@@ -336,6 +336,86 @@ def test_downgrade_preserves_description_edits():
     assert survivor == "My personalised notes about this screen"
 
 
+def test_downgrade_preserves_preexisting_row_with_byte_identical_seed_content():
+    """If a user pre-existed with a row whose name+description+filters+sort
+    match the seed exactly, upgrade() skips it and downgrade() must not
+    delete it — the migration never owned that primary key.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+    _make_filter_presets_table(engine)
+
+    migration = _load_migration()
+
+    # Pick the Minervini seed and reproduce it byte-for-byte.
+    name, description, overrides, sort_by, sort_order = next(
+        item
+        for item in migration.SEEDED_PRESETS
+        if item[0] == "Minervini Trend Template"
+    )
+    seed_filters_json = migration._build_filters_payload(overrides)
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO filter_presets "
+                "(name, description, filters, sort_by, sort_order, position) "
+                "VALUES "
+                "(:name, :description, :filters, :sort_by, :sort_order, 0)"
+            ),
+            {
+                "name": name,
+                "description": description,
+                "filters": seed_filters_json,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+            },
+        )
+        preexisting_id = conn.execute(
+            sa.text("SELECT id FROM filter_presets WHERE name = :n"),
+            {"n": name},
+        ).scalar_one()
+
+        _run_upgrade(migration, conn)
+        _run_downgrade(migration, conn)
+
+        survivor_id = conn.execute(
+            sa.text("SELECT id FROM filter_presets WHERE name = :n"),
+            {"n": name},
+        ).scalar_one_or_none()
+
+    engine.dispose()
+
+    assert survivor_id == preexisting_id
+
+
+def test_downgrade_is_safe_when_audit_table_missing():
+    """downgrade() must be a no-op if upgrade() never ran (audit table absent)."""
+    engine = sa.create_engine("sqlite:///:memory:")
+    _make_filter_presets_table(engine)
+
+    migration = _load_migration()
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO filter_presets "
+                "(name, description, filters, sort_by, sort_order, position) "
+                "VALUES "
+                "('Some User Preset', NULL, '{}', 'composite_score', 'desc', 0)"
+            )
+        )
+
+        _run_downgrade(migration, conn)
+
+        remaining = conn.execute(
+            sa.text("SELECT name FROM filter_presets")
+        ).fetchall()
+
+    engine.dispose()
+
+    assert [row[0] for row in remaining] == ["Some User Preset"]
+
+
 def test_downgrade_ignores_position_changes():
     """Reordering a seeded preset must not block its removal on rollback —
     position is auto-assigned and is mutated by the reorder API during normal use,

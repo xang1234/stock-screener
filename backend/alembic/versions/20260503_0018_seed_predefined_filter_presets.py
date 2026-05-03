@@ -16,13 +16,16 @@ Two static-site presets are intentionally excluded:
 Definitions are embedded inline so the migration is self-contained and stable
 even if ``preset_screens.py`` is later refactored.
 
-``downgrade()`` is content-aware: it only deletes rows whose name,
-description, filters, sort_by, and sort_order all still match what
-``upgrade()`` inserted. Rows the upgrade skipped (because a user-created
-preset with the same name already existed) and rows the user has since edited
-are left untouched. ``position`` is excluded from the match because it is
+``downgrade()`` only removes rows that ``upgrade()`` actually inserted. To
+distinguish migration-owned rows from user data, ``upgrade()`` records each
+inserted primary key in an internal audit table (``_seed_predefined_filter
+_presets_audit``); ``downgrade()`` reads that list and deletes only those
+specific rows whose ``name``, ``description``, ``filters``, ``sort_by``, and
+``sort_order`` all still match the seed values. Pre-existing user rows
+(skipped by upgrade) and seeded rows the user has since edited are left
+untouched. ``position`` is excluded from the match because it is
 auto-assigned at seed time and is mutated by the reorder API during normal
-use.
+use. The audit table is dropped at the end of ``downgrade()``.
 """
 
 from __future__ import annotations
@@ -256,16 +259,32 @@ SEEDED_PRESETS: list[tuple[str, str, dict[str, Any], str, str]] = [
 ]
 
 
+_AUDIT_TABLE_NAME = "_seed_predefined_filter_presets_audit"
+
+
 def _filter_presets_table() -> sa.Table:
-    return sa.table(
+    # Each call gets its own MetaData so the migration can be re-imported
+    # in tests without colliding on the shared global metadata registry.
+    metadata = sa.MetaData()
+    return sa.Table(
         "filter_presets",
-        sa.column("id", sa.Integer),
-        sa.column("name", sa.String),
-        sa.column("description", sa.Text),
-        sa.column("filters", sa.Text),
-        sa.column("sort_by", sa.String),
-        sa.column("sort_order", sa.String),
-        sa.column("position", sa.Integer),
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("name", sa.String),
+        sa.Column("description", sa.Text),
+        sa.Column("filters", sa.Text),
+        sa.Column("sort_by", sa.String),
+        sa.Column("sort_order", sa.String),
+        sa.Column("position", sa.Integer),
+    )
+
+
+def _audit_table_ref() -> sa.Table:
+    metadata = sa.MetaData()
+    return sa.Table(
+        _AUDIT_TABLE_NAME,
+        metadata,
+        sa.Column("filter_preset_id", sa.Integer, primary_key=True),
     )
 
 
@@ -303,36 +322,78 @@ def upgrade() -> None:
         )
         next_position += 1
 
-    if rows_to_insert:
-        op.bulk_insert(table, rows_to_insert)
+    # Always create the audit table so downgrade has a deterministic shape
+    # to read, even when nothing was inserted (e.g. every name pre-existed).
+    # Guard with has_table so a defensive re-run of upgrade() — which Alembic
+    # itself never does, but tests and recovery flows do — stays a no-op.
+    inspector = sa.inspect(bind)
+    if not inspector.has_table(_AUDIT_TABLE_NAME):
+        op.create_table(
+            _AUDIT_TABLE_NAME,
+            sa.Column("filter_preset_id", sa.Integer, primary_key=True),
+        )
+
+    if not rows_to_insert:
+        return
+
+    audit = _audit_table_ref()
+    inserted_ids: list[int] = []
+    for row in rows_to_insert:
+        result = bind.execute(table.insert().values(**row))
+        # inserted_primary_key is a tuple-like; element 0 is the new id.
+        inserted_ids.append(int(result.inserted_primary_key[0]))
+
+    bind.execute(
+        audit.insert(),
+        [{"filter_preset_id": new_id} for new_id in inserted_ids],
+    )
 
 
 def downgrade() -> None:
-    """Remove only rows whose content still matches what upgrade() inserted.
+    """Remove only rows that ``upgrade()`` actually inserted and which the
+    user has not edited since.
 
-    A user may have (a) pre-existed with a same-named preset that upgrade
-    skipped, (b) renamed, edited filters, changed the sort, or rewritten the
-    description on a seeded row. In any of those cases the row no longer
-    represents migration-owned data and we leave it in place to avoid
-    irreversible loss of user work.
+    Inserted IDs are read from the audit table written by ``upgrade()``. Even
+    if a row's content (name, description, filters, sort_by, sort_order)
+    matches a seed value byte-for-byte, it is preserved unless its primary
+    key is recorded as migration-owned. This handles the realistic edge case
+    where a user manually recreated a static preset with identical content
+    before this migration ran — ``upgrade()`` skipped it on the basis of a
+    name conflict, so ``downgrade()`` must not delete it either.
 
-    ``position`` is intentionally excluded from the match. It is auto-assigned
-    at upgrade time based on the live table's max(position) and is mutated by
-    the reorder API, so it can drift from its seed value through normal use
-    without indicating that the row's content has been edited.
+    A user-edited seeded row stays put because the content match fails;
+    ``position`` is intentionally not part of the match because it is
+    auto-assigned at seed time and is mutated by the reorder API during
+    normal use, so position drift is not an edit signal.
     """
     bind = op.get_bind()
     table = _filter_presets_table()
 
-    for name, description, overrides, sort_by, sort_order in SEEDED_PRESETS:
-        bind.execute(
-            table.delete().where(
-                sa.and_(
-                    table.c.name == name,
-                    table.c.description == description,
-                    table.c.filters == _build_filters_payload(overrides),
-                    table.c.sort_by == sort_by,
-                    table.c.sort_order == sort_order,
+    inspector = sa.inspect(bind)
+    if not inspector.has_table(_AUDIT_TABLE_NAME):
+        # Nothing to roll back — upgrade was never applied (or the audit
+        # table was already dropped). Stay idempotent.
+        return
+
+    audit = _audit_table_ref()
+    inserted_ids = [
+        row[0]
+        for row in bind.execute(sa.select(audit.c.filter_preset_id)).fetchall()
+    ]
+
+    if inserted_ids:
+        for name, description, overrides, sort_by, sort_order in SEEDED_PRESETS:
+            bind.execute(
+                table.delete().where(
+                    sa.and_(
+                        table.c.id.in_(inserted_ids),
+                        table.c.name == name,
+                        table.c.description == description,
+                        table.c.filters == _build_filters_payload(overrides),
+                        table.c.sort_by == sort_by,
+                        table.c.sort_order == sort_order,
+                    )
                 )
             )
-        )
+
+    op.drop_table(_AUDIT_TABLE_NAME)
