@@ -60,12 +60,14 @@ describe('StaticGroupDetailModal', () => {
     expect(screen.getByRole('tab', { name: 'Charts' })).toBeDisabled();
   });
 
-  it('renders the dialog paper at 95vw so charts have room to breathe', () => {
+  it('renders the dialog paper at 95vw with zero margin so it never overflows the viewport', () => {
     renderModal();
 
     const dialogPaper = screen.getByRole('dialog');
     // Asserting the actual inline style (set via PaperProps.style) so the
-    // contract regresses if the width or maxWidth is ever changed.
+    // contract regresses if the width is ever changed. Paper margin is
+    // forced to 0 (via sx) so 95vw + margin can never exceed 100vw on
+    // narrow viewports.
     expect(dialogPaper).toHaveStyle({ width: '95vw', maxWidth: '95vw' });
     // maxWidth={false} on Dialog must remain so MUI doesn't cap the width.
     expect(dialogPaper.className).toMatch(/MuiDialog-paperWidthFalse/);

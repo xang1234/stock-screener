@@ -79,8 +79,14 @@ function StaticGroupDetailModal({ group, detail, chartIndex = null, open, onClos
       PaperProps={{
         // Inline style (rather than sx) so the 95vw contract is observable in
         // tests via getComputedStyle/toHaveStyle.
+        //
+        // Paper margin is forced to 0 so it does not stack on top of the
+        // viewport-relative width. The 95vw target already leaves 2.5vw on
+        // each side as breathing room, and overriding MUI's default 32px
+        // Paper margin prevents `95vw + margin > 100vw` overflow on narrow
+        // viewports.
         style: { width: '95vw', maxWidth: '95vw' },
-        sx: { m: 2 },
+        sx: { m: 0 },
       }}
     >
       <DialogTitle>
