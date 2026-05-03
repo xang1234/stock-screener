@@ -15,6 +15,11 @@ Two static-site presets are intentionally excluded:
 
 Definitions are embedded inline so the migration is self-contained and stable
 even if ``preset_screens.py`` is later refactored.
+
+``downgrade()`` is content-aware: it only deletes rows whose name, filters,
+sort_by, and sort_order all still match what ``upgrade()`` inserted. Rows the
+upgrade skipped (because a user-created preset with the same name already
+existed) and rows the user has since edited are left untouched.
 """
 
 from __future__ import annotations
@@ -300,8 +305,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Remove only rows whose content still matches what upgrade() inserted.
+
+    A user may have (a) pre-existed with a same-named preset that upgrade
+    skipped, or (b) edited a seeded preset's filters / sort. In both cases the
+    row no longer represents migration-owned data, so we leave it in place to
+    avoid irreversible loss of user work.
+    """
+    bind = op.get_bind()
     table = _filter_presets_table()
-    seeded_names = [name for name, *_ in SEEDED_PRESETS]
-    op.execute(
-        table.delete().where(table.c.name.in_(seeded_names))
-    )
+
+    for name, _description, overrides, sort_by, sort_order in SEEDED_PRESETS:
+        bind.execute(
+            table.delete().where(
+                sa.and_(
+                    table.c.name == name,
+                    table.c.filters == _build_filters_payload(overrides),
+                    table.c.sort_by == sort_by,
+                    table.c.sort_order == sort_order,
+                )
+            )
+        )

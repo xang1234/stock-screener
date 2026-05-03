@@ -211,3 +211,95 @@ def test_downgrade_removes_seeded_presets_only():
     engine.dispose()
 
     assert [row[0] for row in remaining] == ["User Custom"]
+
+
+def test_downgrade_preserves_preexisting_user_row_with_seeded_name():
+    """A user-created 'CANSLIM' that pre-dates this migration must survive downgrade."""
+    engine = sa.create_engine("sqlite:///:memory:")
+    _make_filter_presets_table(engine)
+
+    migration = _load_migration()
+
+    user_payload = json.dumps({"customized_by": "user", "filters": {"epsRating": {"min": 95}}})
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO filter_presets "
+                "(name, description, filters, sort_by, sort_order, position) "
+                "VALUES "
+                "('CANSLIM', 'user copy', :filters, 'composite_score', 'asc', 0)"
+            ),
+            {"filters": user_payload},
+        )
+
+        _run_upgrade(migration, conn)
+        _run_downgrade(migration, conn)
+
+        survivors = conn.execute(
+            sa.text(
+                "SELECT name, description, filters, sort_by, sort_order "
+                "FROM filter_presets WHERE name = 'CANSLIM'"
+            )
+        ).fetchall()
+
+    engine.dispose()
+
+    assert len(survivors) == 1
+    name, description, filters_json, sort_by, sort_order = survivors[0]
+    assert name == "CANSLIM"
+    assert description == "user copy"
+    assert filters_json == user_payload
+    assert sort_by == "composite_score"
+    assert sort_order == "asc"
+
+
+def test_downgrade_preserves_user_edits_to_seeded_row():
+    """If a user changes a seeded preset's filters or sort, downgrade leaves it alone."""
+    engine = sa.create_engine("sqlite:///:memory:")
+    _make_filter_presets_table(engine)
+
+    migration = _load_migration()
+
+    with engine.begin() as conn:
+        _run_upgrade(migration, conn)
+
+        # User tightens the Minervini RS threshold from 70 to 90.
+        edited_filters = migration._empty_filter_shape()
+        edited_filters.update(
+            {
+                "minerviniScore": {"min": 70, "max": None},
+                "stage": 2,
+                "maAlignment": True,
+                "rsRating": {"min": 90, "max": None},
+            }
+        )
+        conn.execute(
+            sa.text(
+                "UPDATE filter_presets SET filters = :filters "
+                "WHERE name = 'Minervini Trend Template'"
+            ),
+            {"filters": json.dumps(edited_filters)},
+        )
+
+        # User flips CANSLIM sort to ascending.
+        conn.execute(
+            sa.text(
+                "UPDATE filter_presets SET sort_order = 'asc' WHERE name = 'CANSLIM'"
+            )
+        )
+
+        _run_downgrade(migration, conn)
+
+        kept_names = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM filter_presets")
+            ).fetchall()
+        }
+
+    engine.dispose()
+
+    assert "Minervini Trend Template" in kept_names
+    assert "CANSLIM" in kept_names
+    # Untouched seeded presets are still removed.
+    assert "VCP Setups" not in kept_names
