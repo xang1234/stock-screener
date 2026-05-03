@@ -295,6 +295,8 @@ const transformToCandlestickData = (apiData, timeframe = 'daily') => {
  * @param {Array|null} props.priceData - Optional static OHLCV payload to render without API calls
  * @param {number|null} props.dataUpdatedAtOverride - Optional timestamp (ms) for static bundles
  * @param {boolean} props.compact - When true, hides overlays (Daily/Weekly toggle, OHLC legend, updated-at indicator) for dense grid layouts
+ * @param {boolean} props.hideTimeframeToggle - When true, hides only the Daily/Weekly toggle (other overlays stay) and forces the daily timeframe
+ * @param {boolean} props.interactive - When false, disables time-axis pan/zoom (mouse wheel, drag, pinch) until re-enabled
  */
 function CandlestickChart({
   symbol,
@@ -305,6 +307,8 @@ function CandlestickChart({
   priceData = null,
   dataUpdatedAtOverride = null,
   compact = false,
+  hideTimeframeToggle = false,
+  interactive = true,
 }) {
   const chartContainerRef = useRef(null);
   const chartRef = useRef(null);
@@ -371,11 +375,15 @@ function CandlestickChart({
     return new Date(effectiveDataUpdatedAt).toLocaleDateString();
   }, [effectiveDataUpdatedAt]);
 
+  // When the timeframe toggle is hidden, force daily so the chart can't
+  // remain on a stale weekly aggregation chosen before the toggle disappeared.
+  const effectiveTimeframe = hideTimeframeToggle ? 'daily' : timeframe;
+
   // Transform data - memoized to avoid expensive EMA recalculations on every render
   const chartData = useMemo(() => {
     if (!apiData) return null;
-    return transformToCandlestickData(apiData, timeframe);
-  }, [apiData, timeframe]);
+    return transformToCandlestickData(apiData, effectiveTimeframe);
+  }, [apiData, effectiveTimeframe]);
 
   // Initialize chart on mount using useLayoutEffect for synchronous DOM access
   useLayoutEffect(() => {
@@ -413,6 +421,8 @@ function CandlestickChart({
         timeVisible: true,
         secondsVisible: false,
       },
+      handleScroll: interactive,
+      handleScale: interactive,
     });
 
     chartRef.current = chart;
@@ -526,6 +536,11 @@ function CandlestickChart({
       ema20SeriesRef.current = null;
       ema50SeriesRef.current = null;
     };
+    // `interactive` is intentionally not in the deps: it's only used as the
+    // chart's initial handleScroll/handleScale value here, and the dedicated
+    // applyOptions effect below picks up subsequent changes without remounting
+    // the chart (which would reset visible range / EMAs).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [height, isDarkMode, symbol, compact]); // Re-initialize only when required visual inputs change
 
   // Track symbol changes - set flag to restore range when symbol changes
@@ -536,6 +551,16 @@ function CandlestickChart({
     }
     prevSymbolRef.current = symbol;
   }, [symbol]);
+
+  // Toggle pan/zoom handlers without re-initializing the chart so user state
+  // (visible range, EMAs) is preserved when interactivity is enabled/disabled.
+  useEffect(() => {
+    if (!chartRef.current) return;
+    chartRef.current.applyOptions({
+      handleScroll: interactive,
+      handleScale: interactive,
+    });
+  }, [interactive]);
 
   // Subscribe to visible time range changes
   useEffect(() => {
@@ -660,7 +685,7 @@ function CandlestickChart({
       }}
     >
       {/* Timeframe Toggle - only show when chart has data */}
-      {!compact && !showLoading && !showError && !showNoData && (
+      {!compact && !hideTimeframeToggle && !showLoading && !showError && !showNoData && (
         <Box
           sx={{
             position: 'absolute',
