@@ -831,17 +831,17 @@ class IBDGroupRankService:
             if r.get(change_key) is not None
         ]
 
-        # Sort by rank change
-        # Positive change = rank improved (moved up), so sort descending for gainers
-        groups_with_change.sort(key=lambda x: x[change_key], reverse=True)
-
-        gainers = groups_with_change[:limit]
-        losers = groups_with_change[-limit:][::-1]  # Reverse to show biggest losers first
+        # Split by sign so a market with only positive (or only negative) movers
+        # never reports the smallest gainers as "losers" or vice versa.
+        gainers = [r for r in groups_with_change if r[change_key] > 0]
+        losers = [r for r in groups_with_change if r[change_key] < 0]
+        gainers.sort(key=lambda r: r[change_key], reverse=True)
+        losers.sort(key=lambda r: r[change_key])
 
         return {
             'period': period,
-            'gainers': gainers,
-            'losers': losers,
+            'gainers': gainers[:limit],
+            'losers': losers[:limit],
         }
 
     def _get_validated_group_symbols(

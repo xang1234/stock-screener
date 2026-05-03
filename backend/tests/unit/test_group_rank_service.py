@@ -1141,3 +1141,43 @@ def test_get_current_rankings_can_target_explicit_date():
     finally:
         db_session.rollback()
         db_session.close()
+
+
+def test_get_rank_movers_filters_gainers_and_losers_by_sign(monkeypatch):
+    service = _make_group_rank_service()
+    rankings = [
+        {"industry_group": "Up Big", "rank_change_1w": 8},
+        {"industry_group": "Up Small", "rank_change_1w": 1},
+        {"industry_group": "Flat", "rank_change_1w": 0},
+        {"industry_group": "Down Small", "rank_change_1w": -1},
+        {"industry_group": "Down Big", "rank_change_1w": -7},
+    ]
+    monkeypatch.setattr(
+        service,
+        "get_current_rankings",
+        lambda *args, **kwargs: rankings,
+    )
+
+    movers = service.get_rank_movers(Mock(), period="1w", limit=10, market="HK")
+
+    assert [g["industry_group"] for g in movers["gainers"]] == ["Up Big", "Up Small"]
+    assert [l["industry_group"] for l in movers["losers"]] == ["Down Big", "Down Small"]
+
+
+def test_get_rank_movers_omits_losers_when_only_gainers_exist(monkeypatch):
+    service = _make_group_rank_service()
+    rankings = [
+        {"industry_group": "A", "rank_change_1w": 5},
+        {"industry_group": "B", "rank_change_1w": 2},
+        {"industry_group": "C", "rank_change_1w": 1},
+    ]
+    monkeypatch.setattr(
+        service,
+        "get_current_rankings",
+        lambda *args, **kwargs: rankings,
+    )
+
+    movers = service.get_rank_movers(Mock(), period="1w", limit=10, market="HK")
+
+    assert [g["industry_group"] for g in movers["gainers"]] == ["A", "B", "C"]
+    assert movers["losers"] == []
