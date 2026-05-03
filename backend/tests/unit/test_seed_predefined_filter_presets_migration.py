@@ -303,3 +303,63 @@ def test_downgrade_preserves_user_edits_to_seeded_row():
     assert "CANSLIM" in kept_names
     # Untouched seeded presets are still removed.
     assert "VCP Setups" not in kept_names
+
+
+def test_downgrade_preserves_description_edits():
+    """A user-edited description marks the row as no longer migration-owned."""
+    engine = sa.create_engine("sqlite:///:memory:")
+    _make_filter_presets_table(engine)
+
+    migration = _load_migration()
+
+    with engine.begin() as conn:
+        _run_upgrade(migration, conn)
+        conn.execute(
+            sa.text(
+                "UPDATE filter_presets SET description = :desc "
+                "WHERE name = 'Minervini Trend Template'"
+            ),
+            {"desc": "My personalised notes about this screen"},
+        )
+
+        _run_downgrade(migration, conn)
+
+        survivor = conn.execute(
+            sa.text(
+                "SELECT description FROM filter_presets "
+                "WHERE name = 'Minervini Trend Template'"
+            )
+        ).scalar_one_or_none()
+
+    engine.dispose()
+
+    assert survivor == "My personalised notes about this screen"
+
+
+def test_downgrade_ignores_position_changes():
+    """Reordering a seeded preset must not block its removal on rollback —
+    position is auto-assigned and is mutated by the reorder API during normal use,
+    so it doesn't indicate a content edit.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+    _make_filter_presets_table(engine)
+
+    migration = _load_migration()
+
+    with engine.begin() as conn:
+        _run_upgrade(migration, conn)
+
+        # Simulate the reorder endpoint shuffling positions.
+        conn.execute(
+            sa.text("UPDATE filter_presets SET position = position + 100")
+        )
+
+        _run_downgrade(migration, conn)
+
+        remaining = conn.execute(
+            sa.text("SELECT COUNT(*) FROM filter_presets")
+        ).scalar_one()
+
+    engine.dispose()
+
+    assert remaining == 0

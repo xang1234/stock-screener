@@ -16,10 +16,13 @@ Two static-site presets are intentionally excluded:
 Definitions are embedded inline so the migration is self-contained and stable
 even if ``preset_screens.py`` is later refactored.
 
-``downgrade()`` is content-aware: it only deletes rows whose name, filters,
-sort_by, and sort_order all still match what ``upgrade()`` inserted. Rows the
-upgrade skipped (because a user-created preset with the same name already
-existed) and rows the user has since edited are left untouched.
+``downgrade()`` is content-aware: it only deletes rows whose name,
+description, filters, sort_by, and sort_order all still match what
+``upgrade()`` inserted. Rows the upgrade skipped (because a user-created
+preset with the same name already existed) and rows the user has since edited
+are left untouched. ``position`` is excluded from the match because it is
+auto-assigned at seed time and is mutated by the reorder API during normal
+use.
 """
 
 from __future__ import annotations
@@ -308,18 +311,25 @@ def downgrade() -> None:
     """Remove only rows whose content still matches what upgrade() inserted.
 
     A user may have (a) pre-existed with a same-named preset that upgrade
-    skipped, or (b) edited a seeded preset's filters / sort. In both cases the
-    row no longer represents migration-owned data, so we leave it in place to
-    avoid irreversible loss of user work.
+    skipped, (b) renamed, edited filters, changed the sort, or rewritten the
+    description on a seeded row. In any of those cases the row no longer
+    represents migration-owned data and we leave it in place to avoid
+    irreversible loss of user work.
+
+    ``position`` is intentionally excluded from the match. It is auto-assigned
+    at upgrade time based on the live table's max(position) and is mutated by
+    the reorder API, so it can drift from its seed value through normal use
+    without indicating that the row's content has been edited.
     """
     bind = op.get_bind()
     table = _filter_presets_table()
 
-    for name, _description, overrides, sort_by, sort_order in SEEDED_PRESETS:
+    for name, description, overrides, sort_by, sort_order in SEEDED_PRESETS:
         bind.execute(
             table.delete().where(
                 sa.and_(
                     table.c.name == name,
+                    table.c.description == description,
                     table.c.filters == _build_filters_payload(overrides),
                     table.c.sort_by == sort_by,
                     table.c.sort_order == sort_order,
