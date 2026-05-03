@@ -76,7 +76,12 @@ function StaticGroupDetailModal({ group, detail, chartIndex = null, open, onClos
       onClose={onClose}
       maxWidth={false}
       fullWidth
-      PaperProps={{ sx: { width: '95vw', maxWidth: '95vw', m: 2 } }}
+      PaperProps={{
+        // Inline style (rather than sx) so the 95vw contract is observable in
+        // tests via getComputedStyle/toHaveStyle.
+        style: { width: '95vw', maxWidth: '95vw' },
+        sx: { m: 2 },
+      }}
     >
       <DialogTitle>
         <Box display="flex" justifyContent="space-between" alignItems="center">

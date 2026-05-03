@@ -120,4 +120,56 @@ describe('StaticGroupChartsGrid', () => {
       expect(chart.dataset.interactive).toBe('false');
     });
   });
+
+  it('exposes button semantics on the chart cards and supports keyboard selection', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (path) => {
+      const sym = String(path).includes('AAPL') ? 'AAPL' : 'NVDA';
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          symbol: sym,
+          stock_data: { symbol: sym, company_name: `${sym} Corp` },
+          bars: [{ date: '2026-01-02', open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 }],
+          generated_at: '2026-01-02T00:00:00Z',
+        }),
+      };
+    });
+
+    renderGrid({
+      symbols: ['NVDA', 'AAPL'],
+      chartIndex: {
+        symbols: [
+          { symbol: 'NVDA', path: 'charts/NVDA.json' },
+          { symbol: 'AAPL', path: 'charts/AAPL.json' },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('static-candlestick-chart')).toHaveLength(2);
+    });
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.length).toBeGreaterThanOrEqual(2);
+    const nvdaButton = buttons.find((b) => /NVDA chart/.test(b.getAttribute('aria-label') || ''));
+    const aaplButton = buttons.find((b) => /AAPL chart/.test(b.getAttribute('aria-label') || ''));
+    expect(nvdaButton).toBeTruthy();
+    expect(aaplButton).toBeTruthy();
+    expect(nvdaButton).toHaveAttribute('aria-pressed', 'false');
+    expect(nvdaButton).toHaveAttribute('tabindex', '0');
+
+    const user = userEvent.setup();
+    nvdaButton.focus();
+    await user.keyboard('{Enter}');
+
+    expect(nvdaButton).toHaveAttribute('aria-pressed', 'true');
+    expect(aaplButton).toHaveAttribute('aria-pressed', 'false');
+
+    aaplButton.focus();
+    await user.keyboard(' ');
+
+    expect(nvdaButton).toHaveAttribute('aria-pressed', 'false');
+    expect(aaplButton).toHaveAttribute('aria-pressed', 'true');
+  });
 });

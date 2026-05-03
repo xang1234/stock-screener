@@ -375,11 +375,15 @@ function CandlestickChart({
     return new Date(effectiveDataUpdatedAt).toLocaleDateString();
   }, [effectiveDataUpdatedAt]);
 
+  // When the timeframe toggle is hidden, force daily so the chart can't
+  // remain on a stale weekly aggregation chosen before the toggle disappeared.
+  const effectiveTimeframe = hideTimeframeToggle ? 'daily' : timeframe;
+
   // Transform data - memoized to avoid expensive EMA recalculations on every render
   const chartData = useMemo(() => {
     if (!apiData) return null;
-    return transformToCandlestickData(apiData, timeframe);
-  }, [apiData, timeframe]);
+    return transformToCandlestickData(apiData, effectiveTimeframe);
+  }, [apiData, effectiveTimeframe]);
 
   // Initialize chart on mount using useLayoutEffect for synchronous DOM access
   useLayoutEffect(() => {

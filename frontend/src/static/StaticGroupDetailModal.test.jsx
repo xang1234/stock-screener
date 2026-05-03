@@ -60,13 +60,14 @@ describe('StaticGroupDetailModal', () => {
     expect(screen.getByRole('tab', { name: 'Charts' })).toBeDisabled();
   });
 
-  it('opts out of MUI maxWidth so the dialog paper can stretch to 95vw', () => {
+  it('renders the dialog paper at 95vw so charts have room to breathe', () => {
     renderModal();
 
-    // Setting maxWidth={false} on Dialog applies the paperWidthFalse class
-    // (instead of paperWidthLg). Combined with PaperProps.sx={ width: '95vw' }
-    // this is what lets the modal cover ~95% of the viewport.
     const dialogPaper = screen.getByRole('dialog');
+    // Asserting the actual inline style (set via PaperProps.style) so the
+    // contract regresses if the width or maxWidth is ever changed.
+    expect(dialogPaper).toHaveStyle({ width: '95vw', maxWidth: '95vw' });
+    // maxWidth={false} on Dialog must remain so MUI doesn't cap the width.
     expect(dialogPaper.className).toMatch(/MuiDialog-paperWidthFalse/);
   });
 });

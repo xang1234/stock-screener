@@ -76,19 +76,38 @@ function StaticGroupChartCard({ symbol, entry, isSelected, onSelect }) {
         ? 'warning.main'
         : 'error.main';
 
+  const handleSelect = (e) => {
+    e.stopPropagation();
+    onSelect?.(symbol);
+  };
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      onSelect?.(symbol);
+    }
+  };
+
   return (
     <Card
       variant="outlined"
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect?.(symbol);
-      }}
+      role="button"
+      tabIndex={0}
+      aria-pressed={isSelected}
+      aria-label={`${symbol} chart — ${isSelected ? 'selected, zoom enabled' : 'click to enable zoom'}`}
+      onClick={handleSelect}
+      onKeyDown={handleKeyDown}
       sx={{
         overflow: 'hidden',
         cursor: 'pointer',
         borderWidth: 2,
         borderColor: isSelected ? 'success.main' : 'divider',
         transition: 'border-color 120ms ease-in-out',
+        '&:focus-visible': {
+          outline: '2px solid',
+          outlineColor: 'primary.main',
+          outlineOffset: 2,
+        },
       }}
     >
       <Box
