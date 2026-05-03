@@ -1695,6 +1695,123 @@ def test_export_chart_bundle_skips_preset_symbols_without_cached_prices(
     assert manifest["symbols_total"] == 1
 
 
+def test_export_chart_bundle_expands_coverage_for_top_groups_constituents(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Pass 3 should export charts for every constituent of the top-N IBD
+    industry groups even when those symbols fall outside the composite-score
+    top-N from Pass 1 and the preset-screen expansion from Pass 2.
+    """
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=21,
+            as_of_date=date(2026, 4, 2),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 2, 21, 30, 0),
+        ),
+        pointer_run_id=21,
+    )
+
+    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
+    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
+    monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 0)
+    monkeypatch.setattr(export_module, "STATIC_CHART_TOP_N_GROUPS", 2)
+
+    service._price_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols, period="2y": {
+            symbol: _make_chart_price_frame(100.0 + i)
+            for i, symbol in enumerate(symbols)
+        }
+    )
+    service._fundamentals_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+
+    rows = [
+        SimpleNamespace(
+            symbol="NVDA",
+            composite_score=99.0,
+            rating="Strong Buy",
+            current_price=100.0,
+            screeners_run=[],
+            extended_fields={},
+        ),
+        SimpleNamespace(
+            symbol="GROUP_A1",
+            composite_score=20.0,
+            rating="Hold",
+            current_price=50.0,
+            screeners_run=[],
+            extended_fields={},
+        ),
+        SimpleNamespace(
+            symbol="GROUP_B1",
+            composite_score=15.0,
+            rating="Hold",
+            current_price=40.0,
+            screeners_run=[],
+            extended_fields={},
+        ),
+        SimpleNamespace(
+            symbol="OUTSIDE_TOP",
+            composite_score=10.0,
+            rating="Hold",
+            current_price=30.0,
+            screeners_run=[],
+            extended_fields={},
+        ),
+    ]
+    serialized_rows = [
+        {"symbol": "NVDA", "composite_score": 99.0},
+        {"symbol": "GROUP_A1", "composite_score": 20.0},
+        {"symbol": "GROUP_B1", "composite_score": 15.0},
+        {"symbol": "OUTSIDE_TOP", "composite_score": 10.0},
+    ]
+
+    groups_payload = {
+        "available": True,
+        "payload": {
+            "group_details": {
+                "Group A": {
+                    "current_rank": 1,
+                    "stocks": [{"symbol": "NVDA"}, {"symbol": "GROUP_A1"}],
+                },
+                "Group B": {
+                    "current_rank": 2,
+                    "stocks": [{"symbol": "GROUP_B1"}],
+                },
+                "Group C": {
+                    "current_rank": 3,
+                    "stocks": [{"symbol": "OUTSIDE_TOP"}],
+                },
+            },
+        },
+    }
+
+    with session_factory() as db:
+        run = db.get(FeatureRun, 21)
+        manifest = service._export_chart_bundle(  # noqa: SLF001 - intentional unit coverage
+            output_dir=tmp_path,
+            generated_at="2026-04-02T22:00:00Z",
+            run=run,
+            rows=rows,
+            serialized_rows=serialized_rows,
+            groups_payload=groups_payload,
+        )
+
+    index_payload = json.loads((tmp_path / "charts" / "index.json").read_text(encoding="utf-8"))
+    exported = {entry["symbol"] for entry in index_payload["symbols"]}
+
+    assert exported == {"NVDA", "GROUP_A1", "GROUP_B1"}
+    assert "OUTSIDE_TOP" not in exported
+    assert manifest["symbols_total"] == 3
+
+
 def test_build_key_markets_skips_change_when_latest_close_is_null(service_and_session_factory):
     service, session_factory = service_and_session_factory
 

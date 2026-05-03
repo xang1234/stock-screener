@@ -51,6 +51,7 @@ STATIC_CHART_PERIOD_DAYS = 180
 STATIC_CHART_LOOKUP_BATCH_SIZE = 250
 STATIC_DEFAULT_SCAN_FILTERS = {"minVolume": 100_000_000}
 STATIC_CHART_PRESET_TOP_N = 200
+STATIC_CHART_TOP_N_GROUPS = 50
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
@@ -305,26 +306,6 @@ class StaticSiteExportService:
             filter_options=filter_options,
             path_prefix=path_prefix,
         )
-        chart_manifest = self._export_chart_bundle(
-            output_dir=output_dir,
-            generated_at=generated_at,
-            run=latest_run,
-            rows=scan_rows,
-            serialized_rows=serialized_rows,
-            path_prefix=path_prefix,
-        )
-        breadth_payload = self._build_optional_section_payload(
-            section=f"{market} breadth",
-            warnings=warnings,
-            generated_at=generated_at,
-            expected_as_of_date=latest_run.as_of_date,
-            build=lambda: self._build_breadth_payload(
-                generated_at=generated_at,
-                expected_as_of_date=latest_run.as_of_date,
-                market=market,
-                serialized_rows=serialized_rows,
-            ),
-        )
         groups_payload = self._build_optional_section_payload(
             section=f"{market} groups",
             warnings=warnings,
@@ -337,6 +318,27 @@ class StaticSiteExportService:
                 market=market,
                 latest_run=latest_run,
                 current_rows=scan_rows,
+                serialized_rows=serialized_rows,
+            ),
+        )
+        chart_manifest = self._export_chart_bundle(
+            output_dir=output_dir,
+            generated_at=generated_at,
+            run=latest_run,
+            rows=scan_rows,
+            serialized_rows=serialized_rows,
+            path_prefix=path_prefix,
+            groups_payload=groups_payload,
+        )
+        breadth_payload = self._build_optional_section_payload(
+            section=f"{market} breadth",
+            warnings=warnings,
+            generated_at=generated_at,
+            expected_as_of_date=latest_run.as_of_date,
+            build=lambda: self._build_breadth_payload(
+                generated_at=generated_at,
+                expected_as_of_date=latest_run.as_of_date,
+                market=market,
                 serialized_rows=serialized_rows,
             ),
         )
@@ -679,6 +681,7 @@ class StaticSiteExportService:
         rows: list[Any],
         serialized_rows: list[dict[str, Any]] | None = None,
         path_prefix: Path | None = None,
+        groups_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_prefix = Path() if path_prefix is None else Path(path_prefix)
         chart_dir = output_dir / normalized_prefix / "charts"
@@ -811,6 +814,74 @@ class StaticSiteExportService:
                     len(extra_symbols),
                 )
 
+        # --- Pass 3: expand coverage to all constituents of top-N groups ---
+        group_symbols = self._collect_top_group_constituent_symbols(
+            groups_payload=groups_payload,
+            top_n=STATIC_CHART_TOP_N_GROUPS,
+        )
+        if group_symbols:
+            exported_symbols = {e["symbol"] for e in entries}
+            extra_group_symbols = sorted(
+                group_symbols - exported_symbols - set(skipped_symbols)
+            )
+            entries_before_pass_3 = len(entries)
+
+            if extra_group_symbols:
+                ser_by_symbol = (
+                    {r["symbol"]: r for r in serialized_rows if r.get("symbol")}
+                    if serialized_rows is not None
+                    else {}
+                )
+                for row in ordered_rows:
+                    sym = getattr(row, "symbol", None)
+                    if sym and sym not in row_by_symbol:
+                        row_by_symbol[sym] = row
+
+                for batch_start in range(0, len(extra_group_symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
+                    batch = extra_group_symbols[batch_start:batch_start + STATIC_CHART_LOOKUP_BATCH_SIZE]
+                    price_data = self._price_cache.get_many_cached_only(batch, period="2y")
+                    fundamentals = self._fundamentals_cache.get_many_cached_only(batch)
+
+                    for symbol in batch:
+                        bars = self._serialize_chart_bars(price_data.get(symbol))
+                        if not bars:
+                            skipped_symbols.append(symbol)
+                            continue
+
+                        rel_path = self._chart_payload_path(symbol, path_prefix=normalized_prefix)
+                        domain_row = row_by_symbol.get(symbol)
+                        stock_data = (
+                            self._serialize_scan_row(domain_row)
+                            if domain_row
+                            else ser_by_symbol.get(symbol)
+                        )
+                        payload = {
+                            "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
+                            "generated_at": generated_at,
+                            "as_of_date": run.as_of_date.isoformat(),
+                            "symbol": symbol,
+                            "rank": None,
+                            "period": STATIC_CHART_PERIOD,
+                            "bars": bars,
+                            "stock_data": stock_data,
+                            "fundamentals": fundamentals.get(symbol),
+                        }
+                        self._write_json(output_dir / rel_path, payload)
+                        entries.append(
+                            {
+                                "symbol": symbol,
+                                "rank": None,
+                                "path": rel_path.as_posix(),
+                            }
+                        )
+
+                logger.info(
+                    "Top-%d groups expansion added %d charts (%d extra symbols attempted)",
+                    STATIC_CHART_TOP_N_GROUPS,
+                    len(entries) - entries_before_pass_3,
+                    len(extra_group_symbols),
+                )
+
         index_rel_path = normalized_prefix / "charts" / "index.json"
         index_payload = {
             "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
@@ -829,6 +900,35 @@ class StaticSiteExportService:
             "available": bool(entries),
             "skipped_symbols": skipped_symbols,
         }
+
+    @staticmethod
+    def _collect_top_group_constituent_symbols(
+        *,
+        groups_payload: dict[str, Any] | None,
+        top_n: int,
+    ) -> set[str]:
+        """Return constituent symbols across the top-N IBD industry groups.
+
+        Pulls from `groups_payload['payload']['group_details']`, which maps
+        group name → details (including `current_rank` and `stocks`).
+        """
+        if not groups_payload or not groups_payload.get("available"):
+            return set()
+        payload = groups_payload.get("payload") or {}
+        group_details = payload.get("group_details") or {}
+        symbols: set[str] = set()
+        for detail in group_details.values():
+            if not isinstance(detail, dict):
+                continue
+            rank = detail.get("current_rank")
+            if rank is None or rank > top_n:
+                continue
+            for stock in detail.get("stocks") or []:
+                if isinstance(stock, dict):
+                    symbol = stock.get("symbol")
+                    if symbol:
+                        symbols.add(symbol)
+        return symbols
 
     def _build_breadth_payload(
         self,
