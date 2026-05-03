@@ -24,7 +24,7 @@ async def test_get_current_rankings_returns_404_when_no_rankings_exist(monkeypat
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     class _FakeGroupRankService:
-        def get_current_rankings(self, db, limit=197):  # noqa: ARG002
+        def get_current_rankings(self, db, limit=197, calculation_date=None, *, market="US"):  # noqa: ARG002
             return []
 
     monkeypatch.setattr(
@@ -64,8 +64,8 @@ async def test_get_current_rankings_supports_non_us_market_scope(monkeypatch, cl
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
-    class _FakeMarketGroupService:
-        def get_current_rankings(self, db, *, market, limit=197, calculation_date=None):  # noqa: ARG002
+    class _FakeGroupRankService:
+        def get_current_rankings(self, db, limit=197, calculation_date=None, *, market="US"):  # noqa: ARG002
             assert market == "HK"
             return [
                 {
@@ -89,8 +89,8 @@ async def test_get_current_rankings_supports_non_us_market_scope(monkeypatch, cl
             ]
 
     monkeypatch.setattr(
-        "app.api.v1.groups._get_market_group_service",
-        lambda: _FakeMarketGroupService(),
+        "app.api.v1.groups._get_group_rank_service",
+        lambda: _FakeGroupRankService(),
     )
 
     response = await client.get("/api/v1/groups/rankings/current", params={"market": "HK"})
@@ -107,8 +107,8 @@ async def test_get_current_rankings_supports_india_market_scope(monkeypatch, cli
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
-    class _FakeMarketGroupService:
-        def get_current_rankings(self, db, *, market, limit=197, calculation_date=None):  # noqa: ARG002
+    class _FakeGroupRankService:
+        def get_current_rankings(self, db, limit=197, calculation_date=None, *, market="US"):  # noqa: ARG002
             assert market == "IN"
             return [
                 {
@@ -132,8 +132,8 @@ async def test_get_current_rankings_supports_india_market_scope(monkeypatch, cli
             ]
 
     monkeypatch.setattr(
-        "app.api.v1.groups._get_market_group_service",
-        lambda: _FakeMarketGroupService(),
+        "app.api.v1.groups._get_group_rank_service",
+        lambda: _FakeGroupRankService(),
     )
 
     response = await client.get("/api/v1/groups/rankings/current", params={"market": "IN"})
@@ -150,8 +150,8 @@ async def test_get_rank_movers_supports_non_us_market_scope(monkeypatch, client)
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
-    class _FakeMarketGroupService:
-        def get_rank_movers(self, db, *, market, period="1w", limit=20, calculation_date=None):  # noqa: ARG002
+    class _FakeGroupRankService:
+        def get_rank_movers(self, db, period="1w", limit=20, calculation_date=None, *, market="US"):  # noqa: ARG002
             assert market == "JP"
             assert period == "1m"
             return {
@@ -180,8 +180,8 @@ async def test_get_rank_movers_supports_non_us_market_scope(monkeypatch, client)
             }
 
     monkeypatch.setattr(
-        "app.api.v1.groups._get_market_group_service",
-        lambda: _FakeMarketGroupService(),
+        "app.api.v1.groups._get_group_rank_service",
+        lambda: _FakeGroupRankService(),
     )
 
     response = await client.get("/api/v1/groups/rankings/movers", params={"market": "JP", "period": "1m"})
@@ -254,8 +254,8 @@ async def test_get_groups_bootstrap_supports_non_us_market_scope(monkeypatch, cl
         def get_groups_bootstrap(self):
             return None
 
-    class _FakeMarketGroupService:
-        def get_current_rankings(self, db, *, market, limit=197, calculation_date=None):  # noqa: ARG002
+    class _FakeGroupRankService:
+        def get_current_rankings(self, db, limit=197, calculation_date=None, *, market="US"):  # noqa: ARG002
             assert market == "HK"
             return [
                 {
@@ -278,13 +278,13 @@ async def test_get_groups_bootstrap_supports_non_us_market_scope(monkeypatch, cl
                 }
             ]
 
-        def get_rank_movers(self, db, *, market, period="1w", limit=10, calculation_date=None):  # noqa: ARG002
+        def get_rank_movers(self, db, period="1w", limit=10, calculation_date=None, *, market="US"):  # noqa: ARG002
             assert market == "HK"
             return {"period": "1w", "gainers": [], "losers": []}
 
     monkeypatch.setattr(
-        "app.api.v1.groups._get_market_group_service",
-        lambda: _FakeMarketGroupService(),
+        "app.api.v1.groups._get_group_rank_service",
+        lambda: _FakeGroupRankService(),
     )
     app.dependency_overrides[get_ui_snapshot_service] = lambda: _FakeSnapshotService()
     try:
