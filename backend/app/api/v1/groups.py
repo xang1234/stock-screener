@@ -57,19 +57,11 @@ def _normalize_market_param(market: str | None) -> str:
 
 
 def _build_groups_payload(db: Session, *, market: str) -> dict:
-    if market == "US":
-        service = _get_group_rank_service()
-        rankings = service.get_current_rankings(db, limit=197)
-        movers = service.get_rank_movers(db, period=DEFAULT_GROUP_PERIOD, limit=10)
-    else:
-        service = _get_market_group_service()
-        rankings = service.get_current_rankings(db, market=market, limit=197)
-        movers = service.get_rank_movers(
-            db,
-            market=market,
-            period=DEFAULT_GROUP_PERIOD,
-            limit=10,
-        )
+    service = _get_group_rank_service()
+    rankings = service.get_current_rankings(db, limit=197, market=market)
+    movers = service.get_rank_movers(
+        db, period=DEFAULT_GROUP_PERIOD, limit=10, market=market
+    )
 
     if not rankings:
         raise GroupsBootstrapUnavailableError(
@@ -117,16 +109,12 @@ async def get_current_rankings(
     for 1 week, 1 month, 3 months, and 6 months.
     """
     normalized_market = _normalize_market_param(market)
-    if normalized_market == "US":
-        service = _get_group_rank_service()
-        rankings = service.get_current_rankings(db, limit=limit)
-    else:
-        service = _get_market_group_service()
-        rankings = service.get_current_rankings(
-            db,
-            market=normalized_market,
-            limit=limit,
-        )
+    service = _get_group_rank_service()
+    rankings = service.get_current_rankings(
+        db,
+        limit=limit,
+        market=normalized_market,
+    )
 
     if not rankings:
         raise HTTPException(
@@ -196,17 +184,13 @@ async def get_rank_movers(
         Lists of rank gainers and losers
     """
     normalized_market = _normalize_market_param(market)
-    if normalized_market == "US":
-        service = _get_group_rank_service()
-        movers = service.get_rank_movers(db, period=period, limit=limit)
-    else:
-        service = _get_market_group_service()
-        movers = service.get_rank_movers(
-            db,
-            market=normalized_market,
-            period=period,
-            limit=limit,
-        )
+    service = _get_group_rank_service()
+    movers = service.get_rank_movers(
+        db,
+        period=period,
+        limit=limit,
+        market=normalized_market,
+    )
 
     if not movers.get('gainers') and not movers.get('losers'):
         raise HTTPException(
