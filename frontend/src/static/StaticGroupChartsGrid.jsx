@@ -14,7 +14,7 @@ import { getGroupRankColor } from '../utils/colorUtils';
 import { fetchStaticChartPayload, staticChartKeys } from './chartClient';
 
 const MAX_SYMBOLS = 50;
-const CHART_HEIGHT = 420;
+const CHART_HEIGHT = 360;
 
 function StatBadge({ value, label, bgcolor }) {
   return (
@@ -215,7 +215,7 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
           const entry = entryBySymbol.get(sym);
           if (!entry) {
             return (
-              <Grid item xs={12} key={sym}>
+              <Grid item xs={12} md={6} key={sym}>
                 <Card variant="outlined">
                   <Box
                     sx={{
@@ -240,7 +240,7 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
             );
           }
           return (
-            <Grid item xs={12} key={sym}>
+            <Grid item xs={12} md={6} key={sym}>
               <StaticGroupChartCard symbol={sym} entry={entry} />
             </Grid>
           );
