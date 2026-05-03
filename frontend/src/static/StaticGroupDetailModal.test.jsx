@@ -59,4 +59,14 @@ describe('StaticGroupDetailModal', () => {
     expect(tabChildren.every((child) => child.getAttribute('role') === 'tab')).toBe(true);
     expect(screen.getByRole('tab', { name: 'Charts' })).toBeDisabled();
   });
+
+  it('opts out of MUI maxWidth so the dialog paper can stretch to 95vw', () => {
+    renderModal();
+
+    // Setting maxWidth={false} on Dialog applies the paperWidthFalse class
+    // (instead of paperWidthLg). Combined with PaperProps.sx={ width: '95vw' }
+    // this is what lets the modal cover ~95% of the viewport.
+    const dialogPaper = screen.getByRole('dialog');
+    expect(dialogPaper.className).toMatch(/MuiDialog-paperWidthFalse/);
+  });
 });

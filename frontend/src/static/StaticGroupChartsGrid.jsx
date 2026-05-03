@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -40,7 +40,7 @@ function StatBadge({ value, label, bgcolor }) {
   );
 }
 
-function StaticGroupChartCard({ symbol, entry }) {
+function StaticGroupChartCard({ symbol, entry, isSelected, onSelect }) {
   const { data: payload, isLoading, isError } = useQuery({
     queryKey: staticChartKeys.payload(symbol, entry?.path),
     queryFn: () => fetchStaticChartPayload(entry.path),
@@ -77,7 +77,20 @@ function StaticGroupChartCard({ symbol, entry }) {
         : 'error.main';
 
   return (
-    <Card variant="outlined" sx={{ overflow: 'hidden' }}>
+    <Card
+      variant="outlined"
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect?.(symbol);
+      }}
+      sx={{
+        overflow: 'hidden',
+        cursor: 'pointer',
+        borderWidth: 2,
+        borderColor: isSelected ? 'success.main' : 'divider',
+        transition: 'border-color 120ms ease-in-out',
+      }}
+    >
       <Box
         sx={{
           display: 'flex',
@@ -145,6 +158,8 @@ function StaticGroupChartCard({ symbol, entry }) {
           height={CHART_HEIGHT}
           priceData={bars}
           dataUpdatedAtOverride={generatedAt}
+          hideTimeframeToggle
+          interactive={isSelected}
         />
       )}
     </Card>
@@ -155,15 +170,18 @@ function StaticGroupChartCard({ symbol, entry }) {
  * Vertical list of full-featured candlestick charts for a group's constituent
  * stocks, rendered from pre-generated static chart payloads (no live API).
  *
- * Each chart matches the appearance of `StaticChartViewerModal` (EMAs, OHLC
- * legend, daily/weekly toggle) with a header carrying symbol, last close, and
- * the same metric badges as the scan-result popup.
+ * Charts render daily-only (no Daily/Weekly toggle) with EMAs and the OHLC
+ * legend. Time-axis pan/zoom is locked unless the card is clicked, at which
+ * point its border turns green and interactions are enabled. Clicking another
+ * card or the surrounding area deselects.
  *
  * @param {Object} props
  * @param {string[]} props.symbols - Constituent ticker symbols
  * @param {Object|null} props.chartIndex - Static chart index `{ symbols: [{ symbol, path }, ...] }`
  */
 function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
+  const [selectedSymbol, setSelectedSymbol] = useState(null);
+
   const entryBySymbol = useMemo(() => {
     const entries = chartIndex?.symbols || [];
     return new Map(entries.map((entry) => [entry.symbol, entry]));
@@ -204,7 +222,7 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
   const truncated = normalizedSymbols.length > truncatedSymbols.length;
 
   return (
-    <Box>
+    <Box onClick={() => setSelectedSymbol(null)}>
       {truncated && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
           Showing first {truncatedSymbols.length} of {normalizedSymbols.length} stocks.
@@ -241,7 +259,12 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
           }
           return (
             <Grid item xs={12} md={6} key={sym}>
-              <StaticGroupChartCard symbol={sym} entry={entry} />
+              <StaticGroupChartCard
+                symbol={sym}
+                entry={entry}
+                isSelected={selectedSymbol === sym}
+                onSelect={setSelectedSymbol}
+              />
             </Grid>
           );
         })}

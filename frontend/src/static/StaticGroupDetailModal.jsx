@@ -71,7 +71,13 @@ function StaticGroupDetailModal({ group, detail, chartIndex = null, open, onClos
   }, [detail?.history]);
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth={false}
+      fullWidth
+      PaperProps={{ sx: { width: '95vw', maxWidth: '95vw', m: 2 } }}
+    >
       <DialogTitle>
         <Box display="flex" justifyContent="space-between" alignItems="center">
           <Typography variant="h6">{group}</Typography>
