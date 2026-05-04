@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
+from app.domain.markets.registry import market_registry
 from app.services.market_calendar_service import MarketCalendarService
 
 
@@ -67,6 +68,13 @@ def test_market_calendar_service_uses_canonical_calendar_ids():
     assert service.calendar_id("KR") == "XKRX"
     assert service.calendar_id("TW") == "XTAI"
     assert service.calendar_id("CN") == "XSHG"
+
+
+def test_market_calendar_service_matches_market_registry():
+    service = MarketCalendarService(calendar_provider=lambda _: _FakeCalendar())
+
+    for market in market_registry.supported_markets():
+        assert service.calendar_id(market.code) == market_registry.profile(market).calendar_id
 
 
 def test_last_completed_trading_day_before_close_returns_previous_session():

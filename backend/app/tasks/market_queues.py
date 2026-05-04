@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional
 
+from ..domain.markets import Market, UnsupportedMarketError, market_registry
 
-SUPPORTED_MARKETS: tuple[str, ...] = ("US", "HK", "IN", "JP", "KR", "TW", "CN")
+
+SUPPORTED_MARKETS: tuple[str, ...] = market_registry.supported_market_codes()
 
 SHARED_SENTINEL = "SHARED"
 
@@ -38,11 +40,12 @@ def normalize_market(market: Optional[str]) -> str:
     upper = market.strip().upper()
     if upper in ("", SHARED_SENTINEL):
         return SHARED_SENTINEL
-    if upper not in SUPPORTED_MARKETS:
+    try:
+        return Market(upper).code
+    except UnsupportedMarketError as exc:
         raise ValueError(
             f"Unsupported market {market!r}. Supported: {SUPPORTED_MARKETS} (or None/SHARED)."
-        )
-    return upper
+        ) from exc
 
 
 def market_suffix(market: Optional[str]) -> str:

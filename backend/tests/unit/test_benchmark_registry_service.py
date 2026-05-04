@@ -1,3 +1,5 @@
+from app.domain.markets.registry import market_registry
+from app.domain.common.benchmarks import supported_benchmark_markets
 from app.services.benchmark_registry_service import benchmark_registry
 
 
@@ -6,6 +8,10 @@ def test_registry_versioned_mapping_exists_for_all_markets():
 
     assert benchmark_registry.TABLE_VERSION == "2026-04-30.v1"
     assert set(table.keys()) == {"US", "HK", "IN", "JP", "KR", "TW", "CN"}
+
+
+def test_supported_benchmark_markets_match_market_registry():
+    assert tuple(supported_benchmark_markets()) == market_registry.supported_market_codes()
 
 
 def test_non_us_candidates_have_no_spy_leakage():

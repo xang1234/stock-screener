@@ -88,6 +88,9 @@ class PriceCacheFreshnessPolicy:
                     if len(parts) == 3:
                         all_keys.append(key)
                         all_symbols.append(parts[1])
+                    elif len(parts) == 4:
+                        all_keys.append(key)
+                        all_symbols.append(parts[2])
                 if cursor == 0:
                     break
 

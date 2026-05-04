@@ -1,4 +1,12 @@
 from app.services.security_master_service import SecurityMasterResolver
+from app.domain.markets.registry import market_registry
+
+
+def test_security_master_normalize_market_accepts_all_registry_markets():
+    resolver = SecurityMasterResolver()
+
+    for market in market_registry.supported_markets():
+        assert resolver.normalize_market(market.code) == market.code
 
 
 def test_resolve_identity_prefers_explicit_market_and_exchange():
