@@ -107,7 +107,7 @@ export default function BootstrapSetupScreen({
     if (Array.isArray(catalogMarkets) && catalogMarkets.length > 0) {
       return catalogMarkets.map((market) => ({
         code: market.code,
-        label: market.label,
+        label: market.label || market.code,
       }));
     }
     return (supportedMarkets ?? []).map((market) => ({

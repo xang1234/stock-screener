@@ -431,4 +431,37 @@ describe('BootstrapSetupScreen', () => {
       enabledMarkets: ['HK', 'US'],
     });
   });
+
+  it('falls back to the Market code when a catalog label is missing', () => {
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US']}
+        supportedMarkets={['US']}
+        marketCatalog={{
+          version: 'partial.v1',
+          markets: [
+            {
+              code: 'US',
+              label: '',
+              currency: 'USD',
+              timezone: 'America/New_York',
+              calendar_id: 'XNYS',
+              exchanges: ['NYSE'],
+              indexes: ['SP500'],
+              capabilities: {},
+            },
+          ],
+        }}
+        bootstrapState="not_started"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('US (primary)')).toBeInTheDocument();
+  });
 });
