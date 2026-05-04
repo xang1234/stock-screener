@@ -90,7 +90,7 @@ class PriceCacheService:
         self._freshness_policy = PriceCacheFreshnessPolicy(
             logger=logger,
             redis_client=self._redis_client,
-            fetch_meta_key_template="price:*:*:fetch_meta",
+            fetch_meta_key_template=("price:*:*:fetch_meta", "price:*:fetch_meta"),
             get_expected_data_date=self._get_expected_data_date,
             get_fetch_metadata=self._get_fetch_metadata,
         )
@@ -1710,6 +1710,21 @@ class PriceCacheService:
             return market_by_symbol[symbol]
         return market
 
+    def _active_market_by_symbol(self, symbols: list[str]) -> dict[str, str | None]:
+        if not symbols:
+            return {}
+        db = self._session_factory()
+        try:
+            return {
+                row[0]: row[1]
+                for row in db.query(StockUniverse.symbol, StockUniverse.market).filter(
+                    StockUniverse.symbol.in_(symbols),
+                    StockUniverse.active_filter(),
+                ).all()
+            }
+        finally:
+            db.close()
+
     def _store_batch_in_cache_for_market(
         self,
         batch_data: Dict[str, pd.DataFrame],
@@ -1941,14 +1956,21 @@ class PriceCacheService:
         db_results = self._get_many_from_database(symbols, period)
         db_hits = []
         yfinance_needed = []
-
-        for symbol in symbols:
-            df, last_date = db_results.get(symbol, (None, None))
-            symbol_market = self._market_for_symbol(
+        caller_market_by_symbol = {
+            symbol: self._market_for_symbol(
                 symbol,
                 market=market,
                 market_by_symbol=market_by_symbol,
             )
+            for symbol in symbols
+        }
+        active_market_by_symbol = self._active_market_by_symbol(
+            [symbol for symbol, symbol_market in caller_market_by_symbol.items() if symbol_market is None]
+        )
+
+        for symbol in symbols:
+            df, last_date = db_results.get(symbol, (None, None))
+            symbol_market = caller_market_by_symbol[symbol] or active_market_by_symbol.get(symbol)
             is_fresh = (last_date >= expected_date) if (last_date and expected_date) else False
             if self._is_fetch_metadata_stale(fetch_meta_by_symbol.get(symbol), now_et=now_et):
                 is_fresh = False
@@ -1967,17 +1989,8 @@ class PriceCacheService:
 
         from .bulk_data_fetcher import BulkDataFetcher
 
-        active_query_db = self._session_factory()
-        try:
-            active_market_by_symbol = {
-                row[0]: row[1]
-                for row in active_query_db.query(StockUniverse.symbol, StockUniverse.market).filter(
-                    StockUniverse.symbol.in_(yfinance_needed),
-                    StockUniverse.active_filter(),
-                ).all()
-            }
-        finally:
-            active_query_db.close()
+        missing_active_lookup = [symbol for symbol in yfinance_needed if symbol not in active_market_by_symbol]
+        active_market_by_symbol.update(self._active_market_by_symbol(missing_active_lookup))
 
         inactive_symbols = [symbol for symbol in yfinance_needed if symbol not in active_market_by_symbol]
         active_yfinance_needed = [symbol for symbol in yfinance_needed if symbol in active_market_by_symbol]

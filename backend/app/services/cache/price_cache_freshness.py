@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Sequence
 
 from ...utils.market_hours import get_eastern_now, is_market_open
 
@@ -17,13 +17,16 @@ class PriceCacheFreshnessPolicy:
         *,
         logger,
         redis_client,
-        fetch_meta_key_template: str,
+        fetch_meta_key_template: str | Sequence[str],
         get_expected_data_date: Callable[[], Optional[date]],
         get_fetch_metadata: Callable[[str], Optional[Dict]],
     ) -> None:
         self._logger = logger
         self._redis_client = redis_client
-        self._fetch_meta_key_template = fetch_meta_key_template
+        if isinstance(fetch_meta_key_template, str):
+            self._fetch_meta_key_templates = (fetch_meta_key_template,)
+        else:
+            self._fetch_meta_key_templates = tuple(fetch_meta_key_template)
         self._get_expected_data_date = get_expected_data_date
         self._get_fetch_metadata = get_fetch_metadata
 
@@ -75,24 +78,29 @@ class PriceCacheFreshnessPolicy:
             if now_et.time() < time(16, 30):
                 return []
 
-            pattern = self._fetch_meta_key_template.replace("{symbol}", "*")
             all_keys = []
             all_symbols = []
-            cursor = 0
+            seen_key_strings = set()
 
-            while True:
-                cursor, keys = self._redis_client.scan(cursor, match=pattern, count=500)
-                for key in keys:
-                    key_str = key.decode("utf-8") if isinstance(key, bytes) else key
-                    parts = key_str.split(":")
-                    if len(parts) == 3:
-                        all_keys.append(key)
-                        all_symbols.append(parts[1])
-                    elif len(parts) == 4:
-                        all_keys.append(key)
-                        all_symbols.append(parts[2])
-                if cursor == 0:
-                    break
+            for template in self._fetch_meta_key_templates:
+                pattern = template.replace("{symbol}", "*")
+                cursor = 0
+                while True:
+                    cursor, keys = self._redis_client.scan(cursor, match=pattern, count=500)
+                    for key in keys:
+                        key_str = key.decode("utf-8") if isinstance(key, bytes) else key
+                        if key_str in seen_key_strings:
+                            continue
+                        seen_key_strings.add(key_str)
+                        parts = key_str.split(":")
+                        if len(parts) == 3:
+                            all_keys.append(key)
+                            all_symbols.append(parts[1])
+                        elif len(parts) == 4:
+                            all_keys.append(key)
+                            all_symbols.append(parts[2])
+                    if cursor == 0:
+                        break
 
             if not all_keys:
                 return []

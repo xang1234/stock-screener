@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import fnmatch
+import json
 import pickle
 
 import pandas as pd
@@ -11,6 +13,7 @@ import pytest
 from app.domain.markets import Market
 from app.services.benchmark_cache_service import BenchmarkCacheService
 from app.services.cache.market_cache_policy import MarketAwareCachePolicy
+from app.services.cache.price_cache_freshness import PriceCacheFreshnessPolicy
 from app.services.fundamentals_cache_service import FundamentalsCacheService
 from app.services.price_cache_service import PriceCacheService
 
@@ -34,6 +37,8 @@ def test_market_cache_policy_centralizes_ttl_and_freshness():
     now = datetime(2026, 5, 4, 12, 0, 0)
 
     assert policy.ttl_seconds("benchmark", market="HK") == 86400
+    assert policy.is_datetime_fresh("benchmark", now - timedelta(days=1), now=now, market="HK") is True
+    assert policy.is_datetime_fresh("benchmark", now - timedelta(days=2), now=now, market="HK") is False
     assert policy.ttl_seconds("fundamentals", market="HK") == 604800
     assert policy.is_datetime_fresh("fundamentals", now - timedelta(days=7), now=now, market="HK") is True
     assert policy.is_datetime_fresh("fundamentals", now - timedelta(days=8), now=now, market="HK") is False
@@ -98,6 +103,33 @@ class _MutableRedis:
 
     def delete(self, *keys):
         self.deleted.extend(keys)
+
+
+class _ScanningPipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.keys = []
+
+    def get(self, key):
+        self.keys.append(key)
+        return self
+
+    def execute(self):
+        return [self.redis.values[key] for key in self.keys]
+
+
+class _ScanningRedis:
+    def __init__(self, values):
+        self.values = values
+        self.matches = []
+
+    def scan(self, cursor, match, count=500):
+        self.matches.append(match)
+        keys = [key for key in self.values if fnmatch.fnmatch(key, match)]
+        return 0, keys
+
+    def pipeline(self):
+        return _ScanningPipeline(self)
 
 
 class _FailingPipeline:
@@ -176,6 +208,29 @@ def test_price_cache_batch_pipeline_fallback_preserves_market(monkeypatch):
     service.store_batch_in_cache({"0700.HK": data}, also_store_db=False, market="HK")
 
     assert calls == [("0700.HK", "HK")]
+
+
+def test_price_cache_freshness_scans_new_and_legacy_fetch_meta_keys(monkeypatch):
+    import app.services.cache.price_cache_freshness as module
+
+    redis = _ScanningRedis(
+        {
+            "price:HK:0700.HK:fetch_meta": json.dumps({"needs_refresh_after_close": True}),
+            "price:AAPL:fetch_meta": json.dumps({"needs_refresh_after_close": True}),
+        }
+    )
+    policy = PriceCacheFreshnessPolicy(
+        logger=type("Logger", (), {"info": lambda *args, **kwargs: None, "error": lambda *args, **kwargs: None})(),
+        redis_client=redis,
+        fetch_meta_key_template=("price:*:*:fetch_meta", "price:*:fetch_meta"),
+        get_expected_data_date=lambda: None,
+        get_fetch_metadata=lambda symbol: None,
+    )
+    monkeypatch.setattr(module, "get_eastern_now", lambda: datetime(2026, 5, 4, 17, 0, 0))
+    monkeypatch.setattr(module, "is_market_open", lambda now=None: False)
+
+    assert policy.get_stale_intraday_symbols() == ["0700.HK", "AAPL"]
+    assert redis.matches == ["price:*:*:fetch_meta", "price:*:fetch_meta"]
 
 
 def test_fundamentals_cache_invalidate_uses_market_scoped_key():

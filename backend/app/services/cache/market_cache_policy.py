@@ -15,6 +15,7 @@ DEFAULT_TTL_SECONDS_BY_NAMESPACE = {
 }
 
 DEFAULT_MAX_AGE_DAYS_BY_NAMESPACE = {
+    "benchmark": 1,
     "fundamentals": 7,
     "price": 1,
 }

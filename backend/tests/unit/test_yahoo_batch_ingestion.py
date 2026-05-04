@@ -605,6 +605,47 @@ def test_bulk_fallback_writes_fetched_prices_to_symbol_market_scope(monkeypatch)
     assert stored == [({"0700.HK"}, "HK")]
 
 
+def test_bulk_fallback_warms_fresh_db_hits_to_inferred_symbol_market(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
+    service._redis_client = object()
+
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="HKEX",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    db.commit()
+    db.close()
+
+    fresh_df = _price_df(date(2026, 3, 18), 200.0)
+    monkeypatch.setattr(service, "_get_many_from_database", lambda symbols, period: {"0700.HK": (fresh_df, date(2026, 3, 18))})
+    stored = []
+    monkeypatch.setattr(
+        service,
+        "_store_recent_in_redis",
+        lambda symbol, data, market=None: stored.append((symbol, market)),
+    )
+
+    result = service._resolve_bulk_fallback(
+        ["0700.HK"],
+        period="2y",
+        expected_date=date(2026, 3, 18),
+        now_et=datetime(2026, 3, 18, 17, 0, 0),
+    )
+
+    assert result["0700.HK"] is fresh_df
+    assert stored == [("0700.HK", "HK")]
+
+
 def test_get_many_cached_only_fresh_filters_stale_database_rows(monkeypatch):
     service = PriceCacheService(redis_client=None, session_factory=lambda: MagicMock())
     fresh_df = _price_df(date(2026, 3, 18), 123.0)
