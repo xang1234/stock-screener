@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from ..domain.markets.catalog import get_market_catalog
 from ..models.app_settings import AppSetting
-from ..models.stock import StockFundamental, StockPrice
-from ..models.stock_universe import StockUniverse
-from ..tasks.market_queues import SUPPORTED_MARKETS, normalize_market
+from .bootstrap_readiness_service import (
+    BootstrapReadiness,
+    BootstrapReadinessService,
+    MarketBootstrapReadiness,
+)
 
 RUNTIME_SETTINGS_CATEGORY = "runtime"
 PRIMARY_MARKET_KEY = "runtime.primary_market"
 ENABLED_MARKETS_KEY = "runtime.enabled_markets"
 BOOTSTRAP_STATE_KEY = "runtime.bootstrap_state"
+BOOTSTRAP_STARTED_AT_KEY = "runtime.bootstrap_started_at"
 
 DEFAULT_PRIMARY_MARKET = "US"
 DEFAULT_ENABLED_MARKETS = ("US",)
@@ -28,6 +33,7 @@ class RuntimePreferences:
     primary_market: str
     enabled_markets: list[str]
     bootstrap_state: str
+    bootstrap_started_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -61,14 +67,18 @@ def _upsert_setting(db: Session, *, key: str, value: str, description: str) -> N
     setting.description = description
 
 
+def get_bootstrap_readiness_service() -> BootstrapReadinessService:
+    return BootstrapReadinessService()
+
+
 def _normalize_supported_market(value: str | None) -> str:
+    catalog = get_market_catalog()
     try:
-        normalized = normalize_market(value)
+        return catalog.get(value).code
     except ValueError as exc:
-        raise ValueError(f"Unsupported market {value!r}. Supported: {list(SUPPORTED_MARKETS)}") from exc
-    if normalized == "SHARED":
-        raise ValueError(f"Unsupported market {value!r}. Supported: {list(SUPPORTED_MARKETS)}")
-    return normalized
+        raise ValueError(
+            f"Unsupported market {value!r}. Supported: {catalog.supported_market_codes()}"
+        ) from exc
 
 
 def _normalize_enabled_markets(markets: list[str] | tuple[str, ...] | None) -> list[str]:
@@ -88,6 +98,31 @@ def _normalize_bootstrap_state(value: str | None) -> str:
     if normalized in VALID_BOOTSTRAP_STATES:
         return normalized
     return DEFAULT_BOOTSTRAP_STATE
+
+
+def _parse_bootstrap_started_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _write_bootstrap_started_at(db: Session) -> None:
+    _upsert_setting(
+        db,
+        key=BOOTSTRAP_STARTED_AT_KEY,
+        value=datetime.now(timezone.utc).isoformat(),
+        description="UTC timestamp for the current local bootstrap attempt.",
+    )
+
+
+def _ensure_bootstrap_started_at(db: Session) -> None:
+    existing = _get_setting(db, BOOTSTRAP_STARTED_AT_KEY)
+    if _parse_bootstrap_started_at(existing.value if existing else None) is not None:
+        return
+    _write_bootstrap_started_at(db)
 
 
 def get_runtime_preferences(db: Session) -> RuntimePreferences:
@@ -114,11 +149,16 @@ def get_runtime_preferences(db: Session) -> RuntimePreferences:
     bootstrap_state = _normalize_bootstrap_state(
         bootstrap_setting.value if bootstrap_setting else None
     )
+    bootstrap_started_at_setting = _get_setting(db, BOOTSTRAP_STARTED_AT_KEY)
+    bootstrap_started_at = _parse_bootstrap_started_at(
+        bootstrap_started_at_setting.value if bootstrap_started_at_setting else None
+    )
 
     return RuntimePreferences(
         primary_market=primary_market,
         enabled_markets=enabled_markets,
         bootstrap_state=bootstrap_state,
+        bootstrap_started_at=bootstrap_started_at,
     )
 
 
@@ -147,12 +187,22 @@ def save_runtime_preferences(
         description="Enabled markets for the local-default runtime scheduler.",
     )
     if bootstrap_state is not None:
+        normalized_bootstrap_state = _normalize_bootstrap_state(bootstrap_state)
+        existing_bootstrap_setting = _get_setting(db, BOOTSTRAP_STATE_KEY)
+        existing_bootstrap_state = _normalize_bootstrap_state(
+            existing_bootstrap_setting.value if existing_bootstrap_setting else None
+        )
         _upsert_setting(
             db,
             key=BOOTSTRAP_STATE_KEY,
-            value=_normalize_bootstrap_state(bootstrap_state),
+            value=normalized_bootstrap_state,
             description="Current local bootstrap orchestration state.",
         )
+        if normalized_bootstrap_state == "running":
+            if existing_bootstrap_state == "running":
+                _ensure_bootstrap_started_at(db)
+            else:
+                _write_bootstrap_started_at(db)
     db.commit()
     return get_runtime_preferences(db)
 
@@ -186,85 +236,22 @@ def is_market_enabled_now(market: str | None) -> bool:
         db.close()
 
 
-def _has_active_universe_rows(db: Session, market: str | None = None) -> bool:
-    query = db.query(StockUniverse.id).filter(StockUniverse.is_active.is_(True))
-    if market is not None:
-        query = query.filter(StockUniverse.market == _normalize_supported_market(market))
-    return query.limit(1).first() is not None
-
-
-def _has_price_rows(db: Session, market: str | None = None) -> bool:
-    query = (
-        db.query(StockPrice.id)
-        .join(StockUniverse, StockUniverse.symbol == StockPrice.symbol)
-        .filter(StockUniverse.is_active.is_(True))
-    )
-    if market is not None:
-        query = query.filter(StockUniverse.market == _normalize_supported_market(market))
-    return query.limit(1).first() is not None
-
-
-def _has_fundamental_rows(db: Session, market: str | None = None) -> bool:
-    query = (
-        db.query(StockFundamental.id)
-        .join(StockUniverse, StockUniverse.symbol == StockFundamental.symbol)
-        .filter(StockUniverse.is_active.is_(True))
-    )
-    if market is not None:
-        query = query.filter(StockUniverse.market == _normalize_supported_market(market))
-    return query.limit(1).first() is not None
-
-
-def _has_core_market_data(db: Session, market: str | None) -> bool:
-    return (
-        _has_active_universe_rows(db, market)
-        and _has_price_rows(db, market)
-        and _has_fundamental_rows(db, market)
-    )
-
-
-def _has_completed_auto_scan(db: Session, market: str | None) -> bool:
-    from ..infra.db.models.feature_store import FeatureRun
-    from ..models.scan_result import SCAN_TRIGGER_SOURCE_AUTO, Scan
-
-    normalized_market = _normalize_supported_market(market)
-    return (
-        db.query(Scan.id)
-        .join(FeatureRun, FeatureRun.id == Scan.feature_run_id)
-        .filter(
-            Scan.universe_market == normalized_market,
-            Scan.status == "completed",
-            Scan.trigger_source == SCAN_TRIGGER_SOURCE_AUTO,
-            FeatureRun.status == "published",
-        )
-        .limit(1)
-        .first()
-        is not None
-    )
-
-
 def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
     prefs = get_runtime_preferences(db)
-    empty_system = not (
-        _has_active_universe_rows(db)
-        or _has_price_rows(db)
-        or _has_fundamental_rows(db)
-    )
     enabled_markets = list(prefs.enabled_markets)
+    readiness = get_bootstrap_readiness_service().evaluate(
+        db,
+        enabled_markets=enabled_markets,
+        bootstrap_started_at=prefs.bootstrap_started_at,
+    )
+    empty_system = readiness.empty_system
 
     bootstrap_state = prefs.bootstrap_state
-    should_check_readiness = bootstrap_state in {"running", "ready", "failed"}
-    core_ready = (
-        all(_has_core_market_data(db, market) for market in enabled_markets)
-        if should_check_readiness
+    all_markets_ready = (
+        readiness.ready
+        if bootstrap_state in {"running", "ready", "failed"}
         else False
     )
-    scan_ready = (
-        all(_has_completed_auto_scan(db, market) for market in enabled_markets)
-        if should_check_readiness
-        else False
-    )
-    all_markets_ready = core_ready and scan_ready
     if all_markets_ready:
         bootstrap_state = "ready"
     elif empty_system and bootstrap_state == "ready":
@@ -282,5 +269,5 @@ def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
         primary_market=prefs.primary_market,
         enabled_markets=enabled_markets,
         bootstrap_state=bootstrap_state,
-        supported_markets=list(SUPPORTED_MARKETS),
+        supported_markets=get_market_catalog().supported_market_codes(),
     )

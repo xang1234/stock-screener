@@ -48,6 +48,7 @@ function RuntimeProbe() {
     bootstrapState,
     primaryMarket,
     enabledMarkets,
+    marketCatalog,
     supportedMarkets,
     startBootstrap,
   } = useRuntime();
@@ -60,6 +61,9 @@ function RuntimeProbe() {
       <div data-testid="bootstrap-state">{bootstrapState}</div>
       <div data-testid="primary-market">{primaryMarket}</div>
       <div data-testid="enabled-markets">{enabledMarkets.join(',')}</div>
+      <div data-testid="market-catalog-labels">
+        {marketCatalog.markets.map((market) => market.label).join(',')}
+      </div>
       <div data-testid="supported-markets">{supportedMarkets.join(',')}</div>
       <button
         type="button"
@@ -130,6 +134,31 @@ describe('RuntimeProvider', () => {
       bootstrap_required: true,
       primary_market: 'HK',
       enabled_markets: ['HK', 'US'],
+      market_catalog: {
+        version: 'test.v1',
+        markets: [
+          {
+            code: 'US',
+            label: 'United States',
+            currency: 'USD',
+            timezone: 'America/New_York',
+            calendar_id: 'XNYS',
+            exchanges: ['NYSE', 'NASDAQ'],
+            indexes: ['SP500'],
+            capabilities: {},
+          },
+          {
+            code: 'HK',
+            label: 'Hong Kong',
+            currency: 'HKD',
+            timezone: 'Asia/Hong_Kong',
+            calendar_id: 'XHKG',
+            exchanges: ['HKEX'],
+            indexes: ['HSI'],
+            capabilities: {},
+          },
+        ],
+      },
       bootstrap_state: 'running',
       supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN'],
       api_base_path: '/api',
@@ -144,6 +173,7 @@ describe('RuntimeProvider', () => {
     expect(screen.getByTestId('bootstrap-required')).toHaveTextContent('true');
     expect(screen.getByTestId('primary-market')).toHaveTextContent('HK');
     expect(screen.getByTestId('enabled-markets')).toHaveTextContent('HK,US');
+    expect(screen.getByTestId('market-catalog-labels')).toHaveTextContent('United States,Hong Kong');
   });
 
   it('updates cached bootstrap state immediately after bootstrap starts', async () => {
@@ -191,6 +221,9 @@ describe('RuntimeProvider', () => {
         expect.objectContaining({ market: 'HK', task_id: 'task-bootstrap-123' }),
         expect.objectContaining({ market: 'US', task_id: null }),
       ]);
+      expect(queryClient.getQueryData(['appCapabilities'])?.market_catalog).toEqual(
+        DEFAULT_CAPABILITIES.market_catalog
+      );
     });
   });
 

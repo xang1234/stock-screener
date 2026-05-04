@@ -250,6 +250,7 @@ function AppShell() {
     isLoggingIn,
     isStartingBootstrap,
     login,
+    marketCatalog,
     primaryMarket,
     loginError,
     runtimeReady,
@@ -279,6 +280,7 @@ function AppShell() {
         primaryMarket={primaryMarket}
         enabledMarkets={enabledMarkets}
         supportedMarkets={supportedMarkets}
+        marketCatalog={marketCatalog}
         bootstrapState={bootstrapState}
         isStartingBootstrap={isStartingBootstrap}
         bootstrapError={bootstrapError}

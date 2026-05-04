@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import BootstrapSetupScreen from './BootstrapSetupScreen';
@@ -377,5 +377,91 @@ describe('BootstrapSetupScreen', () => {
 
     expect(screen.getByText('55%')).toBeInTheDocument();
     expect(screen.queryByText('25%')).not.toBeInTheDocument();
+  });
+
+  it('renders Market Catalog labels while submitting Market codes', () => {
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+    const onStartBootstrap = vi.fn().mockResolvedValue();
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="HK"
+        enabledMarkets={['HK', 'US']}
+        supportedMarkets={['US', 'HK']}
+        marketCatalog={{
+          version: 'test.v1',
+          markets: [
+            {
+              code: 'US',
+              label: 'United States',
+              currency: 'USD',
+              timezone: 'America/New_York',
+              calendar_id: 'XNYS',
+              exchanges: ['NYSE', 'NASDAQ'],
+              indexes: ['SP500'],
+              capabilities: {},
+            },
+            {
+              code: 'HK',
+              label: 'Hong Kong',
+              currency: 'HKD',
+              timezone: 'Asia/Hong_Kong',
+              calendar_id: 'XHKG',
+              exchanges: ['HKEX'],
+              indexes: ['HSI'],
+              capabilities: {},
+            },
+          ],
+        }}
+        bootstrapState="not_started"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={onStartBootstrap}
+      />
+    );
+
+    expect(screen.getAllByText('Hong Kong').length).toBeGreaterThan(0);
+    expect(screen.getByText('Hong Kong (primary)')).toBeInTheDocument();
+    expect(screen.getByText('United States')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start bootstrap' }));
+
+    expect(onStartBootstrap).toHaveBeenCalledWith({
+      primaryMarket: 'HK',
+      enabledMarkets: ['HK', 'US'],
+    });
+  });
+
+  it('falls back to the Market code when a catalog label is missing', () => {
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US']}
+        supportedMarkets={['US']}
+        marketCatalog={{
+          version: 'partial.v1',
+          markets: [
+            {
+              code: 'US',
+              label: '',
+              currency: 'USD',
+              timezone: 'America/New_York',
+              calendar_id: 'XNYS',
+              exchanges: ['NYSE'],
+              indexes: ['SP500'],
+              capabilities: {},
+            },
+          ],
+        }}
+        bootstrapState="not_started"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('US (primary)')).toBeInTheDocument();
   });
 });
