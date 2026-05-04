@@ -12,6 +12,82 @@ import { loginServer, logoutServer } from '../api/auth';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 import { DEFAULT_RUNTIME_ACTIVITY } from '../hooks/useRuntimeActivity';
 
+export const DEFAULT_MARKET_CATALOG = {
+  version: 'fallback.v1',
+  markets: [
+    {
+      code: 'US',
+      label: 'United States',
+      currency: 'USD',
+      timezone: 'America/New_York',
+      calendar_id: 'XNYS',
+      exchanges: ['NYSE', 'NASDAQ', 'AMEX'],
+      indexes: ['SP500'],
+      capabilities: {},
+    },
+    {
+      code: 'HK',
+      label: 'Hong Kong',
+      currency: 'HKD',
+      timezone: 'Asia/Hong_Kong',
+      calendar_id: 'XHKG',
+      exchanges: ['HKEX', 'SEHK', 'XHKG'],
+      indexes: ['HSI'],
+      capabilities: {},
+    },
+    {
+      code: 'IN',
+      label: 'India',
+      currency: 'INR',
+      timezone: 'Asia/Kolkata',
+      calendar_id: 'XNSE',
+      exchanges: ['NSE', 'BSE', 'XNSE', 'XBOM'],
+      indexes: ['NIFTY50'],
+      capabilities: {},
+    },
+    {
+      code: 'JP',
+      label: 'Japan',
+      currency: 'JPY',
+      timezone: 'Asia/Tokyo',
+      calendar_id: 'XTKS',
+      exchanges: ['TSE', 'JPX', 'XTKS'],
+      indexes: ['NIKKEI225'],
+      capabilities: {},
+    },
+    {
+      code: 'KR',
+      label: 'South Korea',
+      currency: 'KRW',
+      timezone: 'Asia/Seoul',
+      calendar_id: 'XKRX',
+      exchanges: ['KRX', 'KOSPI', 'KOSDAQ', 'XKRX'],
+      indexes: ['KOSPI'],
+      capabilities: {},
+    },
+    {
+      code: 'TW',
+      label: 'Taiwan',
+      currency: 'TWD',
+      timezone: 'Asia/Taipei',
+      calendar_id: 'XTAI',
+      exchanges: ['TWSE', 'TPEx', 'XTAI'],
+      indexes: ['TAIEX'],
+      capabilities: {},
+    },
+    {
+      code: 'CN',
+      label: 'China',
+      currency: 'CNY',
+      timezone: 'Asia/Shanghai',
+      calendar_id: 'XSHG',
+      exchanges: ['SSE', 'SZSE', 'XSHG', 'XSHE'],
+      indexes: ['CSI300'],
+      capabilities: {},
+    },
+  ],
+};
+
 export const DEFAULT_CAPABILITIES = {
   features: {
     themes: true,
@@ -37,6 +113,7 @@ export const DEFAULT_CAPABILITIES = {
   primary_market: 'US',
   enabled_markets: ['US'],
   bootstrap_state: 'not_started',
+  market_catalog: DEFAULT_MARKET_CATALOG,
   supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN'],
   api_base_path: '/api',
 };
@@ -67,6 +144,14 @@ function buildBootstrapSeed(primaryMarket, enabledMarkets, taskId) {
   }));
 }
 
+function supportedMarketsFromCatalog(marketCatalog) {
+  const markets = marketCatalog?.markets;
+  if (!Array.isArray(markets) || markets.length === 0) {
+    return null;
+  }
+  return markets.map((market) => market.code).filter(Boolean);
+}
+
 export function mergeBootstrapCapabilities(previous, data) {
   return {
     ...(previous ?? DEFAULT_CAPABILITIES),
@@ -74,8 +159,13 @@ export function mergeBootstrapCapabilities(previous, data) {
     primary_market: data.primary_market ?? previous?.primary_market ?? 'US',
     enabled_markets: data.enabled_markets ?? previous?.enabled_markets ?? ['US'],
     bootstrap_state: data.bootstrap_state ?? 'running',
+    market_catalog: data.market_catalog
+      ?? previous?.market_catalog
+      ?? DEFAULT_CAPABILITIES.market_catalog,
     supported_markets: data.supported_markets
       ?? previous?.supported_markets
+      ?? supportedMarketsFromCatalog(data.market_catalog)
+      ?? supportedMarketsFromCatalog(previous?.market_catalog)
       ?? DEFAULT_CAPABILITIES.supported_markets,
   };
 }
@@ -182,11 +272,16 @@ export function RuntimeProvider({ children }) {
   const value = useMemo(() => {
     const features = capabilities.features ?? DEFAULT_CAPABILITIES.features;
     const auth = capabilities.auth ?? DEFAULT_CAPABILITIES.auth;
+    const marketCatalog = capabilities.market_catalog ?? DEFAULT_CAPABILITIES.market_catalog;
+    const supportedMarkets = capabilities.supported_markets
+      ?? supportedMarketsFromCatalog(marketCatalog)
+      ?? supportedMarketsFromCatalog(DEFAULT_MARKET_CATALOG);
 
     return {
       capabilities,
       auth,
       features,
+      marketCatalog,
       runtimeReady,
       uiSnapshots: capabilities.ui_snapshots ?? DEFAULT_CAPABILITIES.ui_snapshots,
       scanDefaults: capabilities.scan_defaults ?? DEFAULT_SCAN_DEFAULTS,
@@ -194,7 +289,7 @@ export function RuntimeProvider({ children }) {
       primaryMarket: capabilities.primary_market ?? 'US',
       enabledMarkets: capabilities.enabled_markets ?? ['US'],
       bootstrapState: capabilities.bootstrap_state ?? 'not_started',
-      supportedMarkets: capabilities.supported_markets ?? ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN'],
+      supportedMarkets,
       login: (password) => loginMutation.mutateAsync({ password }),
       logout: () => logoutMutation.mutateAsync(),
       startBootstrap: ({ primaryMarket, enabledMarkets }) => (

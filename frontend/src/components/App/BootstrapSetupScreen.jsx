@@ -79,6 +79,7 @@ export default function BootstrapSetupScreen({
   primaryMarket,
   enabledMarkets,
   supportedMarkets,
+  marketCatalog,
   bootstrapState,
   isStartingBootstrap,
   bootstrapError,
@@ -101,6 +102,19 @@ export default function BootstrapSetupScreen({
     () => normalizeEnabled(selectedPrimary, selectedMarkets),
     [selectedMarkets, selectedPrimary]
   );
+  const marketOptions = useMemo(() => {
+    const catalogMarkets = marketCatalog?.markets;
+    if (Array.isArray(catalogMarkets) && catalogMarkets.length > 0) {
+      return catalogMarkets.map((market) => ({
+        code: market.code,
+        label: market.label,
+      }));
+    }
+    return (supportedMarkets ?? []).map((market) => ({
+      code: market,
+      label: market,
+    }));
+  }, [marketCatalog?.markets, supportedMarkets]);
   const running = bootstrapState === 'running';
   const activityQuery = useRuntimeActivity({ enabled: running || isStartingBootstrap });
   const bootstrap = activityQuery.data?.bootstrap ?? null;
@@ -307,9 +321,9 @@ export default function BootstrapSetupScreen({
                 onChange={handlePrimaryChange}
                 disabled={running || isStartingBootstrap}
               >
-                {supportedMarkets.map((market) => (
-                  <MenuItem key={market} value={market}>
-                    {market}
+                {marketOptions.map((market) => (
+                  <MenuItem key={market.code} value={market.code}>
+                    {market.label}
                   </MenuItem>
                 ))}
               </Select>
@@ -320,17 +334,17 @@ export default function BootstrapSetupScreen({
                 Enabled markets
               </Typography>
               <FormGroup>
-                {supportedMarkets.map((market) => (
+                {marketOptions.map((market) => (
                   <FormControlLabel
-                    key={market}
+                    key={market.code}
                     control={(
                       <Checkbox
-                        checked={normalizedSelection.includes(market)}
-                        disabled={running || isStartingBootstrap || market === selectedPrimary}
-                        onChange={() => toggleMarket(market)}
+                        checked={normalizedSelection.includes(market.code)}
+                        disabled={running || isStartingBootstrap || market.code === selectedPrimary}
+                        onChange={() => toggleMarket(market.code)}
                       />
                     )}
-                    label={market === selectedPrimary ? `${market} (primary)` : market}
+                    label={market.code === selectedPrimary ? `${market.label} (primary)` : market.label}
                   />
                 ))}
               </FormGroup>
