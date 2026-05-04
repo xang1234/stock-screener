@@ -108,18 +108,18 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
     queue="celery",
 )
 def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[str]) -> dict:
+    from ..services.bootstrap_readiness_service import BootstrapReadinessService
     from ..services.runtime_preferences_service import (
-        _has_completed_auto_scan,
         set_bootstrap_state,
     )
 
     db = SessionLocal()
     try:
-        missing_markets = [
-            str(market).upper()
-            for market in enabled_markets
-            if not _has_completed_auto_scan(db, str(market).upper())
-        ]
+        readiness = BootstrapReadinessService().evaluate(
+            db,
+            enabled_markets=enabled_markets,
+        )
+        missing_markets = readiness.missing_markets
         if missing_markets:
             set_bootstrap_state(db, "failed")
             for market in missing_markets:

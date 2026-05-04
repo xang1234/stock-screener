@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 class _FakeSignature:
     def __init__(self, task: str, *, args=None, kwargs=None):
@@ -269,3 +271,76 @@ def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):
             "message": "Bootstrap failed",
         }
     ]
+
+
+def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_markets(monkeypatch):
+    from app.services.bootstrap_readiness_service import (
+        BootstrapReadiness,
+        MarketBootstrapReadiness,
+    )
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class _FakeReadinessService:
+        def evaluate(self, db, *, enabled_markets):
+            calls["evaluate"] = (db, enabled_markets)
+            return BootstrapReadiness(
+                empty_system=False,
+                market_results={
+                    "US": MarketBootstrapReadiness(
+                        market="US",
+                        core_ready=True,
+                        scan_ready=True,
+                    ),
+                    "HK": MarketBootstrapReadiness(
+                        market="HK",
+                        core_ready=True,
+                        scan_ready=False,
+                    ),
+                },
+            )
+
+    session = _FakeSession()
+    calls = {}
+    failed_markets = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        "app.services.bootstrap_readiness_service.BootstrapReadinessService",
+        _FakeReadinessService,
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.set_bootstrap_state",
+        lambda db, state: calls.setdefault("set_bootstrap_state", (db, state)),
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        lambda _db, **kwargs: failed_markets.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match="HK"):
+        module.complete_local_runtime_bootstrap.run(
+            primary_market="US",
+            enabled_markets=["US", "HK"],
+        )
+
+    assert calls["evaluate"] == (session, ["US", "HK"])
+    assert calls["set_bootstrap_state"] == (session, "failed")
+    assert failed_markets == [
+        {
+            "market": "HK",
+            "stage_key": "scan",
+            "lifecycle": "bootstrap",
+            "task_name": "runtime_bootstrap",
+            "task_id": None,
+            "message": "Bootstrap scan did not publish",
+        }
+    ]
+    assert session.closed is True
