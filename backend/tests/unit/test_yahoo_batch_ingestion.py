@@ -62,8 +62,10 @@ def _success_result(symbol: str) -> dict:
 class _FakePipeline:
     def __init__(self, results):
         self._results = results
+        self.keys = []
 
     def get(self, key):
+        self.keys.append(key)
         return self
 
     def execute(self):
@@ -73,9 +75,11 @@ class _FakePipeline:
 class _FakeRedis:
     def __init__(self, results):
         self._results = results
+        self.pipeline_instance = None
 
     def pipeline(self):
-        return _FakePipeline(self._results)
+        self.pipeline_instance = _FakePipeline(self._results)
+        return self.pipeline_instance
 
 
 def test_fetch_batch_prices_uses_required_yfinance_flags(monkeypatch):
@@ -520,6 +524,126 @@ def test_get_many_without_redis_uses_bulk_database_fallback(monkeypatch):
 
     bulk_db_lookup.assert_called_once_with(["AAPL"], "2y")
     assert result["AAPL"] is expected_df
+
+
+def test_get_many_reads_market_scoped_redis_keys(monkeypatch):
+    import app.services.price_cache_service as module
+
+    data = pd.DataFrame(
+        {"Close": list(range(200))},
+        index=pd.date_range(end="2026-03-18", periods=200),
+    )
+    fake_redis = _FakeRedis([pickle.dumps(data), json.dumps({"needs_refresh_after_close": False})])
+    service = PriceCacheService(redis_client=fake_redis, session_factory=lambda: MagicMock())
+
+    monkeypatch.setattr(module, "get_bulk_redis_client", lambda: None)
+    monkeypatch.setattr(module, "get_eastern_now", lambda: datetime(2026, 3, 18, 17, 0, 0))
+    monkeypatch.setattr(service, "_get_expected_data_date", lambda: date(2026, 3, 18))
+
+    result = service.get_many(["0700.HK"], period="2y", market_by_symbol={"0700.HK": "HK"})
+
+    assert result["0700.HK"] is not None
+    assert fake_redis.pipeline_instance.keys == [
+        "price:HK:0700.HK:recent",
+        "price:HK:0700.HK:fetch_meta",
+    ]
+
+
+def test_bulk_fallback_writes_fetched_prices_to_symbol_market_scope(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
+    service._redis_client = object()
+
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="HKEX",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    db.commit()
+    db.close()
+
+    monkeypatch.setattr(service, "_get_many_from_database", lambda symbols, period: {"0700.HK": (None, None)})
+
+    def fake_fetch(self, symbols, period="2y", start_batch_size=None, market=None):
+        assert market == "HK"
+        return {
+            "0700.HK": {
+                "symbol": "0700.HK",
+                "price_data": _price_df(date(2026, 3, 18), 200.0),
+                "info": None,
+                "fundamentals": None,
+                "has_error": False,
+                "error": None,
+            }
+        }
+
+    stored = []
+    monkeypatch.setattr(BulkDataFetcher, "fetch_prices_in_batches", fake_fetch)
+    monkeypatch.setattr(
+        service,
+        "store_batch_in_cache",
+        lambda batch_data, also_store_db=True, market=None: stored.append((set(batch_data), market)),
+    )
+
+    result = service._resolve_bulk_fallback(
+        ["0700.HK"],
+        period="2y",
+        expected_date=date(2026, 3, 18),
+        now_et=datetime(2026, 3, 18, 17, 0, 0),
+        market_by_symbol={"0700.HK": "HK"},
+    )
+
+    assert float(result["0700.HK"]["Close"].iloc[-1]) == 200.0
+    assert stored == [({"0700.HK"}, "HK")]
+
+
+def test_bulk_fallback_warms_fresh_db_hits_to_inferred_symbol_market(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
+    service._redis_client = object()
+
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="HKEX",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    db.commit()
+    db.close()
+
+    fresh_df = _price_df(date(2026, 3, 18), 200.0)
+    monkeypatch.setattr(service, "_get_many_from_database", lambda symbols, period: {"0700.HK": (fresh_df, date(2026, 3, 18))})
+    stored = []
+    monkeypatch.setattr(
+        service,
+        "_store_recent_in_redis",
+        lambda symbol, data, market=None: stored.append((symbol, market)),
+    )
+
+    result = service._resolve_bulk_fallback(
+        ["0700.HK"],
+        period="2y",
+        expected_date=date(2026, 3, 18),
+        now_et=datetime(2026, 3, 18, 17, 0, 0),
+    )
+
+    assert result["0700.HK"] is fresh_df
+    assert stored == [("0700.HK", "HK")]
 
 
 def test_get_many_cached_only_fresh_filters_stale_database_rows(monkeypatch):

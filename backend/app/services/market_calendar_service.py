@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from ..domain.markets import UnsupportedMarketError, market_registry
+
 try:
     import exchange_calendars as xcals  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - runtime guard
@@ -22,25 +24,15 @@ class MarketCalendarService:
     """Unified market calendar contract backed by exchange_calendars."""
 
     CALENDAR_ID_BY_MARKET: dict[str, str] = {
-        "US": "XNYS",
-        "HK": "XHKG",
-        "IN": "XNSE",
-        "JP": "XTKS",
-        "KR": "XKRX",
-        "TW": "XTAI",
-        "CN": "XSHG",
+        profile.market.code: profile.calendar_id for profile in market_registry.profiles()
     }
     TIMEZONE_BY_MARKET: dict[str, str] = {
-        "US": "America/New_York",
-        "HK": "Asia/Hong_Kong",
-        "IN": "Asia/Kolkata",
-        "JP": "Asia/Tokyo",
-        "KR": "Asia/Seoul",
-        "TW": "Asia/Taipei",
-        "CN": "Asia/Shanghai",
+        profile.market.code: profile.timezone_name for profile in market_registry.profiles()
     }
     PROVIDER_CALENDAR_ID_BY_MARKET: dict[str, str] = {
-        "IN": "NSE",
+        profile.market.code: profile.provider_calendar_id
+        for profile in market_registry.profiles()
+        if profile.provider_calendar_id is not None
     }
 
     def __init__(self, calendar_provider=None):
@@ -50,8 +42,9 @@ class MarketCalendarService:
         self._calendar_cache: dict[str, object] = {}
 
     def normalize_market(self, market: str | None) -> str:
-        normalized = (market or "US").strip().upper()
-        if normalized not in self.CALENDAR_ID_BY_MARKET:
+        try:
+            normalized = market_registry.profile(market or "US").market.code
+        except UnsupportedMarketError as exc:
             raise ValueError(f"Unsupported market for calendar service: {market}")
         return normalized
 
@@ -73,7 +66,9 @@ class MarketCalendarService:
 
     def _get_calendar(self, market: str):
         normalized = self.normalize_market(market)
-        calendar_id = self.CALENDAR_ID_BY_MARKET[normalized]
+        profile = market_registry.profile(normalized)
+        calendar_id = profile.calendar_id
+        provider_calendar_id = profile.provider_calendar_id or calendar_id
         provider = self._calendar_provider
         uses_pmc_provider = False
         if provider is None:
@@ -84,11 +79,6 @@ class MarketCalendarService:
                 "pandas_market_calendars" if normalized == "IN" else "exchange_calendars"
             )
             raise RuntimeError(f"{required_package} is required for MarketCalendarService")
-        provider_calendar_id = (
-            self.PROVIDER_CALENDAR_ID_BY_MARKET.get(normalized, calendar_id)
-            if uses_pmc_provider
-            else calendar_id
-        )
         if calendar_id not in self._calendar_cache:
             self._calendar_cache[calendar_id] = provider(provider_calendar_id)
         return self._calendar_cache[calendar_id]

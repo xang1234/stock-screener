@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
+from app.domain.markets import UnsupportedMarketError, market_registry
+
+
 PRIMARY_BENCHMARK_SYMBOL_BY_MARKET = {
-    "US": "SPY",
-    "HK": "^HSI",
-    "IN": "^NSEI",
-    "JP": "^N225",
-    "KR": "^KS11",
-    "TW": "^TWII",
-    "CN": "000300.SS",
+    profile.market.code: profile.primary_benchmark_symbol
+    for profile in market_registry.profiles()
 }
 
 
 def normalize_benchmark_market(market: str | None) -> str:
-    normalized = (market or "US").strip().upper()
-    if normalized not in PRIMARY_BENCHMARK_SYMBOL_BY_MARKET:
+    try:
+        return market_registry.profile(market or "US").market.code
+    except UnsupportedMarketError as exc:
         supported = ", ".join(supported_benchmark_markets())
-        raise ValueError(f"Unsupported market for benchmark registry: {market}. Supported: {supported}")
-    return normalized
+        raise ValueError(
+            f"Unsupported market for benchmark registry: {market}. Supported: {supported}"
+        ) from exc
 
 
 def get_primary_benchmark_symbol(market: str | None) -> str:
@@ -26,4 +26,4 @@ def get_primary_benchmark_symbol(market: str | None) -> str:
 
 
 def supported_benchmark_markets() -> list[str]:
-    return sorted(PRIMARY_BENCHMARK_SYMBOL_BY_MARKET)
+    return list(market_registry.supported_market_codes())

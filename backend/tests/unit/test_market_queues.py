@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.domain.markets.registry import market_registry
 from app.tasks.market_queues import (
     MARKET_JOBS_BASE,
     SHARED_DATA_FETCH_QUEUE,
@@ -20,6 +21,10 @@ from app.tasks.market_queues import (
     queue_for_market,
     user_scans_queue_for_market,
 )
+
+
+def test_supported_markets_match_market_registry_runtime_order():
+    assert SUPPORTED_MARKETS == market_registry.supported_market_codes()
 
 
 class TestNormalizeMarket:

@@ -33,6 +33,7 @@ from ..utils.market_hours import (
 )
 from .cache.price_cache_failure_telemetry import PriceCacheFailureTelemetry
 from .cache.price_cache_freshness import PriceCacheFreshnessPolicy
+from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 from .cache.price_cache_warmup import PriceCacheWarmupStore
 from .errors import CacheRefreshError
 from .redis_pool import get_redis_client, get_bulk_redis_client, is_redis_enabled
@@ -69,9 +70,11 @@ class PriceCacheService:
         self,
         redis_client: Optional[redis.Redis] = None,
         session_factory: Optional[Callable[[], Session]] = None,
+        cache_policy: MarketAwareCachePolicy = market_cache_policy,
     ):
         """Initialize price cache service."""
         self._session_factory = session_factory or SessionLocal
+        self._cache_policy = cache_policy
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -87,7 +90,7 @@ class PriceCacheService:
         self._freshness_policy = PriceCacheFreshnessPolicy(
             logger=logger,
             redis_client=self._redis_client,
-            fetch_meta_key_template=self.REDIS_KEY_FETCH_META,
+            fetch_meta_key_template=("price:*:*:fetch_meta", "price:*:fetch_meta"),
             get_expected_data_date=self._get_expected_data_date,
             get_fetch_metadata=self._get_fetch_metadata,
         )
@@ -108,7 +111,8 @@ class PriceCacheService:
         self,
         symbol: str,
         period: str = "2y",
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        market: str | None = None,
     ) -> Optional[pd.DataFrame]:
         """
         Get historical price data with caching and incremental updates.
@@ -131,19 +135,19 @@ class PriceCacheService:
         """
         if force_refresh:
             logger.info(f"Force refresh requested for {symbol}")
-            return self._fetch_full_and_cache(symbol, period)
+            return self._fetch_full_and_cache(symbol, period, market=market)
 
         # Try to get cached data from database
         cached_data, last_date = self._get_from_database(symbol, period)
 
         if cached_data is not None and not cached_data.empty:
             # Check if data is fresh
-            intraday_stale = self._is_intraday_data_stale(symbol)
+            intraday_stale = self._is_intraday_data_stale(symbol, market=market)
             if self._is_data_fresh(last_date) and not intraday_stale:
                 logger.info(f"Cache HIT for {symbol} (Database, last: {last_date})")
 
                 # Also store in Redis for faster next access
-                self._store_recent_in_redis(symbol, cached_data)
+                self._store_recent_in_redis(symbol, cached_data, market=market)
 
                 return cached_data
             else:
@@ -163,11 +167,21 @@ class PriceCacheService:
                     cached_data,
                     last_date,
                     force_same_day_refresh=intraday_stale,
+                    market=market,
                 )
 
         # No cached data - fetch full history
         logger.info(f"Cache MISS for {symbol} - fetching full history")
-        return self._fetch_full_and_cache(symbol, period)
+        return self._fetch_full_and_cache(symbol, period, market=market)
+
+    def _redis_recent_key(self, symbol: str, market: str | None = None) -> str:
+        return self._cache_policy.key("price", symbol, market=market, parts=("recent",))
+
+    def _redis_last_update_key(self, symbol: str, market: str | None = None) -> str:
+        return self._cache_policy.key("price", symbol, market=market, parts=("last_update",))
+
+    def _redis_fetch_meta_key(self, symbol: str, market: str | None = None) -> str:
+        return self._cache_policy.key("price", symbol, market=market, parts=("fetch_meta",))
 
     def get_cached_only(
         self,
@@ -445,7 +459,12 @@ class PriceCacheService:
         finally:
             db.close()
 
-    def _fetch_full_and_cache(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
+    def _fetch_full_and_cache(
+        self,
+        symbol: str,
+        period: str,
+        market: str | None = None,
+    ) -> Optional[pd.DataFrame]:
         """
         Fetch full historical data from the market provider and cache it.
         """
@@ -459,7 +478,7 @@ class PriceCacheService:
             logger.info(f"Fetched {symbol}: {len(data)} rows")
 
             # Cache in Redis (recent data only)
-            self._store_recent_in_redis(symbol, data)
+            self._store_recent_in_redis(symbol, data, market=market)
 
             # Persist to database (full data)
             self._store_in_database(symbol, data)
@@ -549,6 +568,7 @@ class PriceCacheService:
         cached_data: pd.DataFrame,
         last_cached_date: date,
         force_same_day_refresh: bool = False,
+        market: str | None = None,
     ) -> Optional[pd.DataFrame]:
         """
         Fetch only new data since last_cached_date and merge with cached data.
@@ -625,7 +645,7 @@ class PriceCacheService:
             logger.info(f"Merged data for {symbol}: {len(merged_data)} total rows")
 
             # Update cache with merged data
-            self._store_recent_in_redis(symbol, merged_data)
+            self._store_recent_in_redis(symbol, merged_data, market=market)
             self._store_in_database(symbol, new_data_filtered)  # Only persist new/updated rows
 
             return merged_data
@@ -650,7 +670,12 @@ class PriceCacheService:
             )
             return cached_data  # Return stale cache as fallback
 
-    def _store_recent_in_redis(self, symbol: str, data: pd.DataFrame) -> None:
+    def _store_recent_in_redis(
+        self,
+        symbol: str,
+        data: pd.DataFrame,
+        market: str | None = None,
+    ) -> None:
         """
         Store historical data (up to 5 years) in Redis for fast access.
 
@@ -676,33 +701,33 @@ class PriceCacheService:
             if recent_data.empty:
                 return
 
-            redis_key = self.REDIS_KEY_RECENT.format(symbol=symbol)
+            redis_key = self._redis_recent_key(symbol, market=market)
             pickled_data = pickle.dumps(recent_data)
 
             self._redis_client.setex(
                 redis_key,
-                self.CACHE_TTL_SECONDS,
+                self._cache_policy.ttl_seconds("price", market=market),
                 pickled_data
             )
 
             # Also store last update timestamp
-            last_update_key = self.REDIS_KEY_LAST_UPDATE.format(symbol=symbol)
+            last_update_key = self._redis_last_update_key(symbol, market=market)
             last_date = recent_data.index[-1].strftime('%Y-%m-%d')
             self._redis_client.setex(
                 last_update_key,
-                self.CACHE_TTL_SECONDS,
+                self._cache_policy.ttl_seconds("price", market=market),
                 last_date
             )
 
             # Store fetch metadata for intraday staleness detection
-            self._store_fetch_metadata(symbol)
+            self._store_fetch_metadata(symbol, market=market)
 
             logger.debug(f"Cached {symbol} recent data in Redis ({len(recent_data)} rows)")
 
         except Exception as e:
             logger.error(f"Error storing {symbol} in Redis: {e}", exc_info=True)
 
-    def _store_fetch_metadata(self, symbol: str) -> None:
+    def _store_fetch_metadata(self, symbol: str, market: str | None = None) -> None:
         """
         Store metadata about when data was fetched for staleness detection.
 
@@ -735,10 +760,10 @@ class PriceCacheService:
                 "needs_refresh_after_close": needs_refresh
             }
 
-            meta_key = self.REDIS_KEY_FETCH_META.format(symbol=symbol)
+            meta_key = self._redis_fetch_meta_key(symbol, market=market)
             self._redis_client.setex(
                 meta_key,
-                self.CACHE_TTL_SECONDS,
+                self._cache_policy.ttl_seconds("price", market=market),
                 json.dumps(fetch_meta)
             )
 
@@ -748,7 +773,7 @@ class PriceCacheService:
         except Exception as e:
             logger.error(f"Error storing fetch metadata for {symbol}: {e}", exc_info=True)
 
-    def _get_fetch_metadata(self, symbol: str) -> Optional[Dict]:
+    def _get_fetch_metadata(self, symbol: str, market: str | None = None) -> Optional[Dict]:
         """
         Get fetch metadata for a symbol.
 
@@ -759,7 +784,7 @@ class PriceCacheService:
             return None
 
         try:
-            meta_key = self.REDIS_KEY_FETCH_META.format(symbol=symbol)
+            meta_key = self._redis_fetch_meta_key(symbol, market=market)
             meta_json = self._redis_client.get(meta_key)
 
             if meta_json:
@@ -779,7 +804,7 @@ class PriceCacheService:
         """Return True when a fetch-meta record marks a same-day bar stale after close."""
         return self._freshness_policy.is_fetch_metadata_stale(meta, now_et=now_et)
 
-    def _is_intraday_data_stale(self, symbol: str) -> bool:
+    def _is_intraday_data_stale(self, symbol: str, market: str | None = None) -> bool:
         """
         Check if cached data is stale intraday data.
 
@@ -790,7 +815,17 @@ class PriceCacheService:
         This catches the case where data was fetched at 2 PM with an
         incomplete "today" bar, but user is now scanning at 6 PM.
         """
-        return self._freshness_policy.is_intraday_data_stale(symbol)
+        if market is None:
+            return self._freshness_policy.is_intraday_data_stale(symbol)
+        meta = self._get_fetch_metadata(symbol, market=market)
+        is_stale = self._freshness_policy.is_fetch_metadata_stale(meta)
+        if is_stale:
+            logger.debug(
+                "%s: intraday data is stale for market %s (fetched during market, now after close)",
+                symbol,
+                market,
+            )
+        return is_stale
 
     def get_stale_intraday_symbols(self) -> List[str]:
         """
@@ -1080,7 +1115,7 @@ class PriceCacheService:
             if not self._redis_client:
                 return None
 
-            last_update_key = self.REDIS_KEY_LAST_UPDATE.format(symbol="SPY")
+            last_update_key = self._redis_last_update_key("SPY", market="US")
             last_date_str = self._redis_client.get(last_update_key)
             if last_date_str:
                 decoded = last_date_str.decode() if isinstance(last_date_str, bytes) else last_date_str
@@ -1193,7 +1228,7 @@ class PriceCacheService:
         """Write terminal heartbeat state instead of deleting (per market)."""
         self._warmup_store.complete_warmup_heartbeat(status=status, market=market)
 
-    def clear_fetch_metadata(self, symbol: str) -> None:
+    def clear_fetch_metadata(self, symbol: str, market: str | None = None) -> None:
         """
         Clear fetch metadata for a symbol (called after force refresh).
         """
@@ -1201,12 +1236,17 @@ class PriceCacheService:
             return
 
         try:
-            meta_key = self.REDIS_KEY_FETCH_META.format(symbol=symbol)
+            meta_key = self._redis_fetch_meta_key(symbol, market=market)
             self._redis_client.delete(meta_key)
         except Exception as e:
             logger.error(f"Error clearing fetch metadata for {symbol}: {e}", exc_info=True)
 
-    def get_symbols_needing_refresh(self, symbols: List[str], max_age_hours: float = 4.0) -> List[str]:
+    def get_symbols_needing_refresh(
+        self,
+        symbols: List[str],
+        max_age_hours: float = 4.0,
+        market: str | None = None,
+    ) -> List[str]:
         """
         Filter symbols to only those whose cache is older than max_age_hours.
 
@@ -1232,7 +1272,7 @@ class PriceCacheService:
             # Batch-read fetch_meta keys via pipeline
             pipeline = self._redis_client.pipeline()
             for symbol in symbols:
-                meta_key = self.REDIS_KEY_FETCH_META.format(symbol=symbol)
+                meta_key = self._redis_fetch_meta_key(symbol, market=market)
                 pipeline.get(meta_key)
             results = pipeline.execute()
 
@@ -1280,7 +1320,7 @@ class PriceCacheService:
         symbols = []
 
         try:
-            # Find all price:*:recent keys
+            # Find all market-scoped price:*:*:recent keys plus legacy price:*:recent keys.
             pattern = "price:*:recent"
             cursor = 0
 
@@ -1288,10 +1328,13 @@ class PriceCacheService:
                 cursor, keys = self._redis_client.scan(cursor, match=pattern, count=100)
 
                 for key in keys:
-                    # Extract symbol from key (price:{symbol}:recent)
+                    # Extract symbol from price:US:AAPL:recent or legacy price:AAPL:recent.
                     key_str = key.decode('utf-8') if isinstance(key, bytes) else key
                     parts = key_str.split(':')
-                    if len(parts) == 3:
+                    if len(parts) == 4:
+                        symbol = parts[2]
+                        symbols.append(symbol)
+                    elif len(parts) == 3:
                         symbol = parts[1]
                         symbols.append(symbol)
 
@@ -1410,7 +1453,13 @@ class PriceCacheService:
         del max_age_days
         return self._freshness_policy.is_data_fresh(last_date)
 
-    def store_in_cache(self, symbol: str, data: pd.DataFrame, also_store_db: bool = True) -> None:
+    def store_in_cache(
+        self,
+        symbol: str,
+        data: pd.DataFrame,
+        also_store_db: bool = True,
+        market: str | None = None,
+    ) -> None:
         """
         Store price data in cache (Redis and optionally database).
 
@@ -1427,7 +1476,7 @@ class PriceCacheService:
 
         try:
             # Store in Redis
-            self._store_recent_in_redis(symbol, data)
+            self._store_recent_in_redis(symbol, data, market=market)
             logger.debug(f"Stored {symbol} in Redis cache ({len(data)} rows)")
 
             # Optionally store in database
@@ -1441,7 +1490,8 @@ class PriceCacheService:
     def store_batch_in_cache(
         self,
         batch_data: Dict[str, pd.DataFrame],
-        also_store_db: bool = True
+        also_store_db: bool = True,
+        market: str | None = None,
     ) -> int:
         """
         Store multiple symbols' price data in cache using Redis pipeline.
@@ -1491,16 +1541,28 @@ class PriceCacheService:
                         if recent_data.empty:
                             continue
 
-                        redis_key = self.REDIS_KEY_RECENT.format(symbol=symbol)
+                        redis_key = self._redis_recent_key(symbol, market=market)
                         pickled_data = pickle.dumps(recent_data)
-                        pipeline.setex(redis_key, self.CACHE_TTL_SECONDS, pickled_data)
+                        pipeline.setex(
+                            redis_key,
+                            self._cache_policy.ttl_seconds("price", market=market),
+                            pickled_data,
+                        )
 
-                        last_update_key = self.REDIS_KEY_LAST_UPDATE.format(symbol=symbol)
+                        last_update_key = self._redis_last_update_key(symbol, market=market)
                         last_date = recent_data.index[-1].strftime('%Y-%m-%d')
-                        pipeline.setex(last_update_key, self.CACHE_TTL_SECONDS, last_date)
+                        pipeline.setex(
+                            last_update_key,
+                            self._cache_policy.ttl_seconds("price", market=market),
+                            last_date,
+                        )
 
-                        meta_key = self.REDIS_KEY_FETCH_META.format(symbol=symbol)
-                        pipeline.setex(meta_key, self.CACHE_TTL_SECONDS, fetch_meta_json)
+                        meta_key = self._redis_fetch_meta_key(symbol, market=market)
+                        pipeline.setex(
+                            meta_key,
+                            self._cache_policy.ttl_seconds("price", market=market),
+                            fetch_meta_json,
+                        )
 
                         stored += 1
                     except Exception as e:
@@ -1514,7 +1576,7 @@ class PriceCacheService:
                 # Fall back to individual writes
                 for symbol, data in batch_data.items():
                     if data is not None and not data.empty:
-                        self._store_recent_in_redis(symbol, data)
+                        self._store_recent_in_redis(symbol, data, market=market)
 
         # Batch DB writes
         if also_store_db:
@@ -1637,7 +1699,55 @@ class PriceCacheService:
         finally:
             db.close()
 
-    def get_many(self, symbols: list[str], period: str = "2y") -> Dict[str, Optional[pd.DataFrame]]:
+    @staticmethod
+    def _market_for_symbol(
+        symbol: str,
+        *,
+        market: str | None = None,
+        market_by_symbol: Dict[str, str | None] | None = None,
+    ) -> str | None:
+        if market_by_symbol is not None and symbol in market_by_symbol:
+            return market_by_symbol[symbol]
+        return market
+
+    def _active_market_by_symbol(self, symbols: list[str]) -> dict[str, str | None]:
+        if not symbols:
+            return {}
+        db = self._session_factory()
+        try:
+            return {
+                row[0]: row[1]
+                for row in db.query(StockUniverse.symbol, StockUniverse.market).filter(
+                    StockUniverse.symbol.in_(symbols),
+                    StockUniverse.active_filter(),
+                ).all()
+            }
+        finally:
+            db.close()
+
+    def _store_batch_in_cache_for_market(
+        self,
+        batch_data: Dict[str, pd.DataFrame],
+        *,
+        also_store_db: bool,
+        market: str | None,
+    ) -> int:
+        if market is None:
+            return self.store_batch_in_cache(batch_data, also_store_db=also_store_db)
+        try:
+            return self.store_batch_in_cache(batch_data, also_store_db=also_store_db, market=market)
+        except TypeError as exc:
+            if "market" not in str(exc):
+                raise
+            return self.store_batch_in_cache(batch_data, also_store_db=also_store_db)
+
+    def get_many(
+        self,
+        symbols: list[str],
+        period: str = "2y",
+        market: str | None = None,
+        market_by_symbol: Dict[str, str | None] | None = None,
+    ) -> Dict[str, Optional[pd.DataFrame]]:
         """
         Get cached price data for multiple symbols using Redis pipeline.
 
@@ -1652,6 +1762,8 @@ class PriceCacheService:
         Args:
             symbols: List of stock ticker symbols
             period: Time period needed ("1y" or "2y") - used for database fallback
+            market: Optional market for homogeneous batches.
+            market_by_symbol: Optional per-symbol market map for mixed batches.
 
         Returns:
             Dict mapping symbols to their cached DataFrames (or None if not cached)
@@ -1669,6 +1781,8 @@ class PriceCacheService:
                 period=period,
                 expected_date=expected_date,
                 now_et=now_et,
+                market=market,
+                market_by_symbol=market_by_symbol,
             )
 
         try:
@@ -1694,9 +1808,14 @@ class PriceCacheService:
                 try:
                     pipeline = bulk_client.pipeline()
                     for symbol in chunk_symbols:
-                        redis_key = self.REDIS_KEY_RECENT.format(symbol=symbol)
+                        symbol_market = self._market_for_symbol(
+                            symbol,
+                            market=market,
+                            market_by_symbol=market_by_symbol,
+                        )
+                        redis_key = self._redis_recent_key(symbol, market=symbol_market)
                         pipeline.get(redis_key)
-                        pipeline.get(self.REDIS_KEY_FETCH_META.format(symbol=symbol))
+                        pipeline.get(self._redis_fetch_meta_key(symbol, market=symbol_market))
                     chunk_results = pipeline.execute()
                 except (redis.exceptions.TimeoutError, redis.exceptions.ConnectionError, OSError) as pipe_err:
                     logger.warning(
@@ -1790,6 +1909,8 @@ class PriceCacheService:
                         expected_date=expected_date,
                         now_et=now_et,
                         fetch_meta_by_symbol=fetch_meta_by_symbol,
+                        market=market,
+                        market_by_symbol=market_by_symbol,
                     )
                 )
 
@@ -1817,6 +1938,8 @@ class PriceCacheService:
         expected_date: Optional[date],
         now_et: datetime,
         fetch_meta_by_symbol: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+        market: str | None = None,
+        market_by_symbol: Dict[str, str | None] | None = None,
     ) -> Dict[str, Optional[pd.DataFrame]]:
         """
         Resolve a multi-symbol cache miss via one DB query and one optional batch fetch.
@@ -1833,9 +1956,21 @@ class PriceCacheService:
         db_results = self._get_many_from_database(symbols, period)
         db_hits = []
         yfinance_needed = []
+        caller_market_by_symbol = {
+            symbol: self._market_for_symbol(
+                symbol,
+                market=market,
+                market_by_symbol=market_by_symbol,
+            )
+            for symbol in symbols
+        }
+        active_market_by_symbol = self._active_market_by_symbol(
+            [symbol for symbol, symbol_market in caller_market_by_symbol.items() if symbol_market is None]
+        )
 
         for symbol in symbols:
             df, last_date = db_results.get(symbol, (None, None))
+            symbol_market = caller_market_by_symbol[symbol] or active_market_by_symbol.get(symbol)
             is_fresh = (last_date >= expected_date) if (last_date and expected_date) else False
             if self._is_fetch_metadata_stale(fetch_meta_by_symbol.get(symbol), now_et=now_et):
                 is_fresh = False
@@ -1843,7 +1978,7 @@ class PriceCacheService:
                 cached_data[symbol] = df
                 db_hits.append(symbol)
                 if self._redis_client:
-                    self._store_recent_in_redis(symbol, df)
+                    self._store_recent_in_redis(symbol, df, market=symbol_market)
             else:
                 yfinance_needed.append(symbol)
 
@@ -1854,17 +1989,8 @@ class PriceCacheService:
 
         from .bulk_data_fetcher import BulkDataFetcher
 
-        active_query_db = self._session_factory()
-        try:
-            active_market_by_symbol = {
-                row[0]: row[1]
-                for row in active_query_db.query(StockUniverse.symbol, StockUniverse.market).filter(
-                    StockUniverse.symbol.in_(yfinance_needed),
-                    StockUniverse.active_filter(),
-                ).all()
-            }
-        finally:
-            active_query_db.close()
+        missing_active_lookup = [symbol for symbol in yfinance_needed if symbol not in active_market_by_symbol]
+        active_market_by_symbol.update(self._active_market_by_symbol(missing_active_lookup))
 
         inactive_symbols = [symbol for symbol in yfinance_needed if symbol not in active_market_by_symbol]
         active_yfinance_needed = [symbol for symbol in yfinance_needed if symbol in active_market_by_symbol]
@@ -1888,15 +2014,21 @@ class PriceCacheService:
             bulk_results = {}
             market_groups: dict[str | None, list[str]] = {}
             for symbol in active_yfinance_needed:
-                market = active_market_by_symbol.get(symbol)
-                market_groups.setdefault(market, []).append(symbol)
-            for market, market_symbols in market_groups.items():
+                symbol_market = self._market_for_symbol(
+                    symbol,
+                    market=market,
+                    market_by_symbol=market_by_symbol,
+                )
+                if symbol_market is None:
+                    symbol_market = active_market_by_symbol.get(symbol)
+                market_groups.setdefault(symbol_market, []).append(symbol)
+            for group_market, market_symbols in market_groups.items():
                 try:
                     provider_results = bulk_fetcher.fetch_prices_in_batches(
                         market_symbols,
                         period=period,
                         start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
-                        market=market,
+                        market=group_market,
                     )
                 except TypeError as exc:
                     if "market" not in str(exc):
@@ -1907,36 +2039,48 @@ class PriceCacheService:
                         start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
                     )
                 bulk_results.update(provider_results)
-            batch_to_store = {}
+            batch_to_store_by_market: dict[str | None, Dict[str, pd.DataFrame]] = {}
             for symbol, data in bulk_results.items():
                 if not data.get('has_error') and data.get('price_data') is not None:
                     price_df = data['price_data']
                     cached_data[symbol] = price_df
                     yfinance_success += 1
-                    batch_to_store[symbol] = price_df
+                    symbol_market = self._market_for_symbol(
+                        symbol,
+                        market=market,
+                        market_by_symbol=market_by_symbol,
+                    )
+                    if symbol_market is None:
+                        symbol_market = active_market_by_symbol.get(symbol)
+                    batch_to_store_by_market.setdefault(symbol_market, {})[symbol] = price_df
                 else:
                     cached_data[symbol] = None
                     yfinance_failed += 1
-            if batch_to_store:
-                self.store_batch_in_cache(batch_to_store, also_store_db=True)
+            for group_market, batch_to_store in batch_to_store_by_market.items():
+                self._store_batch_in_cache_for_market(
+                    batch_to_store,
+                    also_store_db=True,
+                    market=group_market,
+                )
 
         logger.info("yfinance batch fetch complete: %d success, %d failed", yfinance_success, yfinance_failed)
         return cached_data
 
-    def invalidate_cache(self, symbol: str) -> None:
+    def invalidate_cache(self, symbol: str, market: str | None = None) -> None:
         """
         Invalidate cached data for a specific symbol.
 
         Args:
             symbol: Stock symbol to invalidate
+            market: Market for the market-scoped cache key. Defaults to US for legacy callers.
         """
         if not self._redis_client:
             logger.warning("Redis not available for cache invalidation")
             return
 
         try:
-            redis_key_recent = self.REDIS_KEY_RECENT.format(symbol=symbol)
-            redis_key_update = self.REDIS_KEY_LAST_UPDATE.format(symbol=symbol)
+            redis_key_recent = self._redis_recent_key(symbol, market=market)
+            redis_key_update = self._redis_last_update_key(symbol, market=market)
 
             self._redis_client.delete(redis_key_recent)
             self._redis_client.delete(redis_key_update)
@@ -1946,7 +2090,7 @@ class PriceCacheService:
         except Exception as e:
             logger.error(f"Error invalidating cache for {symbol}: {e}", exc_info=True)
 
-    def get_cache_stats(self, symbol: str) -> Dict:
+    def get_cache_stats(self, symbol: str, market: str | None = None) -> Dict:
         """
         Get cache statistics for a symbol.
 
@@ -1955,6 +2099,7 @@ class PriceCacheService:
         """
         stats = {
             'symbol': symbol,
+            'market': self._cache_policy.normalize_market(market),
             'redis_cached': False,
             'db_cached': False,
             'last_update': None,
@@ -1964,7 +2109,7 @@ class PriceCacheService:
         # Check Redis
         if self._redis_client:
             try:
-                last_update_key = self.REDIS_KEY_LAST_UPDATE.format(symbol=symbol)
+                last_update_key = self._redis_last_update_key(symbol, market=market)
                 last_update = self._redis_client.get(last_update_key)
 
                 if last_update:

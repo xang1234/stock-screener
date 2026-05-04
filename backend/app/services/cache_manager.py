@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal
 from .benchmark_cache_service import BenchmarkCacheService
 from .benchmark_registry_service import benchmark_registry
+from .cache.market_cache_policy import market_cache_policy
 from .price_cache_service import PriceCacheService
 from .redis_pool import get_redis_client, is_redis_enabled
 from ..config import settings
@@ -333,10 +334,18 @@ class CacheManager:
                 entry = benchmark_registry.get_entry(market)
                 primary_symbol = entry.primary_symbol
                 fallback_symbol = entry.fallback_symbol
-                key_2y = f"benchmark:{primary_symbol}:2y"
-                key_1y = f"benchmark:{primary_symbol}:1y"
-                fallback_key_2y = f"benchmark:{fallback_symbol}:2y" if fallback_symbol else None
-                fallback_key_1y = f"benchmark:{fallback_symbol}:1y" if fallback_symbol else None
+                key_2y = market_cache_policy.key("benchmark", primary_symbol, market=market, parts=("2y",))
+                key_1y = market_cache_policy.key("benchmark", primary_symbol, market=market, parts=("1y",))
+                fallback_key_2y = (
+                    market_cache_policy.key("benchmark", fallback_symbol, market=market, parts=("2y",))
+                    if fallback_symbol
+                    else None
+                )
+                fallback_key_1y = (
+                    market_cache_policy.key("benchmark", fallback_symbol, market=market, parts=("1y",))
+                    if fallback_symbol
+                    else None
+                )
                 has_2y = self.redis_client.exists(key_2y) > 0
                 has_1y = self.redis_client.exists(key_1y) > 0
                 fallback_has_2y = self.redis_client.exists(fallback_key_2y) > 0 if fallback_key_2y else False
@@ -365,9 +374,11 @@ class CacheManager:
             price_symbols = set()
             for key in price_keys:
                 key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-                # Extract symbol from key like "price:AAPL:recent"
+                # Extract symbol from "price:US:AAPL:recent" and legacy "price:AAPL:recent".
                 parts = key_str.split(':')
-                if len(parts) >= 2:
+                if len(parts) >= 4:
+                    price_symbols.add(parts[2])
+                elif len(parts) >= 2:
                     price_symbols.add(parts[1])
 
             stats['price_cache']['symbols_cached'] = len(price_symbols)
@@ -380,9 +391,11 @@ class CacheManager:
             fundamentals_symbols = set()
             for key in fundamentals_keys:
                 key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-                # Extract symbol from key like "fundamentals:AAPL"
+                # Extract symbol from "fundamentals:US:AAPL" and legacy "fundamentals:AAPL".
                 parts = key_str.split(':')
-                if len(parts) >= 2:
+                if len(parts) >= 3:
+                    fundamentals_symbols.add(parts[2])
+                elif len(parts) >= 2:
                     fundamentals_symbols.add(parts[1])
 
             stats['fundamentals_cache']['symbols_cached'] = len(fundamentals_symbols)

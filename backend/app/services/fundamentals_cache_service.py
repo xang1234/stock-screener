@@ -8,6 +8,7 @@ Uses Redis for hot cache and database for persistence.
 import logging
 import math
 import pickle
+import inspect
 from typing import Any, Optional, Dict, Callable
 from datetime import datetime, date
 from sqlalchemy.orm import Session
@@ -29,6 +30,7 @@ from .field_capability_registry import field_capability_registry
 from .fx_service import FXQuote, FXService, currency_for_market, get_fx_service
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
+from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +159,7 @@ class FundamentalsCacheService:
         redis_client: Optional[redis.Redis] = None,
         session_factory: Optional[Callable[[], Session]] = None,
         fx_service: Optional[FXService] = None,
+        cache_policy: MarketAwareCachePolicy = market_cache_policy,
     ):
         """Initialize fundamentals cache service.
 
@@ -165,6 +168,7 @@ class FundamentalsCacheService:
         """
         self._session_factory = session_factory or SessionLocal
         self._fx_service = fx_service
+        self._cache_policy = cache_policy
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -211,7 +215,7 @@ class FundamentalsCacheService:
         # Try Redis first (fast path)
         if self._redis_client:
             try:
-                redis_key = self.REDIS_KEY_FORMAT.format(symbol=symbol)
+                redis_key = self._redis_data_key(symbol, market)
                 cached_data = self._redis_client.get(redis_key)
 
                 if cached_data:
@@ -220,7 +224,7 @@ class FundamentalsCacheService:
                         db_data, last_update = self._get_from_database(symbol)
                         if db_data is not None and self._is_data_fresh(last_update):
                             fundamentals = self._merge_fundamentals(fundamentals, db_data)
-                            self._store_in_redis(symbol, fundamentals)
+                            self._store_in_redis_for_market(symbol, fundamentals, market=market)
                     if self._needs_on_demand_enrichment(fundamentals):
                         logger.info(
                             "Cache HIT but incomplete for %s fundamentals - fetching on-demand enrichment",
@@ -230,7 +234,7 @@ class FundamentalsCacheService:
                         if enriched is not None:
                             return enriched
                     if self._ensure_field_availability_metadata(symbol, fundamentals, market):
-                        self._store_in_redis(symbol, fundamentals)
+                        self._store_in_redis_for_market(symbol, fundamentals, market=market)
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
                     return fundamentals
             except (pickle.PickleError, TypeError, ValueError, RuntimeError, OSError) as exc:
@@ -281,7 +285,7 @@ class FundamentalsCacheService:
                 logger.info(f"Cache HIT for {symbol} (Database, updated: {last_update})")
 
                 # Also store in Redis for faster next access
-                self._store_in_redis(symbol, cached_data)
+                self._store_in_redis_for_market(symbol, cached_data, market=market)
 
                 return cached_data
             else:
@@ -674,7 +678,7 @@ class FundamentalsCacheService:
             self._enrich_with_fx_normalization(fundamentals, market)
 
             # Cache in Redis (7-day TTL)
-            self._store_in_redis(symbol, fundamentals)
+            self._store_in_redis_for_market(symbol, fundamentals, market=market)
 
             # Persist to database (permanent storage) with data source metadata.
             self._store_in_database(
@@ -708,7 +712,22 @@ class FundamentalsCacheService:
             )
             return None
 
-    def _store_in_redis(self, symbol: str, data: Dict) -> None:
+    def _redis_data_key(self, symbol: str, market: Optional[str] = None) -> str:
+        return self._cache_policy.key("fundamentals", symbol, market=market)
+
+    def _store_in_redis_for_market(
+        self,
+        symbol: str,
+        data: Dict,
+        market: Optional[str] = None,
+    ) -> None:
+        store_signature = inspect.signature(self._store_in_redis)
+        if "market" in store_signature.parameters:
+            self._store_in_redis(symbol, data, market=market)
+        else:
+            self._store_in_redis(symbol, data)
+
+    def _store_in_redis(self, symbol: str, data: Dict, market: Optional[str] = None) -> None:
         """
         Store fundamental data in Redis with 7-day TTL.
         """
@@ -716,12 +735,12 @@ class FundamentalsCacheService:
             return
 
         try:
-            redis_key = self.REDIS_KEY_FORMAT.format(symbol=symbol)
+            redis_key = self._redis_data_key(symbol, market)
             pickled_data = pickle.dumps(data)
 
             self._redis_client.setex(
                 redis_key,
-                self.CACHE_TTL_SECONDS,
+                self._cache_policy.ttl_seconds("fundamentals", market=market),
                 pickled_data
             )
 
@@ -1095,7 +1114,10 @@ class FundamentalsCacheService:
         now = datetime.now()
         age_days = (now - last_update).days
 
-        is_fresh = age_days <= max_age_days
+        if max_age_days == self.MAX_AGE_DAYS:
+            is_fresh = self._cache_policy.is_datetime_fresh("fundamentals", last_update)
+        else:
+            is_fresh = age_days <= max_age_days
 
         if not is_fresh:
             logger.debug(f"Data is stale (age: {age_days} days, last update: {last_update})")
@@ -1303,7 +1325,23 @@ class FundamentalsCacheService:
         finally:
             db.close()
 
-    def get_many(self, symbols: list[str]) -> Dict[str, Optional[Dict]]:
+    @staticmethod
+    def _market_for_symbol(
+        symbol: str,
+        *,
+        market: Optional[str] = None,
+        market_by_symbol: Optional[Dict[str, Optional[str]]] = None,
+    ) -> Optional[str]:
+        if market_by_symbol is not None and symbol in market_by_symbol:
+            return market_by_symbol[symbol]
+        return market
+
+    def get_many(
+        self,
+        symbols: list[str],
+        market: Optional[str] = None,
+        market_by_symbol: Optional[Dict[str, Optional[str]]] = None,
+    ) -> Dict[str, Optional[Dict]]:
         """
         Get cached fundamental data for multiple symbols using Redis pipeline.
 
@@ -1315,6 +1353,8 @@ class FundamentalsCacheService:
 
         Args:
             symbols: List of stock ticker symbols
+            market: Optional market for homogeneous batches.
+            market_by_symbol: Optional per-symbol market map for mixed batches.
 
         Returns:
             Dict mapping symbols to their cached fundamental dicts (or None if not cached)
@@ -1334,7 +1374,12 @@ class FundamentalsCacheService:
 
             # Queue all get operations
             for symbol in symbols:
-                redis_key = self.REDIS_KEY_FORMAT.format(symbol=symbol)
+                symbol_market = self._market_for_symbol(
+                    symbol,
+                    market=market,
+                    market_by_symbol=market_by_symbol,
+                )
+                redis_key = self._redis_data_key(symbol, symbol_market)
                 pipeline.get(redis_key)
 
             # Execute all gets in single network call
@@ -1394,7 +1439,16 @@ class FundamentalsCacheService:
                         db_hits.append(symbol)
 
                         # Warm Redis for next time
-                        self._store_in_redis(symbol, cached_data[symbol])
+                        symbol_market = self._market_for_symbol(
+                            symbol,
+                            market=market,
+                            market_by_symbol=market_by_symbol,
+                        )
+                        self._store_in_redis_for_market(
+                            symbol,
+                            cached_data[symbol],
+                            market=symbol_market,
+                        )
 
                 logger.info(
                     "Database fallback: %d hits, %d still missing",
@@ -1465,7 +1519,7 @@ class FundamentalsCacheService:
         self._enrich_with_fx_normalization(normalized_data, market)
 
         # Store in Redis
-        self._store_in_redis(symbol, normalized_data)
+        self._store_in_redis_for_market(symbol, normalized_data, market=market)
 
         # Store in database
         persisted = self._store_in_database(
@@ -1482,7 +1536,10 @@ class FundamentalsCacheService:
             return
         try:
             self._redis_client.incr(self.REDIS_KEY_FALLBACK_COUNT)
-            self._redis_client.expire(self.REDIS_KEY_FALLBACK_COUNT, self.CACHE_TTL_SECONDS)
+            self._redis_client.expire(
+                self.REDIS_KEY_FALLBACK_COUNT,
+                self._cache_policy.ttl_seconds("fundamentals"),
+            )
         except Exception as e:
             logger.debug(f"Error recording on-demand fallback: {e}")
 
@@ -1497,19 +1554,20 @@ class FundamentalsCacheService:
             logger.debug(f"Error reading on-demand fallback count: {e}")
             return 0
 
-    def invalidate_cache(self, symbol: str) -> None:
+    def invalidate_cache(self, symbol: str, market: str | None = None) -> None:
         """
         Invalidate cached fundamental data for a specific symbol.
 
         Args:
             symbol: Stock symbol to invalidate
+            market: Market for the market-scoped cache key. Defaults to US for legacy callers.
         """
         if not self._redis_client:
             logger.warning("Redis not available for cache invalidation")
             return
 
         try:
-            redis_key = self.REDIS_KEY_FORMAT.format(symbol=symbol)
+            redis_key = self._redis_data_key(symbol, market=market)
             self._redis_client.delete(redis_key)
 
             logger.info(f"Invalidated fundamental cache for {symbol}")
@@ -1517,7 +1575,7 @@ class FundamentalsCacheService:
         except Exception as e:
             logger.error(f"Error invalidating cache for {symbol}: {e}", exc_info=True)
 
-    def get_cache_stats(self, symbol: str) -> Dict:
+    def get_cache_stats(self, symbol: str, market: str | None = None) -> Dict:
         """
         Get cache statistics for a symbol.
 
@@ -1526,6 +1584,7 @@ class FundamentalsCacheService:
         """
         stats = {
             'symbol': symbol,
+            'market': self._cache_policy.normalize_market(market),
             'redis_cached': False,
             'db_cached': False,
             'last_update': None,
@@ -1535,7 +1594,7 @@ class FundamentalsCacheService:
         # Check Redis
         if self._redis_client:
             try:
-                redis_key = self.REDIS_KEY_FORMAT.format(symbol=symbol)
+                redis_key = self._redis_data_key(symbol, market=market)
                 cached_data = self._redis_client.get(redis_key)
 
                 if cached_data:

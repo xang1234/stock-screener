@@ -25,9 +25,10 @@ from ...schemas.scanning import (
     ScanStatusResponse,
     SetupDetailsResponse,
 )
-from ...schemas.universe import IndexName
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...database import SessionLocal
+from ...domain.markets import market_registry
+from ...services.market_activity_gate import MarketActivityGate, MarketGateConflict
 from ...services.market_activity_service import get_runtime_activity_status
 from ...tasks.market_queues import SUPPORTED_MARKETS
 from ...wiring.bootstrap import (
@@ -49,26 +50,6 @@ from ...use_cases.scanning.create_scan import ActiveScanConflictError, StaleMark
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-SCAN_BLOCKING_ACTIVITY_STAGES = {"prices", "fundamentals"}
-SCAN_BLOCKING_ACTIVITY_STATUSES = {"queued", "running"}
-SCAN_GUARD_MARKET_BY_INDEX = {
-    IndexName.SP500.value: "US",
-    IndexName.HSI.value: "HK",
-    IndexName.NIKKEI225.value: "JP",
-    IndexName.TAIEX.value: "TW",
-}
-SCAN_GUARD_MARKET_BY_EXCHANGE = {
-    "NYSE": "US",
-    "NASDAQ": "US",
-    "AMEX": "US",
-    "KOSPI": "KR",
-    "KOSDAQ": "KR",
-    "BSE": "IN",
-    "XBOM": "IN",
-    "SSE": "CN",
-    "SZSE": "CN",
-    "BJSE": "CN",
-}
 
 
 class ScanCacheRefreshRequest(BaseModel):
@@ -94,48 +75,24 @@ def _get_market_refresh_conflict_detail(market: str | None) -> dict[str, object]
     if not market:
         return None
 
-    session = SessionLocal()
-    try:
-        runtime_activity = get_runtime_activity_status(session)
-    finally:
-        session.close()
-
-    normalized_market = str(market).upper()
-    conflicting_activity = [
-        item
-        for item in runtime_activity.get("markets", [])
-        if str(item.get("market", "")).upper() == normalized_market
-        and item.get("stage_key") in SCAN_BLOCKING_ACTIVITY_STAGES
-        and item.get("status") in SCAN_BLOCKING_ACTIVITY_STATUSES
-    ]
-    if not conflicting_activity:
-        return None
-
-    active_stages = sorted({str(item.get("stage_key")) for item in conflicting_activity if item.get("stage_key")})
-    lifecycle = conflicting_activity[0].get("lifecycle")
-    stage_labels = ", ".join(
-        item.get("stage_label") or str(item.get("stage_key")).replace("_", " ").title()
-        for item in conflicting_activity
-    )
-    return {
-        "code": "market_refresh_active",
-        "message": (
-            f"{normalized_market} {stage_labels.lower()} is running or queued. "
-            "Wait for it to finish before starting a scan."
-        ),
-        "market": normalized_market,
-        "active_stages": active_stages,
-        "lifecycle": lifecycle,
-    }
+    result = MarketActivityGate(
+        session_factory=SessionLocal,
+        runtime_activity_reader=get_runtime_activity_status,
+    ).check(market)
+    if isinstance(result, MarketGateConflict):
+        return result.detail
+    return None
 
 
 def _resolve_scan_guard_market(universe_def: Any) -> str | None:
     if getattr(universe_def, "market", None):
         return universe_def.market.value
     if getattr(universe_def, "exchange", None):
-        return SCAN_GUARD_MARKET_BY_EXCHANGE.get(universe_def.exchange.value)
+        market = market_registry.market_for_exchange(universe_def.exchange.value)
+        return market.code if market is not None else None
     if getattr(universe_def, "index", None):
-        return SCAN_GUARD_MARKET_BY_INDEX.get(universe_def.index.value)
+        market = market_registry.market_for_index(universe_def.index.value)
+        return market.code if market is not None else None
     return None
 
 

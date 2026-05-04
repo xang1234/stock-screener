@@ -24,6 +24,7 @@ from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
 from .market_calendar_service import MarketCalendarService
 from .benchmark_registry_service import benchmark_registry
+from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open, is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,11 @@ class BenchmarkCacheService:
         self,
         redis_client: Optional[redis.Redis] = None,
         session_factory: Optional[Callable[[], Session]] = None,
+        cache_policy: MarketAwareCachePolicy = market_cache_policy,
     ):
         """Initialize benchmark cache service."""
         self._session_factory = session_factory or SessionLocal
+        self._cache_policy = cache_policy
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -92,11 +95,21 @@ class BenchmarkCacheService:
     def get_benchmark_candidates(self, market: str = "US") -> list[str]:
         return self._benchmark_registry.get_candidate_symbols(market)
 
-    def _redis_data_key(self, benchmark_symbol: str, period: str) -> str:
-        return f"{self.REDIS_KEY_PREFIX}{benchmark_symbol}:{period}"
+    def _redis_data_key(self, benchmark_symbol: str, period: str, market: str) -> str:
+        return self._cache_policy.key(
+            "benchmark",
+            benchmark_symbol,
+            market=market,
+            parts=(period,),
+        )
 
-    def _redis_lock_key(self, benchmark_symbol: str, period: str) -> str:
-        return f"{self._redis_data_key(benchmark_symbol, period)}{self.REDIS_LOCK_KEY_SUFFIX}"
+    def _redis_lock_key(self, benchmark_symbol: str, period: str, market: str) -> str:
+        return self._cache_policy.lock_key(
+            "benchmark",
+            benchmark_symbol,
+            market=market,
+            parts=(period,),
+        )
 
     def get_spy_data(
         self,
@@ -159,7 +172,11 @@ class BenchmarkCacheService:
         if not force_refresh:
             for idx, benchmark_symbol in enumerate(candidates):
                 role = "primary" if idx == 0 else "fallback"
-                cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
+                cached_data = self._get_from_redis(
+                    benchmark_symbol=benchmark_symbol,
+                    period=period,
+                    market=normalized_market,
+                )
                 if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
                     logger.info(
                         "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
@@ -203,7 +220,12 @@ class BenchmarkCacheService:
                         period,
                         role,
                     )
-                    self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=cached_data)
+                    self._store_in_redis(
+                        benchmark_symbol=benchmark_symbol,
+                        period=period,
+                        data=cached_data,
+                        market=normalized_market,
+                    )
                     return BenchmarkDataBundle(
                         market=normalized_market,
                         period=period,
@@ -281,13 +303,18 @@ class BenchmarkCacheService:
         logger.warning("No benchmark candidate produced data for market=%s period=%s", normalized_market, period)
         return None
 
-    def _get_from_redis(self, benchmark_symbol: str, period: str) -> Optional[pd.DataFrame]:
+    def _get_from_redis(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str,
+    ) -> Optional[pd.DataFrame]:
         """Get cached benchmark data from Redis."""
         if not self._redis_client:
             return None
 
         try:
-            redis_key = self._redis_data_key(benchmark_symbol, period)
+            redis_key = self._redis_data_key(benchmark_symbol, period, market=market)
             cached_bytes = self._redis_client.get(redis_key)
 
             if cached_bytes:
@@ -381,7 +408,7 @@ class BenchmarkCacheService:
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
             return benchmark_data
 
-        lock_key = self._redis_lock_key(benchmark_symbol, period)
+        lock_key = self._redis_lock_key(benchmark_symbol, period, market=market)
         # Try to acquire lock
         lock_acquired = False
         if self._redis_client:
@@ -398,7 +425,11 @@ class BenchmarkCacheService:
         if not lock_acquired:
             # Another worker is fetching - wait for it to complete
             logger.info("Another worker is fetching benchmark %s (%s) - waiting...", benchmark_symbol, period)
-            return self._wait_for_cache(benchmark_symbol=benchmark_symbol, period=period)
+            return self._wait_for_cache(
+                benchmark_symbol=benchmark_symbol,
+                period=period,
+                market=market,
+            )
 
         try:
             # We have the lock - fetch from yfinance
@@ -413,7 +444,12 @@ class BenchmarkCacheService:
             logger.info("Fetched benchmark %s %s: %s rows", benchmark_symbol, period, len(benchmark_data))
 
             # Cache in Redis
-            self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=benchmark_data)
+            self._store_in_redis(
+                benchmark_symbol=benchmark_symbol,
+                period=period,
+                data=benchmark_data,
+                market=market,
+            )
 
             # Persist to database
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
@@ -432,6 +468,7 @@ class BenchmarkCacheService:
         self,
         benchmark_symbol: str,
         period: str,
+        market: str,
         max_wait_seconds: int = None,
     ) -> Optional[pd.DataFrame]:
         """
@@ -446,7 +483,11 @@ class BenchmarkCacheService:
 
         while (time.time() - start_time) < max_wait_seconds:
             # Check if data is now in cache
-            cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
+            cached_data = self._get_from_redis(
+                benchmark_symbol=benchmark_symbol,
+                period=period,
+                market=market,
+            )
             if cached_data is not None:
                 logger.info("Benchmark %s %s is now cached by another worker", benchmark_symbol, period)
                 return cached_data
@@ -462,22 +503,33 @@ class BenchmarkCacheService:
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
         return benchmark_data
 
-    def _store_in_redis(self, benchmark_symbol: str, period: str, data: pd.DataFrame) -> None:
+    def _store_in_redis(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        data: pd.DataFrame,
+        market: str = "US",
+    ) -> None:
         """Store benchmark data in Redis."""
         if not self._redis_client:
             return
 
         try:
-            redis_key = self._redis_data_key(benchmark_symbol, period)
+            redis_key = self._redis_data_key(benchmark_symbol, period, market=market)
             pickled_data = pickle.dumps(data)
 
             self._redis_client.setex(
                 redis_key,
-                self.CACHE_TTL_SECONDS,
+                self._cache_policy.ttl_seconds("benchmark", market=market),
                 pickled_data
             )
 
-            logger.info("Cached benchmark %s %s in Redis (TTL: %ss)", benchmark_symbol, period, self.CACHE_TTL_SECONDS)
+            logger.info(
+                "Cached benchmark %s %s in Redis (TTL: %ss)",
+                benchmark_symbol,
+                period,
+                self._cache_policy.ttl_seconds("benchmark", market=market),
+            )
 
         except Exception as e:
             logger.error(f"Error storing in Redis: {e}", exc_info=True)
@@ -642,19 +694,18 @@ class BenchmarkCacheService:
 
         try:
             keys: list[str]
-            symbols = set()
-            for market in self._benchmark_registry.supported_markets():
-                symbols.update(self._benchmark_registry.get_candidate_symbols(market))
             if period:
                 keys = [
-                    self._redis_data_key(symbol, period)
-                    for symbol in symbols
+                    self._redis_data_key(symbol, period, market=market)
+                    for market in self._benchmark_registry.supported_markets()
+                    for symbol in self._benchmark_registry.get_candidate_symbols(market)
                 ]
             else:
                 keys = []
-                for symbol in symbols:
-                    keys.append(self._redis_data_key(symbol, "1y"))
-                    keys.append(self._redis_data_key(symbol, "2y"))
+                for market in self._benchmark_registry.supported_markets():
+                    for symbol in self._benchmark_registry.get_candidate_symbols(market):
+                        keys.append(self._redis_data_key(symbol, "1y", market=market))
+                        keys.append(self._redis_data_key(symbol, "2y", market=market))
 
             if keys:
                 self._redis_client.delete(*keys)

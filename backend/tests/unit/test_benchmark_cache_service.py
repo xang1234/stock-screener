@@ -43,11 +43,11 @@ def test_get_spy_data_delegates_to_market_api():
 def test_market_scoped_redis_keys_are_deterministic():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
 
-    data_key = service._redis_data_key("^N225", "2y")
-    lock_key = service._redis_lock_key("^N225", "2y")
+    data_key = service._redis_data_key("^N225", "2y", market="JP")
+    lock_key = service._redis_lock_key("^N225", "2y", market="JP")
 
-    assert data_key == "benchmark:^N225:2y"
-    assert lock_key == "benchmark:^N225:2y:lock"
+    assert data_key == "benchmark:JP:^N225:2y"
+    assert lock_key == "benchmark:JP:^N225:2y:lock"
 
 
 def test_fetch_and_cache_benchmark_without_redis_fetches_directly_and_persists():
@@ -134,7 +134,8 @@ def test_get_benchmark_data_skips_stale_redis_hit():
     stale_df = pd.DataFrame({"Close": [1.0]}, index=pd.to_datetime(["2026-04-01"]))
     fresh_df = pd.DataFrame({"Close": [2.0]}, index=pd.to_datetime(["2026-04-10"]))
 
-    def fake_get_from_redis(*, benchmark_symbol, period):
+    def fake_get_from_redis(*, benchmark_symbol, period, market="US"):
+        assert market == "HK"
         if benchmark_symbol == "^HSI":
             return stale_df
         return None

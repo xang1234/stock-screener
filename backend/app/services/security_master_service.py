@@ -9,50 +9,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-_SUPPORTED_MARKETS = {"US", "HK", "IN", "JP", "KR", "TW", "CN"}
+from ..domain.markets import UnsupportedMarketError, market_registry
+
+
+_SUPPORTED_MARKETS = set(market_registry.supported_market_codes())
 
 _MARKET_DEFAULTS: dict[str, tuple[str, str]] = {
-    "US": ("USD", "America/New_York"),
-    "HK": ("HKD", "Asia/Hong_Kong"),
-    "IN": ("INR", "Asia/Kolkata"),
-    "JP": ("JPY", "Asia/Tokyo"),
-    "KR": ("KRW", "Asia/Seoul"),
-    "TW": ("TWD", "Asia/Taipei"),
-    "CN": ("CNY", "Asia/Shanghai"),
+    profile.market.code: (profile.currency, profile.timezone_name)
+    for profile in market_registry.profiles()
 }
 
 _MARKET_BY_EXCHANGE: dict[str, str] = {
-    "NYSE": "US",
-    "NASDAQ": "US",
-    "AMEX": "US",
-    "XNYS": "US",
-    "XNAS": "US",
-    "XASE": "US",
-    "HKEX": "HK",
-    "SEHK": "HK",
-    "XHKG": "HK",
-    "NSE": "IN",
-    "XNSE": "IN",
-    "BSE": "IN",
-    "XBOM": "IN",
-    "TSE": "JP",
-    "JPX": "JP",
-    "XTKS": "JP",
-    "KOSPI": "KR",
-    "KOSDAQ": "KR",
-    "KRX": "KR",
-    "XKRX": "KR",
-    "TWSE": "TW",
-    "TPEX": "TW",
-    "XTAI": "TW",
-    "SSE": "CN",
-    "SHSE": "CN",
-    "XSHG": "CN",
-    "SZSE": "CN",
-    "XSHE": "CN",
-    "BJSE": "CN",
-    "XBSE": "CN",
-    "XBEI": "CN",
+    exchange: profile.market.code
+    for profile in market_registry.profiles()
+    for exchange in profile.exchanges
 }
 
 _MARKET_BY_SUFFIX: tuple[tuple[str, str], ...] = (
@@ -132,10 +102,10 @@ class SecurityMasterResolver:
 
     @staticmethod
     def normalize_market(market: str | None) -> str | None:
-        normalized = (market or "").strip().upper()
-        if normalized in _SUPPORTED_MARKETS:
-            return normalized
-        return None
+        try:
+            return market_registry.profile(market or "").market.code
+        except UnsupportedMarketError:
+            return None
 
     def infer_market(self, symbol: str, exchange: str | None = None) -> str:
         normalized_exchange = self.normalize_exchange(exchange)

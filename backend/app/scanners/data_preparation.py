@@ -463,6 +463,10 @@ class DataPreparationLayer:
         identities = [self._resolve_identity(symbol) for symbol in symbols]
         canonical_symbols = [identity.canonical_symbol for identity in identities]
         unique_canonical_symbols = list(dict.fromkeys(canonical_symbols))
+        market_by_symbol = {
+            identity.canonical_symbol: identity.market or "US"
+            for identity in identities
+        }
 
         # PHASE 3 OPTIMIZATION: Bulk cache lookups using Redis pipelines
         # Instead of N individual Redis calls, make 2 pipeline calls (1 per cache type)
@@ -472,10 +476,14 @@ class DataPreparationLayer:
         cached_prices = self.price_cache.get_many(
             unique_canonical_symbols,
             period=requirements.price_period,
+            market_by_symbol=market_by_symbol,
         )
         # Fundamentals cache now includes quarterly growth data (consolidated)
         cached_fundamentals = (
-            self.fundamentals_cache.get_many(unique_canonical_symbols)
+            self.fundamentals_cache.get_many(
+                unique_canonical_symbols,
+                market_by_symbol=market_by_symbol,
+            )
             if requirements.needs_fundamentals
             else {}
         )

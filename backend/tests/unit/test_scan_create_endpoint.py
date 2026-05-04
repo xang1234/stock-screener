@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from app.main import app
 from app.api.v1.scans import _resolve_scan_guard_market
+from app.domain.markets import market_registry
 from app.schemas.universe import Exchange, Market, UniverseDefinition, UniverseType
 from app.services import server_auth
 from app.wiring.bootstrap import get_create_scan_use_case, get_uow
@@ -68,6 +69,17 @@ def test_scan_guard_resolves_beijing_and_bombay_exchange_codes_distinctly():
 
     assert _resolve_scan_guard_market(cn_universe) == "CN"
     assert _resolve_scan_guard_market(legacy_bombay) == "IN"
+
+
+def test_scan_guard_resolves_registry_exchanges_and_indexes():
+    for profile in market_registry.profiles():
+        for exchange in profile.exchanges:
+            universe = SimpleNamespace(market=None, exchange=SimpleNamespace(value=exchange), index=None)
+            assert _resolve_scan_guard_market(universe) == profile.market.code
+
+        for index in profile.indexes:
+            universe = SimpleNamespace(market=None, exchange=None, index=SimpleNamespace(value=index))
+            assert _resolve_scan_guard_market(universe) == profile.market.code
 
 
 @pytest_asyncio.fixture
