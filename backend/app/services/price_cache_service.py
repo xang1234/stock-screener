@@ -1576,7 +1576,7 @@ class PriceCacheService:
                 # Fall back to individual writes
                 for symbol, data in batch_data.items():
                     if data is not None and not data.empty:
-                        self._store_recent_in_redis(symbol, data)
+                        self._store_recent_in_redis(symbol, data, market=market)
 
         # Batch DB writes
         if also_store_db:
@@ -2053,20 +2053,21 @@ class PriceCacheService:
         logger.info("yfinance batch fetch complete: %d success, %d failed", yfinance_success, yfinance_failed)
         return cached_data
 
-    def invalidate_cache(self, symbol: str) -> None:
+    def invalidate_cache(self, symbol: str, market: str | None = None) -> None:
         """
         Invalidate cached data for a specific symbol.
 
         Args:
             symbol: Stock symbol to invalidate
+            market: Market for the market-scoped cache key. Defaults to US for legacy callers.
         """
         if not self._redis_client:
             logger.warning("Redis not available for cache invalidation")
             return
 
         try:
-            redis_key_recent = self._redis_recent_key(symbol)
-            redis_key_update = self._redis_last_update_key(symbol)
+            redis_key_recent = self._redis_recent_key(symbol, market=market)
+            redis_key_update = self._redis_last_update_key(symbol, market=market)
 
             self._redis_client.delete(redis_key_recent)
             self._redis_client.delete(redis_key_update)
@@ -2076,7 +2077,7 @@ class PriceCacheService:
         except Exception as e:
             logger.error(f"Error invalidating cache for {symbol}: {e}", exc_info=True)
 
-    def get_cache_stats(self, symbol: str) -> Dict:
+    def get_cache_stats(self, symbol: str, market: str | None = None) -> Dict:
         """
         Get cache statistics for a symbol.
 
@@ -2085,6 +2086,7 @@ class PriceCacheService:
         """
         stats = {
             'symbol': symbol,
+            'market': self._cache_policy.normalize_market(market),
             'redis_cached': False,
             'db_cached': False,
             'last_update': None,
@@ -2094,7 +2096,7 @@ class PriceCacheService:
         # Check Redis
         if self._redis_client:
             try:
-                last_update_key = self._redis_last_update_key(symbol)
+                last_update_key = self._redis_last_update_key(symbol, market=market)
                 last_update = self._redis_client.get(last_update_key)
 
                 if last_update:

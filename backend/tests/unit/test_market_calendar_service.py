@@ -133,6 +133,15 @@ def test_india_pmc_lookup_uses_provider_specific_calendar_id():
     assert calls == ["NSE"]
 
 
+def test_india_injected_calendar_provider_uses_provider_specific_calendar_id():
+    calls = []
+    service = MarketCalendarService(calendar_provider=lambda calendar_id: calls.append(calendar_id) or _ProviderCalendar())
+
+    service._get_calendar("IN")
+
+    assert calls == ["NSE"]
+
+
 def test_china_calendar_bounds_fallback_uses_weekdays():
     service = MarketCalendarService(calendar_provider=lambda _: _BoundsCalendar())
 

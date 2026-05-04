@@ -95,7 +95,7 @@ class BenchmarkCacheService:
     def get_benchmark_candidates(self, market: str = "US") -> list[str]:
         return self._benchmark_registry.get_candidate_symbols(market)
 
-    def _redis_data_key(self, benchmark_symbol: str, period: str, market: str = "US") -> str:
+    def _redis_data_key(self, benchmark_symbol: str, period: str, market: str) -> str:
         return self._cache_policy.key(
             "benchmark",
             benchmark_symbol,
@@ -103,7 +103,7 @@ class BenchmarkCacheService:
             parts=(period,),
         )
 
-    def _redis_lock_key(self, benchmark_symbol: str, period: str, market: str = "US") -> str:
+    def _redis_lock_key(self, benchmark_symbol: str, period: str, market: str) -> str:
         return self._cache_policy.lock_key(
             "benchmark",
             benchmark_symbol,
@@ -307,7 +307,7 @@ class BenchmarkCacheService:
         self,
         benchmark_symbol: str,
         period: str,
-        market: str = "US",
+        market: str,
     ) -> Optional[pd.DataFrame]:
         """Get cached benchmark data from Redis."""
         if not self._redis_client:
@@ -468,7 +468,7 @@ class BenchmarkCacheService:
         self,
         benchmark_symbol: str,
         period: str,
-        market: str = "US",
+        market: str,
         max_wait_seconds: int = None,
     ) -> Optional[pd.DataFrame]:
         """
@@ -694,19 +694,18 @@ class BenchmarkCacheService:
 
         try:
             keys: list[str]
-            symbols = set()
-            for market in self._benchmark_registry.supported_markets():
-                symbols.update(self._benchmark_registry.get_candidate_symbols(market))
             if period:
                 keys = [
-                    self._redis_data_key(symbol, period)
-                    for symbol in symbols
+                    self._redis_data_key(symbol, period, market=market)
+                    for market in self._benchmark_registry.supported_markets()
+                    for symbol in self._benchmark_registry.get_candidate_symbols(market)
                 ]
             else:
                 keys = []
-                for symbol in symbols:
-                    keys.append(self._redis_data_key(symbol, "1y"))
-                    keys.append(self._redis_data_key(symbol, "2y"))
+                for market in self._benchmark_registry.supported_markets():
+                    for symbol in self._benchmark_registry.get_candidate_symbols(market):
+                        keys.append(self._redis_data_key(symbol, "1y", market=market))
+                        keys.append(self._redis_data_key(symbol, "2y", market=market))
 
             if keys:
                 self._redis_client.delete(*keys)

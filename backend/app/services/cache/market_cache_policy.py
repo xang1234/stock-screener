@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ...domain.markets import Market
 
@@ -75,15 +75,17 @@ class MarketAwareCachePolicy:
         del market
         if last_update is None:
             return False
-        if last_update.tzinfo is not None:
-            last_update = last_update.replace(tzinfo=None)
-        now = now or datetime.now()
-        if now.tzinfo is not None:
-            now = now.replace(tzinfo=None)
-        age_days = (now - last_update).days
+        last_update = self._as_utc(last_update)
+        now = self._as_utc(now) if now is not None else datetime.now(timezone.utc)
+        age_days = (now - last_update).total_seconds() / 86400.0
         max_age_map = self.max_age_days_by_namespace or DEFAULT_MAX_AGE_DAYS_BY_NAMESPACE
         return age_days <= max_age_map[namespace]
 
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
 
 market_cache_policy = MarketAwareCachePolicy()
-

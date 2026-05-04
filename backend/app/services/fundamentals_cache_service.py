@@ -1554,19 +1554,20 @@ class FundamentalsCacheService:
             logger.debug(f"Error reading on-demand fallback count: {e}")
             return 0
 
-    def invalidate_cache(self, symbol: str) -> None:
+    def invalidate_cache(self, symbol: str, market: str | None = None) -> None:
         """
         Invalidate cached fundamental data for a specific symbol.
 
         Args:
             symbol: Stock symbol to invalidate
+            market: Market for the market-scoped cache key. Defaults to US for legacy callers.
         """
         if not self._redis_client:
             logger.warning("Redis not available for cache invalidation")
             return
 
         try:
-            redis_key = self._redis_data_key(symbol)
+            redis_key = self._redis_data_key(symbol, market=market)
             self._redis_client.delete(redis_key)
 
             logger.info(f"Invalidated fundamental cache for {symbol}")
@@ -1574,7 +1575,7 @@ class FundamentalsCacheService:
         except Exception as e:
             logger.error(f"Error invalidating cache for {symbol}: {e}", exc_info=True)
 
-    def get_cache_stats(self, symbol: str) -> Dict:
+    def get_cache_stats(self, symbol: str, market: str | None = None) -> Dict:
         """
         Get cache statistics for a symbol.
 
@@ -1583,6 +1584,7 @@ class FundamentalsCacheService:
         """
         stats = {
             'symbol': symbol,
+            'market': self._cache_policy.normalize_market(market),
             'redis_cached': False,
             'db_cached': False,
             'last_update': None,
@@ -1592,7 +1594,7 @@ class FundamentalsCacheService:
         # Check Redis
         if self._redis_client:
             try:
-                redis_key = self._redis_data_key(symbol)
+                redis_key = self._redis_data_key(symbol, market=market)
                 cached_data = self._redis_client.get(redis_key)
 
                 if cached_data:

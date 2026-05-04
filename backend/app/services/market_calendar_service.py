@@ -68,6 +68,7 @@ class MarketCalendarService:
         normalized = self.normalize_market(market)
         profile = market_registry.profile(normalized)
         calendar_id = profile.calendar_id
+        provider_calendar_id = profile.provider_calendar_id or calendar_id
         provider = self._calendar_provider
         uses_pmc_provider = False
         if provider is None:
@@ -78,11 +79,6 @@ class MarketCalendarService:
                 "pandas_market_calendars" if normalized == "IN" else "exchange_calendars"
             )
             raise RuntimeError(f"{required_package} is required for MarketCalendarService")
-        provider_calendar_id = (
-            profile.provider_calendar_id or calendar_id
-            if uses_pmc_provider
-            else calendar_id
-        )
         if calendar_id not in self._calendar_cache:
             self._calendar_cache[calendar_id] = provider(provider_calendar_id)
         return self._calendar_cache[calendar_id]

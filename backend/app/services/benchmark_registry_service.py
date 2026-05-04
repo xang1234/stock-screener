@@ -23,68 +23,35 @@ class BenchmarkRegistryEntry:
     notes: str
 
 
+def _build_benchmark_entry(market: str, notes: str) -> BenchmarkRegistryEntry:
+    profile = market_registry.profile(market)
+    return BenchmarkRegistryEntry(
+        market=market,
+        primary_symbol=get_primary_benchmark_symbol(market),
+        primary_kind=profile.benchmark_primary_kind,
+        fallback_symbol=profile.benchmark_fallback_symbol,
+        fallback_kind=profile.benchmark_fallback_kind,
+        notes=notes,
+    )
+
+
 class BenchmarkRegistryService:
     """Operator-visible benchmark mapping table for US/HK/IN/JP/KR/TW/CN."""
 
     TABLE_VERSION = "2026-04-30.v1"
 
+    _NOTES_BY_MARKET: Dict[str, str] = {
+        "US": "US baseline benchmark; ETF primary keeps behavior parity.",
+        "HK": "Index-primary for market semantics; ETF fallback when index feed unavailable.",
+        "IN": "NIFTY 50 index-primary with NSE ETF fallback.",
+        "JP": "Nikkei index-primary with TOPIX ETF fallback.",
+        "KR": "KOSPI index-primary with KODEX 200 ETF fallback.",
+        "TW": "TAIEX index-primary with TW50 ETF fallback.",
+        "CN": "CSI 300 index-primary with Shanghai Composite fallback.",
+    }
     _TABLE: Dict[str, BenchmarkRegistryEntry] = {
-        "US": BenchmarkRegistryEntry(
-            market="US",
-            primary_symbol=get_primary_benchmark_symbol("US"),
-            primary_kind=market_registry.profile("US").benchmark_primary_kind,
-            fallback_symbol=market_registry.profile("US").benchmark_fallback_symbol,
-            fallback_kind=market_registry.profile("US").benchmark_fallback_kind,
-            notes="US baseline benchmark; ETF primary keeps behavior parity.",
-        ),
-        "HK": BenchmarkRegistryEntry(
-            market="HK",
-            primary_symbol=get_primary_benchmark_symbol("HK"),
-            primary_kind=market_registry.profile("HK").benchmark_primary_kind,
-            fallback_symbol=market_registry.profile("HK").benchmark_fallback_symbol,
-            fallback_kind=market_registry.profile("HK").benchmark_fallback_kind,
-            notes="Index-primary for market semantics; ETF fallback when index feed unavailable.",
-        ),
-        "IN": BenchmarkRegistryEntry(
-            market="IN",
-            primary_symbol=get_primary_benchmark_symbol("IN"),
-            primary_kind=market_registry.profile("IN").benchmark_primary_kind,
-            fallback_symbol=market_registry.profile("IN").benchmark_fallback_symbol,
-            fallback_kind=market_registry.profile("IN").benchmark_fallback_kind,
-            notes="NIFTY 50 index-primary with NSE ETF fallback.",
-        ),
-        "JP": BenchmarkRegistryEntry(
-            market="JP",
-            primary_symbol=get_primary_benchmark_symbol("JP"),
-            primary_kind=market_registry.profile("JP").benchmark_primary_kind,
-            fallback_symbol=market_registry.profile("JP").benchmark_fallback_symbol,
-            fallback_kind=market_registry.profile("JP").benchmark_fallback_kind,
-            notes="Nikkei index-primary with TOPIX ETF fallback.",
-        ),
-        "KR": BenchmarkRegistryEntry(
-            market="KR",
-            primary_symbol=get_primary_benchmark_symbol("KR"),
-            primary_kind=market_registry.profile("KR").benchmark_primary_kind,
-            fallback_symbol=market_registry.profile("KR").benchmark_fallback_symbol,
-            fallback_kind=market_registry.profile("KR").benchmark_fallback_kind,
-            notes="KOSPI index-primary with KODEX 200 ETF fallback.",
-        ),
-        "TW": BenchmarkRegistryEntry(
-            market="TW",
-            primary_symbol=get_primary_benchmark_symbol("TW"),
-            primary_kind=market_registry.profile("TW").benchmark_primary_kind,
-            fallback_symbol=market_registry.profile("TW").benchmark_fallback_symbol,
-            fallback_kind=market_registry.profile("TW").benchmark_fallback_kind,
-            notes="TAIEX index-primary with TW50 ETF fallback.",
-        ),
-        "CN": BenchmarkRegistryEntry(
-            market="CN",
-            primary_symbol=get_primary_benchmark_symbol("CN"),
-            primary_kind=market_registry.profile("CN").benchmark_primary_kind,
-            fallback_symbol=market_registry.profile("CN").benchmark_fallback_symbol,
-            fallback_kind=market_registry.profile("CN").benchmark_fallback_kind,
-            notes="CSI 300 index-primary with Shanghai Composite fallback.",
-        ),
+        market: _build_benchmark_entry(market, notes)
+        for market, notes in _NOTES_BY_MARKET.items()
     }
 
     def normalize_market(self, market: str | None) -> str:
