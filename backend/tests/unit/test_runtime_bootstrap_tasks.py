@@ -72,6 +72,52 @@ def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
     assert [signature.kwargs.get("activity_lifecycle") for signature in signatures] == ["bootstrap"] * 6
 
 
+def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    monkeypatch.setattr(
+        "app.tasks.universe_tasks.refresh_official_market_universe",
+        _FakeTask("app.tasks.universe_tasks.refresh_official_market_universe"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.universe_tasks.refresh_stock_universe",
+        _FakeTask("app.tasks.universe_tasks.refresh_stock_universe"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.cache_tasks.smart_refresh_cache",
+        _FakeTask("app.tasks.cache_tasks.smart_refresh_cache"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
+        _FakeTask("app.tasks.fundamentals_tasks.refresh_all_fundamentals"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
+        _FakeTask("app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
+        _FakeTask("app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill"),
+    )
+    monkeypatch.setattr(
+        "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
+        _FakeTask("app.interfaces.tasks.feature_store_tasks.build_daily_snapshot"),
+    )
+
+    signatures = module._build_market_bootstrap_signatures("HK")
+
+    assert [signature.task for signature in signatures] == [
+        "app.tasks.universe_tasks.refresh_official_market_universe",
+        "app.tasks.cache_tasks.smart_refresh_cache",
+        "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
+        "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
+        "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
+    ]
+    snapshot = signatures[-1]
+    assert snapshot.kwargs["publish_pointer_key"] == "latest_published_market:HK"
+
+
 def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
     from app.tasks import runtime_bootstrap_tasks as module
 

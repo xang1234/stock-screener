@@ -8,6 +8,7 @@ from typing import Iterable
 from celery import chain, chord, group
 
 from ..database import SessionLocal
+from ..domain.bootstrap.plan import BootstrapQueueKind, build_bootstrap_plan
 from ..services.market_activity_service import (
     mark_current_market_activity_failed,
     mark_market_activity_failed,
@@ -25,6 +26,14 @@ def _bootstrap_universe_name(market: str) -> str:
     return f"market:{market.upper()}"
 
 
+def _queue_for_stage(stage) -> str:
+    if stage.queue_kind == BootstrapQueueKind.DATA_FETCH:
+        return data_fetch_queue_for_market(stage.kwargs["market"])
+    if stage.queue_kind == BootstrapQueueKind.MARKET_JOBS:
+        return market_jobs_queue_for_market(stage.kwargs["market"])
+    raise ValueError(f"Unsupported bootstrap queue kind: {stage.queue_kind}")
+
+
 def _build_market_bootstrap_signatures(market: str) -> list:
     from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
@@ -37,66 +46,39 @@ def _build_market_bootstrap_signatures(market: str) -> list:
         refresh_stock_universe,
     )
 
-    market_code = str(market).upper()
-    signatures = [
-        (
-            refresh_stock_universe.si(
-                market=market_code,
-                activity_lifecycle="bootstrap",
-            )
-            if market_code == "US"
-            else refresh_official_market_universe.si(
-                market=market_code,
-                activity_lifecycle="bootstrap",
-            )
-        ).set(queue=data_fetch_queue_for_market(market_code)),
+    task_by_name = {
+        "refresh_stock_universe": refresh_stock_universe,
+        "refresh_official_market_universe": refresh_official_market_universe,
+        "load_tracked_ibd_industry_groups": load_tracked_ibd_industry_groups,
+        "smart_refresh_cache": smart_refresh_cache,
+        "refresh_all_fundamentals": refresh_all_fundamentals,
+        "calculate_daily_breadth_with_gapfill": calculate_daily_breadth_with_gapfill,
+        "calculate_daily_group_rankings_with_gapfill": calculate_daily_group_rankings_with_gapfill,
+        "build_daily_snapshot": build_daily_snapshot,
+    }
+    plan = build_bootstrap_plan(primary_market=market, enabled_markets=[market])
+    market_plan = plan.market_plans[0]
+    return [
+        task_by_name[stage.task_name]
+        .si(**stage.kwargs)
+        .set(queue=_queue_for_stage(stage))
+        for stage in market_plan.stages
     ]
-    if market_code == "US":
-        signatures.append(
-            load_tracked_ibd_industry_groups.si(
-                market=market_code,
-                activity_lifecycle="bootstrap",
-            ).set(queue=market_jobs_queue_for_market(market_code))
-        )
-    signatures.extend([
-        smart_refresh_cache.si(
-            mode="full",
-            market=market_code,
-            activity_lifecycle="bootstrap",
-        ).set(queue=data_fetch_queue_for_market(market_code)),
-        refresh_all_fundamentals.si(
-            market=market_code,
-            activity_lifecycle="bootstrap",
-        ).set(queue=data_fetch_queue_for_market(market_code)),
-        calculate_daily_breadth_with_gapfill.si(
-            market=market_code,
-            activity_lifecycle="bootstrap",
-        ).set(queue=market_jobs_queue_for_market(market_code)),
-        calculate_daily_group_rankings_with_gapfill.si(
-            market=market_code,
-            activity_lifecycle="bootstrap",
-        ).set(queue=market_jobs_queue_for_market(market_code)),
-        build_daily_snapshot.si(
-            market=market_code,
-            universe_name=_bootstrap_universe_name(market_code),
-            publish_pointer_key=f"latest_published_market:{market_code}",
-            activity_lifecycle="bootstrap",
-            bootstrap_cache_only_if_covered=True,
-        ).set(queue=market_jobs_queue_for_market(market_code)),
-    ])
-    return signatures
 
 
 def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Iterable[str]) -> str:
-    primary = str(primary_market).upper()
-    enabled = []
-    for market in [primary, *[str(item).upper() for item in enabled_markets]]:
-        if market not in enabled:
-            enabled.append(market)
+    plan = build_bootstrap_plan(
+        primary_market=primary_market,
+        enabled_markets=enabled_markets,
+    )
+    primary = plan.primary_market
+    enabled = list(plan.enabled_markets)
 
     market_workflows = []
-    for market in enabled:
-        market_workflows.append(chain(*_build_market_bootstrap_signatures(market)))
+    for market_plan in plan.market_plans:
+        market_workflows.append(
+            chain(*_build_market_bootstrap_signatures(market_plan.market))
+        )
     completion = complete_local_runtime_bootstrap.si(
         primary_market=primary,
         enabled_markets=enabled,
