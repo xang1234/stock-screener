@@ -72,6 +72,12 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
     assert data["primary_market"] == "US"
     assert data["enabled_markets"] == ["US", "HK"]
     assert data["bootstrap_state"] == "running"
+    assert data["supported_markets"] == ["US", "HK", "IN", "JP", "KR", "TW", "CN"]
+    assert data["market_catalog"]["version"] == "2026-05-04.v1"
+    assert data["market_catalog"]["markets"][0]["code"] == "US"
+    assert data["market_catalog"]["markets"][0]["label"] == "United States"
+    assert data["market_catalog"]["markets"][1]["code"] == "HK"
+    assert data["market_catalog"]["markets"][1]["capabilities"]["finviz_screening"] is False
     assert data["api_base_path"] == "/api"
 
 

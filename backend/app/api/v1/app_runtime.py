@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from ...domain.markets.catalog import get_market_catalog
 from ...domain.scanning.defaults import get_default_scan_profile
 from ...database import get_db
 from ...schemas.app_runtime import (
@@ -51,6 +52,7 @@ async def get_app_capabilities(
 
     auth = get_server_auth_status(request)
     bootstrap_status = get_runtime_bootstrap_status(db)
+    market_catalog = get_market_catalog()
     return AppCapabilitiesResponse(
         features=settings.capability_flags(),
         ui_snapshots=get_ui_snapshot_service().ui_snapshot_flags(),
@@ -61,7 +63,8 @@ async def get_app_capabilities(
         primary_market=bootstrap_status.primary_market,
         enabled_markets=bootstrap_status.enabled_markets,
         bootstrap_state=bootstrap_status.bootstrap_state,
-        supported_markets=bootstrap_status.supported_markets,
+        supported_markets=market_catalog.supported_market_codes(),
+        market_catalog=market_catalog.as_runtime_payload(),
         auth=AppAuthStatusResponse(**auth.__dict__),
     )
 

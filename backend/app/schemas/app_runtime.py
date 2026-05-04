@@ -27,6 +27,38 @@ class AppAuthStatusResponse(BaseModel):
     message: str | None = None
 
 
+class MarketCapabilitiesResponse(BaseModel):
+    """Coarse capabilities for a supported Market."""
+
+    benchmark: bool = False
+    breadth: bool = False
+    fundamentals: bool = False
+    group_rankings: bool = False
+    feature_snapshot: bool = False
+    official_universe: bool = False
+    finviz_screening: bool = False
+
+
+class MarketCatalogEntryResponse(BaseModel):
+    """Stable Market facts exposed to the frontend runtime."""
+
+    code: str
+    label: str
+    currency: str
+    timezone: str
+    calendar_id: str
+    exchanges: list[str]
+    indexes: list[str]
+    capabilities: MarketCapabilitiesResponse
+
+
+class MarketCatalogResponse(BaseModel):
+    """Frontend-ready Market Catalog payload."""
+
+    version: str
+    markets: list[MarketCatalogEntryResponse]
+
+
 class AppCapabilitiesResponse(BaseModel):
     """Feature/capability flags exposed to the frontend."""
 
@@ -38,6 +70,7 @@ class AppCapabilitiesResponse(BaseModel):
     enabled_markets: list[str] = Field(default_factory=lambda: ["US"])
     bootstrap_state: str = "not_started"
     supported_markets: list[str] = Field(default_factory=lambda: ["US", "HK", "IN", "JP", "KR", "TW", "CN"])
+    market_catalog: MarketCatalogResponse
     api_base_path: str = "/api"
     auth: AppAuthStatusResponse = Field(default_factory=AppAuthStatusResponse)
 
