@@ -142,7 +142,7 @@ def test_market_catalog_runtime_payload_is_frontend_ready() -> None:
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/domain/test_market_catalog.py -v
 ```
@@ -297,7 +297,7 @@ def get_market_catalog() -> MarketCatalog:
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/domain/test_market_catalog.py -v
 ```
@@ -329,7 +329,7 @@ assert data["market_catalog"]["markets"][1]["capabilities"]["finviz_screening"] 
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/test_app_runtime_endpoints.py -v
 ```
@@ -399,7 +399,7 @@ market_catalog=market_catalog.as_runtime_payload(),
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/test_app_runtime_endpoints.py tests/unit/domain/test_market_catalog.py -v
 ```
@@ -471,7 +471,7 @@ def test_bootstrap_plan_deduplicates_primary_and_enabled_markets_in_order() -> N
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/domain/test_bootstrap_plan.py -v
 ```
@@ -618,7 +618,7 @@ def build_bootstrap_plan(*, primary_market: str, enabled_markets: Iterable[str])
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/domain/test_bootstrap_plan.py tests/unit/domain/test_market_catalog.py -v
 ```
@@ -657,7 +657,7 @@ def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/test_runtime_bootstrap_tasks.py -v
 ```
@@ -717,7 +717,7 @@ Use `plan.primary_market` and `list(plan.enabled_markets)` for completion payloa
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/test_runtime_bootstrap_tasks.py tests/unit/domain/test_bootstrap_plan.py -v
 ```
@@ -798,7 +798,7 @@ def test_empty_system_is_reported_independently_from_market_readiness() -> None:
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/test_bootstrap_readiness_service.py -v
 ```
@@ -930,7 +930,7 @@ class BootstrapReadinessService:
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/test_bootstrap_readiness_service.py -v
 ```
@@ -981,7 +981,7 @@ def test_bootstrap_status_uses_readiness_service(monkeypatch):
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest tests/unit/test_runtime_preferences_service.py::test_bootstrap_status_uses_readiness_service -v
 ```
@@ -1054,7 +1054,7 @@ missing_markets = readiness.missing_markets
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest \
   tests/unit/test_runtime_preferences_service.py \
@@ -1109,7 +1109,7 @@ expect(screen.getByTestId('market-catalog-labels')).toHaveTextContent('United St
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/frontend
+cd "$(git rev-parse --show-toplevel)/frontend"
 npm run test:run -- src/contexts/RuntimeContext.test.jsx
 ```
 
@@ -1186,7 +1186,7 @@ Replace `supportedMarkets.map((market) => ...` with `marketOptions.map((market) 
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/frontend
+cd "$(git rev-parse --show-toplevel)/frontend"
 npm run test:run -- src/contexts/RuntimeContext.test.jsx src/components/App/BootstrapSetupScreen.test.jsx
 ```
 
@@ -1202,7 +1202,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest \
   tests/unit/domain/test_market_catalog.py \
@@ -1222,7 +1222,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/frontend
+cd "$(git rev-parse --show-toplevel)/frontend"
 npm run test:run -- src/contexts/RuntimeContext.test.jsx src/components/App/BootstrapSetupScreen.test.jsx src/components/Layout/Layout.test.jsx
 ```
 
@@ -1233,7 +1233,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/backend
+cd "$(git rev-parse --show-toplevel)/backend"
 source venv/bin/activate
 pytest
 ```
@@ -1243,7 +1243,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude/frontend
+cd "$(git rev-parse --show-toplevel)/frontend"
 npm run test:run
 npm run lint
 ```
@@ -1255,7 +1255,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd /Users/admin/StockScreenClaude
+cd "$(git rev-parse --show-toplevel)"
 git status --short
 git add \
   backend/app/domain/markets \

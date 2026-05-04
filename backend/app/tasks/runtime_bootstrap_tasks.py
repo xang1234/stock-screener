@@ -8,7 +8,11 @@ from typing import Iterable
 from celery import chain, chord, group
 
 from ..database import SessionLocal
-from ..domain.bootstrap.plan import BootstrapQueueKind, build_bootstrap_plan
+from ..domain.bootstrap.plan import (
+    BootstrapQueueKind,
+    MarketBootstrapPlan,
+    build_bootstrap_plan,
+)
 from ..services.market_activity_service import (
     mark_current_market_activity_failed,
     mark_market_activity_failed,
@@ -34,7 +38,7 @@ def _queue_for_stage(stage) -> str:
     raise ValueError(f"Unsupported bootstrap queue kind: {stage.queue_kind}")
 
 
-def _build_market_bootstrap_signatures(market: str) -> list:
+def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list:
     from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
     from app.tasks.cache_tasks import smart_refresh_cache
@@ -56,8 +60,6 @@ def _build_market_bootstrap_signatures(market: str) -> list:
         "calculate_daily_group_rankings_with_gapfill": calculate_daily_group_rankings_with_gapfill,
         "build_daily_snapshot": build_daily_snapshot,
     }
-    plan = build_bootstrap_plan(primary_market=market, enabled_markets=[market])
-    market_plan = plan.market_plans[0]
     return [
         task_by_name[stage.task_name]
         .si(**stage.kwargs)
@@ -77,7 +79,7 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
     market_workflows = []
     for market_plan in plan.market_plans:
         market_workflows.append(
-            chain(*_build_market_bootstrap_signatures(market_plan.market))
+            chain(*_build_market_bootstrap_signatures(market_plan))
         )
     completion = complete_local_runtime_bootstrap.si(
         primary_market=primary,
@@ -110,31 +112,54 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
 def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[str]) -> dict:
     from ..services.bootstrap_readiness_service import BootstrapReadinessService
     from ..services.runtime_preferences_service import (
+        get_runtime_preferences,
         set_bootstrap_state,
     )
 
     db = SessionLocal()
     try:
+        prefs = get_runtime_preferences(db)
         readiness = BootstrapReadinessService().evaluate(
             db,
             enabled_markets=enabled_markets,
+            bootstrap_started_at=prefs.bootstrap_started_at,
         )
         missing_markets = readiness.missing_markets
         if missing_markets:
             set_bootstrap_state(db, "failed")
+            core_missing_markets = []
+            scan_missing_markets = []
             for market in missing_markets:
+                market_result = readiness.market_results[market]
+                if not market_result.core_ready:
+                    core_missing_markets.append(market)
+                    stage_key = "core"
+                    message = "Bootstrap core data incomplete"
+                else:
+                    scan_missing_markets.append(market)
+                    stage_key = "scan"
+                    message = "Bootstrap scan did not publish"
                 mark_market_activity_failed(
                     db,
                     market=market,
-                    stage_key="scan",
+                    stage_key=stage_key,
                     lifecycle="bootstrap",
                     task_name="runtime_bootstrap",
                     task_id=None,
-                    message="Bootstrap scan did not publish",
+                    message=message,
+                )
+            failure_reasons = []
+            if core_missing_markets:
+                failure_reasons.append(
+                    "missing core market data for: " + ", ".join(core_missing_markets)
+                )
+            if scan_missing_markets:
+                failure_reasons.append(
+                    "missing published auto scans for: " + ", ".join(scan_missing_markets)
                 )
             raise RuntimeError(
-                "Bootstrap completed without published auto scans for: "
-                + ", ".join(missing_markets)
+                "Bootstrap completed with unreadied markets: "
+                + "; ".join(failure_reasons)
             )
         set_bootstrap_state(db, "ready")
     finally:

@@ -10,8 +10,8 @@ class _FakeBootstrapReadinessService:
         self._market_results = market_results
         self.calls = calls if calls is not None else []
 
-    def evaluate(self, db, *, enabled_markets):
-        self.calls.append((db, list(enabled_markets)))
+    def evaluate(self, db, *, enabled_markets, bootstrap_started_at=None):
+        self.calls.append((db, list(enabled_markets), bootstrap_started_at))
         return self._module.BootstrapReadiness(
             empty_system=self._empty_system,
             market_results={
@@ -169,6 +169,39 @@ def test_bootstrap_status_uses_readiness_service(monkeypatch):
 
     status = module.get_runtime_bootstrap_status(db)
 
-    assert calls == [(db, ["US", "HK"])]
+    assert calls == [(db, ["US", "HK"], None)]
     assert status.bootstrap_required is True
     assert status.bootstrap_state == "running"
+
+
+def test_bootstrap_status_passes_bootstrap_start_boundary_to_readiness(monkeypatch):
+    from datetime import datetime, timezone
+
+    from app.services import runtime_preferences_service as module
+
+    bootstrap_started_at = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
+    prefs = module.RuntimePreferences(
+        primary_market="US",
+        enabled_markets=["US"],
+        bootstrap_state="running",
+        bootstrap_started_at=bootstrap_started_at,
+    )
+    db = object()
+    calls = []
+
+    monkeypatch.setattr(module, "get_runtime_preferences", lambda _db: prefs)
+    monkeypatch.setattr(
+        module,
+        "get_bootstrap_readiness_service",
+        lambda: _FakeBootstrapReadinessService(
+            module,
+            empty_system=False,
+            market_results=[("US", True, True)],
+            calls=calls,
+        ),
+    )
+
+    status = module.get_runtime_bootstrap_status(db)
+
+    assert calls == [(db, ["US"], bootstrap_started_at)]
+    assert status.bootstrap_state == "ready"

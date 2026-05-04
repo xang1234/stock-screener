@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,7 @@ RUNTIME_SETTINGS_CATEGORY = "runtime"
 PRIMARY_MARKET_KEY = "runtime.primary_market"
 ENABLED_MARKETS_KEY = "runtime.enabled_markets"
 BOOTSTRAP_STATE_KEY = "runtime.bootstrap_state"
+BOOTSTRAP_STARTED_AT_KEY = "runtime.bootstrap_started_at"
 
 DEFAULT_PRIMARY_MARKET = "US"
 DEFAULT_ENABLED_MARKETS = ("US",)
@@ -31,6 +33,7 @@ class RuntimePreferences:
     primary_market: str
     enabled_markets: list[str]
     bootstrap_state: str
+    bootstrap_started_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,15 @@ def _normalize_bootstrap_state(value: str | None) -> str:
     return DEFAULT_BOOTSTRAP_STATE
 
 
+def _parse_bootstrap_started_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
 def get_runtime_preferences(db: Session) -> RuntimePreferences:
     primary_setting = _get_setting(db, PRIMARY_MARKET_KEY)
     primary_market = _normalize_supported_market(
@@ -121,11 +133,16 @@ def get_runtime_preferences(db: Session) -> RuntimePreferences:
     bootstrap_state = _normalize_bootstrap_state(
         bootstrap_setting.value if bootstrap_setting else None
     )
+    bootstrap_started_at_setting = _get_setting(db, BOOTSTRAP_STARTED_AT_KEY)
+    bootstrap_started_at = _parse_bootstrap_started_at(
+        bootstrap_started_at_setting.value if bootstrap_started_at_setting else None
+    )
 
     return RuntimePreferences(
         primary_market=primary_market,
         enabled_markets=enabled_markets,
         bootstrap_state=bootstrap_state,
+        bootstrap_started_at=bootstrap_started_at,
     )
 
 
@@ -154,12 +171,20 @@ def save_runtime_preferences(
         description="Enabled markets for the local-default runtime scheduler.",
     )
     if bootstrap_state is not None:
+        normalized_bootstrap_state = _normalize_bootstrap_state(bootstrap_state)
         _upsert_setting(
             db,
             key=BOOTSTRAP_STATE_KEY,
-            value=_normalize_bootstrap_state(bootstrap_state),
+            value=normalized_bootstrap_state,
             description="Current local bootstrap orchestration state.",
         )
+        if normalized_bootstrap_state == "running":
+            _upsert_setting(
+                db,
+                key=BOOTSTRAP_STARTED_AT_KEY,
+                value=datetime.now(timezone.utc).isoformat(),
+                description="UTC timestamp for the current local bootstrap attempt.",
+            )
     db.commit()
     return get_runtime_preferences(db)
 
@@ -199,6 +224,7 @@ def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
     readiness = get_bootstrap_readiness_service().evaluate(
         db,
         enabled_markets=enabled_markets,
+        bootstrap_started_at=prefs.bootstrap_started_at,
     )
     empty_system = readiness.empty_system
 

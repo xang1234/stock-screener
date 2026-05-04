@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -38,7 +38,7 @@ class FakeBootstrapReadinessService(BootstrapReadinessService):
     def has_core_market_data(self, db, market: str) -> bool:
         return self.core_ready.get(market, False)
 
-    def has_completed_auto_scan(self, db, market: str) -> bool:
+    def has_completed_auto_scan(self, db, market: str, *, bootstrap_started_at=None) -> bool:
         return self.scan_ready.get(market, False)
 
 
@@ -46,7 +46,7 @@ class FakeBootstrapReadinessService(BootstrapReadinessService):
 def readiness_db():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    db = sessionmaker(bind=engine)()
+    db = sessionmaker(engine)()
     try:
         yield db
     finally:
@@ -88,11 +88,14 @@ def seed_scan(
     scan_status: str = "completed",
     trigger_source: str = SCAN_TRIGGER_SOURCE_AUTO,
     feature_status: str = "published",
+    started_at: datetime | None = None,
 ) -> None:
+    ran_at = started_at or datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc)
     feature_run = FeatureRun(
         as_of_date=date(2026, 5, 1),
         run_type="daily_snapshot",
         status=feature_status,
+        published_at=ran_at if feature_status == "published" else None,
     )
     db.add(feature_run)
     db.flush()
@@ -105,6 +108,8 @@ def seed_scan(
             status=scan_status,
             trigger_source=trigger_source,
             feature_run_id=feature_run.id,
+            started_at=ran_at,
+            completed_at=ran_at if scan_status == "completed" else None,
         )
     )
     db.commit()
@@ -164,6 +169,23 @@ def test_sql_service_reports_ready_with_core_data_and_published_auto_scan(readin
     assert result.missing_markets == []
     assert result.market_results["US"].core_ready is True
     assert result.market_results["US"].scan_ready is True
+
+
+def test_sql_service_ignores_auto_scan_before_bootstrap_attempt(readiness_db) -> None:
+    bootstrap_started_at = datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc)
+    seed_core_market_data(readiness_db)
+    seed_scan(readiness_db, started_at=bootstrap_started_at - timedelta(minutes=1))
+
+    result = BootstrapReadinessService().evaluate(
+        readiness_db,
+        enabled_markets=["US"],
+        bootstrap_started_at=bootstrap_started_at,
+    )
+
+    assert result.ready is False
+    assert result.missing_markets == ["US"]
+    assert result.market_results["US"].core_ready is True
+    assert result.market_results["US"].scan_ready is False
 
 
 def test_sql_service_ignores_inactive_universe_rows_for_core_readiness(readiness_db) -> None:

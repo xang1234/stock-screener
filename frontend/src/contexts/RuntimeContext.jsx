@@ -88,6 +88,10 @@ export const DEFAULT_MARKET_CATALOG = {
   ],
 };
 
+const DEFAULT_SUPPORTED_MARKETS = DEFAULT_MARKET_CATALOG.markets
+  .map((market) => market.code)
+  .filter(Boolean);
+
 export const DEFAULT_CAPABILITIES = {
   features: {
     themes: true,
@@ -114,7 +118,7 @@ export const DEFAULT_CAPABILITIES = {
   enabled_markets: ['US'],
   bootstrap_state: 'not_started',
   market_catalog: DEFAULT_MARKET_CATALOG,
-  supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN'],
+  supported_markets: DEFAULT_SUPPORTED_MARKETS,
   api_base_path: '/api',
 };
 

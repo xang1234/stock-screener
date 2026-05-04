@@ -26,6 +26,7 @@ class _FakeTask:
 
 
 def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
+    from app.domain.bootstrap.plan import build_bootstrap_plan
     from app.tasks import runtime_bootstrap_tasks as module
 
     monkeypatch.setattr(
@@ -56,7 +57,8 @@ def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
         "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
         _FakeTask("app.interfaces.tasks.feature_store_tasks.build_daily_snapshot"),
     )
-    signatures = module._build_market_bootstrap_signatures("HK")
+    market_plan = build_bootstrap_plan(primary_market="HK", enabled_markets=["HK"]).market_plans[0]
+    signatures = module._build_market_bootstrap_signatures(market_plan)
     task_names = [signature.task for signature in signatures]
 
     assert "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan" not in task_names
@@ -75,6 +77,7 @@ def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
 
 
 def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
+    from app.domain.bootstrap.plan import build_bootstrap_plan
     from app.tasks import runtime_bootstrap_tasks as module
 
     monkeypatch.setattr(
@@ -106,7 +109,8 @@ def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
         _FakeTask("app.interfaces.tasks.feature_store_tasks.build_daily_snapshot"),
     )
 
-    signatures = module._build_market_bootstrap_signatures("HK")
+    market_plan = build_bootstrap_plan(primary_market="HK", enabled_markets=["HK"]).market_plans[0]
+    signatures = module._build_market_bootstrap_signatures(market_plan)
 
     assert [signature.task for signature in signatures] == [
         "app.tasks.universe_tasks.refresh_official_market_universe",
@@ -121,6 +125,7 @@ def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
 
 
 def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
+    from app.domain.bootstrap.plan import build_bootstrap_plan
     from app.tasks import runtime_bootstrap_tasks as module
 
     monkeypatch.setattr(
@@ -156,7 +161,8 @@ def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
         _FakeTask("app.interfaces.tasks.feature_store_tasks.build_daily_snapshot"),
     )
 
-    signatures = module._build_market_bootstrap_signatures("US")
+    market_plan = build_bootstrap_plan(primary_market="US", enabled_markets=["US"]).market_plans[0]
+    signatures = module._build_market_bootstrap_signatures(market_plan)
     task_names = [signature.task for signature in signatures]
 
     assert task_names == [
@@ -219,7 +225,7 @@ def test_queue_local_runtime_bootstrap_runs_market_chains_in_chord(monkeypatch):
     monkeypatch.setattr(
         module,
         "_build_market_bootstrap_signatures",
-        lambda market: [_FakeSignature(f"task:{market}")],
+        lambda market_plan: [_FakeSignature(f"task:{market_plan.market}")],
     )
 
     result = module.queue_local_runtime_bootstrap(
@@ -288,8 +294,8 @@ def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_mar
             self.closed = True
 
     class _FakeReadinessService:
-        def evaluate(self, db, *, enabled_markets):
-            calls["evaluate"] = (db, enabled_markets)
+        def evaluate(self, db, *, enabled_markets, bootstrap_started_at=None):
+            calls["evaluate"] = (db, enabled_markets, bootstrap_started_at)
             return BootstrapReadiness(
                 empty_system=False,
                 market_results={
@@ -320,6 +326,14 @@ def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_mar
         lambda db, state: calls.setdefault("set_bootstrap_state", (db, state)),
     )
     monkeypatch.setattr(
+        "app.services.runtime_preferences_service.get_runtime_preferences",
+        lambda _db: type(
+            "Prefs",
+            (),
+            {"bootstrap_started_at": "bootstrap-started-at"},
+        )(),
+    )
+    monkeypatch.setattr(
         module,
         "mark_market_activity_failed",
         lambda _db, **kwargs: failed_markets.append(kwargs),
@@ -331,7 +345,7 @@ def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_mar
             enabled_markets=["US", "HK"],
         )
 
-    assert calls["evaluate"] == (session, ["US", "HK"])
+    assert calls["evaluate"] == (session, ["US", "HK"], "bootstrap-started-at")
     assert calls["set_bootstrap_state"] == (session, "failed")
     assert failed_markets == [
         {
@@ -344,3 +358,82 @@ def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_mar
         }
     ]
     assert session.closed is True
+
+
+def test_complete_local_runtime_bootstrap_reports_core_and_scan_readiness_failures(monkeypatch):
+    from app.services.bootstrap_readiness_service import (
+        BootstrapReadiness,
+        MarketBootstrapReadiness,
+    )
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def close(self):
+            pass
+
+    class _FakeReadinessService:
+        def evaluate(self, db, *, enabled_markets, bootstrap_started_at=None):
+            return BootstrapReadiness(
+                empty_system=False,
+                market_results={
+                    "HK": MarketBootstrapReadiness(
+                        market="HK",
+                        core_ready=False,
+                        scan_ready=False,
+                    ),
+                    "TW": MarketBootstrapReadiness(
+                        market="TW",
+                        core_ready=True,
+                        scan_ready=False,
+                    ),
+                },
+            )
+
+    failed_markets = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        "app.services.bootstrap_readiness_service.BootstrapReadinessService",
+        _FakeReadinessService,
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.get_runtime_preferences",
+        lambda _db: type("Prefs", (), {"bootstrap_started_at": None})(),
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.set_bootstrap_state",
+        lambda _db, _state: None,
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        lambda _db, **kwargs: failed_markets.append(kwargs),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="missing core market data for: HK; missing published auto scans for: TW",
+    ):
+        module.complete_local_runtime_bootstrap.run(
+            primary_market="HK",
+            enabled_markets=["HK", "TW"],
+        )
+
+    assert failed_markets == [
+        {
+            "market": "HK",
+            "stage_key": "core",
+            "lifecycle": "bootstrap",
+            "task_name": "runtime_bootstrap",
+            "task_id": None,
+            "message": "Bootstrap core data incomplete",
+        },
+        {
+            "market": "TW",
+            "stage_key": "scan",
+            "lifecycle": "bootstrap",
+            "task_name": "runtime_bootstrap",
+            "task_id": None,
+            "message": "Bootstrap scan did not publish",
+        },
+    ]

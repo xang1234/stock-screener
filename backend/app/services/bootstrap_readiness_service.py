@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -60,9 +61,15 @@ class BootstrapReadinessService:
             and self._has_fundamental_rows(db, market)
         )
 
-    def has_completed_auto_scan(self, db: Session, market: str) -> bool:
+    def has_completed_auto_scan(
+        self,
+        db: Session,
+        market: str,
+        *,
+        bootstrap_started_at: datetime | None = None,
+    ) -> bool:
         normalized_market = self.normalize_market(market)
-        return (
+        query = (
             db.query(Scan.id)
             .join(FeatureRun, FeatureRun.id == Scan.feature_run_id)
             .filter(
@@ -71,16 +78,17 @@ class BootstrapReadinessService:
                 Scan.trigger_source == SCAN_TRIGGER_SOURCE_AUTO,
                 FeatureRun.status == "published",
             )
-            .limit(1)
-            .first()
-            is not None
         )
+        if bootstrap_started_at is not None:
+            query = query.filter(Scan.started_at >= bootstrap_started_at)
+        return query.limit(1).first() is not None
 
     def evaluate(
         self,
         db: Session,
         *,
         enabled_markets: list[str],
+        bootstrap_started_at: datetime | None = None,
     ) -> BootstrapReadiness:
         normalized_markets = [
             self.normalize_market(market) for market in enabled_markets
@@ -91,7 +99,11 @@ class BootstrapReadinessService:
                 market: MarketBootstrapReadiness(
                     market=market,
                     core_ready=self.has_core_market_data(db, market),
-                    scan_ready=self.has_completed_auto_scan(db, market),
+                    scan_ready=self.has_completed_auto_scan(
+                        db,
+                        market,
+                        bootstrap_started_at=bootstrap_started_at,
+                    ),
                 )
                 for market in normalized_markets
             },
