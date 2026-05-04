@@ -109,16 +109,20 @@ def _parse_bootstrap_started_at(value: str | None) -> datetime | None:
         return None
 
 
-def _ensure_bootstrap_started_at(db: Session) -> None:
-    existing = _get_setting(db, BOOTSTRAP_STARTED_AT_KEY)
-    if _parse_bootstrap_started_at(existing.value if existing else None) is not None:
-        return
+def _write_bootstrap_started_at(db: Session) -> None:
     _upsert_setting(
         db,
         key=BOOTSTRAP_STARTED_AT_KEY,
         value=datetime.now(timezone.utc).isoformat(),
         description="UTC timestamp for the current local bootstrap attempt.",
     )
+
+
+def _ensure_bootstrap_started_at(db: Session) -> None:
+    existing = _get_setting(db, BOOTSTRAP_STARTED_AT_KEY)
+    if _parse_bootstrap_started_at(existing.value if existing else None) is not None:
+        return
+    _write_bootstrap_started_at(db)
 
 
 def get_runtime_preferences(db: Session) -> RuntimePreferences:
@@ -184,6 +188,10 @@ def save_runtime_preferences(
     )
     if bootstrap_state is not None:
         normalized_bootstrap_state = _normalize_bootstrap_state(bootstrap_state)
+        existing_bootstrap_setting = _get_setting(db, BOOTSTRAP_STATE_KEY)
+        existing_bootstrap_state = _normalize_bootstrap_state(
+            existing_bootstrap_setting.value if existing_bootstrap_setting else None
+        )
         _upsert_setting(
             db,
             key=BOOTSTRAP_STATE_KEY,
@@ -191,7 +199,10 @@ def save_runtime_preferences(
             description="Current local bootstrap orchestration state.",
         )
         if normalized_bootstrap_state == "running":
-            _ensure_bootstrap_started_at(db)
+            if existing_bootstrap_state == "running":
+                _ensure_bootstrap_started_at(db)
+            else:
+                _write_bootstrap_started_at(db)
     db.commit()
     return get_runtime_preferences(db)
 

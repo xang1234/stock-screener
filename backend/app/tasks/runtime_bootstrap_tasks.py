@@ -157,10 +157,12 @@ def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[
                 failure_reasons.append(
                     "missing published auto scans for: " + ", ".join(scan_missing_markets)
                 )
-            raise RuntimeError(
-                "Bootstrap completed with unreadied markets: "
-                + "; ".join(failure_reasons)
-            )
+            return {
+                "status": "failed",
+                "primary_market": primary_market,
+                "enabled_markets": enabled_markets,
+                "reason": "; ".join(failure_reasons),
+            }
         set_bootstrap_state(db, "ready")
     finally:
         db.close()

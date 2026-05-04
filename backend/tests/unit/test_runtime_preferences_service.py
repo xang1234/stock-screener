@@ -229,6 +229,13 @@ def test_save_runtime_preferences_preserves_running_bootstrap_start_boundary() -
                 category=module.RUNTIME_SETTINGS_CATEGORY,
             )
         )
+        db.add(
+            AppSetting(
+                key=module.BOOTSTRAP_STATE_KEY,
+                value="running",
+                category=module.RUNTIME_SETTINGS_CATEGORY,
+            )
+        )
         db.commit()
 
         prefs = module.save_runtime_preferences(
@@ -245,6 +252,59 @@ def test_save_runtime_preferences_preserves_running_bootstrap_start_boundary() -
         )
         assert prefs.bootstrap_started_at == existing_started_at
         assert persisted_started_at.value == existing_started_at.isoformat()
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_save_runtime_preferences_resets_bootstrap_start_boundary_for_new_attempt() -> None:
+    from datetime import datetime, timezone
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database import Base
+    from app.models.app_settings import AppSetting
+    from app.services import runtime_preferences_service as module
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(engine)()
+    try:
+        old_started_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        db.add(
+            AppSetting(
+                key=module.BOOTSTRAP_STARTED_AT_KEY,
+                value=old_started_at.isoformat(),
+                category=module.RUNTIME_SETTINGS_CATEGORY,
+            )
+        )
+        db.add(
+            AppSetting(
+                key=module.BOOTSTRAP_STATE_KEY,
+                value="failed",
+                category=module.RUNTIME_SETTINGS_CATEGORY,
+            )
+        )
+        db.commit()
+
+        before_save = datetime.now(timezone.utc)
+        prefs = module.save_runtime_preferences(
+            db,
+            primary_market="US",
+            enabled_markets=["US"],
+            bootstrap_state="running",
+        )
+        after_save = datetime.now(timezone.utc)
+
+        persisted_started_at = (
+            db.query(AppSetting)
+            .filter(AppSetting.key == module.BOOTSTRAP_STARTED_AT_KEY)
+            .one()
+        )
+        assert prefs.bootstrap_started_at is not None
+        assert before_save <= prefs.bootstrap_started_at <= after_save
+        assert persisted_started_at.value == prefs.bootstrap_started_at.isoformat()
     finally:
         db.close()
         engine.dispose()

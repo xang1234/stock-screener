@@ -339,14 +339,19 @@ def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_mar
         lambda _db, **kwargs: failed_markets.append(kwargs),
     )
 
-    with pytest.raises(RuntimeError, match="HK"):
-        module.complete_local_runtime_bootstrap.run(
-            primary_market="US",
-            enabled_markets=["US", "HK"],
-        )
+    result = module.complete_local_runtime_bootstrap.run(
+        primary_market="US",
+        enabled_markets=["US", "HK"],
+    )
 
     assert calls["evaluate"] == (session, ["US", "HK"], "bootstrap-started-at")
     assert calls["set_bootstrap_state"] == (session, "failed")
+    assert result == {
+        "status": "failed",
+        "primary_market": "US",
+        "enabled_markets": ["US", "HK"],
+        "reason": "missing published auto scans for: HK",
+    }
     assert failed_markets == [
         {
             "market": "HK",
@@ -410,15 +415,17 @@ def test_complete_local_runtime_bootstrap_reports_core_and_scan_readiness_failur
         lambda _db, **kwargs: failed_markets.append(kwargs),
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="missing core market data for: HK; missing published auto scans for: TW",
-    ):
-        module.complete_local_runtime_bootstrap.run(
-            primary_market="HK",
-            enabled_markets=["HK", "TW"],
-        )
+    result = module.complete_local_runtime_bootstrap.run(
+        primary_market="HK",
+        enabled_markets=["HK", "TW"],
+    )
 
+    assert result == {
+        "status": "failed",
+        "primary_market": "HK",
+        "enabled_markets": ["HK", "TW"],
+        "reason": "missing core market data for: HK; missing published auto scans for: TW",
+    }
     assert failed_markets == [
         {
             "market": "HK",
