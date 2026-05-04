@@ -205,3 +205,46 @@ def test_bootstrap_status_passes_bootstrap_start_boundary_to_readiness(monkeypat
 
     assert calls == [(db, ["US"], bootstrap_started_at)]
     assert status.bootstrap_state == "ready"
+
+
+def test_save_runtime_preferences_preserves_running_bootstrap_start_boundary() -> None:
+    from datetime import datetime, timezone
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database import Base
+    from app.models.app_settings import AppSetting
+    from app.services import runtime_preferences_service as module
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(engine)()
+    try:
+        existing_started_at = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
+        db.add(
+            AppSetting(
+                key=module.BOOTSTRAP_STARTED_AT_KEY,
+                value=existing_started_at.isoformat(),
+                category=module.RUNTIME_SETTINGS_CATEGORY,
+            )
+        )
+        db.commit()
+
+        prefs = module.save_runtime_preferences(
+            db,
+            primary_market="US",
+            enabled_markets=["US", "HK"],
+            bootstrap_state="running",
+        )
+
+        persisted_started_at = (
+            db.query(AppSetting)
+            .filter(AppSetting.key == module.BOOTSTRAP_STARTED_AT_KEY)
+            .one()
+        )
+        assert prefs.bootstrap_started_at == existing_started_at
+        assert persisted_started_at.value == existing_started_at.isoformat()
+    finally:
+        db.close()
+        engine.dispose()

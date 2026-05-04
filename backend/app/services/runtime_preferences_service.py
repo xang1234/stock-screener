@@ -109,6 +109,18 @@ def _parse_bootstrap_started_at(value: str | None) -> datetime | None:
         return None
 
 
+def _ensure_bootstrap_started_at(db: Session) -> None:
+    existing = _get_setting(db, BOOTSTRAP_STARTED_AT_KEY)
+    if _parse_bootstrap_started_at(existing.value if existing else None) is not None:
+        return
+    _upsert_setting(
+        db,
+        key=BOOTSTRAP_STARTED_AT_KEY,
+        value=datetime.now(timezone.utc).isoformat(),
+        description="UTC timestamp for the current local bootstrap attempt.",
+    )
+
+
 def get_runtime_preferences(db: Session) -> RuntimePreferences:
     primary_setting = _get_setting(db, PRIMARY_MARKET_KEY)
     primary_market = _normalize_supported_market(
@@ -179,12 +191,7 @@ def save_runtime_preferences(
             description="Current local bootstrap orchestration state.",
         )
         if normalized_bootstrap_state == "running":
-            _upsert_setting(
-                db,
-                key=BOOTSTRAP_STARTED_AT_KEY,
-                value=datetime.now(timezone.utc).isoformat(),
-                description="UTC timestamp for the current local bootstrap attempt.",
-            )
+            _ensure_bootstrap_started_at(db)
     db.commit()
     return get_runtime_preferences(db)
 
