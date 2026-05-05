@@ -16,8 +16,8 @@ def _workflow_matrix_markets(path: str) -> list[str]:
     return [market.strip() for market in match.group(1).split(",")]
 
 
-def test_static_and_weekly_reference_workflows_include_korea_market():
-    expected = ["US", "HK", "IN", "JP", "KR", "TW"]
+def test_static_and_weekly_reference_workflows_cover_supported_markets():
+    expected = ["US", "HK", "IN", "JP", "KR", "TW", "CN"]
 
     assert _workflow_matrix_markets(".github/workflows/static-site.yml") == expected
     assert _workflow_matrix_markets(".github/workflows/weekly-reference-data.yml") == expected
