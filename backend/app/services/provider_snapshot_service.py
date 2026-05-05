@@ -474,8 +474,17 @@ class ProviderSnapshotService:
         warnings: Optional[list[str]] = None,
         run_mode: str = "publish",
         publish: bool = True,
+        force_publish: bool = False,
     ) -> Dict[str, Any]:
-        """Publish a pre-built market snapshot using the standard run/pointer tables."""
+        """Publish a pre-built market snapshot using the standard run/pointer tables.
+
+        ``force_publish`` lets the caller publish even when the coverage gate
+        would otherwise mark the run as ``publish_blocked``. Used by the weekly
+        builder when a deadline-driven partial run still produces a usable
+        bundle (skipped symbols inherit data from the prior bundle). The gate's
+        warnings are still recorded on the run so consumers can detect the
+        degraded state.
+        """
         normalized_market = str(market or "").strip().upper()
         parity_stats = {
             "market": normalized_market,
@@ -487,6 +496,13 @@ class ProviderSnapshotService:
         )
         all_warnings = list(warnings or [])
         all_warnings.extend(coverage_warnings)
+        force_override = bool(force_publish) and not coverage_ok and publish
+        if force_override:
+            all_warnings.append(
+                "force_publish=True: publishing despite coverage gate failure "
+                f"(active_coverage={coverage_thresholds.get('active_coverage', 0.0):.2%}, "
+                f"min={coverage_thresholds.get('min_active_coverage', 0.0):.2%})"
+            )
 
         run = ProviderSnapshotRun(
             snapshot_key=snapshot_key,
@@ -528,7 +544,7 @@ class ProviderSnapshotService:
         run.warnings_json = json.dumps(all_warnings, sort_keys=True) if all_warnings else None
         run.status = "preview_ready" if not publish else "published"
         published = False
-        if publish and coverage_ok:
+        if publish and (coverage_ok or force_override):
             published_at = datetime.utcnow()
             run.published_at = published_at
             pointer = db.query(ProviderSnapshotPointer).filter(
@@ -559,6 +575,7 @@ class ProviderSnapshotService:
             "warnings": all_warnings,
             "market": normalized_market,
             "coverage_thresholds": coverage_thresholds,
+            "force_published": force_override,
         }
 
     def _fetch_yahoo_only_fields(self, symbol: str) -> Dict[str, Any]:

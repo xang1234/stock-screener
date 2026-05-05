@@ -349,6 +349,196 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
     assert "| `yahoo_quote_not_found` | 2 |" in summary_text
 
 
+def _make_universe_row(symbol: str, market: str = "CN") -> SimpleNamespace:
+    return SimpleNamespace(
+        symbol=symbol,
+        market=market,
+        exchange="SSE" if symbol.endswith(".SS") else "SZSE",
+        name=f"Co-{symbol}",
+        sector="Industrials",
+        industry="Misc",
+        market_cap=1000.0,
+    )
+
+
+def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
+    monkeypatch, tmp_path, capsys
+):
+    """Asia path stops between chunks once the wall-clock budget is exhausted.
+
+    With --max-runtime-minutes set and the deadline tripping after the first
+    chunk, the second chunk is never fetched, the snapshot is published with
+    force_publish=True, and warnings record the deadline.
+    """
+
+    published_at = datetime(2026, 5, 5, 12, 10, 0)
+    active_rows = [
+        _make_universe_row("600000.SS"),
+        _make_universe_row("600001.SS"),
+        _make_universe_row("000001.SZ"),
+    ]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.order_by.return_value.all.return_value = active_rows
+    fake_db = MagicMock()
+    fake_db.query.return_value = fake_query
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    official_service = SimpleNamespace(
+        fetch_market_snapshot=lambda market: SimpleNamespace(
+            market=market,
+            source_name="cn_official",
+            snapshot_id="cn-2026-05-05",
+            snapshot_as_of="2026-05-05",
+            source_metadata={},
+            rows=tuple({"symbol": row.symbol} for row in active_rows),
+        )
+    )
+    monkeypatch.setattr(
+        build_script, "OfficialMarketUniverseSourceService", lambda: official_service
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(
+            ingest_cn_snapshot_rows=lambda db, **kwargs: {"added": 3, "updated": 0, "deactivated": 0}
+        ),
+    )
+
+    # Drive build_script.time.monotonic so the second chunk sees an exhausted
+    # deadline. Each call advances by 60 s, so a 1.5-minute (90 s) budget is
+    # consumed after the first chunk's start.
+    fake_clock = {"value": 0.0}
+
+    def fake_monotonic() -> float:
+        fake_clock["value"] += 60.0
+        return fake_clock["value"]
+
+    monkeypatch.setattr(build_script.time, "monotonic", fake_monotonic)
+
+    fetch_calls: list[list[str]] = []
+    store_calls: list[list[str]] = []
+
+    def fake_fetch_fundamentals_batch(symbols, **kwargs):
+        fetch_calls.append(list(symbols))
+        kwargs["progress_callback"](len(symbols), len(symbols))
+        return {symbol: {"market_cap": 1000.0, "sector": "Industrials"} for symbol in symbols}
+
+    def fake_store_all_caches(data, _cache, **_kwargs):
+        store_calls.append(list(data))
+        return {
+            "fundamentals_stored": len(data),
+            "persisted_symbols": len(data),
+            "failed_persistence_symbols": 0,
+            "failed": 0,
+            "provider_error_counts": {},
+        }
+
+    hybrid_service = SimpleNamespace(
+        yfinance_delay_per_ticker=1.5,
+        fetch_fundamentals_batch=fake_fetch_fundamentals_batch,
+        store_all_caches=fake_store_all_caches,
+    )
+    monkeypatch.setattr(build_script, "get_hybrid_fundamentals_service", lambda: hybrid_service)
+
+    # Cache returns fresh data for both attempted symbols and (simulated)
+    # last-week data for the symbol whose chunk was skipped — that's the whole
+    # point of force-publish: skipped symbols inherit the prior bundle.
+    cached = {
+        "600000.SS": {"market_cap": 1000.0, "sector": "Industrials"},
+        "600001.SS": {"market_cap": 1000.0, "sector": "Industrials"},
+        "000001.SZ": {"market_cap": 999.0, "sector": "Industrials", "data_source": "bundle_import"},
+    }
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_many=lambda symbols: cached),
+    )
+
+    publish_calls: list[dict[str, object]] = []
+    export_calls: list[dict[str, object]] = []
+    provider_snapshot_service = SimpleNamespace(
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": "row-hash",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: publish_calls.append(kwargs)
+        or {
+            "published": True,
+            "force_published": kwargs.get("force_publish", False),
+            "source_revision": "fundamentals_v1_cn:20260505121000",
+            "snapshot_key": kwargs["snapshot_key"],
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+            "coverage_thresholds": {
+                "market": "CN",
+                "active_coverage": 1.0,
+                "min_active_coverage": 0.70,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": 0.30,
+            },
+        },
+        get_published_run=lambda db, snapshot_key: type(
+            "Run",
+            (),
+            {
+                "published_at": published_at,
+                "created_at": published_at,
+                "source_revision": "fundamentals_v1_cn:20260505121000",
+            },
+        )(),
+        export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
+        or {"bundle_path": str(kwargs["output_path"])},
+    )
+    monkeypatch.setattr(
+        build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "CN",
+            "--output-dir",
+            str(tmp_path),
+            "--max-runtime-minutes",
+            "1.5",
+            "--fetch-chunk-size",
+            "2",
+            "--allow-partial-publish",
+        ],
+    )
+
+    assert build_script.main() == 0
+
+    # Only the first chunk fetched; the second chunk's deadline check tripped.
+    assert fetch_calls == [["600000.SS", "600001.SS"]]
+    assert store_calls == [["600000.SS", "600001.SS"]]
+
+    # Snapshot rows still cover all 3 symbols (skipped one inherited from cache).
+    publish_kwargs = publish_calls[0]
+    assert publish_kwargs["force_publish"] is True
+    assert publish_kwargs["coverage_stats"]["partial_run"] is True
+    assert publish_kwargs["coverage_stats"]["attempted_symbols"] == 2
+    assert publish_kwargs["coverage_stats"]["skipped_due_to_deadline"] == 1
+    assert publish_kwargs["coverage_stats"]["snapshot_symbols"] == 3
+    deadline_warning = next(
+        (w for w in publish_kwargs["warnings"] if "deadline reached" in w), None
+    )
+    assert deadline_warning is not None, publish_kwargs["warnings"]
+
+    stdout = capsys.readouterr().out
+    assert "[fundamentals] CN chunk 1/2" in stdout
+    assert "deadline reached before chunk 2/2" in stdout
+    assert export_calls, "Bundle export should still run after a partial publish"
+
+
 def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_path, capsys):
     bundle_path = tmp_path / "weekly-reference.json.gz"
     bundle_path.write_bytes(b"bundle")
