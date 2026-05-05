@@ -11,6 +11,7 @@ x-app-env: &app-env
   POSTGRES_DB: ${POSTGRES_DB:-stockscanner}
   POSTGRES_USER: ${POSTGRES_USER:-stockscanner}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockscanner}
+  ENABLED_MARKETS: ${ENABLED_MARKETS:-US}
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   CELERY_BROKER_URL: redis://redis:6379/0
@@ -166,34 +167,44 @@ services:
 
   celery-datafetch:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_in,data_fetch_jp,data_fetch_kr,data_fetch_tw,data_fetch_cn -n datafetch-global@%h
+    command: >
+      sh -c 'QUEUES="$$(python scripts/compose_enabled_markets.py queues --markets "$${ENABLED_MARKETS:-US}")" &&
+      exec celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1
+      --without-mingle --without-gossip -Q "$$QUEUES" -n datafetch-global@%h'
 
   celery-marketjobs-us:
     <<: *worker-common
+    profiles: ["market-us"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_us -n marketjobs-us@%h
 
   celery-marketjobs-hk:
     <<: *worker-common
+    profiles: ["market-hk"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_hk -n marketjobs-hk@%h
 
   celery-marketjobs-in:
     <<: *worker-common
+    profiles: ["market-in"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_in -n marketjobs-in@%h
 
   celery-marketjobs-jp:
     <<: *worker-common
+    profiles: ["market-jp"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_jp -n marketjobs-jp@%h
 
   celery-marketjobs-kr:
     <<: *worker-common
+    profiles: ["market-kr"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_kr -n marketjobs-kr@%h
 
   celery-marketjobs-tw:
     <<: *worker-common
+    profiles: ["market-tw"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_tw -n marketjobs-tw@%h
 
   celery-marketjobs-cn:
     <<: *worker-common
+    profiles: ["market-cn"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_cn -n marketjobs-cn@%h
 
   celery-userscans:
@@ -202,30 +213,37 @@ services:
 
   celery-userscans-us:
     <<: *worker-common
+    profiles: ["market-us"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_us -n userscans-us@%h
 
   celery-userscans-hk:
     <<: *worker-common
+    profiles: ["market-hk"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_hk -n userscans-hk@%h
 
   celery-userscans-in:
     <<: *worker-common
+    profiles: ["market-in"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_in -n userscans-in@%h
 
   celery-userscans-jp:
     <<: *worker-common
+    profiles: ["market-jp"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_jp -n userscans-jp@%h
 
   celery-userscans-kr:
     <<: *worker-common
+    profiles: ["market-kr"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_kr -n userscans-kr@%h
 
   celery-userscans-tw:
     <<: *worker-common
+    profiles: ["market-tw"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_tw -n userscans-tw@%h
 
   celery-userscans-cn:
     <<: *worker-common
+    profiles: ["market-cn"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_cn -n userscans-cn@%h
 
   celery-beat:

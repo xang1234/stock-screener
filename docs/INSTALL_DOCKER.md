@@ -8,6 +8,7 @@ Docker deployments use **PostgreSQL** as the application database. The shared `.
 
 - Docker Engine 20.10+
 - Docker Compose v2 (`docker compose` or `docker-compose`)
+- Python 3 on the host for `scripts/docker-compose-enabled-markets.sh`
 
 ## Quick Start (Local Development)
 
@@ -19,10 +20,10 @@ cp .env.docker.example .env
 # Edit .env: Set SERVER_AUTH_PASSWORD and add your API keys (GROQ_API_KEY, MINIMAX_API_KEY, etc.)
 
 # 2. Start the local-default stack
-docker-compose up
+scripts/docker-compose-enabled-markets.sh up
 ```
 
-This starts PostgreSQL, Redis, the Backend API, the shared Celery workers, and the Frontend. Access at **http://localhost**.
+This starts PostgreSQL, Redis, the Backend API, the shared Celery workers, the market workers selected by `ENABLED_MARKETS`, and the Frontend. Access at **http://localhost**.
 
 > **Note:** Local backups are now opt-in so the default laptop stack stays lighter. Start `db-backup` with `docker-compose --profile backup up` (or add the profile in a local override) when you want local `pg_dump` snapshots under `./data/backups`.
 
@@ -39,7 +40,7 @@ cp .env.docker.example .env.docker
 # and SERVER_AUTH_SECURE_COOKIE=true if your proxy terminates HTTPS
 
 # 2. Start with production settings
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # 3. Configure your reverse proxy to forward to port 80
 ```
@@ -61,16 +62,16 @@ cp .env.docker.example .env.docker
 #   CORS_ORIGINS=https://stocks.yourdomain.com
 
 # 2. Pull the tagged release images
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
 
 # 3. Deploy without rebuilding locally
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
 ```
 
 For HTTPS on a standalone VPS, add the Caddy overlay:
 ```bash
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml pull
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml pull
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
 ```
 
 ### Release and Rollback
@@ -99,7 +100,7 @@ cp .env.docker.example .env.docker
 # 2. Ensure DNS A record points to your server IP
 
 # 3. Start with HTTPS
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d
 ```
 
 Requirements:
@@ -117,8 +118,10 @@ The HTTPS overlay sets `SERVER_AUTH_SECURE_COOKIE=true` on the backend automatic
 | `postgres` | Application database |
 | `backend` | FastAPI API server |
 | `celery-worker` | General compute queue (2 workers) |
-| `celery-datafetch` | Data fetch queue (1 worker, serialized for rate limits) |
-| `celery-userscans` | User scan queue (2 workers) |
+| `celery-datafetch` | Data fetch queue (1 worker, serialized for rate limits; listens only to enabled-market queues) |
+| `celery-userscans` | Shared user scan queue |
+| `celery-marketjobs-*` | Enabled-market compute queues, selected through Compose profiles |
+| `celery-userscans-*` | Enabled-market user scan queues, selected through Compose profiles |
 | `celery-beat` | Celery Beat scheduler |
 | `db-backup` | Automated PostgreSQL backups to `./data/backups` |
 | `frontend` | React app served via nginx |
