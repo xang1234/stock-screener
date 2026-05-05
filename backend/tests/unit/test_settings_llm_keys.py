@@ -30,6 +30,37 @@ def test_universe_source_timeout_seconds_must_be_positive() -> None:
         raise AssertionError("Expected invalid universe_source_timeout_seconds to fail")
 
 
+def test_universe_source_timeout_seconds_cn_must_be_positive_when_set() -> None:
+    try:
+        Settings(universe_source_timeout_seconds_cn=0)
+    except ValueError as exc:
+        assert "universe_source_timeout_seconds_cn must be > 0" in str(exc)
+    else:
+        raise AssertionError("Expected invalid universe_source_timeout_seconds_cn to fail")
+
+
+def test_universe_source_timeout_for_uses_cn_override() -> None:
+    settings = Settings(
+        universe_source_timeout_seconds=60,
+        universe_source_timeout_seconds_cn=240,
+    )
+
+    assert settings.universe_source_timeout_for("CN") == 240
+    assert settings.universe_source_timeout_for("cn") == 240
+    assert settings.universe_source_timeout_for("US") == 60
+    assert settings.universe_source_timeout_for("HK") == 60
+
+
+def test_universe_source_timeout_for_falls_back_when_cn_override_unset() -> None:
+    settings = Settings(
+        universe_source_timeout_seconds=45,
+        universe_source_timeout_seconds_cn=None,
+    )
+
+    assert settings.universe_source_timeout_for("CN") == 45
+    assert settings.universe_source_timeout_for("US") == 45
+
+
 def test_ibd_industry_csv_path_is_configurable(tmp_path, monkeypatch) -> None:
     override = tmp_path / "custom" / "ibd.csv"
     override.parent.mkdir(parents=True, exist_ok=True)

@@ -181,7 +181,7 @@ class CnMarketDataService:
         self._akshare_module = akshare_module
         self._baostock_module = baostock_module
         self._timeout_seconds = int(
-            timeout_seconds or settings.universe_source_timeout_seconds
+            timeout_seconds or settings.universe_source_timeout_for("CN")
         )
         self._listing_rows_cache: list[dict[str, Any]] | None = None
         self._akshare_ohlcv_consecutive_failures = 0

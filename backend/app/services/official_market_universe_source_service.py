@@ -390,7 +390,8 @@ class OfficialMarketUniverseSourceService:
         if self._cn_provider is None:
             from .cn_market_data_service import CnMarketDataService
 
-            self._cn_provider = CnMarketDataService(timeout_seconds=self._timeout_seconds)
+            cn_timeout = settings.universe_source_timeout_for("CN")
+            self._cn_provider = CnMarketDataService(timeout_seconds=cn_timeout)
         return self._cn_provider
 
     @staticmethod
