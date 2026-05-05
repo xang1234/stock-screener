@@ -121,7 +121,14 @@ function PriceSparkline({
         }}
       >
         {/* Sparkline Chart */}
-        <Box sx={{ width: showChange ? sparklineWidth : '100%', height: '100%', flex: showChange ? 'none' : 1 }}>
+        <Box
+          sx={{
+            width: showChange ? sparklineWidth : '100%',
+            height: '100%',
+            flex: showChange ? '1 1 auto' : 1,
+            minWidth: 0,
+          }}
+        >
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
               data={chartData}
@@ -148,6 +155,7 @@ function PriceSparkline({
               fontFamily: 'monospace',
               color: changeColor,
               whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}
           >
             {changeText}
