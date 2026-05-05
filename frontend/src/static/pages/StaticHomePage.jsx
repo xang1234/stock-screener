@@ -164,12 +164,18 @@ function StaticHomePage() {
 
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         {(home.key_markets || [])
-          .filter((item) => item.latest_close != null && (item.history || []).length > 0)
+          .map((item) => ({
+            ...item,
+            _closes: (item.history || []).map((h) => h.close).filter((c) => c != null),
+          }))
+          .filter((item) => item.latest_close != null && item._closes.length > 1)
           .map((item) => {
-          const closes = (item.history || []).map((h) => h.close).filter((c) => c != null);
-          const trend = closes.length >= 2
-            ? (closes[closes.length - 1] > closes[0] ? 1 : closes[closes.length - 1] < closes[0] ? -1 : 0)
-            : 0;
+          const closes = item._closes;
+          const trend = closes[closes.length - 1] > closes[0]
+            ? 1
+            : closes[closes.length - 1] < closes[0]
+              ? -1
+              : 0;
           return (
             <Grid item xs={12} sm={6} md={4} lg={2.4} key={item.symbol}>
               <Paper
@@ -212,18 +218,16 @@ function StaticHomePage() {
                     </Typography>
                   </Box>
                 </Box>
-                {closes.length > 1 ? (
-                  <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'stretch' }}>
-                    <PriceSparkline
-                      data={closes}
-                      trend={trend}
-                      change1d={null}
-                      width="100%"
-                      height="100%"
-                      showChange={false}
-                    />
-                  </Box>
-                ) : null}
+                <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'stretch' }}>
+                  <PriceSparkline
+                    data={closes}
+                    trend={trend}
+                    change1d={null}
+                    width="100%"
+                    height="100%"
+                    showChange={false}
+                  />
+                </Box>
               </Paper>
             </Grid>
           );
@@ -318,7 +322,7 @@ function StaticHomePage() {
                           industry={row.ibd_industry_group}
                           width={137}
                           height={28}
-                          sparklineWidth={105}
+                          sparklineWidth={92}
                         />
                       </Box>
                     ) : '-'}
