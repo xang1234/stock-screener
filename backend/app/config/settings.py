@@ -141,6 +141,7 @@ class Settings(BaseSettings):
     yfinance_batch_rate_limit_interval: float = 2.0  # seconds between yfinance batch downloads
     yfinance_per_ticker_delay: float = 0.2  # Deprecated: bulk scheduled jobs should not use per-ticker fetches
     universe_source_timeout_seconds: int = 60
+    universe_source_timeout_seconds_cn: int | None = 300
     universe_source_user_agent: str = (
         "StockScannerUniverseRefresh/1.0 (+https://github.com/xang1234/stock-screener)"
     )
@@ -450,6 +451,21 @@ class Settings(BaseSettings):
                 f"universe_source_timeout_seconds must be > 0, got {v}"
             )
         return v
+
+    @field_validator('universe_source_timeout_seconds_cn')
+    @classmethod
+    def validate_universe_source_timeout_seconds_cn(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError(
+                f"universe_source_timeout_seconds_cn must be > 0 when set, got {v}"
+            )
+        return v
+
+    def universe_source_timeout_for(self, market: str) -> int:
+        normalized = str(market or "").strip().upper()
+        if normalized == "CN" and self.universe_source_timeout_seconds_cn:
+            return self.universe_source_timeout_seconds_cn
+        return self.universe_source_timeout_seconds
 
     @field_validator(
         'provider_snapshot_min_active_coverage_us',
