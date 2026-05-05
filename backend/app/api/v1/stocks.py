@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Stock data API endpoints"""
 from datetime import UTC, datetime, timedelta
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -24,6 +25,7 @@ from ...schemas.stock import (
     StockSearchResult,
     StockTechnicals,
 )
+from ...services.redis_pool import get_redis_client, is_redis_enabled
 from ...services.stock_event_context_service import StockEventContextService
 from ...services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
 from ...services.symbol_format import require_valid_symbol
@@ -104,7 +106,51 @@ def _empty_stock_info(symbol: str) -> dict:
     }
 
 
+_STOCK_INFO_REDIS_KEY = "stock:info:{symbol}"
+_STOCK_INFO_CACHE_TTL_SECONDS = 3600  # 1 hour
+
+
+def _stock_info_cache_get(symbol: str) -> dict | None:
+    if not is_redis_enabled():
+        return None
+    client = get_redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(_STOCK_INFO_REDIS_KEY.format(symbol=symbol.upper()))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("stock:info redis GET failed for %s: %s", symbol, exc)
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        logger.warning("stock:info redis payload corrupt for %s: %s", symbol, exc)
+        return None
+
+
+def _stock_info_cache_set(symbol: str, info: dict) -> None:
+    if not is_redis_enabled():
+        return
+    client = get_redis_client()
+    if client is None:
+        return
+    try:
+        client.setex(
+            _STOCK_INFO_REDIS_KEY.format(symbol=symbol.upper()),
+            _STOCK_INFO_CACHE_TTL_SECONDS,
+            json.dumps(info, default=str),
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("stock:info redis SETEX failed for %s: %s", symbol, exc)
+
+
 def _get_stock_info_payload(symbol: str) -> dict | None:
+    cached = _stock_info_cache_get(symbol)
+    if cached is not None:
+        return cached
+
     info = _get_yfinance_service().get_stock_info(symbol.upper())
     if not info:
         logger.warning(
@@ -112,6 +158,8 @@ def _get_stock_info_payload(symbol: str) -> dict | None:
             symbol,
         )
         return None
+
+    _stock_info_cache_set(symbol, info)
     return info
 
 

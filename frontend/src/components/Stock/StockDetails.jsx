@@ -145,6 +145,10 @@ function StockDetails() {
   const { activeProfile, activeProfileDetail } = useStrategyProfile();
   const [peerModalOpen, setPeerModalOpen] = useState(false);
   const [validationLookbackDays, setValidationLookbackDays] = useState(365);
+  // Historical Validation lives in a collapsed accordion at the bottom of the page.
+  // Defer its fetch until the user opens the section so we don't block first paint
+  // on a query most users never look at.
+  const [validationRequested, setValidationRequested] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['stockDecisionDashboard', symbol, activeProfile],
@@ -159,7 +163,7 @@ function StockDetails() {
   } = useQuery({
     queryKey: ['stockValidation', symbol, validationLookbackDays],
     queryFn: () => getStockValidation(symbol, validationLookbackDays),
-    enabled: Boolean(symbol),
+    enabled: Boolean(symbol) && validationRequested,
     staleTime: 60_000,
   });
 
@@ -668,7 +672,11 @@ function StockDetails() {
           </AccordionDetails>
         </Accordion>
 
-        <Accordion>
+        <Accordion
+          onChange={(_, expanded) => {
+            if (expanded && !validationRequested) setValidationRequested(true);
+          }}
+        >
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
               Historical Validation

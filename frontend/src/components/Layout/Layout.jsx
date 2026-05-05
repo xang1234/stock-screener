@@ -16,6 +16,7 @@ import {
   useTheme,
 } from '@mui/material';
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
@@ -30,15 +31,25 @@ import RuntimeActivityStatusButton from './RuntimeActivityStatusButton';
 import { AssistantChatProvider } from '../../contexts/AssistantChatContext';
 import { useRuntime } from '../../contexts/RuntimeContext';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
+import { getStockDecisionDashboard } from '../../api/stocks';
 
 function TickerSearch() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { activeProfile } = useStrategyProfile();
   const [tickerInput, setTickerInput] = useState('');
 
   const handleTickerSubmit = (event) => {
     if (event.key !== 'Enter') return;
     const ticker = tickerInput.trim().toUpperCase();
     if (!ticker) return;
+    // Start the dashboard fetch before navigation so the page reads from
+    // the React Query cache instead of waiting on a fresh round-trip after mount.
+    queryClient.prefetchQuery({
+      queryKey: ['stockDecisionDashboard', ticker, activeProfile],
+      queryFn: () => getStockDecisionDashboard(ticker, activeProfile),
+      staleTime: 60_000,
+    });
     navigate(`/stocks/${encodeURIComponent(ticker)}`);
     setTickerInput('');
     event.target.blur();
