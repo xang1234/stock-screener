@@ -5,6 +5,42 @@ on:
     - cron: '10 8 * * 6'
       timezone: 'America/New_York'
   workflow_dispatch:
+    inputs:
+      market:
+        description: "Run only this market (or 'all' for the full matrix)."
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - US
+          - HK
+          - IN
+          - JP
+          - KR
+          - TW
+          - CN
+      max_runtime_minutes:
+        description: >-
+          Per-market deadline in minutes for the fundamentals refresh. Blank
+          uses the built-in defaults (CN=320, others=0). Set "0" to disable
+          the deadline entirely (e.g. for the first CN seeding run).
+        required: false
+        type: string
+        default: ''
+      allow_partial_publish:
+        description: >-
+          Whether to publish the bundle when the deadline trips. "default"
+          keeps the per-market default (CN=enable, others=disable); "enable"
+          forces partial publish on; "disable" forces it off (useful for
+          first-time CN runs where there is no prior bundle to fall back to).
+        required: false
+        type: choice
+        default: default
+        options:
+          - default
+          - enable
+          - disable
 
 concurrency:
   group: weekly-reference-data
@@ -40,7 +76,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        market: [US, HK, IN, JP, KR, TW, CN]
+        # When workflow_dispatch.market is set to a specific market, run only
+        # that variant; otherwise (scheduled cron, or dispatch with market=all)
+        # run the full matrix. ``github.event.inputs.market`` is null on
+        # scheduled runs, so we coerce to '' before the equality check.
+        market: ${{ fromJSON((github.event.inputs.market || 'all') != 'all' && format('["{0}"]', github.event.inputs.market) || '["US","HK","IN","JP","KR","TW","CN"]') }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -128,22 +168,54 @@ jobs:
             echo "No prior weekly reference bundle found for ${{ matrix.market }}; continuing without seed."
           fi
 
-      - name: Build weekly reference bundle
+      - name: Resolve build inputs
+        id: build_inputs
         env:
-          # Per-market wall-clock budget (minutes) for the fundamentals refresh
-          # phase. CN is the slow path: ~5,500 sequential AKShare+yfinance
-          # round-trips can blow past 6h on a fresh run, so we leave ~30 min
-          # headroom under the 350-minute job cap and opt-in to partial
-          # publish — skipped symbols inherit last week's bundle data.
-          WEEKLY_REFERENCE_MAX_RUNTIME_MINUTES: ${{ matrix.market == 'CN' && '320' || '0' }}
-          WEEKLY_REFERENCE_ALLOW_PARTIAL: ${{ matrix.market == 'CN' && '--allow-partial-publish' || '' }}
+          # Per-market wall-clock budget defaults for the fundamentals refresh.
+          # CN is the slow path: ~5,500 sequential AKShare+yfinance round-trips
+          # can blow past 6h, so we leave ~30 min headroom under the 350-min
+          # job cap and opt-in to partial publish — skipped symbols inherit
+          # last week's bundle data. Workflow_dispatch inputs override either.
+          INPUT_RUNTIME: ${{ github.event.inputs.max_runtime_minutes }}
+          INPUT_PARTIAL: ${{ github.event.inputs.allow_partial_publish }}
+          MATRIX_MARKET: ${{ matrix.market }}
+        run: |
+          if [ -n "$INPUT_RUNTIME" ]; then
+            RUNTIME="$INPUT_RUNTIME"
+          elif [ "$MATRIX_MARKET" = "CN" ]; then
+            RUNTIME="320"
+          else
+            RUNTIME="0"
+          fi
+
+          case "$INPUT_PARTIAL" in
+            enable)
+              PARTIAL="--allow-partial-publish"
+              ;;
+            disable)
+              PARTIAL=""
+              ;;
+            *)
+              if [ "$MATRIX_MARKET" = "CN" ]; then
+                PARTIAL="--allow-partial-publish"
+              else
+                PARTIAL=""
+              fi
+              ;;
+          esac
+
+          echo "max_runtime_minutes=$RUNTIME" >> "$GITHUB_OUTPUT"
+          echo "partial_flag=$PARTIAL" >> "$GITHUB_OUTPUT"
+          echo "Resolved build inputs for $MATRIX_MARKET: runtime=$RUNTIME partial='$PARTIAL'"
+
+      - name: Build weekly reference bundle
         run: |
           cd backend
           python -m app.scripts.build_weekly_reference_bundle \
             --market "${{ matrix.market }}" \
             --output-dir /tmp/weekly-reference \
-            --max-runtime-minutes "${WEEKLY_REFERENCE_MAX_RUNTIME_MINUTES}" \
-            ${WEEKLY_REFERENCE_ALLOW_PARTIAL}
+            --max-runtime-minutes "${{ steps.build_inputs.outputs.max_runtime_minutes }}" \
+            ${{ steps.build_inputs.outputs.partial_flag }}
 
       - name: Upload weekly reference assets
         env:
