@@ -77,7 +77,7 @@ cp .env.docker.example .env.docker
 #   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   GROQ_API_KEY=...
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
 # Open http://localhost
 ```
 
@@ -88,10 +88,26 @@ For local development or contributor laptops, use the default local compose stac
 ```bash
 cp .env.docker.example .env
 # Edit .env: set SERVER_AUTH_PASSWORD and add at least one LLM API key (e.g., GROQ_API_KEY)
-docker-compose up
+scripts/docker-compose-enabled-markets.sh up
 ```
 
 Full guide with homelab, VPS, and GHCR deployment options: **[Docker Deployment](docs/INSTALL_DOCKER.md)**
+
+### Starting Only Enabled Market Workers
+
+The default Compose file defines worker services for every supported market, but market-specific workers are behind Compose profiles. Use the helper script to start only the workers for the markets in `ENABLED_MARKETS`:
+
+```bash
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh up -d
+```
+
+For `ENABLED_MARKETS=US,HK,CN`, Docker starts US/HK/CN market job and user scan workers. IN/JP/KR/TW worker containers are not created. The global data-fetch worker listens only to `data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_cn`.
+
+The first-run bootstrap wizard still persists runtime choices in Postgres. Keep the wizard's enabled markets within the deployment `ENABLED_MARKETS` set. To add a market later, update `ENABLED_MARKETS` and recreate the stack:
+
+```bash
+ENABLED_MARKETS=US,HK,CN,TW scripts/docker-compose-enabled-markets.sh up -d
+```
 
 ### From Source (Contributors)
 
