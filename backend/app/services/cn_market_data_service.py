@@ -177,12 +177,20 @@ class CnMarketDataService:
         akshare_module: Any | None = None,
         baostock_module: Any | None = None,
         timeout_seconds: int | None = None,
+        listing_timeout_seconds: int | None = None,
     ) -> None:
         self._akshare_module = akshare_module
         self._baostock_module = baostock_module
         self._timeout_seconds = int(
-            timeout_seconds or settings.universe_source_timeout_for("CN")
+            timeout_seconds or settings.universe_source_timeout_seconds
         )
+        if listing_timeout_seconds is not None:
+            resolved_listing = listing_timeout_seconds
+        elif timeout_seconds is not None:
+            resolved_listing = timeout_seconds
+        else:
+            resolved_listing = settings.universe_source_timeout_for("CN")
+        self._listing_timeout_seconds = int(resolved_listing)
         self._listing_rows_cache: list[dict[str, Any]] | None = None
         self._akshare_ohlcv_consecutive_failures = 0
         self._akshare_ohlcv_disabled_until = 0.0
@@ -236,7 +244,7 @@ class CnMarketDataService:
             try:
                 frame = _call_with_timeout(
                     fallback_fetcher,
-                    timeout_seconds=self._timeout_seconds,
+                    timeout_seconds=self._listing_timeout_seconds,
                     operation_name="CN A-share code-name fetch",
                 )
                 if frame is not None and not frame.empty:
@@ -254,7 +262,7 @@ class CnMarketDataService:
     def _akshare_spot_frame(self) -> pd.DataFrame | None:
         frame = _call_with_timeout(
             self._akshare.stock_zh_a_spot_em,
-            timeout_seconds=self._timeout_seconds,
+            timeout_seconds=self._listing_timeout_seconds,
             operation_name="CN A-share listing fetch",
         )
         if frame is None or frame.empty:

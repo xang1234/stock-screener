@@ -116,6 +116,7 @@ class OfficialMarketUniverseSourceService:
         cn_provider: Any | None = None,
         market_calendar: Any | None = None,
     ) -> None:
+        self._explicit_timeout_seconds = timeout_seconds
         self._timeout_seconds = int(
             timeout_seconds or settings.universe_source_timeout_seconds
         )
@@ -390,8 +391,9 @@ class OfficialMarketUniverseSourceService:
         if self._cn_provider is None:
             from .cn_market_data_service import CnMarketDataService
 
-            cn_timeout = settings.universe_source_timeout_for("CN")
-            self._cn_provider = CnMarketDataService(timeout_seconds=cn_timeout)
+            self._cn_provider = CnMarketDataService(
+                timeout_seconds=self._explicit_timeout_seconds,
+            )
         return self._cn_provider
 
     @staticmethod

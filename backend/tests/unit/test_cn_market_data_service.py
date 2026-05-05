@@ -358,3 +358,68 @@ def test_cn_market_data_service_raises_dependency_error_when_akshare_missing(mon
 
     with pytest.raises(CnDependencyError, match="akshare is required"):
         service.listing_rows()
+
+
+def test_cn_market_data_service_keeps_ohlcv_on_global_timeout_by_default(monkeypatch):
+    """OHLCV path must not pick up the longer CN listing default."""
+    from app.config import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds", 60)
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds_cn", 300)
+
+    service = CnMarketDataService(akshare_module=object())
+
+    assert service._timeout_seconds == 60
+    assert service._listing_timeout_seconds == 300
+
+
+def test_cn_market_data_service_explicit_timeout_applies_to_both_paths(monkeypatch):
+    """An explicit timeout_seconds (e.g. from tests) must apply to listing too."""
+    from app.config import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds", 60)
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds_cn", 300)
+
+    service = CnMarketDataService(akshare_module=object(), timeout_seconds=2)
+
+    assert service._timeout_seconds == 2
+    assert service._listing_timeout_seconds == 2
+
+
+def test_cn_market_data_service_listing_timeout_can_be_overridden_independently(monkeypatch):
+    from app.config import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds", 60)
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds_cn", 300)
+
+    service = CnMarketDataService(
+        akshare_module=object(),
+        listing_timeout_seconds=120,
+    )
+
+    assert service._timeout_seconds == 60
+    assert service._listing_timeout_seconds == 120
+
+
+def test_cn_market_data_service_uses_listing_timeout_for_spot_fetch(monkeypatch):
+    helper_calls: list[tuple[int, str]] = []
+
+    def fake_call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
+        helper_calls.append((timeout_seconds, operation_name))
+        return fetcher()
+
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
+
+    monkeypatch.setattr(cn_market_data_module, "_call_with_timeout", fake_call_with_timeout)
+
+    service = CnMarketDataService(
+        akshare_module=FakeAkshare(),
+        timeout_seconds=60,
+        listing_timeout_seconds=240,
+    )
+    service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert helper_calls == [(240, "CN A-share listing fetch")]

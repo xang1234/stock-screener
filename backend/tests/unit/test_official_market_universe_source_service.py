@@ -571,6 +571,32 @@ def test_fetch_cn_snapshot_uses_akshare_provider_and_records_validated_baseline(
     assert snapshot.source_metadata["cn_baseline_status"] == "outside_static_baseline"
 
 
+def test_get_cn_provider_uses_cn_listing_default_when_timeout_not_overridden(monkeypatch):
+    from app.config import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds", 60)
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds_cn", 300)
+
+    service = OfficialMarketUniverseSourceService()
+    cn_provider = service._get_cn_provider()
+
+    assert cn_provider._timeout_seconds == 60
+    assert cn_provider._listing_timeout_seconds == 300
+
+
+def test_get_cn_provider_propagates_explicit_service_level_timeout(monkeypatch):
+    from app.config import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds", 60)
+    monkeypatch.setattr(settings_module, "universe_source_timeout_seconds_cn", 300)
+
+    service = OfficialMarketUniverseSourceService(timeout_seconds=2)
+    cn_provider = service._get_cn_provider()
+
+    assert cn_provider._timeout_seconds == 2
+    assert cn_provider._listing_timeout_seconds == 2
+
+
 def test_fetch_tw_snapshot_combines_twse_and_tpex_rows(monkeypatch):
     service = OfficialMarketUniverseSourceService()
     html_twse = _fixture_bytes("twse_stocks_fixture.html")
