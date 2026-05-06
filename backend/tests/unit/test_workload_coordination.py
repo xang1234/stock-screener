@@ -7,6 +7,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from celery.exceptions import Retry
+from sqlalchemy.exc import OperationalError
+
+
+def _postgres_recovery_error() -> OperationalError:
+    return OperationalError(
+        "select 1",
+        {},
+        Exception(
+            "FATAL:  the database system is not yet accepting connections\n"
+            "DETAIL:  Consistent recovery state has not been yet reached."
+        ),
+    )
 
 
 def _make_coordination():
@@ -129,6 +141,51 @@ def test_serialized_market_workload_retries_with_coordination_retry_budget(
     assert retry_calls[0]["countdown"] == 30
     assert retry_calls[0]["max_retries"] == 10_000
     assert "waiting_for_market_workload:US" in str(retry_calls[0]["exc"])
+
+
+@patch("app.wiring.bootstrap.get_workload_coordination")
+def test_serialized_market_workload_retries_transient_postgres_recovery(
+    mock_get_coordination,
+):
+    from app.tasks.workload_coordination import serialized_market_workload
+
+    mock_coordination = MagicMock()
+    mock_coordination.acquire_market_workload.return_value = (True, False)
+    mock_get_coordination.return_value = mock_coordination
+
+    retry_calls = []
+
+    def _retry(*, exc=None, countdown=None, max_retries=None):
+        retry_calls.append(
+            {
+                "exc": exc,
+                "countdown": countdown,
+                "max_retries": max_retries,
+            }
+        )
+        raise Retry(message=str(exc))
+
+    task = SimpleNamespace(
+        request=SimpleNamespace(id="task-123", retries=0),
+        retry=_retry,
+    )
+
+    @serialized_market_workload("build_daily_snapshot")
+    def my_func(self, market=None):
+        raise _postgres_recovery_error()
+
+    with pytest.raises(Retry):
+        my_func(task, market="TW")
+
+    assert retry_calls[0]["countdown"] == 5
+    assert retry_calls[0]["max_retries"] == 12
+    assert "database system is not yet accepting connections" in str(
+        retry_calls[0]["exc"]
+    )
+    mock_coordination.release_market_workload.assert_called_once_with(
+        "task-123",
+        market="TW",
+    )
 
 
 @patch("app.wiring.bootstrap.get_workload_coordination")

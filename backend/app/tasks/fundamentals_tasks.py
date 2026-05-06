@@ -36,6 +36,7 @@ from ..services.market_activity_service import (
 from ..services.ticker_validation_service import TickerValidationService
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
+from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
@@ -454,6 +455,7 @@ def refresh_all_fundamentals(
             except SoftTimeLimitExceeded:
                 raise
             except Exception as e:
+                raise_if_transient_database_error(e)
                 stats['failed'] += 1
                 stats['failed_symbols'].append(symbol)
                 logger.error(f"✗ Error updating {symbol}: {e}")
@@ -567,6 +569,7 @@ def refresh_all_fundamentals(
         )
         _retry_transient_failure(self, "refresh_all_fundamentals", e)
     except Exception as e:
+        raise_if_transient_database_error(e)
         db.rollback()
         logger.error(f"Fatal error in fundamental refresh: {e}", exc_info=True)
         _mark_market_activity_failed_safely(
@@ -627,6 +630,7 @@ def refresh_symbol_fundamentals(self, symbol: str):
             }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"✗ Error refreshing {symbol}: {e}", exc_info=True)
         return {
             'symbol': symbol,
@@ -738,6 +742,7 @@ def populate_initial_cache(self, limit: Optional[int] = None):
                 # (each uses Redis-backed distributed rate limiter)
 
             except Exception as e:
+                raise_if_transient_database_error(e)
                 stats['failed'] += 1
                 stats['failed_symbols'].append(symbol)
                 logger.error(f"✗ Error populating {symbol}: {e}")
@@ -787,6 +792,7 @@ def populate_initial_cache(self, limit: Optional[int] = None):
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Fatal error in initial cache population: {e}", exc_info=True)
         return {
             'error': str(e),
@@ -1191,6 +1197,7 @@ def refresh_all_fundamentals_hybrid(
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Fatal error in hybrid fundamental refresh: {e}", exc_info=True)
         db.rollback()
         _mark_market_activity_failed_safely(
@@ -1311,6 +1318,7 @@ def refresh_symbols_hybrid(
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Error in hybrid refresh: {e}", exc_info=True)
         return {
             'error': str(e),

@@ -20,6 +20,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
 
 from ..config import settings
 from .market_queues import SUPPORTED_MARKETS, market_suffix, normalize_market
+from .transient_database import retry_transient_database_error
 from .workload_coordination import _coordination_retry
 
 logger = logging.getLogger(__name__)
@@ -519,6 +520,12 @@ def serialized_data_fetch(task_name: str):
                 )
                 raise
             except Exception as e:
+                retry_transient_database_error(
+                    task_instance,
+                    task_name,
+                    e,
+                    logger=logger,
+                )
                 logger.error(
                     "Error in data fetch task %s (market=%s): %s",
                     task_name, market_label, e,

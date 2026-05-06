@@ -38,6 +38,7 @@ from ..wiring.bootstrap import (
 )
 from ..services.security_master_service import security_master_resolver
 from .data_fetch_lock import serialized_data_fetch
+from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
 _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
@@ -624,6 +625,7 @@ def weekly_full_refresh(self, market: str | None = None):
             except SoftTimeLimitExceeded:
                 raise
             except Exception as e:
+                raise_if_transient_database_error(e)
                 logger.error(f"Batch {batch_num} error: {e}")
                 failed += len(batch_symbols)
                 failed_symbols.extend(batch_symbols)
@@ -725,6 +727,7 @@ def weekly_full_refresh(self, market: str | None = None):
         price_cache.complete_warmup_heartbeat("failed", market=market)
         raise
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Error in weekly_full_refresh task: {e}", exc_info=True)
         price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e), market=market)
         price_cache.complete_warmup_heartbeat("failed", market=market)
@@ -889,6 +892,7 @@ def _prewarm_scan_cache_impl(task, symbol_list: List[str], priority: str = 'norm
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Error in prewarm_scan_cache: {e}", exc_info=True)
         return {
             'error': str(e),
@@ -990,6 +994,7 @@ def prewarm_all_active_symbols(self):
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Error in prewarm_all_active_symbols task: {e}", exc_info=True)
         return {
             'error': str(e),
@@ -1359,6 +1364,7 @@ def retry_failed_price_symbols(
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
+        raise_if_transient_database_error(exc)
         logger.warning(
             "Failed-symbol price retry attempt %s failed for %s",
             attempt,
@@ -1490,6 +1496,7 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
                     price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
 
             except Exception as e:
+                raise_if_transient_database_error(e)
                 logger.error(f"Batch {batch_num} error: {e}")
                 failed += len(batch_symbols)
                 failed_symbols.extend(batch_symbols)
@@ -1532,6 +1539,7 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Error in force_refresh_stale_intraday: {e}", exc_info=True)
         return {
             'error': str(e),
@@ -1954,6 +1962,7 @@ def smart_refresh_cache(
             except SoftTimeLimitExceeded:
                 raise
             except Exception as e:
+                raise_if_transient_database_error(e)
                 logger.error(f"Batch {batch_num} error: {e}")
                 failed += len(batch_symbols)
                 failed_symbols.extend(batch_symbols)
@@ -2111,6 +2120,7 @@ def smart_refresh_cache(
         )
         raise
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Error in smart_refresh_cache task: {e}", exc_info=True)
         safe_rollback(db)
         # Save partial progress
