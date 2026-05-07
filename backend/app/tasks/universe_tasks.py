@@ -21,6 +21,7 @@ from ..services.market_activity_service import (
 )
 from ..wiring.bootstrap import get_provider_snapshot_service, get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
+from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +327,7 @@ def refresh_stock_universe(
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         safe_rollback(db)
         logger.error(f"Error refreshing universe: {e}", exc_info=True)
         _mark_market_activity_failed_safely(
@@ -868,6 +870,7 @@ def refresh_sp500_membership(self):
         }
 
     except Exception as e:
+        raise_if_transient_database_error(e)
         logger.error(f"Error refreshing S&P 500 membership: {e}", exc_info=True)
         return {
             'status': 'error',

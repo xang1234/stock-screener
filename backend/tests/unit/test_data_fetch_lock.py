@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from celery.exceptions import Retry, SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError
 
 from app.tasks.data_fetch_lock import (
     DataFetchLock,
@@ -24,6 +25,17 @@ from app.tasks.data_fetch_lock import (
 # legacy unsuffixed LOCK_KEY. Legacy LOCK_KEY is retained only for startup
 # cleanup of pre-9.1 stale locks.
 SHARED_LOCK_KEY = _lock_key_for_market(None)  # "data_fetch_job_lock:shared"
+
+
+def _postgres_recovery_error() -> OperationalError:
+    return OperationalError(
+        "select 1",
+        {},
+        Exception(
+            "FATAL:  the database system is not yet accepting connections\n"
+            "DETAIL:  Consistent recovery state has not been yet reached."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +70,13 @@ def _make_lock(lock_value=None, ttl=3600):
             mock_redis.ttl.return_value = ttl
 
     return lock, mock_redis, mock_release_script, mock_extend_script
+
+
+def _make_coordination():
+    mock_coordination = MagicMock()
+    mock_coordination.acquire_market_workload.return_value = (True, False)
+    mock_coordination.acquire_external_fetch.return_value = (True, False)
+    return mock_coordination
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +231,11 @@ class TestSerializedDataFetchDecorator:
         def my_func():
             return "ok"
 
-        result = my_func()
+        with patch(
+            "app.wiring.bootstrap.get_workload_coordination",
+            return_value=_make_coordination(),
+        ):
+            result = my_func()
 
         assert result == "ok"
         mock_lock.acquire.assert_called_once()
@@ -231,8 +254,12 @@ class TestSerializedDataFetchDecorator:
         def my_func():
             raise ValueError("boom")
 
-        with pytest.raises(ValueError, match="boom"):
-            my_func()
+        with patch(
+            "app.wiring.bootstrap.get_workload_coordination",
+            return_value=_make_coordination(),
+        ):
+            with pytest.raises(ValueError, match="boom"):
+                my_func()
 
         mock_lock.release.assert_called_once()
 
@@ -249,8 +276,12 @@ class TestSerializedDataFetchDecorator:
         def my_func():
             raise Retry("retry")
 
-        with pytest.raises(Retry):
-            my_func()
+        with patch(
+            "app.wiring.bootstrap.get_workload_coordination",
+            return_value=_make_coordination(),
+        ):
+            with pytest.raises(Retry):
+                my_func()
 
         mock_lock.release.assert_called_once()
 
@@ -363,6 +394,58 @@ class TestSerializedDataFetchDecorator:
             for record in caplog.records
         )
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    def test_transient_postgres_recovery_retries_and_releases_leases(
+        self,
+        mock_get_lock,
+        mock_get_coordination,
+    ):
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (True, False)
+        mock_get_lock.return_value = mock_lock
+
+        mock_coordination = MagicMock()
+        mock_coordination.acquire_market_workload.return_value = (True, False)
+        mock_coordination.acquire_external_fetch.return_value = (True, False)
+        mock_get_coordination.return_value = mock_coordination
+
+        retry_calls = []
+
+        def _retry(*, exc=None, countdown=None, max_retries=None):
+            retry_calls.append(
+                {
+                    "exc": exc,
+                    "countdown": countdown,
+                    "max_retries": max_retries,
+                }
+            )
+            raise Retry(message=str(exc))
+
+        task = SimpleNamespace(
+            request=SimpleNamespace(id="task-123", retries=0),
+            retry=_retry,
+        )
+
+        @serialized_data_fetch("smart_refresh_cache")
+        def my_func(self, market=None):
+            raise _postgres_recovery_error()
+
+        with pytest.raises(Retry):
+            my_func(task, market="HK")
+
+        assert retry_calls[0]["countdown"] == 5
+        assert retry_calls[0]["max_retries"] == 12
+        assert "database system is not yet accepting connections" in str(
+            retry_calls[0]["exc"]
+        )
+        mock_coordination.release_external_fetch.assert_called_once_with("task-123")
+        mock_coordination.release_market_workload.assert_called_once_with(
+            "task-123",
+            market="HK",
+        )
+        mock_lock.release.assert_called_once_with("task-123", market="HK")
+
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_releases_on_soft_time_limit(self, mock_settings, mock_get_instance):
@@ -376,8 +459,12 @@ class TestSerializedDataFetchDecorator:
         def my_func():
             raise SoftTimeLimitExceeded()
 
-        with pytest.raises(SoftTimeLimitExceeded):
-            my_func()
+        with patch(
+            "app.wiring.bootstrap.get_workload_coordination",
+            return_value=_make_coordination(),
+        ):
+            with pytest.raises(SoftTimeLimitExceeded):
+                my_func()
 
         mock_lock.release.assert_called_once()
 
@@ -394,7 +481,11 @@ class TestSerializedDataFetchDecorator:
         def my_func():
             return "ok"
 
-        result = my_func()
+        with patch(
+            "app.wiring.bootstrap.get_workload_coordination",
+            return_value=_make_coordination(),
+        ):
+            result = my_func()
 
         assert result == "ok"
         mock_lock.release.assert_not_called()
@@ -913,7 +1004,11 @@ class TestDecoratorPassesMarket:
         def my_func(market=None):
             return "ok"
 
-        my_func(market="HK")
+        with patch(
+            "app.wiring.bootstrap.get_workload_coordination",
+            return_value=_make_coordination(),
+        ):
+            my_func(market="HK")
 
         args, kwargs = mock_lock.acquire.call_args
         assert kwargs.get("market") == "HK"
@@ -933,7 +1028,11 @@ class TestDecoratorPassesMarket:
         def my_func():
             return "ok"
 
-        my_func()
+        with patch(
+            "app.wiring.bootstrap.get_workload_coordination",
+            return_value=_make_coordination(),
+        ):
+            my_func()
 
         args, kwargs = mock_lock.acquire.call_args
         # Market arg should be None (→ shared) since the task has no market kwarg.

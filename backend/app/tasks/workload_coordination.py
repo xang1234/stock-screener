@@ -6,7 +6,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import wraps
+import logging
 from typing import Any, Dict, Iterator, Optional, Tuple
+
+from celery.exceptions import Retry
 
 try:
     import redis  # type: ignore
@@ -15,10 +18,12 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from ..config import settings
 from .market_queues import SUPPORTED_MARKETS, market_suffix, normalize_market
+from .transient_database import retry_transient_database_error
 
 EXTERNAL_FETCH_GLOBAL_KEY = "external_fetch_global"
 MARKET_WORKLOAD_PREFIX = "market_workload"
 COORDINATION_WAIT_MAX_RETRIES = 10_000
+logger = logging.getLogger(__name__)
 _SERIALIZED_MARKET_WORKLOAD_DISABLED: ContextVar[bool] = ContextVar(
     "serialized_market_workload_disabled",
     default=False,
@@ -183,6 +188,16 @@ def serialized_market_workload(task_name: str):
 
             try:
                 return func(*args, **kwargs)
+            except Retry:
+                raise
+            except Exception as exc:
+                retry_transient_database_error(
+                    task,
+                    task_name,
+                    exc,
+                    logger=logger,
+                )
+                raise
             finally:
                 if acquired and not is_reentrant:
                     coordination.release_market_workload(task_id, market=market_value)

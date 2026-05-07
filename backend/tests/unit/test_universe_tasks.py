@@ -6,6 +6,18 @@ from unittest.mock import MagicMock
 from celery.exceptions import Retry
 import pytest
 import requests
+from sqlalchemy.exc import OperationalError
+
+
+def _postgres_recovery_error() -> OperationalError:
+    return OperationalError(
+        "select 1",
+        {},
+        Exception(
+            "FATAL:  the database system is not yet accepting connections\n"
+            "DETAIL:  Consistent recovery state has not been yet reached."
+        ),
+    )
 
 
 def _patch_data_fetch_lock(monkeypatch):
@@ -66,6 +78,44 @@ def test_refresh_stock_universe_returns_original_error_when_activity_publish_fai
     assert result["status"] == "error"
     assert result["error"] == "finviz down"
     module.safe_rollback.assert_called_once_with(fake_db)
+
+
+def test_refresh_stock_universe_retries_transient_database_error_from_task_body(monkeypatch):
+    import app.tasks.universe_tasks as module
+
+    fake_db = MagicMock()
+    fake_lock = _patch_data_fetch_lock(monkeypatch)
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "safe_rollback", MagicMock())
+    monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)
+    monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            sync_weekly_reference_from_github=MagicMock(side_effect=_postgres_recovery_error())
+        ),
+    )
+
+    retry_calls = []
+
+    def fake_retry(*args, **kwargs):
+        retry_calls.append(kwargs)
+        raise Retry("retry")
+
+    monkeypatch.setattr(module.refresh_stock_universe, "retry", fake_retry)
+    module.refresh_stock_universe.request.id = "task-123"
+    module.refresh_stock_universe.request.retries = 0
+
+    with pytest.raises(Retry):
+        module.refresh_stock_universe.run(market="US")
+
+    assert retry_calls[0]["countdown"] == 5
+    assert retry_calls[0]["max_retries"] == 12
+    assert "database system is not yet accepting connections" in str(retry_calls[0]["exc"])
+    module.safe_rollback.assert_not_called()
+    fake_lock.release.assert_called_once_with("task-123", market="US")
 
 
 def test_refresh_official_market_universe_preserves_original_error_when_activity_publish_fails(
@@ -235,3 +285,33 @@ def test_refresh_official_market_universe_retries_transient_provider_failure(mon
     assert retry_calls[0]["max_retries"] == 12
     failed.assert_not_called()
     fake_lock.release.assert_called_once_with("task-123", market="CN")
+
+
+def test_refresh_sp500_membership_retries_transient_database_error_from_task_body(monkeypatch):
+    import app.tasks.universe_tasks as module
+
+    fake_db = MagicMock()
+    fake_lock = _patch_data_fetch_lock(monkeypatch)
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        module,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(update_sp500_membership=MagicMock(side_effect=_postgres_recovery_error())),
+    )
+
+    retry_calls = []
+
+    def fake_retry(*args, **kwargs):
+        retry_calls.append(kwargs)
+        raise Retry("retry")
+
+    monkeypatch.setattr(module.refresh_sp500_membership, "retry", fake_retry)
+    module.refresh_sp500_membership.request.id = "task-123"
+    module.refresh_sp500_membership.request.retries = 0
+
+    with pytest.raises(Retry):
+        module.refresh_sp500_membership.run()
+
+    assert retry_calls[0]["countdown"] == 5
+    assert retry_calls[0]["max_retries"] == 12
+    fake_lock.release.assert_called_once_with("task-123", market=None)

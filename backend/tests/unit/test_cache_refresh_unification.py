@@ -8,7 +8,8 @@ import httpx
 import pandas as pd
 import pytest
 import pytest_asyncio
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Retry, SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError
 
 from app.main import app
 
@@ -36,6 +37,17 @@ def _success_result(symbol: str, close: float = 100.0) -> dict:
         "has_error": False,
         "error": None,
     }
+
+
+def _postgres_recovery_error() -> OperationalError:
+    return OperationalError(
+        "select 1",
+        {},
+        Exception(
+            "FATAL:  the database system is not yet accepting connections\n"
+            "DETAIL:  Consistent recovery state has not been yet reached."
+        ),
+    )
 
 
 @pytest_asyncio.fixture
@@ -226,6 +238,54 @@ def test_smart_refresh_cache_publishes_failed_market_activity(monkeypatch):
     assert started[0]["lifecycle"] == "daily_refresh"
     assert failed[0]["stage_key"] == "prices"
     assert "benchmark unavailable" in failed[0]["message"]
+
+
+def test_smart_refresh_cache_retries_transient_database_errors_from_task_body(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_lock, fake_coordination = _patch_serialized_coordination(monkeypatch)
+
+    fake_db = MagicMock()
+    fake_price_cache = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=_postgres_recovery_error()))
+    monkeypatch.setattr(module, "safe_rollback", MagicMock())
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_price_cache",
+        lambda: fake_price_cache,
+    )
+
+    retry_calls = []
+
+    def fake_retry(*, exc=None, countdown=None, max_retries=None):
+        retry_calls.append(
+            {
+                "exc": exc,
+                "countdown": countdown,
+                "max_retries": max_retries,
+            }
+        )
+        raise Retry("retry")
+
+    monkeypatch.setattr(module.smart_refresh_cache, "retry", fake_retry)
+    module.smart_refresh_cache.request.id = "task-123"
+    module.smart_refresh_cache.request.retries = 0
+
+    with pytest.raises(Retry):
+        module.smart_refresh_cache.run("full")
+
+    assert retry_calls[0]["countdown"] == 5
+    assert retry_calls[0]["max_retries"] == 12
+    assert "database system is not yet accepting connections" in str(retry_calls[0]["exc"])
+    fake_lock.release.assert_called_once_with("task-123", market=None)
+    fake_coordination.release_external_fetch.assert_called_once_with("task-123")
+    fake_coordination.release_market_workload.assert_called_once_with("task-123", market=None)
+    module.safe_rollback.assert_not_called()
 
 
 def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
