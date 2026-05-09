@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import math
+import time
 from datetime import datetime
 import os
 from pathlib import Path
@@ -23,6 +25,7 @@ from app.wiring.bootstrap import (
 )
 
 _WEEKLY_NON_US_YFINANCE_DELAY_PER_TICKER = 0.2
+_DEFAULT_FETCH_CHUNK_SIZE = 250
 
 
 def _default_output_dir() -> Path:
@@ -114,6 +117,39 @@ def _print_fundamentals_progress(market: str, completed: float, total: int) -> N
         f"[fundamentals] {market} {completed_count}/{total_count} ({percent:.1f}%)",
         flush=True,
     )
+
+
+_FUNDAMENTALS_STATS_NUMERIC_KEYS = (
+    "fundamentals_stored",
+    "quarterly_stored",
+    "ownership_updated",
+    "failed",
+    "persisted_symbols",
+    "failed_persistence_symbols",
+)
+
+
+def _empty_fundamentals_stats() -> dict[str, Any]:
+    stats: dict[str, Any] = {key: 0 for key in _FUNDAMENTALS_STATS_NUMERIC_KEYS}
+    stats["provider_error_counts"] = {}
+    return stats
+
+
+def _merge_fundamentals_stats(
+    accumulator: dict[str, Any],
+    chunk_stats: dict[str, Any] | None,
+) -> None:
+    if not chunk_stats:
+        return
+    for key in _FUNDAMENTALS_STATS_NUMERIC_KEYS:
+        accumulator[key] = int(accumulator.get(key, 0) or 0) + int(
+            chunk_stats.get(key, 0) or 0
+        )
+    chunk_errors = chunk_stats.get("provider_error_counts") or {}
+    if chunk_errors:
+        bucket = accumulator.setdefault("provider_error_counts", {})
+        for key, value in chunk_errors.items():
+            bucket[key] = int(bucket.get(key, 0) or 0) + int(value or 0)
 
 
 def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
@@ -312,6 +348,84 @@ def _build_us_bundle(
     return summary
 
 
+def _run_chunked_fundamentals_refresh(
+    *,
+    hybrid_service: Any,
+    fundamentals_cache: Any,
+    market: str,
+    symbols: list[str],
+    market_by_symbol: dict[str, str],
+    chunk_size: int,
+    max_runtime_seconds: float,
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Fetch + persist fundamentals in chunks, honouring an optional wall-clock budget.
+
+    Returns ``(stats, attempted_symbols, deadline_hit)``. When the budget is
+    exhausted, the loop exits cleanly between chunks so anything already
+    persisted survives in the cache and DB. Skipped symbols inherit whatever
+    data was previously hydrated from the prior weekly bundle.
+    """
+    stats = _empty_fundamentals_stats()
+    attempted_symbols: list[str] = []
+    deadline_hit = False
+    if not symbols:
+        return stats, attempted_symbols, deadline_hit
+
+    chunk_size = max(1, int(chunk_size))
+    total = len(symbols)
+    chunks_total = math.ceil(total / chunk_size)
+    deadline = (
+        time.monotonic() + float(max_runtime_seconds)
+        if max_runtime_seconds and max_runtime_seconds > 0
+        else None
+    )
+
+    for chunk_index in range(chunks_total):
+        if deadline is not None and time.monotonic() >= deadline:
+            deadline_hit = True
+            print(
+                f"[fundamentals] {market} deadline reached before chunk "
+                f"{chunk_index + 1}/{chunks_total}; stopping with "
+                f"{len(attempted_symbols)}/{total} symbols attempted",
+                flush=True,
+            )
+            break
+
+        chunk = symbols[chunk_index * chunk_size : (chunk_index + 1) * chunk_size]
+        if not chunk:
+            break
+        chunk_market_by_symbol = {s: market_by_symbol[s] for s in chunk if s in market_by_symbol}
+        attempted_so_far = len(attempted_symbols)
+
+        def _chunk_progress_cb(completed: float, _chunk_total: int) -> None:
+            _print_fundamentals_progress(market, attempted_so_far + int(completed), total)
+
+        chunk_data = hybrid_service.fetch_fundamentals_batch(
+            chunk,
+            include_technicals=True,
+            include_finviz=False,
+            progress_callback=_chunk_progress_cb,
+            market_by_symbol=chunk_market_by_symbol,
+        )
+        chunk_stats = hybrid_service.store_all_caches(
+            chunk_data,
+            fundamentals_cache,
+            session_factory=SessionLocal,
+            include_quarterly=True,
+            market_by_symbol=chunk_market_by_symbol,
+        )
+        _merge_fundamentals_stats(stats, chunk_stats)
+        attempted_symbols.extend(chunk)
+        print(
+            f"[fundamentals] {market} chunk {chunk_index + 1}/{chunks_total} "
+            f"persisted={(chunk_stats or {}).get('persisted_symbols', 0)} "
+            f"failed={(chunk_stats or {}).get('failed', 0)}",
+            flush=True,
+        )
+
+    return stats, attempted_symbols, deadline_hit
+
+
 def _build_asia_bundle(
     db,
     *,
@@ -321,6 +435,9 @@ def _build_asia_bundle(
     output_dir: Path,
     bundle_name: str | None,
     latest_manifest_name: str,
+    max_runtime_seconds: float = 0.0,
+    fetch_chunk_size: int = _DEFAULT_FETCH_CHUNK_SIZE,
+    allow_partial_publish: bool = False,
 ) -> dict[str, Any]:
     snapshot_key = ProviderSnapshotService.snapshot_key_for_market(market)
     official_source_service = OfficialMarketUniverseSourceService()
@@ -349,24 +466,16 @@ def _build_asia_bundle(
     market_by_symbol = {row.symbol: market for row in active_rows}
 
     print(f"Starting hybrid fundamentals refresh for {market}...", flush=True)
-    all_data = hybrid_service.fetch_fundamentals_batch(
-        symbols,
-        include_technicals=True,
-        include_finviz=False,
-        progress_callback=lambda completed, total: _print_fundamentals_progress(
-            market,
-            completed,
-            total,
-        ),
+    fundamentals_stats, attempted_symbols, deadline_hit = _run_chunked_fundamentals_refresh(
+        hybrid_service=hybrid_service,
+        fundamentals_cache=fundamentals_cache,
+        market=market,
+        symbols=symbols,
         market_by_symbol=market_by_symbol,
+        chunk_size=fetch_chunk_size,
+        max_runtime_seconds=max_runtime_seconds,
     )
-    fundamentals_stats = hybrid_service.store_all_caches(
-        all_data,
-        fundamentals_cache,
-        session_factory=SessionLocal,
-        include_quarterly=True,
-        market_by_symbol=market_by_symbol,
-    )
+    skipped_symbols = [s for s in symbols if s not in set(attempted_symbols)]
     print(f"Fundamentals refresh complete: {fundamentals_stats}", flush=True)
 
     cached_fundamentals = fundamentals_cache.get_many(symbols)
@@ -394,6 +503,9 @@ def _build_asia_bundle(
         "snapshot_symbols": len(snapshot_rows),
         "covered_active_symbols": len(snapshot_rows),
         "missing_active_symbols": max(len(symbols) - len(snapshot_rows), 0),
+        "attempted_symbols": len(attempted_symbols),
+        "skipped_due_to_deadline": len(skipped_symbols) if deadline_hit else 0,
+        "partial_run": deadline_hit,
     }
     warnings: list[str] = []
     if fundamentals_stats.get("failed"):
@@ -405,8 +517,18 @@ def _build_asia_bundle(
             f"{fundamentals_stats['failed_persistence_symbols']} symbols failed to persist during "
             f"{market} hybrid fundamentals refresh"
         )
+    if deadline_hit:
+        warnings.append(
+            f"Weekly fetch deadline reached after {len(attempted_symbols)}/{len(symbols)} "
+            f"{market} symbols; {len(skipped_symbols)} symbols inherit prior-bundle data."
+        )
+        if not allow_partial_publish:
+            warnings.append(
+                "Partial publish disabled; blocking publish because the weekly fetch deadline was reached."
+            )
 
     source_revision = f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    publish = not (deadline_hit and not allow_partial_publish)
     snapshot_stats = provider_snapshot_service.publish_market_snapshot_run(
         db,
         snapshot_key=snapshot_key,
@@ -415,6 +537,8 @@ def _build_asia_bundle(
         rows=snapshot_rows,
         coverage_stats=coverage_stats,
         warnings=warnings,
+        publish=publish,
+        force_publish=bool(allow_partial_publish and deadline_hit),
     )
     summary = {
         "output_dir": output_dir,
@@ -479,6 +603,37 @@ def main() -> int:
         default=None,
         help="Filename for the latest-pointer manifest JSON. Defaults to the market-scoped name.",
     )
+    parser.add_argument(
+        "--max-runtime-minutes",
+        type=float,
+        default=0.0,
+        help=(
+            "Soft wall-clock budget for the fundamentals refresh phase. "
+            "When > 0, the Asia path fetches in chunks and exits cleanly "
+            "between chunks once the budget is exhausted. The deadline is "
+            "checked before each chunk; leave at least one chunk's runtime "
+            "of headroom under the GitHub Actions 6-hour job cap."
+        ),
+    )
+    parser.add_argument(
+        "--fetch-chunk-size",
+        type=int,
+        default=_DEFAULT_FETCH_CHUNK_SIZE,
+        help=(
+            "Number of symbols processed per chunk when --max-runtime-minutes "
+            f"is set (default {_DEFAULT_FETCH_CHUNK_SIZE})."
+        ),
+    )
+    parser.add_argument(
+        "--allow-partial-publish",
+        action="store_true",
+        help=(
+            "When --max-runtime-minutes triggers an early exit, publish the "
+            "snapshot even if the coverage gate would otherwise block. "
+            "Skipped symbols inherit the prior weekly bundle's data; the "
+            "manifest records partial_run=True and a deadline warning."
+        ),
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -510,6 +665,9 @@ def main() -> int:
                 output_dir=output_dir,
                 bundle_name=args.bundle_name,
                 latest_manifest_name=latest_manifest_name,
+                max_runtime_seconds=max(0.0, float(args.max_runtime_minutes)) * 60.0,
+                fetch_chunk_size=max(1, int(args.fetch_chunk_size)),
+                allow_partial_publish=bool(args.allow_partial_publish),
             )
 
     _write_step_summary(market, summary)
