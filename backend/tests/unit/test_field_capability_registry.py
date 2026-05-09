@@ -25,6 +25,7 @@ from app.services.fundamentals_completeness import (
     screening_fields,
 )
 from app.services.provider_routing_policy import (
+    MARKET_CA,
     MARKET_CN,
     MARKET_HK,
     MARKET_IN,
@@ -49,7 +50,7 @@ def _field_map(artifact: dict) -> dict:
 def test_registry_is_versioned_and_shape_is_deterministic():
     artifact = field_capability_registry.artifact()
 
-    assert artifact["registry_version"] == "2026.04.30.1"
+    assert artifact["registry_version"] == "2026.05.09.1"
     assert artifact["routing_policy_version"] == POLICY_VERSION
     assert artifact["markets"] == [
         MARKET_US,
@@ -59,6 +60,7 @@ def test_registry_is_versioned_and_shape_is_deterministic():
         MARKET_KR,
         MARKET_TW,
         MARKET_CN,
+        MARKET_CA,
     ]
     assert artifact["providers"] == [
         "finviz",

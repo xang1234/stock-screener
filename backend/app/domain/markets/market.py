@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-SUPPORTED_MARKET_CODES: frozenset[str] = frozenset({"US", "HK", "IN", "JP", "KR", "TW", "CN"})
+SUPPORTED_MARKET_CODES: frozenset[str] = frozenset({"US", "HK", "IN", "JP", "KR", "TW", "CN", "CA"})
 
 
 class UnsupportedMarketError(ValueError):

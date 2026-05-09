@@ -165,6 +165,13 @@ class Settings(BaseSettings):
     tw_universe_allow_insecure_fallback: bool = False
     tw_universe_source_twse_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2"
     tw_universe_source_tpex_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=4"
+    ca_universe_allow_insecure_fallback: bool = False
+    ca_universe_source_tsx_url: str = (
+        "https://www.tsx.com/json/company-directory/search/tsx/%5E%5BA-Z%5D"
+    )
+    ca_universe_source_tsxv_url: str = (
+        "https://www.tsx.com/json/company-directory/search/tsxv/%5E%5BA-Z%5D"
+    )
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
     # Per-market rate budget overrides. Each value is in requests-per-second
@@ -313,6 +320,8 @@ class Settings(BaseSettings):
     cache_warm_minute_tw: int = 0
     cache_warm_hour_cn: int = 3
     cache_warm_minute_cn: int = 30
+    cache_warm_hour_ca: int = 17
+    cache_warm_minute_ca: int = 0
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
     # entirely (beat schedule skips it; its worker can be stopped).
@@ -411,7 +420,7 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in',
         'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw',
-        'cache_warm_hour_cn'
+        'cache_warm_hour_cn', 'cache_warm_hour_ca'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -422,7 +431,7 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in',
         'cache_warm_minute_jp', 'cache_warm_minute_kr', 'cache_warm_minute_tw',
-        'cache_warm_minute_cn'
+        'cache_warm_minute_cn', 'cache_warm_minute_ca'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -596,6 +605,7 @@ class Settings(BaseSettings):
             "KR": (self.cache_warm_hour_kr, self.cache_warm_minute_kr),
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
             "CN": (self.cache_warm_hour_cn, self.cache_warm_minute_cn),
+            "CA": (self.cache_warm_hour_ca, self.cache_warm_minute_ca),
         }
         if m not in mapping:
             raise ValueError(f"No cache warm schedule for market {market!r}")

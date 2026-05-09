@@ -34,7 +34,7 @@ from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-SUPPORTED_GROUP_MARKETS = {"US", "HK", "IN", "JP", "KR", "TW", "CN"}
+SUPPORTED_GROUP_MARKETS = {"US", "HK", "IN", "JP", "KR", "TW", "CN", "CA"}
 DEFAULT_GROUP_PERIOD = "1w"
 
 

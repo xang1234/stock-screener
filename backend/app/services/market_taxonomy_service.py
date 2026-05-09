@@ -1,4 +1,4 @@
-"""Shared market-taxonomy loader for US/HK/IN/JP/KR/TW/CN group classifications."""
+"""Shared market-taxonomy loader for US/HK/IN/JP/KR/TW/CN/CA group classifications."""
 
 from __future__ import annotations
 
@@ -105,8 +105,8 @@ class MarketTaxonomyService:
         return best_candidate
 
     def refresh(self) -> None:
-        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}, "CN": {}}
-        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0, "CN": 0}
+        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}, "CN": {}, "CA": {}}
+        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0, "CN": 0, "CA": 0}
         try:
             self._load_us()
             self._load_hk()
@@ -115,6 +115,7 @@ class MarketTaxonomyService:
             self._load_kr()
             self._load_tw()
             self._load_cn()
+            self._load_ca()
         except TaxonomyLoadError:
             self._loaded = False
             raise
@@ -394,6 +395,35 @@ class MarketTaxonomyService:
                     continue
                 self._merge_entry(
                     market="CN",
+                    symbol=symbol,
+                    industry_group=self._normalize_text(row.get("Industry Group")),
+                    sector=self._normalize_text(row.get("Sector")),
+                    industry=self._normalize_text(row.get("Industry")),
+                    sub_industry=self._normalize_text(row.get("Sub-Industry")),
+                    themes=(),
+                )
+
+    def _load_ca(self) -> None:
+        # CA taxonomy CSV is not yet shipped; fall back to whatever sector/
+        # industry the universe ingestion adapter captured from TMX so the
+        # market is still usable for breadth/group-rank calculations even
+        # when no curated GICS file is present.
+        path = self._data_dir / "canada-deep.csv"
+        if not path.exists():
+            return
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            self._require_columns(
+                path,
+                reader,
+                ("Symbol", "Exchange", "Sector", "Industry Group", "Industry", "Sub-Industry"),
+            )
+            for row in reader:
+                symbol = self._normalize_text(row.get("Symbol"))
+                if not symbol:
+                    continue
+                self._merge_entry(
+                    market="CA",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("Industry Group")),
                     sector=self._normalize_text(row.get("Sector")),

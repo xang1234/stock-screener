@@ -181,5 +181,19 @@ market_registry = MarketRegistry(
             benchmark_primary_kind="index",
             benchmark_fallback_kind="index",
         ),
+        MarketProfile(
+            market=Market("CA"),
+            label="Canada",
+            currency="CAD",
+            timezone_name="America/Toronto",
+            calendar_id="XTSE",
+            provider_calendar_id=None,
+            exchanges=("TSX", "TSXV", "XTSE", "XTNX"),
+            indexes=("TSX_COMPOSITE",),
+            primary_benchmark_symbol="^GSPTSE",
+            benchmark_fallback_symbol="XIU.TO",
+            benchmark_primary_kind="index",
+            benchmark_fallback_kind="etf",
+        ),
     )
 )
