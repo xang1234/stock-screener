@@ -56,12 +56,17 @@ class RateBudgetPolicy:
 
     # Per-market batch sizes. Keep the defaults uniform unless operators
     # explicitly override them via settings.
+    #
+    # CA: defaults copied from HK/JP/KR/TW (50 batch, 1 worker for yfinance;
+    # 50 batch, 2 workers for finviz). Not measured — the 9.3 measurement
+    # guidance applies: revise after the first sustained CA refresh run if
+    # empirical throughput diverges from peer markets.
     _DEFAULT_BATCH_SIZE: Dict[str, Dict[str, int]] = {
         # US bumped to 150 — Yahoo accepts batches up to MAX_PRICE_BATCH_SIZE
         # (200) and the adaptive shrink in fetch_prices_in_batches halves the
         # batch on transient failure, so this is safe.
-        "yfinance": {"US": 150, "HK": 50, "IN": 50, "JP": 50, "KR": 50, "TW": 50, "CN": 25},
-        "finviz":   {"US": 100, "HK": 50, "IN": 50, "JP": 50, "KR": 50, "TW": 50, "CN": 50},
+        "yfinance": {"US": 150, "HK": 50, "IN": 50, "JP": 50, "KR": 50, "TW": 50, "CN": 25, "CA": 50},
+        "finviz":   {"US": 100, "HK": 50, "IN": 50, "JP": 50, "KR": 50, "TW": 50, "CN": 50, "CA": 50},
     }
 
     # Per-market default worker counts for providers that benefit from
@@ -72,10 +77,10 @@ class RateBudgetPolicy:
         # finvizfinance has no batch endpoint; concurrency is the only
         # speedup lever. US gets more workers because its rate-limit
         # interval is 0.5s and per-call RTT is typically ~1-2s.
-        "finviz": {"US": 4, "HK": 2, "IN": 2, "JP": 2, "KR": 2, "TW": 2, "CN": 1},
+        "finviz": {"US": 4, "HK": 2, "IN": 2, "JP": 2, "KR": 2, "TW": 2, "CN": 1, "CA": 2},
         # yfinance batch is already a single bulk HTTP call; threading
         # there caused fork issues in Celery workers, so default to 1.
-        "yfinance": {"US": 1, "HK": 1, "IN": 1, "JP": 1, "KR": 1, "TW": 1, "CN": 1},
+        "yfinance": {"US": 1, "HK": 1, "IN": 1, "JP": 1, "KR": 1, "TW": 1, "CN": 1, "CA": 1},
     }
 
     # Per-market backoff caps. Non-US markets get longer caps because
@@ -90,6 +95,7 @@ class RateBudgetPolicy:
             "KR": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "CN": {"base_s": 60, "max_s": 900, "factor": 2.0},
+            "CA": {"base_s": 60, "max_s": 600, "factor": 2.0},
         },
         "finviz": {
             "US": {"base_s": 30, "max_s": 240, "factor": 2.0},
@@ -99,6 +105,7 @@ class RateBudgetPolicy:
             "KR": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "CN": {"base_s": 60, "max_s": 480, "factor": 2.0},
+            "CA": {"base_s": 60, "max_s": 480, "factor": 2.0},
         },
     }
 

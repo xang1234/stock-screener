@@ -981,3 +981,323 @@ def test_refresh_official_market_universe_does_not_ingest_on_fetch_failure(monke
 
     ingest_mock.assert_not_called()
     fake_lock.release.assert_called_once_with("task-123", market="TW")
+
+
+# ---------------------------------------------------------------------------
+# CA / TMX
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "instrument_type,expected_excluded",
+    [
+        ("Common Shares", False),
+        ("Class A Subordinate Voting Shares", False),
+        ("Trust Units", False),
+        ("Limited Partnership Units", False),
+        ("Preferred Shares", False),
+        ("ETF", True),
+        ("Exchange-Traded Fund", True),
+        ("Closed-End Fund", True),
+        ("Mutual Fund", True),
+        ("Notes 6.5%", True),
+        ("Convertible Debentures", True),
+        ("Subscription Receipt", True),
+        ("Warrants", True),
+        ("Rights", True),
+        # False-positive guards: substrings that include excluded tokens but
+        # are NOT excluded instrument types.
+        ("Footnotes Reference", False),
+        ("Bondsmith Common Shares", False),
+        ("Notable Common Shares", False),
+    ],
+)
+def test_ca_instrument_exclusion_matches_whole_words_only(instrument_type, expected_excluded):
+    service = OfficialMarketUniverseSourceService()
+
+    assert service._ca_is_excluded_instrument(instrument_type.lower()) is expected_excluded
+
+
+def test_parse_ca_rows_filters_excluded_instruments_and_normalizes_symbols():
+    service = OfficialMarketUniverseSourceService()
+    payload = json.dumps(
+        {
+            "results": [
+                {"symbol": "RY", "name": "Royal Bank of Canada", "instrumentType": "Common Shares"},
+                {"symbol": "BIP.UN", "name": "Brookfield Infra", "instrumentType": "Trust Units"},
+                {"symbol": "XIU", "name": "iShares S&P/TSX 60", "instrumentType": "ETF"},
+                {"symbol": "XYZ", "name": "Some Note Issuer", "instrumentType": "Notes 6.5%"},
+                {"symbol": "", "name": "No symbol", "instrumentType": "Common Shares"},
+                "not a dict",
+            ]
+        }
+    ).encode("utf-8")
+
+    rows = service.parse_ca_rows(payload, exchange="TSX")
+
+    assert [row["symbol"] for row in rows] == ["RY", "BIP.UN"]
+    assert all(row["exchange"] == "TSX" for row in rows)
+
+
+def test_parse_ca_rows_handles_alternate_payload_shapes():
+    service = OfficialMarketUniverseSourceService()
+
+    list_payload = json.dumps(
+        [{"ticker": "SHOP", "issuerName": "Shopify", "type": "Common Shares"}]
+    ).encode("utf-8")
+    rows = service.parse_ca_rows(list_payload, exchange="TSX")
+    assert rows[0]["symbol"] == "SHOP"
+    assert rows[0]["name"] == "Shopify"
+
+    companies_payload = json.dumps(
+        {"companies": [{"rootTicker": "NVA", "companyName": "Nova", "securityType": "Common Shares"}]}
+    ).encode("utf-8")
+    rows = service.parse_ca_rows(companies_payload, exchange="TSXV")
+    assert rows[0]["symbol"] == "NVA"
+    assert rows[0]["exchange"] == "TSXV"
+
+
+def test_parse_ca_rows_rejects_invalid_payload():
+    service = OfficialMarketUniverseSourceService()
+
+    with pytest.raises(ValueError, match="Invalid TMX directory payload"):
+        service.parse_ca_rows(b"not json{", exchange="TSX")
+
+    with pytest.raises(ValueError, match="Unsupported CA exchange"):
+        service.parse_ca_rows(b"[]", exchange="NYSE")
+
+
+def _ca_letter_payload(symbols_by_letter: dict[str, list[dict]]) -> dict[str, _FetchedSource]:
+    """Build a {url: _FetchedSource} map for the TMX letter-bucket fetcher."""
+    base_tsx = "https://www.tsx.com/json/company-directory/search/tsx/"
+    base_tsxv = "https://www.tsx.com/json/company-directory/search/tsxv/"
+    out: dict[str, _FetchedSource] = {}
+    for letter in (chr(c) for c in range(ord("A"), ord("Z") + 1)):
+        for board, base in (("TSX", base_tsx), ("TSXV", base_tsxv)):
+            results = symbols_by_letter.get(f"{board}:{letter}", [])
+            payload = json.dumps({"results": results}).encode("utf-8")
+            out[f"{base}{letter}"] = _FetchedSource(
+                url=f"{base}{letter}",
+                content=payload,
+                fetched_at=f"2026-05-09T0{0 if letter < 'M' else 1}:00:00+00:00",
+                last_modified="Fri, 09 May 2026 12:00:00 GMT",
+                tls_verification_disabled=False,
+            )
+    return out
+
+
+def test_fetch_ca_snapshot_iterates_letter_buckets_and_dedupes(monkeypatch):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsx_url",
+        "https://www.tsx.com/json/company-directory/search/tsx/{initial}",
+    )
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsxv_url",
+        "https://www.tsx.com/json/company-directory/search/tsxv/{initial}",
+    )
+
+    fixtures = _ca_letter_payload(
+        {
+            "TSX:R": [
+                {"symbol": "RY", "name": "Royal Bank", "instrumentType": "Common Shares"},
+                {"symbol": "RCI.B", "name": "Rogers Class B", "instrumentType": "Class B Shares"},
+                # Duplicate within the same bucket (different fields) — first wins.
+                {"symbol": "RY", "name": "Royal Bank duplicate", "instrumentType": "Common Shares"},
+            ],
+            "TSX:S": [
+                {"symbol": "SHOP", "name": "Shopify", "instrumentType": "Common Shares"},
+                # ETF — should be filtered out by parse_ca_rows.
+                {"symbol": "XIU", "name": "iShares S&P/TSX 60", "instrumentType": "ETF"},
+            ],
+            "TSXV:N": [
+                {"symbol": "NVA", "name": "Nova Mining", "instrumentType": "Common Shares"},
+            ],
+        }
+    )
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service,
+        "_http_get",
+        lambda url, allow_insecure_fallback=False: fixtures[url],
+    )
+
+    snapshot = service.fetch_ca_snapshot()
+
+    symbols = [row["symbol"] for row in snapshot.rows]
+    assert symbols == ["RCI.B", "RY", "SHOP", "NVA"]
+    assert snapshot.source_metadata["row_counts"] == {"tsx": 3, "tsxv": 1}
+    assert snapshot.source_metadata["fetch_mode"] == {"tsx": "letter_buckets", "tsxv": "letter_buckets"}
+    assert snapshot.source_metadata["fetch_attempts"]["tsx"] == [
+        chr(c) for c in range(ord("A"), ord("Z") + 1)
+    ]
+    assert snapshot.source_metadata["fetch_errors"]["tsx"] == {}
+
+
+def test_fetch_ca_snapshot_tolerates_per_letter_failures(monkeypatch):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsx_url",
+        "https://www.tsx.com/json/company-directory/search/tsx/{initial}",
+    )
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsxv_url",
+        "https://www.tsx.com/json/company-directory/search/tsxv/{initial}",
+    )
+
+    fixtures = _ca_letter_payload(
+        {
+            "TSX:R": [
+                {"symbol": "RY", "name": "Royal Bank", "instrumentType": "Common Shares"},
+            ],
+            "TSXV:N": [
+                {"symbol": "NVA", "name": "Nova Mining", "instrumentType": "Common Shares"},
+            ],
+        }
+    )
+
+    failing_letter_url = "https://www.tsx.com/json/company-directory/search/tsx/Q"
+
+    def fake_http_get(url, allow_insecure_fallback=False):
+        if url == failing_letter_url:
+            raise requests.exceptions.ConnectionError("synthetic failure")
+        return fixtures[url]
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_ca_snapshot()
+
+    assert "Q" in snapshot.source_metadata["fetch_errors"]["tsx"]
+    assert "RY" in [row["symbol"] for row in snapshot.rows]
+    assert "NVA" in [row["symbol"] for row in snapshot.rows]
+
+
+def test_fetch_ca_snapshot_raises_when_no_rows_returned_anywhere(monkeypatch):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsx_url",
+        "https://www.tsx.com/json/company-directory/search/tsx/{initial}",
+    )
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsxv_url",
+        "https://www.tsx.com/json/company-directory/search/tsxv/{initial}",
+    )
+
+    empty_payload = json.dumps({"results": []}).encode("utf-8")
+
+    def fake_http_get(url, allow_insecure_fallback=False):
+        return _FetchedSource(
+            url=url,
+            content=empty_payload,
+            fetched_at="2026-05-09T00:00:00+00:00",
+            last_modified=None,
+            tls_verification_disabled=False,
+        )
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    with pytest.raises(ValueError, match="no equity rows for TSX, TSXV"):
+        service.fetch_ca_snapshot()
+
+
+def test_fetch_ca_snapshot_raises_when_one_board_returns_no_rows(monkeypatch):
+    """A full TSX or TSXV outage must surface as a hard error rather than
+    publishing a half-empty CA snapshot."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsx_url",
+        "https://www.tsx.com/json/company-directory/search/tsx/{initial}",
+    )
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsxv_url",
+        "https://www.tsx.com/json/company-directory/search/tsxv/{initial}",
+    )
+
+    fixtures = _ca_letter_payload(
+        {
+            # TSX has rows on letter R, TSXV has rows on no letter.
+            "TSX:R": [
+                {"symbol": "RY", "name": "Royal Bank", "instrumentType": "Common Shares"},
+            ],
+        }
+    )
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service,
+        "_http_get",
+        lambda url, allow_insecure_fallback=False: fixtures[url],
+    )
+
+    with pytest.raises(ValueError, match="no equity rows for TSXV"):
+        service.fetch_ca_snapshot()
+
+
+def test_fetch_ca_snapshot_uses_single_url_when_template_lacks_placeholder(monkeypatch):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsx_url",
+        "https://example.invalid/tsx-mirror.json",
+    )
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsxv_url",
+        "https://example.invalid/tsxv-mirror.json",
+    )
+
+    payloads = {
+        "https://example.invalid/tsx-mirror.json": _FetchedSource(
+            url="tsx",
+            content=json.dumps(
+                {"results": [{"symbol": "RY", "name": "Royal Bank", "instrumentType": "Common Shares"}]}
+            ).encode("utf-8"),
+            fetched_at="2026-05-09T00:00:00+00:00",
+            last_modified="Fri, 09 May 2026 00:00:00 GMT",
+            tls_verification_disabled=False,
+        ),
+        "https://example.invalid/tsxv-mirror.json": _FetchedSource(
+            url="tsxv",
+            content=json.dumps(
+                {"results": [{"symbol": "NVA", "name": "Nova", "instrumentType": "Common Shares"}]}
+            ).encode("utf-8"),
+            fetched_at="2026-05-09T00:00:00+00:00",
+            last_modified="Fri, 09 May 2026 00:00:00 GMT",
+            tls_verification_disabled=False,
+        ),
+    }
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service,
+        "_http_get",
+        lambda url, allow_insecure_fallback=False: payloads[url],
+    )
+
+    snapshot = service.fetch_ca_snapshot()
+
+    assert snapshot.source_metadata["fetch_mode"] == {
+        "tsx": "single_url",
+        "tsxv": "single_url",
+    }
+    assert snapshot.source_metadata["fetch_attempts"] == {
+        "tsx": ["single"],
+        "tsxv": ["single"],
+    }
+    assert {row["symbol"] for row in snapshot.rows} == {"RY", "NVA"}

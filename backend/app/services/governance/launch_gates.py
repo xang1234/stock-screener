@@ -470,6 +470,7 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
         "KR": "^KS11",
         "TW": "^TWII",
         "CN": "000300.SS",
+        "CA": "^GSPTSE",
     }
     expected_calendar_ids = {
         "US": "XNYS",
@@ -479,6 +480,7 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
         "KR": "XKRX",
         "TW": "XTAI",
         "CN": "XSHG",
+        "CA": "XTSE",
     }
     markets = ctx.enabled_markets
     benchmark_mismatches = {}

@@ -85,6 +85,16 @@ export const DEFAULT_MARKET_CATALOG = {
       indexes: [],
       capabilities: {},
     },
+    {
+      code: 'CA',
+      label: 'Canada',
+      currency: 'CAD',
+      timezone: 'America/Toronto',
+      calendar_id: 'XTSE',
+      exchanges: ['TSX', 'TSXV', 'XTSE', 'XTNX'],
+      indexes: ['TSX_COMPOSITE'],
+      capabilities: {},
+    },
   ],
 };
 

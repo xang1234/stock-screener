@@ -17,7 +17,7 @@ def _workflow_matrix_markets(path: str) -> list[str]:
 
 
 def test_static_and_weekly_reference_workflows_cover_supported_markets():
-    expected = ["US", "HK", "IN", "JP", "KR", "TW", "CN"]
+    expected = ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA"]
 
     assert _workflow_matrix_markets(".github/workflows/static-site.yml") == expected
     assert _workflow_matrix_markets(".github/workflows/weekly-reference-data.yml") == expected

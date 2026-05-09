@@ -25,6 +25,7 @@ from app.services.fundamentals_completeness import (
     screening_fields,
 )
 from app.services.provider_routing_policy import (
+    MARKET_CA,
     MARKET_CN,
     MARKET_HK,
     MARKET_IN,
@@ -49,7 +50,7 @@ def _field_map(artifact: dict) -> dict:
 def test_registry_is_versioned_and_shape_is_deterministic():
     artifact = field_capability_registry.artifact()
 
-    assert artifact["registry_version"] == "2026.04.30.1"
+    assert artifact["registry_version"] == "2026.05.09.1"
     assert artifact["routing_policy_version"] == POLICY_VERSION
     assert artifact["markets"] == [
         MARKET_US,
@@ -59,6 +60,7 @@ def test_registry_is_versioned_and_shape_is_deterministic():
         MARKET_KR,
         MARKET_TW,
         MARKET_CN,
+        MARKET_CA,
     ]
     assert artifact["providers"] == [
         "finviz",
@@ -101,7 +103,7 @@ def test_yfinance_core_field_is_partial_for_us_and_supported_for_asia():
     # Finviz can also supply market_cap in US and is primary in the chain.
     assert us["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_SUPPORTED
 
-    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW):
+    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW, MARKET_CA):
         row = market_cap[market]
         assert row["canonical_provider"] == PROVIDER_YFINANCE
         assert row["support_state"] == SUPPORT_STATE_SUPPORTED
@@ -133,7 +135,7 @@ def test_finviz_only_field_is_unsupported_for_non_us_markets():
     assert us["fallback_behavior"] == FALLBACK_BEHAVIOR_PRIMARY
     assert us["canonical_provider_position"] == 0
 
-    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN):
+    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA):
         row = short_interest[market]
         assert row["canonical_provider"] == PROVIDER_FINVIZ
         assert row["support_state"] == SUPPORT_STATE_UNSUPPORTED
@@ -156,7 +158,7 @@ def test_technical_fields_are_computed_for_all_markets():
     assert us["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_SUPPORTED
     assert us["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_UNSUPPORTED
 
-    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN):
+    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA):
         row = rsi[market]
         assert row["canonical_provider"] == SOURCE_TECHNICALS
         assert row["support_state"] == SUPPORT_STATE_COMPUTED
@@ -184,7 +186,7 @@ def test_auxiliary_scan_field_is_enumerated():
     assert us["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
     assert us["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_UNSUPPORTED
 
-    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW):
+    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW, MARKET_CA):
         row = first_trade_date[market]
         assert row["support_state"] == SUPPORT_STATE_SUPPORTED
         assert row["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_SUPPORTED

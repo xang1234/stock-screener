@@ -55,7 +55,7 @@ STATIC_CHART_TOP_N_GROUPS = 50
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
-STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN")
+STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA")
 STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
     "US": "United States",
@@ -65,6 +65,7 @@ STATIC_MARKET_DISPLAY = {
     "KR": "South Korea",
     "TW": "Taiwan",
     "CN": "China A-shares",
+    "CA": "Canada",
 }
 STATIC_GROUP_HISTORY_RUNS = 40
 STATIC_GROUP_CHANGE_OFFSETS = {
@@ -126,6 +127,13 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "600519.SS", "display_name": "Kweichow Moutai", "currency": "CNY"},
         {"symbol": "000001.SZ", "display_name": "Ping An Bank", "currency": "CNY"},
         {"symbol": "300750.SZ", "display_name": "CATL", "currency": "CNY"},
+    ),
+    "CA": (
+        {"symbol": "^GSPTSE", "display_name": "S&P/TSX Composite", "currency": "CAD"},
+        {"symbol": "XIU.TO", "display_name": "iShares S&P/TSX 60 ETF", "currency": "CAD"},
+        {"symbol": "RY.TO", "display_name": "Royal Bank of Canada", "currency": "CAD"},
+        {"symbol": "SHOP.TO", "display_name": "Shopify", "currency": "CAD"},
+        {"symbol": "CNR.TO", "display_name": "Canadian National Railway", "currency": "CAD"},
     ),
 }
 

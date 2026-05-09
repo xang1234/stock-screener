@@ -7,6 +7,7 @@ import pytest
 
 from app.services import provider_routing_policy as policy
 from app.services.provider_routing_policy import (
+    MARKET_CA,
     MARKET_HK,
     MARKET_CN,
     MARKET_IN,
@@ -35,7 +36,7 @@ class TestPolicyVersion:
 
     def test_policy_version_is_date_stamped(self):
         # Format: YYYY.MM.DD.N — bump when routing semantics change.
-        assert POLICY_VERSION == "2026.04.30.1"
+        assert POLICY_VERSION == "2026.05.09.1"
         assert policy_version() == POLICY_VERSION
 
 
@@ -44,6 +45,7 @@ class TestMatrixShape:
 
     def test_supported_markets_covers_us_and_asia(self):
         assert supported_markets() == (
+            MARKET_CA,
             MARKET_CN,
             MARKET_HK,
             MARKET_IN,

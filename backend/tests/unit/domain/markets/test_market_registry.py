@@ -28,7 +28,7 @@ def test_representative_profile_lookups_accept_string_and_market() -> None:
 
 
 def test_supported_codes_are_in_runtime_order() -> None:
-    assert market_registry.supported_market_codes() == ("US", "HK", "IN", "JP", "KR", "TW", "CN")
+    assert market_registry.supported_market_codes() == ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA")
     assert market_registry.supported_markets() == tuple(Market(code) for code in market_registry.supported_market_codes())
 
 

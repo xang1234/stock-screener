@@ -49,6 +49,16 @@ class TestUniverseDefinitionConstruction:
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=exchange)
         assert u.exchange == exchange
 
+    def test_market_ca(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.CA)
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.CA
+
+    @pytest.mark.parametrize("exchange", [Exchange.TSX, Exchange.TSXV])
+    def test_canada_exchanges(self, exchange):
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=exchange)
+        assert u.exchange == exchange
+
     def test_index_sp500(self):
         u = UniverseDefinition(type=UniverseType.INDEX, index=IndexName.SP500)
         assert u.type == UniverseType.INDEX

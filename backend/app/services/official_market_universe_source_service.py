@@ -1,4 +1,4 @@
-"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, and CN."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, CN, and CA."""
 
 from __future__ import annotations
 
@@ -32,6 +32,46 @@ _JP_SOURCE_NAME = "jpx_official"
 _KR_SOURCE_NAME = "krx_official"
 _TW_SOURCE_NAME = "tw_reference_bundle"
 _CN_SOURCE_NAME = "cn_akshare_eastmoney"
+_CA_SOURCE_NAME = "tmx_official"
+# Single tokens (matched as whole words after splitting the instrument-type
+# string on non-alphanumeric chars). Plurals are listed explicitly so that
+# "Notes" matches but "Footnotes" does not.
+_CA_EXCLUDED_INSTRUMENT_TOKENS: frozenset[str] = frozenset(
+    {
+        "etf",
+        "etn",
+        "bond",
+        "bonds",
+        "debenture",
+        "debentures",
+        "note",
+        "notes",
+        "right",
+        "rights",
+        "warrant",
+        "warrants",
+        "nvcc",
+        "convertible",
+        "convertibles",
+    }
+)
+# Multi-word phrases (matched as case-insensitive substrings; specific enough
+# that false positives are unlikely).
+_CA_EXCLUDED_INSTRUMENT_PHRASES: frozenset[str] = frozenset(
+    {
+        "exchange-traded fund",
+        "exchange traded fund",
+        "exchange-traded note",
+        "exchange traded note",
+        "mutual fund",
+        "closed-end fund",
+        "closed end fund",
+        "investment fund",
+        "subscription receipt",
+        "structured product",
+    }
+)
+_CA_INSTRUMENT_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 _KR_VALIDATED_BASELINE = {
     "source_url": "https://global.krx.co.kr/main/main.jspx?bld=listing_list",
     "validated_at": "2026-04-29",
@@ -139,6 +179,8 @@ class OfficialMarketUniverseSourceService:
             return self.fetch_tw_snapshot()
         if normalized_market == "CN":
             return self.fetch_cn_snapshot()
+        if normalized_market == "CA":
+            return self.fetch_ca_snapshot()
         raise ValueError(f"Official universe refresh is unsupported for market {market!r}")
 
     def fetch_hk_snapshot(self) -> OfficialMarketUniverseSnapshot:
@@ -681,6 +723,246 @@ class OfficialMarketUniverseSourceService:
             source_metadata=source_metadata,
             rows=tuple([*twse_rows, *tpex_rows]),
         )
+
+    def fetch_ca_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        """Fetch combined TSX + TSXV issuer listings from TMX.
+
+        TMX publishes per-board JSON issuer directories. Each endpoint returns
+        a payload like ``{"length": N, "results": [{"symbol": "...",
+        "name": "...", "instrumentType": "..."}]}``. We combine both boards,
+        exclude non-equity instrument types (ETFs, debentures, warrants, etc.),
+        and tag each row with its exchange so the ingestion adapter can pick
+        the correct ``.TO`` / ``.V`` suffix.
+
+        The configured URLs may contain a ``{initial}`` placeholder, in which
+        case we iterate A-Z and concatenate the results. This is needed for
+        TMX's letter-bucketed directory; a single letter typically returns
+        ~50-200 issuers so all 26 fetches together cover the universe. Per-
+        letter failures are logged and skipped — the snapshot still succeeds
+        as long as at least one letter returned rows on each board.
+        """
+        tsx_rows, tsx_metadata = self._fetch_ca_board("TSX", settings.ca_universe_source_tsx_url)
+        tsxv_rows, tsxv_metadata = self._fetch_ca_board("TSXV", settings.ca_universe_source_tsxv_url)
+
+        # Both boards must contribute rows. A full TSX or TSXV outage (or
+        # parse failure on every letter) should surface as a hard error so
+        # operators can retry, rather than silently publishing a half-empty
+        # CA snapshot that bypasses reconciliation safety checks downstream.
+        empty_boards = [
+            board for board, rows in (("TSX", tsx_rows), ("TSXV", tsxv_rows)) if not rows
+        ]
+        if empty_boards:
+            raise ValueError(
+                "CA official universe fetch returned no equity rows for "
+                f"{', '.join(empty_boards)}; refusing to publish a partial snapshot."
+            )
+
+        snapshot_as_of = (
+            self._date_from_http_header(tsx_metadata.get("http_last_modified"))
+            or self._date_from_http_header(tsxv_metadata.get("http_last_modified"))
+            or self._utc_today()
+        ).isoformat()
+        fetched_ats = [
+            metadata["fetched_at"]
+            for metadata in (tsx_metadata, tsxv_metadata)
+            if metadata.get("fetched_at")
+        ]
+        source_metadata = {
+            "source_urls": [
+                settings.ca_universe_source_tsx_url,
+                settings.ca_universe_source_tsxv_url,
+            ],
+            "fetched_at": max(fetched_ats) if fetched_ats else datetime.now(UTC).isoformat(),
+            "http_last_modified": {
+                "tsx": tsx_metadata.get("http_last_modified"),
+                "tsxv": tsxv_metadata.get("http_last_modified"),
+            },
+            "tls_verification_disabled": {
+                "tsx": tsx_metadata.get("tls_verification_disabled"),
+                "tsxv": tsxv_metadata.get("tls_verification_disabled"),
+            },
+            "fetch_mode": {
+                "tsx": tsx_metadata.get("fetch_mode"),
+                "tsxv": tsxv_metadata.get("fetch_mode"),
+            },
+            "fetch_attempts": {
+                "tsx": tsx_metadata.get("attempts"),
+                "tsxv": tsxv_metadata.get("attempts"),
+            },
+            "fetch_errors": {
+                "tsx": tsx_metadata.get("errors"),
+                "tsxv": tsxv_metadata.get("errors"),
+            },
+            "filters": {
+                "exchanges": ["TSX", "TSXV"],
+                "excluded_instrument_tokens": sorted(_CA_EXCLUDED_INSTRUMENT_TOKENS),
+                "excluded_instrument_phrases": sorted(_CA_EXCLUDED_INSTRUMENT_PHRASES),
+            },
+            "row_counts": {
+                "tsx": len(tsx_rows),
+                "tsxv": len(tsxv_rows),
+            },
+        }
+        return OfficialMarketUniverseSnapshot(
+            market="CA",
+            source_name=_CA_SOURCE_NAME,
+            snapshot_id=f"tmx-issuer-directory-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            rows=tuple([*tsx_rows, *tsxv_rows]),
+        )
+
+    def _fetch_ca_board(
+        self,
+        exchange: str,
+        url_template: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Fetch one TMX board (TSX or TSXV) with optional A-Z pagination.
+
+        Returns ``(rows, metadata)`` where metadata describes how the fetch
+        was performed (single vs paginated, attempt count, last_modified,
+        per-letter errors). Symbols are deduplicated across letter buckets
+        on ``(exchange, symbol)``.
+        """
+        templated = "{initial}" in url_template
+        attempts: list[str] = []
+        errors: dict[str, str] = {}
+        last_modified: str | None = None
+        tls_verification_disabled = False
+        fetched_ats: list[str] = []
+        rows_by_symbol: dict[str, dict[str, Any]] = {}
+
+        if templated:
+            letters = [chr(code) for code in range(ord("A"), ord("Z") + 1)]
+            for letter in letters:
+                url = url_template.format(initial=letter)
+                attempts.append(letter)
+                try:
+                    fetched = self._http_get(
+                        url,
+                        allow_insecure_fallback=settings.ca_universe_allow_insecure_fallback,
+                    )
+                except requests.exceptions.RequestException as exc:
+                    errors[letter] = str(exc)
+                    logger.warning(
+                        "TMX directory fetch failed for %s/%s: %s", exchange, letter, exc
+                    )
+                    continue
+                fetched_ats.append(fetched.fetched_at)
+                if fetched.last_modified:
+                    last_modified = fetched.last_modified
+                if fetched.tls_verification_disabled:
+                    tls_verification_disabled = True
+                try:
+                    bucket_rows = self.parse_ca_rows(fetched.content, exchange=exchange)
+                except ValueError as exc:
+                    errors[letter] = f"parse failed: {exc}"
+                    logger.warning(
+                        "TMX directory parse failed for %s/%s: %s", exchange, letter, exc
+                    )
+                    continue
+                for row in bucket_rows:
+                    rows_by_symbol.setdefault(row["symbol"], row)
+        else:
+            attempts.append("single")
+            fetched = self._http_get(
+                url_template,
+                allow_insecure_fallback=settings.ca_universe_allow_insecure_fallback,
+            )
+            fetched_ats.append(fetched.fetched_at)
+            last_modified = fetched.last_modified
+            tls_verification_disabled = fetched.tls_verification_disabled
+            for row in self.parse_ca_rows(fetched.content, exchange=exchange):
+                rows_by_symbol.setdefault(row["symbol"], row)
+
+        rows = sorted(rows_by_symbol.values(), key=lambda row: row["symbol"])
+        metadata: dict[str, Any] = {
+            "fetch_mode": "letter_buckets" if templated else "single_url",
+            "attempts": attempts,
+            "errors": errors,
+            "fetched_at": max(fetched_ats) if fetched_ats else None,
+            "http_last_modified": last_modified,
+            "tls_verification_disabled": tls_verification_disabled,
+        }
+        return rows, metadata
+
+    @classmethod
+    def parse_ca_rows(cls, content: bytes, *, exchange: str) -> list[dict[str, Any]]:
+        """Parse a TMX issuer-directory JSON payload into ingestion rows."""
+        if exchange not in ("TSX", "TSXV"):
+            raise ValueError(f"Unsupported CA exchange '{exchange}'")
+
+        try:
+            payload = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"Invalid TMX directory payload for {exchange}: {exc}"
+            ) from exc
+
+        if isinstance(payload, dict):
+            results = payload.get("results") or payload.get("companies") or []
+        elif isinstance(payload, list):
+            results = payload
+        else:
+            raise ValueError(f"Unexpected TMX payload shape for {exchange}: {type(payload).__name__}")
+
+        rows: list[dict[str, Any]] = []
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            raw_symbol = (
+                entry.get("symbol")
+                or entry.get("ticker")
+                or entry.get("rootTicker")
+                or ""
+            )
+            symbol = str(raw_symbol).strip().upper().replace(" ", "")
+            if not symbol:
+                continue
+
+            instrument_type = str(
+                entry.get("instrumentType")
+                or entry.get("type")
+                or entry.get("securityType")
+                or ""
+            ).strip().lower()
+            if cls._ca_is_excluded_instrument(instrument_type):
+                continue
+
+            name = str(entry.get("name") or entry.get("issuerName") or entry.get("companyName") or "").strip()
+            sector = str(entry.get("sector") or entry.get("gicsSector") or "").strip()
+            industry = str(entry.get("industry") or entry.get("gicsIndustry") or "").strip()
+
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "exchange": exchange,
+                    "sector": sector,
+                    "industry": industry,
+                    "market_cap": entry.get("marketCap"),
+                    "instrument_type": instrument_type,
+                }
+            )
+
+        return rows
+
+    @staticmethod
+    def _ca_is_excluded_instrument(instrument_type: str) -> bool:
+        """Return True for non-equity TMX instrument types.
+
+        Multi-word phrases (e.g. "Closed-End Fund") match as substrings.
+        Single-word tokens (e.g. "ETF", "Notes") match only as whole words —
+        so "Common Shares" passes but "Notes 6.5%" is excluded.
+        """
+        if not instrument_type:
+            return False
+        normalized = instrument_type.lower().strip()
+        for phrase in _CA_EXCLUDED_INSTRUMENT_PHRASES:
+            if phrase in normalized:
+                return True
+        tokens = (token for token in _CA_INSTRUMENT_TOKEN_SPLIT.split(normalized) if token)
+        return any(token in _CA_EXCLUDED_INSTRUMENT_TOKENS for token in tokens)
 
     def parse_hk_rows(self, content: bytes) -> list[dict[str, Any]]:
         frame = pd.read_excel(

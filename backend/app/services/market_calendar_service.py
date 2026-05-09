@@ -1,4 +1,4 @@
-"""Market calendar abstraction for US/HK/IN/JP/KR/TW/CN session-aware decisions."""
+"""Market calendar abstraction for US/HK/IN/JP/KR/TW/CN/CA session-aware decisions."""
 
 from __future__ import annotations
 
