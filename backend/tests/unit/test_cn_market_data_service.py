@@ -396,6 +396,34 @@ def test_cn_market_data_service_reraises_akshare_error_when_baostock_login_fails
     assert baostock.login_calls == 1
 
 
+def test_cn_market_data_service_does_not_fall_back_to_baostock_on_deterministic_error():
+    """Schema/parser bugs in AKShare must fail fast, not be masked by BaoStock."""
+
+    class BrokenAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise TypeError("unexpected listing schema")
+
+    baostock_calls = {"login": 0}
+
+    class FakeBaoStock:
+        @staticmethod
+        def login():  # pragma: no cover - should not be called
+            baostock_calls["login"] += 1
+            raise AssertionError("BaoStock must not be queried for deterministic AKShare errors")
+
+    service = CnMarketDataService(
+        akshare_module=BrokenAkshare(),
+        baostock_module=FakeBaoStock(),
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(TypeError, match="unexpected listing schema"):
+        service.listing_rows(as_of=date(2026, 5, 9))
+
+    assert baostock_calls["login"] == 0
+
+
 def test_cn_market_data_service_raises_when_all_listing_sources_return_empty():
     """An outage that returns empty (rather than raising) must still surface as a hard failure."""
 

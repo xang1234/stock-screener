@@ -250,7 +250,16 @@ class CnMarketDataService:
         return self._baostock_module
 
     def listing_rows(self, *, as_of: date | str | None = None) -> list[dict[str, Any]]:
-        """Return A-share listing rows from AKShare, with BaoStock fallback."""
+        """Return A-share listing rows from AKShare, with BaoStock fallback.
+
+        BaoStock fallback is restricted to transient AKShare failures only —
+        deterministic errors (parser/schema/type bugs) propagate so they fail
+        fast instead of being masked by a partial fallback. BaoStock does not
+        cover the Beijing Stock Exchange, so the fallback path emits a
+        prominent warning; callers that need full BJSE coverage should rely
+        on the build script's seeded prior-week universe rescue when this
+        path is taken.
+        """
         del as_of  # CN listing sources return the current source snapshot.
         if self._listing_rows_cache is not None:
             return [dict(row) for row in self._listing_rows_cache]
@@ -261,7 +270,7 @@ class CnMarketDataService:
             frame = self._listing_frame()
         except CnDependencyError:
             raise
-        except Exception as exc:
+        except (requests.exceptions.RequestException, OSError) as exc:
             akshare_error = exc
             frame = None
         if frame is not None and not frame.empty:
@@ -274,14 +283,18 @@ class CnMarketDataService:
                 if akshare_error is not None:
                     raise akshare_error
                 baostock_rows = []
-            except Exception as exc:
+            except (requests.exceptions.RequestException, OSError) as exc:
                 logger.warning("BaoStock CN listing fallback failed: %s", exc)
                 if akshare_error is not None:
                     raise akshare_error from exc
                 baostock_rows = []
             if baostock_rows:
-                logger.info(
-                    "Using BaoStock CN listing fallback (%d rows)", len(baostock_rows)
+                logger.warning(
+                    "Using BaoStock CN listing fallback (%d rows). BaoStock "
+                    "does not cover the Beijing Stock Exchange, so this "
+                    "snapshot omits BJSE listings; downstream consumers "
+                    "should treat it as partial.",
+                    len(baostock_rows),
                 )
                 rows = baostock_rows
             elif akshare_error is not None:

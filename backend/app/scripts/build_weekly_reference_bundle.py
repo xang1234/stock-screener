@@ -458,11 +458,21 @@ def _build_asia_bundle(
         # _ingest_official_market_snapshot may have raised mid-transaction
         # (after bulk_save_objects but before commit), leaving the session in
         # a doomed state. Roll back before the seeded-rows query so we don't
-        # mask the original error with a PendingRollbackError.
+        # mask the original error with a PendingRollbackError. The rollback
+        # also reverts any partial bulk-insert, so the seeded-count below
+        # reflects only rows that pre-existed this run.
         try:
             db.rollback()
         except Exception:  # pragma: no cover - defensive; rollback failures fall through
             pass
+        # Assumption: the ``Seed prior weekly reference bundle`` step in
+        # weekly-reference-data.yml is the only writer of CN rows in the
+        # CI Postgres before this script runs, so any active rows present
+        # here came from ``import_weekly_reference_bundle``. The rollback
+        # above guarantees no partially-ingested rows survive. Long-running
+        # deployments without a fresh Postgres should not rely on this
+        # rescue path without first verifying that prior rows reflect the
+        # intended baseline.
         seeded_count = (
             db.query(StockUniverse)
             .filter(
