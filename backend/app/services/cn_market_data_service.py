@@ -286,6 +286,10 @@ class CnMarketDataService:
                 rows = baostock_rows
             elif akshare_error is not None:
                 raise akshare_error
+            else:
+                raise CnDependencyError(
+                    "CN listing sources returned no rows (AKShare and BaoStock both empty)"
+                )
 
         self._listing_rows_cache = rows
         return [dict(row) for row in rows]

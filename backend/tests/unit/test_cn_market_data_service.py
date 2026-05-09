@@ -396,6 +396,30 @@ def test_cn_market_data_service_reraises_akshare_error_when_baostock_login_fails
     assert baostock.login_calls == 1
 
 
+def test_cn_market_data_service_raises_when_all_listing_sources_return_empty():
+    """An outage that returns empty (rather than raising) must still surface as a hard failure."""
+
+    class EmptyAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            return pd.DataFrame()
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame()
+
+    baostock = _FakeBaoStockListing(rows=[])
+
+    service = CnMarketDataService(
+        akshare_module=EmptyAkshare(),
+        baostock_module=baostock,
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(CnDependencyError, match="no rows"):
+        service.listing_rows(as_of=date(2026, 5, 9))
+
+
 def test_cn_market_data_service_baostock_listing_skips_suspended_and_beijing_codes():
     class FailingAkshare:
         @staticmethod

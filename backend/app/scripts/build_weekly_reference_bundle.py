@@ -455,6 +455,14 @@ def _build_asia_bundle(
     except Exception as exc:
         if not allow_partial_publish:
             raise
+        # _ingest_official_market_snapshot may have raised mid-transaction
+        # (after bulk_save_objects but before commit), leaving the session in
+        # a doomed state. Roll back before the seeded-rows query so we don't
+        # mask the original error with a PendingRollbackError.
+        try:
+            db.rollback()
+        except Exception:  # pragma: no cover - defensive; rollback failures fall through
+            pass
         seeded_count = (
             db.query(StockUniverse)
             .filter(
@@ -662,10 +670,13 @@ def main() -> int:
         "--allow-partial-publish",
         action="store_true",
         help=(
-            "When --max-runtime-minutes triggers an early exit, publish the "
-            "snapshot even if the coverage gate would otherwise block. "
-            "Skipped symbols inherit the prior weekly bundle's data; the "
-            "manifest records partial_run=True and a deadline warning."
+            "Allow partial publish in two scenarios: (a) --max-runtime-minutes "
+            "triggers an early exit between fundamentals chunks, or (b) the "
+            "official market-universe fetch fails and prior-week seeded "
+            "universe rows are available. The snapshot is force-published "
+            "even if the coverage gate would otherwise block. Skipped symbols "
+            "inherit the prior weekly bundle's data; the manifest records "
+            "partial_run=True with a deadline or stale_universe warning."
         ),
     )
     args = parser.parse_args()
