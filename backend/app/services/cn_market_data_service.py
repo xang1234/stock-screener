@@ -250,16 +250,43 @@ class CnMarketDataService:
         return self._baostock_module
 
     def listing_rows(self, *, as_of: date | str | None = None) -> list[dict[str, Any]]:
-        """Return A-share listing rows from AKShare-backed no-key sources."""
+        """Return A-share listing rows from AKShare, with BaoStock fallback."""
         del as_of  # CN listing sources return the current source snapshot.
         if self._listing_rows_cache is not None:
             return [dict(row) for row in self._listing_rows_cache]
 
-        frame = self._listing_frame()
-        if frame is None or frame.empty:
-            return []
+        rows: list[dict[str, Any]] = []
+        akshare_error: Exception | None = None
+        try:
+            frame = self._listing_frame()
+        except CnDependencyError:
+            raise
+        except Exception as exc:
+            akshare_error = exc
+            frame = None
+        if frame is not None and not frame.empty:
+            rows = self._rows_from_listing_frame(frame)
 
-        rows = self._rows_from_listing_frame(frame)
+        if not rows:
+            try:
+                baostock_rows = self._baostock_listing_rows()
+            except CnDependencyError:
+                if akshare_error is not None:
+                    raise akshare_error
+                baostock_rows = []
+            except Exception as exc:
+                logger.warning("BaoStock CN listing fallback failed: %s", exc)
+                if akshare_error is not None:
+                    raise akshare_error from exc
+                baostock_rows = []
+            if baostock_rows:
+                logger.info(
+                    "Using BaoStock CN listing fallback (%d rows)", len(baostock_rows)
+                )
+                rows = baostock_rows
+            elif akshare_error is not None:
+                raise akshare_error
+
         self._listing_rows_cache = rows
         return [dict(row) for row in rows]
 
@@ -537,6 +564,74 @@ class CnMarketDataService:
                 )
             )
         return [row for row in result if row.date]
+
+    def _baostock_listing_rows(self) -> list[dict[str, Any]]:
+        """Fall back to BaoStock's all-stock query for the CN listing universe.
+
+        Returns rows in the shape produced by ``_rows_from_listing_frame`` with
+        ``None`` for fields BaoStock does not expose (market cap, P/E, etc.).
+        BaoStock only covers SSE and SZSE; Beijing-listed codes are skipped.
+        """
+        bs = self._baostock
+
+        def _fetch_rows() -> list[dict[str, Any]]:
+            today = date.today().strftime("%Y-%m-%d")
+            login_result = bs.login()
+            if getattr(login_result, "error_code", "0") != "0":
+                return []
+            rows: list[dict[str, Any]] = []
+            try:
+                query = bs.query_all_stock(day=today)
+                if getattr(query, "error_code", "0") != "0":
+                    return []
+                fields = list(getattr(query, "fields", []) or [])
+                while query.next():
+                    data = dict(zip(fields, query.get_row_data()))
+                    code = str(data.get("code") or "").strip()
+                    if not code:
+                        continue
+                    trade_status = str(data.get("tradeStatus") or "").strip()
+                    if trade_status and trade_status != "1":
+                        continue
+                    raw_code = code.split(".", 1)[1] if "." in code else code
+                    local_code = _normalize_code(raw_code)
+                    exchange = _exchange_for_code(local_code)
+                    if exchange is None or exchange == "BJSE":
+                        continue
+                    suffix = _suffix_for_exchange(exchange)
+                    board = _board_for_code(local_code, exchange)
+                    rows.append(
+                        {
+                            "symbol": f"{local_code}{suffix}",
+                            "local_code": local_code,
+                            "name": str(data.get("code_name") or "").strip(),
+                            "exchange": exchange,
+                            "board": board,
+                            "sector": infer_cn_sector(None, None, "", board=board),
+                            "industry_group": "",
+                            "industry": "",
+                            "sub_industry": "",
+                            "market_cap": None,
+                            "float_market_cap": None,
+                            "shares_outstanding": None,
+                            "pe_ratio": None,
+                            "price_to_book": None,
+                            "dividend_yield": None,
+                            "source_board": board,
+                        }
+                    )
+            finally:
+                try:
+                    bs.logout()
+                except Exception:  # pragma: no cover - defensive cleanup
+                    pass
+            return rows
+
+        return _call_with_timeout(
+            _fetch_rows,
+            timeout_seconds=self._listing_timeout_seconds,
+            operation_name="CN A-share BaoStock listing fetch",
+        )
 
     def _daily_ohlcv_from_baostock(
         self,

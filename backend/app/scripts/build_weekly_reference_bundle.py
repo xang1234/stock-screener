@@ -446,9 +446,37 @@ def _build_asia_bundle(
     _configure_weekly_hybrid_service(market, hybrid_service)
 
     print(f"Starting official universe refresh for {market}...", flush=True)
-    official_snapshot = official_source_service.fetch_market_snapshot(market)
-    universe_stats = _ingest_official_market_snapshot(db, stock_universe_service, official_snapshot)
-    print(f"Universe refresh complete: {universe_stats}", flush=True)
+    stale_universe = False
+    universe_error: str | None = None
+    try:
+        official_snapshot = official_source_service.fetch_market_snapshot(market)
+        universe_stats = _ingest_official_market_snapshot(db, stock_universe_service, official_snapshot)
+        print(f"Universe refresh complete: {universe_stats}", flush=True)
+    except Exception as exc:
+        if not allow_partial_publish:
+            raise
+        seeded_count = (
+            db.query(StockUniverse)
+            .filter(
+                StockUniverse.active_filter(),
+                StockUniverse.market == market,
+            )
+            .count()
+        )
+        if seeded_count == 0:
+            raise
+        stale_universe = True
+        universe_error = str(exc)
+        universe_stats = {
+            "stale_universe": True,
+            "error": universe_error,
+            "fallback_rows": seeded_count,
+        }
+        print(
+            f"[universe] {market} official fetch failed ({universe_error}); "
+            f"falling back to {seeded_count} seeded prior-week rows",
+            flush=True,
+        )
 
     active_rows = (
         db.query(StockUniverse)
@@ -505,9 +533,15 @@ def _build_asia_bundle(
         "missing_active_symbols": max(len(symbols) - len(snapshot_rows), 0),
         "attempted_symbols": len(attempted_symbols),
         "skipped_due_to_deadline": len(skipped_symbols) if deadline_hit else 0,
-        "partial_run": deadline_hit,
+        "partial_run": deadline_hit or stale_universe,
+        "stale_universe": stale_universe,
     }
     warnings: list[str] = []
+    if stale_universe:
+        warnings.append(
+            f"Official {market} universe fetch failed ({universe_error}); "
+            f"reused {len(symbols)} seeded prior-week rows."
+        )
     if fundamentals_stats.get("failed"):
         warnings.append(
             f"{fundamentals_stats['failed']} symbols failed during {market} hybrid fundamentals refresh"
@@ -538,7 +572,7 @@ def _build_asia_bundle(
         coverage_stats=coverage_stats,
         warnings=warnings,
         publish=publish,
-        force_publish=bool(allow_partial_publish and deadline_hit),
+        force_publish=bool(allow_partial_publish and (deadline_hit or stale_universe)),
     )
     summary = {
         "output_dir": output_dir,
