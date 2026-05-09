@@ -265,6 +265,15 @@ def _ingest_official_market_snapshot(db, stock_universe_service, snapshot) -> di
             snapshot_as_of=snapshot.snapshot_as_of,
             source_metadata=snapshot.source_metadata,
         )
+    if snapshot.market == "CA":
+        return stock_universe_service.ingest_ca_snapshot_rows(
+            db,
+            rows=snapshot.rows,
+            source_name=snapshot.source_name,
+            snapshot_id=snapshot.snapshot_id,
+            snapshot_as_of=snapshot.snapshot_as_of,
+            source_metadata=snapshot.source_metadata,
+        )
     raise ValueError(f"Unsupported official weekly reference market {snapshot.market!r}")
 
 

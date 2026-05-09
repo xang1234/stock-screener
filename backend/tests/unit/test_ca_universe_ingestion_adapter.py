@@ -104,6 +104,27 @@ def test_ca_adapter_deduplicates_deterministically():
     assert result.canonical_rows[0].name == "Royal Bank of Canada"
 
 
+def test_ca_adapter_keeps_same_root_on_different_exchanges_distinct():
+    # Same root on TSX and TSXV should canonicalize to *different* symbols
+    # (.TO vs .V) and therefore both rows must survive — no cross-exchange
+    # collapse.
+    result = ca_universe_ingestion_adapter.canonicalize_rows(
+        [
+            {"symbol": "ABC", "name": "Senior Listing", "exchange": "TSX"},
+            {"symbol": "ABC", "name": "Junior Listing", "exchange": "TSXV"},
+        ],
+        source_name="tmx_official",
+        snapshot_id="tmx-2026-05-09",
+    )
+
+    assert result.rejected_rows == ()
+    assert len(result.canonical_rows) == 2
+    by_symbol = {row.symbol: row for row in result.canonical_rows}
+    assert set(by_symbol) == {"ABC.TO", "ABC.V"}
+    assert by_symbol["ABC.TO"].exchange == "TSX"
+    assert by_symbol["ABC.V"].exchange == "TSXV"
+
+
 def test_ca_adapter_rejects_unapproved_source():
     with pytest.raises(ValueError, match="Unapproved CA source"):
         ca_universe_ingestion_adapter.canonicalize_rows(

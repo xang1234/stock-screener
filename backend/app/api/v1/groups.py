@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 SUPPORTED_GROUP_MARKETS = {"US", "HK", "IN", "JP", "KR", "TW", "CN", "CA"}
+_SUPPORTED_GROUP_MARKETS_DESCRIPTION = ", ".join(sorted(SUPPORTED_GROUP_MARKETS))
 DEFAULT_GROUP_PERIOD = "1w"
 
 
@@ -51,7 +52,10 @@ def _normalize_market_param(market: str | None) -> str:
     if normalized not in SUPPORTED_GROUP_MARKETS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported market '{market}'. Expected one of: US, HK, IN, JP, KR, TW, CN.",
+            detail=(
+                f"Unsupported market '{market}'. Expected one of: "
+                f"{_SUPPORTED_GROUP_MARKETS_DESCRIPTION}."
+            ),
         )
     return normalized
 
@@ -99,7 +103,7 @@ def _require_task_controls() -> None:
 @router.get("/rankings/current", response_model=GroupRankingsResponse)
 async def get_current_rankings(
     limit: int = Query(50, ge=1, le=197, description="Number of groups to return"),
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, or CA"),
     db: Session = Depends(get_db)
 ):
     """
@@ -135,7 +139,7 @@ async def get_current_rankings(
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
 async def get_groups_bootstrap(
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, or CA"),
     db: Session = Depends(get_db),
     snapshot_service=Depends(get_ui_snapshot_service),
 ):
@@ -170,7 +174,7 @@ async def get_groups_bootstrap(
 async def get_rank_movers(
     period: str = Query("1w", pattern="^(1w|1m|3m|6m)$", description="Time period"),
     limit: int = Query(20, ge=1, le=50, description="Number of movers per direction"),
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, or CA"),
     db: Session = Depends(get_db)
 ):
     """
@@ -210,7 +214,7 @@ async def get_rank_movers(
 async def get_group_detail(
     group: str = Query(..., description="IBD industry group name"),
     days: int = Query(180, ge=1, le=365, description="Days of history to retrieve"),
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, or CA"),
     db: Session = Depends(get_db)
 ):
     """

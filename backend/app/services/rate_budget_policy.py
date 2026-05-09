@@ -95,6 +95,7 @@ class RateBudgetPolicy:
             "KR": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "CN": {"base_s": 60, "max_s": 900, "factor": 2.0},
+            "CA": {"base_s": 60, "max_s": 600, "factor": 2.0},
         },
         "finviz": {
             "US": {"base_s": 30, "max_s": 240, "factor": 2.0},
@@ -104,6 +105,7 @@ class RateBudgetPolicy:
             "KR": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "CN": {"base_s": 60, "max_s": 480, "factor": 2.0},
+            "CA": {"base_s": 60, "max_s": 480, "factor": 2.0},
         },
     }
 

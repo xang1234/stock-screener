@@ -19,6 +19,10 @@ _JP_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,5}[A-Z]?$")
 _KR_LOCAL_CODE_RE = re.compile(r"^[0-9]{6}$")
 _TW_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,6}[A-Z]?$")
 _CN_LOCAL_CODE_RE = re.compile(r"^[0-9]{6}$")
+# Yahoo-form CA local code: 1-6 char alpha-led root, with up to three
+# dash-separated segments for class/unit/preferred-series qualifiers
+# (e.g. RCI-B, BIP-UN, BCE-PR-K).
+_CA_LOCAL_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{0,5}(?:-[A-Z][A-Z0-9]{0,3}){0,3}$")
 
 _TW_EXCHANGE_ALIASES = {
     "TWSE": "TWSE",
@@ -29,6 +33,15 @@ _TW_EXCHANGE_ALIASES = {
     "TPEX STOCK": "TPEX",
     "TPEX STOCKS": "TPEX",
     "TPEx": "TPEX",
+}
+
+_CA_EXCHANGE_ALIASES = {
+    "TSX": "TSX",
+    "XTSE": "TSX",
+    "TO": "TSX",
+    "TSXV": "TSXV",
+    "XTNX": "TSXV",
+    "V": "TSXV",
 }
 
 _EMPTY_TOKENS = {"", "-", "N/A", "NA", "NAN", "NONE", "NULL"}
@@ -428,8 +441,11 @@ class MarketTaxonomyService:
                 ("Symbol", "Exchange", "Sector", "Industry Group", "Industry", "Sub-Industry"),
             )
             for row in reader:
-                symbol = self._normalize_text(row.get("Symbol"))
-                if not symbol:
+                symbol = self._canonicalize_ca_symbol(
+                    row.get("Symbol"),
+                    exchange=row.get("Exchange"),
+                )
+                if symbol is None:
                     continue
                 self._merge_entry(
                     market="CA",
@@ -558,6 +574,31 @@ class MarketTaxonomyService:
                 sse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SSE")
                 szse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SZSE")
                 candidates.extend(candidate for candidate in (sse_variant, szse_variant) if candidate)
+            candidates.append(normalized)
+            return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
+        if market == "CA":
+            candidates: list[str] = []
+            canonical = self._canonicalize_ca_symbol(normalized, exchange=exchange)
+            if canonical:
+                candidates.append(canonical)
+            if "." not in normalized:
+                raw_exchange = str(exchange or "").strip().upper()
+                if raw_exchange not in {"TSXV", "XTNX", "V"}:
+                    tsx_variant = self._canonicalize_ca_symbol(normalized, exchange="TSX")
+                    if tsx_variant:
+                        candidates.append(tsx_variant)
+                if raw_exchange not in {"TSX", "XTSE", "TO"}:
+                    tsxv_variant = self._canonicalize_ca_symbol(normalized, exchange="TSXV")
+                    if tsxv_variant:
+                        candidates.append(tsxv_variant)
+            elif normalized.endswith(".TO"):
+                tsxv_variant = self._canonicalize_ca_symbol(normalized[:-3], exchange="TSXV")
+                if tsxv_variant:
+                    candidates.append(tsxv_variant)
+            elif normalized.endswith(".V"):
+                tsx_variant = self._canonicalize_ca_symbol(normalized[:-2], exchange="TSX")
+                if tsx_variant:
+                    candidates.append(tsx_variant)
             candidates.append(normalized)
             return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
         return (normalized,)
@@ -791,6 +832,49 @@ class MarketTaxonomyService:
             symbol=token,
             market="CN",
             exchange=normalized_exchange,
+            local_code=token,
+        )
+        return identity.canonical_symbol
+
+    @staticmethod
+    def _canonicalize_ca_symbol(
+        raw_symbol: object,
+        *,
+        exchange: object | None = None,
+    ) -> str | None:
+        token = security_master_resolver.normalize_symbol(str(raw_symbol or ""))
+        if not token:
+            return None
+        for prefix in ("TSX:", "XTSE:", "TSXV:", "XTNX:", "TO:", "V:"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+
+        normalized_exchange = str(exchange or "").strip().upper()
+        if token.endswith(".TO"):
+            token = token[:-3]
+            normalized_exchange = "TSX"
+        elif token.endswith(".V"):
+            token = token[:-2]
+            normalized_exchange = "TSXV"
+
+        # TMX delivers class/unit/preferred segments with dots; Yahoo expects dashes.
+        token = token.replace(".", "-")
+
+        if normalized_exchange:
+            normalized_exchange = _CA_EXCHANGE_ALIASES.get(normalized_exchange)
+            if normalized_exchange is None:
+                return None
+
+        if not _CA_LOCAL_CODE_RE.fullmatch(token):
+            return None
+
+        suffix_for_exchange = {"TSX": ".TO", "TSXV": ".V"}
+        suffix = suffix_for_exchange.get(normalized_exchange or "TSX", ".TO")
+        identity = security_master_resolver.resolve_identity(
+            symbol=f"{token}{suffix}",
+            market="CA",
+            exchange=normalized_exchange or None,
             local_code=token,
         )
         return identity.canonical_symbol

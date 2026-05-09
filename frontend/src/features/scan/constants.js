@@ -91,5 +91,10 @@ export const UNIVERSE_SCOPES_BY_MARKET = {
     { value: 'exchange:SZSE', label: 'Shenzhen Stock Exchange' },
     { value: 'exchange:BJSE', label: 'Beijing Stock Exchange' },
   ],
+  CA: [
+    { value: 'market', label: 'All Canada' },
+    { value: 'exchange:TSX', label: 'Toronto Stock Exchange' },
+    { value: 'exchange:TSXV', label: 'TSX Venture Exchange' },
+  ],
   TEST: [],
 };

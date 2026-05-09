@@ -948,6 +948,12 @@ class StockUniverseService:
                 env_name="ASIA_RECONCILIATION_MIN_COUNT_CN",
                 default=max(default_min, CN_ACTIVE_UNIVERSE_MIN_COUNT),
             )
+        if normalized_market == "CA":
+            return StockUniverseService._safety_int_setting(
+                field_name="asia_reconciliation_min_count_ca",
+                env_name="ASIA_RECONCILIATION_MIN_COUNT_CA",
+                default=max(default_min, CA_ACTIVE_UNIVERSE_MIN_COUNT),
+            )
         return default_min
 
     @staticmethod

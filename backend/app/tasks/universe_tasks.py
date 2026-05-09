@@ -25,7 +25,7 @@ from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
 
-_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "KR", "TW", "CN"})
+_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "KR", "TW", "CN", "CA"})
 _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800

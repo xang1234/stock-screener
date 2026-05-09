@@ -311,6 +311,17 @@ def test_load_ca_loads_canada_deep_when_present(tmp_path):
     assert service.entry_count_for_market("CA") == 2
     assert service.groups_for_market("CA") == ["Banks", "Software"]
 
+    # Suffix-less and TSXV-suffix lookups should resolve via _candidate_symbols.
+    ry_unsuffixed = service.get("RY", market="CA")
+    assert ry_unsuffixed is not None
+    assert ry_unsuffixed.symbol == "RY.TO"
+
+    ry_tsxv_lookup = service.get("RY.V", market="CA")
+    # CSV listed RY on TSX only — TSXV suffix should still find it via the
+    # cross-exchange candidate fallback.
+    assert ry_tsxv_lookup is not None
+    assert ry_tsxv_lookup.symbol == "RY.TO"
+
 
 def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp_path):
     runtime_root = tmp_path / "runtime"

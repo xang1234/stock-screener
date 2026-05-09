@@ -885,7 +885,9 @@ class OfficialMarketUniverseSourceService:
         try:
             payload = json.loads(content.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Invalid TMX directory payload for {exchange}: {exc}")
+            raise ValueError(
+                f"Invalid TMX directory payload for {exchange}: {exc}"
+            ) from exc
 
         if isinstance(payload, dict):
             results = payload.get("results") or payload.get("companies") or []
