@@ -167,6 +167,27 @@ def test_cn_market_data_service_retries_transient_spot_disconnect(monkeypatch):
     assert rows[0]["symbol"] == "600519.SS"
 
 
+def test_cn_market_data_service_does_not_retry_deterministic_spot_errors(monkeypatch):
+    sleeps: list[float] = []
+    attempts = {"count": 0}
+
+    class BrokenAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            attempts["count"] += 1
+            raise TypeError("unexpected listing schema")
+
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda delay: sleeps.append(delay))
+
+    service = CnMarketDataService(akshare_module=BrokenAkshare(), timeout_seconds=1)
+
+    with pytest.raises(TypeError, match="unexpected listing schema"):
+        service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert attempts["count"] == 1
+    assert sleeps == []
+
+
 def test_cn_market_data_service_retries_transient_code_name_disconnect(monkeypatch):
     sleeps: list[float] = []
     fallback_attempts = {"count": 0}

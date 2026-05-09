@@ -167,7 +167,7 @@ def _call_listing_with_retries(
     attempts: int = _CN_LISTING_FETCH_ATTEMPTS,
     base_delay_seconds: float = _CN_LISTING_RETRY_BASE_DELAY_SECONDS,
 ):
-    last_error: Exception | None = None
+    """Call a CN listing fetcher with timeout and retry transient request failures."""
     for attempt in range(1, max(1, int(attempts)) + 1):
         try:
             return _call_with_timeout(
@@ -177,8 +177,7 @@ def _call_listing_with_retries(
             )
         except requests.exceptions.Timeout:
             raise
-        except Exception as exc:
-            last_error = exc
+        except requests.exceptions.RequestException as exc:
             if attempt >= attempts:
                 raise
             delay = max(0.0, float(base_delay_seconds)) * attempt
@@ -192,9 +191,6 @@ def _call_listing_with_retries(
             )
             if delay:
                 time.sleep(delay)
-    if last_error is not None:
-        raise last_error
-    return None
 
 
 @dataclass(frozen=True)
