@@ -39,9 +39,12 @@ _APPROVED_CA_SOURCES: frozenset[str] = frozenset(
     }
 )
 
-# Yahoo-form local code: leading alpha, optional digits, optional dash-separated
-# class/unit/preferred segments (e.g. RCI-B, BIP-UN, BCE-PR-K).
-_CA_LOCAL_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{0,4}(?:-[A-Z]{1,3}){0,3}$")
+# Yahoo-form local code: 1-6 char alpha-led root (covers TSX/TSXV common,
+# preferred, and units), with up to three dash-separated segments for class,
+# unit, and preferred-series qualifiers (e.g. RCI-B, BIP-UN, BCE-PR-K,
+# BCE-PR-K22). Each dash segment is alpha-led but may carry trailing digits
+# for preferred series numbers.
+_CA_LOCAL_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{0,5}(?:-[A-Z][A-Z0-9]{0,3}){0,3}$")
 
 _CA_SUFFIX_BY_EXCHANGE: dict[str, str] = {
     "TSX": ".TO",

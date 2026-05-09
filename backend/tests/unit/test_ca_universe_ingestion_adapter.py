@@ -132,3 +132,43 @@ def test_ca_adapter_strips_exchange_prefix(raw_symbol, expected_canonical, expec
     assert result.rejected_rows == ()
     assert result.canonical_rows[0].symbol == expected_canonical
     assert result.canonical_rows[0].exchange == expected_exchange
+
+
+@pytest.mark.parametrize(
+    "raw_symbol,expected_local_code",
+    [
+        ("X", "X"),                # single-char ticker
+        ("ABCDEF", "ABCDEF"),      # 6-char root
+        ("BCE.PR.K22", "BCE-PR-K22"),  # preferred series with digits
+        ("AQN.PR.A", "AQN-PR-A"),  # preferred class
+    ],
+)
+def test_ca_adapter_accepts_widened_regex_cases(raw_symbol, expected_local_code):
+    result = ca_universe_ingestion_adapter.canonicalize_rows(
+        [{"symbol": raw_symbol, "name": "Edge case", "exchange": "TSX"}],
+        source_name="tmx_official",
+        snapshot_id="tmx-2026-05-09",
+    )
+
+    assert result.rejected_rows == ()
+    assert result.canonical_rows[0].local_code == expected_local_code
+
+
+@pytest.mark.parametrize(
+    "raw_symbol",
+    [
+        "ABCDEFG",         # 7-char root exceeds limit
+        "RY-",             # trailing dash
+        "RY-TOOOLONG",     # dash segment > 4 chars
+        "1RY",             # numeric leading char
+    ],
+)
+def test_ca_adapter_rejects_out_of_range_symbols(raw_symbol):
+    result = ca_universe_ingestion_adapter.canonicalize_rows(
+        [{"symbol": raw_symbol, "name": "Bad", "exchange": "TSX"}],
+        source_name="tmx_official",
+        snapshot_id="tmx-2026-05-09",
+    )
+
+    assert result.canonical_rows == ()
+    assert any("Invalid CA symbol" in row.reason for row in result.rejected_rows)

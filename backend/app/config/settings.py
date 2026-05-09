@@ -166,11 +166,17 @@ class Settings(BaseSettings):
     tw_universe_source_twse_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2"
     tw_universe_source_tpex_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=4"
     ca_universe_allow_insecure_fallback: bool = False
+    # TMX issuer-directory URL templates. The ``{initial}`` placeholder is
+    # substituted with each starting character A-Z so all issuers are
+    # collected, regardless of whether TMX returns paginated or full results
+    # for a regex-style query. If no ``{initial}`` placeholder is present the
+    # fetcher does a single GET against the URL as-is (useful when operators
+    # point at a pre-aggregated mirror).
     ca_universe_source_tsx_url: str = (
-        "https://www.tsx.com/json/company-directory/search/tsx/%5E%5BA-Z%5D"
+        "https://www.tsx.com/json/company-directory/search/tsx/{initial}"
     )
     ca_universe_source_tsxv_url: str = (
-        "https://www.tsx.com/json/company-directory/search/tsxv/%5E%5BA-Z%5D"
+        "https://www.tsx.com/json/company-directory/search/tsxv/{initial}"
     )
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
@@ -321,7 +327,7 @@ class Settings(BaseSettings):
     cache_warm_hour_cn: int = 3
     cache_warm_minute_cn: int = 30
     cache_warm_hour_ca: int = 17
-    cache_warm_minute_ca: int = 0
+    cache_warm_minute_ca: int = 30
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
     # entirely (beat schedule skips it; its worker can be stopped).
