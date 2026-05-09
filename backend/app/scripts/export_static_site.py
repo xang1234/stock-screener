@@ -462,6 +462,16 @@ def _run_daily_refresh(
         # build_daily_snapshot's inner enrichment runs *before* group ranks
         # for `as_of_date` are populated, so US rows would otherwise carry
         # `details_json["ibd_group_rank"] = None`.
+        #
+        # Only re-enrich when the backfill above actually succeeded
+        # (status "completed" — fresh ranks were written — or "skipped" —
+        # existing rows already cover ``as_of_date``). For any other
+        # status (e.g. "errored") the IBDGroupRank table is still missing
+        # rows, so calling the enricher would overwrite previously valid
+        # ``ibd_group_rank`` values with ``None`` — particularly harmful
+        # when ``build_daily_snapshot`` returned "already_published" and
+        # the existing run carries good ranks from an earlier successful
+        # refresh.
         ibd_metadata_refresh: dict[str, Any] = {}
         for selected_market in selected_markets:
             snapshot = feature_snapshots.get(selected_market, {})
@@ -470,6 +480,14 @@ def _run_daily_refresh(
                     "status": "skipped",
                     "market": selected_market,
                     "reason": "snapshot_not_ready",
+                }
+                continue
+            backfill_status = (group_rank_history.get(selected_market) or {}).get("status")
+            if backfill_status not in ("completed", "skipped"):
+                ibd_metadata_refresh[selected_market] = {
+                    "status": "skipped",
+                    "market": selected_market,
+                    "reason": f"group_rank_backfill_{backfill_status or 'missing'}",
                 }
                 continue
             feature_run_id = (

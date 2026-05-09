@@ -756,6 +756,70 @@ def test_run_daily_refresh_reenriches_ibd_metadata_after_group_rank_backfill(mon
     }
 
 
+def test_run_daily_refresh_skips_reenrich_when_group_rank_backfill_errored(monkeypatch):
+    """If ``_ensure_group_rank_history`` fails, the IBDGroupRank table is
+    still missing ``as_of_date`` rows. Re-enriching in that state would
+    overwrite previously valid ``ibd_group_rank`` values with ``None``
+    (most damaging when ``build_daily_snapshot`` returned ``already_published``
+    and the existing run carries ranks from an earlier successful refresh).
+    The driver must skip re-enrich when the backfill did not succeed."""
+
+    enrich_calls: list[dict] = []
+
+    def fake_enrich(**kwargs):
+        enrich_calls.append(kwargs)
+        return {"updated_rows": 99}
+
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", SimpleNamespace(run=lambda **_kwargs: {"task": "universe_refresh"}))
+    monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", SimpleNamespace(run=lambda **_kwargs: {"task": "fundamentals_refresh"}))
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(
+            run=lambda **kwargs: {"status": "published", "run_id": 77, "kwargs": kwargs}
+        ),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        fake_enrich,
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_group_rank_history",
+        lambda *, as_of_date, market: {
+            "status": "errored",
+            "market": market,
+            "error": "Failed to fetch SPY benchmark data",
+        },
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market=None: {"task": "price_refresh"},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, _warnings = export_script._run_daily_refresh(market="US")  # noqa: SLF001 - intentional unit test coverage
+
+    assert enrich_calls == []
+    assert results["ibd_metadata_refresh"]["US"] == {
+        "status": "skipped",
+        "market": "US",
+        "reason": "group_rank_backfill_errored",
+    }
+
+
 def test_run_daily_refresh_skips_reenrich_when_snapshot_not_ready(monkeypatch):
     enrich_calls: list[dict] = []
 
