@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import time
 from datetime import datetime
@@ -150,6 +151,17 @@ def _merge_fundamentals_stats(
         bucket = accumulator.setdefault("provider_error_counts", {})
         for key, value in chunk_errors.items():
             bucket[key] = int(bucket.get(key, 0) or 0) + int(value or 0)
+
+
+def _published_run_is_partial(provider_snapshot_service: Any, db, snapshot_key: str) -> bool:
+    published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
+    if published_run is None or not published_run.coverage_stats_json:
+        return False
+    try:
+        coverage = json.loads(published_run.coverage_stats_json)
+    except (TypeError, ValueError):
+        return False
+    return bool(coverage.get("partial_run"))
 
 
 def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
@@ -447,6 +459,7 @@ def _build_asia_bundle(
     max_runtime_seconds: float = 0.0,
     fetch_chunk_size: int = _DEFAULT_FETCH_CHUNK_SIZE,
     allow_partial_publish: bool = False,
+    resume_partial_seed: bool = False,
 ) -> dict[str, Any]:
     snapshot_key = ProviderSnapshotService.snapshot_key_for_market(market)
     official_source_service = OfficialMarketUniverseSourceService()
@@ -519,18 +532,33 @@ def _build_asia_bundle(
 
     symbols = [row.symbol for row in active_rows]
     market_by_symbol = {row.symbol: market for row in active_rows}
+    seeded_symbols: list[str] = []
+    if resume_partial_seed and _published_run_is_partial(
+        provider_snapshot_service, db, snapshot_key
+    ):
+        seeded_payloads = fundamentals_cache.get_many(symbols)
+        seeded_symbols = [symbol for symbol in symbols if seeded_payloads.get(symbol)]
+        if seeded_symbols:
+            print(
+                f"[fundamentals] {market} resuming partial seed: "
+                f"skipping {len(seeded_symbols)} cached symbols and fetching "
+                f"{len(symbols) - len(seeded_symbols)} remaining symbols",
+                flush=True,
+            )
+    seeded_symbol_set = set(seeded_symbols)
+    fetch_symbols = [symbol for symbol in symbols if symbol not in seeded_symbol_set]
 
     print(f"Starting hybrid fundamentals refresh for {market}...", flush=True)
     fundamentals_stats, attempted_symbols, deadline_hit = _run_chunked_fundamentals_refresh(
         hybrid_service=hybrid_service,
         fundamentals_cache=fundamentals_cache,
         market=market,
-        symbols=symbols,
+        symbols=fetch_symbols,
         market_by_symbol=market_by_symbol,
         chunk_size=fetch_chunk_size,
         max_runtime_seconds=max_runtime_seconds,
     )
-    skipped_symbols = [s for s in symbols if s not in set(attempted_symbols)]
+    skipped_symbols = [s for s in fetch_symbols if s not in set(attempted_symbols)]
     print(f"Fundamentals refresh complete: {fundamentals_stats}", flush=True)
 
     cached_fundamentals = fundamentals_cache.get_many(symbols)
@@ -559,6 +587,8 @@ def _build_asia_bundle(
         "covered_active_symbols": len(snapshot_rows),
         "missing_active_symbols": max(len(symbols) - len(snapshot_rows), 0),
         "attempted_symbols": len(attempted_symbols),
+        "seeded_symbols": len(seeded_symbols),
+        "fetch_symbols": len(fetch_symbols),
         "skipped_due_to_deadline": len(skipped_symbols) if deadline_hit else 0,
         "partial_run": deadline_hit or stale_universe,
         "stale_universe": stale_universe,
@@ -581,7 +611,8 @@ def _build_asia_bundle(
     if deadline_hit:
         warnings.append(
             f"Weekly fetch deadline reached after {len(attempted_symbols)}/{len(symbols)} "
-            f"{market} symbols; {len(skipped_symbols)} symbols inherit prior-bundle data."
+            f"{market} symbols ({len(seeded_symbols)} seeded); "
+            f"{len(skipped_symbols)} symbols inherit prior-bundle data."
         )
         if not allow_partial_publish:
             warnings.append(
@@ -698,6 +729,15 @@ def main() -> int:
             "partial_run=True with a deadline or stale_universe warning."
         ),
     )
+    parser.add_argument(
+        "--resume-partial-seed",
+        action="store_true",
+        help=(
+            "When the seeded prior bundle is marked partial_run=True, skip symbols "
+            "already present in the hydrated fundamentals cache and fetch only the "
+            "remaining symbols. Intended for initial CN bootstrap continuation."
+        ),
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -732,6 +772,7 @@ def main() -> int:
                 max_runtime_seconds=max(0.0, float(args.max_runtime_minutes)) * 60.0,
                 fetch_chunk_size=max(1, int(args.fetch_chunk_size)),
                 allow_partial_publish=bool(args.allow_partial_publish),
+                resume_partial_seed=bool(args.resume_partial_seed),
             )
 
     _write_step_summary(market, summary)

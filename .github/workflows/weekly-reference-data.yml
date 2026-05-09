@@ -24,8 +24,9 @@ on:
       max_runtime_minutes:
         description: >-
           Per-market deadline in minutes for the fundamentals refresh. Blank
-          uses the built-in defaults (CN=320, others=0). Set "0" to disable
-          the deadline entirely (e.g. for the first CN seeding run).
+          uses the built-in defaults (CN=300, others=0). CN bootstrap runs
+          should keep a deadline so a partial resumable bundle can publish
+          before the GitHub Actions job cap.
         required: false
         type: string
         default: ''
@@ -174,9 +175,9 @@ jobs:
         env:
           # Per-market wall-clock budget defaults for the fundamentals refresh.
           # CN is the slow path: ~5,500 sequential AKShare+yfinance round-trips
-          # can blow past 6h, so we leave ~30 min headroom under the 350-min
-          # job cap and opt-in to partial publish — skipped symbols inherit
-          # last week's bundle data. Workflow_dispatch inputs override either.
+          # can blow past 6h, so we leave ~50 min headroom under the 350-min
+          # job cap and opt in to partial publish. Initial bootstrap runs can
+          # publish partial bundles, and later CN runs resume from them.
           INPUT_RUNTIME: ${{ github.event.inputs.max_runtime_minutes }}
           INPUT_PARTIAL: ${{ github.event.inputs.allow_partial_publish }}
           MATRIX_MARKET: ${{ matrix.market }}
@@ -184,7 +185,7 @@ jobs:
           if [ -n "$INPUT_RUNTIME" ]; then
             RUNTIME="$INPUT_RUNTIME"
           elif [ "$MATRIX_MARKET" = "CN" ]; then
-            RUNTIME="320"
+            RUNTIME="300"
           else
             RUNTIME="0"
           fi
@@ -212,10 +213,15 @@ jobs:
       - name: Build weekly reference bundle
         run: |
           cd backend
+          RESUME_FLAG=""
+          if [ "${{ matrix.market }}" = "CN" ]; then
+            RESUME_FLAG="--resume-partial-seed"
+          fi
           python -m app.scripts.build_weekly_reference_bundle \
             --market "${{ matrix.market }}" \
             --output-dir /tmp/weekly-reference \
             --max-runtime-minutes "${{ steps.build_inputs.outputs.max_runtime_minutes }}" \
+            $RESUME_FLAG \
             ${{ steps.build_inputs.outputs.partial_flag }}
 
       - name: Upload weekly reference assets

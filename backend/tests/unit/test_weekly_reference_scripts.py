@@ -911,6 +911,125 @@ def test_build_asia_bundle_reraises_when_partial_publish_disabled(monkeypatch, t
         build_script.main()
 
 
+def test_build_weekly_reference_bundle_resumes_partial_seed_by_skipping_cached_symbols(
+    monkeypatch, tmp_path
+):
+    active_rows = [
+        _make_universe_row("600000.SS"),
+        _make_universe_row("600001.SS"),
+        _make_universe_row("000001.SZ"),
+    ]
+    fake_db = _make_cn_db_mock(active_rows)
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _patch_cn_dependencies(monkeypatch, raise_universe=False)
+
+    fetch_calls: list[list[str]] = []
+    cached = {
+        "600000.SS": {
+            "market_cap": 999.0,
+            "sector": "Industrials",
+            "data_source": "bundle_import",
+        },
+    }
+
+    def fake_fetch_fundamentals_batch(symbols, **kwargs):
+        fetch_calls.append(list(symbols))
+        kwargs["progress_callback"](len(symbols), len(symbols))
+        return {symbol: {"market_cap": 1000.0, "sector": "Industrials"} for symbol in symbols}
+
+    def fake_store_all_caches(data, _cache, **_kwargs):
+        cached.update(data)
+        return {
+            "fundamentals_stored": len(data),
+            "persisted_symbols": len(data),
+            "failed_persistence_symbols": 0,
+            "failed": 0,
+            "provider_error_counts": {},
+        }
+
+    monkeypatch.setattr(
+        build_script,
+        "get_hybrid_fundamentals_service",
+        lambda: SimpleNamespace(
+            yfinance_delay_per_ticker=1.5,
+            fetch_fundamentals_batch=fake_fetch_fundamentals_batch,
+            store_all_caches=fake_store_all_caches,
+        ),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_many=lambda symbols: {s: cached[s] for s in symbols if s in cached}),
+    )
+
+    published_at = datetime(2026, 5, 5, 12, 10, 0)
+    publish_calls: list[dict[str, object]] = []
+    export_calls: list[dict[str, object]] = []
+    provider_snapshot_service = SimpleNamespace(
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": "row-hash",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: publish_calls.append(kwargs)
+        or {
+            "published": True,
+            "force_published": False,
+            "source_revision": "fundamentals_v1_cn:20260505121000",
+            "snapshot_key": kwargs["snapshot_key"],
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+            "coverage_thresholds": {
+                "market": "CN",
+                "active_coverage": 1.0,
+                "min_active_coverage": 0.70,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": 0.30,
+            },
+        },
+        get_published_run=lambda db, snapshot_key: SimpleNamespace(
+            published_at=published_at,
+            created_at=published_at,
+            source_revision="fundamentals_v1_cn:20260505121000",
+            coverage_stats_json='{"partial_run": true}',
+        ),
+        export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
+        or {"bundle_path": str(kwargs["output_path"])},
+    )
+    monkeypatch.setattr(
+        build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "CN",
+            "--output-dir",
+            str(tmp_path),
+            "--fetch-chunk-size",
+            "2",
+            "--resume-partial-seed",
+        ],
+    )
+
+    assert build_script.main() == 0
+
+    assert fetch_calls == [["600001.SS", "000001.SZ"]]
+    publish_kwargs = publish_calls[0]
+    assert publish_kwargs["coverage_stats"]["seeded_symbols"] == 1
+    assert publish_kwargs["coverage_stats"]["fetch_symbols"] == 2
+    assert publish_kwargs["coverage_stats"]["attempted_symbols"] == 2
+    assert publish_kwargs["coverage_stats"]["partial_run"] is False
+    assert publish_kwargs["coverage_stats"]["snapshot_symbols"] == 3
+    assert export_calls, "Bundle export should run after completing a resumed seed"
+
+
 def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_path, capsys):
     bundle_path = tmp_path / "weekly-reference.json.gz"
     bundle_path.write_bytes(b"bundle")
