@@ -144,6 +144,56 @@ def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_is_empty(
     assert rows[0]["board"] == "SSE_STAR"
 
 
+def test_cn_market_data_service_retries_transient_spot_disconnect(monkeypatch):
+    sleeps: list[float] = []
+    attempts = {"count": 0}
+
+    class FlakyAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise requests.exceptions.ConnectionError("eastmoney disconnected")
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
+
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda delay: sleeps.append(delay))
+
+    service = CnMarketDataService(akshare_module=FlakyAkshare(), timeout_seconds=1)
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert attempts["count"] == 2
+    assert sleeps == [5.0]
+    assert rows[0]["symbol"] == "600519.SS"
+
+
+def test_cn_market_data_service_retries_transient_code_name_disconnect(monkeypatch):
+    sleeps: list[float] = []
+    fallback_attempts = {"count": 0}
+
+    class FlakyFallbackAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise requests.exceptions.ConnectionError("spot source disconnected")
+
+        @staticmethod
+        def stock_info_a_code_name():
+            fallback_attempts["count"] += 1
+            if fallback_attempts["count"] == 1:
+                raise requests.exceptions.ConnectionError("code-name source disconnected")
+            return pd.DataFrame([{"code": "000001", "name": "平安银行"}])
+
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda delay: sleeps.append(delay))
+
+    service = CnMarketDataService(akshare_module=FlakyFallbackAkshare(), timeout_seconds=1)
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert fallback_attempts["count"] == 2
+    assert sleeps == [5.0, 10.0, 5.0]
+    assert rows[0]["symbol"] == "000001.SZ"
+
+
 @pytest.mark.skipif(not _SIGALRM_AVAILABLE, reason="SIGALRM timers are unavailable on this platform")
 def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_times_out():
     class FallbackAkshare:
