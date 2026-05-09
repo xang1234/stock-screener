@@ -195,5 +195,19 @@ market_registry = MarketRegistry(
             benchmark_primary_kind="index",
             benchmark_fallback_kind="etf",
         ),
+        MarketProfile(
+            market=Market("DE"),
+            label="Germany",
+            currency="EUR",
+            timezone_name="Europe/Berlin",
+            calendar_id="XETR",
+            provider_calendar_id=None,
+            exchanges=("XETR", "XETRA", "XFRA", "FRA", "FWB"),
+            indexes=("DAX", "MDAX", "SDAX"),
+            primary_benchmark_symbol="^GDAXI",
+            benchmark_fallback_symbol="EXS1.DE",
+            benchmark_primary_kind="index",
+            benchmark_fallback_kind="etf",
+        ),
     )
 )

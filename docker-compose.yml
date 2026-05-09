@@ -207,6 +207,11 @@ services:
     profiles: ["market-cn"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_cn -n marketjobs-cn@%h
 
+  celery-marketjobs-de:
+    <<: *worker-common
+    profiles: ["market-de"]
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_de -n marketjobs-de@%h
+
   celery-userscans:
     <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_shared -n userscans-shared@%h
@@ -245,6 +250,11 @@ services:
     <<: *worker-common
     profiles: ["market-cn"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_cn -n userscans-cn@%h
+
+  celery-userscans-de:
+    <<: *worker-common
+    profiles: ["market-de"]
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_de -n userscans-de@%h
 
   celery-beat:
     build: *backend-build

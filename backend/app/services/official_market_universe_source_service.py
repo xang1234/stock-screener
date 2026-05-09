@@ -1,4 +1,4 @@
-"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, CN, and CA."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, CN, CA, and DE."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ _KR_SOURCE_NAME = "krx_official"
 _TW_SOURCE_NAME = "tw_reference_bundle"
 _CN_SOURCE_NAME = "cn_akshare_eastmoney"
 _CA_SOURCE_NAME = "tmx_official"
+_DE_SOURCE_NAME = "dbg_official"
 # Single tokens (matched as whole words after splitting the instrument-type
 # string on non-alphanumeric chars). Plurals are listed explicitly so that
 # "Notes" matches but "Footnotes" does not.
