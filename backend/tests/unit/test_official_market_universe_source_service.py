@@ -1208,7 +1208,43 @@ def test_fetch_ca_snapshot_raises_when_no_rows_returned_anywhere(monkeypatch):
     service = OfficialMarketUniverseSourceService()
     monkeypatch.setattr(service, "_http_get", fake_http_get)
 
-    with pytest.raises(ValueError, match="no equity rows"):
+    with pytest.raises(ValueError, match="no equity rows for TSX, TSXV"):
+        service.fetch_ca_snapshot()
+
+
+def test_fetch_ca_snapshot_raises_when_one_board_returns_no_rows(monkeypatch):
+    """A full TSX or TSXV outage must surface as a hard error rather than
+    publishing a half-empty CA snapshot."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsx_url",
+        "https://www.tsx.com/json/company-directory/search/tsx/{initial}",
+    )
+    monkeypatch.setattr(
+        app_settings,
+        "ca_universe_source_tsxv_url",
+        "https://www.tsx.com/json/company-directory/search/tsxv/{initial}",
+    )
+
+    fixtures = _ca_letter_payload(
+        {
+            # TSX has rows on letter R, TSXV has rows on no letter.
+            "TSX:R": [
+                {"symbol": "RY", "name": "Royal Bank", "instrumentType": "Common Shares"},
+            ],
+        }
+    )
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service,
+        "_http_get",
+        lambda url, allow_insecure_fallback=False: fixtures[url],
+    )
+
+    with pytest.raises(ValueError, match="no equity rows for TSXV"):
         service.fetch_ca_snapshot()
 
 

@@ -744,8 +744,18 @@ class OfficialMarketUniverseSourceService:
         tsx_rows, tsx_metadata = self._fetch_ca_board("TSX", settings.ca_universe_source_tsx_url)
         tsxv_rows, tsxv_metadata = self._fetch_ca_board("TSXV", settings.ca_universe_source_tsxv_url)
 
-        if not tsx_rows and not tsxv_rows:
-            raise ValueError("CA official universe fetch returned no equity rows")
+        # Both boards must contribute rows. A full TSX or TSXV outage (or
+        # parse failure on every letter) should surface as a hard error so
+        # operators can retry, rather than silently publishing a half-empty
+        # CA snapshot that bypasses reconciliation safety checks downstream.
+        empty_boards = [
+            board for board, rows in (("TSX", tsx_rows), ("TSXV", tsxv_rows)) if not rows
+        ]
+        if empty_boards:
+            raise ValueError(
+                "CA official universe fetch returned no equity rows for "
+                f"{', '.join(empty_boards)}; refusing to publish a partial snapshot."
+            )
 
         snapshot_as_of = (
             self._date_from_http_header(tsx_metadata.get("http_last_modified"))
