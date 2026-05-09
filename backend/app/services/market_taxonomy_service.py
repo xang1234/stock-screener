@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import csv
+import logging
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
 from .security_master_service import security_master_resolver
+
+logger = logging.getLogger(__name__)
 
 _HK_LOCAL_CODE_RE = re.compile(r"^[0-9]{1,8}$")
 _IN_LOCAL_CODE_RE = re.compile(r"^[0-9A-Z-]{1,16}$")
@@ -410,6 +413,12 @@ class MarketTaxonomyService:
         # when no curated GICS file is present.
         path = self._data_dir / "canada-deep.csv"
         if not path.exists():
+            logger.info(
+                "CA taxonomy CSV not found at %s; symbol-level GICS sector/"
+                "industry will fall back to TMX ingestion fields. Add "
+                "canada-deep.csv to enrich classification.",
+                path,
+            )
             return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)

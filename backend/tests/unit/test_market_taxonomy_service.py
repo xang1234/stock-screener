@@ -247,6 +247,71 @@ def test_market_taxonomy_service_raises_load_error_for_malformed_csv(tmp_path):
         service.groups_for_market("HK")
 
 
+def _write_minimum_required_csvs(tmp_path) -> None:
+    """Write the seven CSVs required by the pre-CA loaders so a test can
+    isolate CA-specific behaviour without tripping required-CSV errors."""
+    _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
+    _write_csv(tmp_path / "hk-deep.csv", "Symbol,EM Industry (EN),Theme (EN)\n")
+    _write_csv(
+        tmp_path / "india-deep.csv",
+        "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
+    )
+    _write_csv(
+        tmp_path / "kabutan_themes_en.csv",
+        "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
+    )
+    _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+    _write_csv(
+        tmp_path / "korea-deep.csv",
+        "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n",
+    )
+    _write_csv(
+        tmp_path / "china-deep.csv",
+        "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n",
+    )
+
+
+def test_load_ca_skips_silently_when_csv_is_missing(tmp_path, caplog):
+    _write_minimum_required_csvs(tmp_path)
+
+    service = MarketTaxonomyService(data_dir=tmp_path)
+
+    with caplog.at_level("INFO", logger="app.services.market_taxonomy_service"):
+        # Force taxonomy load via any market lookup; CA loader runs as part of
+        # refresh() and must not raise when canada-deep.csv is absent.
+        assert service.entry_count_for_market("CA") == 0
+        assert service.groups_for_market("CA") == []
+
+    info_messages = [
+        record.message
+        for record in caplog.records
+        if record.name == "app.services.market_taxonomy_service"
+        and record.levelname == "INFO"
+    ]
+    assert any("CA taxonomy CSV not found" in message for message in info_messages)
+
+
+def test_load_ca_loads_canada_deep_when_present(tmp_path):
+    _write_minimum_required_csvs(tmp_path)
+    _write_csv(
+        tmp_path / "canada-deep.csv",
+        (
+            "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n"
+            "RY.TO,TSX,Financials,Banks,Diversified Banks,Diversified Banks\n"
+            "SHOP.TO,TSX,Information Technology,Software,Application Software,E-commerce Platforms\n"
+        ),
+    )
+
+    service = MarketTaxonomyService(data_dir=tmp_path)
+
+    ry = service.get("RY.TO", market="CA")
+    assert ry is not None
+    assert ry.industry_group == "Banks"
+    assert ry.sector == "Financials"
+    assert service.entry_count_for_market("CA") == 2
+    assert service.groups_for_market("CA") == ["Banks", "Software"]
+
+
 def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp_path):
     runtime_root = tmp_path / "runtime"
     service_path = runtime_root / "app" / "app" / "services" / "market_taxonomy_service.py"

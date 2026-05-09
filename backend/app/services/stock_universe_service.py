@@ -54,6 +54,9 @@ MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
 }
 KR_ACTIVE_UNIVERSE_MIN_COUNT = 2526
 CN_ACTIVE_UNIVERSE_MIN_COUNT = 5217
+# Provisional: estimated from public TMX issuer counts (~3,200 raw, ~2,300-2,600
+# after ETF/fund/debt/derivative exclusions). Re-baseline against the first
+# successful TMX snapshot before treating as authoritative.
 CA_ACTIVE_UNIVERSE_MIN_COUNT = 2300
 
 

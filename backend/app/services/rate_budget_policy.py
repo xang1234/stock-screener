@@ -56,6 +56,11 @@ class RateBudgetPolicy:
 
     # Per-market batch sizes. Keep the defaults uniform unless operators
     # explicitly override them via settings.
+    #
+    # CA: defaults copied from HK/JP/KR/TW (50 batch, 1 worker for yfinance;
+    # 50 batch, 2 workers for finviz). Not measured — the 9.3 measurement
+    # guidance applies: revise after the first sustained CA refresh run if
+    # empirical throughput diverges from peer markets.
     _DEFAULT_BATCH_SIZE: Dict[str, Dict[str, int]] = {
         # US bumped to 150 — Yahoo accepts batches up to MAX_PRICE_BATCH_SIZE
         # (200) and the adaptive shrink in fetch_prices_in_batches halves the
