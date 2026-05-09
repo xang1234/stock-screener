@@ -522,8 +522,13 @@ def _build_asia_bundle(
             f"Weekly fetch deadline reached after {len(attempted_symbols)}/{len(symbols)} "
             f"{market} symbols; {len(skipped_symbols)} symbols inherit prior-bundle data."
         )
+        if not allow_partial_publish:
+            warnings.append(
+                "Partial publish disabled; blocking publish because the weekly fetch deadline was reached."
+            )
 
     source_revision = f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    publish = not (deadline_hit and not allow_partial_publish)
     snapshot_stats = provider_snapshot_service.publish_market_snapshot_run(
         db,
         snapshot_key=snapshot_key,
@@ -532,6 +537,7 @@ def _build_asia_bundle(
         rows=snapshot_rows,
         coverage_stats=coverage_stats,
         warnings=warnings,
+        publish=publish,
         force_publish=bool(allow_partial_publish and deadline_hit),
     )
     summary = {

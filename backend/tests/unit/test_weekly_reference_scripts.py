@@ -539,6 +539,140 @@ def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
     assert export_calls, "Bundle export should still run after a partial publish"
 
 
+def test_build_weekly_reference_bundle_deadline_blocks_when_partial_disabled(
+    monkeypatch, tmp_path
+):
+    """Disabling partial publish blocks deadline-hit runs even when cache coverage passes."""
+
+    active_rows = [
+        _make_universe_row("600000.SS"),
+        _make_universe_row("600001.SS"),
+        _make_universe_row("000001.SZ"),
+    ]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.order_by.return_value.all.return_value = active_rows
+    fake_db = MagicMock()
+    fake_db.query.return_value = fake_query
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(
+        build_script,
+        "OfficialMarketUniverseSourceService",
+        lambda: SimpleNamespace(
+            fetch_market_snapshot=lambda market: SimpleNamespace(
+                market=market,
+                source_name="cn_official",
+                snapshot_id="cn-2026-05-05",
+                snapshot_as_of="2026-05-05",
+                source_metadata={},
+                rows=tuple({"symbol": row.symbol} for row in active_rows),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(
+            ingest_cn_snapshot_rows=lambda db, **kwargs: {"added": 3, "updated": 0, "deactivated": 0}
+        ),
+    )
+
+    fake_clock = {"value": 0.0}
+
+    def fake_monotonic() -> float:
+        fake_clock["value"] += 60.0
+        return fake_clock["value"]
+
+    monkeypatch.setattr(build_script.time, "monotonic", fake_monotonic)
+
+    monkeypatch.setattr(
+        build_script,
+        "get_hybrid_fundamentals_service",
+        lambda: SimpleNamespace(
+            yfinance_delay_per_ticker=1.5,
+            fetch_fundamentals_batch=lambda symbols, **kwargs: {
+                symbol: {"market_cap": 1000.0, "sector": "Industrials"} for symbol in symbols
+            },
+            store_all_caches=lambda data, _cache, **_kwargs: {
+                "fundamentals_stored": len(data),
+                "persisted_symbols": len(data),
+                "failed_persistence_symbols": 0,
+                "failed": 0,
+                "provider_error_counts": {},
+            },
+        ),
+    )
+    cached = {
+        "600000.SS": {"market_cap": 1000.0, "sector": "Industrials"},
+        "600001.SS": {"market_cap": 1000.0, "sector": "Industrials"},
+        "000001.SZ": {"market_cap": 999.0, "sector": "Industrials", "data_source": "bundle_import"},
+    }
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_many=lambda symbols: cached),
+    )
+
+    publish_calls: list[dict[str, object]] = []
+
+    def fake_publish_market_snapshot_run(db, **kwargs):
+        publish_calls.append(kwargs)
+        return {
+            "published": False,
+            "source_revision": "fundamentals_v1_cn:20260505121000",
+            "snapshot_key": kwargs["snapshot_key"],
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+            "coverage_thresholds": {
+                "market": "CN",
+                "active_coverage": 1.0,
+                "min_active_coverage": 0.70,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": 0.30,
+            },
+        }
+
+    monkeypatch.setattr(
+        build_script,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            build_market_snapshot_row=lambda **kwargs: {
+                "symbol": kwargs["symbol"],
+                "exchange": kwargs["exchange"],
+                "row_hash": "row-hash",
+                "normalized_payload": kwargs["normalized_payload"],
+                "raw_payload": kwargs["raw_payload"],
+            },
+            publish_market_snapshot_run=fake_publish_market_snapshot_run,
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "CN",
+            "--output-dir",
+            str(tmp_path),
+            "--max-runtime-minutes",
+            "1.5",
+            "--fetch-chunk-size",
+            "2",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Partial publish disabled"):
+        build_script.main()
+
+    publish_kwargs = publish_calls[0]
+    assert publish_kwargs["publish"] is False
+    assert publish_kwargs["force_publish"] is False
+    assert publish_kwargs["coverage_stats"]["partial_run"] is True
+    assert publish_kwargs["coverage_stats"]["snapshot_symbols"] == 3
+
+
 def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_path, capsys):
     bundle_path = tmp_path / "weekly-reference.json.gz"
     bundle_path.write_bytes(b"bundle")
