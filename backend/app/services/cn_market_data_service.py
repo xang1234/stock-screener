@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 _AKSHARE_OHLCV_FAILURE_THRESHOLD = 2
 _AKSHARE_OHLCV_COOLDOWN_SECONDS = 300.0
+_CN_LISTING_FETCH_ATTEMPTS = 3
+_CN_LISTING_RETRY_BASE_DELAY_SECONDS = 5.0
 
 
 class CnDependencyError(RuntimeError):
@@ -157,6 +159,40 @@ def _call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
             )
 
 
+def _call_listing_with_retries(
+    fetcher,
+    *,
+    timeout_seconds: int,
+    operation_name: str,
+    attempts: int = _CN_LISTING_FETCH_ATTEMPTS,
+    base_delay_seconds: float = _CN_LISTING_RETRY_BASE_DELAY_SECONDS,
+):
+    """Call a CN listing fetcher with timeout and retry transient request failures."""
+    for attempt in range(1, max(1, int(attempts)) + 1):
+        try:
+            return _call_with_timeout(
+                fetcher,
+                timeout_seconds=timeout_seconds,
+                operation_name=operation_name,
+            )
+        except requests.exceptions.Timeout:
+            raise
+        except requests.exceptions.RequestException as exc:
+            if attempt >= attempts:
+                raise
+            delay = max(0.0, float(base_delay_seconds)) * attempt
+            logger.warning(
+                "%s failed on attempt %d/%d: %s; retrying in %.1fs",
+                operation_name,
+                attempt,
+                attempts,
+                exc,
+                delay,
+            )
+            if delay:
+                time.sleep(delay)
+
+
 @dataclass(frozen=True)
 class CnDailyPriceRow:
     date: str
@@ -242,7 +278,7 @@ class CnMarketDataService:
         fallback_fetcher = getattr(self._akshare, "stock_info_a_code_name", None)
         if callable(fallback_fetcher):
             try:
-                frame = _call_with_timeout(
+                frame = _call_listing_with_retries(
                     fallback_fetcher,
                     timeout_seconds=self._listing_timeout_seconds,
                     operation_name="CN A-share code-name fetch",
@@ -260,7 +296,7 @@ class CnMarketDataService:
         return None
 
     def _akshare_spot_frame(self) -> pd.DataFrame | None:
-        frame = _call_with_timeout(
+        frame = _call_listing_with_retries(
             self._akshare.stock_zh_a_spot_em,
             timeout_seconds=self._listing_timeout_seconds,
             operation_name="CN A-share listing fetch",
