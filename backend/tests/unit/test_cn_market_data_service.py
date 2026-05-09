@@ -288,6 +288,197 @@ def test_cn_market_data_service_times_out_listing_fetch():
     assert time.monotonic() - started_at < 3
 
 
+class _FakeBaoLogin:
+    def __init__(self, error_code: str = "0") -> None:
+        self.error_code = error_code
+
+
+class _FakeBaoQuery:
+    error_code = "0"
+    fields = ["code", "tradeStatus", "code_name"]
+
+    def __init__(self, rows: list[list[str]]) -> None:
+        self._remaining = list(rows)
+
+    def next(self) -> bool:
+        return bool(self._remaining)
+
+    def get_row_data(self) -> list[str]:
+        return self._remaining.pop(0)
+
+
+class _FakeBaoStockListing:
+    def __init__(
+        self,
+        rows: list[list[str]],
+        *,
+        login_error_code: str = "0",
+        query_error_code: str = "0",
+    ) -> None:
+        self._rows = rows
+        self._login_error_code = login_error_code
+        self._query_error_code = query_error_code
+        self.login_calls = 0
+        self.logout_calls = 0
+        self.query_calls = 0
+
+    def login(self) -> _FakeBaoLogin:
+        self.login_calls += 1
+        return _FakeBaoLogin(self._login_error_code)
+
+    def query_all_stock(self, day: str) -> _FakeBaoQuery:
+        self.query_calls += 1
+        query = _FakeBaoQuery(self._rows)
+        query.error_code = self._query_error_code
+        return query
+
+    def logout(self) -> None:
+        self.logout_calls += 1
+
+
+def test_cn_market_data_service_falls_back_to_baostock_when_akshare_fails():
+    class FailingAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise requests.exceptions.Timeout("eastmoney listing timed out")
+
+        @staticmethod
+        def stock_info_a_code_name():
+            raise requests.exceptions.Timeout("code-name listing timed out")
+
+    baostock = _FakeBaoStockListing(
+        [
+            ["sh.600519", "1", "贵州茅台"],
+            ["sz.000001", "1", "平安银行"],
+        ]
+    )
+
+    service = CnMarketDataService(
+        akshare_module=FailingAkshare(),
+        baostock_module=baostock,
+        timeout_seconds=1,
+    )
+
+    rows = service.listing_rows(as_of=date(2026, 5, 9))
+
+    assert [row["symbol"] for row in rows] == ["600519.SS", "000001.SZ"]
+    assert all(row["market_cap"] is None for row in rows)
+    assert all(row["pe_ratio"] is None for row in rows)
+    assert all(row["shares_outstanding"] is None for row in rows)
+    assert rows[0]["exchange"] == "SSE"
+    assert rows[0]["board"] == "SSE_MAIN"
+    assert rows[0]["sector"] == "Other"
+    assert rows[0]["name"] == "贵州茅台"
+    assert rows[1]["exchange"] == "SZSE"
+    assert baostock.login_calls == 1
+    assert baostock.logout_calls == 1
+
+
+def test_cn_market_data_service_reraises_akshare_error_when_baostock_login_fails():
+    class FailingAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise requests.exceptions.Timeout("eastmoney listing timed out")
+
+    baostock = _FakeBaoStockListing(rows=[], login_error_code="10001")
+
+    service = CnMarketDataService(
+        akshare_module=FailingAkshare(),
+        baostock_module=baostock,
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(
+        requests.exceptions.Timeout, match="eastmoney listing timed out"
+    ):
+        service.listing_rows(as_of=date(2026, 5, 9))
+
+    assert baostock.login_calls == 1
+
+
+def test_cn_market_data_service_does_not_fall_back_to_baostock_on_deterministic_error():
+    """Schema/parser bugs in AKShare must fail fast, not be masked by BaoStock."""
+
+    class BrokenAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise TypeError("unexpected listing schema")
+
+    baostock_calls = {"login": 0}
+
+    class FakeBaoStock:
+        @staticmethod
+        def login():  # pragma: no cover - should not be called
+            baostock_calls["login"] += 1
+            raise AssertionError("BaoStock must not be queried for deterministic AKShare errors")
+
+    service = CnMarketDataService(
+        akshare_module=BrokenAkshare(),
+        baostock_module=FakeBaoStock(),
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(TypeError, match="unexpected listing schema"):
+        service.listing_rows(as_of=date(2026, 5, 9))
+
+    assert baostock_calls["login"] == 0
+
+
+def test_cn_market_data_service_raises_when_all_listing_sources_return_empty():
+    """An outage that returns empty (rather than raising) must still surface as a hard failure."""
+
+    class EmptyAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            return pd.DataFrame()
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame()
+
+    baostock = _FakeBaoStockListing(rows=[])
+
+    service = CnMarketDataService(
+        akshare_module=EmptyAkshare(),
+        baostock_module=baostock,
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(CnDependencyError, match="no rows"):
+        service.listing_rows(as_of=date(2026, 5, 9))
+
+
+def test_cn_market_data_service_baostock_listing_skips_suspended_and_beijing_codes():
+    class FailingAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise requests.exceptions.ConnectionError("eastmoney down")
+
+        @staticmethod
+        def stock_info_a_code_name():
+            raise requests.exceptions.ConnectionError("code-name down")
+
+    baostock = _FakeBaoStockListing(
+        [
+            ["sh.600519", "1", "贵州茅台"],
+            ["sz.000002", "0", "万科A (suspended)"],
+            ["bj.920118", "1", "太湖雪 (Beijing)"],
+            ["sz.300750", "1", "宁德时代"],
+        ]
+    )
+
+    service = CnMarketDataService(
+        akshare_module=FailingAkshare(),
+        baostock_module=baostock,
+        timeout_seconds=1,
+    )
+
+    rows = service.listing_rows(as_of=date(2026, 5, 9))
+
+    assert [row["symbol"] for row in rows] == ["600519.SS", "300750.SZ"]
+    assert rows[1]["board"] == "SZSE_CHINEXT"
+
+
 def test_cn_market_data_service_skips_baostock_ohlcv_for_beijing_codes():
     class FakeBaoStock:
         def login(self):  # pragma: no cover - should not be called

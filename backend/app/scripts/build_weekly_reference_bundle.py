@@ -455,9 +455,55 @@ def _build_asia_bundle(
     _configure_weekly_hybrid_service(market, hybrid_service)
 
     print(f"Starting official universe refresh for {market}...", flush=True)
-    official_snapshot = official_source_service.fetch_market_snapshot(market)
-    universe_stats = _ingest_official_market_snapshot(db, stock_universe_service, official_snapshot)
-    print(f"Universe refresh complete: {universe_stats}", flush=True)
+    stale_universe = False
+    universe_error: str | None = None
+    try:
+        official_snapshot = official_source_service.fetch_market_snapshot(market)
+        universe_stats = _ingest_official_market_snapshot(db, stock_universe_service, official_snapshot)
+        print(f"Universe refresh complete: {universe_stats}", flush=True)
+    except Exception as exc:
+        if not allow_partial_publish:
+            raise
+        # _ingest_official_market_snapshot may have raised mid-transaction
+        # (after bulk_save_objects but before commit), leaving the session in
+        # a doomed state. Roll back before the seeded-rows query so we don't
+        # mask the original error with a PendingRollbackError. The rollback
+        # also reverts any partial bulk-insert, so the seeded-count below
+        # reflects only rows that pre-existed this run.
+        try:
+            db.rollback()
+        except Exception:  # pragma: no cover - defensive; rollback failures fall through
+            pass
+        # Assumption: the ``Seed prior weekly reference bundle`` step in
+        # weekly-reference-data.yml is the only writer of CN rows in the
+        # CI Postgres before this script runs, so any active rows present
+        # here came from ``import_weekly_reference_bundle``. The rollback
+        # above guarantees no partially-ingested rows survive. Long-running
+        # deployments without a fresh Postgres should not rely on this
+        # rescue path without first verifying that prior rows reflect the
+        # intended baseline.
+        seeded_count = (
+            db.query(StockUniverse)
+            .filter(
+                StockUniverse.active_filter(),
+                StockUniverse.market == market,
+            )
+            .count()
+        )
+        if seeded_count == 0:
+            raise
+        stale_universe = True
+        universe_error = str(exc)
+        universe_stats = {
+            "stale_universe": True,
+            "error": universe_error,
+            "fallback_rows": seeded_count,
+        }
+        print(
+            f"[universe] {market} official fetch failed ({universe_error}); "
+            f"falling back to {seeded_count} seeded prior-week rows",
+            flush=True,
+        )
 
     active_rows = (
         db.query(StockUniverse)
@@ -514,9 +560,15 @@ def _build_asia_bundle(
         "missing_active_symbols": max(len(symbols) - len(snapshot_rows), 0),
         "attempted_symbols": len(attempted_symbols),
         "skipped_due_to_deadline": len(skipped_symbols) if deadline_hit else 0,
-        "partial_run": deadline_hit,
+        "partial_run": deadline_hit or stale_universe,
+        "stale_universe": stale_universe,
     }
     warnings: list[str] = []
+    if stale_universe:
+        warnings.append(
+            f"Official {market} universe fetch failed ({universe_error}); "
+            f"reused {len(symbols)} seeded prior-week rows."
+        )
     if fundamentals_stats.get("failed"):
         warnings.append(
             f"{fundamentals_stats['failed']} symbols failed during {market} hybrid fundamentals refresh"
@@ -547,7 +599,7 @@ def _build_asia_bundle(
         coverage_stats=coverage_stats,
         warnings=warnings,
         publish=publish,
-        force_publish=bool(allow_partial_publish and deadline_hit),
+        force_publish=bool(allow_partial_publish and (deadline_hit or stale_universe)),
     )
     summary = {
         "output_dir": output_dir,
@@ -637,10 +689,13 @@ def main() -> int:
         "--allow-partial-publish",
         action="store_true",
         help=(
-            "When --max-runtime-minutes triggers an early exit, publish the "
-            "snapshot even if the coverage gate would otherwise block. "
-            "Skipped symbols inherit the prior weekly bundle's data; the "
-            "manifest records partial_run=True and a deadline warning."
+            "Allow partial publish in two scenarios: (a) --max-runtime-minutes "
+            "triggers an early exit between fundamentals chunks, or (b) the "
+            "official market-universe fetch fails and prior-week seeded "
+            "universe rows are available. The snapshot is force-published "
+            "even if the coverage gate would otherwise block. Skipped symbols "
+            "inherit the prior weekly bundle's data; the manifest records "
+            "partial_run=True with a deadline or stale_universe warning."
         ),
     )
     args = parser.parse_args()

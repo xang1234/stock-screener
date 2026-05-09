@@ -673,6 +673,244 @@ def test_build_weekly_reference_bundle_deadline_blocks_when_partial_disabled(
     assert publish_kwargs["coverage_stats"]["snapshot_symbols"] == 3
 
 
+def _patch_cn_dependencies(monkeypatch, *, raise_universe: bool, hybrid_failures: int = 0):
+    """Wire the supporting Asia-bundle services for stale-universe fallback tests."""
+
+    def fetch(market):
+        if raise_universe:
+            raise RuntimeError("AKShare CN spot disconnected")
+        return SimpleNamespace(
+            market=market,
+            source_name="cn_official",
+            snapshot_id="cn-2026-05-09",
+            snapshot_as_of="2026-05-09",
+            source_metadata={},
+            rows=(),
+        )
+
+    monkeypatch.setattr(
+        build_script,
+        "OfficialMarketUniverseSourceService",
+        lambda: SimpleNamespace(fetch_market_snapshot=fetch),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(
+            ingest_cn_snapshot_rows=lambda db, **kwargs: {
+                "added": 0,
+                "updated": 0,
+                "deactivated": 0,
+            }
+        ),
+    )
+
+    monkeypatch.setattr(
+        build_script,
+        "get_hybrid_fundamentals_service",
+        lambda: SimpleNamespace(
+            yfinance_delay_per_ticker=1.5,
+            fetch_fundamentals_batch=lambda symbols, **kwargs: {
+                symbol: {"market_cap": 1000.0, "sector": "Industrials"} for symbol in symbols
+            },
+            store_all_caches=lambda data, _cache, **_kwargs: {
+                "fundamentals_stored": len(data),
+                "persisted_symbols": len(data),
+                "failed_persistence_symbols": 0,
+                "failed": hybrid_failures,
+                "provider_error_counts": {},
+            },
+        ),
+    )
+
+
+def _make_cn_db_mock(active_rows: list[SimpleNamespace], *, seeded_count: int | None = None):
+    fake_query = MagicMock()
+    fake_query.filter.return_value.order_by.return_value.all.return_value = active_rows
+    fake_query.filter.return_value.count.return_value = (
+        seeded_count if seeded_count is not None else len(active_rows)
+    )
+    fake_db = MagicMock()
+    fake_db.query.return_value = fake_query
+    return fake_db
+
+
+def test_build_asia_bundle_falls_back_to_seeded_universe_when_official_fetch_fails(
+    monkeypatch, tmp_path, capsys
+):
+    """When AKShare listing fails and partial publish is on, reuse seeded rows."""
+    published_at = datetime(2026, 5, 9, 12, 10, 0)
+    active_rows = [
+        _make_universe_row("600000.SS"),
+        _make_universe_row("000001.SZ"),
+    ]
+    fake_db = _make_cn_db_mock(active_rows)
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    _patch_cn_dependencies(monkeypatch, raise_universe=True)
+
+    cached = {
+        "600000.SS": {"market_cap": 1000.0, "sector": "Industrials"},
+        "000001.SZ": {"market_cap": 1000.0, "sector": "Industrials"},
+    }
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_many=lambda symbols: cached),
+    )
+
+    publish_calls: list[dict[str, object]] = []
+    export_calls: list[dict[str, object]] = []
+    provider_snapshot_service = SimpleNamespace(
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": "row-hash",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: publish_calls.append(kwargs)
+        or {
+            "published": True,
+            "force_published": kwargs.get("force_publish", False),
+            "source_revision": "fundamentals_v1_cn:20260509121000",
+            "snapshot_key": kwargs["snapshot_key"],
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+            "coverage_thresholds": {
+                "market": "CN",
+                "active_coverage": 1.0,
+                "min_active_coverage": 0.70,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": 0.30,
+            },
+        },
+        get_published_run=lambda db, snapshot_key: type(
+            "Run",
+            (),
+            {
+                "published_at": published_at,
+                "created_at": published_at,
+                "source_revision": "fundamentals_v1_cn:20260509121000",
+            },
+        )(),
+        export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
+        or {"bundle_path": str(kwargs["output_path"])},
+    )
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "CN",
+            "--output-dir",
+            str(tmp_path),
+            "--allow-partial-publish",
+        ],
+    )
+
+    assert build_script.main() == 0
+
+    publish_kwargs = publish_calls[0]
+    assert publish_kwargs["force_publish"] is True
+    assert publish_kwargs["coverage_stats"]["stale_universe"] is True
+    assert publish_kwargs["coverage_stats"]["partial_run"] is True
+    stale_warning = next(
+        (w for w in publish_kwargs["warnings"] if "Official CN universe fetch failed" in w),
+        None,
+    )
+    assert stale_warning is not None, publish_kwargs["warnings"]
+    assert "AKShare CN spot disconnected" in stale_warning
+    assert export_calls, "Bundle export should still run after a stale-universe fallback"
+
+    stdout = capsys.readouterr().out
+    assert "[universe] CN official fetch failed" in stdout
+    assert "falling back to 2 seeded prior-week rows" in stdout
+
+
+def test_build_asia_bundle_reraises_when_no_seeded_universe_rows(monkeypatch, tmp_path):
+    """If AKShare fails AND no prior-week rows are seeded, surface the original error."""
+    fake_db = _make_cn_db_mock([], seeded_count=0)
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    _patch_cn_dependencies(monkeypatch, raise_universe=True)
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_many=lambda symbols: {}),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            build_market_snapshot_row=lambda **kwargs: {},
+            publish_market_snapshot_run=lambda db, **kwargs: {"published": False, "warnings": []},
+        ),
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "CN",
+            "--output-dir",
+            str(tmp_path),
+            "--allow-partial-publish",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="AKShare CN spot disconnected"):
+        build_script.main()
+
+
+def test_build_asia_bundle_reraises_when_partial_publish_disabled(monkeypatch, tmp_path):
+    """Without --allow-partial-publish, an AKShare failure must abort the run."""
+    active_rows = [_make_universe_row("600000.SS")]
+    fake_db = _make_cn_db_mock(active_rows)
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    _patch_cn_dependencies(monkeypatch, raise_universe=True)
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_many=lambda symbols: {}),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            build_market_snapshot_row=lambda **kwargs: {},
+            publish_market_snapshot_run=lambda db, **kwargs: {"published": False, "warnings": []},
+        ),
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "CN",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="AKShare CN spot disconnected"):
+        build_script.main()
+
+
 def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_path, capsys):
     bundle_path = tmp_path / "weekly-reference.json.gz"
     bundle_path.write_bytes(b"bundle")
