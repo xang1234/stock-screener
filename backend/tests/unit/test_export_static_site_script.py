@@ -678,6 +678,148 @@ def test_refresh_static_daily_prices_filters_to_selected_market(monkeypatch):
     assert stored_batches == [{"symbols": ["0700.HK"], "also_store_db": True}]
 
 
+def test_run_daily_refresh_reenriches_ibd_metadata_after_group_rank_backfill(monkeypatch):
+    """Group ranks for ``as_of_date`` are backfilled by ``_ensure_group_rank_history``
+    only after ``build_daily_snapshot`` has already run its inner enrichment.
+    The driver must re-run ``_enrich_feature_run_with_ibd_metadata`` so the
+    static export reads up-to-date ``ibd_group_rank`` values from
+    ``details_json``."""
+
+    events: list[str] = []
+
+    def make_task(name: str):
+        def run(**kwargs):
+            events.append(name)
+            return {"task": name, "kwargs": kwargs, "run_id": 77, "status": "published"}
+
+        return SimpleNamespace(run=run)
+
+    enrich_calls: list[dict] = []
+
+    def fake_enrich(*, feature_run_id, ranking_date, **_kwargs):
+        events.append(f"enrich:{feature_run_id}")
+        enrich_calls.append({"feature_run_id": feature_run_id, "ranking_date": ranking_date})
+        return {"run_id": feature_run_id, "updated_rows": 3, "missing_rank_rows": 0}
+
+    group_rank_calls: list[dict] = []
+
+    def fake_ensure_group_rank_history(*, as_of_date, market):
+        events.append(f"group_rank:{market}")
+        group_rank_calls.append({"as_of_date": as_of_date, "market": market})
+        return {"status": "completed", "market": market, "missing_dates": 1}
+
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
+    monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
+    monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        fake_enrich,
+    )
+    monkeypatch.setattr(export_script, "_ensure_group_rank_history", fake_ensure_group_rank_history)
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, warnings = export_script._run_daily_refresh(market="US")  # noqa: SLF001 - intentional unit test coverage
+
+    assert warnings == []
+    # Order matters: the re-enrich step must run *after* the group-rank
+    # backfill (otherwise it would re-read the same empty IBDGroupRank rows
+    # build_daily_snapshot already saw).
+    assert events == [
+        "universe_refresh",
+        "fundamentals_refresh",
+        "feature_snapshot",
+        "group_rank:US",
+        "enrich:77",
+    ]
+    assert group_rank_calls == [{"as_of_date": date(2026, 4, 2), "market": "US"}]
+    assert enrich_calls == [{"feature_run_id": 77, "ranking_date": date(2026, 4, 2)}]
+    assert results["ibd_metadata_refresh"]["US"] == {
+        "run_id": 77,
+        "updated_rows": 3,
+        "missing_rank_rows": 0,
+    }
+
+
+def test_run_daily_refresh_skips_reenrich_when_snapshot_not_ready(monkeypatch):
+    enrich_calls: list[dict] = []
+
+    def fake_enrich(**kwargs):
+        enrich_calls.append(kwargs)
+        return {"updated_rows": 0}
+
+    def build_snapshot(**kwargs):
+        if kwargs["market"] == "US":
+            return {"status": "failed", "run_id": 91}
+        return {"status": "published", "run_id": 77, "kwargs": kwargs}
+
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        fake_enrich,
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_group_rank_history",
+        lambda **_kwargs: {"status": "completed"},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market=None: {"task": "price_refresh"},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", SimpleNamespace(run=lambda: {"task": "universe_refresh"}))
+    monkeypatch.setattr(
+        fundamentals_tasks,
+        "refresh_all_fundamentals",
+        SimpleNamespace(run=lambda: {"task": "fundamentals_refresh"}),
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, _warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    # US returned status "failed" → not snapshot_ready → re-enrich must skip it
+    assert results["ibd_metadata_refresh"]["US"]["status"] == "skipped"
+    assert results["ibd_metadata_refresh"]["US"]["reason"] == "snapshot_not_ready"
+    # The other markets returned no status but a run_id, so they ARE re-enriched.
+    other_markets = [m for m in export_script.STATIC_EXPORT_MARKETS if m != "US"]
+    assert all(
+        results["ibd_metadata_refresh"][m]["updated_rows"] == 0
+        for m in other_markets
+    )
+    assert {call["feature_run_id"] for call in enrich_calls} == {77}
+
+
 def test_run_daily_refresh_warns_when_non_default_market_snapshot_is_not_publish_ready(monkeypatch):
     def build_snapshot(**kwargs):
         if kwargs["market"] == "HK":

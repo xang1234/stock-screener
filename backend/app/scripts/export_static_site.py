@@ -383,6 +383,7 @@ def _run_daily_refresh(
     hydrate_published_snapshot: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
+        _enrich_feature_run_with_ibd_metadata,
         build_daily_snapshot,
     )
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
@@ -456,6 +457,36 @@ def _run_daily_refresh(
                 market=selected_market,
             )
         results["group_rank_history_backfill"] = group_rank_history
+
+        # Re-enrich feature runs after the IBDGroupRank backfill above.
+        # build_daily_snapshot's inner enrichment runs *before* group ranks
+        # for `as_of_date` are populated, so US rows would otherwise carry
+        # `details_json["ibd_group_rank"] = None`.
+        ibd_metadata_refresh: dict[str, Any] = {}
+        for selected_market in selected_markets:
+            snapshot = feature_snapshots.get(selected_market, {})
+            if not _snapshot_ready(snapshot):
+                ibd_metadata_refresh[selected_market] = {
+                    "status": "skipped",
+                    "market": selected_market,
+                    "reason": "snapshot_not_ready",
+                }
+                continue
+            feature_run_id = (
+                snapshot.get("run_id") or snapshot.get("existing_run_id")
+            )
+            if feature_run_id is None:
+                ibd_metadata_refresh[selected_market] = {
+                    "status": "skipped",
+                    "market": selected_market,
+                    "reason": "no_run_id",
+                }
+                continue
+            ibd_metadata_refresh[selected_market] = _enrich_feature_run_with_ibd_metadata(
+                feature_run_id=feature_run_id,
+                ranking_date=as_of_date,
+            )
+        results["ibd_metadata_refresh"] = ibd_metadata_refresh
 
         for snapshot_market, snapshot in feature_snapshots.items():
             if snapshot_market == STATIC_DEFAULT_MARKET:
