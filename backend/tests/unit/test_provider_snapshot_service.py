@@ -251,6 +251,36 @@ def test_create_snapshot_run_uses_market_specific_thresholds_for_hk(monkeypatch)
     db.close()
 
 
+def test_coverage_gate_resolves_thresholds_for_every_weekly_reference_market():
+    """Regression: ensure every market in WEEKLY_REFERENCE_MARKETS has the
+    pair of ``provider_snapshot_min_active_coverage_<m>`` /
+    ``provider_snapshot_max_missing_ratio_<m>`` settings defined.
+
+    ``_coverage_gate`` reads these via plain ``getattr`` (no default), so a
+    missing pair raises ``AttributeError`` at runtime — surfaced as a hard
+    failure of ``create_snapshot_run`` / ``publish_market_snapshot_run``.
+    Adding a market to WEEKLY_REFERENCE_MARKETS without adding the matching
+    settings is what regressed DE in the first cut of this PR.
+    """
+    from app.services.provider_snapshot_service import WEEKLY_REFERENCE_MARKETS
+
+    service = _make_provider_snapshot_service()
+    coverage_stats = {
+        "active_symbols": 100,
+        "covered_active_symbols": 80,
+        "missing_active_symbols": 20,
+    }
+    for market in WEEKLY_REFERENCE_MARKETS:
+        ok, warnings, thresholds = service._coverage_gate(coverage_stats, market=market)
+        assert thresholds["market"] == market, market
+        assert isinstance(thresholds["min_active_coverage"], float), market
+        assert isinstance(thresholds["max_missing_ratio"], float), market
+        # warnings list may be non-empty if the synthetic stats fall below
+        # the market's threshold — that's not the regression we're guarding.
+        assert isinstance(ok, bool)
+        assert isinstance(warnings, list)
+
+
 def test_create_snapshot_run_uses_market_specific_thresholds_for_kr(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
