@@ -153,7 +153,17 @@ def _merge_fundamentals_stats(
             bucket[key] = int(bucket.get(key, 0) or 0) + int(value or 0)
 
 
-def _published_run_is_partial(provider_snapshot_service: Any, db, snapshot_key: str) -> bool:
+def _as_nonnegative_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(parsed, 0)
+
+
+def _published_run_is_incomplete_partial_seed(
+    provider_snapshot_service: Any, db, snapshot_key: str
+) -> bool:
     published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     if published_run is None or not published_run.coverage_stats_json:
         return False
@@ -161,7 +171,23 @@ def _published_run_is_partial(provider_snapshot_service: Any, db, snapshot_key: 
         coverage = json.loads(published_run.coverage_stats_json)
     except (TypeError, ValueError):
         return False
-    return bool(coverage.get("partial_run"))
+    if not coverage.get("partial_run"):
+        return False
+
+    missing_active_symbols = _as_nonnegative_int(coverage.get("missing_active_symbols"))
+    if missing_active_symbols is not None:
+        return missing_active_symbols > 0
+
+    active_symbols = _as_nonnegative_int(coverage.get("active_symbols"))
+    snapshot_symbols = _as_nonnegative_int(coverage.get("snapshot_symbols"))
+    if active_symbols is not None and snapshot_symbols is not None:
+        return snapshot_symbols < active_symbols
+
+    covered_active_symbols = _as_nonnegative_int(coverage.get("covered_active_symbols"))
+    if active_symbols is not None and covered_active_symbols is not None:
+        return covered_active_symbols < active_symbols
+
+    return False
 
 
 def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
@@ -533,7 +559,7 @@ def _build_asia_bundle(
     symbols = [row.symbol for row in active_rows]
     market_by_symbol = {row.symbol: market for row in active_rows}
     seeded_symbols: list[str] = []
-    if resume_partial_seed and _published_run_is_partial(
+    if resume_partial_seed and _published_run_is_incomplete_partial_seed(
         provider_snapshot_service, db, snapshot_key
     ):
         seeded_payloads = fundamentals_cache.get_many(symbols)
@@ -558,7 +584,8 @@ def _build_asia_bundle(
         chunk_size=fetch_chunk_size,
         max_runtime_seconds=max_runtime_seconds,
     )
-    skipped_symbols = [s for s in fetch_symbols if s not in set(attempted_symbols)]
+    attempted_symbol_set = set(attempted_symbols)
+    skipped_symbols = [s for s in fetch_symbols if s not in attempted_symbol_set]
     print(f"Fundamentals refresh complete: {fundamentals_stats}", flush=True)
 
     cached_fundamentals = fundamentals_cache.get_many(symbols)
