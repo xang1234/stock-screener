@@ -328,6 +328,8 @@ class Settings(BaseSettings):
     cache_warm_minute_cn: int = 30
     cache_warm_hour_ca: int = 17
     cache_warm_minute_ca: int = 30
+    cache_warm_hour_de: int = 18
+    cache_warm_minute_de: int = 0
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
     # entirely (beat schedule skips it; its worker can be stopped).
@@ -428,7 +430,7 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in',
         'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw',
-        'cache_warm_hour_cn', 'cache_warm_hour_ca'
+        'cache_warm_hour_cn', 'cache_warm_hour_ca', 'cache_warm_hour_de'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -439,7 +441,7 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in',
         'cache_warm_minute_jp', 'cache_warm_minute_kr', 'cache_warm_minute_tw',
-        'cache_warm_minute_cn', 'cache_warm_minute_ca'
+        'cache_warm_minute_cn', 'cache_warm_minute_ca', 'cache_warm_minute_de'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -616,6 +618,7 @@ class Settings(BaseSettings):
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
             "CN": (self.cache_warm_hour_cn, self.cache_warm_minute_cn),
             "CA": (self.cache_warm_hour_ca, self.cache_warm_minute_ca),
+            "DE": (self.cache_warm_hour_de, self.cache_warm_minute_de),
         }
         if m not in mapping:
             raise ValueError(f"No cache warm schedule for market {market!r}")

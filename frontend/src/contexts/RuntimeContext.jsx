@@ -95,6 +95,16 @@ export const DEFAULT_MARKET_CATALOG = {
       indexes: ['TSX_COMPOSITE'],
       capabilities: {},
     },
+    {
+      code: 'DE',
+      label: 'Germany',
+      currency: 'EUR',
+      timezone: 'Europe/Berlin',
+      calendar_id: 'XETR',
+      exchanges: ['XETR', 'XETRA', 'XFRA', 'FRA', 'FWB'],
+      indexes: ['DAX', 'MDAX', 'SDAX'],
+      capabilities: {},
+    },
   ],
 };
 

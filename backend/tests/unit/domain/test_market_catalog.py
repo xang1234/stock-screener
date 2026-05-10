@@ -47,6 +47,7 @@ def test_market_catalog_runtime_payload_is_frontend_ready() -> None:
         "TW",
         "CN",
         "CA",
+        "DE",
     ]
     assert payload["markets"][0] == {
         "code": "US",

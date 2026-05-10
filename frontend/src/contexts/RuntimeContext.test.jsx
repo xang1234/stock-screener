@@ -263,7 +263,7 @@ describe('RuntimeProvider', () => {
       expect(queryClient.getQueryData(['appCapabilities'])?.supported_markets).toEqual(
         DEFAULT_CAPABILITIES.supported_markets
       );
-      expect(screen.getByTestId('supported-markets')).toHaveTextContent('US,HK,IN,JP,KR,TW,CN,CA');
+      expect(screen.getByTestId('supported-markets')).toHaveTextContent('US,HK,IN,JP,KR,TW,CN,CA,DE');
     });
   });
 });
