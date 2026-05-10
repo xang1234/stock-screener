@@ -101,9 +101,10 @@ MARKET_KR = "KR"
 MARKET_TW = "TW"
 MARKET_CN = "CN"
 MARKET_CA = "CA"
+MARKET_DE = "DE"
 
 KNOWN_MARKETS: FrozenSet[str] = frozenset(
-    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA}
+    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA, MARKET_DE}
 )
 
 DEFAULT_MARKET = MARKET_US
@@ -142,6 +143,10 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # alphavantage free tier likewise excludes Canadian listings. yfinance
     # natively supports the .TO and .V suffixes produced by SecurityMasterService.
     MARKET_CA: (PROVIDER_YFINANCE,),
+    # DE: yfinance only. Finviz screener does not cover Xetra/Frankfurt; the
+    # alphavantage free tier likewise excludes German listings. yfinance
+    # natively supports the .DE and .F suffixes produced by SecurityMasterService.
+    MARKET_DE: (PROVIDER_YFINANCE,),
 }
 
 

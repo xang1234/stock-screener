@@ -8,7 +8,7 @@ from app.domain.markets.catalog import MarketCatalogError, get_market_catalog
 def test_market_catalog_lists_supported_markets_in_runtime_order() -> None:
     catalog = get_market_catalog()
 
-    assert catalog.supported_market_codes() == ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA"]
+    assert catalog.supported_market_codes() == ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"]
 
 
 def test_market_catalog_entry_contains_stable_market_facts() -> None:
@@ -47,6 +47,7 @@ def test_market_catalog_runtime_payload_is_frontend_ready() -> None:
         "TW",
         "CN",
         "CA",
+        "DE",
     ]
     assert payload["markets"][0] == {
         "code": "US",

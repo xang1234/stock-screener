@@ -1,4 +1,10 @@
-"""Shared market-taxonomy loader for US/HK/IN/JP/KR/TW/CN/CA group classifications."""
+"""Shared market-taxonomy loader for US/HK/IN/JP/KR/TW/CN/CA/DE group classifications.
+
+Canada (CA) and Germany (DE) register empty buckets: neither ships with a
+committed taxonomy CSV at launch (no IBD-style group rankings). The empty
+buckets keep ``groups_for_market("CA")`` / ``groups_for_market("DE")``
+returning empty lists rather than raising.
+"""
 
 from __future__ import annotations
 
@@ -82,6 +88,8 @@ class MarketTaxonomyService:
             "KR": {},
             "TW": {},
             "CN": {},
+            "CA": {},
+            "DE": {},
         }
         self._loaded_row_counts: dict[str, int] = {
             "US": 0,
@@ -91,6 +99,8 @@ class MarketTaxonomyService:
             "KR": 0,
             "TW": 0,
             "CN": 0,
+            "CA": 0,
+            "DE": 0,
         }
 
     @staticmethod
@@ -121,8 +131,8 @@ class MarketTaxonomyService:
         return best_candidate
 
     def refresh(self) -> None:
-        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}, "CN": {}, "CA": {}}
-        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0, "CN": 0, "CA": 0}
+        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}, "CN": {}, "CA": {}, "DE": {}}
+        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0, "CN": 0, "CA": 0, "DE": 0}
         try:
             self._load_us()
             self._load_hk()

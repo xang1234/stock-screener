@@ -21,6 +21,7 @@ on:
           - TW
           - CN
           - CA
+          - DE
       max_runtime_minutes:
         description: >-
           Per-market deadline in minutes for the fundamentals refresh. Blank
@@ -93,7 +94,7 @@ jobs:
         # that variant; otherwise (scheduled cron, or dispatch with market=all)
         # run the full matrix. ``github.event.inputs.market`` is null on
         # scheduled runs, so we coerce to '' before the equality check.
-        market: ${{ fromJSON((github.event.inputs.market || 'all') != 'all' && format('["{0}"]', github.event.inputs.market) || '["US","HK","IN","JP","KR","TW","CN","CA"]') }}
+        market: ${{ fromJSON((github.event.inputs.market || 'all') != 'all' && format('["{0}"]', github.event.inputs.market) || '["US","HK","IN","JP","KR","TW","CN","CA","DE"]') }}
     services:
       postgres:
         image: postgres:16-alpine

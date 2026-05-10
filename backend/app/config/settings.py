@@ -328,6 +328,8 @@ class Settings(BaseSettings):
     cache_warm_minute_cn: int = 30
     cache_warm_hour_ca: int = 17
     cache_warm_minute_ca: int = 30
+    cache_warm_hour_de: int = 18
+    cache_warm_minute_de: int = 0
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
     # entirely (beat schedule skips it; its worker can be stopped).
@@ -383,6 +385,7 @@ class Settings(BaseSettings):
     provider_snapshot_min_active_coverage_tw: float = 0.70
     provider_snapshot_min_active_coverage_cn: float = 0.70
     provider_snapshot_min_active_coverage_ca: float = 0.70
+    provider_snapshot_min_active_coverage_de: float = 0.70
     provider_snapshot_max_missing_ratio_us: float = 0.005
     provider_snapshot_max_missing_ratio_hk: float = 0.30
     provider_snapshot_max_missing_ratio_in: float = 0.40
@@ -391,6 +394,7 @@ class Settings(BaseSettings):
     provider_snapshot_max_missing_ratio_tw: float = 0.30
     provider_snapshot_max_missing_ratio_cn: float = 0.30
     provider_snapshot_max_missing_ratio_ca: float = 0.30
+    provider_snapshot_max_missing_ratio_de: float = 0.30
     market_data_source_mode: str = "github_first"  # github_first | live_only
     github_data_repository: str = "xang1234/stock-screener"
     github_data_api_base: str = "https://api.github.com"
@@ -428,7 +432,7 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in',
         'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw',
-        'cache_warm_hour_cn', 'cache_warm_hour_ca'
+        'cache_warm_hour_cn', 'cache_warm_hour_ca', 'cache_warm_hour_de'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -439,7 +443,7 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in',
         'cache_warm_minute_jp', 'cache_warm_minute_kr', 'cache_warm_minute_tw',
-        'cache_warm_minute_cn', 'cache_warm_minute_ca'
+        'cache_warm_minute_cn', 'cache_warm_minute_ca', 'cache_warm_minute_de'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -493,6 +497,7 @@ class Settings(BaseSettings):
         'provider_snapshot_min_active_coverage_tw',
         'provider_snapshot_min_active_coverage_cn',
         'provider_snapshot_min_active_coverage_ca',
+        'provider_snapshot_min_active_coverage_de',
         'provider_snapshot_max_missing_ratio_us',
         'provider_snapshot_max_missing_ratio_hk',
         'provider_snapshot_max_missing_ratio_in',
@@ -501,6 +506,7 @@ class Settings(BaseSettings):
         'provider_snapshot_max_missing_ratio_tw',
         'provider_snapshot_max_missing_ratio_cn',
         'provider_snapshot_max_missing_ratio_ca',
+        'provider_snapshot_max_missing_ratio_de',
     )
     @classmethod
     def validate_provider_snapshot_ratios(cls, v: float) -> float:
@@ -616,6 +622,7 @@ class Settings(BaseSettings):
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
             "CN": (self.cache_warm_hour_cn, self.cache_warm_minute_cn),
             "CA": (self.cache_warm_hour_ca, self.cache_warm_minute_ca),
+            "DE": (self.cache_warm_hour_de, self.cache_warm_minute_de),
         }
         if m not in mapping:
             raise ValueError(f"No cache warm schedule for market {market!r}")

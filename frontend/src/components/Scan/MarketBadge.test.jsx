@@ -9,8 +9,8 @@ describe('MarketBadge', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders the market code for US/HK/IN/JP/KR/TW/CN/CA', () => {
-    for (const code of ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA']) {
+  it('renders the market code for US/HK/IN/JP/KR/TW/CN/CA/DE', () => {
+    for (const code of ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE']) {
       const { unmount } = renderWithProviders(<MarketBadge market={code} />);
       expect(screen.getByTestId(`market-badge-${code}`)).toBeInTheDocument();
       expect(screen.getByText(code)).toBeInTheDocument();

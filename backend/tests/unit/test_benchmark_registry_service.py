@@ -7,7 +7,7 @@ def test_registry_versioned_mapping_exists_for_all_markets():
     table = benchmark_registry.mapping_table()
 
     assert benchmark_registry.TABLE_VERSION == "2026-05-09.v1"
-    assert set(table.keys()) == {"US", "HK", "IN", "JP", "KR", "TW", "CN", "CA"}
+    assert set(table.keys()) == {"US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"}
 
 
 def test_supported_benchmark_markets_match_market_registry():

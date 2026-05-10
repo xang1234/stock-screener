@@ -34,6 +34,7 @@ frontend/public/static-data/
 !data/india-deep.csv
 !data/kabutan_themes_en.csv
 !data/taiwan-deep.csv
+!backend/data/de_dax40_constituents.csv
 *.db
 *.db-shm
 *.db-wal

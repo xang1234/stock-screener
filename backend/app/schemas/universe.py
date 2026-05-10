@@ -61,6 +61,9 @@ class IndexName(str, Enum):
     HSI = "HSI"
     NIKKEI225 = "NIKKEI225"
     TAIEX = "TAIEX"
+    DAX = "DAX"
+    MDAX = "MDAX"
+    SDAX = "SDAX"
 
 
 class UniverseDefinition(BaseModel):

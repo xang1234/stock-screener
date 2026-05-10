@@ -55,7 +55,7 @@ STATIC_CHART_TOP_N_GROUPS = 50
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
-STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA")
+STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE")
 STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
     "US": "United States",
@@ -66,6 +66,7 @@ STATIC_MARKET_DISPLAY = {
     "TW": "Taiwan",
     "CN": "China A-shares",
     "CA": "Canada",
+    "DE": "Germany",
 }
 STATIC_GROUP_HISTORY_RUNS = 40
 STATIC_GROUP_CHANGE_OFFSETS = {
@@ -134,6 +135,13 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "RY.TO", "display_name": "Royal Bank of Canada", "currency": "CAD"},
         {"symbol": "SHOP.TO", "display_name": "Shopify", "currency": "CAD"},
         {"symbol": "CNR.TO", "display_name": "Canadian National Railway", "currency": "CAD"},
+    ),
+    "DE": (
+        {"symbol": "^GDAXI", "display_name": "DAX", "currency": "EUR"},
+        {"symbol": "EXS1.DE", "display_name": "iShares DAX UCITS ETF", "currency": "EUR"},
+        {"symbol": "SAP.DE", "display_name": "SAP", "currency": "EUR"},
+        {"symbol": "SIE.DE", "display_name": "Siemens", "currency": "EUR"},
+        {"symbol": "ALV.DE", "display_name": "Allianz", "currency": "EUR"},
     ),
 }
 

@@ -169,6 +169,24 @@ MARKET_CATALOG = MarketCatalog(
             indexes=("TSX_COMPOSITE",),
             capabilities=FULL_CAPABILITIES,
         ),
+        MarketCatalogEntry(
+            code="DE",
+            label="Germany",
+            currency="EUR",
+            timezone="Europe/Berlin",
+            calendar_id="XETR",
+            exchanges=("XETR", "XETRA", "XFRA", "FRA", "FWB"),
+            indexes=("DAX", "MDAX", "SDAX"),
+            capabilities=MarketCapabilities(
+                benchmark=True,
+                breadth=True,
+                fundamentals=True,
+                group_rankings=False,
+                feature_snapshot=True,
+                official_universe=True,
+                finviz_screening=False,
+            ),
+        ),
     ]
 )
 

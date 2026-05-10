@@ -18,7 +18,7 @@ const runtimeState = {
   uiSnapshots: { groups: false },
   primaryMarket: 'HK',
   enabledMarkets: ['HK', 'US'],
-  supportedMarkets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA'],
+  supportedMarkets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE'],
 };
 
 vi.mock('../api/groups', () => ({
@@ -74,7 +74,7 @@ describe('GroupRankingsPage', () => {
     runtimeState.uiSnapshots = { groups: false };
     runtimeState.primaryMarket = 'HK';
     runtimeState.enabledMarkets = ['HK', 'US'];
-    runtimeState.supportedMarkets = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA'];
+    runtimeState.supportedMarkets = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE'];
     getGroupsBootstrap.mockReset();
     getCurrentRankings.mockReset();
     getRankMovers.mockReset();
