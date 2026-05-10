@@ -43,6 +43,17 @@ on:
           - default
           - enable
           - disable
+      cn_resume_partial_seed:
+        description: >-
+          CN only: continue an initial partial bootstrap by skipping symbols
+          already present in the partial bundle. Keep disabled for ordinary
+          weekly refreshes so stale prior-bundle rows are refreshed.
+        required: false
+        type: choice
+        default: disable
+        options:
+          - disable
+          - enable
 
 concurrency:
   group: weekly-reference-data
@@ -176,10 +187,13 @@ jobs:
           # Per-market wall-clock budget defaults for the fundamentals refresh.
           # CN is the slow path: ~5,500 sequential AKShare+yfinance round-trips
           # can blow past 6h, so we leave ~50 min headroom under the 350-min
-          # job cap and opt in to partial publish. Initial bootstrap runs can
-          # publish partial bundles, and later CN runs resume from them.
+          # job cap and opt in to partial publish. Initial bootstrap
+          # continuation requires explicitly enabling cn_resume_partial_seed on
+          # a manual CN run so ordinary weekly refreshes do not skip stale
+          # prior-bundle rows.
           INPUT_RUNTIME: ${{ github.event.inputs.max_runtime_minutes }}
           INPUT_PARTIAL: ${{ github.event.inputs.allow_partial_publish }}
+          INPUT_CN_RESUME_PARTIAL_SEED: ${{ github.event.inputs.cn_resume_partial_seed }}
           MATRIX_MARKET: ${{ matrix.market }}
         run: |
           if [ -n "$INPUT_RUNTIME" ]; then
@@ -206,22 +220,24 @@ jobs:
               ;;
           esac
 
+          RESUME=""
+          if [ "$MATRIX_MARKET" = "CN" ] && [ "$INPUT_CN_RESUME_PARTIAL_SEED" = "enable" ]; then
+            RESUME="--resume-partial-seed"
+          fi
+
           echo "max_runtime_minutes=$RUNTIME" >> "$GITHUB_OUTPUT"
           echo "partial_flag=$PARTIAL" >> "$GITHUB_OUTPUT"
-          echo "Resolved build inputs for $MATRIX_MARKET: runtime=$RUNTIME partial='$PARTIAL'"
+          echo "resume_flag=$RESUME" >> "$GITHUB_OUTPUT"
+          echo "Resolved build inputs for $MATRIX_MARKET: runtime=$RUNTIME partial='$PARTIAL' resume='$RESUME'"
 
       - name: Build weekly reference bundle
         run: |
           cd backend
-          RESUME_FLAG=""
-          if [ "${{ matrix.market }}" = "CN" ]; then
-            RESUME_FLAG="--resume-partial-seed"
-          fi
           python -m app.scripts.build_weekly_reference_bundle \
             --market "${{ matrix.market }}" \
             --output-dir /tmp/weekly-reference \
             --max-runtime-minutes "${{ steps.build_inputs.outputs.max_runtime_minutes }}" \
-            $RESUME_FLAG \
+            ${{ steps.build_inputs.outputs.resume_flag }} \
             ${{ steps.build_inputs.outputs.partial_flag }}
 
       - name: Upload weekly reference assets
