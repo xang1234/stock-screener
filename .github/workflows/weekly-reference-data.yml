@@ -21,6 +21,7 @@ on:
           - TW
           - CN
           - CA
+          - DE
       max_runtime_minutes:
         description: >-
           Per-market deadline in minutes for the fundamentals refresh. Blank
