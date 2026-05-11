@@ -58,7 +58,7 @@ async def test_get_twitter_session_status_reports_official_api_mode(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["authenticated"] is True
+    assert payload["authenticated"] is False
     assert payload["provider"] == "official_x_api"
     assert payload["status_code"] == "configured"
 

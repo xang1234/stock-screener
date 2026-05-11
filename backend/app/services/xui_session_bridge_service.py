@@ -71,10 +71,10 @@ class XUISessionBridgeService:
         if _twitter_provider() != "xui":
             configured = bool((settings.twitter_bearer_token or "").strip())
             return TwitterSessionStatus(
-                authenticated=configured,
+                authenticated=False,
                 status_code="configured" if configured else "missing_bearer_token",
                 message=(
-                    "Official X API bearer token is configured."
+                    "Official X API bearer token is configured but has not been validated."
                     if configured
                     else "TWITTER_BEARER_TOKEN is required for official X API ingestion."
                 ),
