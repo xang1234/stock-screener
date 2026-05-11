@@ -1481,9 +1481,9 @@ def test_fetch_de_snapshot_falls_back_on_http_error(monkeypatch, tmp_path):
     assert snapshot.snapshot_id.startswith("de-csv-fallback-")
 
 
-def test_fetch_de_snapshot_falls_back_when_baseline_symbol_missing(monkeypatch, tmp_path):
-    """A live universe that omits curated DAX names triggers fallback so the
-    reconciler doesn't deactivate known positions."""
+def test_fetch_de_snapshot_publishes_live_when_baseline_symbol_missing(monkeypatch, tmp_path):
+    """A healthy live Xetra universe should not collapse to the tiny curated
+    fallback CSV just because one seed symbol is no longer present."""
     from app.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
@@ -1492,7 +1492,7 @@ def test_fetch_de_snapshot_falls_back_when_baseline_symbol_missing(monkeypatch, 
         app_settings, "de_universe_fallback_csv_path",
         _write_de_baseline_csv(tmp_path, ["SAP.DE", "ALV.DE"]),
     )
-    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 1)
 
     csv_bytes = _xetra_csv_content([
         _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", WKN="000716460", Instrument="SAP SE"),
@@ -1502,12 +1502,12 @@ def test_fetch_de_snapshot_falls_back_when_baseline_symbol_missing(monkeypatch, 
 
     snapshot = service.fetch_de_snapshot()
 
-    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
-    live_error = snapshot.source_metadata["fetch_errors"]["live_http"]
-    assert "missing 1 curated baseline symbols" in live_error
-    assert "ALV.DE" in live_error
-    # Bundle now reflects the curated baseline, not the truncated live result.
-    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE"}
+    assert snapshot.source_name == "dbg_official"
+    assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    assert snapshot.source_metadata["baseline_missing_symbols"] == ["ALV.DE"]
+    assert snapshot.source_metadata["baseline_missing_count"] == 1
+    assert snapshot.source_metadata["baseline_status"] == "missing_symbols"
+    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE"}
 
 
 def test_fetch_de_snapshot_falls_back_when_universe_too_small(monkeypatch, tmp_path):

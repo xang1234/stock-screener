@@ -200,11 +200,9 @@ class Settings(BaseSettings):
     )
     # Minimum live-universe row count before the snapshot is considered
     # publishable. The Xetra reference CSV typically ships ~870 Common Stock
-    # rows; setting this to 200 lets a partial Xetra outage (e.g. status
-    # filters tightening) still publish while catching catastrophic universe
-    # shrinkage. Set to 0 to disable the floor (the CSV-superset check still
-    # applies regardless).
-    de_live_min_universe_size: int = 200
+    # rows; setting this near 800 catches catastrophic shrinkage without
+    # rejecting ordinary listing churn. Set to 0 to disable the floor.
+    de_live_min_universe_size: int = 800
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
     # Per-market rate budget overrides. Each value is in requests-per-second
