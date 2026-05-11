@@ -39,6 +39,31 @@ def test_universe_source_timeout_seconds_cn_must_be_positive_when_set() -> None:
         raise AssertionError("Expected invalid universe_source_timeout_seconds_cn to fail")
 
 
+def test_x_ingest_provider_is_normalized_and_validated() -> None:
+    assert Settings(x_ingest_provider="XUI").x_ingest_provider == "xui"
+    assert Settings(x_ingest_provider="").x_ingest_provider == "official"
+
+    try:
+        Settings(x_ingest_provider="selenium")
+    except ValueError as exc:
+        assert "x_ingest_provider must be 'official' or 'xui'" in str(exc)
+    else:
+        raise AssertionError("Expected invalid x_ingest_provider to fail")
+
+
+def test_x_api_numeric_settings_must_be_positive() -> None:
+    for kwargs in (
+        {"x_api_max_pages_per_source": 0},
+        {"x_api_max_results_per_page": 0},
+    ):
+        try:
+            Settings(**kwargs)
+        except ValueError as exc:
+            assert "Official X API numeric settings must be > 0" in str(exc)
+        else:
+            raise AssertionError(f"Expected invalid settings to fail: {kwargs}")
+
+
 def test_universe_source_timeout_for_uses_cn_override() -> None:
     settings = Settings(
         universe_source_timeout_seconds=60,

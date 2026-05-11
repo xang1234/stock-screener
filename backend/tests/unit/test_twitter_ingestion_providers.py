@@ -48,7 +48,7 @@ def test_provider_router_rejects_invalid_provider(monkeypatch: pytest.MonkeyPatc
 
 def test_official_fetcher_maps_user_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "twitter_bearer_token", "token")
-    monkeypatch.setattr(settings, "xui_limit_per_source", 50)
+    monkeypatch.setattr(settings, "x_api_max_results_per_page", 50)
     calls: list[tuple[str, dict[str, object]]] = []
 
     class FakeResponse:
@@ -110,7 +110,7 @@ def test_official_fetcher_maps_user_timeline(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_official_fetcher_maps_list_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "twitter_bearer_token", "token")
-    monkeypatch.setattr(settings, "xui_limit_per_source", 20)
+    monkeypatch.setattr(settings, "x_api_max_results_per_page", 20)
 
     class FakeResponse:
         status_code = 200
@@ -173,7 +173,7 @@ def test_official_fetcher_raises_on_rate_limit(monkeypatch: pytest.MonkeyPatch) 
 
 def test_official_fetcher_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "twitter_bearer_token", "token")
-    monkeypatch.setattr(settings, "xui_limit_per_source", 50)
+    monkeypatch.setattr(settings, "x_api_max_results_per_page", 50)
     monkeypatch.setattr(settings, "x_api_max_pages_per_source", 5)
     timeline_params: list[dict[str, object]] = []
 
@@ -226,7 +226,10 @@ def test_official_fetcher_follows_pagination(monkeypatch: pytest.MonkeyPatch) ->
     assert all(row["_twitter_since_id"] == "101" for row in rows)
 
 
-def test_official_fetcher_raises_when_page_cap_would_skip_data(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_official_fetcher_returns_partial_rows_when_page_cap_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     monkeypatch.setattr(settings, "twitter_bearer_token", "token")
     monkeypatch.setattr(settings, "x_api_max_pages_per_source", 1)
 
@@ -253,8 +256,43 @@ def test_official_fetcher_raises_when_page_cap_would_skip_data(monkeypatch: pyte
 
     monkeypatch.setattr(provider_mod.requests, "get", fake_get)
 
-    with pytest.raises(TwitterIngestionProviderError, match="pagination cap"):
-        OfficialXTwitterFetcher().fetch(ContentSource(name="@alice", source_type="twitter", url="@alice"))
+    rows = OfficialXTwitterFetcher().fetch(ContentSource(name="@alice", source_type="twitter", url="@alice"))
+
+    assert len(rows) == 1
+    assert rows[0]["_twitter_since_id"] == "101"
+    assert "official_x_api_pagination_cap_reached" in caplog.text
+
+
+def test_official_fetcher_uses_dedicated_page_size_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "twitter_bearer_token", "token")
+    monkeypatch.setattr(settings, "xui_limit_per_source", 20)
+    monkeypatch.setattr(settings, "x_api_max_results_per_page", 75)
+    captured_params: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        text = "ok"
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, *, headers, params, timeout):
+        if url.endswith("/2/users/by/username/alice"):
+            return FakeResponse({"data": {"id": "42", "username": "alice"}})
+        captured_params.append(dict(params))
+        return FakeResponse({"data": [], "meta": {}})
+
+    monkeypatch.setattr(provider_mod.requests, "get", fake_get)
+
+    OfficialXTwitterFetcher().fetch(ContentSource(name="@alice", source_type="twitter", url="@alice"))
+
+    assert captured_params[0]["max_results"] == 75
 
 
 def test_official_fetcher_uses_persisted_since_id(monkeypatch: pytest.MonkeyPatch) -> None:

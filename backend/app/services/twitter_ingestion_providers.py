@@ -79,6 +79,14 @@ class OfficialXTwitterFetcher:
             fallback_author = None
 
         rows = _records_from_api_payload(payload, source, fallback_author=fallback_author)
+        if payload.get("cap_reached"):
+            meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+            logger.warning(
+                "official_x_api_pagination_cap_reached source=%s newest_id=%s items_fetched=%d",
+                source.name,
+                meta.get("newest_id"),
+                len(rows),
+            )
         logger.info(
             "twitter_fetch provider=%s source_kind=%s source=%s items_fetched=%d",
             self.provider_name,
@@ -99,7 +107,7 @@ class OfficialXTwitterFetcher:
         max_pages = max(1, int(settings.x_api_max_pages_per_source))
         combined_data: list[dict[str, Any]] = []
         users_by_id: dict[str, dict[str, Any]] = {}
-        newest_id: str | None = None
+        fallback_newest_id: str | None = None
         next_token: str | None = None
 
         for _page in range(max_pages):
@@ -119,19 +127,18 @@ class OfficialXTwitterFetcher:
 
             meta = payload.get("meta") or {}
             if isinstance(meta, dict):
-                newest_id = newest_id or _normalize_tweet_id(meta.get("newest_id"))
+                fallback_newest_id = fallback_newest_id or _normalize_tweet_id(meta.get("newest_id"))
                 next_token = str(meta.get("next_token") or "").strip() or None
             else:
                 next_token = None
             if not next_token:
-                return {
-                    "data": combined_data,
-                    "includes": {"users": list(users_by_id.values())},
-                    "meta": {"newest_id": newest_id or _max_tweet_id(combined_data)},
-                }
+                return _timeline_payload(combined_data, users_by_id, fallback_newest_id)
 
-        raise TwitterIngestionProviderError(
-            f"Official X API pagination cap reached for {path}; not advancing source checkpoint."
+        return _timeline_payload(
+            combined_data,
+            users_by_id,
+            fallback_newest_id,
+            cap_reached=True,
         )
 
     def _lookup_user(self, username: str, token: str) -> dict[str, Any]:
@@ -260,7 +267,7 @@ def _looks_like_handle(value: str) -> bool:
 
 def _timeline_params(since: datetime | None, *, since_id: str | None = None) -> dict[str, object]:
     params: dict[str, object] = {
-        "max_results": max(5, min(int(settings.xui_limit_per_source), 100)),
+        "max_results": max(5, min(int(settings.x_api_max_results_per_page), 100)),
         "tweet.fields": "created_at,author_id",
         "expansions": "author_id",
         "user.fields": "username",
@@ -272,6 +279,23 @@ def _timeline_params(since: datetime | None, *, since_id: str | None = None) -> 
     if since_bound is not None:
         params["start_time"] = since_bound.strftime("%Y-%m-%dT%H:%M:%SZ")
     return params
+
+
+def _timeline_payload(
+    data: list[dict[str, Any]],
+    users_by_id: dict[str, dict[str, Any]],
+    fallback_newest_id: str | None,
+    *,
+    cap_reached: bool = False,
+) -> dict[str, Any]:
+    payload = {
+        "data": data,
+        "includes": {"users": list(users_by_id.values())},
+        "meta": {"newest_id": _max_tweet_id(data) or fallback_newest_id},
+    }
+    if cap_reached:
+        payload["cap_reached"] = True
+    return payload
 
 
 def _records_from_api_payload(
