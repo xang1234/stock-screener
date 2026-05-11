@@ -1308,590 +1308,240 @@ def test_fetch_ca_snapshot_uses_single_url_when_template_lacks_placeholder(monke
 # ---------------------------------------------------------------------------
 
 
-_DE_BASE_URL = "https://api.boerse-frankfurt.de/v1/search/equity_search"
+_DE_CSV_URL = (
+    "https://www.cashmarket.deutsche-boerse.com/resource/blob/1528/"
+    "c06ff55cb683eed417e40d1cd4bad215/data/t7-xetr-allTradableInstruments.csv"
+)
 
 
-def _de_page_payload(
-    rows: list[dict[str, object]], *, total: int | None = None
-) -> bytes:
-    """Build a Boerse Frankfurt search-API page response."""
-    body: dict[str, object] = {"data": rows}
-    if total is not None:
-        body["totalCount"] = total
-    return json.dumps(body).encode("utf-8")
+def _xetra_csv_content(rows: list[dict[str, str]]) -> bytes:
+    """Build a synthetic Xetra all-tradable-instruments CSV.
+
+    Mirrors the real file shape: two metadata header rows, then the column
+    header on line 3, then data rows. Only the columns the parser reads are
+    populated; everything else is left empty (the real file has 154 columns
+    but the parser only depends on Product/Instrument Status, Instrument,
+    ISIN, WKN, Mnemonic, MIC Code, Instrument Type).
+    """
+    columns = [
+        "Product Status",
+        "Instrument Status",
+        "Instrument",
+        "ISIN",
+        "Product ID",
+        "Instrument ID",
+        "WKN",
+        "Mnemonic",
+        "MIC Code",
+        "CCP eligible Code",
+        "Trading Model Type",
+        "Product Assignment Group",
+        "Product Assignment Group Description",
+        "Designated Sponsor Member ID",
+        "Designated Sponsor",
+        "Price Range Value",
+        "Price Range Percentage",
+        "Minimum Quote Size",
+        "Instrument Type",
+    ]
+    lines = ["Market:;XETR", "Date Last Update:;11.05.2026", ";".join(columns)]
+    for row in rows:
+        cells = [row.get(col, "") for col in columns]
+        lines.append(";".join(cells))
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def _de_fetched_source(content: bytes, *, fetched_at: str = "2026-05-09T01:00:00+00:00") -> _FetchedSource:
+def _xetra_row(**overrides) -> dict[str, str]:
+    """Build a single Common Stock row with sensible defaults."""
+    base = {
+        "Product Status": "Active",
+        "Instrument Status": "Active",
+        "Instrument": "Test Co",
+        "ISIN": "DE0001234567",
+        "WKN": "000123456",
+        "Mnemonic": "TEST",
+        "MIC Code": "XETR",
+        "Instrument Type": "CS",
+    }
+    base.update({k: str(v) for k, v in overrides.items()})
+    return base
+
+
+def _write_de_baseline_csv(tmp_path, symbols: list[str] | None = None) -> str:
+    """Write a fallback CSV requiring the given symbols.
+
+    Pass an empty list to make the CSV-superset safety check vacuous (header
+    only) — use this when the test exercises live parsing in isolation.
+    """
+    csv_path = tmp_path / "de_baseline.csv"
+    rows = symbols or []
+    lines = ["symbol,name,exchange,index,isin"]
+    for sym in rows:
+        lines.append(f"{sym},Co for {sym},XETR,DAX,DE000{sym.replace('.DE','').ljust(8,'0')}")
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(csv_path)
+
+
+def _fetched_xetra(content: bytes) -> _FetchedSource:
     return _FetchedSource(
-        url=_DE_BASE_URL,
+        url=_DE_CSV_URL,
         content=content,
-        fetched_at=fetched_at,
-        last_modified="Sat, 09 May 2026 00:00:00 GMT",
+        fetched_at="2026-05-11T05:00:00+00:00",
+        last_modified="Sun, 11 May 2026 05:00:00 GMT",
         tls_verification_disabled=False,
     )
 
 
-def _write_de_isin_map_csv(tmp_path) -> str:
-    """Write a CSV that the fetcher can use as both fallback and ISIN→ticker map."""
-    csv_path = tmp_path / "de_dax40_constituents.csv"
-    csv_path.write_text(
-        "symbol,name,exchange,index,isin\n"
-        "SAP.DE,SAP SE,XETR,DAX,DE0007164600\n"
-        "ALV.DE,Allianz SE,XETR,DAX,DE0008404005\n",
-        encoding="utf-8",
-    )
-    return str(csv_path)
-
-
-def _write_de_empty_csv(tmp_path) -> str:
-    """Write a header-only CSV so the live-path safety checks (CSV-superset)
-    are vacuous. Use for tests that exercise live behaviour in isolation
-    rather than the live-vs-baseline reconciliation guard."""
-    csv_path = tmp_path / "de_empty.csv"
-    csv_path.write_text("symbol,name,exchange,index,isin\n", encoding="utf-8")
-    return str(csv_path)
-
-
-def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch, tmp_path):
+def test_fetch_de_snapshot_filters_xetra_common_stock(monkeypatch, tmp_path):
+    """The live path filters the Xetra CSV down to active Common Stock and
+    publishes one snapshot row per surviving instrument."""
     from app.config import settings as app_settings
-    from app.services import official_market_universe_source_service as svc_module
 
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
     monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+        app_settings, "de_universe_fallback_csv_path",
+        _write_de_baseline_csv(tmp_path),
     )
-    # Shrink the page size so the test can exercise multi-page pagination
-    # without constructing 100-row fixtures. The pagination loop stops on
-    # partial-page responses, so each non-final page must be exactly the
-    # configured size to trigger another fetch.
-    monkeypatch.setattr(svc_module, "_BOERSE_FRANKFURT_PAGE_SIZE", 2)
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
 
-    page_one = _de_page_payload(
-        [
-            # Resolved via explicit tickerSymbol field.
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": {"originalValue": "SAP SE"},
-                "isXetraTradable": True,
-            },
-            # Resolved via the ISIN→ticker map (no explicit ticker field).
-            {
-                "isin": "DE0008404005",
-                "wkn": "840400",
-                "name": "Allianz SE",
-                "isXetraTradable": True,
-            },
-        ],
-        total=3,
-    )
-    page_two = _de_page_payload(
-        [
-            # Resolved via ``ticker`` (alternate explicit field).
-            {
-                "isin": "DE000A1EWWW0",
-                "wkn": "A1EWWW",
-                "ticker": "ADS",
-                "name": "Adidas AG",
-                "xetraTradable": True,
-            },
-        ],
-        total=3,
-    )
-
-    pages = iter([page_one, page_two])
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        assert extra_headers is not None, "DE fetch must send signed headers"
-        assert "X-Security" in extra_headers
-        assert "Client-Date" in extra_headers
-        return _de_fetched_source(next(pages))
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", WKN="000716460", Instrument="SAP SE"),
+        _xetra_row(Mnemonic="ALV", ISIN="DE0008404005", WKN="000840400", Instrument="ALLIANZ"),
+        # Inactive — dropped
+        _xetra_row(
+            Mnemonic="DELIST", ISIN="DE000DELIST0", **{"Instrument Status": "Inactive"}
+        ),
+        # ETF — dropped
+        _xetra_row(
+            Mnemonic="ETF1", ISIN="DE000ETF00001", **{"Instrument Type": "ETF"},
+        ),
+        # ETN — dropped
+        _xetra_row(
+            Mnemonic="ETN1", ISIN="DE000ETN00001", **{"Instrument Type": "ETN"},
+        ),
+        # Mnemonic too long — dropped (would not pass the DE adapter regex)
+        _xetra_row(Mnemonic="TOOLONGTICKER", ISIN="DE000TOOLONG0"),
+    ])
 
     service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
+    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes))
 
     snapshot = service.fetch_de_snapshot()
 
     assert snapshot.market == "DE"
     assert snapshot.source_name == "dbg_official"
     assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    assert snapshot.snapshot_id.startswith("xetra-allinstruments-")
     symbols = [row["symbol"] for row in snapshot.rows]
-    assert symbols == sorted(["SAP.DE", "ALV.DE", "ADS.DE"])
-    assert snapshot.source_metadata["row_counts"]["xetra"] == 3
-    assert snapshot.source_metadata["row_counts"]["frankfurt"] == 0
-    assert snapshot.source_metadata["row_counts"]["total"] == 3
-    assert snapshot.source_metadata["page_attempts"] == [0, 2]
-    assert snapshot.source_metadata["ticker_resolution"] == {
-        "explicit_field": 2,
-        "isin_map": 1,
-        "unresolved": 0,
-    }
+    assert symbols == ["ALV.DE", "SAP.DE"]
+    # Both surviving rows are tagged XETR
+    assert all(row["exchange"] == "XETR" for row in snapshot.rows)
+    assert snapshot.source_metadata["row_counts"] == {"xetra": 2, "frankfurt": 0, "total": 2}
 
 
-def test_fetch_de_snapshot_drops_rows_without_resolvable_ticker(monkeypatch, tmp_path):
-    """Rows without an explicit ticker field or an ISIN-map hit are dropped."""
+def test_fetch_de_snapshot_falls_back_on_http_error(monkeypatch, tmp_path):
+    """RequestException from the live fetch routes to CSV fallback."""
     from app.config import settings as app_settings
 
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    # Empty CSV: the safety-check guard against universe shrinkage is vacuous,
-    # so the live path's per-row drop behaviour is what's actually being tested.
-    monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_empty_csv(tmp_path)
-    )
-
-    # Omit ``total=`` so the resolution-ratio safety check is skipped: this
-    # test focuses on per-row drop behaviour rather than aggregate ratios.
-    page_one = _de_page_payload(
-        [
-            # Resolvable via explicit ticker field.
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": "SAP SE",
-                "isXetraTradable": True,
-            },
-            # Unresolvable: WKN is the only identifier and we never use WKN
-            # as a ticker. No tickerSymbol, ISIN not in the (empty) map.
-            # Expect this to be dropped with an `unresolved` resolution.
-            {
-                "isin": "DE000UNK0001",
-                "wkn": "UNK001",
-                "name": "Unknown Company",
-                "isXetraTradable": True,
-            },
-        ],
-    )
-    pages = iter([page_one, _de_page_payload([])])
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        return _de_fetched_source(next(pages))
-
-    service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
-
-    snapshot = service.fetch_de_snapshot()
-
-    assert [row["symbol"] for row in snapshot.rows] == ["SAP.DE"]
-    assert snapshot.source_metadata["ticker_resolution"]["unresolved"] == 1
-
-
-def test_fetch_de_snapshot_tolerates_per_page_failures(monkeypatch, tmp_path):
-    from app.config import settings as app_settings
-    from app.services import official_market_universe_source_service as svc_module
-
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
-    )
-    monkeypatch.setattr(svc_module, "_BOERSE_FRANKFURT_PAGE_SIZE", 2)
-
-    page_one = _de_page_payload(
-        [
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": "SAP SE",
-                "isXetraTradable": True,
-            },
-            {
-                "isin": "DE0008404005",
-                "wkn": "840400",
-                "tickerSymbol": "ALV",
-                "name": "Allianz SE",
-                "isXetraTradable": True,
-            },
-        ],
-        total=4,
-    )
-    page_three = _de_page_payload(
-        [
-            {
-                "isin": "DE000A1EWWW0",
-                "wkn": "A1EWWW",
-                "tickerSymbol": "ADS",
-                "name": "Adidas AG",
-                "xetraTradable": True,
-            },
-        ],
-        total=4,
-    )
-
-    call_count = {"n": 0}
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        call_count["n"] += 1
-        if call_count["n"] == 2:
-            # Second page (offset=2) blows up — but the live path must still
-            # succeed because pages 1 and 3 each return rows.
-            raise requests.exceptions.ConnectionError("synthetic page-2 failure")
-        if call_count["n"] == 1:
-            return _de_fetched_source(page_one)
-        return _de_fetched_source(page_three)
-
-    service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
-
-    snapshot = service.fetch_de_snapshot()
-
-    assert snapshot.source_metadata["fetch_mode"] == "live_http"
-    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE", "ADS.DE"}
-    # Per-page error surfaces in fetch_errors so operators can see what failed
-    # without having to dig into worker logs.
-    assert "page_2" in snapshot.source_metadata["fetch_errors"]
-    assert "synthetic page-2 failure" in snapshot.source_metadata["fetch_errors"]["page_2"]
-
-
-def test_fetch_de_snapshot_short_circuits_on_consecutive_failures(monkeypatch, tmp_path):
-    """A salt rotation / DNS outage hits every page; the fetcher must abort
-    quickly rather than retrying all 50 offsets before falling back."""
-    from app.config import settings as app_settings
-
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
-    )
-
-    call_count = {"n": 0}
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        call_count["n"] += 1
-        raise requests.exceptions.ConnectionError(f"synthetic outage #{call_count['n']}")
-
-    service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
-
-    snapshot = service.fetch_de_snapshot()
-
-    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
-    # Live path aborted after 3 consecutive failures, not the full 50-page cap.
-    assert call_count["n"] == 3
-    assert snapshot.source_metadata["fetch_errors"]["live_http"].startswith(
-        "DE live universe fetch failed for every page (3 attempts)"
-    )
-
-
-def test_fetch_de_snapshot_falls_back_when_live_missing_csv_symbols(monkeypatch, tmp_path):
-    """Codex P1: a partially-resolved live snapshot that drops curated
-    baseline symbols would let the reconciler deactivate known DAX names.
-    The live path must refuse to publish such a snapshot and trigger the
-    CSV fallback instead."""
-    from app.config import settings as app_settings
-
-    # Bundled CSV requires SAP and ALV (curated baseline).
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
-    )
-
-    # Live API returns only SAP — ALV is absent. This would normally publish
-    # successfully with 1 row; the safety guard forces a fallback to keep
-    # the curated baseline intact.
-    page_one = _de_page_payload(
-        [
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": "SAP SE",
-                "isXetraTradable": True,
-            },
-        ],
-    )
-    pages = iter([page_one, _de_page_payload([])])
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        return _de_fetched_source(next(pages))
-
-    service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
-
-    snapshot = service.fetch_de_snapshot()
-
-    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
-    assert snapshot.source_name == "de_manual_csv"
-    # The fetch_errors entry preserves the diagnostic so operators can see
-    # which baseline symbols were missing from the live response.
-    live_error = snapshot.source_metadata["fetch_errors"]["live_http"]
-    assert "missing 1 curated baseline symbols" in live_error
-    assert "ALV.DE" in live_error
-    # The bundle now reflects the CSV (both SAP and ALV present), not the
-    # 1-row live response.
-    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE"}
-
-
-def test_fetch_de_snapshot_falls_back_when_resolution_ratio_too_low(monkeypatch, tmp_path):
-    """If the live API reports a large universe but our heuristics resolve
-    only a small fraction, the live snapshot is suspect — fall back rather
-    than publish a partial bundle that will deactivate known symbols."""
-    from app.config import settings as app_settings
-
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    # Empty CSV so the superset check is vacuous; only the ratio check
-    # should trigger.
-    monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
-    )
-    monkeypatch.setattr(app_settings, "de_live_min_resolution_ratio", 0.5)
-
-    # 2 resolved out of 100 reported = 2% — well below the 50% threshold.
-    page_one = _de_page_payload(
-        [
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": "SAP SE",
-                "isXetraTradable": True,
-            },
-            {
-                "isin": "DE0008404005",
-                "wkn": "840400",
-                "tickerSymbol": "ALV",
-                "name": "Allianz SE",
-                "isXetraTradable": True,
-            },
-        ],
-        total=100,
-    )
-    # Second page reports the same 100 total but is empty (i.e., the API
-    # claims many more rows than the resolver can handle).
-    pages = iter([page_one, _de_page_payload([], total=100)])
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        return _de_fetched_source(next(pages))
-
-    service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
-
-    snapshot = service.fetch_de_snapshot()
-
-    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
-    live_error = snapshot.source_metadata["fetch_errors"]["live_http"]
-    assert "resolved only 2/100" in live_error
-    assert "below 50% threshold" in live_error
-
-
-def test_fetch_de_snapshot_falls_back_to_csv_on_http_failure(monkeypatch, tmp_path):
-    from app.config import settings as app_settings
-
-    csv_path = tmp_path / "de_dax40_constituents.csv"
-    csv_path.write_text(
+    fallback_csv = tmp_path / "de_fallback.csv"
+    fallback_csv.write_text(
         "symbol,name,exchange,index\n"
         "SAP.DE,SAP SE,XETR,DAX\n"
         "ALV.DE,Allianz SE,XETR,DAX\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(csv_path))
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
+    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(fallback_csv))
 
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        raise requests.exceptions.ConnectionError("synthetic upstream outage")
+    def fake_http_get(url, allow_insecure_fallback=False):
+        raise requests.exceptions.ConnectionError("synthetic blob 404 / DNS outage")
 
     service = OfficialMarketUniverseSourceService()
     monkeypatch.setattr(service, "_http_get", fake_http_get)
 
     snapshot = service.fetch_de_snapshot()
 
-    assert snapshot.market == "DE"
-    assert snapshot.source_name == "de_manual_csv"
     assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
-    assert snapshot.source_metadata["fetch_errors"]["live_http"].startswith(
-        "DE live universe fetch failed for every page (3 attempts)"
-    )
-    assert snapshot.source_metadata["fallback_csv_path"] == str(csv_path)
+    assert snapshot.source_name == "de_manual_csv"
+    assert "synthetic blob 404" in snapshot.source_metadata["fetch_errors"]["live_http"]
     assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE"}
     assert snapshot.snapshot_id.startswith("de-csv-fallback-")
 
 
-@pytest.mark.parametrize("xetra_first", [True, False])
-def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(
-    monkeypatch, tmp_path, xetra_first
-):
-    """The Xetra preference must hold regardless of payload ordering — even
-    when the API returns the Frankfurt-floor venue before the Xetra one for
-    the same ISIN."""
+def test_fetch_de_snapshot_falls_back_when_baseline_symbol_missing(monkeypatch, tmp_path):
+    """A live universe that omits curated DAX names triggers fallback so the
+    reconciler doesn't deactivate known positions."""
     from app.config import settings as app_settings
 
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    # Empty CSV: this test exercises the venue preference, not CSV reconciliation.
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
+    # Baseline requires SAP.DE *and* ALV.DE — live CSV only contains SAP.
     monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_empty_csv(tmp_path)
+        app_settings, "de_universe_fallback_csv_path",
+        _write_de_baseline_csv(tmp_path, ["SAP.DE", "ALV.DE"]),
     )
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
 
-    xetra_row = {
-        "isin": "DE0007164600",
-        "wkn": "716460",
-        "tickerSymbol": "SAP",
-        "name": "SAP SE",
-        "isXetraTradable": True,
-    }
-    frankfurt_row = {
-        "isin": "DE0007164600",
-        "wkn": "716460",
-        "tickerSymbol": "SAP",
-        "name": "SAP SE Frankfurt",
-        "isXetraTradable": False,
-    }
-    ordered_rows = [xetra_row, frankfurt_row] if xetra_first else [frankfurt_row, xetra_row]
-    page_one = _de_page_payload(ordered_rows, total=2)
-
-    pages = iter([page_one, _de_page_payload([], total=2)])
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        return _de_fetched_source(next(pages))
-
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", WKN="000716460", Instrument="SAP SE"),
+    ])
     service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
+    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes))
 
     snapshot = service.fetch_de_snapshot()
 
-    assert [row["symbol"] for row in snapshot.rows] == ["SAP.DE"]
-    assert snapshot.rows[0]["exchange"] == "XETR"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    live_error = snapshot.source_metadata["fetch_errors"]["live_http"]
+    assert "missing 1 curated baseline symbols" in live_error
+    assert "ALV.DE" in live_error
+    # Bundle now reflects the curated baseline, not the truncated live result.
+    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE"}
 
 
-def test_fetch_de_snapshot_paginates_on_raw_row_count_not_filtered(monkeypatch, tmp_path):
-    """Pagination must use the raw upstream page size, not the post-filter row
-    count. A page full of unresolved tickers (filtered out by ticker derivation)
-    must not be mistaken for a partial page that ends pagination early."""
-    from app.config import settings as app_settings
-    from app.services import official_market_universe_source_service as svc_module
-
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
-    # Empty CSV + ratio=0 isolates the test to pagination behaviour.
-    monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_empty_csv(tmp_path)
-    )
-    monkeypatch.setattr(app_settings, "de_live_min_resolution_ratio", 0.0)
-    monkeypatch.setattr(svc_module, "_BOERSE_FRANKFURT_PAGE_SIZE", 2)
-
-    # Page 1: 2 raw rows, but only 1 resolves (the other has no ticker fields
-    # and is dropped). If pagination used post-filter count (1 < 2 → "partial
-    # page"), it would stop here and never request page 2.
-    page_one = _de_page_payload(
-        [
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": "SAP SE",
-                "isXetraTradable": True,
-            },
-            {
-                "isin": "DE000UNK0001",
-                "wkn": "UNK001",
-                "name": "Unknown",  # no tickerSymbol/ticker → dropped
-                "isXetraTradable": True,
-            },
-        ],
-        total=3,
-    )
-    page_two = _de_page_payload(
-        [
-            {
-                "isin": "DE000A1EWWW0",
-                "wkn": "A1EWWW",
-                "tickerSymbol": "ADS",
-                "name": "Adidas AG",
-                "isXetraTradable": True,
-            },
-        ],
-        total=3,
-    )
-
-    pages = iter([page_one, page_two])
-
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        return _de_fetched_source(next(pages))
-
-    service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
-
-    snapshot = service.fetch_de_snapshot()
-
-    # Both pages were fetched; both resolvable symbols ended up in the bundle.
-    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ADS.DE"}
-    assert snapshot.source_metadata["page_attempts"] == [0, 2]
-    assert snapshot.source_metadata["ticker_resolution"]["unresolved"] == 1
-
-
-def test_fetch_de_snapshot_raises_when_live_fails_and_csv_missing(monkeypatch, tmp_path):
+def test_fetch_de_snapshot_falls_back_when_universe_too_small(monkeypatch, tmp_path):
+    """A live universe below the configured minimum size triggers fallback —
+    catches the blob-URL-rotated case where the response is technically valid
+    but covers a tiny subset of Xetra."""
     from app.config import settings as app_settings
 
-    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
     monkeypatch.setattr(
-        app_settings,
-        "de_universe_fallback_csv_path",
-        str(tmp_path / "missing.csv"),
+        app_settings, "de_universe_fallback_csv_path",
+        _write_de_baseline_csv(tmp_path),  # empty header-only baseline
     )
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 5)
 
-    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
-        raise requests.exceptions.ConnectionError("synthetic upstream outage")
-
+    # Two rows survives the filter, which is below the configured floor of 5.
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", Instrument="SAP SE"),
+        _xetra_row(Mnemonic="ALV", ISIN="DE0008404005", Instrument="Allianz"),
+    ])
     service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", fake_http_get)
+    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes))
 
+    # No bundled fallback rows for this test — empty baseline CSV — so the
+    # fetcher will raise because there's nothing to fall back to.
     with pytest.raises(ValueError, match="no fallback CSV rows"):
         service.fetch_de_snapshot()
 
 
-def test_parse_de_results_handles_alternate_payload_keys():
+def test_parse_de_xetra_csv_raises_on_missing_header():
+    """File without the expected ``Product Status`` header column should raise."""
     service = OfficialMarketUniverseSourceService()
-    payload = json.dumps(
-        {
-            "results": [
-                {
-                    "isin": "DE0007164600",
-                    "wkn": "716460",
-                    "tickerSymbol": "SAP",
-                    "name": "SAP SE",
-                    "isXetraTradable": True,
-                },
-                # Frankfurt-only listing, ticker via alternate explicit field.
-                {
-                    "isin": "DE0006062144",
-                    "wkn": "606214",
-                    "ticker": "1COV",
-                    "name": "Covestro",
-                    "isXetraTradable": False,
-                },
-                # WKN missing but ISIN + tickerSymbol present → still
-                # publishable. WKN is carried as diagnostic context only.
-                {"isin": "DE000XXX0000", "tickerSymbol": "ANON", "name": "Anonymous"},
-                # No ISIN → skipped (ISIN keys the dedupe map).
-                {"wkn": "999999", "tickerSymbol": "NOISIN", "name": "No-ISIN co"},
-            ],
-            "recordsTotal": 4,
-        }
-    ).encode("utf-8")
-
-    rows, total, resolution, raw_row_count = service._parse_de_results(payload)
-
-    assert total == 4
-    # raw_row_count reflects the upstream payload size *before* filtering out
-    # rows without ISIN (the fourth entry is dropped because it has no ISIN).
-    assert raw_row_count == 4
-    # _parse_de_results preserves upstream order; _fetch_de_live sorts later.
-    symbols = [row["symbol"] for row in rows]
-    assert symbols == ["SAP.DE", "1COV.F", "ANON.F"]
-    assert rows[1]["exchange"] == "XFRA"
-    # ANON has no wkn — that's fine, the field is just empty on the published
-    # row rather than dropping the row entirely.
-    anon_row = next(row for row in rows if row["symbol"] == "ANON.F")
-    assert anon_row["wkn"] == ""
-    assert anon_row["isin"] == "DE000XXX0000"
-    assert resolution["explicit_field"] == 3
-    assert "slug_derived" not in resolution
+    bogus = b"some;completely;different;file\nfoo;bar;baz;qux\n"
+    with pytest.raises(ValueError, match="Product Status"):
+        service._parse_de_xetra_csv(bogus)
 
 
-def test_parse_de_results_rejects_invalid_payload():
+def test_parse_de_xetra_csv_strips_wkn_zero_padding():
+    """The published CSV pads WKN to 9 chars; parser should normalize."""
     service = OfficialMarketUniverseSourceService()
-    with pytest.raises(ValueError, match="Invalid Boerse Frankfurt response"):
-        service._parse_de_results(b"not-json")
-    with pytest.raises(ValueError, match="Unexpected Boerse Frankfurt payload shape"):
-        service._parse_de_results(b"[]")
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", WKN="000716460", Instrument="SAP SE"),
+    ])
+    rows = service._parse_de_xetra_csv(csv_bytes)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "SAP.DE"
+    assert rows[0]["wkn"] == "716460"
 
 
 def test_load_de_csv_fallback_returns_empty_when_path_missing(monkeypatch, tmp_path):
@@ -1904,91 +1554,3 @@ def test_load_de_csv_fallback_returns_empty_when_path_missing(monkeypatch, tmp_p
     )
     service = OfficialMarketUniverseSourceService()
     assert service._load_de_csv_fallback() == []
-
-
-def test_derive_de_ticker_prefers_explicit_field_then_isin_map():
-    """Slug-based derivation was removed in review: slugs encode the company
-    name, not the ticker (e.g. ``adidas-ag`` → ``ADIDAS`` instead of the Yahoo
-    symbol ``ADS``). Live resolution is now explicit ticker field → ISIN map,
-    and any row that falls through both is dropped."""
-    derive = OfficialMarketUniverseSourceService._derive_de_ticker
-    isin_map = {"DE0007164600": "SAP", "DE0008404005": "ALV"}
-
-    # Explicit field wins even when the ISIN is in the map.
-    ticker, source = derive(
-        {"tickerSymbol": "EXP", "slug": "sap-se"},
-        isin="DE0007164600",
-        isin_to_ticker=isin_map,
-    )
-    assert (ticker, source) == ("EXP", "explicit_field")
-
-    # Falls through to ISIN map when no explicit field — slug is ignored.
-    ticker, source = derive(
-        {"slug": "ignore-this-slug"},
-        isin="DE0008404005",
-        isin_to_ticker=isin_map,
-    )
-    assert (ticker, source) == ("ALV", "isin_map")
-
-    # Slug is no longer a resolution path: this row drops even with a slug.
-    ticker, source = derive(
-        {"slug": "covestro-ag"},
-        isin="DE0006062144",
-        isin_to_ticker=isin_map,
-    )
-    assert (ticker, source) == (None, "unresolved")
-
-    # Returns None when nothing resolves — caller drops the row.
-    ticker, source = derive(
-        {"wkn": "716460"},
-        isin="DE000UNK0001",
-        isin_to_ticker=isin_map,
-    )
-    assert (ticker, source) == (None, "unresolved")
-
-    # ``shortName`` is a descriptive label (``"Adidas"``), not a ticker. Even
-    # though it would happen to match the [A-Z0-9]{1,8} regex, accepting it
-    # would publish plausible-but-wrong symbols and inflate the resolved-row
-    # count past the live-path safety guards. The row must drop.
-    ticker, source = derive(
-        {"shortName": "Adidas"},
-        isin="DE000A1EWWW0",
-        isin_to_ticker=isin_map,
-    )
-    assert (ticker, source) == (None, "unresolved")
-
-
-def test_load_de_isin_to_ticker_map(monkeypatch, tmp_path):
-    from app.config import settings as app_settings
-
-    csv_path = tmp_path / "de.csv"
-    csv_path.write_text(
-        "symbol,name,exchange,index,isin\n"
-        "SAP.DE,SAP SE,XETR,DAX,DE0007164600\n"
-        "ALV.DE,Allianz SE,XETR,DAX,DE0008404005\n"
-        # Row missing isin column should be skipped silently.
-        "ADS.DE,Adidas AG,XETR,DAX,\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(csv_path))
-
-    isin_map = OfficialMarketUniverseSourceService._load_de_isin_to_ticker_map()
-    assert isin_map == {
-        "DE0007164600": "SAP",
-        "DE0008404005": "ALV",
-    }
-
-
-def test_load_de_isin_to_ticker_map_returns_empty_when_csv_lacks_isin_column(
-    monkeypatch, tmp_path
-):
-    from app.config import settings as app_settings
-
-    csv_path = tmp_path / "de_no_isin.csv"
-    csv_path.write_text(
-        "symbol,name,exchange,index\nSAP.DE,SAP SE,XETR,DAX\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(csv_path))
-
-    assert OfficialMarketUniverseSourceService._load_de_isin_to_ticker_map() == {}
