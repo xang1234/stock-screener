@@ -31,6 +31,7 @@ class Market(str, Enum):
     TW = "TW"
     CN = "CN"
     CA = "CA"
+    DE = "DE"
 
 
 class Exchange(str, Enum):
@@ -206,7 +207,6 @@ class UniverseDefinition(BaseModel):
                 Market.KR: "South Korea Market",
                 Market.TW: "Taiwan Market",
                 Market.CN: "China A-shares",
-                Market.CA: "Canada Market",
             }
             return market_labels.get(self.market, f"{self.market.value} Market")
         elif self.type == UniverseType.EXCHANGE:
@@ -317,16 +317,11 @@ class UniverseDefinition(BaseModel):
             "nasdaq": Exchange.NASDAQ,
             "amex": Exchange.AMEX,
         }
-        market_map = {
-            "us": Market.US,
-            "hk": Market.HK,
-            "in": Market.IN,
-            "jp": Market.JP,
-            "kr": Market.KR,
-            "tw": Market.TW,
-            "cn": Market.CN,
-            "ca": Market.CA,
-        }
+        market_map = {market.value.lower(): market for market in Market}
+        valid_markets = ", ".join(market.value for market in Market)
+        valid_market_universes = ", ".join(
+            f"market:{market.value.lower()}" for market in Market
+        )
 
         if u == "all":
             return cls(type=UniverseType.ALL)
@@ -334,7 +329,7 @@ class UniverseDefinition(BaseModel):
             raw_market = u.split(":", 1)[1].strip().lower()
             if raw_market in market_map:
                 return cls(type=UniverseType.MARKET, market=market_map[raw_market])
-            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, IN, JP, KR, TW, CN, CA")
+            raise ValueError(f"Unknown market '{raw_market}'. Valid values: {valid_markets}")
         elif u in exchange_map:
             return cls(type=UniverseType.EXCHANGE, exchange=exchange_map[u])
         elif u == "sp500":
@@ -350,6 +345,6 @@ class UniverseDefinition(BaseModel):
                 return cls(type=UniverseType.CUSTOM, symbols=symbols)
             raise ValueError(
                 f"Unknown universe '{universe}' and no symbols provided. "
-                f"Valid values: all, market:us, market:hk, market:in, market:jp, market:kr, market:tw, market:cn, "
+                f"Valid values: all, {valid_market_universes}, "
                 f"nyse, nasdaq, amex, sp500, custom, test"
             )

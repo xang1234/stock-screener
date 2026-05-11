@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Optional
 
-from ..schemas.universe import UniverseDefinition
+from ..schemas.universe import Market, UniverseDefinition
 
 # Time-bounded compatibility policy.
 LEGACY_UNIVERSE_DEPRECATION_DATE = date(2026, 4, 11)
@@ -33,6 +33,10 @@ LEGACY_UNIVERSE_ALIAS_MAP: dict[str, dict[str, Any]] = {
     "market:kr": {"type": "market", "market": "KR"},
     "market:tw": {"type": "market", "market": "TW"},
     "market:cn": {"type": "market", "market": "CN"},
+    **{
+        f"market:{market.value.lower()}": {"type": "market", "market": market.value}
+        for market in Market
+    },
     "custom": {"type": "custom"},
     "test": {"type": "test"},
 }

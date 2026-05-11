@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 
 from app.database import get_db
+from app.domain.markets import market_registry
 from app.domain.scanning.defaults import get_default_scan_profile
 from app.main import app
 
@@ -72,7 +73,7 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
     assert data["primary_market"] == "US"
     assert data["enabled_markets"] == ["US", "HK"]
     assert data["bootstrap_state"] == "running"
-    assert data["supported_markets"] == ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"]
+    assert data["supported_markets"] == list(market_registry.supported_market_codes())
     assert data["market_catalog"]["version"]
     market_catalog = {
         market["code"]: market

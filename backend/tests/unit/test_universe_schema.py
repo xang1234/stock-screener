@@ -285,6 +285,11 @@ class TestFromLegacy:
         assert u.type == UniverseType.MARKET
         assert u.market == Market.CN
 
+    def test_market_prefixed_germany(self):
+        u = UniverseDefinition.from_legacy("market:de")
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.DE
+
     def test_market_short_code_without_prefix_is_not_legacy(self):
         with pytest.raises(ValueError, match="Unknown universe"):
             UniverseDefinition.from_legacy("hk")

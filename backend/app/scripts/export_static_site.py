@@ -16,6 +16,7 @@ from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
+from app.domain.markets import market_registry
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
@@ -40,7 +41,7 @@ STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS = 20
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_BUILD_MODE_PRICE_DELTA = "price_delta"
 STATIC_BUILD_MODE_FULL = "full"
-STATIC_EXPORT_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE")
+STATIC_EXPORT_MARKETS = market_registry.supported_market_codes()
 STATIC_DEFAULT_MARKET = "US"
 STATIC_EXPORT_SKIPPED_EXIT_CODE = 78
 

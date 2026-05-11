@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+from app.domain.markets import market_registry
 from app.domain.markets.catalog import MarketCatalogError, get_market_catalog
 
 
 def test_market_catalog_lists_supported_markets_in_runtime_order() -> None:
     catalog = get_market_catalog()
 
-    assert catalog.supported_market_codes() == ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"]
+    assert catalog.supported_market_codes() == list(market_registry.supported_market_codes())
 
 
 def test_market_catalog_entry_contains_stable_market_facts() -> None:
@@ -38,17 +39,9 @@ def test_market_catalog_runtime_payload_is_frontend_ready() -> None:
     payload = get_market_catalog().as_runtime_payload()
 
     assert payload["version"] == "2026-05-09.v1"
-    assert [market["code"] for market in payload["markets"]] == [
-        "US",
-        "HK",
-        "IN",
-        "JP",
-        "KR",
-        "TW",
-        "CN",
-        "CA",
-        "DE",
-    ]
+    assert [market["code"] for market in payload["markets"]] == list(
+        market_registry.supported_market_codes()
+    )
     assert payload["markets"][0] == {
         "code": "US",
         "label": "United States",

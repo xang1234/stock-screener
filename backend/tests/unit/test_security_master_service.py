@@ -154,3 +154,25 @@ def test_resolve_identity_uses_china_suffixes_by_exchange():
     assert bjse.canonical_symbol == "920118.BJ"
     assert india_bse.market == "IN"
     assert india_bse.canonical_symbol == "500325.BO"
+
+
+def test_resolve_identity_uses_canada_and_germany_suffixes_by_exchange():
+    resolver = SecurityMasterResolver()
+
+    tsx = resolver.resolve_identity(symbol="SHOP", exchange="xtse")
+    tsxv = resolver.resolve_identity(symbol="VTX", exchange="xtnx")
+    xetra = resolver.resolve_identity(symbol="SAP", exchange="xetra")
+    frankfurt = resolver.resolve_identity(symbol="SIE.DE", exchange="fra")
+
+    assert tsx.market == "CA"
+    assert tsx.currency == "CAD"
+    assert tsx.timezone == "America/Toronto"
+    assert tsx.canonical_symbol == "SHOP.TO"
+    assert tsxv.market == "CA"
+    assert tsxv.canonical_symbol == "VTX.V"
+    assert xetra.market == "DE"
+    assert xetra.currency == "EUR"
+    assert xetra.timezone == "Europe/Berlin"
+    assert xetra.canonical_symbol == "SAP.DE"
+    assert frankfurt.market == "DE"
+    assert frankfurt.canonical_symbol == "SIE.F"

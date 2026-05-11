@@ -55,6 +55,15 @@ _SUFFIX_BY_MARKET: dict[str, str] = {
 }
 
 _SUFFIX_BY_EXCHANGE: dict[str, str] = {
+    "TSX": ".TO",
+    "XTSE": ".TO",
+    "TSXV": ".V",
+    "XTNX": ".V",
+    "XETR": ".DE",
+    "XETRA": ".DE",
+    "XFRA": ".F",
+    "FRA": ".F",
+    "FWB": ".F",
     "NSE": ".NS",
     "XNSE": ".NS",
     "BSE": ".BO",

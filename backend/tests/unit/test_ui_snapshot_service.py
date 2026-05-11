@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.domain.markets import market_registry
 from app.infra.db.models.feature_store import FeatureRun
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
@@ -256,7 +257,7 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
     assert published["breadth_hk"] == fake_snapshot
     assert published["breadth_in"] == fake_snapshot
     assert published["breadth_cn"] == fake_snapshot
-    assert published_breadth_markets == ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"]
+    assert published_breadth_markets == list(market_registry.supported_market_codes())
     assert published["groups"] is None
 
 
