@@ -92,7 +92,8 @@ class Settings(BaseSettings):
     minimax_api_base: str = "https://api.minimax.io/v1"  # Minimax OpenAI-compatible base URL
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
-    twitter_bearer_token: str = ""  # Legacy Twitter/X API token (unused for XUI ingestion)
+    twitter_bearer_token: str = ""  # Official X API bearer token for Twitter/X ingestion
+    x_ingest_provider: str = "official"  # official or xui
     xui_enabled: bool = False  # Browser-driven X ingestion is opt-in for local runtimes
     xui_config_path: str = str(_PROJECT_ROOT / "data" / "xui-reader" / "config.toml")
     xui_profile: str = "default"

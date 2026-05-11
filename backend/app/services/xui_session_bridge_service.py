@@ -67,6 +67,20 @@ class XUISessionBridgeService:
     _rate_limit_per_window = 30
 
     def get_auth_status(self) -> TwitterSessionStatus:
+        if _twitter_provider() != "xui":
+            configured = bool((settings.twitter_bearer_token or "").strip())
+            return TwitterSessionStatus(
+                authenticated=configured,
+                status_code="configured" if configured else "missing_bearer_token",
+                message=(
+                    "Official X API bearer token is configured."
+                    if configured
+                    else "TWITTER_BEARER_TOKEN is required for official X API ingestion."
+                ),
+                profile="",
+                storage_state_path="",
+                provider="official_x_api",
+            )
         self._ensure_enabled()
         bindings = _load_xui_auth_bindings()
         result = _call_probe_auth_status(
@@ -196,6 +210,11 @@ class XUISessionBridgeService:
             ) from exc
 
     def _ensure_enabled(self) -> None:
+        if _twitter_provider() != "xui":
+            raise XUISessionBridgeError(
+                503,
+                "XUI browser session bridge is unavailable unless X_INGEST_PROVIDER=xui.",
+            )
         if not settings.xui_bridge_enabled:
             raise XUISessionBridgeError(503, "XUI browser session bridge is disabled.")
 
@@ -448,6 +467,10 @@ def _to_twitter_session_status(auth_result: Any) -> TwitterSessionStatus:
         storage_state_path=str(getattr(auth_result, "storage_state_path", "")),
         provider="xui",
     )
+
+
+def _twitter_provider() -> str:
+    return str(getattr(settings, "x_ingest_provider", "") or "official").strip().lower()
 
 
 def _token_hash(token: str) -> str:

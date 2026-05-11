@@ -9,6 +9,7 @@ import pytest_asyncio
 from app.main import app
 from app.services import server_auth
 from app.services.xui_session_bridge_service import XUISessionBridgeError
+from app.config import settings
 
 
 @pytest_asyncio.fixture
@@ -21,6 +22,7 @@ async def client(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_get_twitter_session_status_returns_provider_payload(monkeypatch: pytest.MonkeyPatch, client):
+    monkeypatch.setattr(settings, "x_ingest_provider", "xui")
     monkeypatch.setattr(
         "app.api.v1.themes.XUISessionBridgeService.get_auth_status",
         lambda self: type(
@@ -45,7 +47,42 @@ async def test_get_twitter_session_status_returns_provider_payload(monkeypatch: 
 
 
 @pytest.mark.asyncio
+async def test_get_twitter_session_status_reports_official_api_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    client,
+):
+    monkeypatch.setattr(settings, "x_ingest_provider", "official")
+    monkeypatch.setattr(settings, "twitter_bearer_token", "token")
+
+    response = await client.get("/api/v1/themes/twitter/session")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authenticated"] is True
+    assert payload["provider"] == "official_x_api"
+    assert payload["status_code"] == "configured"
+
+
+@pytest.mark.asyncio
+async def test_challenge_is_unavailable_in_official_api_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    client,
+):
+    monkeypatch.setattr(settings, "x_ingest_provider", "official")
+
+    response = await client.post(
+        "/api/v1/themes/twitter/session/challenge",
+        headers={"Origin": "http://localhost:5173"},
+    )
+
+    assert response.status_code == 503
+    assert "X_INGEST_PROVIDER=xui" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_create_challenge_maps_bridge_error_status(monkeypatch: pytest.MonkeyPatch, client):
+    monkeypatch.setattr(settings, "x_ingest_provider", "xui")
+
     def _raise_disallowed_origin(self, *, origin, client_key):
         raise XUISessionBridgeError(403, "Origin not allowed")
 
@@ -64,6 +101,7 @@ async def test_create_challenge_maps_bridge_error_status(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_import_endpoint_returns_status_payload(monkeypatch: pytest.MonkeyPatch, client):
+    monkeypatch.setattr(settings, "x_ingest_provider", "xui")
     monkeypatch.setattr(
         "app.api.v1.themes.XUISessionBridgeService.import_browser_cookies",
         lambda self, **_kwargs: type(

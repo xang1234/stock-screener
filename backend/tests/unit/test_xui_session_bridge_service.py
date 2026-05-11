@@ -15,6 +15,7 @@ from app.services.xui_session_bridge_service import (
 
 
 def _set_bridge_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "x_ingest_provider", "xui")
     monkeypatch.setattr(settings, "xui_bridge_enabled", True)
     monkeypatch.setattr(
         settings,

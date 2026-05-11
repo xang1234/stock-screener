@@ -3,7 +3,7 @@ Content Ingestion Service for Theme Discovery
 
 Fetches content from multiple sources:
 - Substack RSS feeds
-- Twitter/X via xui-reader UI collection
+- Twitter/X via official X API by default, or private xui override
 - News APIs (Benzinga, Seeking Alpha)
 - Reddit API
 """
@@ -102,15 +102,15 @@ class RSSFetcher(BaseContentFetcher):
 
 
 class TwitterFetcher(BaseContentFetcher):
-    """Fetches content from Twitter/X exclusively via xui-reader."""
+    """Fetches content from Twitter/X through the configured provider."""
 
     def __init__(self):
-        from .xui_twitter_fetcher import XUITwitterFetcher
+        from .twitter_ingestion_providers import build_twitter_fetcher
 
-        self._xui_fetcher = XUITwitterFetcher()
+        self._provider_fetcher = build_twitter_fetcher()
 
     def fetch(self, source: ContentSource, since: Optional[datetime] = None) -> list[dict]:
-        return self._xui_fetcher.fetch(source, since)
+        return self._provider_fetcher.fetch(source, since)
 
 
 class NewsFetcher(BaseContentFetcher):

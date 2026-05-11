@@ -21,8 +21,6 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 ```bash
 pip install -r requirements.txt
-pip install -e ../xui-reader
-python -m playwright install chromium
 ```
 
 ### 3. Configure Environment
@@ -39,7 +37,18 @@ redis-server
 # or: brew services start redis (macOS)
 ```
 
-### 5. Bootstrap XUI Session State (Required for Twitter Theme Ingestion)
+### 5. Configure Twitter/X Theme Ingestion
+
+Official X API ingestion is the default. Set `TWITTER_BEARER_TOKEN` in `.env` to enable it.
+
+To override the official API with the private xui package:
+
+```bash
+pip install git+ssh://git@github.com/xang1234/xui.git
+export X_INGEST_PROVIDER=xui
+```
+
+If you use the xui browser-session bridge, bootstrap its session state:
 
 ```bash
 export XUI_CONFIG_PATH="${XUI_CONFIG_PATH:-$HOME/.stockscanner/xui-reader/config.toml}"

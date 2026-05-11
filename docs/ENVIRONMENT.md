@@ -76,21 +76,27 @@ Enables assistant web research fallback.
 | `FRONTEND_IMAGE` | `ghcr.io/you/stockscreenclaude-frontend` | GHCR image (release overlay) |
 | `APP_IMAGE_TAG` | `v1.2.3` | Release tag to deploy |
 
-## Twitter/X Ingestion (xui-reader)
+## Twitter/X Ingestion
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `XUI_ENABLED` | `false` | Enable Twitter/X ingestion |
-| `XUI_CONFIG_PATH` | Platform app-data dir locally; `/app/data/xui-reader/config.toml` in Docker | Path to xui-reader config |
-| `XUI_PROFILE` | `default` | xui-reader auth profile |
+| `X_INGEST_PROVIDER` | `official` | Twitter/X ingestion provider: `official` or `xui` |
+| `TWITTER_BEARER_TOKEN` | empty | Official X API bearer token |
+| `XUI_ENABLED` | `false` | Enable private xui ingestion when `X_INGEST_PROVIDER=xui` |
+| `XUI_CONFIG_PATH` | Platform app-data dir locally; `/app/data/xui-reader/config.toml` in Docker | Path to xui config/session state |
+| `XUI_PROFILE` | `default` | xui auth profile |
 | `XUI_LIMIT_PER_SOURCE` | `50` | Max items per source fetch |
-| `XUI_NEW_ONLY` | `true` | Only fetch new items |
-| `XUI_CHECKPOINT_MODE` | `auto` | Checkpoint behavior |
-| `XUI_BRIDGE_ENABLED` | `false` | Enable browser session bridge |
-| `XUI_BRIDGE_ALLOWED_ORIGINS` | See `.env.example` | Allowed CORS origins for bridge |
-| `XUI_BRIDGE_CHALLENGE_TTL_SECONDS` | `120` | Challenge TTL |
-| `XUI_BRIDGE_MAX_COOKIES` | `300` | Max cookies to accept |
+| `XUI_NEW_ONLY` | `true` | Private xui new-item mode |
+| `XUI_CHECKPOINT_MODE` | `auto` | Private xui checkpoint behavior |
+| `XUI_BRIDGE_ENABLED` | `false` | Enable browser session bridge in xui mode |
+| `XUI_BRIDGE_ALLOWED_ORIGINS` | See `.env.example` | Allowed CORS origins for xui bridge |
+| `XUI_BRIDGE_CHALLENGE_TTL_SECONDS` | `120` | xui bridge challenge TTL |
+| `XUI_BRIDGE_MAX_COOKIES` | `300` | Max cookies to accept for xui bridge |
 | `TWITTER_REQUEST_DELAY` | `5.0` | Delay between fetches (seconds) |
+
+For the private override, install the private package locally with
+`pip install git+ssh://git@github.com/xang1234/xui.git` and set
+`X_INGEST_PROVIDER=xui`.
 
 ## MCP Server
 
