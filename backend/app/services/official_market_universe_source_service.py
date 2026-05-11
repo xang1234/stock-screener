@@ -1017,6 +1017,15 @@ class OfficialMarketUniverseSourceService:
             live_meta = self._fetch_de_live()
         except (requests.exceptions.RequestException, ValueError) as exc:
             live_error = str(exc)
+            # ``logger.warning`` writes to stderr and the CI build-step log
+            # often misses it — surface the failure reason on stdout too so
+            # operators inspecting the workflow output can see why fallback
+            # fired without diving into the log viewer's stderr stream.
+            print(
+                f"[de] Live universe fetch failed: {live_error!s}. "
+                f"Falling back to bundled CSV at {settings.de_universe_fallback_csv_path}.",
+                flush=True,
+            )
             logger.warning(
                 "Live DE universe fetch failed (%s); falling back to bundled CSV at %s",
                 live_error,
@@ -1036,6 +1045,11 @@ class OfficialMarketUniverseSourceService:
             fetched_at = live_meta.get("fetched_at")
             last_modified = live_meta.get("http_last_modified")
             tls_verification_disabled = bool(live_meta.get("tls_verification_disabled"))
+            print(
+                f"[de] Live universe fetch succeeded: {len(rows)} Common Stock rows "
+                f"from {settings.de_universe_source_url}",
+                flush=True,
+            )
 
         if not rows:
             raise ValueError("DE official universe fetch returned no rows")
@@ -1086,9 +1100,26 @@ class OfficialMarketUniverseSourceService:
           universe (would silently deactivate curated names downstream).
         """
         url = settings.de_universe_source_url
+        # Deutsche Boerse Cash Market 403s the default bot-style User-Agent
+        # (``StockScannerUniverseRefresh/1.0 ...``) — a developer-machine
+        # curl with ``Mozilla/5.0`` reaches the CSV fine but a GH Actions
+        # runner using the bot UA falls straight into CSV fallback. Pass a
+        # browser-like UA + accompanying headers so the live path actually
+        # gets a response.
+        browser_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/csv,application/vnd.ms-excel,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+            "Referer": "https://www.xetra.com/xetra-en/instruments/all-tradable-instruments",
+        }
         fetched = self._http_get(
             url,
             allow_insecure_fallback=settings.de_universe_allow_insecure_fallback,
+            extra_headers=browser_headers,
         )
 
         rows = self._parse_de_xetra_csv(fetched.content)

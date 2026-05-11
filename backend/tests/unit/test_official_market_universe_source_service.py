@@ -1429,7 +1429,7 @@ def test_fetch_de_snapshot_filters_xetra_common_stock(monkeypatch, tmp_path):
     ])
 
     service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes))
+    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_xetra(csv_bytes))
 
     snapshot = service.fetch_de_snapshot()
 
@@ -1466,7 +1466,7 @@ def test_fetch_de_snapshot_falls_back_on_http_error(monkeypatch, tmp_path):
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
     monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(fallback_csv))
 
-    def fake_http_get(url, allow_insecure_fallback=False):
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
         raise requests.exceptions.ConnectionError("synthetic blob 404 / DNS outage")
 
     service = OfficialMarketUniverseSourceService()
@@ -1498,7 +1498,7 @@ def test_fetch_de_snapshot_falls_back_when_baseline_symbol_missing(monkeypatch, 
         _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", WKN="000716460", Instrument="SAP SE"),
     ])
     service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes))
+    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_xetra(csv_bytes))
 
     snapshot = service.fetch_de_snapshot()
 
@@ -1529,7 +1529,7 @@ def test_fetch_de_snapshot_falls_back_when_universe_too_small(monkeypatch, tmp_p
         _xetra_row(Mnemonic="ALV", ISIN="DE0008404005", Instrument="Allianz"),
     ])
     service = OfficialMarketUniverseSourceService()
-    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes))
+    monkeypatch.setattr(service, "_http_get", lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_xetra(csv_bytes))
 
     # No bundled fallback rows for this test — empty baseline CSV — so the
     # fetcher will raise because there's nothing to fall back to.
@@ -1555,6 +1555,46 @@ def test_parse_de_xetra_csv_strips_wkn_zero_padding():
     assert len(rows) == 1
     assert rows[0]["symbol"] == "SAP.DE"
     assert rows[0]["wkn"] == "716460"
+
+
+def test_fetch_de_snapshot_sends_browser_user_agent(monkeypatch, tmp_path):
+    """Deutsche Boerse Cash Market 403s the default bot-style User-Agent.
+    The live path must override with a browser-like UA so the GH Actions
+    runner actually receives the CSV instead of falling straight back to
+    the bundled seed."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path",
+        _write_de_baseline_csv(tmp_path),
+    )
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
+
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", Instrument="SAP SE"),
+    ])
+    captured_headers: list[dict] = []
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        captured_headers.append(extra_headers or {})
+        return _fetched_xetra(csv_bytes)
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    service.fetch_de_snapshot()
+
+    assert captured_headers, "expected the live path to invoke _http_get"
+    headers = captured_headers[0]
+    assert headers.get("User-Agent", "").startswith("Mozilla/5.0"), (
+        f"expected Mozilla UA, got {headers.get('User-Agent')!r}"
+    )
+    # The accompanying headers help the request blend in with browser
+    # traffic (some CDN bot-detection systems flag UA-only spoofs).
+    assert "Accept" in headers
+    assert "Accept-Language" in headers
+    assert "Referer" in headers and "xetra.com" in headers["Referer"]
 
 
 def test_parse_de_xetra_csv_tolerates_utf8_bom():
@@ -1625,7 +1665,7 @@ def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path
     service = OfficialMarketUniverseSourceService()
     monkeypatch.setattr(
         service, "_http_get",
-        lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes),
+        lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_xetra(csv_bytes),
     )
 
     with caplog.at_level("WARNING"):
