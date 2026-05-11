@@ -519,9 +519,11 @@ class CnMarketDataService:
     ) -> list[CnDailyPriceRow]:
         """Return daily OHLCV rows from AKShare, with BaoStock fallback."""
         code = _normalize_code(local_code)
+        exchange = _exchange_for_code(code)
+        has_baostock_fallback = exchange not in (None, "BJSE")
         start_token = _as_yyyymmdd(start)
         end_token = _as_yyyymmdd(end or date.today())
-        if self._should_try_akshare_ohlcv():
+        if not has_baostock_fallback or self._should_try_akshare_ohlcv():
             try:
                 frame = _call_with_timeout(
                     lambda: self._akshare.stock_zh_a_hist(
@@ -541,9 +543,12 @@ class CnMarketDataService:
             except CnDependencyError:
                 raise
             except Exception as exc:  # pragma: no cover - network variability
-                self._record_akshare_ohlcv_failure()
+                if has_baostock_fallback:
+                    self._record_akshare_ohlcv_failure()
                 logger.warning("AKShare CN OHLCV fetch failed for %s: %s", code, exc)
 
+        if not has_baostock_fallback:
+            return []
         return self._daily_ohlcv_from_baostock(code, start=start_token, end=end_token)
 
     def _should_try_akshare_ohlcv(self) -> bool:

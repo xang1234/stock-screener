@@ -489,6 +489,36 @@ def test_cn_market_data_service_skips_baostock_ohlcv_for_beijing_codes():
     assert service._daily_ohlcv_from_baostock("920118", start="20260401", end="20260430") == []
 
 
+def test_cn_market_data_service_tries_akshare_for_beijing_codes_during_ohlcv_cooldown():
+    frame = pd.DataFrame(
+        [
+            {"日期": "2026-04-29", "开盘": 10.0, "最高": 11.0, "最低": 9.0, "收盘": 10.5, "成交量": 1000},
+        ]
+    )
+
+    class FakeAkshare:
+        calls = 0
+
+        @classmethod
+        def stock_zh_a_hist(cls, **kwargs):
+            cls.calls += 1
+            assert kwargs["symbol"] == "920118"
+            return frame
+
+    class FakeBaoStock:
+        def login(self):  # pragma: no cover - should not be called
+            raise AssertionError("BaoStock should not be queried for Beijing Stock Exchange codes")
+
+    service = CnMarketDataService(akshare_module=FakeAkshare(), baostock_module=FakeBaoStock())
+    service._akshare_ohlcv_disabled_until = time.monotonic() + 300
+
+    rows = service.daily_ohlcv("920118", start="20260401", end="20260430")
+
+    assert FakeAkshare.calls == 1
+    assert rows[0].date == "2026-04-29"
+    assert rows[0].close == 10.5
+
+
 def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():
     frame = pd.DataFrame(
         [

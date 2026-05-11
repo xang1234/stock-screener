@@ -206,6 +206,42 @@ def test_export_daily_price_bundle_can_require_complete_symbol_coverage(tmp_path
     db.close()
 
 
+def test_export_daily_price_bundle_can_allow_stale_rows_when_complete_required(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    db.add_all(
+        [
+            _stock_row("000001.SZ", "CN", "SZSE", 1000.0),
+            _stock_row("000004.SZ", "CN", "SZSE", 900.0),
+            _price_row("000001.SZ", date(2026, 5, 8), 10.0),
+            _price_row("000004.SZ", date(2026, 4, 27), 20.0),
+        ]
+    )
+    db.commit()
+
+    service = _make_service(session_factory)
+    bundle_path = tmp_path / "daily-price-cn-20260508.json.gz"
+
+    stats = service.export_daily_price_bundle(
+        db,
+        market="CN",
+        output_path=bundle_path,
+        bundle_asset_name=bundle_path.name,
+        latest_manifest_path=tmp_path / "daily-price-latest-cn.json",
+        as_of_date=date(2026, 5, 8),
+        require_complete=True,
+        allow_stale_complete=True,
+    )
+
+    payload = service._read_bundle_payload(bundle_path)
+
+    assert stats["symbol_count"] == 2
+    assert stats["stale_symbol_count"] == 1
+    assert [row["symbol"] for row in payload["rows"]] == ["000001.SZ", "000004.SZ"]
+
+    db.close()
+
+
 def test_sync_from_github_up_to_date_exposes_manifest_metadata():
     session_factory = _make_session()
     db = session_factory()

@@ -53,6 +53,14 @@ def main() -> int:
         action="store_true",
         help="Fail if any active market symbol is missing price rows through the bundle as-of date.",
     )
+    parser.add_argument(
+        "--allow-stale-complete",
+        action="store_true",
+        help=(
+            "With --require-complete, allow symbols that have price rows but no bar "
+            "on the bundle as-of date."
+        ),
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -91,6 +99,7 @@ def main() -> int:
             latest_manifest_path=output_dir / latest_manifest_name,
             as_of_date=resolved_as_of_date,
             require_complete=args.require_complete,
+            allow_stale_complete=args.allow_stale_complete,
         )
 
     print(f"Daily price bundle complete for {market}:")
