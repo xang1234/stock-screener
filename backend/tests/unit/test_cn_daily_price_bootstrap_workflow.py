@@ -62,3 +62,16 @@ def test_cn_daily_price_bootstrap_workflow_pins_weekly_reference_for_all_jobs() 
     assert "Download pinned CN weekly reference bundle" in workflow
     assert "app.scripts.import_weekly_reference_bundle" in workflow
     assert "app.scripts.sync_weekly_reference_from_github --market CN" not in workflow
+
+
+def test_cn_daily_price_bootstrap_workflow_authenticates_checkpoint_upload_step() -> None:
+    workflow = _workflow()
+
+    refresh_step = workflow.split(
+        "      - name: Refresh CN daily price shard",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+
+    assert "GH_TOKEN: ${{ github.token }}" in refresh_step
+    assert "GH_REPO: ${{ github.repository }}" in refresh_step
+    assert "--checkpoint-release-tag cn-daily-price-shards" in refresh_step

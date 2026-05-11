@@ -387,6 +387,9 @@ jobs:
           fi
 
       - name: Refresh CN daily price shard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           cd backend
           CHECKPOINT_ARGS=()
