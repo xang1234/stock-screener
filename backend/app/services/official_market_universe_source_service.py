@@ -56,26 +56,6 @@ _BOERSE_FRANKFURT_MAX_CONSECUTIVE_PAGE_FAILURES = 3
 # tickers — there is no value in publishing a row whose symbol cannot be
 # resolved to a market data feed.
 _DE_LIVE_TICKER_RE = re.compile(r"^[A-Z0-9]{1,8}$")
-# Trailing entity-form tokens stripped from a Boerse Frankfurt slug while
-# searching for the embedded ticker. Order matters: longer phrases must match
-# before their substrings (``co-kgaa`` before ``kgaa``) so the longer suffix
-# wins.
-_DE_SLUG_ENTITY_SUFFIXES: tuple[str, ...] = (
-    "co-kgaa",
-    "co-kg",
-    "gmbh-co-kg",
-    "kgaa",
-    "ag-co",
-    "ag",
-    "se",
-    "n",
-    "na",
-    "nv",
-    "ohg",
-    "kg",
-    "vz",
-    "st",
-)
 # Single tokens (matched as whole words after splitting the instrument-type
 # string on non-alphanumeric chars). Plurals are listed explicitly so that
 # "Notes" matches but "Footnotes" does not.
@@ -1040,10 +1020,13 @@ class OfficialMarketUniverseSourceService:
            ``slug``, etc. but does not directly carry the Yahoo Finance
            ticker. ``_derive_de_ticker`` first checks for explicit
            ``tickerSymbol``/``ticker`` fields, then consults the bundled
-           CSV's ISIN-to-ticker map, then derives a ticker from the slug.
-           Rows that fall through all three are dropped (with a warning) so
-           the live path never publishes a Yahoo-incompatible symbol like
-           ``716460.DE`` (the WKN, not the ticker).
+           CSV's ISIN-to-ticker map. Rows that fall through both are
+           dropped so the live path never publishes a Yahoo-incompatible
+           symbol like ``716460.DE`` (the WKN, not the ticker). Until the
+           bundled CSV ships verified ISIN→ticker pairs for the wider
+           Xetra/Frankfurt universe, the live path will resolve only rows
+           that the API tags with an explicit ticker field, and the CSV
+           fallback is responsible for the rest.
 
         Together these mean operators should treat the live path as
         opportunistic and expect the CSV fallback to be the contract until
@@ -1145,7 +1128,6 @@ class OfficialMarketUniverseSourceService:
         ticker_resolution: dict[str, int] = {
             "explicit_field": 0,
             "isin_map": 0,
-            "slug_derived": 0,
             "unresolved": 0,
         }
         consecutive_failures = 0
@@ -1184,8 +1166,10 @@ class OfficialMarketUniverseSourceService:
                 tls_verification_disabled = True
 
             try:
-                page_rows, total_count, page_resolution = self._parse_de_results(
-                    fetched.content, isin_to_ticker=isin_to_ticker
+                page_rows, total_count, page_resolution, raw_row_count = (
+                    self._parse_de_results(
+                        fetched.content, isin_to_ticker=isin_to_ticker
+                    )
                 )
             except ValueError as exc:
                 page_errors[str(offset)] = f"parse failed: {exc}"
@@ -1211,19 +1195,24 @@ class OfficialMarketUniverseSourceService:
                     continue
                 # Prefer Xetra over Frankfurt-floor for the same ISIN: Xetra is
                 # the primary venue and yields the .DE suffix the rest of the
-                # platform expects. ``setdefault`` keeps the first hit; sort
-                # order from the API (lang=en, sort=NAME) groups venues for an
-                # ISIN together so the choice is stable.
-                rows_by_isin.setdefault(isin, row)
+                # platform expects. If we already have a row but the new one is
+                # XETR and the existing one is XFRA, swap. Otherwise keep the
+                # first hit.
+                existing = rows_by_isin.get(isin)
+                if existing is None:
+                    rows_by_isin[isin] = row
+                elif existing.get("exchange") != "XETR" and row.get("exchange") == "XETR":
+                    rows_by_isin[isin] = row
 
-            if not page_rows:
+            # Pagination break checks use the *raw* upstream row count, not the
+            # post-filter ``page_rows`` length. Otherwise a full page that
+            # happened to contain many unresolved-ticker rows would look like a
+            # partial page and stop pagination early.
+            if raw_row_count == 0:
                 break
-            # Stop when the API tells us we've seen the whole universe.
-            if total_count and (offset + len(page_rows)) >= total_count:
+            if total_count and (offset + raw_row_count) >= total_count:
                 break
-            # Otherwise stop when the upstream returns a partial page — there
-            # are no more results to request.
-            if len(page_rows) < _BOERSE_FRANKFURT_PAGE_SIZE:
+            if raw_row_count < _BOERSE_FRANKFURT_PAGE_SIZE:
                 break
 
         successful_pages = len(page_attempts) - len(page_errors)
@@ -1253,13 +1242,16 @@ class OfficialMarketUniverseSourceService:
         content: bytes,
         *,
         isin_to_ticker: dict[str, str] | None = None,
-    ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    ) -> tuple[list[dict[str, Any]], int, dict[str, int], int]:
         """Parse a Boerse Frankfurt search-API page into ingestion row dicts.
 
-        Returns ``(rows, total_count, ticker_resolution)`` where
-        ``ticker_resolution`` is a per-bucket counter so the caller can record
-        in snapshot metadata how the live tickers were resolved (explicit
-        field vs ISIN map vs slug derivation vs unresolved/dropped).
+        Returns ``(rows, total_count, ticker_resolution, raw_row_count)``.
+        ``rows`` is the post-filtering list (only entries with a resolvable
+        Yahoo-compatible ticker). ``raw_row_count`` is the size of the upstream
+        payload's data array before any filtering — the caller uses this for
+        partial-page detection so a page full of unresolved tickers doesn't
+        prematurely stop pagination. ``ticker_resolution`` is a per-bucket
+        counter recording how each resolved row was matched.
         """
         try:
             payload = json.loads(content.decode("utf-8"))
@@ -1277,6 +1269,7 @@ class OfficialMarketUniverseSourceService:
                 "Boerse Frankfurt 'data' field is not a list "
                 f"(got {type(raw_rows).__name__})"
             )
+        raw_row_count = len(raw_rows)
 
         total_count = 0
         for total_key in ("totalCount", "recordsTotal", "total"):
@@ -1290,7 +1283,6 @@ class OfficialMarketUniverseSourceService:
         resolution = {
             "explicit_field": 0,
             "isin_map": 0,
-            "slug_derived": 0,
             "unresolved": 0,
         }
         for entry in raw_rows:
@@ -1344,7 +1336,7 @@ class OfficialMarketUniverseSourceService:
                 }
             )
 
-        return rows, total_count, resolution
+        return rows, total_count, resolution, raw_row_count
 
     @classmethod
     def _derive_de_ticker(
@@ -1357,13 +1349,20 @@ class OfficialMarketUniverseSourceService:
         """Resolve a Yahoo-compatible ticker from a Boerse Frankfurt entry.
 
         Resolution order: explicit ``tickerSymbol`` / ``ticker`` field →
-        bundled-CSV ISIN map → slug-based derivation. Returns
-        ``(ticker, "explicit_field" | "isin_map" | "slug_derived")`` or
-        ``(None, "unresolved")`` if nothing yields a value matching the DE
-        adapter's local-code pattern.
+        bundled-CSV ISIN map. Returns ``(ticker, "explicit_field" | "isin_map")``
+        or ``(None, "unresolved")`` if neither path yields a value matching
+        the DE adapter's local-code pattern.
 
         WKN is intentionally never used: Yahoo Finance keys German equities
-        by ticker symbol (``SAP``), not WKN (``716460``).
+        by ticker symbol (``SAP``), not WKN (``716460``). Slug-based derivation
+        was tried earlier in the PR but rejected in review — slugs encode the
+        company name, which often differs from the Yahoo ticker (Adidas's slug
+        is ``adidas-ag`` but its Yahoo symbol is ``ADS``), so deriving from a
+        slug produces "looks-valid" symbols that fail downstream hydration.
+        Until the bundled ISIN map is populated with verified ISIN→ticker
+        pairs for the wider Xetra/Frankfurt universe, only rows that the API
+        labels with an explicit ticker field can resolve via the live path —
+        everything else is dropped and the CSV fallback covers the gap.
         """
         for field in ("tickerSymbol", "ticker", "shortName"):
             candidate = str(entry.get(field) or "").strip().upper()
@@ -1373,53 +1372,7 @@ class OfficialMarketUniverseSourceService:
         if isin and isin in isin_to_ticker:
             return isin_to_ticker[isin], "isin_map"
 
-        slug = str(entry.get("slug") or "").strip().lower()
-        derived = cls._derive_ticker_from_slug(slug)
-        if derived:
-            return derived, "slug_derived"
-
         return None, "unresolved"
-
-    @staticmethod
-    def _derive_ticker_from_slug(slug: str) -> str | None:
-        """Best-effort ticker extraction from a boerse-frankfurt.de slug.
-
-        Slugs typically look like ``sap-se``, ``deutsche-bank-ag``,
-        ``allianz-se-na``. We strip trailing entity-form tokens (``-se``,
-        ``-ag``, ``-kgaa``, etc.) iteratively, then take the resulting
-        head segment as the ticker candidate. Returns ``None`` if the
-        result doesn't pass the DE adapter's local-code regex.
-        """
-        if not slug:
-            return None
-        tokens = [t for t in slug.split("-") if t]
-        if not tokens:
-            return None
-
-        # Iteratively strip trailing entity tokens; check both the longest
-        # multi-token suffix and single-token suffixes.
-        while tokens:
-            joined_tail = "-".join(tokens[-3:]).lower()
-            stripped = False
-            for suffix in _DE_SLUG_ENTITY_SUFFIXES:
-                if joined_tail == suffix:
-                    tokens = tokens[: -len(suffix.split("-"))]
-                    stripped = True
-                    break
-                if joined_tail.endswith(f"-{suffix}"):
-                    tokens = tokens[: -len(suffix.split("-"))]
-                    stripped = True
-                    break
-            if not stripped:
-                break
-
-        if not tokens:
-            return None
-
-        candidate = tokens[0].upper()
-        if _DE_LIVE_TICKER_RE.fullmatch(candidate):
-            return candidate
-        return None
 
     @classmethod
     def _load_de_isin_to_ticker_map(cls) -> dict[str, str]:

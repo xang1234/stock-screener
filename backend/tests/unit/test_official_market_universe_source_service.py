@@ -1379,16 +1379,11 @@ def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch, tmp_path):
     )
     page_two = _de_page_payload(
         [
-            # Resolved via slug-based derivation (not in the bundled CSV).
-            # Note: the slug-derived ticker is the slug head, which often
-            # differs from the Yahoo-recognized ticker (e.g. Adidas's slug is
-            # ``adidas-ag`` but its Yahoo ticker is ``ADS``). The ISIN map is
-            # the better resolution path for DAX-40 names; slug derivation is
-            # the last-resort path for everything else.
+            # Resolved via ``ticker`` (alternate explicit field).
             {
                 "isin": "DE000A1EWWW0",
                 "wkn": "A1EWWW",
-                "slug": "adidas-ag",
+                "ticker": "ADS",
                 "name": "Adidas AG",
                 "xetraTradable": True,
             },
@@ -1413,15 +1408,14 @@ def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch, tmp_path):
     assert snapshot.source_name == "dbg_official"
     assert snapshot.source_metadata["fetch_mode"] == "live_http"
     symbols = [row["symbol"] for row in snapshot.rows]
-    assert symbols == sorted(["SAP.DE", "ALV.DE", "ADIDAS.DE"])
+    assert symbols == sorted(["SAP.DE", "ALV.DE", "ADS.DE"])
     assert snapshot.source_metadata["row_counts"]["xetra"] == 3
     assert snapshot.source_metadata["row_counts"]["frankfurt"] == 0
     assert snapshot.source_metadata["row_counts"]["total"] == 3
     assert snapshot.source_metadata["page_attempts"] == [0, 2]
     assert snapshot.source_metadata["ticker_resolution"] == {
-        "explicit_field": 1,
+        "explicit_field": 2,
         "isin_map": 1,
-        "slug_derived": 1,
         "unresolved": 0,
     }
 
@@ -1597,7 +1591,13 @@ def test_fetch_de_snapshot_falls_back_to_csv_on_http_failure(monkeypatch, tmp_pa
     assert snapshot.snapshot_id.startswith("de-csv-fallback-")
 
 
-def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(monkeypatch, tmp_path):
+@pytest.mark.parametrize("xetra_first", [True, False])
+def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(
+    monkeypatch, tmp_path, xetra_first
+):
+    """The Xetra preference must hold regardless of payload ordering — even
+    when the API returns the Frankfurt-floor venue before the Xetra one for
+    the same ISIN."""
     from app.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
@@ -1605,27 +1605,22 @@ def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(monkeypatch, tmp_pat
         app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
     )
 
-    page_one = _de_page_payload(
-        [
-            # Same ISIN appears once on Xetra and once on Frankfurt floor.
-            # The first occurrence (Xetra, .DE suffix) wins.
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": "SAP SE",
-                "isXetraTradable": True,
-            },
-            {
-                "isin": "DE0007164600",
-                "wkn": "716460",
-                "tickerSymbol": "SAP",
-                "name": "SAP SE Frankfurt",
-                "isXetraTradable": False,
-            },
-        ],
-        total=2,
-    )
+    xetra_row = {
+        "isin": "DE0007164600",
+        "wkn": "716460",
+        "tickerSymbol": "SAP",
+        "name": "SAP SE",
+        "isXetraTradable": True,
+    }
+    frankfurt_row = {
+        "isin": "DE0007164600",
+        "wkn": "716460",
+        "tickerSymbol": "SAP",
+        "name": "SAP SE Frankfurt",
+        "isXetraTradable": False,
+    }
+    ordered_rows = [xetra_row, frankfurt_row] if xetra_first else [frankfurt_row, xetra_row]
+    page_one = _de_page_payload(ordered_rows, total=2)
 
     pages = iter([page_one, _de_page_payload([], total=2)])
 
@@ -1639,6 +1634,69 @@ def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(monkeypatch, tmp_pat
 
     assert [row["symbol"] for row in snapshot.rows] == ["SAP.DE"]
     assert snapshot.rows[0]["exchange"] == "XETR"
+
+
+def test_fetch_de_snapshot_paginates_on_raw_row_count_not_filtered(monkeypatch, tmp_path):
+    """Pagination must use the raw upstream page size, not the post-filter row
+    count. A page full of unresolved tickers (filtered out by ticker derivation)
+    must not be mistaken for a partial page that ends pagination early."""
+    from app.config import settings as app_settings
+    from app.services import official_market_universe_source_service as svc_module
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
+    monkeypatch.setattr(svc_module, "_BOERSE_FRANKFURT_PAGE_SIZE", 2)
+
+    # Page 1: 2 raw rows, but only 1 resolves (the other has no ticker fields
+    # and is dropped). If pagination used post-filter count (1 < 2 → "partial
+    # page"), it would stop here and never request page 2.
+    page_one = _de_page_payload(
+        [
+            {
+                "isin": "DE0007164600",
+                "wkn": "716460",
+                "tickerSymbol": "SAP",
+                "name": "SAP SE",
+                "isXetraTradable": True,
+            },
+            {
+                "isin": "DE000UNK0001",
+                "wkn": "UNK001",
+                "name": "Unknown",  # no tickerSymbol/ticker → dropped
+                "isXetraTradable": True,
+            },
+        ],
+        total=3,
+    )
+    page_two = _de_page_payload(
+        [
+            {
+                "isin": "DE000A1EWWW0",
+                "wkn": "A1EWWW",
+                "tickerSymbol": "ADS",
+                "name": "Adidas AG",
+                "isXetraTradable": True,
+            },
+        ],
+        total=3,
+    )
+
+    pages = iter([page_one, page_two])
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        return _de_fetched_source(next(pages))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    # Both pages were fetched; both resolvable symbols ended up in the bundle.
+    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ADS.DE"}
+    assert snapshot.source_metadata["page_attempts"] == [0, 2]
+    assert snapshot.source_metadata["ticker_resolution"]["unresolved"] == 1
 
 
 def test_fetch_de_snapshot_raises_when_live_fails_and_csv_missing(monkeypatch, tmp_path):
@@ -1673,11 +1731,11 @@ def test_parse_de_results_handles_alternate_payload_keys():
                     "name": "SAP SE",
                     "isXetraTradable": True,
                 },
-                # Frankfurt-only listing, ticker via slug
+                # Frankfurt-only listing, ticker via alternate explicit field.
                 {
                     "isin": "DE0006062144",
                     "wkn": "606214",
-                    "slug": "covestro-ag",
+                    "ticker": "1COV",
                     "name": "Covestro",
                     "isXetraTradable": False,
                 },
@@ -1688,14 +1746,17 @@ def test_parse_de_results_handles_alternate_payload_keys():
         }
     ).encode("utf-8")
 
-    rows, total, resolution = service._parse_de_results(payload)
+    rows, total, resolution, raw_row_count = service._parse_de_results(payload)
 
     assert total == 3
+    # raw_row_count reflects the upstream payload size *before* filtering out
+    # rows without WKN (the third entry is missing wkn and gets dropped).
+    assert raw_row_count == 3
     symbols = [row["symbol"] for row in rows]
-    assert symbols == ["SAP.DE", "COVESTRO.F"]
+    assert symbols == ["SAP.DE", "1COV.F"]
     assert rows[1]["exchange"] == "XFRA"
-    assert resolution["explicit_field"] == 1
-    assert resolution["slug_derived"] == 1
+    assert resolution["explicit_field"] == 2
+    assert "slug_derived" not in resolution
 
 
 def test_parse_de_results_rejects_invalid_payload():
@@ -1718,31 +1779,11 @@ def test_load_de_csv_fallback_returns_empty_when_path_missing(monkeypatch, tmp_p
     assert service._load_de_csv_fallback() == []
 
 
-@pytest.mark.parametrize(
-    "slug,expected",
-    [
-        ("sap-se", "SAP"),
-        ("adidas-ag", "ADIDAS"),
-        ("allianz-se-na", "ALLIANZ"),
-        ("rwe-st", "RWE"),
-        ("henkel-vz", "HENKEL"),
-        # Multi-token entity suffix should be stripped as a unit.
-        ("abc-co-kgaa", "ABC"),
-        ("", None),
-        # Slug whose head doesn't fit the [A-Z0-9]{1,8} pattern (the head is
-        # 19 chars long after stripping the -ag entity token).
-        ("verylongcompanyname-ag", None),
-        # No alphanumeric tokens at all.
-        ("---", None),
-    ],
-)
-def test_derive_ticker_from_slug(slug, expected):
-    assert (
-        OfficialMarketUniverseSourceService._derive_ticker_from_slug(slug) == expected
-    )
-
-
-def test_derive_de_ticker_prefers_explicit_field_then_isin_map_then_slug():
+def test_derive_de_ticker_prefers_explicit_field_then_isin_map():
+    """Slug-based derivation was removed in review: slugs encode the company
+    name, not the ticker (e.g. ``adidas-ag`` → ``ADIDAS`` instead of the Yahoo
+    symbol ``ADS``). Live resolution is now explicit ticker field → ISIN map,
+    and any row that falls through both is dropped."""
     derive = OfficialMarketUniverseSourceService._derive_de_ticker
     isin_map = {"DE0007164600": "SAP", "DE0008404005": "ALV"}
 
@@ -1754,7 +1795,7 @@ def test_derive_de_ticker_prefers_explicit_field_then_isin_map_then_slug():
     )
     assert (ticker, source) == ("EXP", "explicit_field")
 
-    # Falls through to ISIN map when no explicit field.
+    # Falls through to ISIN map when no explicit field — slug is ignored.
     ticker, source = derive(
         {"slug": "ignore-this-slug"},
         isin="DE0008404005",
@@ -1762,13 +1803,13 @@ def test_derive_de_ticker_prefers_explicit_field_then_isin_map_then_slug():
     )
     assert (ticker, source) == ("ALV", "isin_map")
 
-    # Falls through to slug derivation when neither is present.
+    # Slug is no longer a resolution path: this row drops even with a slug.
     ticker, source = derive(
         {"slug": "covestro-ag"},
         isin="DE0006062144",
         isin_to_ticker=isin_map,
     )
-    assert (ticker, source) == ("COVESTRO", "slug_derived")
+    assert (ticker, source) == (None, "unresolved")
 
     # Returns None when nothing resolves — caller drops the row.
     ticker, source = derive(

@@ -190,7 +190,7 @@ class Settings(BaseSettings):
         "https://api.boerse-frankfurt.de/v1/search/equity_search"
     )
     de_universe_fallback_csv_path: str = str(
-        _PROJECT_ROOT / "backend" / "data" / "de_dax40_constituents.csv"
+        _PROJECT_ROOT / "data" / "de_dax40_constituents.csv"
     )
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
