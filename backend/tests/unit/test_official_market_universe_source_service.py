@@ -1946,6 +1946,17 @@ def test_derive_de_ticker_prefers_explicit_field_then_isin_map():
     )
     assert (ticker, source) == (None, "unresolved")
 
+    # ``shortName`` is a descriptive label (``"Adidas"``), not a ticker. Even
+    # though it would happen to match the [A-Z0-9]{1,8} regex, accepting it
+    # would publish plausible-but-wrong symbols and inflate the resolved-row
+    # count past the live-path safety guards. The row must drop.
+    ticker, source = derive(
+        {"shortName": "Adidas"},
+        isin="DE000A1EWWW0",
+        isin_to_ticker=isin_map,
+    )
+    assert (ticker, source) == (None, "unresolved")
+
 
 def test_load_de_isin_to_ticker_map(monkeypatch, tmp_path):
     from app.config import settings as app_settings

@@ -1397,18 +1397,22 @@ class OfficialMarketUniverseSourceService:
         or ``(None, "unresolved")`` if neither path yields a value matching
         the DE adapter's local-code pattern.
 
-        WKN is intentionally never used: Yahoo Finance keys German equities
-        by ticker symbol (``SAP``), not WKN (``716460``). Slug-based derivation
-        was tried earlier in the PR but rejected in review — slugs encode the
-        company name, which often differs from the Yahoo ticker (Adidas's slug
-        is ``adidas-ag`` but its Yahoo symbol is ``ADS``), so deriving from a
-        slug produces "looks-valid" symbols that fail downstream hydration.
-        Until the bundled ISIN map is populated with verified ISIN→ticker
-        pairs for the wider Xetra/Frankfurt universe, only rows that the API
-        labels with an explicit ticker field can resolve via the live path —
-        everything else is dropped and the CSV fallback covers the gap.
+        Fields that look like tickers but are not are intentionally NOT
+        consulted: ``shortName`` is a descriptive company label (``Adidas``,
+        ``SAP SE``) that may accidentally match the ``[A-Z0-9]{1,8}`` regex
+        even though it is not a real exchange ticker. Letting such values
+        through would publish plausible-but-wrong symbols and inflate the
+        resolved-row count past the safety guards in ``_fetch_de_live``.
+        WKN is never used either: Yahoo Finance keys German equities by
+        ticker (``SAP``), not by WKN (``716460``). Slug-based derivation was
+        tried earlier in the PR and removed for the same reason — slugs
+        encode the company name, not the ticker. Until the bundled ISIN map
+        is populated with verified ISIN→ticker pairs for the wider Xetra /
+        Frankfurt universe, only rows that the API labels with an explicit
+        ticker field can resolve via the live path; everything else is
+        dropped and the CSV fallback covers the gap.
         """
-        for field in ("tickerSymbol", "ticker", "shortName"):
+        for field in ("tickerSymbol", "ticker"):
             candidate = str(entry.get(field) or "").strip().upper()
             if candidate and _DE_LIVE_TICKER_RE.fullmatch(candidate):
                 return candidate, "explicit_field"
