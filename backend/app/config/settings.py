@@ -179,27 +179,32 @@ class Settings(BaseSettings):
         "https://www.tsx.com/json/company-directory/search/tsxv/{initial}"
     )
     de_universe_allow_insecure_fallback: bool = False
-    # Boerse Frankfurt public equity-search endpoint. Powers the same UI on
-    # boerse-frankfurt.de and accepts ``offset``/``limit`` pagination plus the
-    # ``X-Security`` HMAC header computed in
-    # ``de_universe_source_signing.build_signed_headers``. When the live
-    # endpoint is unreachable or upstream rotates the signing salt, the fetcher
-    # falls back to ``de_universe_fallback_csv_path`` so the bundle can still
-    # publish (with ``--allow-partial-publish``).
+    # Deutsche Boerse Cash Market reference-data CSV for Xetra-tradable
+    # instruments. Plain ``;``-delimited file with two metadata header rows
+    # before the column header. Filter to ``Instrument Status = Active`` and
+    # ``Instrument Type = CS`` to get the ~870 Common Stock universe; the
+    # ``Mnemonic`` column maps directly to the Yahoo ticker prefix
+    # (``Mnemonic + ".DE"``). The blob hash in the URL rotates periodically
+    # — when the live fetch returns 404, operators should refresh this value
+    # by following the link on
+    # https://www.xetra.com/xetra-en/instruments/all-tradable-instruments
+    # (it 301-redirects to the canonical cashmarket.deutsche-boerse.com URL).
+    # While stale, the fetcher falls back to the bundled DAX-40 seed CSV
+    # so the bundle can still publish.
     de_universe_source_url: str = (
-        "https://api.boerse-frankfurt.de/v1/search/equity_search"
+        "https://www.cashmarket.deutsche-boerse.com/resource/blob/1528/"
+        "c06ff55cb683eed417e40d1cd4bad215/data/t7-xetr-allTradableInstruments.csv"
     )
     de_universe_fallback_csv_path: str = str(
         _PROJECT_ROOT / "data" / "de_dax40_constituents.csv"
     )
-    # Minimum fraction of upstream rows that must resolve to a Yahoo-compatible
-    # ticker before the live DE snapshot is considered publishable. Below this
-    # threshold ``_fetch_de_live`` raises so ``fetch_de_snapshot`` falls back
-    # to the bundled CSV — this prevents silent deactivation of valid symbols
-    # when the live API returns partial data or our resolution heuristics
-    # regress. Set to 0 to disable the ratio check (the CSV-superset check
-    # below still applies).
-    de_live_min_resolution_ratio: float = 0.5
+    # Minimum live-universe row count before the snapshot is considered
+    # publishable. The Xetra reference CSV typically ships ~870 Common Stock
+    # rows; setting this to 200 lets a partial Xetra outage (e.g. status
+    # filters tightening) still publish while catching catastrophic universe
+    # shrinkage. Set to 0 to disable the floor (the CSV-superset check still
+    # applies regardless).
+    de_live_min_universe_size: int = 200
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
     # Per-market rate budget overrides. Each value is in requests-per-second
