@@ -189,6 +189,15 @@ def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
                 snapshot_as_of=snapshot.snapshot_as_of,
                 source_metadata=snapshot.source_metadata,
             )
+        if snapshot.market == "DE":
+            return stock_universe_service.ingest_de_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
         raise ValueError(f"Unsupported official universe snapshot market {snapshot.market!r}")
     finally:
         db.close()

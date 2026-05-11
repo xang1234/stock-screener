@@ -315,3 +315,49 @@ def test_refresh_sp500_membership_retries_transient_database_error_from_task_bod
     assert retry_calls[0]["countdown"] == 5
     assert retry_calls[0]["max_retries"] == 12
     fake_lock.release.assert_called_once_with("task-123", market=None)
+
+
+@pytest.mark.parametrize(
+    "market",
+    sorted(__import__("app.tasks.universe_tasks", fromlist=["_OFFICIAL_SOURCE_MARKETS"])._OFFICIAL_SOURCE_MARKETS),
+)
+def test_ingest_official_snapshot_handles_every_allowlisted_market(monkeypatch, market):
+    """Drift guard for PR #170 review: every market in
+    ``_OFFICIAL_SOURCE_MARKETS`` must have a matching ``snapshot.market ==
+    "..."`` branch in ``_ingest_official_snapshot``. Otherwise the
+    allowlist lets a refresh through and the dispatcher raises
+    ``ValueError`` in production. Iterating the allowlist guarantees the
+    next added market trips this test instead of failing silently."""
+    import app.tasks.universe_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+
+    ingest_calls: list[str] = []
+
+    class FakeUniverseService:
+        def __getattr__(self, name: str):
+            # Record every ``ingest_<market>_snapshot_rows`` call so we can
+            # assert the dispatcher targeted the right method.
+            def _stub(db, **kwargs):
+                ingest_calls.append(name)
+                return {"added": 0, "updated": 0, "total": 0}
+            return _stub
+
+    monkeypatch.setattr(
+        module, "get_stock_universe_service", lambda: FakeUniverseService()
+    )
+
+    snapshot = SimpleNamespace(
+        market=market,
+        rows=(),
+        source_name="test_source",
+        snapshot_id="test-snapshot-id",
+        snapshot_as_of="2026-05-11",
+        source_metadata={},
+    )
+
+    # Must not raise — every allowlisted market needs a dispatcher branch.
+    result = module._ingest_official_snapshot(snapshot)
+    assert result["added"] == 0
+    assert ingest_calls == [f"ingest_{market.lower()}_snapshot_rows"]
