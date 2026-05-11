@@ -17,6 +17,7 @@ import pandas as pd
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
+from app.domain.markets.catalog import get_market_catalog
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock import StockPrice
@@ -55,18 +56,11 @@ STATIC_CHART_TOP_N_GROUPS = 50
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
-STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE")
+_MARKET_CATALOG = get_market_catalog()
+STATIC_SUPPORTED_MARKETS = tuple(_MARKET_CATALOG.supported_market_codes())
 STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
-    "US": "United States",
-    "HK": "Hong Kong",
-    "IN": "India",
-    "JP": "Japan",
-    "KR": "South Korea",
-    "TW": "Taiwan",
-    "CN": "China A-shares",
-    "CA": "Canada",
-    "DE": "Germany",
+    market: _MARKET_CATALOG.get(market).label for market in STATIC_SUPPORTED_MARKETS
 }
 STATIC_GROUP_HISTORY_RUNS = 40
 STATIC_GROUP_CHANGE_OFFSETS = {

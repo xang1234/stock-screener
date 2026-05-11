@@ -9,6 +9,16 @@ from types import SimpleNamespace
 import app.scripts.build_daily_price_bundle as build_script
 import app.scripts.sync_daily_price_bundle_from_github as sync_daily_script
 import app.scripts.sync_weekly_reference_from_github as sync_weekly_script
+from app.domain.markets import market_registry
+from app.services.daily_price_bundle_service import DailyPriceBundleService
+from app.services.provider_snapshot_service import ProviderSnapshotService
+
+
+def test_daily_and_weekly_reference_script_markets_match_market_registry():
+    assert DailyPriceBundleService.DAILY_PRICE_SUPPORTED_MARKETS == market_registry.supported_market_codes()
+    assert tuple(ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS_BY_MARKET) == (
+        market_registry.supported_market_codes()
+    )
 
 
 @contextmanager

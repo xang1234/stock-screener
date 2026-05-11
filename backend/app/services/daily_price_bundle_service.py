@@ -16,6 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..domain.markets import market_registry
 from ..models.app_settings import AppSetting
 from ..models.stock import StockPrice
 from ..models.stock_universe import StockUniverse
@@ -30,7 +31,7 @@ class DailyPriceBundleService:
     DAILY_PRICE_MANIFEST_SCHEMA_VERSION = "daily-price-manifest-v1"
     DAILY_PRICE_RELEASE_TAG = "daily-price-data"
     DAILY_PRICE_BAR_PERIOD = "2y"
-    DAILY_PRICE_SUPPORTED_MARKETS: tuple[str, ...] = ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE")
+    DAILY_PRICE_SUPPORTED_MARKETS: tuple[str, ...] = market_registry.supported_market_codes()
     SYNC_STATE_CATEGORY = "github_sync"
 
     def __init__(
