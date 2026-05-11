@@ -1,0 +1,529 @@
+name: CN Daily Price Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      shard_count:
+        description: "Number of CN price shards to refresh."
+        required: true
+        default: "12"
+      shard:
+        description: "Run one 1-based shard index, or 'all'."
+        required: true
+        default: "all"
+      as_of_date:
+        description: "CN bundle as-of date (YYYY-MM-DD). Blank uses latest completed CN trading day."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: cn-daily-price-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CAN_PUBLISH_RELEASES: ${{ github.ref_name == github.event.repository.default_branch }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shard_count: ${{ steps.plan.outputs.shard_count }}
+      shards: ${{ steps.plan.outputs.shards }}
+      as_of_date: ${{ steps.plan.outputs.as_of_date }}
+      as_of_compact: ${{ steps.plan.outputs.as_of_compact }}
+      combine: ${{ steps.plan.outputs.combine }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Resolve shard plan
+        id: plan
+        env:
+          INPUT_SHARD_COUNT: ${{ github.event.inputs.shard_count }}
+          INPUT_SHARD: ${{ github.event.inputs.shard }}
+          INPUT_AS_OF_DATE: ${{ github.event.inputs.as_of_date }}
+        run: |
+          cd backend
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from datetime import date
+
+          from app.services.market_calendar_service import MarketCalendarService
+
+          shard_count = int(os.environ["INPUT_SHARD_COUNT"])
+          if shard_count < 1:
+              raise SystemExit("shard_count must be >= 1")
+
+          raw_shard = (os.environ["INPUT_SHARD"] or "all").strip().lower()
+          if raw_shard == "all":
+              shards = list(range(1, shard_count + 1))
+              combine = "true"
+          else:
+              shard = int(raw_shard)
+              if shard < 1 or shard > shard_count:
+                  raise SystemExit("shard must be between 1 and shard_count")
+              shards = [shard]
+              combine = "false"
+
+          calendar = MarketCalendarService()
+          raw_as_of = (os.environ.get("INPUT_AS_OF_DATE") or "").strip()
+          if raw_as_of:
+              as_of = date.fromisoformat(raw_as_of)
+          else:
+              as_of = calendar.last_completed_trading_day("CN")
+
+          latest_completed = calendar.last_completed_trading_day("CN")
+          if as_of > latest_completed:
+              raise SystemExit(
+                  f"as_of_date {as_of.isoformat()} is after CN's latest completed "
+                  f"trading day {latest_completed.isoformat()}"
+              )
+          if not calendar.is_trading_day("CN", as_of):
+              raise SystemExit(f"as_of_date {as_of.isoformat()} is not a CN trading day")
+
+          print(f"shard_count={shard_count}")
+          print(f"shards={json.dumps(shards)}")
+          print(f"as_of_date={as_of.isoformat()}")
+          print(f"as_of_compact={as_of.isoformat().replace('-', '')}")
+          print(f"combine={combine}")
+          PY
+
+      - name: Pin CN weekly reference bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          AS_OF_DATE: ${{ steps.plan.outputs.as_of_date }}
+          AS_OF_COMPACT: ${{ steps.plan.outputs.as_of_compact }}
+          SHARD_COUNT: ${{ steps.plan.outputs.shard_count }}
+        run: |
+          mkdir -p /tmp/cn-weekly-reference
+          MARKET_MANIFEST="weekly-reference-latest-cn.json"
+          LEGACY_MANIFEST="weekly-reference-latest.json"
+          PLAN_ASSET="daily-price-cn-${AS_OF_COMPACT}-shards-${SHARD_COUNT}.plan.json"
+          export PLAN_PATH="/tmp/cn-weekly-reference/${PLAN_ASSET}"
+
+          retry_download_from_release() {
+            release_tag="$1"
+            asset_name="$2"
+            output_dir="$3"
+            for attempt in 1 2 3; do
+              rm -f "${output_dir}/${asset_name}"
+              if gh release download "${release_tag}" \
+                --pattern "${asset_name}" \
+                --dir "${output_dir}" >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          retry_list_assets() {
+            release_tag="$1"
+            for attempt in 1 2 3; do
+              if gh release view "${release_tag}" --json assets --jq '.assets[].name'; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          if [ "${CAN_PUBLISH_RELEASES}" = "true" ] \
+            && ! gh release view cn-daily-price-shards >/dev/null 2>&1; then
+            gh release create cn-daily-price-shards \
+              --title "CN Daily Price Shards" \
+              --notes "Durable resumable shard checkpoints for China A-share daily price bootstraps."
+          fi
+
+          if gh release view cn-daily-price-shards >/dev/null 2>&1 \
+            && retry_download_from_release cn-daily-price-shards "${PLAN_ASSET}" /tmp/cn-weekly-reference; then
+            export BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads(Path(os.environ["PLAN_PATH"]).read_text(encoding="utf-8"))
+          if plan["as_of_date"] != os.environ["AS_OF_DATE"]:
+              raise SystemExit("Pinned CN shard plan as_of_date mismatch")
+          if int(plan["shard_count"]) != int(os.environ["SHARD_COUNT"]):
+              raise SystemExit("Pinned CN shard plan shard_count mismatch")
+          print(plan["weekly_reference_bundle_asset_name"])
+          PY
+          )"
+            export BUNDLE_SHA256="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads(Path(os.environ["PLAN_PATH"]).read_text(encoding="utf-8"))
+          print(plan["weekly_reference_sha256"])
+          PY
+          )"
+          else
+            ASSET_NAMES="$(retry_list_assets weekly-reference-data)"
+
+            if printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${MARKET_MANIFEST}"; then
+              retry_download_from_release weekly-reference-data "${MARKET_MANIFEST}" /tmp/cn-weekly-reference
+              export MANIFEST_PATH="/tmp/cn-weekly-reference/${MARKET_MANIFEST}"
+              export MANIFEST_ASSET_NAME="${MARKET_MANIFEST}"
+            elif printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${LEGACY_MANIFEST}"; then
+              retry_download_from_release weekly-reference-data "${LEGACY_MANIFEST}" /tmp/cn-weekly-reference
+              export MANIFEST_PATH="/tmp/cn-weekly-reference/${LEGACY_MANIFEST}"
+              export MANIFEST_ASSET_NAME="${LEGACY_MANIFEST}"
+            else
+              echo "No CN weekly reference manifest and no legacy fallback are available." >&2
+              exit 1
+            fi
+
+            export BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path(os.environ["MANIFEST_PATH"]).read_text(encoding="utf-8"))
+          print(manifest["bundle_asset_name"])
+          PY
+          )"
+            export BUNDLE_SHA256="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path(os.environ["MANIFEST_PATH"]).read_text(encoding="utf-8"))
+          print(manifest["sha256"])
+          PY
+          )"
+
+            python - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+
+          plan = {
+              "schema_version": "cn-daily-price-shard-plan-v1",
+              "market": "CN",
+              "as_of_date": os.environ["AS_OF_DATE"],
+              "shard_count": int(os.environ["SHARD_COUNT"]),
+              "weekly_reference_manifest_asset_name": os.environ["MANIFEST_ASSET_NAME"],
+              "weekly_reference_bundle_asset_name": os.environ["BUNDLE_ASSET_NAME"],
+              "weekly_reference_sha256": os.environ["BUNDLE_SHA256"],
+              "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+          }
+          Path(os.environ["PLAN_PATH"]).write_text(
+              json.dumps(plan, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+            if [ "${CAN_PUBLISH_RELEASES}" = "true" ]; then
+              gh release upload cn-daily-price-shards "${PLAN_PATH}" --clobber
+            fi
+          fi
+
+          retry_download_from_release weekly-reference-data "$BUNDLE_ASSET_NAME" /tmp/cn-weekly-reference
+
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          bundle_path = Path("/tmp/cn-weekly-reference") / os.environ["BUNDLE_ASSET_NAME"]
+          digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          expected = os.environ["BUNDLE_SHA256"]
+          if digest != expected:
+              raise SystemExit(
+                  f"Weekly reference bundle checksum mismatch for {bundle_path.name}: "
+                  f"{digest} != {expected}"
+              )
+          PY
+
+      - name: Upload pinned CN weekly reference bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cn-weekly-reference
+          path: /tmp/cn-weekly-reference
+          if-no-files-found: error
+
+  ensure-releases:
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure durable release targets exist
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view daily-price-data >/dev/null 2>&1; then
+            gh release create daily-price-data \
+              --title "Daily Price Data" \
+              --notes "Automated daily market-scoped OHLCV bundles for runtime bootstrap and refresh."
+          fi
+          if ! gh release view cn-daily-price-shards >/dev/null 2>&1; then
+            gh release create cn-daily-price-shards \
+              --title "CN Daily Price Shards" \
+              --notes "Durable resumable shard checkpoints for China A-share daily price bootstraps."
+          fi
+
+      - name: Skip release setup on non-default branch
+        if: github.ref_name != github.event.repository.default_branch
+        run: echo "Release creation is skipped outside the default branch."
+
+  build-cn-price-shard:
+    needs: [plan, ensure-releases]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stockscanner
+          POSTGRES_USER: stockscanner
+          POSTGRES_PASSWORD: stockscanner
+        options: >-
+          --health-cmd "pg_isready -U stockscanner -d stockscanner"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      REDIS_ENABLED: "false"
+      DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
+      GITHUB_DATA_TOKEN: ${{ github.token }}
+      SHARD_COUNT: ${{ needs.plan.outputs.shard_count }}
+      SHARD_INDEX: ${{ matrix.shard }}
+      AS_OF_DATE: ${{ needs.plan.outputs.as_of_date }}
+      AS_OF_COMPACT: ${{ needs.plan.outputs.as_of_compact }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Download pinned CN weekly reference bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: cn-weekly-reference
+          path: /tmp/cn-weekly-reference
+
+      - name: Import pinned CN weekly reference
+        run: |
+          cd backend
+          WEEKLY_REFERENCE_BUNDLE="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          plans = sorted(Path("/tmp/cn-weekly-reference").glob("daily-price-cn-*-shards-*.plan.json"))
+          if not plans:
+              raise SystemExit("Pinned CN shard plan was not downloaded")
+          plan = json.loads(plans[0].read_text(encoding="utf-8"))
+          print(Path("/tmp/cn-weekly-reference") / plan["weekly_reference_bundle_asset_name"])
+          PY
+          )"
+          python -m app.scripts.import_weekly_reference_bundle \
+            --input "${WEEKLY_REFERENCE_BUNDLE}"
+
+      - name: Seed latest full CN daily price bundle
+        run: |
+          cd backend
+          python -m app.scripts.sync_daily_price_bundle_from_github \
+            --market CN \
+            --allow-stale
+
+      - name: Resume prior shard checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p /tmp/cn-prior-price-shard
+          SHARD_ASSET="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.json.gz"
+          SHARD_MANIFEST="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.manifest.json"
+          if gh release download cn-daily-price-shards \
+            --pattern "${SHARD_ASSET}" \
+            --dir /tmp/cn-prior-price-shard >/dev/null 2>&1 \
+            && gh release download cn-daily-price-shards \
+              --pattern "${SHARD_MANIFEST}" \
+              --dir /tmp/cn-prior-price-shard >/dev/null 2>&1; then
+            cd backend
+            python -m app.scripts.import_daily_price_bundle \
+              --input "/tmp/cn-prior-price-shard/${SHARD_ASSET}" \
+              --manifest "/tmp/cn-prior-price-shard/${SHARD_MANIFEST}" \
+              --expected-market CN \
+              --expected-as-of-date "${AS_OF_DATE}" \
+              --expected-bundle-asset-name "${SHARD_ASSET}" \
+              --warm-redis-symbols 0
+          else
+            echo "No prior verified CN shard checkpoint found for ${SHARD_ASSET}; starting this shard from seeded full bundle only."
+          fi
+
+      - name: Refresh CN daily price shard
+        run: |
+          cd backend
+          CHECKPOINT_ARGS=()
+          if [ "${CAN_PUBLISH_RELEASES}" = "true" ]; then
+            CHECKPOINT_ARGS=(--checkpoint-release-tag cn-daily-price-shards)
+          fi
+          python -m app.scripts.bootstrap_cn_daily_price_shard \
+            --shard-index "${SHARD_INDEX}" \
+            --shard-count "${SHARD_COUNT}" \
+            --as-of-date "${AS_OF_DATE}" \
+            --output-dir /tmp/cn-price-shard \
+            "${CHECKPOINT_ARGS[@]}"
+
+      - name: Upload CN price shard artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cn-daily-price-shard-${{ matrix.shard }}-of-${{ needs.plan.outputs.shard_count }}
+          path: /tmp/cn-price-shard
+          if-no-files-found: error
+
+      - name: Verify CN price shard outputs
+        run: |
+          SHARD_ASSET="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.json.gz"
+          SHARD_MANIFEST="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.manifest.json"
+          test -f "/tmp/cn-price-shard/${SHARD_ASSET}"
+          test -f "/tmp/cn-price-shard/${SHARD_MANIFEST}"
+
+  combine-cn-price-shards:
+    if: needs.plan.outputs.combine == 'true'
+    needs: [plan, build-cn-price-shard]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stockscanner
+          POSTGRES_USER: stockscanner
+          POSTGRES_PASSWORD: stockscanner
+        options: >-
+          --health-cmd "pg_isready -U stockscanner -d stockscanner"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      REDIS_ENABLED: "false"
+      DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
+      GITHUB_DATA_TOKEN: ${{ github.token }}
+      SHARD_COUNT: ${{ needs.plan.outputs.shard_count }}
+      AS_OF_DATE: ${{ needs.plan.outputs.as_of_date }}
+      AS_OF_COMPACT: ${{ needs.plan.outputs.as_of_compact }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Download pinned CN weekly reference bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: cn-weekly-reference
+          path: /tmp/cn-weekly-reference
+
+      - name: Download current shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cn-daily-price-shard-*
+          path: /tmp/cn-price-shards
+          merge-multiple: true
+
+      - name: Import pinned CN weekly reference
+        run: |
+          cd backend
+          WEEKLY_REFERENCE_BUNDLE="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          plans = sorted(Path("/tmp/cn-weekly-reference").glob("daily-price-cn-*-shards-*.plan.json"))
+          if not plans:
+              raise SystemExit("Pinned CN shard plan was not downloaded")
+          plan = json.loads(plans[0].read_text(encoding="utf-8"))
+          print(Path("/tmp/cn-weekly-reference") / plan["weekly_reference_bundle_asset_name"])
+          PY
+          )"
+          python -m app.scripts.import_weekly_reference_bundle \
+            --input "${WEEKLY_REFERENCE_BUNDLE}"
+
+      - name: Import CN shard bundles
+        run: |
+          shopt -s nullglob
+          bundles=(/tmp/cn-price-shards/daily-price-cn-${AS_OF_COMPACT}-shard-*-of-${SHARD_COUNT}.json.gz)
+          if [ "${#bundles[@]}" -ne "${SHARD_COUNT}" ]; then
+            echo "Expected ${SHARD_COUNT} shard bundles, found ${#bundles[@]}" >&2
+            printf 'Found bundles:\n'
+            printf '  %s\n' "${bundles[@]}"
+            exit 1
+          fi
+          for bundle in "${bundles[@]}"; do
+            cd "$GITHUB_WORKSPACE/backend"
+            python -m app.scripts.import_daily_price_bundle \
+              --input "$bundle" \
+              --warm-redis-symbols 0
+          done
+
+      - name: Build final CN daily price bundle
+        run: |
+          cd backend
+          python -m app.scripts.build_daily_price_bundle \
+            --market CN \
+            --output-dir /tmp/daily-price \
+            --as-of-date "${AS_OF_DATE}" \
+            --require-complete
+
+      - name: Publish final CN daily price bundle
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          BUNDLE_PATH="/tmp/daily-price/daily-price-cn-${AS_OF_COMPACT}.json.gz"
+          MANIFEST_PATH="/tmp/daily-price/daily-price-latest-cn.json"
+          if [ ! -f "$BUNDLE_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
+            echo "Missing final CN daily price bundle outputs" >&2
+            find /tmp/daily-price -maxdepth 1 -type f -print >&2 || true
+            exit 1
+          fi
+          gh release upload daily-price-data "$BUNDLE_PATH" --clobber
+          gh release upload daily-price-data "$MANIFEST_PATH" --clobber
+
+      - name: Skip final release publish on non-default branch
+        if: github.ref_name != github.event.repository.default_branch
+        run: echo "Final CN daily price release publish is skipped outside the default branch."

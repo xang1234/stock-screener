@@ -192,20 +192,28 @@ class DailyPriceBundleService:
         bundle_asset_name: str,
         latest_manifest_path: Path | None = None,
         as_of_date: date | None = None,
+        symbols: list[str] | tuple[str, ...] | None = None,
+        require_complete: bool = False,
     ) -> dict[str, Any]:
         bundle_market = self.normalize_market(market)
         bundle_as_of_date = as_of_date or self.market_calendar.last_completed_trading_day(bundle_market)
         start_date = bundle_as_of_date - timedelta(days=730)
+        selected_symbols = None
+        if symbols is not None:
+            selected_symbols = sorted({str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()})
+            if not selected_symbols:
+                raise ValueError("symbols must contain at least one symbol when provided")
 
-        active_rows = (
+        active_query = (
             db.query(StockUniverse)
             .filter(
                 StockUniverse.active_filter(),
                 StockUniverse.market == bundle_market,
             )
-            .order_by(StockUniverse.symbol.asc())
-            .all()
         )
+        if selected_symbols is not None:
+            active_query = active_query.filter(StockUniverse.symbol.in_(selected_symbols))
+        active_rows = active_query.order_by(StockUniverse.symbol.asc()).all()
         if not active_rows:
             raise ValueError(f"No active universe rows found for market {bundle_market}")
 
@@ -238,6 +246,11 @@ class DailyPriceBundleService:
                     "volume": row.volume,
                 }
             )
+        latest_by_symbol = {
+            symbol: date.fromisoformat(rows[-1]["date"])
+            for symbol, rows in rows_by_symbol.items()
+            if rows
+        }
 
         bundle_rows = [
             {
@@ -248,6 +261,17 @@ class DailyPriceBundleService:
             for symbol in sorted(rows_by_symbol)
             if rows_by_symbol[symbol]
         ]
+        missing_symbols = [
+            symbol for symbol in all_symbols
+            if not rows_by_symbol.get(symbol)
+            or latest_by_symbol.get(symbol) < bundle_as_of_date
+        ]
+        if require_complete and missing_symbols:
+            preview = ", ".join(missing_symbols[:10])
+            raise ValueError(
+                f"Missing {len(missing_symbols)} {bundle_market} symbols from daily price bundle "
+                f"as of {bundle_as_of_date.isoformat()}: {preview}"
+            )
         if not bundle_rows:
             raise ValueError(f"No {bundle_market} stock_prices rows were available to export")
 

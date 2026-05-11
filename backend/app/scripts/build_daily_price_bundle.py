@@ -48,6 +48,11 @@ def main() -> int:
         default=None,
         help="Override the bundle as-of date (YYYY-MM-DD). Defaults to the latest completed trading day.",
     )
+    parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="Fail if any active market symbol is missing price rows through the bundle as-of date.",
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -61,6 +66,17 @@ def main() -> int:
         if args.as_of_date
         else service.market_calendar.last_completed_trading_day(market)
     )
+    if args.as_of_date:
+        latest_completed = service.market_calendar.last_completed_trading_day(market)
+        if resolved_as_of_date > latest_completed:
+            raise SystemExit(
+                f"{market} as-of date {resolved_as_of_date.isoformat()} is after "
+                f"the latest completed trading day {latest_completed.isoformat()}"
+            )
+        if not service.market_calendar.is_trading_day(market, resolved_as_of_date):
+            raise SystemExit(
+                f"{market} as-of date {resolved_as_of_date.isoformat()} is not a trading day"
+            )
     bundle_name = args.bundle_name or _default_bundle_name(market, resolved_as_of_date)
     latest_manifest_name = (
         args.latest_manifest_name or service.latest_manifest_name_for_market(market)
@@ -74,6 +90,7 @@ def main() -> int:
             bundle_asset_name=bundle_name,
             latest_manifest_path=output_dir / latest_manifest_name,
             as_of_date=resolved_as_of_date,
+            require_complete=args.require_complete,
         )
 
     print(f"Daily price bundle complete for {market}:")
