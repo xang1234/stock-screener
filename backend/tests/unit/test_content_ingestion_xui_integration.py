@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.models.app_settings import AppSetting
 from app.models.theme import ContentItem, ContentItemPipelineState, ContentSource
 from app.services.content_ingestion_service import ContentIngestionService, RSSFetcher
 
@@ -227,6 +228,122 @@ def test_fetch_source_propagates_adapter_error_and_does_not_advance_last_fetched
     db_session.refresh(source)
     assert source.last_fetched_at == previous_fetch
     assert db_session.query(ContentItem).count() == 0
+
+
+def test_fetch_source_persists_official_x_since_id_after_success(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = ContentSource(
+        name="@alice",
+        source_type="twitter",
+        url="https://x.com/alice",
+        is_active=True,
+    )
+    db_session.add(source)
+    db_session.commit()
+    responses = [
+        [
+            {
+                "external_id": "tweet-9",
+                "title": "",
+                "content": "older",
+                "url": "https://x.com/alice/status/9",
+                "author": "@alice",
+                "published_at": datetime.utcnow(),
+                "_twitter_since_id": "9",
+            },
+            {
+                "external_id": "tweet-100",
+                "title": "",
+                "content": "hello",
+                "url": "https://x.com/alice/status/100",
+                "author": "@alice",
+                "published_at": datetime.utcnow(),
+                "_twitter_since_id": "100",
+            },
+        ],
+        [
+            {
+                "external_id": "tweet-101",
+                "title": "",
+                "content": "newer",
+                "url": "https://x.com/alice/status/101",
+                "author": "@alice",
+                "published_at": datetime.utcnow(),
+                "_twitter_since_id": "101",
+            }
+        ],
+    ]
+
+    class FakeTwitterFetcher:
+        def fetch(self, _source, _since=None):
+            return responses.pop(0)
+
+    monkeypatch.setattr(
+        "app.services.content_ingestion_service.TwitterFetcher",
+        lambda: FakeTwitterFetcher(),
+    )
+
+    service = ContentIngestionService(db_session)
+    inserted = service.fetch_source(source)
+
+    assert inserted == 2
+    key = f"twitter.official_x_api.source.{source.id}.since_id"
+    setting = db_session.query(AppSetting).filter(
+        AppSetting.key == key
+    ).one()
+    assert setting.value == "100"
+    assert setting.category == "theme"
+
+    inserted = service.fetch_source(source)
+
+    assert inserted == 1
+    settings = db_session.query(AppSetting).filter(AppSetting.key == key).all()
+    assert len(settings) == 1
+    assert settings[0].value == "101"
+
+
+def test_fetch_source_does_not_persist_since_id_for_xui_shape(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = ContentSource(
+        name="@alice",
+        source_type="twitter",
+        url="https://x.com/alice",
+        is_active=True,
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    class FakeTwitterFetcher:
+        def fetch(self, _source, _since=None):
+            return [
+                {
+                    "external_id": "tweet-100",
+                    "title": "",
+                    "content": "hello",
+                    "url": "https://x.com/alice/status/100",
+                    "author": "@alice",
+                    "published_at": datetime.utcnow(),
+                }
+            ]
+
+    monkeypatch.setattr(
+        "app.services.content_ingestion_service.TwitterFetcher",
+        lambda: FakeTwitterFetcher(),
+    )
+
+    inserted = ContentIngestionService(db_session).fetch_source(source)
+
+    assert inserted == 1
+    assert (
+        db_session.query(AppSetting)
+        .filter(AppSetting.key == f"twitter.official_x_api.source.{source.id}.since_id")
+        .first()
+        is None
+    )
 
 
 def test_rss_fetcher_handles_aware_since_with_naive_feed_timestamps(

@@ -15,6 +15,7 @@ from app.services.xui_session_bridge_service import (
 
 
 def _set_bridge_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "x_ingest_provider", "xui")
     monkeypatch.setattr(settings, "xui_bridge_enabled", True)
     monkeypatch.setattr(
         settings,
@@ -29,6 +30,33 @@ def _set_bridge_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "app.services.xui_session_bridge_service.get_redis_client",
         lambda: None,
     )
+
+
+def test_get_auth_status_official_mode_reports_configured_not_authenticated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "x_ingest_provider", "official")
+    monkeypatch.setattr(settings, "twitter_bearer_token", "token")
+
+    result = XUISessionBridgeService().get_auth_status()
+
+    assert result.provider == "official_x_api"
+    assert result.authenticated is False
+    assert result.status_code == "configured"
+    assert "not been validated" in result.message
+
+
+def test_get_auth_status_official_mode_reports_missing_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "x_ingest_provider", "official")
+    monkeypatch.setattr(settings, "twitter_bearer_token", "")
+
+    result = XUISessionBridgeService().get_auth_status()
+
+    assert result.provider == "official_x_api"
+    assert result.authenticated is False
+    assert result.status_code == "missing_bearer_token"
 
 
 def test_create_and_consume_challenge_single_use(monkeypatch: pytest.MonkeyPatch) -> None:

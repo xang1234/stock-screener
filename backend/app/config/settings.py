@@ -92,7 +92,10 @@ class Settings(BaseSettings):
     minimax_api_base: str = "https://api.minimax.io/v1"  # Minimax OpenAI-compatible base URL
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
-    twitter_bearer_token: str = ""  # Legacy Twitter/X API token (unused for XUI ingestion)
+    twitter_bearer_token: str = ""  # Official X API bearer token for Twitter/X ingestion
+    x_ingest_provider: str = "official"  # official or xui
+    x_api_max_pages_per_source: int = 10
+    x_api_max_results_per_page: int = 50
     xui_enabled: bool = False  # Browser-driven X ingestion is opt-in for local runtimes
     xui_config_path: str = str(_PROJECT_ROOT / "data" / "xui-reader" / "config.toml")
     xui_profile: str = "default"
@@ -549,6 +552,24 @@ class Settings(BaseSettings):
                 f"got {v!r}"
             )
         return normalized
+
+    @field_validator("x_ingest_provider")
+    @classmethod
+    def validate_x_ingest_provider(cls, v: str) -> str:
+        normalized = str(v or "").strip().lower() or "official"
+        if normalized not in {"official", "xui"}:
+            raise ValueError(
+                "x_ingest_provider must be 'official' or 'xui', "
+                f"got {v!r}"
+            )
+        return normalized
+
+    @field_validator("x_api_max_pages_per_source", "x_api_max_results_per_page")
+    @classmethod
+    def validate_positive_x_api_settings(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"Official X API numeric settings must be > 0, got {v}")
+        return v
 
     @field_validator(
         "github_data_timeout_seconds",
