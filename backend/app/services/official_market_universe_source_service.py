@@ -73,6 +73,17 @@ _CA_EXCLUDED_INSTRUMENT_PHRASES: frozenset[str] = frozenset(
     }
 )
 _CA_INSTRUMENT_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
+# Boerse Frankfurt's public equity-search endpoint pages results in fixed-size
+# windows. 100 keeps each request small enough to avoid timeouts while bounding
+# the total round-trip count to ~10 for the ~1,000-symbol Xetra/Frankfurt list.
+_BOERSE_FRANKFURT_PAGE_SIZE = 100
+# Hard cap on pagination loops so a misbehaving upstream that never decrements
+# `recordsTotal` cannot spin forever inside the GitHub Actions job.
+_BOERSE_FRANKFURT_MAX_PAGES = 50
+# Source identifier emitted on snapshot rows when the live API is unreachable
+# and the bundled DE seed CSV is used instead. Distinct from `_DE_SOURCE_NAME`
+# so downstream coverage gates can tell live from fallback.
+_DE_FALLBACK_SOURCE_NAME = "de_manual_csv"
 _KR_VALIDATED_BASELINE = {
     "source_url": "https://global.krx.co.kr/main/main.jspx?bld=listing_list",
     "validated_at": "2026-04-29",
@@ -182,6 +193,8 @@ class OfficialMarketUniverseSourceService:
             return self.fetch_cn_snapshot()
         if normalized_market == "CA":
             return self.fetch_ca_snapshot()
+        if normalized_market == "DE":
+            return self.fetch_de_snapshot()
         raise ValueError(f"Official universe refresh is unsupported for market {market!r}")
 
     def fetch_hk_snapshot(self) -> OfficialMarketUniverseSnapshot:
@@ -964,6 +977,250 @@ class OfficialMarketUniverseSourceService:
                 return True
         tokens = (token for token in _CA_INSTRUMENT_TOKEN_SPLIT.split(normalized) if token)
         return any(token in _CA_EXCLUDED_INSTRUMENT_TOKENS for token in tokens)
+
+    def fetch_de_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        """Fetch the DE equity universe from Boerse Frankfurt with CSV fallback.
+
+        Live path: paginate the public ``/v1/search/equity_search`` endpoint with
+        the signed headers from ``de_universe_source_signing.build_signed_headers``,
+        dedupe results by ISIN, and prefer Xetra over Frankfurt-floor listings.
+
+        Fallback path: when the live request fails (DNS/timeout/HTTP error,
+        signature rotation, or empty response), load the bundled DAX-40 CSV at
+        ``settings.de_universe_fallback_csv_path``. The snapshot is still
+        published, but ``source_metadata['fetch_mode'] == 'csv_fallback'`` and
+        ``source_name == 'de_manual_csv'`` so the coverage gate / downstream
+        operators can see the snapshot is incomplete.
+        """
+        rows: list[dict[str, Any]] = []
+        fetch_mode = "live_http"
+        fetch_errors: dict[str, str] = {}
+        fetched_ats: list[str] = []
+        last_modified: str | None = None
+        tls_verification_disabled = False
+        page_attempts: list[int] = []
+        live_error: str | None = None
+
+        try:
+            rows, fetch_meta = self._fetch_de_live()
+            page_attempts = fetch_meta.get("page_attempts", [])
+            fetched_ats = fetch_meta.get("fetched_ats", [])
+            last_modified = fetch_meta.get("http_last_modified")
+            tls_verification_disabled = bool(fetch_meta.get("tls_verification_disabled"))
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            live_error = str(exc)
+            logger.warning(
+                "Live DE universe fetch failed (%s); falling back to bundled CSV at %s",
+                live_error,
+                settings.de_universe_fallback_csv_path,
+            )
+            fetch_errors["live_http"] = live_error
+            rows = self._load_de_csv_fallback()
+            if not rows:
+                raise ValueError(
+                    "DE official universe fetch failed and no fallback CSV rows are available "
+                    f"(live error: {live_error})"
+                ) from exc
+            fetch_mode = "csv_fallback"
+            fetched_ats = [datetime.now(UTC).isoformat()]
+
+        if not rows:
+            raise ValueError("DE official universe fetch returned no rows")
+
+        snapshot_as_of = (
+            self._date_from_http_header(last_modified) or self._utc_today()
+        ).isoformat()
+        source_name = (
+            _DE_FALLBACK_SOURCE_NAME if fetch_mode == "csv_fallback" else _DE_SOURCE_NAME
+        )
+        source_metadata: dict[str, Any] = {
+            "source_urls": [settings.de_universe_source_url],
+            "fetched_at": max(fetched_ats) if fetched_ats else datetime.now(UTC).isoformat(),
+            "http_last_modified": last_modified,
+            "tls_verification_disabled": tls_verification_disabled,
+            "fetch_mode": fetch_mode,
+            "page_attempts": page_attempts,
+            "fetch_errors": fetch_errors,
+            "row_counts": {
+                "xetra": sum(1 for row in rows if row.get("exchange") == "XETR"),
+                "frankfurt": sum(1 for row in rows if row.get("exchange") == "XFRA"),
+                "total": len(rows),
+            },
+        }
+        if fetch_mode == "csv_fallback":
+            source_metadata["fallback_csv_path"] = settings.de_universe_fallback_csv_path
+
+        snapshot_id_prefix = "dbg-equity" if fetch_mode == "live_http" else "de-csv-fallback"
+        return OfficialMarketUniverseSnapshot(
+            market="DE",
+            source_name=source_name,
+            snapshot_id=f"{snapshot_id_prefix}-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            rows=tuple(rows),
+        )
+
+    def _fetch_de_live(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Paginate the Boerse Frankfurt search API and return deduped rows."""
+        from .de_universe_source_signing import build_signed_headers
+
+        base_url = settings.de_universe_source_url
+        rows_by_isin: dict[str, dict[str, Any]] = {}
+        page_attempts: list[int] = []
+        fetched_ats: list[str] = []
+        last_modified: str | None = None
+        tls_verification_disabled = False
+
+        for page_index in range(_BOERSE_FRANKFURT_MAX_PAGES):
+            offset = page_index * _BOERSE_FRANKFURT_PAGE_SIZE
+            url = (
+                f"{base_url}?lang=en&offset={offset}"
+                f"&limit={_BOERSE_FRANKFURT_PAGE_SIZE}&sort=NAME&sortOrder=ASC"
+            )
+            page_attempts.append(offset)
+            fetched = self._http_get(
+                url,
+                allow_insecure_fallback=settings.de_universe_allow_insecure_fallback,
+                extra_headers=build_signed_headers(url),
+            )
+            fetched_ats.append(fetched.fetched_at)
+            if fetched.last_modified:
+                last_modified = fetched.last_modified
+            if fetched.tls_verification_disabled:
+                tls_verification_disabled = True
+
+            page_rows, total_count = self._parse_de_results(fetched.content)
+            for row in page_rows:
+                isin = row.get("isin")
+                if not isin:
+                    continue
+                # Prefer Xetra over Frankfurt-floor for the same ISIN: Xetra is
+                # the primary venue and yields the .DE suffix the rest of the
+                # platform expects. ``setdefault`` already keeps the first hit;
+                # since we sort by NAME and request lang=en, both venues for an
+                # ISIN appear next to each other and we pick whichever the API
+                # listed first. Fix this if upstream changes ordering.
+                rows_by_isin.setdefault(isin, row)
+
+            if not page_rows:
+                break
+            # Stop when the API tells us we've seen the whole universe.
+            if total_count and (offset + len(page_rows)) >= total_count:
+                break
+            # Otherwise stop when the upstream returns a partial page — there
+            # are no more results to request.
+            if len(page_rows) < _BOERSE_FRANKFURT_PAGE_SIZE:
+                break
+
+        if not rows_by_isin:
+            raise ValueError("DE live universe fetch returned no rows")
+
+        rows = sorted(rows_by_isin.values(), key=lambda row: row["symbol"])
+        return rows, {
+            "page_attempts": page_attempts,
+            "fetched_ats": fetched_ats,
+            "http_last_modified": last_modified,
+            "tls_verification_disabled": tls_verification_disabled,
+        }
+
+    @classmethod
+    def _parse_de_results(cls, content: bytes) -> tuple[list[dict[str, Any]], int]:
+        """Parse a Boerse Frankfurt search-API page into ingestion row dicts."""
+        try:
+            payload = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid Boerse Frankfurt response: {exc}") from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Unexpected Boerse Frankfurt payload shape: {type(payload).__name__}"
+            )
+
+        raw_rows = payload.get("data") or payload.get("results") or []
+        if not isinstance(raw_rows, list):
+            raise ValueError(
+                "Boerse Frankfurt 'data' field is not a list "
+                f"(got {type(raw_rows).__name__})"
+            )
+
+        total_count = 0
+        for total_key in ("totalCount", "recordsTotal", "total"):
+            value = payload.get(total_key)
+            if isinstance(value, (int, float)) and value > 0:
+                total_count = int(value)
+                break
+
+        rows: list[dict[str, Any]] = []
+        for entry in raw_rows:
+            if not isinstance(entry, dict):
+                continue
+            isin = str(entry.get("isin") or "").strip().upper()
+            wkn = str(entry.get("wkn") or "").strip().upper()
+            if not isin or not wkn:
+                continue
+
+            name_field = entry.get("name")
+            if isinstance(name_field, dict):
+                name = str(
+                    name_field.get("originalValue")
+                    or name_field.get("translation")
+                    or name_field.get("display")
+                    or ""
+                ).strip()
+            else:
+                name = str(name_field or "").strip()
+
+            is_xetra = bool(
+                entry.get("isXetraTradable")
+                or entry.get("isXetraEquity")
+                or entry.get("xetraTradable")
+            )
+            exchange = "XETR" if is_xetra else "XFRA"
+            symbol_suffix = ".DE" if exchange == "XETR" else ".F"
+
+            rows.append(
+                {
+                    "symbol": f"{wkn}{symbol_suffix}",
+                    "name": name,
+                    "exchange": exchange,
+                    "sector": str(entry.get("sector") or "").strip(),
+                    "industry": str(entry.get("industry") or "").strip(),
+                    "market_cap": entry.get("marketCap"),
+                    "isin": isin,
+                    "wkn": wkn,
+                }
+            )
+
+        return rows, total_count
+
+    @classmethod
+    def _load_de_csv_fallback(cls) -> list[dict[str, Any]]:
+        """Read the bundled DE seed CSV into the same row schema as the live path."""
+        from pathlib import Path as _Path
+
+        csv_path = _Path(settings.de_universe_fallback_csv_path)
+        if not csv_path.exists():
+            return []
+
+        frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        rows: list[dict[str, Any]] = []
+        for record in frame.to_dict("records"):
+            symbol = str(record.get("symbol") or "").strip()
+            name = str(record.get("name") or "").strip()
+            exchange = str(record.get("exchange") or "XETR").strip().upper()
+            if not symbol or not name:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "exchange": exchange,
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                }
+            )
+        return sorted(rows, key=lambda row: row["symbol"])
 
     def parse_hk_rows(self, content: bytes) -> list[dict[str, Any]]:
         frame = pd.read_excel(

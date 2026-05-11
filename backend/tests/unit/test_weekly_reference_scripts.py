@@ -349,6 +349,151 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
     assert "| `yahoo_quote_not_found` | 2 |" in summary_text
 
 
+def test_build_weekly_reference_bundle_runs_de_official_path(monkeypatch, tmp_path, capsys):
+    """Mirror of the HK official-path test for the new DE fetcher.
+
+    Verifies the build script (1) fetches the DE snapshot via the official
+    source service, (2) routes the snapshot to ``ingest_de_snapshot_rows``
+    rather than raising on ``Unsupported official weekly reference market``,
+    and (3) publishes/exports the resulting bundle.
+    """
+    published_at = datetime(2026, 5, 9, 12, 10, 0)
+    active_rows = [
+        SimpleNamespace(
+            symbol="SAP.DE",
+            market="DE",
+            exchange="XETR",
+            name="SAP SE",
+            sector="Technology",
+            industry="Application Software",
+            market_cap=200.0,
+        )
+    ]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.order_by.return_value.all.return_value = active_rows
+    fake_db = MagicMock()
+    fake_db.query.return_value = fake_query
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+
+    fetch_calls: list[str] = []
+    official_service = SimpleNamespace(
+        fetch_market_snapshot=lambda market: fetch_calls.append(market)
+        or SimpleNamespace(
+            market=market,
+            source_name="dbg_official",
+            snapshot_id="dbg-equity-2026-05-09",
+            snapshot_as_of="2026-05-09",
+            source_metadata={"source_urls": ["https://api.boerse-frankfurt.de"], "fetch_mode": "live_http"},
+            rows=(
+                {
+                    "symbol": "SAP.DE",
+                    "name": "SAP SE",
+                    "exchange": "XETR",
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                    "isin": "DE0007164600",
+                    "wkn": "SAP",
+                },
+            ),
+        )
+    )
+    monkeypatch.setattr(build_script, "OfficialMarketUniverseSourceService", lambda: official_service)
+
+    ingest_calls: list[dict[str, object]] = []
+    stock_universe_service = SimpleNamespace(
+        ingest_de_snapshot_rows=lambda db, **kwargs: ingest_calls.append(kwargs)
+        or {"added": 1, "updated": 0, "deactivated": 0},
+    )
+    monkeypatch.setattr(build_script, "get_stock_universe_service", lambda: stock_universe_service)
+
+    hybrid_service = SimpleNamespace(
+        yfinance_delay_per_ticker=1.5,
+        fetch_fundamentals_batch=lambda symbols, **kwargs: (
+            kwargs["progress_callback"](1, len(symbols))
+            or {"SAP.DE": {"market_cap": 200.0, "sector": "Technology"}}
+        ),
+        store_all_caches=lambda *args, **kwargs: {
+            "fundamentals_stored": 1,
+            "persisted_symbols": 1,
+            "failed_persistence_symbols": 0,
+            "failed": 0,
+            "provider_error_counts": {},
+        },
+    )
+    monkeypatch.setattr(build_script, "get_hybrid_fundamentals_service", lambda: hybrid_service)
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(
+            get_many=lambda symbols: {"SAP.DE": {"market_cap": 200.0, "sector": "Technology"}}
+        ),
+    )
+
+    export_calls: list[dict[str, object]] = []
+    provider_snapshot_service = SimpleNamespace(
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": "row-hash",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: {
+            "published": True,
+            "source_revision": "fundamentals_v1_de:20260509121000",
+            "snapshot_key": kwargs["snapshot_key"],
+            "coverage": {"snapshot_symbols": 1, "active_symbols": 1},
+            "coverage_thresholds": {
+                "market": "DE",
+                "active_coverage": 1.0,
+                "min_active_coverage": 0.70,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": 0.30,
+            },
+        },
+        get_published_run=lambda db, snapshot_key: type(
+            "Run",
+            (),
+            {
+                "published_at": published_at,
+                "created_at": published_at,
+                "source_revision": "fundamentals_v1_de:20260509121000",
+            },
+        )(),
+        export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
+        or {"bundle_path": str(kwargs["output_path"])},
+    )
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "DE",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert build_script.main() == 0
+    assert fetch_calls == ["DE"]
+    assert len(ingest_calls) == 1
+    assert ingest_calls[0]["source_name"] == "dbg_official"
+    assert ingest_calls[0]["snapshot_id"] == "dbg-equity-2026-05-09"
+    assert export_calls[0]["output_path"] == (
+        tmp_path / "weekly-reference-de-20260509-fundamentals_v1_de-20260509121000.json.gz"
+    )
+    assert export_calls[0]["latest_manifest_path"] == tmp_path / "weekly-reference-latest-de.json"
+    assert export_calls[0]["market"] == "DE"
+    stdout = capsys.readouterr().out
+    assert "Starting official universe refresh for DE..." in stdout
+    assert "Weekly reference bundle complete for DE:" in stdout
+
+
 def _make_universe_row(symbol: str, market: str = "CN") -> SimpleNamespace:
     return SimpleNamespace(
         symbol=symbol,

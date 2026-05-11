@@ -178,6 +178,20 @@ class Settings(BaseSettings):
     ca_universe_source_tsxv_url: str = (
         "https://www.tsx.com/json/company-directory/search/tsxv/{initial}"
     )
+    de_universe_allow_insecure_fallback: bool = False
+    # Boerse Frankfurt public equity-search endpoint. Powers the same UI on
+    # boerse-frankfurt.de and accepts ``offset``/``limit`` pagination plus the
+    # ``X-Security`` HMAC header computed in
+    # ``de_universe_source_signing.build_signed_headers``. When the live
+    # endpoint is unreachable or upstream rotates the signing salt, the fetcher
+    # falls back to ``de_universe_fallback_csv_path`` so the bundle can still
+    # publish (with ``--allow-partial-publish``).
+    de_universe_source_url: str = (
+        "https://api.boerse-frankfurt.de/v1/search/equity_search"
+    )
+    de_universe_fallback_csv_path: str = str(
+        _PROJECT_ROOT / "backend" / "data" / "de_dax40_constituents.csv"
+    )
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
     # Per-market rate budget overrides. Each value is in requests-per-second

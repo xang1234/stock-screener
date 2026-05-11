@@ -1301,3 +1301,229 @@ def test_fetch_ca_snapshot_uses_single_url_when_template_lacks_placeholder(monke
         "tsxv": ["single"],
     }
     assert {row["symbol"] for row in snapshot.rows} == {"RY", "NVA"}
+
+
+# ---------------------------------------------------------------------------
+# DE (Deutsche Boerse / Xetra) snapshot tests
+# ---------------------------------------------------------------------------
+
+
+_DE_BASE_URL = "https://api.boerse-frankfurt.de/v1/search/equity_search"
+
+
+def _de_page_payload(
+    rows: list[dict[str, object]], *, total: int | None = None
+) -> bytes:
+    """Build a Boerse Frankfurt search-API page response."""
+    body: dict[str, object] = {"data": rows}
+    if total is not None:
+        body["totalCount"] = total
+    return json.dumps(body).encode("utf-8")
+
+
+def _de_fetched_source(content: bytes, *, fetched_at: str = "2026-05-09T01:00:00+00:00") -> _FetchedSource:
+    return _FetchedSource(
+        url=_DE_BASE_URL,
+        content=content,
+        fetched_at=fetched_at,
+        last_modified="Sat, 09 May 2026 00:00:00 GMT",
+        tls_verification_disabled=False,
+    )
+
+
+def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch):
+    from app.config import settings as app_settings
+    from app.services import official_market_universe_source_service as svc_module
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    # Shrink the page size so the test can exercise multi-page pagination
+    # without constructing 100-row fixtures. The pagination loop stops on
+    # partial-page responses, so each non-final page must be exactly the
+    # configured size to trigger another fetch.
+    monkeypatch.setattr(svc_module, "_BOERSE_FRANKFURT_PAGE_SIZE", 2)
+
+    page_one = _de_page_payload(
+        [
+            {
+                "isin": "DE0007164600",
+                "wkn": "SAP",
+                "name": {"originalValue": "SAP SE"},
+                "isXetraTradable": True,
+            },
+            {
+                "isin": "DE0008404005",
+                "wkn": "ALV",
+                "name": "Allianz SE",
+                "isXetraTradable": True,
+            },
+        ],
+        total=3,
+    )
+    page_two = _de_page_payload(
+        [
+            {
+                "isin": "DE000A1EWWW0",
+                "wkn": "ADS",
+                "name": "Adidas AG",
+                "xetraTradable": True,
+            },
+        ],
+        total=3,
+    )
+
+    pages = iter([page_one, page_two])
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        assert extra_headers is not None, "DE fetch must send signed headers"
+        assert "X-Security" in extra_headers
+        assert "Client-Date" in extra_headers
+        return _de_fetched_source(next(pages))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.market == "DE"
+    assert snapshot.source_name == "dbg_official"
+    assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    symbols = [row["symbol"] for row in snapshot.rows]
+    assert symbols == sorted(["SAP.DE", "ALV.DE", "ADS.DE"])
+    assert snapshot.source_metadata["row_counts"]["xetra"] == 3
+    assert snapshot.source_metadata["row_counts"]["frankfurt"] == 0
+    assert snapshot.source_metadata["row_counts"]["total"] == 3
+    assert snapshot.source_metadata["page_attempts"] == [0, 2]
+
+
+def test_fetch_de_snapshot_falls_back_to_csv_on_http_failure(monkeypatch, tmp_path):
+    from app.config import settings as app_settings
+
+    csv_path = tmp_path / "de_dax40_constituents.csv"
+    csv_path.write_text(
+        "symbol,name,exchange,index\n"
+        "SAP.DE,SAP SE,XETR,DAX\n"
+        "ALV.DE,Allianz SE,XETR,DAX\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(csv_path))
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        raise requests.exceptions.ConnectionError("synthetic upstream outage")
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.market == "DE"
+    assert snapshot.source_name == "de_manual_csv"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert snapshot.source_metadata["fetch_errors"]["live_http"].startswith(
+        "synthetic upstream outage"
+    )
+    assert snapshot.source_metadata["fallback_csv_path"] == str(csv_path)
+    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE"}
+    assert snapshot.snapshot_id.startswith("de-csv-fallback-")
+
+
+def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(monkeypatch):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+
+    page_one = _de_page_payload(
+        [
+            # Same ISIN appears once on Xetra and once on Frankfurt floor.
+            # The first occurrence (Xetra, .DE suffix) wins.
+            {
+                "isin": "DE0007164600",
+                "wkn": "SAP",
+                "name": "SAP SE",
+                "isXetraTradable": True,
+            },
+            {
+                "isin": "DE0007164600",
+                "wkn": "SAP",
+                "name": "SAP SE Frankfurt",
+                "isXetraTradable": False,
+            },
+        ],
+        total=2,
+    )
+
+    pages = iter([page_one, _de_page_payload([], total=2)])
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        return _de_fetched_source(next(pages))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert [row["symbol"] for row in snapshot.rows] == ["SAP.DE"]
+    assert snapshot.rows[0]["exchange"] == "XETR"
+
+
+def test_fetch_de_snapshot_raises_when_live_fails_and_csv_missing(monkeypatch, tmp_path):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings,
+        "de_universe_fallback_csv_path",
+        str(tmp_path / "missing.csv"),
+    )
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        raise requests.exceptions.ConnectionError("synthetic upstream outage")
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    with pytest.raises(ValueError, match="no fallback CSV rows"):
+        service.fetch_de_snapshot()
+
+
+def test_parse_de_results_handles_alternate_payload_keys():
+    service = OfficialMarketUniverseSourceService()
+    payload = json.dumps(
+        {
+            "results": [
+                {"isin": "DE0007164600", "wkn": "SAP", "name": "SAP SE", "isXetraTradable": True},
+                # Frankfurt-only listing
+                {"isin": "DE0006062144", "wkn": "COV", "name": "Covestro", "isXetraTradable": False},
+                # Missing wkn → skipped
+                {"isin": "DE000XXX0000", "name": "Anonymous"},
+            ],
+            "recordsTotal": 3,
+        }
+    ).encode("utf-8")
+
+    rows, total = service._parse_de_results(payload)
+
+    assert total == 3
+    symbols = [row["symbol"] for row in rows]
+    assert symbols == ["SAP.DE", "COV.F"]
+    assert rows[1]["exchange"] == "XFRA"
+
+
+def test_parse_de_results_rejects_invalid_payload():
+    service = OfficialMarketUniverseSourceService()
+    with pytest.raises(ValueError, match="Invalid Boerse Frankfurt response"):
+        service._parse_de_results(b"not-json")
+    with pytest.raises(ValueError, match="Unexpected Boerse Frankfurt payload shape"):
+        service._parse_de_results(b"[]")
+
+
+def test_load_de_csv_fallback_returns_empty_when_path_missing(monkeypatch, tmp_path):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "de_universe_fallback_csv_path",
+        str(tmp_path / "does-not-exist.csv"),
+    )
+    service = OfficialMarketUniverseSourceService()
+    assert service._load_de_csv_fallback() == []
