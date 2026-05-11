@@ -101,6 +101,168 @@ jobs:
           print(f"combine={combine}")
           PY
 
+      - name: Pin CN weekly reference bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          AS_OF_DATE: ${{ steps.plan.outputs.as_of_date }}
+          AS_OF_COMPACT: ${{ steps.plan.outputs.as_of_compact }}
+          SHARD_COUNT: ${{ steps.plan.outputs.shard_count }}
+        run: |
+          mkdir -p /tmp/cn-weekly-reference
+          MARKET_MANIFEST="weekly-reference-latest-cn.json"
+          LEGACY_MANIFEST="weekly-reference-latest.json"
+          PLAN_ASSET="daily-price-cn-${AS_OF_COMPACT}-shards-${SHARD_COUNT}.plan.json"
+          export PLAN_PATH="/tmp/cn-weekly-reference/${PLAN_ASSET}"
+
+          retry_download_from_release() {
+            release_tag="$1"
+            asset_name="$2"
+            output_dir="$3"
+            for attempt in 1 2 3; do
+              rm -f "${output_dir}/${asset_name}"
+              if gh release download "${release_tag}" \
+                --pattern "${asset_name}" \
+                --dir "${output_dir}" >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          retry_list_assets() {
+            release_tag="$1"
+            for attempt in 1 2 3; do
+              if gh release view "${release_tag}" --json assets --jq '.assets[].name'; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          if [ "${CAN_PUBLISH_RELEASES}" = "true" ] \
+            && ! gh release view cn-daily-price-shards >/dev/null 2>&1; then
+            gh release create cn-daily-price-shards \
+              --title "CN Daily Price Shards" \
+              --notes "Durable resumable shard checkpoints for China A-share daily price bootstraps."
+          fi
+
+          if gh release view cn-daily-price-shards >/dev/null 2>&1 \
+            && retry_download_from_release cn-daily-price-shards "${PLAN_ASSET}" /tmp/cn-weekly-reference; then
+            export BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads(Path(os.environ["PLAN_PATH"]).read_text(encoding="utf-8"))
+          if plan["as_of_date"] != os.environ["AS_OF_DATE"]:
+              raise SystemExit("Pinned CN shard plan as_of_date mismatch")
+          if int(plan["shard_count"]) != int(os.environ["SHARD_COUNT"]):
+              raise SystemExit("Pinned CN shard plan shard_count mismatch")
+          print(plan["weekly_reference_bundle_asset_name"])
+          PY
+          )"
+            export BUNDLE_SHA256="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads(Path(os.environ["PLAN_PATH"]).read_text(encoding="utf-8"))
+          print(plan["weekly_reference_sha256"])
+          PY
+          )"
+          else
+            ASSET_NAMES="$(retry_list_assets weekly-reference-data)"
+
+            if printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${MARKET_MANIFEST}"; then
+              retry_download_from_release weekly-reference-data "${MARKET_MANIFEST}" /tmp/cn-weekly-reference
+              export MANIFEST_PATH="/tmp/cn-weekly-reference/${MARKET_MANIFEST}"
+              export MANIFEST_ASSET_NAME="${MARKET_MANIFEST}"
+            elif printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${LEGACY_MANIFEST}"; then
+              retry_download_from_release weekly-reference-data "${LEGACY_MANIFEST}" /tmp/cn-weekly-reference
+              export MANIFEST_PATH="/tmp/cn-weekly-reference/${LEGACY_MANIFEST}"
+              export MANIFEST_ASSET_NAME="${LEGACY_MANIFEST}"
+            else
+              echo "No CN weekly reference manifest and no legacy fallback are available." >&2
+              exit 1
+            fi
+
+            export BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path(os.environ["MANIFEST_PATH"]).read_text(encoding="utf-8"))
+          print(manifest["bundle_asset_name"])
+          PY
+          )"
+            export BUNDLE_SHA256="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path(os.environ["MANIFEST_PATH"]).read_text(encoding="utf-8"))
+          print(manifest["sha256"])
+          PY
+          )"
+
+            python - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+
+          plan = {
+              "schema_version": "cn-daily-price-shard-plan-v1",
+              "market": "CN",
+              "as_of_date": os.environ["AS_OF_DATE"],
+              "shard_count": int(os.environ["SHARD_COUNT"]),
+              "weekly_reference_manifest_asset_name": os.environ["MANIFEST_ASSET_NAME"],
+              "weekly_reference_bundle_asset_name": os.environ["BUNDLE_ASSET_NAME"],
+              "weekly_reference_sha256": os.environ["BUNDLE_SHA256"],
+              "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+          }
+          Path(os.environ["PLAN_PATH"]).write_text(
+              json.dumps(plan, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+            if [ "${CAN_PUBLISH_RELEASES}" = "true" ]; then
+              gh release upload cn-daily-price-shards "${PLAN_PATH}" --clobber
+            fi
+          fi
+
+          retry_download_from_release weekly-reference-data "$BUNDLE_ASSET_NAME" /tmp/cn-weekly-reference
+
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          bundle_path = Path("/tmp/cn-weekly-reference") / os.environ["BUNDLE_ASSET_NAME"]
+          digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          expected = os.environ["BUNDLE_SHA256"]
+          if digest != expected:
+              raise SystemExit(
+                  f"Weekly reference bundle checksum mismatch for {bundle_path.name}: "
+                  f"{digest} != {expected}"
+              )
+          PY
+
+      - name: Upload pinned CN weekly reference bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cn-weekly-reference
+          path: /tmp/cn-weekly-reference
+          if-no-files-found: error
+
   ensure-releases:
     needs: plan
     runs-on: ubuntu-latest
@@ -168,10 +330,28 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
 
-      - name: Import latest CN weekly reference
+      - name: Download pinned CN weekly reference bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: cn-weekly-reference
+          path: /tmp/cn-weekly-reference
+
+      - name: Import pinned CN weekly reference
         run: |
           cd backend
-          python -m app.scripts.sync_weekly_reference_from_github --market CN
+          WEEKLY_REFERENCE_BUNDLE="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          plans = sorted(Path("/tmp/cn-weekly-reference").glob("daily-price-cn-*-shards-*.plan.json"))
+          if not plans:
+              raise SystemExit("Pinned CN shard plan was not downloaded")
+          plan = json.loads(plans[0].read_text(encoding="utf-8"))
+          print(Path("/tmp/cn-weekly-reference") / plan["weekly_reference_bundle_asset_name"])
+          PY
+          )"
+          python -m app.scripts.import_weekly_reference_bundle \
+            --input "${WEEKLY_REFERENCE_BUNDLE}"
 
       - name: Seed latest full CN daily price bundle
         run: |
@@ -272,6 +452,12 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
 
+      - name: Download pinned CN weekly reference bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: cn-weekly-reference
+          path: /tmp/cn-weekly-reference
+
       - name: Download current shard artifacts
         uses: actions/download-artifact@v4
         with:
@@ -279,10 +465,22 @@ jobs:
           path: /tmp/cn-price-shards
           merge-multiple: true
 
-      - name: Import latest CN weekly reference
+      - name: Import pinned CN weekly reference
         run: |
           cd backend
-          python -m app.scripts.sync_weekly_reference_from_github --market CN
+          WEEKLY_REFERENCE_BUNDLE="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          plans = sorted(Path("/tmp/cn-weekly-reference").glob("daily-price-cn-*-shards-*.plan.json"))
+          if not plans:
+              raise SystemExit("Pinned CN shard plan was not downloaded")
+          plan = json.loads(plans[0].read_text(encoding="utf-8"))
+          print(Path("/tmp/cn-weekly-reference") / plan["weekly_reference_bundle_asset_name"])
+          PY
+          )"
+          python -m app.scripts.import_weekly_reference_bundle \
+            --input "${WEEKLY_REFERENCE_BUNDLE}"
 
       - name: Import CN shard bundles
         run: |

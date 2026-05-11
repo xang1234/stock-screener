@@ -46,3 +46,19 @@ def test_cn_daily_price_bootstrap_workflow_validates_inputs_and_checkpoint_manif
     assert "--expected-market CN" in workflow
     assert "--expected-as-of-date \"${AS_OF_DATE}\"" in workflow
     assert "--expected-bundle-asset-name \"${SHARD_ASSET}\"" in workflow
+
+
+def test_cn_daily_price_bootstrap_workflow_pins_weekly_reference_for_all_jobs() -> None:
+    workflow = _workflow()
+
+    assert "Pin CN weekly reference bundle" in workflow
+    assert "daily-price-cn-${AS_OF_COMPACT}-shards-${SHARD_COUNT}.plan.json" in workflow
+    assert "cn-daily-price-shards \"${PLAN_ASSET}\"" in workflow
+    assert "weekly_reference_bundle_asset_name" in workflow
+    assert "weekly_reference_sha256" in workflow
+    assert "weekly-reference-latest-cn.json" in workflow
+    assert "weekly-reference-data" in workflow
+    assert "name: cn-weekly-reference" in workflow
+    assert "Download pinned CN weekly reference bundle" in workflow
+    assert "app.scripts.import_weekly_reference_bundle" in workflow
+    assert "app.scripts.sync_weekly_reference_from_github --market CN" not in workflow

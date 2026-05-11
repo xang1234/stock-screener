@@ -247,7 +247,7 @@ class DailyPriceBundleService:
                 }
             )
         latest_by_symbol = {
-            symbol: rows[-1]["date"]
+            symbol: date.fromisoformat(rows[-1]["date"])
             for symbol, rows in rows_by_symbol.items()
             if rows
         }
@@ -264,7 +264,7 @@ class DailyPriceBundleService:
         missing_symbols = [
             symbol for symbol in all_symbols
             if not rows_by_symbol.get(symbol)
-            or latest_by_symbol.get(symbol) < bundle_as_of_date.isoformat()
+            or latest_by_symbol.get(symbol) < bundle_as_of_date
         ]
         if require_complete and missing_symbols:
             preview = ", ".join(missing_symbols[:10])
