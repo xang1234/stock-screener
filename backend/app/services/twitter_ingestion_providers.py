@@ -11,8 +11,10 @@ from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
 
 import requests
+from sqlalchemy.orm import object_session
 
 from ..config import settings
+from ..models.app_settings import AppSetting
 from ..models.theme import ContentSource
 
 logger = logging.getLogger(__name__)
@@ -26,14 +28,20 @@ class TwitterIngestionProviderError(RuntimeError):
 
 
 def build_twitter_fetcher():
-    provider = _normalize_provider(settings.x_ingest_provider)
+    provider = resolve_x_ingest_provider(settings.x_ingest_provider)
     if provider == "official":
         return OfficialXTwitterFetcher()
     if provider == "xui":
         return PrivateXUIFetcher()
+    raise AssertionError(f"Unhandled X ingestion provider: {provider}")
+
+
+def resolve_x_ingest_provider(raw: str | None) -> str:
+    provider = _normalize_provider(raw)
+    if provider in {"official", "xui"}:
+        return provider
     raise TwitterIngestionProviderError(
-        "Unsupported X_INGEST_PROVIDER value "
-        f"'{settings.x_ingest_provider}'. Expected 'official' or 'xui'."
+        f"Unsupported X_INGEST_PROVIDER value '{raw}'. Expected 'official' or 'xui'."
     )
 
 
@@ -51,19 +59,22 @@ class OfficialXTwitterFetcher:
 
         locator = _normalized_locator(source)
         source_ref = _parse_source_locator(locator, source)
+        since_id = _get_official_since_id(source)
         if source_ref.kind == "user":
             user = self._lookup_user(source_ref.value, token)
-            payload = self._get(
+            payload = self._fetch_timeline(
                 f"/2/users/{user['id']}/tweets",
                 token,
-                params=_timeline_params(since),
+                since=since,
+                since_id=since_id,
             )
             fallback_author = str(user.get("username") or source_ref.value)
         else:
-            payload = self._get(
+            payload = self._fetch_timeline(
                 f"/2/lists/{source_ref.value}/tweets",
                 token,
-                params=_timeline_params(since),
+                since=since,
+                since_id=since_id,
             )
             fallback_author = None
 
@@ -76,6 +87,52 @@ class OfficialXTwitterFetcher:
             len(rows),
         )
         return rows
+
+    def _fetch_timeline(
+        self,
+        path: str,
+        token: str,
+        *,
+        since: datetime | None,
+        since_id: str | None,
+    ) -> dict[str, Any]:
+        max_pages = max(1, int(settings.x_api_max_pages_per_source))
+        combined_data: list[dict[str, Any]] = []
+        users_by_id: dict[str, dict[str, Any]] = {}
+        newest_id: str | None = None
+        next_token: str | None = None
+
+        for _page in range(max_pages):
+            params = _timeline_params(since, since_id=since_id)
+            if next_token:
+                params["pagination_token"] = next_token
+            payload = self._get(path, token, params=params)
+
+            data = payload.get("data") or []
+            if not isinstance(data, list):
+                raise TwitterIngestionProviderError("Official X API returned unexpected timeline data.")
+            combined_data.extend(item for item in data if isinstance(item, dict))
+
+            for user in payload.get("includes", {}).get("users", []):
+                if isinstance(user, dict) and user.get("id"):
+                    users_by_id[str(user["id"])] = user
+
+            meta = payload.get("meta") or {}
+            if isinstance(meta, dict):
+                newest_id = newest_id or _normalize_tweet_id(meta.get("newest_id"))
+                next_token = str(meta.get("next_token") or "").strip() or None
+            else:
+                next_token = None
+            if not next_token:
+                return {
+                    "data": combined_data,
+                    "includes": {"users": list(users_by_id.values())},
+                    "meta": {"newest_id": newest_id or _max_tweet_id(combined_data)},
+                }
+
+        raise TwitterIngestionProviderError(
+            f"Official X API pagination cap reached for {path}; not advancing source checkpoint."
+        )
 
     def _lookup_user(self, username: str, token: str) -> dict[str, Any]:
         payload = self._get(
@@ -201,13 +258,16 @@ def _looks_like_handle(value: str) -> bool:
     return bool(value) and len(value) <= 15 and all(ch.isalnum() or ch == "_" for ch in value)
 
 
-def _timeline_params(since: datetime | None) -> dict[str, object]:
+def _timeline_params(since: datetime | None, *, since_id: str | None = None) -> dict[str, object]:
     params: dict[str, object] = {
         "max_results": max(5, min(int(settings.xui_limit_per_source), 100)),
         "tweet.fields": "created_at,author_id",
         "expansions": "author_id",
         "user.fields": "username",
     }
+    if since_id:
+        params["since_id"] = since_id
+        return params
     since_bound = _normalize_datetime(since)
     if since_bound is not None:
         params["start_time"] = since_bound.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -228,7 +288,15 @@ def _records_from_api_payload(
     data = payload.get("data") or []
     if not isinstance(data, list):
         raise TwitterIngestionProviderError("Official X API returned unexpected timeline data.")
-    return [_record_from_api_tweet(item, source, users_by_id, fallback_author) for item in data if isinstance(item, dict)]
+    newest_id = None
+    meta = payload.get("meta") or {}
+    if isinstance(meta, dict):
+        newest_id = _normalize_tweet_id(meta.get("newest_id")) or _max_tweet_id(data)
+    return [
+        _record_from_api_tweet(item, source, users_by_id, fallback_author, since_id=newest_id)
+        for item in data
+        if isinstance(item, dict)
+    ]
 
 
 def _record_from_api_tweet(
@@ -236,6 +304,8 @@ def _record_from_api_tweet(
     source: ContentSource,
     users_by_id: dict[str, str],
     fallback_author: str | None,
+    *,
+    since_id: str | None,
 ) -> dict[str, Any]:
     tweet_id = str(item.get("id") or "").strip()
     if not tweet_id:
@@ -248,6 +318,7 @@ def _record_from_api_tweet(
         "url": _tweet_url(tweet_id, author),
         "author": _format_author(author),
         "published_at": _parse_x_datetime(item.get("created_at")),
+        "_twitter_since_id": since_id or tweet_id,
     }
 
 
@@ -364,11 +435,39 @@ def _load_private_xui_bindings() -> _PrivateXUIBindings:
             "`pip install git+ssh://git@github.com/xang1234/xui.git`."
         ) from exc
 
-    for attr in ("read_source", "fetch_source", "fetch", "read"):
-        candidate = getattr(xui_mod, attr, None)
-        if callable(candidate):
-            return _PrivateXUIBindings(read_source=candidate)
+    candidate = getattr(xui_mod, "read_source", None)
+    if callable(candidate):
+        return _PrivateXUIBindings(read_source=candidate)
     raise TwitterIngestionProviderError(
         "Private xui package is installed but no supported read function was found "
-        "(expected one of: read_source, fetch_source, fetch, read)."
+        "(expected: read_source)."
     )
+
+
+def official_since_id_key(source_id: int) -> str:
+    return f"twitter.official_x_api.source.{source_id}.since_id"
+
+
+def _get_official_since_id(source: ContentSource) -> str | None:
+    if source.id is None:
+        return None
+    session = object_session(source)
+    if session is None:
+        return None
+    row = session.query(AppSetting).filter(AppSetting.key == official_since_id_key(source.id)).first()
+    if row is None:
+        return None
+    return _normalize_tweet_id(row.value)
+
+
+def _normalize_tweet_id(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized if normalized.isdigit() else None
+
+
+def _max_tweet_id(items: list[dict[str, Any]]) -> str | None:
+    ids = [_normalize_tweet_id(item.get("id")) for item in items if isinstance(item, dict)]
+    numeric_ids = [int(tweet_id) for tweet_id in ids if tweet_id is not None]
+    if not numeric_ids:
+        return None
+    return str(max(numeric_ids))

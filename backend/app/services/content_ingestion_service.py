@@ -19,6 +19,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from ..models.theme import ContentSource, ContentItem, ContentItemPipelineState
+from ..models.app_settings import AppSetting
 from ..config import settings
 from .language_detection_service import build_detection_text, detect_language
 from .theme_pipeline_state_service import normalize_pipelines
@@ -32,6 +33,12 @@ def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _twitter_official_since_id_key(source_id: int) -> str:
+    from .twitter_ingestion_providers import official_since_id_key
+
+    return official_since_id_key(source_id)
 
 
 class BaseContentFetcher(ABC):
@@ -373,11 +380,38 @@ class ContentIngestionService:
         # resumes from the correct point.
         if not lookback_days:
             source.last_fetched_at = datetime.now(timezone.utc)
+            if source_type == "twitter":
+                self._persist_twitter_since_id(source_id, items)
         source.total_items_fetched = (source.total_items_fetched or 0) + new_count
         self.db.commit()
 
         logger.info(f"Ingested {new_count} new items from {source.name}")
         return new_count
+
+    def _persist_twitter_since_id(self, source_id: int, items: list[dict]) -> None:
+        candidate_ids = [
+            str(item.get("_twitter_since_id", "")).strip()
+            for item in items
+            if str(item.get("_twitter_since_id", "")).strip().isdigit()
+        ]
+        if not candidate_ids:
+            return
+        since_id = str(max(int(candidate_id) for candidate_id in candidate_ids))
+        key = _twitter_official_since_id_key(source_id)
+        setting = self.db.query(AppSetting).filter(AppSetting.key == key).first()
+        if setting is None:
+            self.db.add(
+                AppSetting(
+                    key=key,
+                    value=since_id,
+                    category="theme",
+                    description="Newest official X API post id successfully ingested for this content source.",
+                )
+            )
+        else:
+            setting.value = since_id
+            setting.category = "theme"
+            setting.description = "Newest official X API post id successfully ingested for this content source."
 
     def fetch_all_active_sources(self, lookback_days: int | None = None) -> dict:
         """Fetch from all active sources, returns summary.

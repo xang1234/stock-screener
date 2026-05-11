@@ -19,6 +19,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from ..config import settings
+from .twitter_ingestion_providers import TwitterIngestionProviderError, resolve_x_ingest_provider
 from .redis_pool import get_redis_client
 
 
@@ -470,7 +471,10 @@ def _to_twitter_session_status(auth_result: Any) -> TwitterSessionStatus:
 
 
 def _twitter_provider() -> str:
-    return str(getattr(settings, "x_ingest_provider", "") or "official").strip().lower()
+    try:
+        return resolve_x_ingest_provider(getattr(settings, "x_ingest_provider", "official"))
+    except TwitterIngestionProviderError as exc:
+        raise XUISessionBridgeError(503, str(exc)) from exc
 
 
 def _token_hash(token: str) -> str:

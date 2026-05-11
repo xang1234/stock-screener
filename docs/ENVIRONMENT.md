@@ -82,9 +82,10 @@ Enables assistant web research fallback.
 |----------|---------|-------------|
 | `X_INGEST_PROVIDER` | `official` | Twitter/X ingestion provider: `official` or `xui` |
 | `TWITTER_BEARER_TOKEN` | empty | Official X API bearer token |
-| `XUI_ENABLED` | `false` | Enable private xui ingestion when `X_INGEST_PROVIDER=xui` |
-| `XUI_CONFIG_PATH` | Platform app-data dir locally; `/app/data/xui-reader/config.toml` in Docker | Path to xui config/session state |
-| `XUI_PROFILE` | `default` | xui auth profile |
+| `X_API_MAX_PAGES_PER_SOURCE` | `10` | Official X API pagination cap per source fetch; hitting the cap fails the source without advancing its checkpoint |
+| `XUI_ENABLED` | `false` | Legacy repo-local xui-reader flag; private xui override is selected by `X_INGEST_PROVIDER=xui` |
+| `XUI_CONFIG_PATH` | Platform app-data dir locally; `/app/data/xui-reader/config.toml` in Docker | Path to xui session state for bridge/local tooling |
+| `XUI_PROFILE` | `default` | xui session profile |
 | `XUI_LIMIT_PER_SOURCE` | `50` | Max items per source fetch |
 | `XUI_NEW_ONLY` | `true` | Private xui new-item mode |
 | `XUI_CHECKPOINT_MODE` | `auto` | Private xui checkpoint behavior |

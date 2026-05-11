@@ -80,6 +80,19 @@ async def test_challenge_is_unavailable_in_official_api_mode(
 
 
 @pytest.mark.asyncio
+async def test_get_twitter_session_status_rejects_invalid_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    client,
+):
+    monkeypatch.setattr(settings, "x_ingest_provider", "selenium")
+
+    response = await client.get("/api/v1/themes/twitter/session")
+
+    assert response.status_code == 503
+    assert "X_INGEST_PROVIDER" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_create_challenge_maps_bridge_error_status(monkeypatch: pytest.MonkeyPatch, client):
     monkeypatch.setattr(settings, "x_ingest_provider", "xui")
 
