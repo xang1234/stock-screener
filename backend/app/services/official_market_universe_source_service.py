@@ -1327,7 +1327,14 @@ class OfficialMarketUniverseSourceService:
                 continue
             isin = str(entry.get("isin") or "").strip().upper()
             wkn = str(entry.get("wkn") or "").strip().upper()
-            if not isin or not wkn:
+            # Only ISIN is required: it keys the dedupe map and is what the
+            # downstream reconciler matches on. WKN is carried through as
+            # diagnostic context but isn't used for ticker resolution
+            # (``_derive_de_ticker`` keys off ``tickerSymbol``/``ticker`` or
+            # the ISIN map), so a row with ``isin + tickerSymbol`` but no WKN
+            # is still publishable. Dropping those would shrink the live
+            # universe unnecessarily.
+            if not isin:
                 continue
 
             name_field = entry.get("name")

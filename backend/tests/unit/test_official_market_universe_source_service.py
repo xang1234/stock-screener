@@ -1857,23 +1857,32 @@ def test_parse_de_results_handles_alternate_payload_keys():
                     "name": "Covestro",
                     "isXetraTradable": False,
                 },
-                # Missing wkn → skipped
+                # WKN missing but ISIN + tickerSymbol present → still
+                # publishable. WKN is carried as diagnostic context only.
                 {"isin": "DE000XXX0000", "tickerSymbol": "ANON", "name": "Anonymous"},
+                # No ISIN → skipped (ISIN keys the dedupe map).
+                {"wkn": "999999", "tickerSymbol": "NOISIN", "name": "No-ISIN co"},
             ],
-            "recordsTotal": 3,
+            "recordsTotal": 4,
         }
     ).encode("utf-8")
 
     rows, total, resolution, raw_row_count = service._parse_de_results(payload)
 
-    assert total == 3
+    assert total == 4
     # raw_row_count reflects the upstream payload size *before* filtering out
-    # rows without WKN (the third entry is missing wkn and gets dropped).
-    assert raw_row_count == 3
+    # rows without ISIN (the fourth entry is dropped because it has no ISIN).
+    assert raw_row_count == 4
+    # _parse_de_results preserves upstream order; _fetch_de_live sorts later.
     symbols = [row["symbol"] for row in rows]
-    assert symbols == ["SAP.DE", "1COV.F"]
+    assert symbols == ["SAP.DE", "1COV.F", "ANON.F"]
     assert rows[1]["exchange"] == "XFRA"
-    assert resolution["explicit_field"] == 2
+    # ANON has no wkn — that's fine, the field is just empty on the published
+    # row rather than dropping the row entirely.
+    anon_row = next(row for row in rows if row["symbol"] == "ANON.F")
+    assert anon_row["wkn"] == ""
+    assert anon_row["isin"] == "DE000XXX0000"
+    assert resolution["explicit_field"] == 3
     assert "slug_derived" not in resolution
 
 
