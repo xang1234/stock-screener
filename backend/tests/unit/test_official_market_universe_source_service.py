@@ -1407,9 +1407,14 @@ def test_fetch_de_snapshot_filters_xetra_common_stock(monkeypatch, tmp_path):
     csv_bytes = _xetra_csv_content([
         _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", WKN="000716460", Instrument="SAP SE"),
         _xetra_row(Mnemonic="ALV", ISIN="DE0008404005", WKN="000840400", Instrument="ALLIANZ"),
-        # Inactive — dropped
+        # Instrument inactive — dropped
         _xetra_row(
             Mnemonic="DELIST", ISIN="DE000DELIST0", **{"Instrument Status": "Inactive"}
+        ),
+        # Product status not yet tradable (``Published``) — dropped even
+        # though the instrument record is Active. Codex P2 on PR #169.
+        _xetra_row(
+            Mnemonic="PUB1", ISIN="DE000PUB10000", **{"Product Status": "Published"},
         ),
         # ETF — dropped
         _xetra_row(
@@ -1437,6 +1442,14 @@ def test_fetch_de_snapshot_filters_xetra_common_stock(monkeypatch, tmp_path):
     # Both surviving rows are tagged XETR
     assert all(row["exchange"] == "XETR" for row in snapshot.rows)
     assert snapshot.source_metadata["row_counts"] == {"xetra": 2, "frankfurt": 0, "total": 2}
+
+    # Lock in the live-path row schema so downstream consumers can rely on
+    # isin/wkn being present. CodeRabbit nitpick on PR #169.
+    rows_by_symbol = {row["symbol"]: row for row in snapshot.rows}
+    assert rows_by_symbol["SAP.DE"]["isin"] == "DE0007164600"
+    assert rows_by_symbol["SAP.DE"]["wkn"] == "716460"  # leading zeros stripped
+    assert rows_by_symbol["ALV.DE"]["isin"] == "DE0008404005"
+    assert rows_by_symbol["ALV.DE"]["wkn"] == "840400"
 
 
 def test_fetch_de_snapshot_falls_back_on_http_error(monkeypatch, tmp_path):
@@ -1554,3 +1567,60 @@ def test_load_de_csv_fallback_returns_empty_when_path_missing(monkeypatch, tmp_p
     )
     service = OfficialMarketUniverseSourceService()
     assert service._load_de_csv_fallback() == []
+
+
+def test_load_de_csv_fallback_emits_isin_for_schema_parity(monkeypatch, tmp_path):
+    """The fallback rows must include isin/wkn so the schema matches the
+    live path; downstream consumers rely on field presence."""
+    from app.config import settings as app_settings
+
+    csv_path = tmp_path / "seed.csv"
+    csv_path.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "SAP.DE,SAP SE,XETR,DAX,DE0007164600\n"
+        "ALV.DE,Allianz SE,XETR,DAX,DE0008404005\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(csv_path))
+
+    rows = OfficialMarketUniverseSourceService._load_de_csv_fallback()
+    rows_by_symbol = {row["symbol"]: row for row in rows}
+    assert rows_by_symbol["SAP.DE"]["isin"] == "DE0007164600"
+    assert rows_by_symbol["SAP.DE"]["wkn"] == ""
+    # All rows carry the same 8 keys as the live path.
+    expected_keys = {"symbol", "name", "exchange", "sector", "industry",
+                     "market_cap", "isin", "wkn"}
+    for row in rows:
+        assert set(row.keys()) == expected_keys
+
+
+def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path, caplog):
+    """When the baseline CSV file is absent from disk the superset safety
+    check is trivially vacuous — emit a loud warning so the gap is observable."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
+    monkeypatch.setattr(
+        app_settings,
+        "de_universe_fallback_csv_path",
+        str(tmp_path / "totally-missing.csv"),
+    )
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
+
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", Instrument="SAP SE"),
+    ])
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False: _fetched_xetra(csv_bytes),
+    )
+
+    with caplog.at_level("WARNING"):
+        snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    assert any(
+        "baseline CSV at" in record.message and "missing on disk" in record.message
+        for record in caplog.records
+    ), f"Expected missing-baseline warning, got: {[r.message for r in caplog.records]}"

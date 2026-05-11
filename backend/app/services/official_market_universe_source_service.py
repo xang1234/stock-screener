@@ -1109,8 +1109,22 @@ class OfficialMarketUniverseSourceService:
         # rows that are absent from the snapshot. A live universe that drops
         # curated DAX-40 names would silently deactivate those positions. Force
         # CSV fallback when that happens.
+        #
+        # When the baseline CSV is absent from disk entirely (container layout
+        # drift, image-build glitch, etc.) ``_load_de_csv_fallback`` returns an
+        # empty list and the superset check trivially passes — silently
+        # disabling the safety net. Log a loud warning so the gap is
+        # observable rather than vanishing.
         live_symbols = {row["symbol"] for row in rows}
-        csv_symbols = {row["symbol"] for row in self._load_de_csv_fallback()}
+        baseline_rows = self._load_de_csv_fallback()
+        if not baseline_rows and not Path(settings.de_universe_fallback_csv_path).exists():
+            logger.warning(
+                "DE baseline CSV at %s is missing on disk; the curated-baseline "
+                "superset check cannot run and the live universe will publish "
+                "unverified. Restore the seed file to re-enable the safety guard.",
+                settings.de_universe_fallback_csv_path,
+            )
+        csv_symbols = {row["symbol"] for row in baseline_rows}
         missing_csv_symbols = csv_symbols - live_symbols
         if missing_csv_symbols:
             sample = sorted(missing_csv_symbols)[:5]
@@ -1156,7 +1170,15 @@ class OfficialMarketUniverseSourceService:
                     header = [col.strip() for col in raw_row]
                 continue
 
-            row_dict = dict(zip(header, raw_row))
+            row_dict = dict(zip(header, raw_row, strict=False))
+            # Both status fields must be Active. The Xetra feed schema
+            # distinguishes ``Product Status`` (the product itself is tradable)
+            # from ``Instrument Status`` (this specific instrument record is
+            # tradable). ``Product Status == "Published"`` means the product is
+            # listed but not yet open for trading — those rows would inflate
+            # the universe with symbols that yfinance / Finviz can't quote.
+            if (row_dict.get("Product Status") or "").strip() != "Active":
+                continue
             if (row_dict.get("Instrument Status") or "").strip() != "Active":
                 continue
             if (row_dict.get("Instrument Type") or "").strip() != "CS":
@@ -1199,7 +1221,15 @@ class OfficialMarketUniverseSourceService:
 
     @classmethod
     def _load_de_csv_fallback(cls) -> list[dict[str, Any]]:
-        """Read the bundled DE seed CSV into the same row schema as the live path."""
+        """Read the bundled DE seed CSV into the same row schema as the live path.
+
+        Emits the same 8-key dict shape ``_parse_de_xetra_csv`` produces, so
+        downstream consumers (``ingest_de_snapshot_rows``, the DE adapter)
+        see identical fields whether the snapshot came from the live Xetra
+        CSV or this curated seed. ``isin`` is read from the optional ``isin``
+        column; ``wkn`` is always empty here because the seed CSV doesn't
+        carry WKNs.
+        """
         csv_path = Path(settings.de_universe_fallback_csv_path)
         if not csv_path.exists():
             return []
@@ -1210,6 +1240,7 @@ class OfficialMarketUniverseSourceService:
             symbol = str(record.get("symbol") or "").strip()
             name = str(record.get("name") or "").strip()
             exchange = str(record.get("exchange") or "XETR").strip().upper()
+            isin = str(record.get("isin") or "").strip().upper()
             if not symbol or not name:
                 continue
             rows.append(
@@ -1220,6 +1251,8 @@ class OfficialMarketUniverseSourceService:
                     "sector": "",
                     "industry": "",
                     "market_cap": None,
+                    "isin": isin,
+                    "wkn": "",
                 }
             )
         return sorted(rows, key=lambda row: row["symbol"])
