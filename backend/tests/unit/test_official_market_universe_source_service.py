@@ -1331,11 +1331,26 @@ def _de_fetched_source(content: bytes, *, fetched_at: str = "2026-05-09T01:00:00
     )
 
 
-def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch):
+def _write_de_isin_map_csv(tmp_path) -> str:
+    """Write a CSV that the fetcher can use as both fallback and ISIN→ticker map."""
+    csv_path = tmp_path / "de_dax40_constituents.csv"
+    csv_path.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "SAP.DE,SAP SE,XETR,DAX,DE0007164600\n"
+        "ALV.DE,Allianz SE,XETR,DAX,DE0008404005\n",
+        encoding="utf-8",
+    )
+    return str(csv_path)
+
+
+def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch, tmp_path):
     from app.config import settings as app_settings
     from app.services import official_market_universe_source_service as svc_module
 
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
     # Shrink the page size so the test can exercise multi-page pagination
     # without constructing 100-row fixtures. The pagination loop stops on
     # partial-page responses, so each non-final page must be exactly the
@@ -1344,15 +1359,18 @@ def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch):
 
     page_one = _de_page_payload(
         [
+            # Resolved via explicit tickerSymbol field.
             {
                 "isin": "DE0007164600",
-                "wkn": "SAP",
+                "wkn": "716460",
+                "tickerSymbol": "SAP",
                 "name": {"originalValue": "SAP SE"},
                 "isXetraTradable": True,
             },
+            # Resolved via the ISIN→ticker map (no explicit ticker field).
             {
                 "isin": "DE0008404005",
-                "wkn": "ALV",
+                "wkn": "840400",
                 "name": "Allianz SE",
                 "isXetraTradable": True,
             },
@@ -1361,9 +1379,16 @@ def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch):
     )
     page_two = _de_page_payload(
         [
+            # Resolved via slug-based derivation (not in the bundled CSV).
+            # Note: the slug-derived ticker is the slug head, which often
+            # differs from the Yahoo-recognized ticker (e.g. Adidas's slug is
+            # ``adidas-ag`` but its Yahoo ticker is ``ADS``). The ISIN map is
+            # the better resolution path for DAX-40 names; slug derivation is
+            # the last-resort path for everything else.
             {
                 "isin": "DE000A1EWWW0",
-                "wkn": "ADS",
+                "wkn": "A1EWWW",
+                "slug": "adidas-ag",
                 "name": "Adidas AG",
                 "xetraTradable": True,
             },
@@ -1388,11 +1413,156 @@ def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch):
     assert snapshot.source_name == "dbg_official"
     assert snapshot.source_metadata["fetch_mode"] == "live_http"
     symbols = [row["symbol"] for row in snapshot.rows]
-    assert symbols == sorted(["SAP.DE", "ALV.DE", "ADS.DE"])
+    assert symbols == sorted(["SAP.DE", "ALV.DE", "ADIDAS.DE"])
     assert snapshot.source_metadata["row_counts"]["xetra"] == 3
     assert snapshot.source_metadata["row_counts"]["frankfurt"] == 0
     assert snapshot.source_metadata["row_counts"]["total"] == 3
     assert snapshot.source_metadata["page_attempts"] == [0, 2]
+    assert snapshot.source_metadata["ticker_resolution"] == {
+        "explicit_field": 1,
+        "isin_map": 1,
+        "slug_derived": 1,
+        "unresolved": 0,
+    }
+
+
+def test_fetch_de_snapshot_drops_rows_without_resolvable_ticker(monkeypatch, tmp_path):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
+
+    page_one = _de_page_payload(
+        [
+            # Resolvable via ISIN map (in the bundled CSV).
+            {
+                "isin": "DE0007164600",
+                "wkn": "716460",
+                "name": "SAP SE",
+                "isXetraTradable": True,
+            },
+            # Unresolvable: WKN is the only identifier and we never use WKN
+            # as a ticker. No tickerSymbol, no slug, ISIN not in the map.
+            # Expect this to be dropped with an `unresolved` resolution.
+            {
+                "isin": "DE000UNK0001",
+                "wkn": "UNK001",
+                "name": "Unknown Company",
+                "isXetraTradable": True,
+            },
+        ],
+        total=2,
+    )
+    pages = iter([page_one, _de_page_payload([], total=2)])
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        return _de_fetched_source(next(pages))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert [row["symbol"] for row in snapshot.rows] == ["SAP.DE"]
+    assert snapshot.source_metadata["ticker_resolution"]["unresolved"] == 1
+
+
+def test_fetch_de_snapshot_tolerates_per_page_failures(monkeypatch, tmp_path):
+    from app.config import settings as app_settings
+    from app.services import official_market_universe_source_service as svc_module
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
+    monkeypatch.setattr(svc_module, "_BOERSE_FRANKFURT_PAGE_SIZE", 2)
+
+    page_one = _de_page_payload(
+        [
+            {
+                "isin": "DE0007164600",
+                "wkn": "716460",
+                "tickerSymbol": "SAP",
+                "name": "SAP SE",
+                "isXetraTradable": True,
+            },
+            {
+                "isin": "DE0008404005",
+                "wkn": "840400",
+                "tickerSymbol": "ALV",
+                "name": "Allianz SE",
+                "isXetraTradable": True,
+            },
+        ],
+        total=4,
+    )
+    page_three = _de_page_payload(
+        [
+            {
+                "isin": "DE000A1EWWW0",
+                "wkn": "A1EWWW",
+                "tickerSymbol": "ADS",
+                "name": "Adidas AG",
+                "xetraTradable": True,
+            },
+        ],
+        total=4,
+    )
+
+    call_count = {"n": 0}
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            # Second page (offset=2) blows up — but the live path must still
+            # succeed because pages 1 and 3 each return rows.
+            raise requests.exceptions.ConnectionError("synthetic page-2 failure")
+        if call_count["n"] == 1:
+            return _de_fetched_source(page_one)
+        return _de_fetched_source(page_three)
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE", "ADS.DE"}
+    # Per-page error surfaces in fetch_errors so operators can see what failed
+    # without having to dig into worker logs.
+    assert "page_2" in snapshot.source_metadata["fetch_errors"]
+    assert "synthetic page-2 failure" in snapshot.source_metadata["fetch_errors"]["page_2"]
+
+
+def test_fetch_de_snapshot_short_circuits_on_consecutive_failures(monkeypatch, tmp_path):
+    """A salt rotation / DNS outage hits every page; the fetcher must abort
+    quickly rather than retrying all 50 offsets before falling back."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
+
+    call_count = {"n": 0}
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        call_count["n"] += 1
+        raise requests.exceptions.ConnectionError(f"synthetic outage #{call_count['n']}")
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    # Live path aborted after 3 consecutive failures, not the full 50-page cap.
+    assert call_count["n"] == 3
+    assert snapshot.source_metadata["fetch_errors"]["live_http"].startswith(
+        "DE live universe fetch failed for every page (3 attempts)"
+    )
 
 
 def test_fetch_de_snapshot_falls_back_to_csv_on_http_failure(monkeypatch, tmp_path):
@@ -1420,17 +1590,20 @@ def test_fetch_de_snapshot_falls_back_to_csv_on_http_failure(monkeypatch, tmp_pa
     assert snapshot.source_name == "de_manual_csv"
     assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
     assert snapshot.source_metadata["fetch_errors"]["live_http"].startswith(
-        "synthetic upstream outage"
+        "DE live universe fetch failed for every page (3 attempts)"
     )
     assert snapshot.source_metadata["fallback_csv_path"] == str(csv_path)
     assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE"}
     assert snapshot.snapshot_id.startswith("de-csv-fallback-")
 
 
-def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(monkeypatch):
+def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(monkeypatch, tmp_path):
     from app.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
 
     page_one = _de_page_payload(
         [
@@ -1438,13 +1611,15 @@ def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(monkeypatch):
             # The first occurrence (Xetra, .DE suffix) wins.
             {
                 "isin": "DE0007164600",
-                "wkn": "SAP",
+                "wkn": "716460",
+                "tickerSymbol": "SAP",
                 "name": "SAP SE",
                 "isXetraTradable": True,
             },
             {
                 "isin": "DE0007164600",
-                "wkn": "SAP",
+                "wkn": "716460",
+                "tickerSymbol": "SAP",
                 "name": "SAP SE Frankfurt",
                 "isXetraTradable": False,
             },
@@ -1491,22 +1666,36 @@ def test_parse_de_results_handles_alternate_payload_keys():
     payload = json.dumps(
         {
             "results": [
-                {"isin": "DE0007164600", "wkn": "SAP", "name": "SAP SE", "isXetraTradable": True},
-                # Frankfurt-only listing
-                {"isin": "DE0006062144", "wkn": "COV", "name": "Covestro", "isXetraTradable": False},
+                {
+                    "isin": "DE0007164600",
+                    "wkn": "716460",
+                    "tickerSymbol": "SAP",
+                    "name": "SAP SE",
+                    "isXetraTradable": True,
+                },
+                # Frankfurt-only listing, ticker via slug
+                {
+                    "isin": "DE0006062144",
+                    "wkn": "606214",
+                    "slug": "covestro-ag",
+                    "name": "Covestro",
+                    "isXetraTradable": False,
+                },
                 # Missing wkn → skipped
-                {"isin": "DE000XXX0000", "name": "Anonymous"},
+                {"isin": "DE000XXX0000", "tickerSymbol": "ANON", "name": "Anonymous"},
             ],
             "recordsTotal": 3,
         }
     ).encode("utf-8")
 
-    rows, total = service._parse_de_results(payload)
+    rows, total, resolution = service._parse_de_results(payload)
 
     assert total == 3
     symbols = [row["symbol"] for row in rows]
-    assert symbols == ["SAP.DE", "COV.F"]
+    assert symbols == ["SAP.DE", "COVESTRO.F"]
     assert rows[1]["exchange"] == "XFRA"
+    assert resolution["explicit_field"] == 1
+    assert resolution["slug_derived"] == 1
 
 
 def test_parse_de_results_rejects_invalid_payload():
@@ -1527,3 +1716,100 @@ def test_load_de_csv_fallback_returns_empty_when_path_missing(monkeypatch, tmp_p
     )
     service = OfficialMarketUniverseSourceService()
     assert service._load_de_csv_fallback() == []
+
+
+@pytest.mark.parametrize(
+    "slug,expected",
+    [
+        ("sap-se", "SAP"),
+        ("adidas-ag", "ADIDAS"),
+        ("allianz-se-na", "ALLIANZ"),
+        ("rwe-st", "RWE"),
+        ("henkel-vz", "HENKEL"),
+        # Multi-token entity suffix should be stripped as a unit.
+        ("abc-co-kgaa", "ABC"),
+        ("", None),
+        # Slug whose head doesn't fit the [A-Z0-9]{1,8} pattern (the head is
+        # 19 chars long after stripping the -ag entity token).
+        ("verylongcompanyname-ag", None),
+        # No alphanumeric tokens at all.
+        ("---", None),
+    ],
+)
+def test_derive_ticker_from_slug(slug, expected):
+    assert (
+        OfficialMarketUniverseSourceService._derive_ticker_from_slug(slug) == expected
+    )
+
+
+def test_derive_de_ticker_prefers_explicit_field_then_isin_map_then_slug():
+    derive = OfficialMarketUniverseSourceService._derive_de_ticker
+    isin_map = {"DE0007164600": "SAP", "DE0008404005": "ALV"}
+
+    # Explicit field wins even when the ISIN is in the map.
+    ticker, source = derive(
+        {"tickerSymbol": "EXP", "slug": "sap-se"},
+        isin="DE0007164600",
+        isin_to_ticker=isin_map,
+    )
+    assert (ticker, source) == ("EXP", "explicit_field")
+
+    # Falls through to ISIN map when no explicit field.
+    ticker, source = derive(
+        {"slug": "ignore-this-slug"},
+        isin="DE0008404005",
+        isin_to_ticker=isin_map,
+    )
+    assert (ticker, source) == ("ALV", "isin_map")
+
+    # Falls through to slug derivation when neither is present.
+    ticker, source = derive(
+        {"slug": "covestro-ag"},
+        isin="DE0006062144",
+        isin_to_ticker=isin_map,
+    )
+    assert (ticker, source) == ("COVESTRO", "slug_derived")
+
+    # Returns None when nothing resolves — caller drops the row.
+    ticker, source = derive(
+        {"wkn": "716460"},
+        isin="DE000UNK0001",
+        isin_to_ticker=isin_map,
+    )
+    assert (ticker, source) == (None, "unresolved")
+
+
+def test_load_de_isin_to_ticker_map(monkeypatch, tmp_path):
+    from app.config import settings as app_settings
+
+    csv_path = tmp_path / "de.csv"
+    csv_path.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "SAP.DE,SAP SE,XETR,DAX,DE0007164600\n"
+        "ALV.DE,Allianz SE,XETR,DAX,DE0008404005\n"
+        # Row missing isin column should be skipped silently.
+        "ADS.DE,Adidas AG,XETR,DAX,\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(csv_path))
+
+    isin_map = OfficialMarketUniverseSourceService._load_de_isin_to_ticker_map()
+    assert isin_map == {
+        "DE0007164600": "SAP",
+        "DE0008404005": "ALV",
+    }
+
+
+def test_load_de_isin_to_ticker_map_returns_empty_when_csv_lacks_isin_column(
+    monkeypatch, tmp_path
+):
+    from app.config import settings as app_settings
+
+    csv_path = tmp_path / "de_no_isin.csv"
+    csv_path.write_text(
+        "symbol,name,exchange,index\nSAP.DE,SAP SE,XETR,DAX\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(csv_path))
+
+    assert OfficialMarketUniverseSourceService._load_de_isin_to_ticker_map() == {}

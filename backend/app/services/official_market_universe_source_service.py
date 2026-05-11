@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import math
+from pathlib import Path
 import re
 import time
 from typing import Any, Iterable
@@ -20,6 +21,7 @@ import requests
 import urllib3
 
 from ..config import settings
+from .de_universe_source_signing import build_signed_headers
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,46 @@ _TW_SOURCE_NAME = "tw_reference_bundle"
 _CN_SOURCE_NAME = "cn_akshare_eastmoney"
 _CA_SOURCE_NAME = "tmx_official"
 _DE_SOURCE_NAME = "dbg_official"
+# Source identifier emitted on snapshot rows when the live API is unreachable
+# and the bundled DE seed CSV is used instead. Distinct from `_DE_SOURCE_NAME`
+# so downstream coverage gates can tell live from fallback.
+_DE_FALLBACK_SOURCE_NAME = "de_manual_csv"
+# Boerse Frankfurt's public equity-search endpoint pages results in fixed-size
+# windows. 100 keeps each request small enough to avoid timeouts while bounding
+# the total round-trip count to ~10 for the ~1,000-symbol Xetra/Frankfurt list.
+_BOERSE_FRANKFURT_PAGE_SIZE = 100
+# Hard cap on pagination loops so a misbehaving upstream that never decrements
+# `recordsTotal` cannot spin forever inside the GitHub Actions job.
+_BOERSE_FRANKFURT_MAX_PAGES = 50
+# Bail out of the live fetch after this many consecutive page failures so a
+# salt rotation / DNS outage does not waste minutes retrying every offset
+# before falling back to the CSV.
+_BOERSE_FRANKFURT_MAX_CONSECUTIVE_PAGE_FAILURES = 3
+# Yahoo-incompatible local codes are dropped from live results. The DE adapter
+# enforces ``[A-Z0-9]{1,8}`` and downstream yfinance only accepts well-formed
+# tickers — there is no value in publishing a row whose symbol cannot be
+# resolved to a market data feed.
+_DE_LIVE_TICKER_RE = re.compile(r"^[A-Z0-9]{1,8}$")
+# Trailing entity-form tokens stripped from a Boerse Frankfurt slug while
+# searching for the embedded ticker. Order matters: longer phrases must match
+# before their substrings (``co-kgaa`` before ``kgaa``) so the longer suffix
+# wins.
+_DE_SLUG_ENTITY_SUFFIXES: tuple[str, ...] = (
+    "co-kgaa",
+    "co-kg",
+    "gmbh-co-kg",
+    "kgaa",
+    "ag-co",
+    "ag",
+    "se",
+    "n",
+    "na",
+    "nv",
+    "ohg",
+    "kg",
+    "vz",
+    "st",
+)
 # Single tokens (matched as whole words after splitting the instrument-type
 # string on non-alphanumeric chars). Plurals are listed explicitly so that
 # "Notes" matches but "Footnotes" does not.
@@ -73,17 +115,6 @@ _CA_EXCLUDED_INSTRUMENT_PHRASES: frozenset[str] = frozenset(
     }
 )
 _CA_INSTRUMENT_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
-# Boerse Frankfurt's public equity-search endpoint pages results in fixed-size
-# windows. 100 keeps each request small enough to avoid timeouts while bounding
-# the total round-trip count to ~10 for the ~1,000-symbol Xetra/Frankfurt list.
-_BOERSE_FRANKFURT_PAGE_SIZE = 100
-# Hard cap on pagination loops so a misbehaving upstream that never decrements
-# `recordsTotal` cannot spin forever inside the GitHub Actions job.
-_BOERSE_FRANKFURT_MAX_PAGES = 50
-# Source identifier emitted on snapshot rows when the live API is unreachable
-# and the bundled DE seed CSV is used instead. Distinct from `_DE_SOURCE_NAME`
-# so downstream coverage gates can tell live from fallback.
-_DE_FALLBACK_SOURCE_NAME = "de_manual_csv"
 _KR_VALIDATED_BASELINE = {
     "source_url": "https://global.krx.co.kr/main/main.jspx?bld=listing_list",
     "validated_at": "2026-04-29",
@@ -981,32 +1012,54 @@ class OfficialMarketUniverseSourceService:
     def fetch_de_snapshot(self) -> OfficialMarketUniverseSnapshot:
         """Fetch the DE equity universe from Boerse Frankfurt with CSV fallback.
 
-        Live path: paginate the public ``/v1/search/equity_search`` endpoint with
-        the signed headers from ``de_universe_source_signing.build_signed_headers``,
-        dedupe results by ISIN, and prefer Xetra over Frankfurt-floor listings.
+        Live path (best-effort, see caveats below): paginate the public
+        ``/v1/search/equity_search`` endpoint with the signed headers from
+        ``de_universe_source_signing.build_signed_headers``, derive a
+        Yahoo-compatible ticker via ``_derive_de_ticker``, dedupe by ISIN, and
+        prefer Xetra over Frankfurt-floor listings.
 
         Fallback path: when the live request fails (DNS/timeout/HTTP error,
-        signature rotation, or empty response), load the bundled DAX-40 CSV at
+        signature rotation, every page errored, no row resolved to a usable
+        ticker, etc.) load the bundled DAX-40 CSV at
         ``settings.de_universe_fallback_csv_path``. The snapshot is still
         published, but ``source_metadata['fetch_mode'] == 'csv_fallback'`` and
         ``source_name == 'de_manual_csv'`` so the coverage gate / downstream
         operators can see the snapshot is incomplete.
+
+        ## Live-path caveats
+
+        Two assumptions in the live path are not validated against a real
+        endpoint from this codebase and may regress without notice:
+
+        1. The ``X-Security`` signing scheme + public salt in
+           ``de_universe_source_signing`` is reverse-engineered from the
+           boerse-frankfurt.de SPA. If Deutsche Boerse rotates the salt or
+           changes the algorithm, every signed request returns 401/403 and
+           the CSV fallback takes over.
+        2. The Boerse Frankfurt search payload exposes ``isin``, ``wkn``,
+           ``slug``, etc. but does not directly carry the Yahoo Finance
+           ticker. ``_derive_de_ticker`` first checks for explicit
+           ``tickerSymbol``/``ticker`` fields, then consults the bundled
+           CSV's ISIN-to-ticker map, then derives a ticker from the slug.
+           Rows that fall through all three are dropped (with a warning) so
+           the live path never publishes a Yahoo-incompatible symbol like
+           ``716460.DE`` (the WKN, not the ticker).
+
+        Together these mean operators should treat the live path as
+        opportunistic and expect the CSV fallback to be the contract until
+        somebody cuts a release after verifying the live API end-to-end.
         """
-        rows: list[dict[str, Any]] = []
         fetch_mode = "live_http"
         fetch_errors: dict[str, str] = {}
         fetched_ats: list[str] = []
         last_modified: str | None = None
         tls_verification_disabled = False
         page_attempts: list[int] = []
-        live_error: str | None = None
+        page_errors: dict[str, str] = {}
+        ticker_resolution: dict[str, int] = {}
 
         try:
-            rows, fetch_meta = self._fetch_de_live()
-            page_attempts = fetch_meta.get("page_attempts", [])
-            fetched_ats = fetch_meta.get("fetched_ats", [])
-            last_modified = fetch_meta.get("http_last_modified")
-            tls_verification_disabled = bool(fetch_meta.get("tls_verification_disabled"))
+            live_meta = self._fetch_de_live()
         except (requests.exceptions.RequestException, ValueError) as exc:
             live_error = str(exc)
             logger.warning(
@@ -1023,6 +1076,16 @@ class OfficialMarketUniverseSourceService:
                 ) from exc
             fetch_mode = "csv_fallback"
             fetched_ats = [datetime.now(UTC).isoformat()]
+        else:
+            rows = live_meta["rows"]
+            page_attempts = live_meta.get("page_attempts", [])
+            page_errors = live_meta.get("page_errors", {})
+            fetched_ats = live_meta.get("fetched_ats", [])
+            last_modified = live_meta.get("http_last_modified")
+            tls_verification_disabled = bool(live_meta.get("tls_verification_disabled"))
+            ticker_resolution = live_meta.get("ticker_resolution", {})
+            if page_errors:
+                fetch_errors.update({f"page_{k}": v for k, v in page_errors.items()})
 
         if not rows:
             raise ValueError("DE official universe fetch returned no rows")
@@ -1047,6 +1110,8 @@ class OfficialMarketUniverseSourceService:
                 "total": len(rows),
             },
         }
+        if fetch_mode == "live_http" and ticker_resolution:
+            source_metadata["ticker_resolution"] = ticker_resolution
         if fetch_mode == "csv_fallback":
             source_metadata["fallback_csv_path"] = settings.de_universe_fallback_csv_path
 
@@ -1060,16 +1125,30 @@ class OfficialMarketUniverseSourceService:
             rows=tuple(rows),
         )
 
-    def _fetch_de_live(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """Paginate the Boerse Frankfurt search API and return deduped rows."""
-        from .de_universe_source_signing import build_signed_headers
+    def _fetch_de_live(self) -> dict[str, Any]:
+        """Paginate the Boerse Frankfurt search API tolerating per-page failures.
 
+        Mirrors ``_fetch_ca_board``'s resilience pattern: a transient HTTP or
+        parse error on any single page is logged and recorded but does not
+        abort the whole fetch. The live path only fails (and triggers the
+        CSV fallback) when *every* page errored or no row resolved to a
+        Yahoo-compatible ticker.
+        """
         base_url = settings.de_universe_source_url
+        isin_to_ticker = self._load_de_isin_to_ticker_map()
         rows_by_isin: dict[str, dict[str, Any]] = {}
         page_attempts: list[int] = []
+        page_errors: dict[str, str] = {}
         fetched_ats: list[str] = []
         last_modified: str | None = None
         tls_verification_disabled = False
+        ticker_resolution: dict[str, int] = {
+            "explicit_field": 0,
+            "isin_map": 0,
+            "slug_derived": 0,
+            "unresolved": 0,
+        }
+        consecutive_failures = 0
 
         for page_index in range(_BOERSE_FRANKFURT_MAX_PAGES):
             offset = page_index * _BOERSE_FRANKFURT_PAGE_SIZE
@@ -1078,28 +1157,63 @@ class OfficialMarketUniverseSourceService:
                 f"&limit={_BOERSE_FRANKFURT_PAGE_SIZE}&sort=NAME&sortOrder=ASC"
             )
             page_attempts.append(offset)
-            fetched = self._http_get(
-                url,
-                allow_insecure_fallback=settings.de_universe_allow_insecure_fallback,
-                extra_headers=build_signed_headers(url),
-            )
+            try:
+                fetched = self._http_get(
+                    url,
+                    allow_insecure_fallback=settings.de_universe_allow_insecure_fallback,
+                    extra_headers=build_signed_headers(url),
+                )
+            except requests.exceptions.RequestException as exc:
+                page_errors[str(offset)] = str(exc)
+                logger.warning(
+                    "DE live fetch failed for offset %s: %s", offset, exc
+                )
+                consecutive_failures += 1
+                if consecutive_failures >= _BOERSE_FRANKFURT_MAX_CONSECUTIVE_PAGE_FAILURES:
+                    logger.warning(
+                        "DE live fetch hit %s consecutive page failures; aborting",
+                        consecutive_failures,
+                    )
+                    break
+                continue
+
             fetched_ats.append(fetched.fetched_at)
             if fetched.last_modified:
                 last_modified = fetched.last_modified
             if fetched.tls_verification_disabled:
                 tls_verification_disabled = True
 
-            page_rows, total_count = self._parse_de_results(fetched.content)
+            try:
+                page_rows, total_count, page_resolution = self._parse_de_results(
+                    fetched.content, isin_to_ticker=isin_to_ticker
+                )
+            except ValueError as exc:
+                page_errors[str(offset)] = f"parse failed: {exc}"
+                logger.warning(
+                    "DE live parse failed for offset %s: %s", offset, exc
+                )
+                consecutive_failures += 1
+                if consecutive_failures >= _BOERSE_FRANKFURT_MAX_CONSECUTIVE_PAGE_FAILURES:
+                    logger.warning(
+                        "DE live fetch hit %s consecutive page failures; aborting",
+                        consecutive_failures,
+                    )
+                    break
+                continue
+
+            consecutive_failures = 0
+            for bucket, count in page_resolution.items():
+                ticker_resolution[bucket] = ticker_resolution.get(bucket, 0) + count
+
             for row in page_rows:
                 isin = row.get("isin")
                 if not isin:
                     continue
                 # Prefer Xetra over Frankfurt-floor for the same ISIN: Xetra is
                 # the primary venue and yields the .DE suffix the rest of the
-                # platform expects. ``setdefault`` already keeps the first hit;
-                # since we sort by NAME and request lang=en, both venues for an
-                # ISIN appear next to each other and we pick whichever the API
-                # listed first. Fix this if upstream changes ordering.
+                # platform expects. ``setdefault`` keeps the first hit; sort
+                # order from the API (lang=en, sort=NAME) groups venues for an
+                # ISIN together so the choice is stable.
                 rows_by_isin.setdefault(isin, row)
 
             if not page_rows:
@@ -1112,20 +1226,41 @@ class OfficialMarketUniverseSourceService:
             if len(page_rows) < _BOERSE_FRANKFURT_PAGE_SIZE:
                 break
 
+        successful_pages = len(page_attempts) - len(page_errors)
+        if successful_pages <= 0:
+            raise ValueError(
+                f"DE live universe fetch failed for every page ({len(page_errors)} attempts)"
+            )
         if not rows_by_isin:
-            raise ValueError("DE live universe fetch returned no rows")
+            raise ValueError(
+                "DE live universe fetch returned no rows whose tickers could be resolved"
+            )
 
         rows = sorted(rows_by_isin.values(), key=lambda row: row["symbol"])
-        return rows, {
+        return {
+            "rows": rows,
             "page_attempts": page_attempts,
+            "page_errors": page_errors,
             "fetched_ats": fetched_ats,
             "http_last_modified": last_modified,
             "tls_verification_disabled": tls_verification_disabled,
+            "ticker_resolution": ticker_resolution,
         }
 
     @classmethod
-    def _parse_de_results(cls, content: bytes) -> tuple[list[dict[str, Any]], int]:
-        """Parse a Boerse Frankfurt search-API page into ingestion row dicts."""
+    def _parse_de_results(
+        cls,
+        content: bytes,
+        *,
+        isin_to_ticker: dict[str, str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+        """Parse a Boerse Frankfurt search-API page into ingestion row dicts.
+
+        Returns ``(rows, total_count, ticker_resolution)`` where
+        ``ticker_resolution`` is a per-bucket counter so the caller can record
+        in snapshot metadata how the live tickers were resolved (explicit
+        field vs ISIN map vs slug derivation vs unresolved/dropped).
+        """
         try:
             payload = json.loads(content.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1150,7 +1285,14 @@ class OfficialMarketUniverseSourceService:
                 total_count = int(value)
                 break
 
+        isin_map = isin_to_ticker or {}
         rows: list[dict[str, Any]] = []
+        resolution = {
+            "explicit_field": 0,
+            "isin_map": 0,
+            "slug_derived": 0,
+            "unresolved": 0,
+        }
         for entry in raw_rows:
             if not isinstance(entry, dict):
                 continue
@@ -1178,9 +1320,20 @@ class OfficialMarketUniverseSourceService:
             exchange = "XETR" if is_xetra else "XFRA"
             symbol_suffix = ".DE" if exchange == "XETR" else ".F"
 
+            ticker, source = cls._derive_de_ticker(entry, isin=isin, isin_to_ticker=isin_map)
+            if ticker is None:
+                resolution["unresolved"] += 1
+                logger.debug(
+                    "Dropping DE live row %s (wkn=%s): no Yahoo-compatible ticker",
+                    isin,
+                    wkn,
+                )
+                continue
+            resolution[source] += 1
+
             rows.append(
                 {
-                    "symbol": f"{wkn}{symbol_suffix}",
+                    "symbol": f"{ticker}{symbol_suffix}",
                     "name": name,
                     "exchange": exchange,
                     "sector": str(entry.get("sector") or "").strip(),
@@ -1191,14 +1344,117 @@ class OfficialMarketUniverseSourceService:
                 }
             )
 
-        return rows, total_count
+        return rows, total_count, resolution
+
+    @classmethod
+    def _derive_de_ticker(
+        cls,
+        entry: dict[str, Any],
+        *,
+        isin: str,
+        isin_to_ticker: dict[str, str],
+    ) -> tuple[str | None, str]:
+        """Resolve a Yahoo-compatible ticker from a Boerse Frankfurt entry.
+
+        Resolution order: explicit ``tickerSymbol`` / ``ticker`` field →
+        bundled-CSV ISIN map → slug-based derivation. Returns
+        ``(ticker, "explicit_field" | "isin_map" | "slug_derived")`` or
+        ``(None, "unresolved")`` if nothing yields a value matching the DE
+        adapter's local-code pattern.
+
+        WKN is intentionally never used: Yahoo Finance keys German equities
+        by ticker symbol (``SAP``), not WKN (``716460``).
+        """
+        for field in ("tickerSymbol", "ticker", "shortName"):
+            candidate = str(entry.get(field) or "").strip().upper()
+            if candidate and _DE_LIVE_TICKER_RE.fullmatch(candidate):
+                return candidate, "explicit_field"
+
+        if isin and isin in isin_to_ticker:
+            return isin_to_ticker[isin], "isin_map"
+
+        slug = str(entry.get("slug") or "").strip().lower()
+        derived = cls._derive_ticker_from_slug(slug)
+        if derived:
+            return derived, "slug_derived"
+
+        return None, "unresolved"
+
+    @staticmethod
+    def _derive_ticker_from_slug(slug: str) -> str | None:
+        """Best-effort ticker extraction from a boerse-frankfurt.de slug.
+
+        Slugs typically look like ``sap-se``, ``deutsche-bank-ag``,
+        ``allianz-se-na``. We strip trailing entity-form tokens (``-se``,
+        ``-ag``, ``-kgaa``, etc.) iteratively, then take the resulting
+        head segment as the ticker candidate. Returns ``None`` if the
+        result doesn't pass the DE adapter's local-code regex.
+        """
+        if not slug:
+            return None
+        tokens = [t for t in slug.split("-") if t]
+        if not tokens:
+            return None
+
+        # Iteratively strip trailing entity tokens; check both the longest
+        # multi-token suffix and single-token suffixes.
+        while tokens:
+            joined_tail = "-".join(tokens[-3:]).lower()
+            stripped = False
+            for suffix in _DE_SLUG_ENTITY_SUFFIXES:
+                if joined_tail == suffix:
+                    tokens = tokens[: -len(suffix.split("-"))]
+                    stripped = True
+                    break
+                if joined_tail.endswith(f"-{suffix}"):
+                    tokens = tokens[: -len(suffix.split("-"))]
+                    stripped = True
+                    break
+            if not stripped:
+                break
+
+        if not tokens:
+            return None
+
+        candidate = tokens[0].upper()
+        if _DE_LIVE_TICKER_RE.fullmatch(candidate):
+            return candidate
+        return None
+
+    @classmethod
+    def _load_de_isin_to_ticker_map(cls) -> dict[str, str]:
+        """Build an ISIN→ticker map from the bundled DE seed CSV.
+
+        The CSV ships with the curated DAX-40 (and any future MDAX/SDAX
+        additions). Live-fetch rows whose ISIN is in this map can publish a
+        ticker that's known to round-trip through yfinance, even when the
+        live API doesn't expose a usable ticker field. Returns an empty map
+        if the CSV is missing — callers tolerate that and fall through to
+        slug-based derivation.
+        """
+        csv_path = Path(settings.de_universe_fallback_csv_path)
+        if not csv_path.exists():
+            return {}
+
+        frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        if "isin" not in frame.columns or "symbol" not in frame.columns:
+            return {}
+
+        isin_to_ticker: dict[str, str] = {}
+        for record in frame.to_dict("records"):
+            isin = str(record.get("isin") or "").strip().upper()
+            symbol = str(record.get("symbol") or "").strip().upper()
+            if not isin or not symbol:
+                continue
+            ticker = symbol.split(".", 1)[0]
+            if _DE_LIVE_TICKER_RE.fullmatch(ticker):
+                isin_to_ticker.setdefault(isin, ticker)
+        return isin_to_ticker
 
     @classmethod
     def _load_de_csv_fallback(cls) -> list[dict[str, Any]]:
         """Read the bundled DE seed CSV into the same row schema as the live path."""
-        from pathlib import Path as _Path
-
-        csv_path = _Path(settings.de_universe_fallback_csv_path)
+        csv_path = Path(settings.de_universe_fallback_csv_path)
         if not csv_path.exists():
             return []
 
