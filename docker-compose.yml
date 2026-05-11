@@ -38,6 +38,9 @@ x-app-env: &app-env
   GROQ_API_KEYS: ${GROQ_API_KEYS:-}
   TAVILY_API_KEY: ${TAVILY_API_KEY:-}
   SERPER_API_KEY: ${SERPER_API_KEY:-}
+  X_INGEST_PROVIDER: ${X_INGEST_PROVIDER:-official}
+  TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+  X_API_MAX_PAGES_PER_SOURCE: ${X_API_MAX_PAGES_PER_SOURCE:-10}
   XUI_ENABLED: ${XUI_ENABLED:-false}
   XUI_CONFIG_PATH: ${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
   XUI_PROFILE: ${XUI_PROFILE:-default}
@@ -207,6 +210,11 @@ services:
     profiles: ["market-cn"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_cn -n marketjobs-cn@%h
 
+  celery-marketjobs-ca:
+    <<: *worker-common
+    profiles: ["market-ca"]
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_ca -n marketjobs-ca@%h
+
   celery-marketjobs-de:
     <<: *worker-common
     profiles: ["market-de"]
@@ -250,6 +258,11 @@ services:
     <<: *worker-common
     profiles: ["market-cn"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_cn -n userscans-cn@%h
+
+  celery-userscans-ca:
+    <<: *worker-common
+    profiles: ["market-ca"]
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_ca -n userscans-ca@%h
 
   celery-userscans-de:
     <<: *worker-common
