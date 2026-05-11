@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.services.field_capability_registry import (
     FALLBACK_BEHAVIOR_COMPUTED,
     FALLBACK_BEHAVIOR_FALLBACK,
@@ -25,8 +27,10 @@ from app.services.fundamentals_completeness import (
     screening_fields,
 )
 from app.services.provider_routing_policy import (
+    KNOWN_MARKETS,
     MARKET_CA,
     MARKET_CN,
+    MARKET_DE,
     MARKET_HK,
     MARKET_IN,
     MARKET_JP,
@@ -61,6 +65,7 @@ def test_registry_is_versioned_and_shape_is_deterministic():
         MARKET_TW,
         MARKET_CN,
         MARKET_CA,
+        MARKET_DE,
     ]
     assert artifact["providers"] == [
         "finviz",
@@ -263,3 +268,51 @@ def test_us_missing_supported_ownership_field_is_marked_missing():
     )
     assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_MISSING
     assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_MISSING_SUPPORTED
+
+
+@pytest.mark.parametrize("market", sorted(KNOWN_MARKETS))
+def test_derive_ownership_sentiment_availability_covers_every_known_market(market):
+    """Regression for the weekly-ref DE workflow failure: when a new market
+    was added to ``routing_policy.KNOWN_MARKETS`` but not to
+    ``FieldCapabilityRegistryService.MARKET_ORDER``, ``entry.markets[market]``
+    raised ``KeyError`` inside ``derive_ownership_sentiment_availability``.
+    That cascaded through ``fundamentals_cache.store`` and the persistence
+    step recorded 100% failure with empty ``provider_error_counts``, blocking
+    the coverage gate.
+
+    Iterating over ``KNOWN_MARKETS`` keeps the next added market from
+    silently regressing — any market in the routing policy must also resolve
+    in the capability registry."""
+    availability = field_capability_registry.derive_ownership_sentiment_availability(
+        data={},
+        market=market,
+    )
+    assert isinstance(availability, dict)
+    # Every entry must report a status; missing markets used to crash with
+    # KeyError before this regression was filed.
+    for field_name, info in availability.items():
+        assert info.get("status"), (
+            f"market={market} field={field_name} info={info}"
+        )
+
+
+def test_de_missing_ownership_fields_surface_non_us_gap_reason():
+    """DE routes to yfinance only (no Finviz), so ownership/sentiment fields
+    that are unavailable from Yahoo for non-US should surface the
+    non-US-gap reason code rather than the US-style ``missing_supported``."""
+    availability = field_capability_registry.derive_ownership_sentiment_availability(
+        data={},
+        market=MARKET_DE,
+    )
+    assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_UNSUPPORTED
+    assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP
+
+
+def test_ca_missing_ownership_fields_surface_non_us_gap_reason():
+    """CA routes to yfinance only — same non-US-gap classification as DE/HK."""
+    availability = field_capability_registry.derive_ownership_sentiment_availability(
+        data={},
+        market=MARKET_CA,
+    )
+    assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_UNSUPPORTED
+    assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP

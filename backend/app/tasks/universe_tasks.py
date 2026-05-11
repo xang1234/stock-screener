@@ -25,7 +25,7 @@ from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
 
-_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "KR", "TW", "CN", "CA"})
+_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"})
 _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
@@ -182,6 +182,15 @@ def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
             )
         if snapshot.market == "CA":
             return stock_universe_service.ingest_ca_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
+        if snapshot.market == "DE":
+            return stock_universe_service.ingest_de_snapshot_rows(
                 db,
                 rows=snapshot.rows,
                 source_name=snapshot.source_name,
