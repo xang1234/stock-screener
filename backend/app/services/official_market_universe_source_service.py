@@ -1156,6 +1156,14 @@ class OfficialMarketUniverseSourceService:
             # Some Deutsche Boerse files ship as CP1252 — fall back gracefully.
             text = content.decode("cp1252", errors="replace")
 
+        # Strip an optional UTF-8 BOM. Without this, if Deutsche Boerse ever
+        # starts emitting one, the first cell becomes ``"﻿Market:"`` (or
+        # ``"﻿Product Status"`` if the metadata rows are removed) and
+        # the exact ``== "Product Status"`` match below never fires —
+        # ``_parse_de_xetra_csv`` would then raise on a perfectly valid file.
+        if text.startswith("﻿"):
+            text = text[1:]
+
         reader = csv.reader(io.StringIO(text), delimiter=";")
         header: list[str] | None = None
         rows: list[dict[str, Any]] = []

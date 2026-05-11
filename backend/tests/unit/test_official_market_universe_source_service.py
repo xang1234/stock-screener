@@ -1557,6 +1557,18 @@ def test_parse_de_xetra_csv_strips_wkn_zero_padding():
     assert rows[0]["wkn"] == "716460"
 
 
+def test_parse_de_xetra_csv_tolerates_utf8_bom():
+    """If Deutsche Boerse ever ships the CSV with a UTF-8 BOM, the first cell
+    becomes ``"﻿Product Status"`` and the exact header match would never
+    fire. Codex P2 on PR #169."""
+    service = OfficialMarketUniverseSourceService()
+    csv_bytes = b"\xef\xbb\xbf" + _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", Instrument="SAP SE"),
+    ])
+    rows = service._parse_de_xetra_csv(csv_bytes)
+    assert [row["symbol"] for row in rows] == ["SAP.DE"]
+
+
 def test_load_de_csv_fallback_returns_empty_when_path_missing(monkeypatch, tmp_path):
     from app.config import settings as app_settings
 
