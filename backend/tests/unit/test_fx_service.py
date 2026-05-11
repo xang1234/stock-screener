@@ -32,6 +32,8 @@ class TestCurrencyForMarket:
         assert currency_for_market("KR") == "KRW"
         assert currency_for_market("TW") == "TWD"
         assert currency_for_market("CN") == "CNY"
+        assert currency_for_market("CA") == "CAD"
+        assert currency_for_market("DE") == "EUR"
 
     def test_case_insensitive_and_trimmed(self):
         assert currency_for_market("  hk  ") == "HKD"

@@ -64,6 +64,8 @@ MARKET_CURRENCY_MAP: Mapping[str, str] = {
     "KR": "KRW",
     "TW": "TWD",
     "CN": "CNY",
+    "CA": "CAD",
+    "DE": "EUR",
 }
 
 SUPPORTED_CURRENCIES = frozenset(MARKET_CURRENCY_MAP.values())

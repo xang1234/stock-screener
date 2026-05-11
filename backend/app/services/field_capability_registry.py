@@ -76,6 +76,7 @@ class FieldCapabilityRegistryService:
         routing_policy.MARKET_TW,
         routing_policy.MARKET_CN,
         routing_policy.MARKET_CA,
+        routing_policy.MARKET_DE,
     )
     PROVIDER_ORDER: Tuple[str, ...] = (
         routing_policy.PROVIDER_FINVIZ,
@@ -405,6 +406,8 @@ class FieldCapabilityRegistryService:
                     routing_policy.MARKET_KR,
                     routing_policy.MARKET_TW,
                     routing_policy.MARKET_CN,
+                    routing_policy.MARKET_CA,
+                    routing_policy.MARKET_DE,
                 )
             ):
                 reason_code = REASON_CODE_NON_US_GAP
