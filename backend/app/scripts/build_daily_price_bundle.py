@@ -66,6 +66,17 @@ def main() -> int:
         if args.as_of_date
         else service.market_calendar.last_completed_trading_day(market)
     )
+    if args.as_of_date:
+        latest_completed = service.market_calendar.last_completed_trading_day(market)
+        if resolved_as_of_date > latest_completed:
+            raise SystemExit(
+                f"{market} as-of date {resolved_as_of_date.isoformat()} is after "
+                f"the latest completed trading day {latest_completed.isoformat()}"
+            )
+        if not service.market_calendar.is_trading_day(market, resolved_as_of_date):
+            raise SystemExit(
+                f"{market} as-of date {resolved_as_of_date.isoformat()} is not a trading day"
+            )
     bundle_name = args.bundle_name or _default_bundle_name(market, resolved_as_of_date)
     latest_manifest_name = (
         args.latest_manifest_name or service.latest_manifest_name_for_market(market)

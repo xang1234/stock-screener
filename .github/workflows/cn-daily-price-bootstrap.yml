@@ -24,6 +24,9 @@ concurrency:
   group: cn-daily-price-bootstrap-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CAN_PUBLISH_RELEASES: ${{ github.ref_name == github.event.repository.default_branch }}
+
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -75,11 +78,21 @@ jobs:
               shards = [shard]
               combine = "false"
 
+          calendar = MarketCalendarService()
           raw_as_of = (os.environ.get("INPUT_AS_OF_DATE") or "").strip()
           if raw_as_of:
               as_of = date.fromisoformat(raw_as_of)
           else:
-              as_of = MarketCalendarService().last_completed_trading_day("CN")
+              as_of = calendar.last_completed_trading_day("CN")
+
+          latest_completed = calendar.last_completed_trading_day("CN")
+          if as_of > latest_completed:
+              raise SystemExit(
+                  f"as_of_date {as_of.isoformat()} is after CN's latest completed "
+                  f"trading day {latest_completed.isoformat()}"
+              )
+          if not calendar.is_trading_day("CN", as_of):
+              raise SystemExit(f"as_of_date {as_of.isoformat()} is not a CN trading day")
 
           print(f"shard_count={shard_count}")
           print(f"shards={json.dumps(shards)}")
@@ -93,6 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ensure durable release targets exist
+        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -107,6 +121,10 @@ jobs:
               --title "CN Daily Price Shards" \
               --notes "Durable resumable shard checkpoints for China A-share daily price bootstraps."
           fi
+
+      - name: Skip release setup on non-default branch
+        if: github.ref_name != github.event.repository.default_branch
+        run: echo "Release creation is skipped outside the default branch."
 
   build-cn-price-shard:
     needs: [plan, ensure-releases]
@@ -169,25 +187,38 @@ jobs:
         run: |
           mkdir -p /tmp/cn-prior-price-shard
           SHARD_ASSET="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.json.gz"
+          SHARD_MANIFEST="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.manifest.json"
           if gh release download cn-daily-price-shards \
             --pattern "${SHARD_ASSET}" \
-            --dir /tmp/cn-prior-price-shard >/dev/null 2>&1; then
+            --dir /tmp/cn-prior-price-shard >/dev/null 2>&1 \
+            && gh release download cn-daily-price-shards \
+              --pattern "${SHARD_MANIFEST}" \
+              --dir /tmp/cn-prior-price-shard >/dev/null 2>&1; then
             cd backend
             python -m app.scripts.import_daily_price_bundle \
               --input "/tmp/cn-prior-price-shard/${SHARD_ASSET}" \
+              --manifest "/tmp/cn-prior-price-shard/${SHARD_MANIFEST}" \
+              --expected-market CN \
+              --expected-as-of-date "${AS_OF_DATE}" \
+              --expected-bundle-asset-name "${SHARD_ASSET}" \
               --warm-redis-symbols 0
           else
-            echo "No prior CN shard checkpoint found for ${SHARD_ASSET}; starting this shard from seeded full bundle only."
+            echo "No prior verified CN shard checkpoint found for ${SHARD_ASSET}; starting this shard from seeded full bundle only."
           fi
 
       - name: Refresh CN daily price shard
         run: |
           cd backend
+          CHECKPOINT_ARGS=()
+          if [ "${CAN_PUBLISH_RELEASES}" = "true" ]; then
+            CHECKPOINT_ARGS=(--checkpoint-release-tag cn-daily-price-shards)
+          fi
           python -m app.scripts.bootstrap_cn_daily_price_shard \
             --shard-index "${SHARD_INDEX}" \
             --shard-count "${SHARD_COUNT}" \
             --as-of-date "${AS_OF_DATE}" \
-            --output-dir /tmp/cn-price-shard
+            --output-dir /tmp/cn-price-shard \
+            "${CHECKPOINT_ARGS[@]}"
 
       - name: Upload CN price shard artifact
         uses: actions/upload-artifact@v4
@@ -196,17 +227,12 @@ jobs:
           path: /tmp/cn-price-shard
           if-no-files-found: error
 
-      - name: Publish durable CN shard checkpoint
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+      - name: Verify CN price shard outputs
         run: |
           SHARD_ASSET="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.json.gz"
           SHARD_MANIFEST="daily-price-cn-${AS_OF_COMPACT}-shard-${SHARD_INDEX}-of-${SHARD_COUNT}.manifest.json"
-          gh release upload cn-daily-price-shards \
-            "/tmp/cn-price-shard/${SHARD_ASSET}" \
-            "/tmp/cn-price-shard/${SHARD_MANIFEST}" \
-            --clobber
+          test -f "/tmp/cn-price-shard/${SHARD_ASSET}"
+          test -f "/tmp/cn-price-shard/${SHARD_MANIFEST}"
 
   combine-cn-price-shards:
     if: needs.plan.outputs.combine == 'true'
@@ -285,6 +311,7 @@ jobs:
             --require-complete
 
       - name: Publish final CN daily price bundle
+        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -296,7 +323,9 @@ jobs:
             find /tmp/daily-price -maxdepth 1 -type f -print >&2 || true
             exit 1
           fi
-          gh release upload daily-price-data \
-            "$BUNDLE_PATH" \
-            "$MANIFEST_PATH" \
-            --clobber
+          gh release upload daily-price-data "$BUNDLE_PATH" --clobber
+          gh release upload daily-price-data "$MANIFEST_PATH" --clobber
+
+      - name: Skip final release publish on non-default branch
+        if: github.ref_name != github.event.repository.default_branch
+        run: echo "Final CN daily price release publish is skipped outside the default branch."

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 import app.scripts.build_daily_price_bundle as build_script
 import app.scripts.bootstrap_cn_daily_price_shard as cn_shard_script
@@ -115,6 +118,86 @@ def test_import_daily_price_bundle_script_calls_service(monkeypatch, tmp_path, c
     assert "Daily price bundle import complete:" in capsys.readouterr().out
 
 
+def test_import_daily_price_bundle_script_verifies_manifest(monkeypatch, tmp_path):
+    bundle_path = tmp_path / "daily-price-cn-20260508-shard-1-of-2.json.gz"
+    manifest_path = tmp_path / "daily-price-cn-20260508-shard-1-of-2.manifest.json"
+    bundle_path.write_bytes(b"bundle")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": DailyPriceBundleService.DAILY_PRICE_MANIFEST_SCHEMA_VERSION,
+                "market": "CN",
+                "as_of_date": "2026-05-08",
+                "bundle_asset_name": bundle_path.name,
+                "bar_period": DailyPriceBundleService.DAILY_PRICE_BAR_PERIOD,
+                "sha256": hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    monkeypatch.setattr(import_daily_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(import_daily_script, "SessionLocal", _fake_session)
+
+    def _fake_import(db, **kwargs):
+        captured.update(kwargs)
+        return {"market": "CN", "imported_symbols": 1, "imported_rows": 1}
+
+    monkeypatch.setattr(
+        import_daily_script,
+        "get_daily_price_bundle_service",
+        lambda: SimpleNamespace(import_daily_price_bundle=_fake_import),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "import_daily_price_bundle",
+            "--input",
+            str(bundle_path),
+            "--manifest",
+            str(manifest_path),
+            "--expected-market",
+            "CN",
+            "--expected-as-of-date",
+            "2026-05-08",
+            "--expected-bundle-asset-name",
+            bundle_path.name,
+        ],
+    )
+
+    assert import_daily_script.main() == 0
+    assert captured["input_path"] == bundle_path
+
+
+def test_import_daily_price_bundle_manifest_rejects_checksum_mismatch(tmp_path):
+    bundle_path = tmp_path / "daily-price-cn-20260508-shard-1-of-2.json.gz"
+    manifest_path = tmp_path / "daily-price-cn-20260508-shard-1-of-2.manifest.json"
+    bundle_path.write_bytes(b"bundle")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": DailyPriceBundleService.DAILY_PRICE_MANIFEST_SCHEMA_VERSION,
+                "market": "CN",
+                "as_of_date": "2026-05-08",
+                "bundle_asset_name": bundle_path.name,
+                "bar_period": DailyPriceBundleService.DAILY_PRICE_BAR_PERIOD,
+                "sha256": "bad",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        import_daily_script.verify_daily_price_bundle_manifest(
+            input_path=bundle_path,
+            manifest_path=manifest_path,
+            expected_market="CN",
+            expected_as_of_date="2026-05-08",
+            expected_bundle_asset_name=bundle_path.name,
+        )
+
+
 def test_cn_daily_price_shard_selection_is_sorted_and_one_based():
     assert cn_shard_script.select_shard_symbols(
         ["600000.SS", "000001.SZ", "000002.SZ", "300001.SZ", "688001.SS"],
@@ -128,7 +211,7 @@ def test_cn_daily_price_shard_bootstrap_fetches_missing_symbols_and_exports_shar
     tmp_path,
     capsys,
 ):
-    captured = {"stored": [], "export": None}
+    captured = {"stored": [], "export": None, "published": []}
 
     class FakeQuery:
         def filter(self, *args, **kwargs):
@@ -195,6 +278,9 @@ def test_cn_daily_price_shard_bootstrap_fetches_missing_symbols_and_exports_shar
         as_of_date=date(2026, 5, 8),
         output_dir=tmp_path,
         batch_size=10,
+        checkpoint_publisher=lambda bundle, manifest: captured["published"].append(
+            (bundle.name, manifest.name)
+        ),
     )
 
     assert stats["shard_symbols"] == 2
@@ -203,6 +289,12 @@ def test_cn_daily_price_shard_bootstrap_fetches_missing_symbols_and_exports_shar
     assert captured["stored"] == [({"600000.SS": SimpleNamespace(empty=False)}, True)]
     assert captured["export"]["symbols"] == ["000001.SZ", "600000.SS"]
     assert captured["export"]["bundle_asset_name"] == "daily-price-cn-20260508-shard-1-of-2.json.gz"
+    assert captured["published"] == [
+        (
+            "daily-price-cn-20260508-shard-1-of-2.json.gz",
+            "daily-price-cn-20260508-shard-1-of-2.manifest.json",
+        )
+    ]
     assert "CN daily price shard complete:" in capsys.readouterr().out
 
 
