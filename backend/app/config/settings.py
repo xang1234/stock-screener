@@ -192,6 +192,14 @@ class Settings(BaseSettings):
     de_universe_fallback_csv_path: str = str(
         _PROJECT_ROOT / "data" / "de_dax40_constituents.csv"
     )
+    # Minimum fraction of upstream rows that must resolve to a Yahoo-compatible
+    # ticker before the live DE snapshot is considered publishable. Below this
+    # threshold ``_fetch_de_live`` raises so ``fetch_de_snapshot`` falls back
+    # to the bundled CSV — this prevents silent deactivation of valid symbols
+    # when the live API returns partial data or our resolution heuristics
+    # regress. Set to 0 to disable the ratio check (the CSV-superset check
+    # below still applies).
+    de_live_min_resolution_ratio: float = 0.5
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
     # Per-market rate budget overrides. Each value is in requests-per-second

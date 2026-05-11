@@ -1000,11 +1000,17 @@ class OfficialMarketUniverseSourceService:
 
         Fallback path: when the live request fails (DNS/timeout/HTTP error,
         signature rotation, every page errored, no row resolved to a usable
-        ticker, etc.) load the bundled DAX-40 CSV at
+        ticker, the live snapshot dropped curated baseline symbols, or fewer
+        than ``settings.de_live_min_resolution_ratio`` of upstream rows
+        resolved) load the bundled DAX-40 CSV at
         ``settings.de_universe_fallback_csv_path``. The snapshot is still
         published, but ``source_metadata['fetch_mode'] == 'csv_fallback'`` and
         ``source_name == 'de_manual_csv'`` so the coverage gate / downstream
-        operators can see the snapshot is incomplete.
+        operators can see the snapshot is incomplete. The two safety guards
+        (CSV-superset and minimum-resolution-ratio) prevent
+        ``ingest_de_snapshot_rows`` from deactivating known DAX names when
+        the live API returns partial data or our resolution heuristics
+        regress for a subset of the universe.
 
         ## Live-path caveats
 
@@ -1224,6 +1230,37 @@ class OfficialMarketUniverseSourceService:
             raise ValueError(
                 "DE live universe fetch returned no rows whose tickers could be resolved"
             )
+
+        # Safety guards against silent universe shrinkage. The reconciler in
+        # ``ingest_de_snapshot_rows`` deactivates rows that are absent from the
+        # snapshot, so a partially-resolved live fetch (e.g. when only a few
+        # rows carry an explicit ticker field and the CSV-derived ISIN map is
+        # sparse) would silently disable known DAX names. Raising here forces
+        # ``fetch_de_snapshot`` to fall back to the curated CSV, which is the
+        # safer floor.
+        live_symbols = {row["symbol"] for row in rows_by_isin.values()}
+        csv_symbols = {row["symbol"] for row in self._load_de_csv_fallback()}
+        missing_csv_symbols = csv_symbols - live_symbols
+        if missing_csv_symbols:
+            sample = sorted(missing_csv_symbols)[:5]
+            raise ValueError(
+                f"DE live universe fetch missing {len(missing_csv_symbols)} curated "
+                f"baseline symbols (e.g. {sample}); refusing to publish — would "
+                "deactivate known names"
+            )
+
+        min_ratio = float(getattr(settings, "de_live_min_resolution_ratio", 0.0))
+        # ``total_count`` is the most recent value reported by the API. We
+        # guarded above that at least one page succeeded, so it has been
+        # assigned at least once when we reach this point.
+        if min_ratio > 0 and total_count > 0:
+            resolved_ratio = len(rows_by_isin) / total_count
+            if resolved_ratio < min_ratio:
+                raise ValueError(
+                    f"DE live universe resolved only {len(rows_by_isin)}/{total_count} "
+                    f"rows ({resolved_ratio:.1%}, below {min_ratio:.0%} threshold); "
+                    "refusing to publish a partial bundle"
+                )
 
         rows = sorted(rows_by_isin.values(), key=lambda row: row["symbol"])
         return {

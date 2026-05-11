@@ -1343,6 +1343,15 @@ def _write_de_isin_map_csv(tmp_path) -> str:
     return str(csv_path)
 
 
+def _write_de_empty_csv(tmp_path) -> str:
+    """Write a header-only CSV so the live-path safety checks (CSV-superset)
+    are vacuous. Use for tests that exercise live behaviour in isolation
+    rather than the live-vs-baseline reconciliation guard."""
+    csv_path = tmp_path / "de_empty.csv"
+    csv_path.write_text("symbol,name,exchange,index,isin\n", encoding="utf-8")
+    return str(csv_path)
+
+
 def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch, tmp_path):
     from app.config import settings as app_settings
     from app.services import official_market_universe_source_service as svc_module
@@ -1421,24 +1430,30 @@ def test_fetch_de_snapshot_paginates_xetra_equities(monkeypatch, tmp_path):
 
 
 def test_fetch_de_snapshot_drops_rows_without_resolvable_ticker(monkeypatch, tmp_path):
+    """Rows without an explicit ticker field or an ISIN-map hit are dropped."""
     from app.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    # Empty CSV: the safety-check guard against universe shrinkage is vacuous,
+    # so the live path's per-row drop behaviour is what's actually being tested.
     monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+        app_settings, "de_universe_fallback_csv_path", _write_de_empty_csv(tmp_path)
     )
 
+    # Omit ``total=`` so the resolution-ratio safety check is skipped: this
+    # test focuses on per-row drop behaviour rather than aggregate ratios.
     page_one = _de_page_payload(
         [
-            # Resolvable via ISIN map (in the bundled CSV).
+            # Resolvable via explicit ticker field.
             {
                 "isin": "DE0007164600",
                 "wkn": "716460",
+                "tickerSymbol": "SAP",
                 "name": "SAP SE",
                 "isXetraTradable": True,
             },
             # Unresolvable: WKN is the only identifier and we never use WKN
-            # as a ticker. No tickerSymbol, no slug, ISIN not in the map.
+            # as a ticker. No tickerSymbol, ISIN not in the (empty) map.
             # Expect this to be dropped with an `unresolved` resolution.
             {
                 "isin": "DE000UNK0001",
@@ -1447,9 +1462,8 @@ def test_fetch_de_snapshot_drops_rows_without_resolvable_ticker(monkeypatch, tmp
                 "isXetraTradable": True,
             },
         ],
-        total=2,
     )
-    pages = iter([page_one, _de_page_payload([], total=2)])
+    pages = iter([page_one, _de_page_payload([])])
 
     def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
         return _de_fetched_source(next(pages))
@@ -1559,6 +1573,107 @@ def test_fetch_de_snapshot_short_circuits_on_consecutive_failures(monkeypatch, t
     )
 
 
+def test_fetch_de_snapshot_falls_back_when_live_missing_csv_symbols(monkeypatch, tmp_path):
+    """Codex P1: a partially-resolved live snapshot that drops curated
+    baseline symbols would let the reconciler deactivate known DAX names.
+    The live path must refuse to publish such a snapshot and trigger the
+    CSV fallback instead."""
+    from app.config import settings as app_settings
+
+    # Bundled CSV requires SAP and ALV (curated baseline).
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
+
+    # Live API returns only SAP — ALV is absent. This would normally publish
+    # successfully with 1 row; the safety guard forces a fallback to keep
+    # the curated baseline intact.
+    page_one = _de_page_payload(
+        [
+            {
+                "isin": "DE0007164600",
+                "wkn": "716460",
+                "tickerSymbol": "SAP",
+                "name": "SAP SE",
+                "isXetraTradable": True,
+            },
+        ],
+    )
+    pages = iter([page_one, _de_page_payload([])])
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        return _de_fetched_source(next(pages))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert snapshot.source_name == "de_manual_csv"
+    # The fetch_errors entry preserves the diagnostic so operators can see
+    # which baseline symbols were missing from the live response.
+    live_error = snapshot.source_metadata["fetch_errors"]["live_http"]
+    assert "missing 1 curated baseline symbols" in live_error
+    assert "ALV.DE" in live_error
+    # The bundle now reflects the CSV (both SAP and ALV present), not the
+    # 1-row live response.
+    assert {row["symbol"] for row in snapshot.rows} == {"SAP.DE", "ALV.DE"}
+
+
+def test_fetch_de_snapshot_falls_back_when_resolution_ratio_too_low(monkeypatch, tmp_path):
+    """If the live API reports a large universe but our heuristics resolve
+    only a small fraction, the live snapshot is suspect — fall back rather
+    than publish a partial bundle that will deactivate known symbols."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    # Empty CSV so the superset check is vacuous; only the ratio check
+    # should trigger.
+    monkeypatch.setattr(
+        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+    )
+    monkeypatch.setattr(app_settings, "de_live_min_resolution_ratio", 0.5)
+
+    # 2 resolved out of 100 reported = 2% — well below the 50% threshold.
+    page_one = _de_page_payload(
+        [
+            {
+                "isin": "DE0007164600",
+                "wkn": "716460",
+                "tickerSymbol": "SAP",
+                "name": "SAP SE",
+                "isXetraTradable": True,
+            },
+            {
+                "isin": "DE0008404005",
+                "wkn": "840400",
+                "tickerSymbol": "ALV",
+                "name": "Allianz SE",
+                "isXetraTradable": True,
+            },
+        ],
+        total=100,
+    )
+    # Second page reports the same 100 total but is empty (i.e., the API
+    # claims many more rows than the resolver can handle).
+    pages = iter([page_one, _de_page_payload([], total=100)])
+
+    def fake_http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        return _de_fetched_source(next(pages))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    live_error = snapshot.source_metadata["fetch_errors"]["live_http"]
+    assert "resolved only 2/100" in live_error
+    assert "below 50% threshold" in live_error
+
+
 def test_fetch_de_snapshot_falls_back_to_csv_on_http_failure(monkeypatch, tmp_path):
     from app.config import settings as app_settings
 
@@ -1601,8 +1716,9 @@ def test_fetch_de_snapshot_dedupes_by_isin_preferring_xetra(
     from app.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    # Empty CSV: this test exercises the venue preference, not CSV reconciliation.
     monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+        app_settings, "de_universe_fallback_csv_path", _write_de_empty_csv(tmp_path)
     )
 
     xetra_row = {
@@ -1644,9 +1760,11 @@ def test_fetch_de_snapshot_paginates_on_raw_row_count_not_filtered(monkeypatch, 
     from app.services import official_market_universe_source_service as svc_module
 
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_BASE_URL)
+    # Empty CSV + ratio=0 isolates the test to pagination behaviour.
     monkeypatch.setattr(
-        app_settings, "de_universe_fallback_csv_path", _write_de_isin_map_csv(tmp_path)
+        app_settings, "de_universe_fallback_csv_path", _write_de_empty_csv(tmp_path)
     )
+    monkeypatch.setattr(app_settings, "de_live_min_resolution_ratio", 0.0)
     monkeypatch.setattr(svc_module, "_BOERSE_FRANKFURT_PAGE_SIZE", 2)
 
     # Page 1: 2 raw rows, but only 1 resolves (the other has no ticker fields
