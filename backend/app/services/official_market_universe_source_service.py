@@ -992,10 +992,9 @@ class OfficialMarketUniverseSourceService:
         Finance uses as its ticker prefix.
 
         Fallback path: when the live CSV is unreachable (404 because the blob
-        hash rotated, network error, parse failure, fewer than
+        hash rotated, network error, parse failure, or fewer than
         ``settings.de_live_min_universe_size`` Common Stock rows survive the
-        filter, or the bundled DAX-40 baseline isn't a subset of the live
-        universe) the fetcher falls back to the bundled seed CSV at
+        filter) the fetcher falls back to the bundled seed CSV at
         ``settings.de_universe_fallback_csv_path``. The snapshot still
         publishes but with ``source_name == 'de_manual_csv'`` and
         ``fetch_mode == 'csv_fallback'`` so the coverage gate / operators can
@@ -1012,6 +1011,7 @@ class OfficialMarketUniverseSourceService:
         fetched_at: str | None = None
         last_modified: str | None = None
         tls_verification_disabled = False
+        live_meta: dict[str, Any] = {}
 
         try:
             live_meta = self._fetch_de_live()
@@ -1073,6 +1073,14 @@ class OfficialMarketUniverseSourceService:
                 "total": len(rows),
             },
         }
+        for key in (
+            "baseline_status",
+            "baseline_missing_count",
+            "baseline_missing_symbols",
+            "baseline_missing_symbols_truncated",
+        ):
+            if key in live_meta:
+                source_metadata[key] = live_meta[key]
         if fetch_mode == "csv_fallback":
             source_metadata["fallback_csv_path"] = settings.de_universe_fallback_csv_path
 
@@ -1096,8 +1104,9 @@ class OfficialMarketUniverseSourceService:
         * the CSV cannot be parsed,
         * fewer than ``settings.de_live_min_universe_size`` Common Stock rows
           survive the filter, or
-        * any symbol in the bundled baseline CSV is absent from the live
-          universe (would silently deactivate curated names downstream).
+        Missing symbols from the bundled baseline CSV are returned as warning
+        metadata instead of forcing fallback; the live Xetra CSV remains the
+        authoritative universe when it is otherwise healthy.
         """
         url = settings.de_universe_source_url
         # Deutsche Boerse Cash Market 403s the default bot-style User-Agent
@@ -1136,10 +1145,11 @@ class OfficialMarketUniverseSourceService:
                 "the Xetra blob URL likely rotated and needs refreshing"
             )
 
-        # Safety guard: the reconciler in ``ingest_de_snapshot_rows`` deactivates
-        # rows that are absent from the snapshot. A live universe that drops
-        # curated DAX-40 names would silently deactivate those positions. Force
-        # CSV fallback when that happens.
+        # Safety signal: the reconciler in ``ingest_de_snapshot_rows`` can
+        # deactivate rows that are absent from the snapshot. A live universe
+        # that drops curated DAX-40 names is worth surfacing, but it should not
+        # collapse an otherwise healthy 800+ row Xetra snapshot to the tiny
+        # fallback CSV.
         #
         # When the baseline CSV is absent from disk entirely (container layout
         # drift, image-build glitch, etc.) ``_load_de_csv_fallback`` returns an
@@ -1157,19 +1167,34 @@ class OfficialMarketUniverseSourceService:
             )
         csv_symbols = {row["symbol"] for row in baseline_rows}
         missing_csv_symbols = csv_symbols - live_symbols
+        baseline_metadata: dict[str, Any] = {
+            "baseline_status": "ok",
+            "baseline_missing_count": 0,
+            "baseline_missing_symbols": [],
+            "baseline_missing_symbols_truncated": False,
+        }
         if missing_csv_symbols:
-            sample = sorted(missing_csv_symbols)[:5]
-            raise ValueError(
-                f"DE live universe missing {len(missing_csv_symbols)} curated "
-                f"baseline symbols (e.g. {sample}); refusing to publish — would "
-                "deactivate known names"
+            missing_symbols = sorted(missing_csv_symbols)
+            sample = missing_symbols[:5]
+            logger.warning(
+                "DE live universe missing %s curated baseline symbols (e.g. %s); "
+                "publishing live Xetra universe with warning metadata.",
+                len(missing_symbols),
+                sample,
             )
+            baseline_metadata = {
+                "baseline_status": "missing_symbols",
+                "baseline_missing_count": len(missing_symbols),
+                "baseline_missing_symbols": missing_symbols[:25],
+                "baseline_missing_symbols_truncated": len(missing_symbols) > 25,
+            }
 
         return {
             "rows": sorted(rows, key=lambda row: row["symbol"]),
             "fetched_at": fetched.fetched_at,
             "http_last_modified": fetched.last_modified,
             "tls_verification_disabled": fetched.tls_verification_disabled,
+            **baseline_metadata,
         }
 
     @classmethod
