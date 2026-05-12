@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
 import shutil
 import tempfile
 from datetime import date, datetime, timedelta
@@ -195,10 +196,14 @@ class DailyPriceBundleService:
         symbols: list[str] | tuple[str, ...] | None = None,
         require_complete: bool = False,
         allow_stale_complete: bool = False,
+        min_symbol_coverage: float | None = None,
     ) -> dict[str, Any]:
         bundle_market = self.normalize_market(market)
         bundle_as_of_date = as_of_date or self.market_calendar.last_completed_trading_day(bundle_market)
         start_date = bundle_as_of_date - timedelta(days=730)
+        coverage_floor = 1.0 if min_symbol_coverage is None else float(min_symbol_coverage)
+        if not math.isfinite(coverage_floor) or coverage_floor < 0 or coverage_floor > 1:
+            raise ValueError("min_symbol_coverage must be between 0 and 1")
         selected_symbols = None
         if symbols is not None:
             selected_symbols = sorted({str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()})
@@ -276,16 +281,37 @@ class DailyPriceBundleService:
             if allow_stale_complete
             else [*missing_price_symbols, *stale_symbols]
         )
+        covered_symbol_count = len(all_symbols) - len(missing_symbols)
+        symbol_coverage = (
+            covered_symbol_count / len(all_symbols)
+            if all_symbols
+            else 1.0
+        )
         if require_complete and missing_symbols:
-            preview = ", ".join(missing_symbols[:10])
-            raise ValueError(
-                f"Missing {len(missing_symbols)} {bundle_market} symbols from daily price bundle "
-                f"as of {bundle_as_of_date.isoformat()}: {preview}"
-            )
+            if min_symbol_coverage is None or coverage_floor >= 1.0:
+                preview = ", ".join(missing_symbols[:10])
+                raise ValueError(
+                    f"Missing {len(missing_symbols)} {bundle_market} symbols from daily price bundle "
+                    f"as of {bundle_as_of_date.isoformat()}: {preview}"
+                )
+            if symbol_coverage < coverage_floor:
+                preview = ", ".join(missing_symbols[:10])
+                raise ValueError(
+                    f"Daily price bundle coverage {symbol_coverage:.2%} is below required "
+                    f"{coverage_floor:.2%} for {bundle_market} as of "
+                    f"{bundle_as_of_date.isoformat()}; missing {len(missing_symbols)} "
+                    f"symbols: {preview}"
+                )
         if not bundle_rows:
             raise ValueError(f"No {bundle_market} stock_prices rows were available to export")
 
         source_revision = f"daily_prices_{bundle_market.lower()}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        coverage_summary = {
+            "symbol_universe_count": len(all_symbols),
+            "covered_symbol_count": covered_symbol_count,
+            "symbol_coverage": round(symbol_coverage, 6),
+            "min_symbol_coverage": coverage_floor if min_symbol_coverage is not None else None,
+        }
         bundle_payload = {
             "schema_version": self.DAILY_PRICE_BUNDLE_SCHEMA_VERSION,
             "market": bundle_market,
@@ -297,6 +323,7 @@ class DailyPriceBundleService:
             "missing_symbol_count": len(missing_price_symbols),
             "stale_symbol_count": len(stale_symbols),
             "allow_stale_complete": bool(allow_stale_complete),
+            **coverage_summary,
             "rows": bundle_rows,
         }
         self._write_bundle_payload(output_path, bundle_payload)
@@ -315,6 +342,7 @@ class DailyPriceBundleService:
             "missing_symbol_count": len(missing_price_symbols),
             "stale_symbol_count": len(stale_symbols),
             "allow_stale_complete": bool(allow_stale_complete),
+            **coverage_summary,
         }
         if latest_manifest_path is not None:
             latest_manifest_path.write_text(
@@ -335,6 +363,7 @@ class DailyPriceBundleService:
             "missing_symbol_count": len(missing_price_symbols),
             "stale_symbol_count": len(stale_symbols),
             "allow_stale_complete": bool(allow_stale_complete),
+            **coverage_summary,
             "rows": sum(len(row["prices"]) for row in bundle_rows),
         }
 

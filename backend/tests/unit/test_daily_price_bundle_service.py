@@ -242,6 +242,106 @@ def test_export_daily_price_bundle_can_allow_stale_rows_when_complete_required(t
     db.close()
 
 
+def test_export_daily_price_bundle_allows_missing_rows_at_coverage_threshold(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    symbols = [f"00000{index}.SZ" for index in range(10)]
+    db.add_all(
+        [_stock_row(symbol, "CN", "SZSE", 1000.0 - index) for index, symbol in enumerate(symbols)]
+        + [
+            _price_row(symbol, date(2026, 5, 8), 10.0 + index)
+            for index, symbol in enumerate(symbols[:-1])
+        ]
+    )
+    db.commit()
+
+    service = _make_service(session_factory)
+    bundle_path = tmp_path / "daily-price-cn-20260508.json.gz"
+    manifest_path = tmp_path / "daily-price-latest-cn.json"
+
+    stats = service.export_daily_price_bundle(
+        db,
+        market="CN",
+        output_path=bundle_path,
+        bundle_asset_name=bundle_path.name,
+        latest_manifest_path=manifest_path,
+        as_of_date=date(2026, 5, 8),
+        require_complete=True,
+        allow_stale_complete=True,
+        min_symbol_coverage=0.9,
+    )
+
+    payload = service._read_bundle_payload(bundle_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert stats["symbol_universe_count"] == 10
+    assert stats["covered_symbol_count"] == 9
+    assert stats["symbol_coverage"] == 0.9
+    assert stats["min_symbol_coverage"] == 0.9
+    assert payload["symbol_coverage"] == 0.9
+    assert manifest["symbol_coverage"] == 0.9
+
+    db.close()
+
+
+def test_export_daily_price_bundle_fails_below_coverage_threshold(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    symbols = [f"00000{index}.SZ" for index in range(10)]
+    db.add_all(
+        [_stock_row(symbol, "CN", "SZSE", 1000.0 - index) for index, symbol in enumerate(symbols)]
+        + [
+            _price_row(symbol, date(2026, 5, 8), 10.0 + index)
+            for index, symbol in enumerate(symbols[:8])
+        ]
+    )
+    db.commit()
+
+    service = _make_service(session_factory)
+
+    with pytest.raises(ValueError, match="coverage 80.00% is below required 90.00%"):
+        service.export_daily_price_bundle(
+            db,
+            market="CN",
+            output_path=tmp_path / "daily-price-cn-20260508.json.gz",
+            bundle_asset_name="daily-price-cn-20260508.json.gz",
+            latest_manifest_path=tmp_path / "daily-price-latest-cn.json",
+            as_of_date=date(2026, 5, 8),
+            require_complete=True,
+            allow_stale_complete=True,
+            min_symbol_coverage=0.9,
+        )
+
+    db.close()
+
+
+def test_export_daily_price_bundle_rejects_non_finite_coverage_threshold(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    db.add_all(
+        [
+            _stock_row("000001.SZ", "CN", "SZSE", 1000.0),
+            _price_row("000001.SZ", date(2026, 5, 8), 10.0),
+        ]
+    )
+    db.commit()
+
+    service = _make_service(session_factory)
+
+    with pytest.raises(ValueError, match="min_symbol_coverage must be between 0 and 1"):
+        service.export_daily_price_bundle(
+            db,
+            market="CN",
+            output_path=tmp_path / "daily-price-cn-20260508.json.gz",
+            bundle_asset_name="daily-price-cn-20260508.json.gz",
+            latest_manifest_path=tmp_path / "daily-price-latest-cn.json",
+            as_of_date=date(2026, 5, 8),
+            min_symbol_coverage=float("nan"),
+        )
+
+    db.close()
+
+
 def test_sync_from_github_up_to_date_exposes_manifest_metadata():
     session_factory = _make_session()
     db = session_factory()

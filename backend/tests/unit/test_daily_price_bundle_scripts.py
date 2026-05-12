@@ -77,6 +77,58 @@ def test_build_daily_price_bundle_exports_market_bundle(monkeypatch, tmp_path, c
     assert (tmp_path / "daily-price-latest-us.json").exists()
 
 
+def test_build_daily_price_bundle_passes_min_symbol_coverage(monkeypatch, tmp_path):
+    captured = {}
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", _fake_session)
+
+    def _fake_export(db, **kwargs):
+        _ = db
+        captured.update(kwargs)
+        kwargs["latest_manifest_path"].write_text("{}", encoding="utf-8")
+        kwargs["output_path"].write_bytes(b"bundle")
+        return {
+            "bundle_path": str(kwargs["output_path"]),
+            "manifest_path": str(kwargs["latest_manifest_path"]),
+            "market": kwargs["market"],
+            "as_of_date": kwargs["as_of_date"].isoformat(),
+            "symbol_count": 9,
+            "bar_period": "2y",
+        }
+
+    service = SimpleNamespace(
+        market_calendar=SimpleNamespace(
+            last_completed_trading_day=lambda market: date(2026, 5, 8),
+            is_trading_day=lambda market, day: True,
+        ),
+        latest_manifest_name_for_market=lambda market: f"daily-price-latest-{market.lower()}.json",
+        export_daily_price_bundle=_fake_export,
+    )
+    monkeypatch.setattr(build_script, "get_daily_price_bundle_service", lambda: service)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_daily_price_bundle",
+            "--market",
+            "CN",
+            "--output-dir",
+            str(tmp_path),
+            "--as-of-date",
+            "2026-05-08",
+            "--require-complete",
+            "--allow-stale-complete",
+            "--min-symbol-coverage",
+            "0.90",
+        ],
+    )
+
+    assert build_script.main() == 0
+    assert captured["require_complete"] is True
+    assert captured["allow_stale_complete"] is True
+    assert captured["min_symbol_coverage"] == 0.9
+
+
 def test_import_daily_price_bundle_script_calls_service(monkeypatch, tmp_path, capsys):
     bundle_path = tmp_path / "daily-price-cn-shard.json.gz"
     bundle_path.write_bytes(b"bundle")

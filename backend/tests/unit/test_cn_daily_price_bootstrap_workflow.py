@@ -87,3 +87,4 @@ def test_cn_daily_price_bootstrap_workflow_allows_stale_rows_in_final_export() -
 
     assert "--require-complete" in final_export_step
     assert "--allow-stale-complete" in final_export_step
+    assert "--min-symbol-coverage 0.90" in final_export_step
