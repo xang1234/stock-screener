@@ -7,6 +7,7 @@ export const MARKET_FLAGS = {
   TW: '🇹🇼',
   CN: '🇨🇳',
   DE: '🇩🇪',
+  CA: '🇨🇦',
 };
 
 export function marketFlag(code) {
