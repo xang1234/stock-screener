@@ -194,6 +194,7 @@ class DailyPriceBundleService:
         as_of_date: date | None = None,
         symbols: list[str] | tuple[str, ...] | None = None,
         require_complete: bool = False,
+        allow_stale_complete: bool = False,
     ) -> dict[str, Any]:
         bundle_market = self.normalize_market(market)
         bundle_as_of_date = as_of_date or self.market_calendar.last_completed_trading_day(bundle_market)
@@ -261,11 +262,20 @@ class DailyPriceBundleService:
             for symbol in sorted(rows_by_symbol)
             if rows_by_symbol[symbol]
         ]
-        missing_symbols = [
+        missing_price_symbols = [
             symbol for symbol in all_symbols
             if not rows_by_symbol.get(symbol)
-            or latest_by_symbol.get(symbol) < bundle_as_of_date
         ]
+        stale_symbols = [
+            symbol for symbol in all_symbols
+            if rows_by_symbol.get(symbol)
+            and latest_by_symbol.get(symbol) < bundle_as_of_date
+        ]
+        missing_symbols = (
+            missing_price_symbols
+            if allow_stale_complete
+            else [*missing_price_symbols, *stale_symbols]
+        )
         if require_complete and missing_symbols:
             preview = ", ".join(missing_symbols[:10])
             raise ValueError(
@@ -284,6 +294,9 @@ class DailyPriceBundleService:
             "source_revision": source_revision,
             "bar_period": self.DAILY_PRICE_BAR_PERIOD,
             "symbol_count": len(bundle_rows),
+            "missing_symbol_count": len(missing_price_symbols),
+            "stale_symbol_count": len(stale_symbols),
+            "allow_stale_complete": bool(allow_stale_complete),
             "rows": bundle_rows,
         }
         self._write_bundle_payload(output_path, bundle_payload)
@@ -299,6 +312,9 @@ class DailyPriceBundleService:
             "sha256": sha256,
             "bar_period": self.DAILY_PRICE_BAR_PERIOD,
             "symbol_count": len(bundle_rows),
+            "missing_symbol_count": len(missing_price_symbols),
+            "stale_symbol_count": len(stale_symbols),
+            "allow_stale_complete": bool(allow_stale_complete),
         }
         if latest_manifest_path is not None:
             latest_manifest_path.write_text(
@@ -316,6 +332,9 @@ class DailyPriceBundleService:
             "as_of_date": bundle_payload["as_of_date"],
             "bar_period": self.DAILY_PRICE_BAR_PERIOD,
             "symbol_count": len(bundle_rows),
+            "missing_symbol_count": len(missing_price_symbols),
+            "stale_symbol_count": len(stale_symbols),
+            "allow_stale_complete": bool(allow_stale_complete),
             "rows": sum(len(row["prices"]) for row in bundle_rows),
         }
 

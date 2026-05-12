@@ -75,3 +75,15 @@ def test_cn_daily_price_bootstrap_workflow_authenticates_checkpoint_upload_step(
     assert "GH_TOKEN: ${{ github.token }}" in refresh_step
     assert "GH_REPO: ${{ github.repository }}" in refresh_step
     assert "--checkpoint-release-tag cn-daily-price-shards" in refresh_step
+
+
+def test_cn_daily_price_bootstrap_workflow_allows_stale_rows_in_final_export() -> None:
+    workflow = _workflow()
+
+    final_export_step = workflow.split(
+        "      - name: Build final CN daily price bundle",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+
+    assert "--require-complete" in final_export_step
+    assert "--allow-stale-complete" in final_export_step
