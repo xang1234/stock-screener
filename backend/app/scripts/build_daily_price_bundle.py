@@ -61,6 +61,15 @@ def main() -> int:
             "on the bundle as-of date."
         ),
     )
+    parser.add_argument(
+        "--min-symbol-coverage",
+        type=float,
+        default=None,
+        help=(
+            "With --require-complete, fail only when active symbol coverage is below "
+            "this fraction. Defaults to 1.0 when omitted."
+        ),
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -100,6 +109,7 @@ def main() -> int:
             as_of_date=resolved_as_of_date,
             require_complete=args.require_complete,
             allow_stale_complete=args.allow_stale_complete,
+            min_symbol_coverage=args.min_symbol_coverage,
         )
 
     print(f"Daily price bundle complete for {market}:")

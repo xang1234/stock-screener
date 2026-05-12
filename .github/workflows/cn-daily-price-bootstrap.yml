@@ -510,7 +510,8 @@ jobs:
             --output-dir /tmp/daily-price \
             --as-of-date "${AS_OF_DATE}" \
             --require-complete \
-            --allow-stale-complete
+            --allow-stale-complete \
+            --min-symbol-coverage 0.90
 
       - name: Publish final CN daily price bundle
         if: github.ref_name == github.event.repository.default_branch
