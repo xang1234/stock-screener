@@ -51,13 +51,30 @@ class PriceSparklineCalculator:
             }
 
         try:
-            # Get last 30 trading days (most recent data)
-            stock_last_30 = stock_prices.iloc[-self.SPARKLINE_DAYS:].values
+            # Get last 30 trading days (most recent data) as float to make
+            # NaN/Inf checks consistent regardless of source dtype.
+            stock_last_30 = np.asarray(
+                stock_prices.iloc[-self.SPARKLINE_DAYS:].values, dtype=float
+            )
 
             price_change_1d = self._calculate_price_change_1d(stock_prices)
 
-            # Handle any NaN values
-            price_series = np.nan_to_num(stock_last_30, nan=stock_last_30[0])
+            # If the window contains no finite samples (all NaN/Inf), bail out
+            # to None instead of emitting [nan, ...] — downstream Pydantic
+            # serialization converts NaN to null and rejects List[None].
+            finite_mask = np.isfinite(stock_last_30)
+            if not finite_mask.any():
+                logger.debug("All-non-finite price series; returning None sparkline")
+                return {
+                    "price_data": None,
+                    "price_trend": 0,
+                    "price_change_1d": price_change_1d,
+                }
+
+            # Replace any NaN/Inf with the first finite value so the series is
+            # fully finite even when the leading bar is missing.
+            first_finite = float(stock_last_30[np.argmax(finite_mask)])
+            price_series = np.where(finite_mask, stock_last_30, first_finite)
 
             # Normalize to start at 1.0 if requested (better for visual comparison)
             if normalize and price_series[0] != 0:
@@ -80,6 +97,16 @@ class PriceSparklineCalculator:
 
             # Round values for JSON storage efficiency (4 decimal places)
             price_data = [round(float(v), 4) for v in price_series]
+
+            # Final safety net: if rounding/normalization produced any non-finite
+            # value, collapse the whole payload to None.
+            if not all(np.isfinite(v) for v in price_data):
+                logger.debug("Non-finite values after normalization; returning None sparkline")
+                return {
+                    "price_data": None,
+                    "price_trend": 0,
+                    "price_change_1d": price_change_1d,
+                }
 
             return {
                 "price_data": price_data,
