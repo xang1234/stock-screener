@@ -2,7 +2,13 @@
 
 A stock screening platform with multi-methodology scans across **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-share, Germany, and Canada** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
 
+### Scan Workflow Demo
+
 ![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
+
+---
+
+### Static Site Page Tour
 
 ![Static site page tour — Daily, Scan, Breadth, Groups](docs/gifs/static-site-tour.gif)
 
@@ -14,7 +20,19 @@ The static page is for demo purposes only. It is a read-only daily snapshot with
 
 ### Multi-Market Coverage
 
-Scan and track nine markets — **United States** (NYSE, NASDAQ, AMEX, S&P 500), **Hong Kong** (HSI), **India** (NSE, BSE), **Japan** (Nikkei 225), **Korea** (KOSPI, KOSDAQ), **Taiwan** (TAIEX), **mainland China A-shares** (SSE, SZSE, BJSE), **Germany** (XETRA, DAX), and **Canada** (TSX, TSXV). Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI / XSHG / XETR / XTSE) with independent Celery refresh queues and locks, so US, Asia, and Europe can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
+Scan and track nine markets:
+
+- 🇺🇸 **United States** — NYSE, NASDAQ, AMEX, S&P 500
+- 🇭🇰 **Hong Kong** — HSI
+- 🇮🇳 **India** — NSE, BSE
+- 🇯🇵 **Japan** — Nikkei 225
+- 🇰🇷 **Korea** — KOSPI, KOSDAQ
+- 🇹🇼 **Taiwan** — TAIEX
+- 🇨🇳 **Mainland China A-shares** — SSE, SZSE, BJSE
+- 🇩🇪 **Germany** — XETRA, DAX
+- 🇨🇦 **Canada** — TSX, TSXV
+
+Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI / XSHG / XETR / XTSE) with independent Celery refresh queues and locks, so US, Asia, and Europe can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
 
 ![Market selector](docs/screenshots/market-selector.jpg)
 *Market picker in the scan control bar — pick US, HK, IN, JP, KR, TW, CN, DE, or CA and scope to an exchange or index*
@@ -30,20 +48,6 @@ Run Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, and Custom scans
 
 ![Scan Results](docs/screenshots/scan-results.png)
 *Results table with composite scores, RS sparklines, multi-screener ratings, and per-row classification columns — GICS Sector, IBD Industry, market themes, and group rank*
-
-### AI Research Chatbot
-
-Groq-powered research chat with optional Tavily/Serper web search, persistent conversation history, and tool-augmented investigation.
-
-![Chatbot](docs/screenshots/chatbot.png)
-*AI chatbot with conversation sidebar and research tools*
-
-### Theme Discovery Pipeline
-
-AI-powered market theme identification from RSS, Twitter/X, and news feeds. Tracks trending vs. emerging themes, monitors constituent stocks, and alerts on momentum shifts.
-
-![Themes](docs/screenshots/themes.png)
-*Theme discovery with rankings and emerging themes panel*
 
 ### Market Breadth Dashboard
 
@@ -65,6 +69,20 @@ Visual performance tracking with RS and price sparklines (30-day trends), price 
 
 ![Watchlist Table](docs/screenshots/watchlist-table.png)
 *Watchlist with sparklines and price change visualization*
+
+### AI Research Chatbot
+
+Groq-powered research chat with optional Tavily/Serper web search, persistent conversation history, and tool-augmented investigation.
+
+![Chatbot](docs/screenshots/chatbot.png)
+*AI chatbot with conversation sidebar and research tools*
+
+### Theme Discovery Pipeline
+
+AI-powered market theme identification from RSS, Twitter/X, and news feeds. Tracks trending vs. emerging themes, monitors constituent stocks, and alerts on momentum shifts.
+
+![Themes](docs/screenshots/themes.png)
+*Theme discovery with rankings and emerging themes panel*
 
 ## Get Started
 
