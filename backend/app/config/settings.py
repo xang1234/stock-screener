@@ -238,6 +238,20 @@ class Settings(BaseSettings):
     yfinance_batch_size_tw: int | None = None
     yfinance_batch_size_cn: int | None = None
 
+    # Per-market batch interval overrides for the ``yfinance:batch`` provider key.
+    # Values are in requests-per-second for that market specifically; the
+    # RateBudgetPolicy converts them to ``1.0/rps`` second intervals between
+    # yfinance bulk-download batch calls. e.g. ``YFINANCE_BATCH_RATE_LIMIT_IN=0.1``
+    # -> 10s between IN batches. ``None`` falls back to the universe-weighted
+    # division of ``yfinance_batch_rate_limit_interval``.
+    yfinance_batch_rate_limit_us: float | None = None
+    yfinance_batch_rate_limit_hk: float | None = None
+    yfinance_batch_rate_limit_in: float | None = None
+    yfinance_batch_rate_limit_jp: float | None = None
+    yfinance_batch_rate_limit_kr: float | None = None
+    yfinance_batch_rate_limit_tw: float | None = None
+    yfinance_batch_rate_limit_cn: float | None = None
+
     # Per-market backoff cap (seconds) for consecutive 429-driven backoffs.
     # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
     yfinance_backoff_max_s_us: int | None = None

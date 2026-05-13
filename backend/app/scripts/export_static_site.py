@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -44,6 +45,17 @@ STATIC_BUILD_MODE_FULL = "full"
 STATIC_EXPORT_MARKETS = market_registry.supported_market_codes()
 STATIC_DEFAULT_MARKET = "US"
 STATIC_EXPORT_SKIPPED_EXIT_CODE = 78
+
+# Markets where Yahoo's 429 backoff windows are long enough that a single
+# refresh pass routinely leaves a tail of rate-limited symbols. For these
+# markets we wait ``STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS`` after the main
+# loop and replay only the symbols whose failure looks transient, in a
+# smaller batch (``STATIC_RATE_LIMITED_RETRY_BATCH_SIZE``). The Yahoo 429
+# window typically clears in 2-5 minutes; 300s is a safe single retry that
+# doesn't double the IN job runtime.
+STATIC_RATE_LIMITED_RETRY_MARKETS = frozenset({"IN"})
+STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS = 300
+STATIC_RATE_LIMITED_RETRY_BATCH_SIZE = 25
 
 
 def _default_output_dir() -> Path:
@@ -145,6 +157,7 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
 
     refreshed = 0
     failed = 0
+    rate_limited_symbols: list[str] = []
     total = len(stale_symbols)
     total_batches = (total + STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE - 1) // STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE
 
@@ -177,6 +190,8 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
                 refreshed += 1
             else:
                 failed += 1
+                if _is_rate_limit_failure(payload):
+                    rate_limited_symbols.append(symbol)
         if batch_to_store:
             price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
         print(
@@ -184,6 +199,15 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
             f"{refreshed + failed:,}/{total:,} processed, {refreshed:,} refreshed, {failed:,} failed.",
             flush=True,
         )
+
+    retry_stats = _retry_rate_limited_failures(
+        market=market,
+        rate_limited_symbols=rate_limited_symbols,
+        fetcher=fetcher,
+        price_cache=price_cache,
+    )
+    refreshed += retry_stats["recovered"]
+    failed -= retry_stats["recovered"]
 
     return {
         "status": "completed",
@@ -197,6 +221,98 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
         "skipped_unsupported_symbols": len(skipped_symbols),
         "yahoo_fetched_symbols": refreshed,
         "yahoo_failed_symbols": failed,
+        "rate_limited_retry": retry_stats,
+    }
+
+
+def _is_rate_limit_failure(payload: dict[str, Any]) -> bool:
+    """Return True when ``payload`` describes a transient 429/rate-limit miss.
+
+    Symbol-level Yahoo errors include "Too Many Requests" / "rate" / "429" /
+    "throttl" in the error string. Permanent failures (delisted ticker,
+    unknown symbol, empty data after retries) don't match — those must be
+    excluded so we don't waste another 5-min wait retrying tickers that will
+    never come back.
+    """
+    if not payload.get("has_error"):
+        return False
+    error = str(payload.get("error") or "").lower()
+    if not error:
+        return False
+    indicators = ("rate", "429", "too many", "limit", "throttl")
+    return any(token in error for token in indicators)
+
+
+def _retry_rate_limited_failures(
+    *,
+    market: str | None,
+    rate_limited_symbols: list[str],
+    fetcher: BulkDataFetcher,
+    price_cache: Any,
+) -> dict[str, Any]:
+    """One-shot retry of rate-limited symbols after a fixed cool-down.
+
+    Gated on ``market in STATIC_RATE_LIMITED_RETRY_MARKETS`` because only
+    IN currently sees Yahoo 429 windows long enough to leave a recoverable
+    tail after the first pass. Permanent-looking failures from the main
+    loop (delisted, no data) are excluded by ``_is_rate_limit_failure``,
+    so this retry replays only the slice that's plausibly recoverable.
+    """
+    skipped_payload: dict[str, Any] = {
+        "attempted": 0,
+        "recovered": 0,
+        "still_failed": 0,
+        "wait_seconds": 0,
+        "batch_size": STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
+    }
+    if not rate_limited_symbols:
+        return skipped_payload
+    normalized = (market or "").upper()
+    if normalized not in STATIC_RATE_LIMITED_RETRY_MARKETS:
+        if rate_limited_symbols:
+            print(
+                f"[static-daily prices] Skipping rate-limited retry for market={normalized or 'shared'}: "
+                f"{len(rate_limited_symbols)} symbols looked throttled but market is outside the retry allowlist.",
+                flush=True,
+            )
+        return skipped_payload
+
+    unique_symbols = sorted(set(rate_limited_symbols))
+    print(
+        f"[static-daily prices:{normalized}] Yahoo flagged {len(unique_symbols)} symbols as rate-limited; "
+        f"waiting {STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS}s then retrying with batch size "
+        f"{STATIC_RATE_LIMITED_RETRY_BATCH_SIZE}.",
+        flush=True,
+    )
+    time.sleep(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
+
+    retry_results = fetcher.fetch_prices_in_batches(
+        unique_symbols,
+        period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
+        start_batch_size=STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
+        market=market,
+    )
+    recovered_payload: dict[str, Any] = {}
+    recovered = 0
+    for symbol, payload in retry_results.items():
+        price_data = payload.get("price_data")
+        if not payload.get("has_error") and price_data is not None and not price_data.empty:
+            recovered_payload[symbol] = price_data
+            recovered += 1
+    if recovered_payload:
+        price_cache.store_batch_in_cache(recovered_payload, also_store_db=True)
+    still_failed = len(unique_symbols) - recovered
+    print(
+        f"[static-daily prices:{normalized}] Rate-limited retry complete: "
+        f"{recovered}/{len(unique_symbols)} recovered, {still_failed} still failed.",
+        flush=True,
+    )
+    return {
+        "attempted": len(unique_symbols),
+        "recovered": recovered,
+        "still_failed": still_failed,
+        "wait_seconds": STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS,
+        "batch_size": STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
     }
 
 

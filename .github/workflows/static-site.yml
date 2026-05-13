@@ -57,6 +57,11 @@ jobs:
     env:
       REDIS_ENABLED: "false"
       DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
+      # IN-specific yfinance throttle: smaller batches + 10s between batches to
+      # stay under Yahoo's 429 window for the ~4.4k IN universe. Other markets
+      # ignore these (the policy looks up settings.<provider>_<key>_<market>).
+      YFINANCE_BATCH_SIZE_IN: "25"
+      YFINANCE_BATCH_RATE_LIMIT_IN: "0.1"
 
     steps:
       - uses: actions/checkout@v4
