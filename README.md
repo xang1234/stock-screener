@@ -4,6 +4,8 @@ A stock screening platform with multi-methodology scans across **US, Hong Kong, 
 
 ![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
 
+![Static site page tour — Daily, Scan, Breadth, Groups](docs/gifs/static-site-tour.gif)
+
 Static demo: [https://xang1234.github.io/stock-screener/](https://xang1234.github.io/stock-screener/)
 
 The static page is for demo purposes only. It is a read-only daily snapshot with reduced functionality compared with the full application, which includes live workflows such as chatbot, themes pipeline, watchlists, and the full interactive backend.
