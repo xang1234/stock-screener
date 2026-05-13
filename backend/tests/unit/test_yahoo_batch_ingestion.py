@@ -149,12 +149,66 @@ def test_fetch_price_batch_with_retries_degrades_batch_size(monkeypatch):
     assert sleeps == [30]
 
 
+def test_fetch_price_batch_with_retries_uses_in_market_backoff(monkeypatch):
+    """IN passes through RateBudgetPolicy backoff (base_s=60, factor=2.0,
+    max_s=600) so its retry waits land at 60/120/240s instead of the legacy
+    30/60/120s schedule applied to shared/unmarked callers."""
+    fetcher = BulkDataFetcher()
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    symbols = [f"SYM{i}.NS" for i in range(60)]
+
+    def fake_fetch_batch_prices(batch_symbols, period="2y"):
+        calls.append(list(batch_symbols))
+        return {
+            symbol: {
+                "symbol": symbol,
+                "price_data": None,
+                "info": None,
+                "fundamentals": None,
+                "has_error": True,
+                "error": "429 Too Many Requests",
+            }
+            for symbol in batch_symbols
+        }
+
+    monkeypatch.setattr(fetcher, "fetch_batch_prices", fake_fetch_batch_prices)
+    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    fetcher._fetch_price_batch_with_retries(
+        symbols,
+        period="2y",
+        initial_batch_size=50,
+        market="IN",
+    )
+
+    assert sleeps == [60, 120, 240]
+
+
+def test_fetch_price_batch_with_retries_keeps_legacy_schedule_without_market():
+    """When no market is supplied (legacy shared callers), the retry schedule
+    stays at the original 30/60/120s so we don't slow down code paths that
+    haven't migrated to the per-market policy yet."""
+    fetcher = BulkDataFetcher()
+    schedule = fetcher._resolve_price_batch_backoff(None)
+    assert schedule == (30, 60, 120)
+
+
+def test_fetch_price_batch_with_retries_us_market_keeps_legacy_schedule():
+    """US base_s=30 preserves the legacy retry schedule for the largest
+    market so this change is conservative for the hot path."""
+    fetcher = BulkDataFetcher()
+    schedule = fetcher._resolve_price_batch_backoff("US")
+    assert schedule == (30, 60, 120)
+
+
 def test_fetch_prices_in_batches_delays_growth_until_cooldown_expires(monkeypatch):
     fetcher = BulkDataFetcher()
     observed_batch_sizes = []
 
-    def fake_fetch_price_batch_with_retries(batch_symbols, *, period, initial_batch_size):
+    def fake_fetch_price_batch_with_retries(batch_symbols, *, period, initial_batch_size, market=None):
         _ = period
+        _ = market
         observed_batch_sizes.append(initial_batch_size)
         if len(observed_batch_sizes) == 1:
             return {

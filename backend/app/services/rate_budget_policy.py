@@ -86,9 +86,15 @@ class RateBudgetPolicy:
     # Per-market backoff caps. Non-US markets get longer caps because
     # observed 429 windows from non-US queries are sometimes longer than US.
     # 9.3 measurements will refine these.
+    #
+    # US keeps ``base_s=30`` to preserve the legacy 30/60/120 retry schedule
+    # used by ``BulkDataFetcher._fetch_price_batch_with_retries``. Non-US
+    # markets bump to ``base_s=60`` so an IN refresh that hits 429s waits
+    # 60/120/240s before giving up — empirically Yahoo's IN throttle windows
+    # are longer than US.
     _DEFAULT_BACKOFF: Dict[str, Dict[str, dict]] = {
         "yfinance": {
-            "US": {"base_s": 60, "max_s": 480, "factor": 2.0},
+            "US": {"base_s": 30, "max_s": 480, "factor": 2.0},
             "HK": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "IN": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "JP": {"base_s": 60, "max_s": 600, "factor": 2.0},

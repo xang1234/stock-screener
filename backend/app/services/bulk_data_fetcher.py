@@ -689,6 +689,7 @@ class BulkDataFetcher:
                 batch_symbols,
                 period=period,
                 initial_batch_size=batch_size,
+                market=market,
             )
             combined_results.update(batch_results)
 
@@ -808,14 +809,46 @@ class BulkDataFetcher:
             merged[symbol] = enriched_payload
         return merged
 
+    def _resolve_price_batch_backoff(self, market: Optional[str]) -> tuple[int, ...]:
+        """Return the per-attempt sleep schedule for ``_fetch_price_batch_with_retries``.
+
+        When a market is supplied we derive the schedule from
+        ``RateBudgetPolicy.get_backoff_params`` so India (and other markets
+        with longer Yahoo throttle windows) wait ``60/120/240s`` instead of
+        the legacy ``30/60/120s``. ``market=None`` keeps the legacy schedule
+        for shared/unmarked callers.
+        """
+        if market is None:
+            return self.PRICE_BATCH_RETRY_BACKOFF_SECONDS
+
+        from .rate_budget_policy import get_rate_budget_policy
+
+        params = get_rate_budget_policy().get_backoff_params("yfinance", market)
+        base_s = params.get("base_s", 60)
+        factor = params.get("factor", 2.0)
+        max_s = params.get("max_s", 480)
+        attempts = len(self.PRICE_BATCH_RETRY_BACKOFF_SECONDS)
+        return tuple(
+            min(int(round(base_s * (factor ** attempt))), int(max_s))
+            for attempt in range(attempts)
+        )
+
     def _fetch_price_batch_with_retries(
         self,
         symbols: List[str],
         *,
         period: str,
         initial_batch_size: int,
+        market: Optional[str] = None,
     ) -> Dict[str, Dict]:
-        """Retry transient batch failures using degraded sub-batches."""
+        """Retry transient batch failures using degraded sub-batches.
+
+        Inter-attempt wait schedule comes from ``RateBudgetPolicy`` when a
+        ``market`` is supplied — IN gets longer backoffs than US — and falls
+        back to the legacy ``PRICE_BATCH_RETRY_BACKOFF_SECONDS`` tuple for
+        callers that don't pass a market.
+        """
+        backoff_schedule = self._resolve_price_batch_backoff(market)
         current_batch_size = max(
             self.MIN_PRICE_BATCH_SIZE,
             min(initial_batch_size, self.MAX_PRICE_BATCH_SIZE),
@@ -825,7 +858,7 @@ class BulkDataFetcher:
             for symbol in symbols
         }
 
-        for attempt in range(len(self.PRICE_BATCH_RETRY_BACKOFF_SECONDS) + 1):
+        for attempt in range(len(backoff_schedule) + 1):
             attempt_results: Dict[str, Dict] = {}
             for chunk_start in range(0, len(symbols), current_batch_size):
                 chunk_symbols = symbols[chunk_start:chunk_start + current_batch_size]
@@ -833,20 +866,21 @@ class BulkDataFetcher:
 
             last_results = attempt_results
             failure_rate = self._transient_failure_rate(attempt_results)
-            if failure_rate <= 0.20 or attempt == len(self.PRICE_BATCH_RETRY_BACKOFF_SECONDS):
+            if failure_rate <= 0.20 or attempt == len(backoff_schedule):
                 return attempt_results
 
             current_batch_size = max(self.MIN_PRICE_BATCH_SIZE, current_batch_size // 2)
-            wait_seconds = self.PRICE_BATCH_RETRY_BACKOFF_SECONDS[attempt]
+            wait_seconds = backoff_schedule[attempt]
             logger.warning(
-                "Transient Yahoo batch failure rate %.1f%% for %d symbols; "
+                "Transient Yahoo batch failure rate %.1f%% for %d symbols (market=%s); "
                 "retrying with batch size %d after %ds (attempt %d/%d)",
                 failure_rate * 100,
                 len(symbols),
+                market or "shared",
                 current_batch_size,
                 wait_seconds,
                 attempt + 1,
-                len(self.PRICE_BATCH_RETRY_BACKOFF_SECONDS),
+                len(backoff_schedule),
             )
             time.sleep(wait_seconds)
 
