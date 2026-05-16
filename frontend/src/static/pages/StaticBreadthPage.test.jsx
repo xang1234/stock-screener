@@ -307,4 +307,95 @@ describe('StaticBreadthPage', () => {
       await screen.findByText('Group attribution is not yet supported for market HK.')
     ).toBeInTheDocument();
   });
+
+  it('keeps the session picker reachable when the latest session has no movers', async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            default_market: 'US',
+            supported_markets: ['US'],
+            markets: {
+              US: {
+                display_name: 'United States',
+                pages: { breadth: { path: 'markets/us/breadth.json' } },
+              },
+            },
+            pages: {},
+          }),
+        };
+      }
+
+      if (path === 'markets/us/breadth.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            available: true,
+            generated_at: '2026-05-15T22:00:00Z',
+            payload: {
+              benchmark_symbol: 'SPY',
+              benchmark_overlay: [],
+              current: { market: 'US', date: '2026-05-15', stocks_up_4pct: 0, stocks_down_4pct: 0 },
+              chart_data: [],
+              history_90d: [],
+              group_attribution: {
+                available: true,
+                market: 'US',
+                threshold_pct: 4.0,
+                lookback_days: 10,
+                latest_date: '2026-05-15',
+                // History is newest-first. Latest session is quiet, prior session has movers.
+                history: [
+                  {
+                    date: '2026-05-15',
+                    stocks_up_4pct: 0,
+                    stocks_down_4pct: 0,
+                    groups: [],
+                  },
+                  {
+                    date: '2026-05-14',
+                    stocks_up_4pct: 1,
+                    stocks_down_4pct: 0,
+                    groups: [
+                      {
+                        group: 'Semiconductors',
+                        up_count: 1,
+                        down_count: 0,
+                        net: 1,
+                        up_stocks: [
+                          { symbol: 'NVDA', name: 'NVIDIA', pct_change: 6.1, close: 950.0 },
+                        ],
+                        down_stocks: [],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        };
+      }
+
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'United States Breadth' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /by group/i }));
+
+    // The empty-session message is shown but the date picker remains usable.
+    expect(await screen.findByText(/No 4%\+ movers were attributed for 2026-05-15/i)).toBeInTheDocument();
+    const sessionCombobox = screen.getByRole('combobox', { name: /session/i });
+    fireEvent.mouseDown(sessionCombobox);
+    fireEvent.click(await screen.findByRole('option', { name: '2026-05-14' }));
+
+    // After switching, the prior session's groups render.
+    expect(await screen.findByText('Semiconductors')).toBeInTheDocument();
+  });
 });

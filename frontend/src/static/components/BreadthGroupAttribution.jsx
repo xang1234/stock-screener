@@ -160,13 +160,15 @@ function BreadthGroupAttribution({ attribution }) {
     );
   }
 
-  if (!selectedDay || (selectedDay.groups || []).length === 0) {
+  if (!selectedDay) {
     return (
       <Alert severity="info" sx={{ fontSize: '12px' }}>
-        No 4%+ movers were attributed for the selected session.
+        No 4%+ movers were attributed for the lookback window.
       </Alert>
     );
   }
+
+  const hasGroups = (selectedDay.groups || []).length > 0;
 
   return (
     <Box>
@@ -208,37 +210,46 @@ function BreadthGroupAttribution({ attribution }) {
           />
           <Chip
             size="small"
-            label={`Groups: ${selectedDay.groups.length}`}
+            label={`Groups: ${(selectedDay.groups || []).length}`}
             variant="outlined"
           />
         </Box>
       </Box>
 
-      <Paper elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
-        <TableContainer sx={{ maxHeight: 'calc(100vh - 320px)' }}>
-          <Table stickyHeader size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ width: 32 }} />
-                <TableCell>IBD Industry Group</TableCell>
-                <TableCell align="right">Up 4%+</TableCell>
-                <TableCell align="right">Down 4%+</TableCell>
-                <TableCell align="right">Net</TableCell>
-                <TableCell align="right">Total</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {selectedDay.groups.map((row) => (
-                <GroupRow key={row.group} row={row} />
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Paper>
-      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-        Click a group to expand its 4%+ movers. Stocks without an IBD industry group are bucketed
-        under &quot;No Group&quot;.
-      </Typography>
+      {hasGroups ? (
+        <>
+          <Paper elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
+            <TableContainer sx={{ maxHeight: 'calc(100vh - 320px)' }}>
+              <Table stickyHeader size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ width: 32 }} />
+                    <TableCell>IBD Industry Group</TableCell>
+                    <TableCell align="right">Up 4%+</TableCell>
+                    <TableCell align="right">Down 4%+</TableCell>
+                    <TableCell align="right">Net</TableCell>
+                    <TableCell align="right">Total</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {selectedDay.groups.map((row) => (
+                    <GroupRow key={row.group} row={row} />
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+            Click a group to expand its 4%+ movers. Stocks without an IBD industry group are
+            bucketed under &quot;No Group&quot;.
+          </Typography>
+        </>
+      ) : (
+        <Alert severity="info" sx={{ fontSize: '12px' }}>
+          No 4%+ movers were attributed for {selectedDay.date}. Pick another session above to see
+          the groups that drove its breadth.
+        </Alert>
+      )}
     </Box>
   );
 }
