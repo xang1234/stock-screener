@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -116,8 +116,8 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -138,7 +138,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     assert calls == [
         "universe_refresh",
         "fundamentals_refresh",
-        "price_refresh",
+        *(["price_refresh"] * len(expected_markets)),
         *(["feature_snapshot"] * len(expected_markets)),
         "pointer:latest_published:77",
     ]
@@ -154,6 +154,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
             "publish_pointer_key": f"latest_published_market:{market}",
             "ignore_runtime_market_gate": True,
         }
+    assert set(results["price_refresh"]) == set(expected_markets)
     assert results["default_market_pointer"] == {
         "market": "US",
         "pointer_key": "latest_published",
@@ -191,8 +192,8 @@ def test_run_daily_refresh_uses_resolved_tracked_ibd_csv_path(monkeypatch, tmp_p
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(export_script, "_tracked_ibd_csv_path", lambda: resolved_csv)
     monkeypatch.setattr(
@@ -244,8 +245,8 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -275,7 +276,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
 
     assert warnings == []
     assert calls == [
-        "price_refresh",
+        *(["price_refresh"] * len(export_script.STATIC_EXPORT_MARKETS)),
         *(["feature_snapshot"] * len(export_script.STATIC_EXPORT_MARKETS)),
         "pointer:latest_published:77",
     ]
@@ -315,8 +316,8 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -366,8 +367,8 @@ def test_run_daily_refresh_warns_when_default_market_run_id_is_missing(monkeypat
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -413,8 +414,8 @@ def test_run_daily_refresh_does_not_repoint_default_pointer_for_unpublished_us_r
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -485,8 +486,8 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -521,8 +522,8 @@ def test_run_daily_refresh_limits_work_to_selected_market(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -555,6 +556,74 @@ def test_run_daily_refresh_limits_work_to_selected_market(monkeypatch):
     ]
 
 
+def test_run_daily_refresh_uses_per_market_trading_date_for_in(monkeypatch):
+    """Regression: ``build_daily_snapshot`` for IN must receive IN's latest
+    completed trading date, not NYSE's. Before the per-market calendar fix,
+    running ``--market IN`` on a day NSE was closed but NYSE was open caused
+    the snapshot to be silently skipped with ``reason='not_trading_day'``."""
+
+    snapshot_calls: list[dict] = []
+
+    def build_snapshot_run(**kwargs):
+        snapshot_calls.append(kwargs)
+        return {"status": "published", "run_id": 91}
+
+    # Simulate the failure scenario: NYSE traded on Apr 2 (US holiday for
+    # IN), so IN's latest completed session is Apr 1. The previous bug used
+    # Apr 2 for IN's snapshot, hitting the not_trading_day guard.
+    market_dates = {"US": date(2026, 4, 2), "IN": date(2026, 4, 1)}
+
+    monkeypatch.setattr(
+        universe_tasks,
+        "refresh_stock_universe",
+        SimpleNamespace(run=lambda **_kwargs: {"task": "universe_refresh"}),
+    )
+    monkeypatch.setattr(
+        fundamentals_tasks,
+        "refresh_all_fundamentals",
+        SimpleNamespace(run=lambda **_kwargs: {"task": "fundamentals_refresh"}),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot_run),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market=None: {
+            "task": "price_refresh",
+            "market": market,
+            "as_of_date": as_of_date.isoformat(),
+        },
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_trading_date",
+        lambda selected_market: market_dates[selected_market],
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, _warnings = export_script._run_daily_refresh(market="IN")  # noqa: SLF001
+
+    assert results["price_refresh"]["as_of_date"] == "2026-04-01"
+    assert snapshot_calls == [
+        {
+            "as_of_date_str": "2026-04-01",
+            "static_daily_mode": True,
+            "universe_name": "market:in",
+            "market": "IN",
+            "publish_pointer_key": "latest_published_market:IN",
+            "ignore_runtime_market_gate": True,
+        }
+    ]
+
+
 def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
@@ -575,8 +644,8 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -725,8 +794,8 @@ def test_run_daily_refresh_reenriches_ibd_metadata_after_group_rank_backfill(mon
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -801,8 +870,8 @@ def test_run_daily_refresh_skips_reenrich_when_group_rank_backfill_errored(monke
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -855,8 +924,8 @@ def test_run_daily_refresh_skips_reenrich_when_snapshot_not_ready(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -907,8 +976,8 @@ def test_run_daily_refresh_warns_when_non_default_market_snapshot_is_not_publish
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -928,14 +997,31 @@ def test_run_daily_refresh_warns_when_non_default_market_snapshot_is_not_publish
     assert "Static export market HK snapshot returned status 'skipped' (market HK is disabled in local runtime preferences)." in warnings
 
 
-def test_resolve_latest_completed_us_trading_date_uses_last_market_close(monkeypatch):
+def test_resolve_latest_completed_trading_date_uses_market_calendar(monkeypatch):
+    """Per-market resolution: each market hits its own calendar instead of
+    NYSE's. Regression test for the IN-skipped-on-US-trading-day bug."""
+
+    calls: list[str] = []
+    market_dates = {
+        "US": date(2026, 4, 2),
+        "IN": date(2026, 4, 3),
+        "HK": date(2026, 4, 1),
+    }
+
+    def last_completed_trading_day(market: str) -> date:
+        calls.append(market)
+        return market_dates[market]
+
     monkeypatch.setattr(
         export_script,
-        "get_last_market_close",
-        lambda: datetime(2026, 4, 2, 16, 0),
+        "get_market_calendar_service",
+        lambda: SimpleNamespace(last_completed_trading_day=last_completed_trading_day),
     )
 
-    assert export_script._resolve_latest_completed_us_trading_date() == datetime(2026, 4, 2, 16, 0).date()
+    assert export_script._resolve_latest_completed_trading_date("IN") == date(2026, 4, 3)
+    assert export_script._resolve_latest_completed_trading_date("US") == date(2026, 4, 2)
+    assert export_script._resolve_latest_completed_trading_date("HK") == date(2026, 4, 1)
+    assert calls == ["IN", "US", "HK"]
 
 
 def test_main_rejects_market_in_combine_mode(monkeypatch, tmp_path):
