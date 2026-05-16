@@ -1,77 +1,109 @@
 {
-  "data": [
-    {
-      "nc": "D05",
-      "N": "DBS GROUP HOLDINGS LTD",
-      "SIP": "Singapore-based financial services group.",
-      "ISIN": "SG1L01001701",
-      "MCAP": "95012345678",
-      "ICBINDUSTRY": "Banks",
-      "ICBSUBSECTOR": "Banks",
-      "LISTED_TYPE": "Equity"
-    },
-    {
-      "nc": "O39",
-      "N": "OVERSEA-CHINESE BANKING CORP",
-      "ISIN": "SG1S04926220",
-      "MCAP": "73456789012",
-      "ICBINDUSTRY": "Banks",
-      "ICBSUBSECTOR": "Banks",
-      "LISTED_TYPE": "Equity"
-    },
-    {
-      "nc": "U11",
-      "N": "UNITED OVERSEAS BANK LTD",
-      "ISIN": "SG1M31001969",
-      "MCAP": "55678912345",
-      "ICBINDUSTRY": "Banks",
-      "ICBSUBSECTOR": "Banks",
-      "LISTED_TYPE": "Equity"
-    },
-    {
-      "nc": "A17U",
-      "N": "CAPITALAND ASCENDAS REIT",
-      "ISIN": "SG1M77906915",
-      "MCAP": "12345678901",
-      "ICBINDUSTRY": "Real Estate",
-      "ICBSUBSECTOR": "Industrial & Office REITs",
-      "LISTED_TYPE": "Equity"
-    },
-    {
-      "nc": "NS8U",
-      "N": "HUTCHISON PORT HOLDINGS TRUST",
-      "ISIN": "SG2D02980265",
-      "MCAP": "1234567890",
-      "ICBINDUSTRY": "Industrial Transportation",
-      "ICBSUBSECTOR": "Marine Transportation",
-      "LISTED_TYPE": "Equity"
-    },
-    {
-      "nc": "C6L",
-      "N": "SINGAPORE AIRLINES LTD",
-      "ISIN": "SG1V61937297",
-      "MCAP": "20123456789",
-      "ICBINDUSTRY": "Travel & Leisure",
-      "ICBSUBSECTOR": "Airlines",
-      "LISTED_TYPE": "Equity"
-    },
-    {
-      "nc": "5E2",
-      "N": "SEATRIUM LIMITED",
-      "ISIN": "SG1L74000000",
-      "ICBINDUSTRY": "Industrial Engineering",
-      "LISTED_TYPE": "Equity"
-    },
-    {
-      "nc": "ES3",
-      "N": "SPDR STRAITS TIMES INDEX ETF",
-      "ISIN": "SG1G53000007",
-      "LISTED_TYPE": "ETF"
-    },
-    {
-      "nc": "BAD!CODE",
-      "N": "Invalid ticker shape",
-      "LISTED_TYPE": "Equity"
-    }
-  ]
+  "meta": {
+    "code": "200",
+    "message": "success",
+    "totalPages": 1,
+    "totalItems": 1,
+    "processedTime": 1778953026776
+  },
+  "data": {
+    "prices": [
+      {
+        "type": "listedcertificates",
+        "nc": null,
+        "n": null,
+        "issuer-name": null,
+        "m": null,
+        "cur": null,
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "D05",
+        "n": "DBS GROUP HOLDINGS LTD",
+        "issuer-name": "DBS GROUP HOLDINGS LTD",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "O39",
+        "n": "OVERSEA-CHINESE BANKING CORP",
+        "issuer-name": "OVERSEA-CHINESE BANKING CORP",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "U11",
+        "n": "UNITED OVERSEAS BANK LTD",
+        "issuer-name": "UNITED OVERSEAS BANK LTD",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "A17U",
+        "n": "CAPITALAND ASCENDAS REIT",
+        "issuer-name": "CAPITALAND ASCENDAS REIT",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "NS8U",
+        "n": "HUTCHISON PORT HOLDINGS TRUST",
+        "issuer-name": "HUTCHISON PORT HOLDINGS TRUST",
+        "m": "MAINBOARD",
+        "cur": "USD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "C6L",
+        "n": "SINGAPORE AIRLINES LTD",
+        "issuer-name": "SINGAPORE AIRLINES LTD",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "5E2",
+        "n": "SEATRIUM LIMITED",
+        "issuer-name": "SEATRIUM LIMITED",
+        "m": "CATALIST",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "etfs",
+        "nc": "ES3",
+        "n": "SPDR STRAITS TIMES INDEX ETF",
+        "issuer-name": "SPDR STRAITS TIMES INDEX ETF",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "companywarrants",
+        "nc": "VT2W",
+        "n": "17LIVE W281207",
+        "issuer-name": "17LIVE W281207",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "BAD!CODE",
+        "n": "Invalid ticker shape",
+        "m": "MAINBOARD"
+      }
+    ]
+  }
 }

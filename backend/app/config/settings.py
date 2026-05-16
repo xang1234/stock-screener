@@ -206,16 +206,20 @@ class Settings(BaseSettings):
     # rows; setting this near 800 catches catastrophic shrinkage without
     # rejecting ordinary listing churn. Set to 0 to disable the floor.
     de_live_min_universe_size: int = 800
-    # SGX public JSON API at api.sgx.com is the de-facto endpoint used by
-    # community scrapers; returns ~1,200 Mainboard and Catalist listings with
-    # no authentication required. ``params`` requests issuer code, name, ISIN,
-    # market cap, and ICB industry/subsector. Operators concerned about SGX
-    # terms of service can blank this string to force the bundled fallback CSV.
-    sg_universe_source_url: str = (
-        "https://api.sgx.com/securities/v1.1"
-        "?excludetypes=bonds"
-        "&params=nc,N,SIP,ISIN,MCAP,ICBINDUSTRY,ICBSUBSECTOR,LISTED_TYPE"
-    )
+    # SGX public JSON API at api.sgx.com returns Mainboard and Catalist
+    # listings with no authentication required. The endpoint is undocumented
+    # and the ``params=`` filter system rejects every known field-code list
+    # with SGX_4015, so the URL omits ``params`` and consumes the full default
+    # field set (``type``, ``nc``, ``n``, ``m``, ``issuer-name``, ...).
+    #
+    # The default ships blank to force the bundled CSV fallback because:
+    # 1) SGX terms of service for programmatic access are unclear;
+    # 2) the API is undocumented and may change without notice;
+    # 3) the live response shape was reverse-engineered, not validated against
+    #    a published contract.
+    # Operators who have confirmed acceptable use can opt in by setting
+    # ``SG_UNIVERSE_SOURCE_URL=https://api.sgx.com/securities/v1.1?excludetypes=bonds``.
+    sg_universe_source_url: str = ""
     sg_universe_fallback_csv_path: str = str(
         _PROJECT_ROOT / "data" / "sg_sgx_constituents.csv"
     )

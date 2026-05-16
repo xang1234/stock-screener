@@ -48,6 +48,10 @@ _SG_FALLBACK_SOURCE_NAME = "sg_manual_csv"
 # adapter enforces — reject Yahoo-incompatible codes from the live response
 # before they reach downstream consumers.
 _SG_LIVE_TICKER_RE = re.compile(r"^[A-Z0-9]{1,8}$")
+# SGX equity boards. Mainboard hosts established issuers; Catalist is the
+# sponsor-supervised growth board. Both are common-stock venues; everything
+# else (e.g., GlobalQuote, structured warrants) is excluded.
+_SG_EQUITY_BOARDS = frozenset({"MAINBOARD", "CATALIST"})
 # Yahoo-incompatible local codes are dropped from live results. The DE adapter
 # enforces ``[A-Z0-9]{1,8}`` and downstream yfinance only accepts well-formed
 # tickers — there is no value in publishing a row whose symbol cannot be
@@ -1479,22 +1483,34 @@ class OfficialMarketUniverseSourceService:
     def _parse_sg_api_json(cls, content: bytes) -> list[dict[str, Any]]:
         """Parse the SGX securities JSON payload.
 
-        The SGX API wraps its securities list under different keys depending on
-        the endpoint version (``data``, ``securities``, ``items``) and may also
-        return a bare JSON array. This parser walks the common shapes and
-        extracts issuer-code rows that match the Yahoo-compatible ticker regex.
+        Response shape verified 2026-05-15 against the live endpoint::
+
+            {
+              "meta": {"code": "200", "totalPages": 1, ...},
+              "data": {"prices": [
+                {"type": "stocks", "nc": "LVR", "n": "17LIVE GROUP",
+                 "m": "MAINBOARD", "issuer-name": "17LIVE GROUP", "sc": "K",
+                 "cur": "SGD", "trading_time": "...", ...},
+                {"type": "companywarrants", "nc": "VT2W", ...},
+                ...
+              ]}
+            }
+
+        SGX does not return ICB industry/subsector, ISIN, or market cap in the
+        default response. The ``params=`` query argument is not accepted by
+        the current endpoint (every known field list returns ``SGX_4015``),
+        so this parser consumes the default field set only.
 
         Filters applied:
 
-        * The row must carry an ``nc`` (issuer name code) value.
-        * The code must match ``[A-Z0-9]{1,8}`` (Yahoo ticker compatible).
-        * Bond rows are excluded via the ``excludetypes=bonds`` query param
-          server-side; any residual non-equity rows are dropped here when
-          ``LISTED_TYPE`` is set and does not look like an equity listing.
-        * REITs, Business Trusts, and Stapled Securities are dropped — SGX
-          tags them as ``LISTED_TYPE=Equity`` so the rejection relies on the
-          ICB industry/subsector strings instead. These instrument classes
-          fall outside the supported SG coverage scope.
+        * ``type`` must equal ``"stocks"`` (drops ``companywarrants``,
+          ``listedcertificates``, ``etfs``, and placeholder/null rows).
+        * ``nc`` (issuer name code) must match ``[A-Z0-9]{1,8}`` for Yahoo
+          ticker compatibility.
+        * ``m`` (board) must be ``MAINBOARD`` or ``CATALIST`` (the equity
+          boards). Empty board is accepted as a permissive default.
+        * REITs, Business Trusts, and Stapled Securities are dropped based on
+          the issuer name (SGX does not expose ICB classification here).
         """
         try:
             text = content.decode("utf-8")
@@ -1511,33 +1527,34 @@ class OfficialMarketUniverseSourceService:
         for record in records:
             if not isinstance(record, dict):
                 continue
+            instrument_type = str(record.get("type") or "").strip().lower()
+            if instrument_type and instrument_type != "stocks":
+                continue
             local_code = str(record.get("nc") or record.get("NC") or "").strip().upper()
             if not local_code or not _SG_LIVE_TICKER_RE.fullmatch(local_code):
                 continue
-            listed_type = str(record.get("LISTED_TYPE") or "").strip().lower()
-            if listed_type and listed_type not in {"equity", "stock", "share", "shares", ""}:
+            board = str(record.get("m") or "").strip().upper()
+            if board and board not in _SG_EQUITY_BOARDS:
                 continue
-            name = str(record.get("N") or record.get("SIP") or record.get("name") or "").strip()
-            industry_raw = str(record.get("ICBINDUSTRY") or "").strip()
-            subsector_raw = str(record.get("ICBSUBSECTOR") or "").strip()
-            if cls._sg_is_excluded_instrument(name, industry_raw, subsector_raw):
+            name = str(
+                record.get("n")
+                or record.get("issuer-name")
+                or record.get("N")
+                or record.get("name")
+                or ""
+            ).strip()
+            if cls._sg_is_excluded_instrument(name, "", ""):
                 continue
-            isin = str(record.get("ISIN") or "").strip().upper()
-            market_cap = record.get("MCAP")
-            try:
-                market_cap_value = float(market_cap) if market_cap not in (None, "", "-") else None
-            except (TypeError, ValueError):
-                market_cap_value = None
 
             rows.append(
                 {
                     "symbol": f"{local_code}.SI",
                     "name": name,
                     "exchange": "XSES",
-                    "sector": subsector_raw,
-                    "industry": industry_raw,
-                    "market_cap": market_cap_value,
-                    "isin": isin,
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                    "isin": "",
                 }
             )
         return rows

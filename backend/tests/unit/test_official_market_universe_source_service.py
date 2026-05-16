@@ -1682,10 +1682,7 @@ def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path
 # Singapore (SG) coverage
 # ---------------------------------------------------------------------------
 
-_SG_API_URL = (
-    "https://api.sgx.com/securities/v1.1?excludetypes=bonds"
-    "&params=nc,N,SIP,ISIN,MCAP,ICBINDUSTRY,ICBSUBSECTOR,LISTED_TYPE"
-)
+_SG_API_URL = "https://api.sgx.com/securities/v1.1?excludetypes=bonds"
 
 
 def _fetched_sg(content: bytes, *, last_modified: str | None = None) -> _FetchedSource:
@@ -1699,7 +1696,7 @@ def _fetched_sg(content: bytes, *, last_modified: str | None = None) -> _Fetched
 
 
 def test_fetch_sg_snapshot_parses_sgx_api_json(monkeypatch):
-    """Live SGX API JSON yields canonical .SI rows with sector enrichment."""
+    """Live SGX API JSON yields canonical .SI rows from Mainboard and Catalist."""
     from app.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "sg_universe_source_url", _SG_API_URL)
@@ -1719,14 +1716,18 @@ def test_fetch_sg_snapshot_parses_sgx_api_json(monkeypatch):
     assert snapshot.source_name == "sgx_official"
     assert snapshot.source_metadata["fetch_mode"] == "live_http"
     symbols = {row["symbol"] for row in snapshot.rows}
-    # Common equities survive. The REIT (A17U), Business Trust (NS8U), ETF
-    # (ES3, dropped by LISTED_TYPE), and malformed ticker are all rejected.
+    # Mainboard + Catalist stocks survive. Dropped: placeholder/null row,
+    # REIT (A17U), Business Trust (NS8U), ETF (ES3, type=etfs),
+    # warrant (VT2W, type=companywarrants), and malformed ticker.
     assert symbols == {"D05.SI", "O39.SI", "U11.SI", "C6L.SI", "5E2.SI"}
     dbs = next(row for row in snapshot.rows if row["symbol"] == "D05.SI")
-    assert dbs["sector"] == "Banks"
-    assert dbs["industry"] == "Banks"
-    assert dbs["market_cap"] == pytest.approx(95012345678.0)
-    assert dbs["isin"] == "SG1L01001701"
+    # SGX does not expose ICB classification, ISIN, or market cap in the
+    # default response, so these fields are emitted empty.
+    assert dbs["name"] == "DBS GROUP HOLDINGS LTD"
+    assert dbs["sector"] == ""
+    assert dbs["industry"] == ""
+    assert dbs["market_cap"] is None
+    assert dbs["isin"] == ""
     assert snapshot.snapshot_id.startswith("sgx-securities-")
 
 
@@ -1839,46 +1840,55 @@ def test_parse_sg_api_json_raises_on_invalid_json():
 
 
 def test_parse_sg_api_json_drops_reits_business_trusts_and_stapled():
-    """SGX tags REITs/Business Trusts with LISTED_TYPE=Equity, so the parser
-    relies on ICB subsector and the issuer name to reject them. Stapled
-    securities are also excluded from supported SG coverage."""
+    """SGX returns REITs/Business Trusts as ``type=stocks`` so the parser
+    relies on the issuer name to reject them. Stapled securities are also
+    excluded from supported SG coverage."""
     payload = json.dumps({
-        "data": [
-            {
-                "nc": "A17U",
-                "N": "CAPITALAND ASCENDAS REIT",
-                "ICBSUBSECTOR": "Industrial & Office REITs",
-                "LISTED_TYPE": "Equity",
-            },
-            {
-                "nc": "NS8U",
-                "N": "HUTCHISON PORT HOLDINGS TRUST",
-                "ICBSUBSECTOR": "Marine Transportation",
-                "LISTED_TYPE": "Equity",
-            },
-            {
-                "nc": "HMN",
-                "N": "CAPITALAND ASCOTT TRUST",
-                "ICBSUBSECTOR": "Hotel & Lodging REITs",
-                "LISTED_TYPE": "Equity",
-            },
-            {
-                "nc": "STPL",
-                "N": "EXAMPLE STAPLED SECURITIES",
-                "ICBSUBSECTOR": "Stapled Securities",
-                "LISTED_TYPE": "Equity",
-            },
-            {
-                "nc": "D05",
-                "N": "DBS GROUP HOLDINGS LTD",
-                "ICBSUBSECTOR": "Banks",
-                "LISTED_TYPE": "Equity",
-            },
-        ]
+        "data": {"prices": [
+            {"type": "stocks", "nc": "A17U", "n": "CAPITALAND ASCENDAS REIT", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "NS8U", "n": "HUTCHISON PORT HOLDINGS TRUST", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "HMN", "n": "CAPITALAND ASCOTT TRUST", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "STPL", "n": "EXAMPLE STAPLED SECURITIES", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "D05", "n": "DBS GROUP HOLDINGS LTD", "m": "MAINBOARD"},
+        ]}
     }).encode("utf-8")
 
     rows = OfficialMarketUniverseSourceService._parse_sg_api_json(payload)
     assert [r["symbol"] for r in rows] == ["D05.SI"]
+
+
+def test_parse_sg_api_json_drops_non_stock_instrument_types():
+    """SGX returns warrants, listed certificates, ETFs, and other instrument
+    classes in the same payload. Only ``type=stocks`` rows survive."""
+    payload = json.dumps({
+        "data": {"prices": [
+            {"type": "stocks", "nc": "D05", "n": "DBS GROUP HOLDINGS LTD", "m": "MAINBOARD"},
+            {"type": "companywarrants", "nc": "VT2W", "n": "17LIVE W281207", "m": "MAINBOARD"},
+            {"type": "etfs", "nc": "ES3", "n": "SPDR STI ETF", "m": "MAINBOARD"},
+            {"type": "listedcertificates", "nc": None, "n": None, "m": None},
+            {"type": "structuredwarrants", "nc": "ABCW", "n": "Some Warrant", "m": "MAINBOARD"},
+        ]}
+    }).encode("utf-8")
+
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(payload)
+    assert [r["symbol"] for r in rows] == ["D05.SI"]
+
+
+def test_parse_sg_api_json_drops_non_equity_boards():
+    """Only Mainboard and Catalist listings survive. Other venues (e.g.,
+    GlobalQuote, structured-product boards) are excluded."""
+    payload = json.dumps({
+        "data": {"prices": [
+            {"type": "stocks", "nc": "D05", "n": "DBS", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "5E2", "n": "Seatrium", "m": "CATALIST"},
+            {"type": "stocks", "nc": "XXX", "n": "Foreign Quote", "m": "GLOBALQUOTE"},
+            {"type": "stocks", "nc": "YYY", "n": "No Board"},
+        ]}
+    }).encode("utf-8")
+
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(payload)
+    # MAINBOARD, CATALIST, and missing board (permissive) all survive.
+    assert {r["symbol"] for r in rows} == {"D05.SI", "5E2.SI", "YYY.SI"}
 
 
 def test_sg_is_excluded_instrument_matches_trust_at_word_boundary():
