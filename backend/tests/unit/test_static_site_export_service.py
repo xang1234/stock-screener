@@ -1064,6 +1064,123 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
     assert breadth_payload["benchmark_symbol"] == "^HSI"
     assert breadth_payload["benchmark_overlay"] == breadth_payload["spy_overlay"]
     assert breadth_payload["benchmark_overlay"][-1]["date"] == "2026-04-24"
+    # Group attribution is US-only in the first cut.
+    assert breadth_payload["group_attribution"]["available"] is False
+
+
+def test_build_breadth_payload_includes_us_group_attribution(
+    service_and_session_factory,
+    monkeypatch,
+):
+    service, _session_factory = service_and_session_factory
+    idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
+
+    def flat_frame(price: float) -> pd.DataFrame:
+        closes = [price] * len(idx)
+        return pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [value + 1 for value in closes],
+                "Low": [value - 1 for value in closes],
+                "Close": closes,
+                "Volume": [1000] * len(idx),
+            },
+            index=idx,
+        )
+
+    def gapping_frame(direction: str) -> pd.DataFrame:
+        # Holds at 100 until the second-to-last day, then jumps ±10% on the
+        # final session so only 2026-04-24 produces a mover.
+        closes = [100.0] * len(idx)
+        closes[-1] = 110.0 if direction == "up" else 90.0
+        return pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [value + 1 for value in closes],
+                "Low": [value - 1 for value in closes],
+                "Close": closes,
+                "Volume": [1000] * len(idx),
+            },
+            index=idx,
+        )
+
+    histories = {
+        "PLTR": gapping_frame("up"),
+        "AAPL": gapping_frame("up"),
+        "BANK": gapping_frame("down"),
+        "FLAT": flat_frame(100.0),  # No 4% move at all
+        "NOGRP": gapping_frame("up"),
+    }
+    monkeypatch.setattr(
+        service,
+        "_get_market_benchmark_history",
+        lambda market, *, period: ("SPY", flat_frame(400.0)),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_cached_price_histories",
+        lambda symbols, *, period: {sym: histories.get(sym) for sym in symbols},
+    )
+
+    serialized_rows = [
+        {
+            "symbol": "PLTR",
+            "company_name": "Palantir Technologies",
+            "ibd_industry_group": "Computer Software-Database",
+        },
+        {
+            "symbol": "AAPL",
+            "company_name": "Apple Inc.",
+            "ibd_industry_group": "Computer Software-Database",
+        },
+        {
+            "symbol": "BANK",
+            "company_name": "Big Bank",
+            "ibd_industry_group": "Banks-Money Center",
+        },
+        {
+            "symbol": "FLAT",
+            "company_name": "No Move Corp",
+            "ibd_industry_group": "Retail-Apparel",
+        },
+        {
+            "symbol": "NOGRP",
+            "company_name": "Ungrouped Inc",
+            "ibd_industry_group": None,
+        },
+    ]
+
+    payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
+        generated_at="2026-04-24T22:00:00Z",
+        expected_as_of_date=date(2026, 4, 24),
+        market="US",
+        serialized_rows=serialized_rows,
+    )
+
+    attribution = payload["payload"]["group_attribution"]
+    assert attribution["available"] is True
+    assert attribution["market"] == "US"
+    assert attribution["threshold_pct"] == 4.0
+    assert attribution["latest_date"] == "2026-04-24"
+    assert attribution["lookback_days"] == 10
+    # history is newest-first
+    latest = attribution["history"][0]
+    assert latest["date"] == "2026-04-24"
+    assert latest["stocks_up_4pct"] == 3  # PLTR, AAPL, NOGRP
+    assert latest["stocks_down_4pct"] == 1  # BANK
+
+    groups_by_name = {row["group"]: row for row in latest["groups"]}
+    assert "Computer Software-Database" in groups_by_name
+    assert groups_by_name["Computer Software-Database"]["up_count"] == 2
+    assert {s["symbol"] for s in groups_by_name["Computer Software-Database"]["up_stocks"]} == {
+        "PLTR",
+        "AAPL",
+    }
+    assert groups_by_name["Banks-Money Center"]["down_count"] == 1
+    assert groups_by_name["No Group"]["up_count"] == 1
+    assert groups_by_name["No Group"]["up_stocks"][0]["symbol"] == "NOGRP"
+    # FLAT didn't move 4%, so Retail-Apparel should not appear.
+    assert "Retail-Apparel" not in groups_by_name
 
 
 def test_export_rejects_legacy_unscoped_run_for_market_bundle(
