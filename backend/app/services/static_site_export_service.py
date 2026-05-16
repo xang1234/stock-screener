@@ -30,6 +30,7 @@ from app.schemas.groups import (
     MoversResponse,
 )
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
+from app.services.breadth_attribution_service import BreadthAttributionService
 from app.services.preset_screens import PRESET_SCREENS, get_preset_chart_symbols
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
@@ -55,6 +56,8 @@ STATIC_CHART_PRESET_TOP_N = 200
 STATIC_CHART_TOP_N_GROUPS = 50
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
+STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS = 10
+STATIC_BREADTH_ATTRIBUTION_MARKETS = ("US",)
 STATIC_DEFAULT_MARKET = "US"
 _MARKET_CATALOG = get_market_catalog()
 STATIC_SUPPORTED_MARKETS = tuple(_MARKET_CATALOG.supported_market_codes())
@@ -1019,6 +1022,12 @@ class StaticSiteExportService:
             period_days=31,
             end_date=expected_as_of_date,
         )
+        group_attribution = self._build_group_attribution(
+            market=market,
+            serialized_rows=serialized_rows,
+            price_data=price_data,
+            ordered_dates=ordered_dates,
+        )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
@@ -1041,7 +1050,70 @@ class StaticSiteExportService:
                 "benchmark_symbol": benchmark_symbol,
                 "benchmark_overlay": benchmark_overlay,
                 "spy_overlay": benchmark_overlay,
+                "group_attribution": group_attribution,
             },
+        }
+
+    def _build_group_attribution(
+        self,
+        *,
+        market: str,
+        serialized_rows: list[dict[str, Any]],
+        price_data: dict[str, pd.DataFrame | None],
+        ordered_dates: list[date],
+    ) -> dict[str, Any]:
+        """Attribute ±4% movers to IBD industry groups for the most recent sessions.
+
+        Only enabled for markets in ``STATIC_BREADTH_ATTRIBUTION_MARKETS`` — non-US
+        taxonomies aren't wired in for the first cut. Returns an
+        ``{available: False, reason}`` payload when skipped so the static client
+        can hide the feature cleanly.
+        """
+        if market not in STATIC_BREADTH_ATTRIBUTION_MARKETS:
+            return {
+                "available": False,
+                "reason": f"Group attribution is not yet supported for market {market}.",
+            }
+        if not ordered_dates:
+            return {
+                "available": False,
+                "reason": "No trading dates were available to attribute.",
+            }
+
+        attribution_dates = ordered_dates[-STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS:]
+        symbols_meta = [
+            {
+                "symbol": row.get("symbol"),
+                "company_name": row.get("company_name"),
+                "ibd_industry_group": row.get("ibd_industry_group"),
+            }
+            for row in serialized_rows
+            if row.get("symbol")
+        ]
+        service = BreadthAttributionService()
+        history = service.compute(
+            symbols_meta=symbols_meta,
+            price_data=price_data,
+            target_dates=attribution_dates,
+        )
+        has_any_mover = any(
+            (day.get("stocks_up_4pct", 0) + day.get("stocks_down_4pct", 0)) > 0
+            for day in history
+        )
+        if not history or not has_any_mover:
+            return {
+                "available": False,
+                "reason": "No 4%+ movers were attributable for the lookback window.",
+            }
+
+        latest = history[-1]
+        return {
+            "available": True,
+            "market": market,
+            "threshold_pct": 4.0,
+            "lookback_days": STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS,
+            "latest_date": latest["date"] if latest else None,
+            "history": list(reversed(history)),
         }
 
     def _build_groups_payload(
