@@ -1719,10 +1719,9 @@ def test_fetch_sg_snapshot_parses_sgx_api_json(monkeypatch):
     assert snapshot.source_name == "sgx_official"
     assert snapshot.source_metadata["fetch_mode"] == "live_http"
     symbols = {row["symbol"] for row in snapshot.rows}
-    # Equities + ETF (LISTED_TYPE absent treats as equity) survive; only the
-    # malformed ticker is dropped.
-    assert {"D05.SI", "O39.SI", "U11.SI", "A17U.SI", "C6L.SI", "5E2.SI"} <= symbols
-    assert not any("BAD" in s for s in symbols)
+    # Common equities survive. The REIT (A17U), Business Trust (NS8U), ETF
+    # (ES3, dropped by LISTED_TYPE), and malformed ticker are all rejected.
+    assert symbols == {"D05.SI", "O39.SI", "U11.SI", "C6L.SI", "5E2.SI"}
     dbs = next(row for row in snapshot.rows if row["symbol"] == "D05.SI")
     assert dbs["sector"] == "Banks"
     assert dbs["industry"] == "Banks"
@@ -1837,3 +1836,63 @@ def test_parse_sg_api_json_handles_alternate_payload_shapes():
 def test_parse_sg_api_json_raises_on_invalid_json():
     with pytest.raises(ValueError, match="not valid JSON"):
         OfficialMarketUniverseSourceService._parse_sg_api_json(b"not json")
+
+
+def test_parse_sg_api_json_drops_reits_business_trusts_and_stapled():
+    """SGX tags REITs/Business Trusts with LISTED_TYPE=Equity, so the parser
+    relies on ICB subsector and the issuer name to reject them. Stapled
+    securities are also excluded from supported SG coverage."""
+    payload = json.dumps({
+        "data": [
+            {
+                "nc": "A17U",
+                "N": "CAPITALAND ASCENDAS REIT",
+                "ICBSUBSECTOR": "Industrial & Office REITs",
+                "LISTED_TYPE": "Equity",
+            },
+            {
+                "nc": "NS8U",
+                "N": "HUTCHISON PORT HOLDINGS TRUST",
+                "ICBSUBSECTOR": "Marine Transportation",
+                "LISTED_TYPE": "Equity",
+            },
+            {
+                "nc": "HMN",
+                "N": "CAPITALAND ASCOTT TRUST",
+                "ICBSUBSECTOR": "Hotel & Lodging REITs",
+                "LISTED_TYPE": "Equity",
+            },
+            {
+                "nc": "STPL",
+                "N": "EXAMPLE STAPLED SECURITIES",
+                "ICBSUBSECTOR": "Stapled Securities",
+                "LISTED_TYPE": "Equity",
+            },
+            {
+                "nc": "D05",
+                "N": "DBS GROUP HOLDINGS LTD",
+                "ICBSUBSECTOR": "Banks",
+                "LISTED_TYPE": "Equity",
+            },
+        ]
+    }).encode("utf-8")
+
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(payload)
+    assert [r["symbol"] for r in rows] == ["D05.SI"]
+
+
+def test_sg_is_excluded_instrument_matches_trust_at_word_boundary():
+    """Bare ``trust`` matches only as a whole token so ``Trustco`` and similar
+    issuer names are not falsely excluded."""
+    excluded = OfficialMarketUniverseSourceService._sg_is_excluded_instrument
+    assert excluded("Hutchison Port Holdings Trust", "", "") is True
+    assert excluded("CapitaLand Ascendas REIT", "Real Estate", "Industrial REITs") is True
+    assert excluded("Example Stapled Securities", "", "Stapled Securities") is True
+    assert excluded("Trustco Holdings", "Financials", "Diversified Financials") is False
+    assert excluded("DBS Group Holdings Ltd", "Banks", "Banks") is False
+
+
+def test_parse_sg_api_json_handles_empty_dict_payload():
+    """An unrecognized response shape returns no rows rather than raising."""
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(b'{"foo": "bar"}')
+    assert rows == []

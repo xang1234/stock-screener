@@ -38,6 +38,15 @@
       "LISTED_TYPE": "Equity"
     },
     {
+      "nc": "NS8U",
+      "N": "HUTCHISON PORT HOLDINGS TRUST",
+      "ISIN": "SG2D02980265",
+      "MCAP": "1234567890",
+      "ICBINDUSTRY": "Industrial Transportation",
+      "ICBSUBSECTOR": "Marine Transportation",
+      "LISTED_TYPE": "Equity"
+    },
+    {
       "nc": "C6L",
       "N": "SINGAPORE AIRLINES LTD",
       "ISIN": "SG1V61937297",

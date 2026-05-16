@@ -1491,6 +1491,10 @@ class OfficialMarketUniverseSourceService:
         * Bond rows are excluded via the ``excludetypes=bonds`` query param
           server-side; any residual non-equity rows are dropped here when
           ``LISTED_TYPE`` is set and does not look like an equity listing.
+        * REITs, Business Trusts, and Stapled Securities are dropped — SGX
+          tags them as ``LISTED_TYPE=Equity`` so the rejection relies on the
+          ICB industry/subsector strings instead. These instrument classes
+          fall outside the supported SG coverage scope.
         """
         try:
             text = content.decode("utf-8")
@@ -1514,22 +1518,24 @@ class OfficialMarketUniverseSourceService:
             if listed_type and listed_type not in {"equity", "stock", "share", "shares", ""}:
                 continue
             name = str(record.get("N") or record.get("SIP") or record.get("name") or "").strip()
+            industry_raw = str(record.get("ICBINDUSTRY") or "").strip()
+            subsector_raw = str(record.get("ICBSUBSECTOR") or "").strip()
+            if cls._sg_is_excluded_instrument(name, industry_raw, subsector_raw):
+                continue
             isin = str(record.get("ISIN") or "").strip().upper()
             market_cap = record.get("MCAP")
             try:
                 market_cap_value = float(market_cap) if market_cap not in (None, "", "-") else None
             except (TypeError, ValueError):
                 market_cap_value = None
-            industry = str(record.get("ICBINDUSTRY") or "").strip()
-            sector = str(record.get("ICBSUBSECTOR") or "").strip()
 
             rows.append(
                 {
                     "symbol": f"{local_code}.SI",
                     "name": name,
                     "exchange": "XSES",
-                    "sector": sector,
-                    "industry": industry,
+                    "sector": subsector_raw,
+                    "industry": industry_raw,
                     "market_cap": market_cap_value,
                     "isin": isin,
                 }
@@ -1554,6 +1560,24 @@ class OfficialMarketUniverseSourceService:
                         return nested
         return []
 
+    @staticmethod
+    def _sg_is_excluded_instrument(name: str, industry: str, subsector: str) -> bool:
+        """Identify SGX rows that should be excluded from the supported universe.
+
+        SGX tags REITs and Business Trusts with ``LISTED_TYPE=Equity``, so the
+        LISTED_TYPE filter alone does not drop them. This helper matches on the
+        ICB industry/subsector strings and the issuer name. The bare ``trust``
+        token is matched at word boundaries so issuers like "Hutchison Port
+        Holdings Trust" are caught while names like "Trustco" are not.
+        """
+        haystack = " ".join(part for part in (industry, subsector, name) if part).lower()
+        if not haystack:
+            return False
+        if "reit" in haystack or "stapled" in haystack:
+            return True
+        tokens = re.split(r"[^a-z0-9]+", haystack)
+        return "trust" in tokens or "trusts" in tokens
+
     @classmethod
     def _load_sg_csv_fallback(cls) -> list[dict[str, Any]]:
         """Read the bundled SG seed CSV into the same row schema as the live path."""
@@ -1569,6 +1593,8 @@ class OfficialMarketUniverseSourceService:
             exchange = str(record.get("exchange") or "XSES").strip().upper() or "XSES"
             isin = str(record.get("isin") or "").strip().upper()
             if not symbol or not name:
+                continue
+            if cls._sg_is_excluded_instrument(name, "", ""):
                 continue
             rows.append(
                 {
