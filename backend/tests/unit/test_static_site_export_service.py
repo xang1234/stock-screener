@@ -1183,6 +1183,53 @@ def test_build_breadth_payload_includes_us_group_attribution(
     assert "Retail-Apparel" not in groups_by_name
 
 
+def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(
+    service_and_session_factory,
+    monkeypatch,
+):
+    """History rows can be present yet all-zero — that must still flag unavailable."""
+    service, _session_factory = service_and_session_factory
+    idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
+
+    def flat_frame(price: float) -> pd.DataFrame:
+        closes = [price] * len(idx)
+        return pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [value + 1 for value in closes],
+                "Low": [value - 1 for value in closes],
+                "Close": closes,
+                "Volume": [1000] * len(idx),
+            },
+            index=idx,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_get_market_benchmark_history",
+        lambda market, *, period: ("SPY", flat_frame(400.0)),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_cached_price_histories",
+        lambda symbols, *, period: {sym: flat_frame(100.0) for sym in symbols},
+    )
+
+    payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
+        generated_at="2026-04-24T22:00:00Z",
+        expected_as_of_date=date(2026, 4, 24),
+        market="US",
+        serialized_rows=[
+            {"symbol": "FLAT1", "ibd_industry_group": "Software"},
+            {"symbol": "FLAT2", "ibd_industry_group": "Banks"},
+        ],
+    )
+
+    attribution = payload["payload"]["group_attribution"]
+    assert attribution["available"] is False
+    assert "no 4%+ movers" in attribution["reason"].lower()
+
+
 def test_export_rejects_legacy_unscoped_run_for_market_bundle(
     service_and_session_factory,
     tmp_path,

@@ -1096,13 +1096,17 @@ class StaticSiteExportService:
             price_data=price_data,
             target_dates=attribution_dates,
         )
-        if not history:
+        has_any_mover = any(
+            (day.get("stocks_up_4pct", 0) + day.get("stocks_down_4pct", 0)) > 0
+            for day in history
+        )
+        if not history or not has_any_mover:
             return {
                 "available": False,
                 "reason": "No 4%+ movers were attributable for the lookback window.",
             }
 
-        latest = history[-1] if history else None
+        latest = history[-1]
         return {
             "available": True,
             "market": market,

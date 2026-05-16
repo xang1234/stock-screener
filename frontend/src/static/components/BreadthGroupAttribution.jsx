@@ -78,16 +78,26 @@ function StockList({ title, stocks, color }) {
 function GroupRow({ row }) {
   const [open, setOpen] = useState(false);
   const totalActivity = row.up_count + row.down_count;
+  const toggle = () => setOpen((prev) => !prev);
 
   return (
     <>
       <TableRow
         hover
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={toggle}
         sx={{ cursor: 'pointer', '& > *': { borderBottom: 'unset' } }}
       >
         <TableCell sx={{ width: 32, py: 0.5 }}>
-          <IconButton size="small" sx={{ p: 0.25 }}>
+          <IconButton
+            size="small"
+            sx={{ p: 0.25 }}
+            aria-label={open ? `Collapse ${row.group}` : `Expand ${row.group}`}
+            aria-expanded={open}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggle();
+            }}
+          >
             {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
           </IconButton>
         </TableCell>
