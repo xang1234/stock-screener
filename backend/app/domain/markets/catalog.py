@@ -187,6 +187,24 @@ MARKET_CATALOG = MarketCatalog(
                 finviz_screening=False,
             ),
         ),
+        MarketCatalogEntry(
+            code="SG",
+            label="Singapore",
+            currency="SGD",
+            timezone="Asia/Singapore",
+            calendar_id="XSES",
+            exchanges=("SGX", "SES", "XSES"),
+            indexes=("STI",),
+            capabilities=MarketCapabilities(
+                benchmark=True,
+                breadth=False,
+                fundamentals=True,
+                group_rankings=False,
+                feature_snapshot=True,
+                official_universe=True,
+                finviz_screening=False,
+            ),
+        ),
     ]
 )
 

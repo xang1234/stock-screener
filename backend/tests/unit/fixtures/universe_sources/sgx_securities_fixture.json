@@ -1,0 +1,68 @@
+{
+  "data": [
+    {
+      "nc": "D05",
+      "N": "DBS GROUP HOLDINGS LTD",
+      "SIP": "Singapore-based financial services group.",
+      "ISIN": "SG1L01001701",
+      "MCAP": "95012345678",
+      "ICBINDUSTRY": "Banks",
+      "ICBSUBSECTOR": "Banks",
+      "LISTED_TYPE": "Equity"
+    },
+    {
+      "nc": "O39",
+      "N": "OVERSEA-CHINESE BANKING CORP",
+      "ISIN": "SG1S04926220",
+      "MCAP": "73456789012",
+      "ICBINDUSTRY": "Banks",
+      "ICBSUBSECTOR": "Banks",
+      "LISTED_TYPE": "Equity"
+    },
+    {
+      "nc": "U11",
+      "N": "UNITED OVERSEAS BANK LTD",
+      "ISIN": "SG1M31001969",
+      "MCAP": "55678912345",
+      "ICBINDUSTRY": "Banks",
+      "ICBSUBSECTOR": "Banks",
+      "LISTED_TYPE": "Equity"
+    },
+    {
+      "nc": "A17U",
+      "N": "CAPITALAND ASCENDAS REIT",
+      "ISIN": "SG1M77906915",
+      "MCAP": "12345678901",
+      "ICBINDUSTRY": "Real Estate",
+      "ICBSUBSECTOR": "Industrial & Office REITs",
+      "LISTED_TYPE": "Equity"
+    },
+    {
+      "nc": "C6L",
+      "N": "SINGAPORE AIRLINES LTD",
+      "ISIN": "SG1V61937297",
+      "MCAP": "20123456789",
+      "ICBINDUSTRY": "Travel & Leisure",
+      "ICBSUBSECTOR": "Airlines",
+      "LISTED_TYPE": "Equity"
+    },
+    {
+      "nc": "5E2",
+      "N": "SEATRIUM LIMITED",
+      "ISIN": "SG1L74000000",
+      "ICBINDUSTRY": "Industrial Engineering",
+      "LISTED_TYPE": "Equity"
+    },
+    {
+      "nc": "ES3",
+      "N": "SPDR STRAITS TIMES INDEX ETF",
+      "ISIN": "SG1G53000007",
+      "LISTED_TYPE": "ETF"
+    },
+    {
+      "nc": "BAD!CODE",
+      "N": "Invalid ticker shape",
+      "LISTED_TYPE": "Equity"
+    }
+  ]
+}

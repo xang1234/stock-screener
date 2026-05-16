@@ -209,5 +209,19 @@ market_registry = MarketRegistry(
             benchmark_primary_kind="index",
             benchmark_fallback_kind="etf",
         ),
+        MarketProfile(
+            market=Market("SG"),
+            label="Singapore",
+            currency="SGD",
+            timezone_name="Asia/Singapore",
+            calendar_id="XSES",
+            provider_calendar_id=None,
+            exchanges=("SGX", "SES", "XSES"),
+            indexes=("STI",),
+            primary_benchmark_symbol="^STI",
+            benchmark_fallback_symbol="ES3.SI",
+            benchmark_primary_kind="index",
+            benchmark_fallback_kind="etf",
+        ),
     )
 )

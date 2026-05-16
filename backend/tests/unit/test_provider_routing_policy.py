@@ -14,6 +14,7 @@ from app.services.provider_routing_policy import (
     MARKET_IN,
     MARKET_JP,
     MARKET_KR,
+    MARKET_SG,
     MARKET_TW,
     MARKET_US,
     POLICY_VERSION,
@@ -53,6 +54,7 @@ class TestMatrixShape:
             MARKET_IN,
             MARKET_JP,
             MARKET_KR,
+            MARKET_SG,
             MARKET_TW,
             MARKET_US,
         )

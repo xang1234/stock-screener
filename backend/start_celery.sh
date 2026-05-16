@@ -29,7 +29,7 @@ echo "Starting Celery workers..."
 POOL="${CELERY_POOL:-solo}"
 
 # Enabled markets (comma-separated). Override via env to skip markets locally.
-ENABLED_MARKETS="${ENABLED_MARKETS:-US,HK,IN,JP,KR,TW,CN,CA,DE}"
+ENABLED_MARKETS="${ENABLED_MARKETS:-US,HK,IN,JP,KR,TW,CN,CA,DE,SG}"
 
 echo "  Pool: $POOL"
 echo "  Enabled markets: $ENABLED_MARKETS"
@@ -64,7 +64,7 @@ for RAW_MARKET in "${MARKET_ARRAY[@]}"; do
     MARKET_LOWER="$(echo "$MARKET_UPPER" | tr '[:upper:]' '[:lower:]')"
 
     case "$MARKET_UPPER" in
-        US|HK|IN|JP|KR|TW|CN|CA|DE) ;;
+        US|HK|IN|JP|KR|TW|CN|CA|DE|SG) ;;
         *)
             echo "  Skipping unknown market: $MARKET_UPPER"
             continue

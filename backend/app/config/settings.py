@@ -206,6 +206,25 @@ class Settings(BaseSettings):
     # rows; setting this near 800 catches catastrophic shrinkage without
     # rejecting ordinary listing churn. Set to 0 to disable the floor.
     de_live_min_universe_size: int = 800
+    # SGX public JSON API at api.sgx.com is the de-facto endpoint used by
+    # community scrapers; returns ~1,200 Mainboard and Catalist listings with
+    # no authentication required. ``params`` requests issuer code, name, ISIN,
+    # market cap, and ICB industry/subsector. Operators concerned about SGX
+    # terms of service can blank this string to force the bundled fallback CSV.
+    sg_universe_source_url: str = (
+        "https://api.sgx.com/securities/v1.1"
+        "?excludetypes=bonds"
+        "&params=nc,N,SIP,ISIN,MCAP,ICBINDUSTRY,ICBSUBSECTOR,LISTED_TYPE"
+    )
+    sg_universe_fallback_csv_path: str = str(
+        _PROJECT_ROOT / "data" / "sg_sgx_constituents.csv"
+    )
+    # SGX hosts ~700 stocks across Mainboard + Catalist. The bundled fallback
+    # ships ~55 STI/Catalist names; setting the floor to 200 catches a broken
+    # live response without rejecting routine listing churn. Set to 0 to
+    # disable the floor and always trust the live SGX feed.
+    sg_live_min_universe_size: int = 200
+    sg_universe_allow_insecure_fallback: bool = False
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
     # Per-market rate budget overrides. Each value is in requests-per-second
@@ -220,6 +239,7 @@ class Settings(BaseSettings):
     yfinance_rate_limit_kr: float | None = None
     yfinance_rate_limit_tw: float | None = None
     yfinance_rate_limit_cn: float | None = None
+    yfinance_rate_limit_sg: float | None = None
     finviz_rate_limit_us: float | None = None
     finviz_rate_limit_hk: float | None = None
     finviz_rate_limit_in: float | None = None
@@ -227,6 +247,7 @@ class Settings(BaseSettings):
     finviz_rate_limit_kr: float | None = None
     finviz_rate_limit_tw: float | None = None
     finviz_rate_limit_cn: float | None = None
+    finviz_rate_limit_sg: float | None = None
 
     # Per-market batch sizes for yfinance bulk downloads. Defaults ship via
     # RateBudgetPolicy._DEFAULT_BATCH_SIZE and may be overridden per market.
@@ -237,6 +258,7 @@ class Settings(BaseSettings):
     yfinance_batch_size_kr: int | None = None
     yfinance_batch_size_tw: int | None = None
     yfinance_batch_size_cn: int | None = None
+    yfinance_batch_size_sg: int | None = None
 
     # Per-market batch interval overrides for the ``yfinance:batch`` provider key.
     # Values are in requests-per-second for that market specifically; the
@@ -251,6 +273,7 @@ class Settings(BaseSettings):
     yfinance_batch_rate_limit_kr: float | None = None
     yfinance_batch_rate_limit_tw: float | None = None
     yfinance_batch_rate_limit_cn: float | None = None
+    yfinance_batch_rate_limit_sg: float | None = None
 
     # Per-market backoff cap (seconds) for consecutive 429-driven backoffs.
     # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
@@ -261,6 +284,7 @@ class Settings(BaseSettings):
     yfinance_backoff_max_s_kr: int | None = None
     yfinance_backoff_max_s_tw: int | None = None
     yfinance_backoff_max_s_cn: int | None = None
+    yfinance_backoff_max_s_sg: int | None = None
 
     # Per-market parallel worker counts for finviz (which has no batch API,
     # so concurrency is the only knob). Defaults live in
@@ -274,6 +298,7 @@ class Settings(BaseSettings):
     finviz_workers_kr: int | None = None
     finviz_workers_tw: int | None = None
     finviz_workers_cn: int | None = None
+    finviz_workers_sg: int | None = None
 
     # Provider circuit breaker (services/provider_circuit_breaker.py).
     # Trips when N consecutive batches/calls hit transient 429-style errors;
@@ -288,6 +313,7 @@ class Settings(BaseSettings):
     circuit_breaker_cooldown_kr: int = 300
     circuit_breaker_cooldown_tw: int = 300
     circuit_breaker_cooldown_cn: int = 300
+    circuit_breaker_cooldown_sg: int = 300
 
     # yfinance HTTP session: when enabled, calls are routed through a
     # process-wide curl_cffi session impersonating Chrome to dramatically
@@ -372,6 +398,11 @@ class Settings(BaseSettings):
     cache_warm_minute_ca: int = 30
     cache_warm_hour_de: int = 18
     cache_warm_minute_de: int = 0
+    # SGX closes 17:00 SGT (UTC+8); translates to ~05:00 America/New_York after
+    # 30-minute settlement buffer. Picked to land after close and before the
+    # India/HK refresh window.
+    cache_warm_hour_sg: int = 5
+    cache_warm_minute_sg: int = 0
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
     # entirely (beat schedule skips it; its worker can be stopped).
@@ -428,6 +459,7 @@ class Settings(BaseSettings):
     provider_snapshot_min_active_coverage_cn: float = 0.70
     provider_snapshot_min_active_coverage_ca: float = 0.70
     provider_snapshot_min_active_coverage_de: float = 0.70
+    provider_snapshot_min_active_coverage_sg: float = 0.70
     provider_snapshot_max_missing_ratio_us: float = 0.005
     provider_snapshot_max_missing_ratio_hk: float = 0.30
     provider_snapshot_max_missing_ratio_in: float = 0.40
@@ -437,6 +469,7 @@ class Settings(BaseSettings):
     provider_snapshot_max_missing_ratio_cn: float = 0.30
     provider_snapshot_max_missing_ratio_ca: float = 0.30
     provider_snapshot_max_missing_ratio_de: float = 0.30
+    provider_snapshot_max_missing_ratio_sg: float = 0.30
     market_data_source_mode: str = "github_first"  # github_first | live_only
     github_data_repository: str = "xang1234/stock-screener"
     github_data_api_base: str = "https://api.github.com"
@@ -474,7 +507,8 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in',
         'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw',
-        'cache_warm_hour_cn', 'cache_warm_hour_ca', 'cache_warm_hour_de'
+        'cache_warm_hour_cn', 'cache_warm_hour_ca', 'cache_warm_hour_de',
+        'cache_warm_hour_sg'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -485,7 +519,8 @@ class Settings(BaseSettings):
     @field_validator(
         'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in',
         'cache_warm_minute_jp', 'cache_warm_minute_kr', 'cache_warm_minute_tw',
-        'cache_warm_minute_cn', 'cache_warm_minute_ca', 'cache_warm_minute_de'
+        'cache_warm_minute_cn', 'cache_warm_minute_ca', 'cache_warm_minute_de',
+        'cache_warm_minute_sg'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -540,6 +575,7 @@ class Settings(BaseSettings):
         'provider_snapshot_min_active_coverage_cn',
         'provider_snapshot_min_active_coverage_ca',
         'provider_snapshot_min_active_coverage_de',
+        'provider_snapshot_min_active_coverage_sg',
         'provider_snapshot_max_missing_ratio_us',
         'provider_snapshot_max_missing_ratio_hk',
         'provider_snapshot_max_missing_ratio_in',
@@ -549,6 +585,7 @@ class Settings(BaseSettings):
         'provider_snapshot_max_missing_ratio_cn',
         'provider_snapshot_max_missing_ratio_ca',
         'provider_snapshot_max_missing_ratio_de',
+        'provider_snapshot_max_missing_ratio_sg',
     )
     @classmethod
     def validate_provider_snapshot_ratios(cls, v: float) -> float:
@@ -683,6 +720,7 @@ class Settings(BaseSettings):
             "CN": (self.cache_warm_hour_cn, self.cache_warm_minute_cn),
             "CA": (self.cache_warm_hour_ca, self.cache_warm_minute_ca),
             "DE": (self.cache_warm_hour_de, self.cache_warm_minute_de),
+            "SG": (self.cache_warm_hour_sg, self.cache_warm_minute_sg),
         }
         if m not in mapping:
             raise ValueError(f"No cache warm schedule for market {market!r}")

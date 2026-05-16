@@ -1676,3 +1676,164 @@ def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path
         "baseline CSV at" in record.message and "missing on disk" in record.message
         for record in caplog.records
     ), f"Expected missing-baseline warning, got: {[r.message for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# Singapore (SG) coverage
+# ---------------------------------------------------------------------------
+
+_SG_API_URL = (
+    "https://api.sgx.com/securities/v1.1?excludetypes=bonds"
+    "&params=nc,N,SIP,ISIN,MCAP,ICBINDUSTRY,ICBSUBSECTOR,LISTED_TYPE"
+)
+
+
+def _fetched_sg(content: bytes, *, last_modified: str | None = None) -> _FetchedSource:
+    return _FetchedSource(
+        url=_SG_API_URL,
+        content=content,
+        fetched_at="2026-05-15T00:00:00+00:00",
+        last_modified=last_modified,
+        tls_verification_disabled=False,
+    )
+
+
+def test_fetch_sg_snapshot_parses_sgx_api_json(monkeypatch):
+    """Live SGX API JSON yields canonical .SI rows with sector enrichment."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", _SG_API_URL)
+    monkeypatch.setattr(app_settings, "sg_live_min_universe_size", 1)
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_sg(
+            _fixture_bytes("sgx_securities_fixture.json")
+        ),
+    )
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.market == "SG"
+    assert snapshot.source_name == "sgx_official"
+    assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    symbols = {row["symbol"] for row in snapshot.rows}
+    # Equities + ETF (LISTED_TYPE absent treats as equity) survive; only the
+    # malformed ticker is dropped.
+    assert {"D05.SI", "O39.SI", "U11.SI", "A17U.SI", "C6L.SI", "5E2.SI"} <= symbols
+    assert not any("BAD" in s for s in symbols)
+    dbs = next(row for row in snapshot.rows if row["symbol"] == "D05.SI")
+    assert dbs["sector"] == "Banks"
+    assert dbs["industry"] == "Banks"
+    assert dbs["market_cap"] == pytest.approx(95012345678.0)
+    assert dbs["isin"] == "SG1L01001701"
+    assert snapshot.snapshot_id.startswith("sgx-securities-")
+
+
+def test_fetch_sg_snapshot_falls_back_on_http_error(monkeypatch, tmp_path):
+    """RequestException from the live fetch routes to the bundled CSV fallback."""
+    from app.config import settings as app_settings
+
+    fallback_csv = tmp_path / "sg_fallback.csv"
+    fallback_csv.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "D05.SI,DBS Group,XSES,STI,SG1L01001701\n"
+        "O39.SI,OCBC,XSES,STI,SG1S04926220\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", _SG_API_URL)
+    monkeypatch.setattr(app_settings, "sg_universe_fallback_csv_path", str(fallback_csv))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: (_ for _ in ()).throw(
+            requests.exceptions.ConnectionError("synthetic SGX outage")
+        ),
+    )
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.market == "SG"
+    assert snapshot.source_name == "sg_manual_csv"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert "synthetic SGX outage" in snapshot.source_metadata["fetch_errors"]["live_http"]
+    assert {row["symbol"] for row in snapshot.rows} == {"D05.SI", "O39.SI"}
+    assert snapshot.snapshot_id.startswith("sg-csv-fallback-")
+
+
+def test_fetch_sg_snapshot_uses_fallback_when_url_blank(monkeypatch, tmp_path):
+    """Blank ``sg_universe_source_url`` forces CSV fallback without an HTTP attempt."""
+    from app.config import settings as app_settings
+
+    fallback_csv = tmp_path / "sg_fallback.csv"
+    fallback_csv.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "D05.SI,DBS Group,XSES,STI,SG1L01001701\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", "")
+    monkeypatch.setattr(app_settings, "sg_universe_fallback_csv_path", str(fallback_csv))
+
+    service = OfficialMarketUniverseSourceService()
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("_http_get must not be called when source URL is blank")
+
+    monkeypatch.setattr(service, "_http_get", fail_if_called)
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.source_name == "sg_manual_csv"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert {row["symbol"] for row in snapshot.rows} == {"D05.SI"}
+
+
+def test_fetch_sg_snapshot_falls_back_when_universe_too_small(monkeypatch, tmp_path):
+    """A live universe below the configured minimum size triggers fallback."""
+    from app.config import settings as app_settings
+
+    fallback_csv = tmp_path / "sg_fallback.csv"
+    fallback_csv.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "D05.SI,DBS Group,XSES,STI,SG1L01001701\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", _SG_API_URL)
+    monkeypatch.setattr(app_settings, "sg_universe_fallback_csv_path", str(fallback_csv))
+    monkeypatch.setattr(app_settings, "sg_live_min_universe_size", 100)
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_sg(
+            json.dumps({"data": [
+                {"nc": "D05", "N": "DBS Group"},
+                {"nc": "O39", "N": "OCBC"},
+            ]}).encode("utf-8")
+        ),
+    )
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.source_name == "sg_manual_csv"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert "below 100 threshold" in snapshot.source_metadata["fetch_errors"]["live_http"]
+    assert {row["symbol"] for row in snapshot.rows} == {"D05.SI"}
+
+
+def test_parse_sg_api_json_handles_alternate_payload_shapes():
+    """The SGX API has shipped several wrapping shapes; the parser must walk them."""
+    nested = json.dumps({"data": {"prices": [{"nc": "Z74", "N": "Singtel"}]}}).encode("utf-8")
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(nested)
+    assert [r["symbol"] for r in rows] == ["Z74.SI"]
+
+    bare = json.dumps([{"nc": "F34", "N": "Wilmar"}]).encode("utf-8")
+    rows_bare = OfficialMarketUniverseSourceService._parse_sg_api_json(bare)
+    assert [r["symbol"] for r in rows_bare] == ["F34.SI"]
+
+
+def test_parse_sg_api_json_raises_on_invalid_json():
+    with pytest.raises(ValueError, match="not valid JSON"):
+        OfficialMarketUniverseSourceService._parse_sg_api_json(b"not json")

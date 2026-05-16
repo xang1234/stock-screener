@@ -10,8 +10,8 @@ import apiClient from './client';
  * @param {Array<string>} params.symbols - Custom symbol list (required if universe='custom' or 'test')
  * @param {Object} [params.universe_def] - Structured universe definition (takes precedence over legacy universe field)
  * @param {string} params.universe_def.type - Universe type: 'all', 'market', 'exchange', 'index', 'custom', 'test'
- * @param {string} [params.universe_def.market] - Market code: 'US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE' (if type='market', optional for type='exchange')
- * @param {string} [params.universe_def.exchange] - Exchange name: 'NYSE', 'NASDAQ', 'AMEX', 'KOSPI', 'KOSDAQ', 'SSE', 'SZSE', 'BJSE', 'TSX', 'TSXV', 'XETR', 'XFRA' (if type='exchange')
+ * @param {string} [params.universe_def.market] - Market code: 'US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE', 'SG' (if type='market', optional for type='exchange')
+ * @param {string} [params.universe_def.exchange] - Exchange name: 'NYSE', 'NASDAQ', 'AMEX', 'KOSPI', 'KOSDAQ', 'SSE', 'SZSE', 'BJSE', 'TSX', 'TSXV', 'XETR', 'XFRA', 'XSES' (if type='exchange')
  * @param {string} [params.universe_def.index] - Index name: 'SP500' (if type='index')
  * @param {Array<string>} [params.universe_def.symbols] - Symbol list (if type='custom' or 'test')
  * @param {Object} params.criteria - Scan criteria

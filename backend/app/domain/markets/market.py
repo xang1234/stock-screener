@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 
 SUPPORTED_MARKET_CODES: frozenset[str] = frozenset(
-    {"US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"}
+    {"US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE", "SG"}
 )
 
 
