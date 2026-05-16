@@ -25,7 +25,6 @@ from app.services.ibd_industry_service import IBDIndustryService
 from app.services.static_site_export_service import StaticSiteExportService
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
-from app.utils.market_hours import get_last_market_close
 from app.utils.symbol_support import split_supported_price_symbols
 from app.wiring.bootstrap import (
     get_group_rank_service,
@@ -66,9 +65,15 @@ def _tracked_ibd_csv_path() -> Path:
     return IBDIndustryService.resolve_tracked_csv_path(settings.ibd_industry_csv_path)
 
 
-def _resolve_latest_completed_us_trading_date() -> date:
-    """Return the latest completed NYSE session date for static exports."""
-    return get_last_market_close().date()
+def _resolve_latest_completed_trading_date(market: str) -> date:
+    """Return the latest completed trading session date for ``market``.
+
+    Each market has its own calendar (NYSE, HKEX, NSE, …). Using the NYSE
+    date for non-US markets either falsely skips them on days NYSE was
+    closed but the target exchange traded, or builds their snapshot for a
+    stale date when NYSE traded but the target exchange did not.
+    """
+    return get_market_calendar_service().last_completed_trading_day(market)
 
 
 def _iter_chunks(items: list[str], chunk_size: int) -> list[list[str]]:
@@ -507,7 +512,6 @@ def _run_daily_refresh(
     from app.tasks.universe_tasks import refresh_stock_universe
 
     warnings: list[str] = []
-    as_of_date = _resolve_latest_completed_us_trading_date()
 
     def _snapshot_ready(snapshot: dict[str, Any]) -> bool:
         status = snapshot.get("status")
@@ -520,6 +524,11 @@ def _run_daily_refresh(
         return False
 
     selected_markets = (market,) if market is not None else STATIC_EXPORT_MARKETS
+    as_of_by_market: dict[str, date] = {
+        selected_market: _resolve_latest_completed_trading_date(selected_market)
+        for selected_market in selected_markets
+    }
+
     with disable_serialized_data_fetch_lock(), disable_serialized_market_workload():
         results: dict[str, Any] = {}
         if not skip_universe_refresh:
@@ -544,11 +553,26 @@ def _run_daily_refresh(
                 "loaded": IBDIndustryService.load_from_csv(db, csv_path=_tracked_ibd_csv_path()),
             }
 
-        results["price_refresh"] = _refresh_static_daily_prices(as_of_date=as_of_date, market=market)
+        # Price refresh is per-market so each market's staleness check uses
+        # its own calendar's latest session — avoids treating an HK-traded
+        # day as stale because NYSE was closed (or vice-versa).
+        price_refresh_results: dict[str, Any] = {}
+        for selected_market in selected_markets:
+            price_refresh_results[selected_market] = _refresh_static_daily_prices(
+                as_of_date=as_of_by_market[selected_market],
+                market=selected_market,
+            )
+        results["price_refresh"] = (
+            price_refresh_results[selected_markets[0]]
+            if market is not None
+            else price_refresh_results
+        )
+
         feature_snapshots: dict[str, Any] = {}
         for selected_market in selected_markets:
+            market_as_of = as_of_by_market[selected_market]
             market_result = build_daily_snapshot.run(
-                as_of_date_str=as_of_date.isoformat(),
+                as_of_date_str=market_as_of.isoformat(),
                 static_daily_mode=True,
                 universe_name=f"market:{selected_market.lower()}",
                 market=selected_market,
@@ -570,7 +594,7 @@ def _run_daily_refresh(
                 }
                 continue
             group_rank_history[selected_market] = _ensure_group_rank_history(
-                as_of_date=as_of_date,
+                as_of_date=as_of_by_market[selected_market],
                 market=selected_market,
             )
         results["group_rank_history_backfill"] = group_rank_history
@@ -619,7 +643,7 @@ def _run_daily_refresh(
                 continue
             ibd_metadata_refresh[selected_market] = _enrich_feature_run_with_ibd_metadata(
                 feature_run_id=feature_run_id,
-                ranking_date=as_of_date,
+                ranking_date=as_of_by_market[selected_market],
             )
         results["ibd_metadata_refresh"] = ibd_metadata_refresh
 
