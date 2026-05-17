@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 import pandas as pd
+import pytest
 
 from app.domain.markets.registry import market_registry
 from app.services.market_calendar_service import MarketCalendarService
@@ -133,6 +134,21 @@ def test_india_pmc_lookup_uses_provider_specific_calendar_id():
     assert calls == ["NSE"]
 
 
+def test_singapore_lookup_uses_exchange_calendars_calendar_id():
+    calls = []
+    service = MarketCalendarService()
+    service._pmc_provider = (
+        lambda calendar_id: calls.append(("pmc", calendar_id)) or _ProviderCalendar()
+    )
+    service._xcals_provider = (
+        lambda calendar_id: calls.append(("xcals", calendar_id)) or _ProviderCalendar()
+    )
+
+    service._get_calendar("SG")
+
+    assert calls == [("xcals", "XSES")]
+
+
 def test_india_injected_calendar_provider_uses_provider_specific_calendar_id():
     calls = []
     service = MarketCalendarService(calendar_provider=lambda calendar_id: calls.append(calendar_id) or _ProviderCalendar())
@@ -142,18 +158,20 @@ def test_india_injected_calendar_provider_uses_provider_specific_calendar_id():
     assert calls == ["NSE"]
 
 
-def test_china_calendar_bounds_fallback_uses_weekdays():
+@pytest.mark.parametrize("market", ["CN", "SG"])
+def test_calendar_bounds_fallback_uses_weekdays(market):
     service = MarketCalendarService(calendar_provider=lambda _: _BoundsCalendar())
 
-    assert service.is_trading_day("CN", date(2026, 4, 10)) is True
-    assert service.is_trading_day("CN", date(2026, 4, 11)) is False
+    assert service.is_trading_day(market, date(2026, 4, 10)) is True
+    assert service.is_trading_day(market, date(2026, 4, 11)) is False
 
 
-def test_china_last_completed_trading_day_bounds_fallback():
+@pytest.mark.parametrize("market", ["CN", "SG"])
+def test_last_completed_trading_day_bounds_fallback(market):
     service = MarketCalendarService(calendar_provider=lambda _: _BoundsCalendar())
 
     before_close = datetime.fromisoformat("2026-04-10T15:00:00+08:00")
     after_close = datetime.fromisoformat("2026-04-10T16:00:00+08:00")
 
-    assert service.last_completed_trading_day("CN", now=before_close) == date(2026, 4, 9)
-    assert service.last_completed_trading_day("CN", now=after_close) == date(2026, 4, 10)
+    assert service.last_completed_trading_day(market, now=before_close) == date(2026, 4, 9)
+    assert service.last_completed_trading_day(market, now=after_close) == date(2026, 4, 10)

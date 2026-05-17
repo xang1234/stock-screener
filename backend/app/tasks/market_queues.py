@@ -1,7 +1,7 @@
 """
 Per-market Celery queue topology.
 
-Partitions data_fetch and user_scans work by market (US/HK/IN/JP/KR/TW/CN) so that one
+Partitions data_fetch and user_scans work by market so that one
 market's refresh pipeline cannot stall throughput for another market. Pairs
 with the market-scoped DataFetchLock in data_fetch_lock.py.
 """

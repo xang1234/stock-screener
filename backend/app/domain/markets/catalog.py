@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
-CATALOG_VERSION = "2026-05-09.v1"
+CATALOG_VERSION = "2026-05-17.v1"
 
 
 class MarketCatalogError(ValueError):

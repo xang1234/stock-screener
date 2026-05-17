@@ -87,6 +87,49 @@ def test_ingest_cn_snapshot_rows_populates_stock_industry_taxonomy():
     db.close()
 
 
+def test_ingest_sg_snapshot_rows_canonicalizes_sgx_codes():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+
+    stats = service.ingest_sg_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "D05",
+                "name": "DBS GROUP HOLDINGS LTD",
+                "exchange": "SGX",
+                "sector": "Finance",
+                "industry": "Banking",
+                "market_cap": "100.5",
+                "isin": "SG1L01001701",
+            },
+            {
+                "symbol": "A17U.SI",
+                "name": "CAPITALAND ASCENDAS REIT",
+                "exchange": "XSES",
+                "sector": "Real Estate",
+                "industry": "REIT",
+            },
+        ],
+        source_name="sgx_official",
+        snapshot_id="sgx-securities-2026-05-17",
+        strict=True,
+    )
+
+    rows = db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()
+    assert stats["total"] == 2
+    assert stats["rejected"] == 0
+    assert [row.symbol for row in rows] == ["A17U.SI", "D05.SI"]
+    assert rows[0].market == "SG"
+    assert rows[0].exchange == "XSES"
+    assert rows[0].currency == "SGD"
+    assert rows[0].timezone == "Asia/Singapore"
+    assert rows[0].local_code == "A17U"
+    assert rows[1].market_cap == 100.5
+    db.close()
+
+
 def test_get_active_symbols_uses_is_active_over_stale_active_status():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()

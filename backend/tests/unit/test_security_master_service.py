@@ -156,6 +156,23 @@ def test_resolve_identity_uses_china_suffixes_by_exchange():
     assert india_bse.canonical_symbol == "500325.BO"
 
 
+def test_resolve_identity_uses_singapore_suffix_by_exchange_and_market():
+    resolver = SecurityMasterResolver()
+
+    by_exchange = resolver.resolve_identity(symbol="D05", exchange="xses")
+    by_market = resolver.resolve_identity(symbol="A17U", market="sg")
+    by_suffix = resolver.resolve_identity(symbol="C6L.SI")
+
+    assert by_exchange.market == "SG"
+    assert by_exchange.currency == "SGD"
+    assert by_exchange.timezone == "Asia/Singapore"
+    assert by_exchange.canonical_symbol == "D05.SI"
+    assert by_market.market == "SG"
+    assert by_market.canonical_symbol == "A17U.SI"
+    assert by_suffix.market == "SG"
+    assert by_suffix.canonical_symbol == "C6L.SI"
+
+
 def test_resolve_identity_uses_canada_and_germany_suffixes_by_exchange():
     resolver = SecurityMasterResolver()
 

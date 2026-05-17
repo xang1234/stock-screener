@@ -64,6 +64,7 @@ MARKET_CURRENCY_MAP: Mapping[str, str] = {
     "KR": "KRW",
     "TW": "TWD",
     "CN": "CNY",
+    "SG": "SGD",
     "CA": "CAD",
     "DE": "EUR",
 }

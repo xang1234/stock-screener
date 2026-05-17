@@ -32,6 +32,7 @@ class TestCurrencyForMarket:
         assert currency_for_market("KR") == "KRW"
         assert currency_for_market("TW") == "TWD"
         assert currency_for_market("CN") == "CNY"
+        assert currency_for_market("SG") == "SGD"
         assert currency_for_market("CA") == "CAD"
         assert currency_for_market("DE") == "EUR"
 

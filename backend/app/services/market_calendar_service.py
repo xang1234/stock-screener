@@ -1,4 +1,4 @@
-"""Market calendar abstraction for US/HK/IN/JP/KR/TW/CN/CA session-aware decisions."""
+"""Market calendar abstraction for supported market session-aware decisions."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ except ModuleNotFoundError:  # pragma: no cover - runtime guard
 
 class MarketCalendarService:
     """Unified market calendar contract backed by exchange_calendars."""
+
+    WEEKDAY_BOUNDS_FALLBACK_MARKETS = frozenset({"CN", "SG"})
 
     CALENDAR_ID_BY_MARKET: dict[str, str] = {
         profile.market.code: profile.calendar_id for profile in market_registry.profiles()
@@ -76,7 +78,7 @@ class MarketCalendarService:
             provider = self._pmc_provider if uses_pmc_provider else self._xcals_provider
         if provider is None:
             required_package = (
-                "pandas_market_calendars" if normalized == "IN" else "exchange_calendars"
+                "pandas_market_calendars" if uses_pmc_provider else "exchange_calendars"
             )
             raise RuntimeError(f"{required_package} is required for MarketCalendarService")
         if calendar_id not in self._calendar_cache:
@@ -147,7 +149,10 @@ class MarketCalendarService:
             calendar = self._get_calendar(normalized)
             return self._is_session(calendar, pd.Timestamp(candidate_day))
         except Exception as exc:
-            if normalized == "CN" and self._is_calendar_bounds_error(exc):
+            if (
+                normalized in self.WEEKDAY_BOUNDS_FALLBACK_MARKETS
+                and self._is_calendar_bounds_error(exc)
+            ):
                 return self._is_weekday(candidate_day)
             raise
 
@@ -219,7 +224,10 @@ class MarketCalendarService:
                 return current_session.date()
             return self._previous_session(calendar, current_session).date()
         except Exception as exc:
-            if normalized == "CN" and self._is_calendar_bounds_error(exc):
+            if (
+                normalized in self.WEEKDAY_BOUNDS_FALLBACK_MARKETS
+                and self._is_calendar_bounds_error(exc)
+            ):
                 if self._is_weekday(current_session.date()) and market_now.time().hour >= 16:
                     return current_session.date()
                 return self._previous_weekday(current_session.date())

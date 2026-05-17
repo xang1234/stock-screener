@@ -85,19 +85,19 @@ class TestUSPolicy:
 class TestAsiaPolicy:
     """HK/IN/JP/TW route to yfinance only; KR has native providers first."""
 
-    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW])
+    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW, MARKET_SG])
     def test_asia_markets_are_yfinance_only(self, market):
         assert providers_for(market) == (PROVIDER_YFINANCE,)
 
-    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW])
+    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW, MARKET_SG])
     def test_asia_markets_reject_finviz(self, market):
         assert is_supported(market, PROVIDER_FINVIZ) is False
 
-    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW])
+    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW, MARKET_SG])
     def test_asia_markets_reject_alphavantage(self, market):
         assert is_supported(market, PROVIDER_ALPHAVANTAGE) is False
 
-    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW])
+    @pytest.mark.parametrize("market", [MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW, MARKET_SG])
     def test_asia_markets_allow_yfinance(self, market):
         assert is_supported(market, PROVIDER_YFINANCE) is True
 

@@ -2025,6 +2025,29 @@ def test_build_key_markets_includes_canada_defaults(service_and_session_factory,
     assert all(item["currency"] == "CAD" for item in markets)
 
 
+def test_build_key_markets_includes_singapore_defaults(service_and_session_factory, monkeypatch):
+    service, _session_factory = service_and_session_factory
+    history = [
+        {"date": "2026-05-08", "close": 100.0},
+        {"date": "2026-05-09", "close": 101.0},
+    ]
+    monkeypatch.setattr(service, "_get_symbol_price_history", lambda symbol, period="6mo": [symbol, period])
+    monkeypatch.setattr(service, "_serialize_close_history", lambda history_payload, days=30: history)
+
+    markets = service._build_key_markets("SG")  # noqa: SLF001 - intentional unit test coverage
+
+    assert [item["symbol"] for item in markets] == [
+        "^STI",
+        "ES3.SI",
+        "D05.SI",
+        "C6L.SI",
+        "Z74.SI",
+        "O39.SI",
+        "U11.SI",
+    ]
+    assert all(item["currency"] == "SGD" for item in markets)
+
+
 def test_apply_group_rank_changes_from_table_fills_missing_periods(
     service_and_session_factory, monkeypatch
 ):

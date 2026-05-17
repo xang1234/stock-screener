@@ -74,6 +74,15 @@ def _breadth_row(market: str, day: date, *, up: int, down: int) -> MarketBreadth
     )
 
 
+def test_market_query_description_excludes_unsupported_singapore_breadth():
+    from app.api.v1 import breadth as breadth_module
+
+    assert breadth_module.MARKET_QUERY_DESCRIPTION == (
+        "Market code: US, HK, IN, JP, KR, TW, CN, CA, DE"
+    )
+    assert "SG" not in breadth_module.MARKET_QUERY_DESCRIPTION
+
+
 @pytest.mark.asyncio
 async def test_current_breadth_filters_by_market(client, session):
     app.dependency_overrides[get_db] = _override_db(session)

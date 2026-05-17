@@ -6,7 +6,7 @@ from app.services.benchmark_registry_service import benchmark_registry
 def test_registry_versioned_mapping_exists_for_all_markets():
     table = benchmark_registry.mapping_table()
 
-    assert benchmark_registry.TABLE_VERSION == "2026-05-09.v1"
+    assert benchmark_registry.TABLE_VERSION == "2026-05-17.v1"
     assert set(table.keys()) == set(market_registry.supported_market_codes())
 
 
@@ -15,7 +15,7 @@ def test_supported_benchmark_markets_match_market_registry():
 
 
 def test_non_us_candidates_have_no_spy_leakage():
-    for market in ("HK", "IN", "JP", "KR", "TW", "CN"):
+    for market in ("HK", "IN", "JP", "KR", "TW", "CN", "SG"):
         candidates = benchmark_registry.get_candidate_symbols(market)
         assert "SPY" not in candidates
         assert len(candidates) >= 1
