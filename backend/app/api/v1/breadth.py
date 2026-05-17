@@ -55,7 +55,7 @@ def _require_task_controls() -> None:
 
 @router.get("/current", response_model=BreadthResponse)
 async def get_current_breadth(
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, SG, CA, or DE"),
     db: Session = Depends(get_db),
 ):
     """
@@ -81,7 +81,7 @@ async def get_current_breadth(
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
 async def get_breadth_bootstrap(
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, SG, CA, or DE"),
     snapshot_service=Depends(get_ui_snapshot_service),
 ):
     """Return the published breadth bootstrap snapshot if available."""
@@ -100,7 +100,7 @@ async def get_historical_breadth(
     start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: date = Query(..., description="End date (YYYY-MM-DD)"),
     limit: int = Query(365, ge=1, le=730, description="Maximum number of records"),
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, SG, CA, or DE"),
     db: Session = Depends(get_db)
 ):
     """
@@ -153,7 +153,7 @@ async def get_historical_breadth(
 async def get_indicator_trend(
     indicator: str,
     days: int = Query(30, ge=1, le=730, description="Number of days to retrieve"),
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, SG, CA, or DE"),
     db: Session = Depends(get_db)
 ):
     """
@@ -223,7 +223,7 @@ async def get_indicator_trend(
 async def trigger_calculation(
     request: CalculationRequest,
     background_tasks: BackgroundTasks,
-    market: str | None = Query(None, description="Optional market override: US, HK, IN, JP, KR, TW, or CN"),
+    market: str | None = Query(None, description="Optional market override: US, HK, IN, JP, KR, TW, CN, SG, CA, or DE"),
     db: Session = Depends(get_db)
 ):
     """
@@ -268,7 +268,7 @@ async def trigger_calculation(
 @router.post("/backfill", response_model=BackfillResponse)
 async def trigger_backfill(
     request: BackfillRequest,
-    market: str | None = Query(None, description="Optional market override: US, HK, IN, JP, KR, TW, or CN"),
+    market: str | None = Query(None, description="Optional market override: US, HK, IN, JP, KR, TW, CN, SG, CA, or DE"),
     db: Session = Depends(get_db)
 ):
     """
@@ -337,7 +337,7 @@ async def trigger_backfill(
 
 @router.get("/summary", response_model=BreadthSummary)
 async def get_breadth_summary(
-    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, or CN"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, KR, TW, CN, SG, CA, or DE"),
     db: Session = Depends(get_db),
 ):
     """

@@ -86,6 +86,16 @@ export const DEFAULT_MARKET_CATALOG = {
       capabilities: {},
     },
     {
+      code: 'SG',
+      label: 'Singapore',
+      currency: 'SGD',
+      timezone: 'Asia/Singapore',
+      calendar_id: 'XSES',
+      exchanges: ['SGX', 'SES', 'XSES'],
+      indexes: ['STI'],
+      capabilities: {},
+    },
+    {
       code: 'CA',
       label: 'Canada',
       currency: 'CAD',

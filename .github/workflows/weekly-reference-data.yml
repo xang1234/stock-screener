@@ -20,6 +20,7 @@ on:
           - KR
           - TW
           - CN
+          - SG
           - CA
           - DE
       max_runtime_minutes:
@@ -94,7 +95,7 @@ jobs:
         # that variant; otherwise (scheduled cron, or dispatch with market=all)
         # run the full matrix. ``github.event.inputs.market`` is null on
         # scheduled runs, so we coerce to '' before the equality check.
-        market: ${{ fromJSON((github.event.inputs.market || 'all') != 'all' && format('["{0}"]', github.event.inputs.market) || '["US","HK","IN","JP","KR","TW","CN","CA","DE"]') }}
+        market: ${{ fromJSON((github.event.inputs.market || 'all') != 'all' && format('["{0}"]', github.event.inputs.market) || '["US","HK","IN","JP","KR","TW","CN","SG","CA","DE"]') }}
     services:
       postgres:
         image: postgres:16-alpine

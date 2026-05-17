@@ -176,7 +176,7 @@ fi
 COMPOSE_ARGS+=("$@")
 
 if is_down_command "${COMPOSE_ARGS[@]}" && ! has_arg "--remove-orphans" "${COMPOSE_ARGS[@]}"; then
-  COMPOSE_ARGS+=(--remove-orphans)
+  COMPOSE_ARGS+=("--remove-orphans")
 fi
 
 exec docker compose "${COMPOSE_ARGS[@]}"

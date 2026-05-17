@@ -187,11 +187,29 @@
   "tasks": [
     {
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (CA)",
+      "is_enabled": true,
+      "last_run": null,
+      "name": "daily-market-pipeline-ca",
+      "schedule_description": "17:30 ET, Mon-Fri (CA)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+    },
+    {
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (CN)",
       "is_enabled": true,
       "last_run": null,
       "name": "daily-market-pipeline-cn",
       "schedule_description": "3:30 ET, Mon-Fri (CN)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+    },
+    {
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (DE)",
+      "is_enabled": true,
+      "last_run": null,
+      "name": "daily-market-pipeline-de",
+      "schedule_description": "18:00 ET, Mon-Fri (DE)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
@@ -228,6 +246,15 @@
       "last_run": null,
       "name": "daily-market-pipeline-kr",
       "schedule_description": "3:00 ET, Mon-Fri (KR)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+    },
+    {
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (SG)",
+      "is_enabled": true,
+      "last_run": null,
+      "name": "daily-market-pipeline-sg",
+      "schedule_description": "4:30 ET, Mon-Fri (SG)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {

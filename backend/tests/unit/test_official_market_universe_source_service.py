@@ -697,6 +697,106 @@ def test_fetch_tw_snapshot_requires_explicit_opt_in_for_insecure_tls(monkeypatch
     ]
 
 
+def test_fetch_sg_snapshot_combines_equity_like_security_categories(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    responses = {
+        "https://api.sgx.com/securities/v1.1/stocks": {
+            "data": {
+                "prices": [
+                    {
+                        "nc": "D05",
+                        "n": "DBS",
+                        "type": "stocks",
+                        "m": "MAINBOARD",
+                        "sc": "8",
+                        "cur": "SGD",
+                    }
+                ]
+            }
+        },
+        "https://api.sgx.com/securities/v1.1/reits": {
+            "data": {
+                "prices": [
+                    {
+                        "nc": "A17U",
+                        "n": "CapLand Ascendas REIT",
+                        "type": "reits",
+                        "m": "MAINBOARD",
+                        "sc": "L",
+                        "cur": "SGD",
+                    }
+                ]
+            }
+        },
+        "https://api.sgx.com/securities/v1.1/businesstrusts": {
+            "data": {
+                "prices": [
+                    {
+                        "nc": "J85",
+                        "n": "CDL HTrust",
+                        "type": "businesstrusts",
+                        "m": "MAINBOARD",
+                        "sc": "L",
+                        "cur": "SGD",
+                    }
+                ]
+            }
+        },
+        "https://api.sgx.com/marketmetadata/v2": {
+            "data": [
+                {
+                    "stockCode": "D05",
+                    "issuerName": "DBS GROUP HOLDINGS LTD",
+                    "isinCode": "SG1L01001701",
+                    "tradingCurrency": "SGD",
+                },
+                {
+                    "stockCode": "A17U",
+                    "issuerName": "CAPITALAND ASCENDAS REIT",
+                    "isinCode": "SG1M77906915",
+                    "tradingCurrency": "SGD",
+                },
+            ]
+        },
+    }
+    calls: list[str] = []
+
+    def fake_get(url, allow_insecure_fallback=False, extra_headers=None):
+        calls.append(url)
+        return _FetchedSource(
+            url=url,
+            content=json.dumps(responses[url]).encode("utf-8"),
+            fetched_at="2026-05-17T00:00:00+00:00",
+            last_modified=None,
+            tls_verification_disabled=False,
+        )
+
+    monkeypatch.setattr(service, "_http_get", fake_get)
+
+    snapshot = service.fetch_sg_snapshot()
+
+    assert calls == [
+        "https://api.sgx.com/securities/v1.1/stocks",
+        "https://api.sgx.com/securities/v1.1/reits",
+        "https://api.sgx.com/securities/v1.1/businesstrusts",
+        "https://api.sgx.com/marketmetadata/v2",
+    ]
+    assert snapshot.market == "SG"
+    assert snapshot.source_name == "sgx_official"
+    assert snapshot.snapshot_id == "sgx-securities-2026-05-17"
+    assert snapshot.snapshot_as_of == "2026-05-17"
+    assert [row["symbol"] for row in snapshot.rows] == ["D05.SI", "A17U.SI", "J85.SI"]
+    assert snapshot.rows[0]["name"] == "DBS GROUP HOLDINGS LTD"
+    assert snapshot.rows[0]["isin"] == "SG1L01001701"
+    assert snapshot.rows[0]["sector"] == "Finance"
+    assert snapshot.rows[1]["industry"] == "REIT"
+    assert snapshot.source_metadata["row_counts"] == {
+        "stocks": 1,
+        "reits": 1,
+        "businesstrusts": 1,
+    }
+
+
 def test_http_get_retries_timeouts_before_succeeding(monkeypatch):
     service = OfficialMarketUniverseSourceService(timeout_seconds=7)
     calls: list[dict[str, object]] = []

@@ -153,7 +153,7 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/IN/JP/KR/TW/CN/CA). When provided, the
+            market: Optional supported market code. When provided, the
                 provider routing policy filters out providers that do not
                 cover this market (e.g. finviz is skipped for non-US markets).
                 ``None`` preserves legacy US-equivalent behaviour.
@@ -356,7 +356,7 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/IN/JP/KR/TW/CN/CA); see
+            market: Optional supported market code; see
                 ``get_fundamentals`` for semantics.
 
         Returns:
@@ -423,7 +423,7 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/IN/JP/KR/TW/CN/CA); see
+            market: Optional supported market code; see
                 ``get_fundamentals`` for semantics.
 
         Returns:

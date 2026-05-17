@@ -181,6 +181,8 @@ class Settings(BaseSettings):
     ca_universe_source_tsxv_url: str = (
         "https://www.tsx.com/json/company-directory/search/tsxv/{initial}"
     )
+    sg_universe_source_url: str = "https://api.sgx.com/securities/v1.1"
+    sg_universe_metadata_url: str = "https://api.sgx.com/marketmetadata/v2"
     de_universe_allow_insecure_fallback: bool = False
     # Deutsche Boerse Cash Market reference-data CSV for Xetra-tradable
     # instruments. Plain ``;``-delimited file with two metadata header rows
@@ -220,6 +222,7 @@ class Settings(BaseSettings):
     yfinance_rate_limit_kr: float | None = None
     yfinance_rate_limit_tw: float | None = None
     yfinance_rate_limit_cn: float | None = None
+    yfinance_rate_limit_sg: float | None = None
     finviz_rate_limit_us: float | None = None
     finviz_rate_limit_hk: float | None = None
     finviz_rate_limit_in: float | None = None
@@ -227,6 +230,7 @@ class Settings(BaseSettings):
     finviz_rate_limit_kr: float | None = None
     finviz_rate_limit_tw: float | None = None
     finviz_rate_limit_cn: float | None = None
+    finviz_rate_limit_sg: float | None = None
 
     # Per-market batch sizes for yfinance bulk downloads. Defaults ship via
     # RateBudgetPolicy._DEFAULT_BATCH_SIZE and may be overridden per market.
@@ -237,6 +241,7 @@ class Settings(BaseSettings):
     yfinance_batch_size_kr: int | None = None
     yfinance_batch_size_tw: int | None = None
     yfinance_batch_size_cn: int | None = None
+    yfinance_batch_size_sg: int | None = None
 
     # Per-market backoff cap (seconds) for consecutive 429-driven backoffs.
     # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
@@ -247,6 +252,7 @@ class Settings(BaseSettings):
     yfinance_backoff_max_s_kr: int | None = None
     yfinance_backoff_max_s_tw: int | None = None
     yfinance_backoff_max_s_cn: int | None = None
+    yfinance_backoff_max_s_sg: int | None = None
 
     # Per-market parallel worker counts for finviz (which has no batch API,
     # so concurrency is the only knob). Defaults live in
@@ -260,6 +266,7 @@ class Settings(BaseSettings):
     finviz_workers_kr: int | None = None
     finviz_workers_tw: int | None = None
     finviz_workers_cn: int | None = None
+    finviz_workers_sg: int | None = None
 
     # Provider circuit breaker (services/provider_circuit_breaker.py).
     # Trips when N consecutive batches/calls hit transient 429-style errors;
@@ -274,6 +281,7 @@ class Settings(BaseSettings):
     circuit_breaker_cooldown_kr: int = 300
     circuit_breaker_cooldown_tw: int = 300
     circuit_breaker_cooldown_cn: int = 300
+    circuit_breaker_cooldown_sg: int = 300
 
     # yfinance HTTP session: when enabled, calls are routed through a
     # process-wide curl_cffi session impersonating Chrome to dramatically
@@ -354,6 +362,8 @@ class Settings(BaseSettings):
     cache_warm_minute_tw: int = 0
     cache_warm_hour_cn: int = 3
     cache_warm_minute_cn: int = 30
+    cache_warm_hour_sg: int = 4
+    cache_warm_minute_sg: int = 30
     cache_warm_hour_ca: int = 17
     cache_warm_minute_ca: int = 30
     cache_warm_hour_de: int = 18
@@ -412,6 +422,7 @@ class Settings(BaseSettings):
     provider_snapshot_min_active_coverage_kr: float = 0.70
     provider_snapshot_min_active_coverage_tw: float = 0.70
     provider_snapshot_min_active_coverage_cn: float = 0.70
+    provider_snapshot_min_active_coverage_sg: float = 0.70
     provider_snapshot_min_active_coverage_ca: float = 0.70
     provider_snapshot_min_active_coverage_de: float = 0.70
     provider_snapshot_max_missing_ratio_us: float = 0.005
@@ -421,6 +432,7 @@ class Settings(BaseSettings):
     provider_snapshot_max_missing_ratio_kr: float = 0.30
     provider_snapshot_max_missing_ratio_tw: float = 0.30
     provider_snapshot_max_missing_ratio_cn: float = 0.30
+    provider_snapshot_max_missing_ratio_sg: float = 0.30
     provider_snapshot_max_missing_ratio_ca: float = 0.30
     provider_snapshot_max_missing_ratio_de: float = 0.30
     market_data_source_mode: str = "github_first"  # github_first | live_only
@@ -524,6 +536,7 @@ class Settings(BaseSettings):
         'provider_snapshot_min_active_coverage_kr',
         'provider_snapshot_min_active_coverage_tw',
         'provider_snapshot_min_active_coverage_cn',
+        'provider_snapshot_min_active_coverage_sg',
         'provider_snapshot_min_active_coverage_ca',
         'provider_snapshot_min_active_coverage_de',
         'provider_snapshot_max_missing_ratio_us',
@@ -533,6 +546,7 @@ class Settings(BaseSettings):
         'provider_snapshot_max_missing_ratio_kr',
         'provider_snapshot_max_missing_ratio_tw',
         'provider_snapshot_max_missing_ratio_cn',
+        'provider_snapshot_max_missing_ratio_sg',
         'provider_snapshot_max_missing_ratio_ca',
         'provider_snapshot_max_missing_ratio_de',
     )
@@ -667,6 +681,7 @@ class Settings(BaseSettings):
             "KR": (self.cache_warm_hour_kr, self.cache_warm_minute_kr),
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
             "CN": (self.cache_warm_hour_cn, self.cache_warm_minute_cn),
+            "SG": (self.cache_warm_hour_sg, self.cache_warm_minute_sg),
             "CA": (self.cache_warm_hour_ca, self.cache_warm_minute_ca),
             "DE": (self.cache_warm_hour_de, self.cache_warm_minute_de),
         }

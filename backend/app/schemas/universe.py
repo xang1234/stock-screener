@@ -30,6 +30,7 @@ class Market(str, Enum):
     KR = "KR"
     TW = "TW"
     CN = "CN"
+    SG = "SG"
     CA = "CA"
     DE = "DE"
 
@@ -44,6 +45,9 @@ class Exchange(str, Enum):
     SSE = "SSE"
     SZSE = "SZSE"
     BJSE = "BJSE"
+    SGX = "SGX"
+    SES = "SES"
+    XSES = "XSES"
     TSX = "TSX"
     TSXV = "TSXV"
 
@@ -62,6 +66,7 @@ class IndexName(str, Enum):
     HSI = "HSI"
     NIKKEI225 = "NIKKEI225"
     TAIEX = "TAIEX"
+    STI = "STI"
     DAX = "DAX"
     MDAX = "MDAX"
     SDAX = "SDAX"
@@ -207,6 +212,7 @@ class UniverseDefinition(BaseModel):
                 Market.KR: "South Korea Market",
                 Market.TW: "Taiwan Market",
                 Market.CN: "China A-shares",
+                Market.SG: "Singapore Market",
             }
             return market_labels.get(self.market, f"{self.market.value} Market")
         elif self.type == UniverseType.EXCHANGE:
@@ -296,6 +302,7 @@ class UniverseDefinition(BaseModel):
         - "market:jp" -> MARKET:JP
         - "market:tw" -> MARKET:TW
         - "market:cn" -> MARKET:CN
+        - "market:sg" -> MARKET:SG
         - "nyse" -> EXCHANGE:NYSE
         - "nasdaq" -> EXCHANGE:NASDAQ
         - "amex" -> EXCHANGE:AMEX
@@ -316,6 +323,9 @@ class UniverseDefinition(BaseModel):
             "nyse": Exchange.NYSE,
             "nasdaq": Exchange.NASDAQ,
             "amex": Exchange.AMEX,
+            "sgx": Exchange.SGX,
+            "ses": Exchange.SES,
+            "xses": Exchange.XSES,
         }
         market_map = {market.value.lower(): market for market in Market}
         valid_markets = ", ".join(market.value for market in Market)
@@ -334,6 +344,8 @@ class UniverseDefinition(BaseModel):
             return cls(type=UniverseType.EXCHANGE, exchange=exchange_map[u])
         elif u == "sp500":
             return cls(type=UniverseType.INDEX, index=IndexName.SP500)
+        elif u == "sti":
+            return cls(type=UniverseType.INDEX, index=IndexName.STI)
         elif u == "custom":
             return cls(type=UniverseType.CUSTOM, symbols=symbols or [])
         elif u == "test":

@@ -112,7 +112,7 @@ class TestSelfCheckGates:
         report = run_all_gates(project_root=_PROJECT_ROOT, now=_NOW)
         g3 = next(g for g in report.gates if g.gate_id == "G3")
         assert g3.status == GateStatus.PASS, g3.detail
-        assert g3.metrics["checked_markets"] == ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE"]
+        assert g3.metrics["checked_markets"] == ["US", "HK", "IN", "JP", "KR", "TW", "CN", "SG", "CA", "DE"]
 
     def test_g8_observability_passes_with_recent_drill(self, tmp_path):
         root = _make_docs_root(tmp_path)

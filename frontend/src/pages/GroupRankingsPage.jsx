@@ -64,6 +64,7 @@ const MARKET_LABELS = {
   KR: 'KR',
   TW: 'TW',
   CN: 'CN',
+  SG: 'SG',
 };
 
 const REASON_HINTS = {

@@ -38,7 +38,7 @@ def test_market_catalog_rejects_unknown_market() -> None:
 def test_market_catalog_runtime_payload_is_frontend_ready() -> None:
     payload = get_market_catalog().as_runtime_payload()
 
-    assert payload["version"] == "2026-05-09.v1"
+    assert payload["version"] == "2026-05-17.v1"
     assert [market["code"] for market in payload["markets"]] == list(
         market_registry.supported_market_codes()
     )

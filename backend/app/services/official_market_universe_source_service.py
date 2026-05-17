@@ -1,4 +1,4 @@
-"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, CN, CA, and DE."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, CN, SG, CA, and DE."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import math
 from pathlib import Path
 import re
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
@@ -34,6 +34,7 @@ _JP_SOURCE_NAME = "jpx_official"
 _KR_SOURCE_NAME = "krx_official"
 _TW_SOURCE_NAME = "tw_reference_bundle"
 _CN_SOURCE_NAME = "cn_akshare_eastmoney"
+_SG_SOURCE_NAME = "sgx_official"
 _CA_SOURCE_NAME = "tmx_official"
 _DE_SOURCE_NAME = "dbg_official"
 # Source identifier emitted on snapshot rows when the live CSV is unreachable
@@ -84,6 +85,27 @@ _CA_EXCLUDED_INSTRUMENT_PHRASES: frozenset[str] = frozenset(
     }
 )
 _CA_INSTRUMENT_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
+_SG_SECURITY_CATEGORIES: tuple[str, ...] = ("stocks", "reits", "businesstrusts")
+_SG_CATEGORY_INDUSTRY: dict[str, str] = {
+    "stocks": "Common Stock",
+    "reits": "REIT",
+    "businesstrusts": "Business Trust",
+}
+_SG_SECTOR_CODES: dict[str, str] = {
+    "1": "Multi-Industry",
+    "2": "Manufacturing",
+    "3": "Construction",
+    "4": "Commerce",
+    "5": "Loans & Debentures",
+    "6": "Hotels/Restaurants",
+    "7": "Transport/Storage",
+    "8": "Finance",
+    "9": "Properties",
+}
+_SG_SOURCE_HEADERS = {
+    "Accept": "application/json,*/*",
+    "Referer": "https://www.sgx.com/securities/stock-screener",
+}
 _KR_VALIDATED_BASELINE = {
     "source_url": "https://global.krx.co.kr/main/main.jspx?bld=listing_list",
     "validated_at": "2026-04-29",
@@ -191,6 +213,8 @@ class OfficialMarketUniverseSourceService:
             return self.fetch_tw_snapshot()
         if normalized_market == "CN":
             return self.fetch_cn_snapshot()
+        if normalized_market == "SG":
+            return self.fetch_sg_snapshot()
         if normalized_market == "CA":
             return self.fetch_ca_snapshot()
         if normalized_market == "DE":
@@ -737,6 +761,179 @@ class OfficialMarketUniverseSourceService:
             source_metadata=source_metadata,
             rows=tuple([*twse_rows, *tpex_rows]),
         )
+
+    def fetch_sg_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        """Fetch SGX-listed equity-like securities from SGX public APIs."""
+        category_rows: dict[str, list[dict[str, Any]]] = {}
+        fetched_by_category: dict[str, _FetchedSource] = {}
+        base_url = settings.sg_universe_source_url.rstrip("/")
+
+        for category in _SG_SECURITY_CATEGORIES:
+            url = f"{base_url}/{category}"
+            fetched = self._http_get(url, extra_headers=_SG_SOURCE_HEADERS)
+            fetched_by_category[category] = fetched
+            category_rows[category] = self.parse_sg_security_rows(
+                fetched.content,
+                category=category,
+            )
+
+        metadata_fetched = self._http_get(
+            settings.sg_universe_metadata_url,
+            extra_headers=_SG_SOURCE_HEADERS,
+        )
+        metadata_by_code = self.parse_sg_metadata_rows(metadata_fetched.content)
+
+        rows: list[dict[str, Any]] = []
+        for category in _SG_SECURITY_CATEGORIES:
+            rows.extend(
+                self.normalize_sg_security_rows(
+                    category_rows[category],
+                    category=category,
+                    metadata_by_code=metadata_by_code,
+                )
+            )
+
+        if not rows:
+            raise ValueError("SG official universe fetch returned no equity-like rows")
+
+        fetched_sources = [*fetched_by_category.values(), metadata_fetched]
+        snapshot_date = (
+            self._latest_fetched_source_date(fetched_sources)
+            or self._date_from_http_header(metadata_fetched.last_modified)
+            or self._utc_today()
+        )
+        snapshot_as_of = snapshot_date.isoformat()
+        fetched_ats = [fetched.fetched_at for fetched in fetched_sources if fetched.fetched_at]
+        source_metadata = {
+            "source_urls": [
+                *[f"{base_url}/{category}" for category in _SG_SECURITY_CATEGORIES],
+                settings.sg_universe_metadata_url,
+            ],
+            "fetched_at": max(fetched_ats) if fetched_ats else datetime.now(UTC).isoformat(),
+            "http_last_modified": metadata_fetched.last_modified,
+            "tls_verification_disabled": {
+                **{
+                    category: fetched_by_category[category].tls_verification_disabled
+                    for category in _SG_SECURITY_CATEGORIES
+                },
+                "metadata": metadata_fetched.tls_verification_disabled,
+            },
+            "filters": {
+                "categories": list(_SG_SECURITY_CATEGORIES),
+            },
+            "row_counts": {
+                category: len(category_rows[category])
+                for category in _SG_SECURITY_CATEGORIES
+            },
+        }
+        return OfficialMarketUniverseSnapshot(
+            market="SG",
+            source_name=_SG_SOURCE_NAME,
+            snapshot_id=f"sgx-securities-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            rows=tuple(rows),
+        )
+
+    @staticmethod
+    def parse_sg_security_rows(content: bytes, *, category: str) -> list[dict[str, Any]]:
+        """Parse one SGX securities category response into raw security rows."""
+        try:
+            payload = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid SGX {category} payload: {exc}") from exc
+
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        if isinstance(data, dict):
+            prices = data.get("prices") or data.get("securities") or data.get("rows") or []
+        elif isinstance(data, list):
+            prices = data
+        else:
+            raise ValueError(f"Unexpected SGX {category} payload shape: {type(payload).__name__}")
+
+        rows: list[dict[str, Any]] = []
+        for entry in prices:
+            if isinstance(entry, dict):
+                rows.append(entry)
+        return rows
+
+    @staticmethod
+    def parse_sg_metadata_rows(content: bytes) -> dict[str, dict[str, Any]]:
+        """Parse SGX metadata rows keyed by uppercase stock code."""
+        try:
+            payload = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid SGX metadata payload: {exc}") from exc
+
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        if isinstance(data, dict):
+            rows = data.get("metadata") or data.get("securities") or data.get("rows") or []
+        elif isinstance(data, list):
+            rows = data
+        else:
+            rows = []
+
+        metadata_by_code: dict[str, dict[str, Any]] = {}
+        for entry in rows:
+            if not isinstance(entry, dict):
+                continue
+            raw_code = entry.get("stockCode") or entry.get("stock_code") or entry.get("code")
+            code = str(raw_code or "").strip().upper().replace(" ", "")
+            if code:
+                metadata_by_code[code] = entry
+        return metadata_by_code
+
+    @staticmethod
+    def normalize_sg_security_rows(
+        rows: Iterable[dict[str, Any]],
+        *,
+        category: str,
+        metadata_by_code: Mapping[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Normalize SGX security rows into stock-universe ingestion rows."""
+        normalized_rows: list[dict[str, Any]] = []
+        for entry in rows:
+            raw_code = entry.get("nc") or entry.get("stockCode") or entry.get("code")
+            local_code = str(raw_code or "").strip().upper().replace(" ", "")
+            if local_code.endswith(".SI"):
+                local_code = local_code[:-3]
+            if not local_code:
+                continue
+
+            metadata = metadata_by_code.get(local_code, {})
+            raw_name = (
+                metadata.get("issuerName")
+                or metadata.get("name")
+                or entry.get("n")
+                or entry.get("name")
+                or ""
+            )
+            name = OfficialMarketUniverseSourceService._collapse_whitespace(str(raw_name))
+            if not name:
+                continue
+
+            raw_currency = (
+                metadata.get("tradingCurrency")
+                or metadata.get("currency")
+                or entry.get("cur")
+                or "SGD"
+            )
+            sector_code = str(entry.get("sc") or "").strip().upper()
+            sector = _SG_SECTOR_CODES.get(sector_code, "")
+            normalized_rows.append(
+                {
+                    "symbol": f"{local_code}.SI",
+                    "name": name,
+                    "exchange": "XSES",
+                    "sector": sector,
+                    "industry": _SG_CATEGORY_INDUSTRY.get(category, ""),
+                    "market_cap": None,
+                    "isin": metadata.get("isinCode") or metadata.get("isin") or "",
+                    "currency": str(raw_currency or "SGD").strip().upper() or "SGD",
+                    "source_category": category,
+                }
+            )
+        return normalized_rows
 
     def fetch_ca_snapshot(self) -> OfficialMarketUniverseSnapshot:
         """Fetch combined TSX + TSXV issuer listings from TMX.
@@ -1693,6 +1890,19 @@ class OfficialMarketUniverseSourceService:
     @staticmethod
     def _utc_today() -> date:
         return datetime.now(UTC).date()
+
+    @staticmethod
+    def _latest_fetched_source_date(sources: Iterable[_FetchedSource]) -> date | None:
+        parsed_dates: list[date] = []
+        for source in sources:
+            raw = str(source.fetched_at or "").strip()
+            if not raw:
+                continue
+            try:
+                parsed_dates.append(datetime.fromisoformat(raw.replace("Z", "+00:00")).date())
+            except ValueError:
+                continue
+        return max(parsed_dates) if parsed_dates else None
 
     @staticmethod
     def _date_from_http_header(header_value: str | None) -> date | None:

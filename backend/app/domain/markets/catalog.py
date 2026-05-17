@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
-CATALOG_VERSION = "2026-05-09.v1"
+CATALOG_VERSION = "2026-05-17.v1"
 
 
 class MarketCatalogError(ValueError):
@@ -158,6 +158,24 @@ MARKET_CATALOG = MarketCatalog(
             exchanges=("SSE", "SZSE", "BJSE", "XSHG", "XSHE", "XBSE"),
             indexes=(),
             capabilities=FULL_CAPABILITIES,
+        ),
+        MarketCatalogEntry(
+            code="SG",
+            label="Singapore",
+            currency="SGD",
+            timezone="Asia/Singapore",
+            calendar_id="XSES",
+            exchanges=("SGX", "SES", "XSES"),
+            indexes=("STI",),
+            capabilities=MarketCapabilities(
+                benchmark=True,
+                breadth=True,
+                fundamentals=True,
+                group_rankings=False,
+                feature_snapshot=True,
+                official_universe=True,
+                finviz_screening=False,
+            ),
         ),
         MarketCatalogEntry(
             code="CA",

@@ -1,4 +1,4 @@
-"""Market calendar abstraction for US/HK/IN/JP/KR/TW/CN/CA session-aware decisions."""
+"""Market calendar abstraction for supported market session-aware decisions."""
 
 from __future__ import annotations
 
@@ -72,11 +72,11 @@ class MarketCalendarService:
         provider = self._calendar_provider
         uses_pmc_provider = False
         if provider is None:
-            uses_pmc_provider = normalized == "IN"
+            uses_pmc_provider = normalized in {"IN", "SG"}
             provider = self._pmc_provider if uses_pmc_provider else self._xcals_provider
         if provider is None:
             required_package = (
-                "pandas_market_calendars" if normalized == "IN" else "exchange_calendars"
+                "pandas_market_calendars" if uses_pmc_provider else "exchange_calendars"
             )
             raise RuntimeError(f"{required_package} is required for MarketCalendarService")
         if calendar_id not in self._calendar_cache:

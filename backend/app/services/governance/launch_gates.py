@@ -470,6 +470,7 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
         "KR": "^KS11",
         "TW": "^TWII",
         "CN": "000300.SS",
+        "SG": "^STI",
         "CA": "^GSPTSE",
         "DE": "^GDAXI",
     }
@@ -481,6 +482,7 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
         "KR": "XKRX",
         "TW": "XTAI",
         "CN": "XSHG",
+        "SG": "XSES",
         "CA": "XTSE",
         "DE": "XETR",
     }

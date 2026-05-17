@@ -66,7 +66,7 @@ class FieldCapabilityEntry:
 class FieldCapabilityRegistryService:
     """Deterministic matrix for screening-field market/provider coverage."""
 
-    REGISTRY_VERSION = "2026.05.09.1"
+    REGISTRY_VERSION = "2026.05.17.1"
     MARKET_ORDER: Tuple[str, ...] = (
         routing_policy.MARKET_US,
         routing_policy.MARKET_HK,
@@ -75,6 +75,7 @@ class FieldCapabilityRegistryService:
         routing_policy.MARKET_KR,
         routing_policy.MARKET_TW,
         routing_policy.MARKET_CN,
+        routing_policy.MARKET_SG,
         routing_policy.MARKET_CA,
         routing_policy.MARKET_DE,
     )

@@ -123,6 +123,13 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "000001.SZ", "display_name": "Ping An Bank", "currency": "CNY"},
         {"symbol": "300750.SZ", "display_name": "CATL", "currency": "CNY"},
     ),
+    "SG": (
+        {"symbol": "^STI", "display_name": "Straits Times Index", "currency": "SGD"},
+        {"symbol": "ES3.SI", "display_name": "SPDR Straits Times Index ETF", "currency": "SGD"},
+        {"symbol": "D05.SI", "display_name": "DBS Group", "currency": "SGD"},
+        {"symbol": "C6L.SI", "display_name": "Singapore Airlines", "currency": "SGD"},
+        {"symbol": "Z74.SI", "display_name": "Singtel", "currency": "SGD"},
+    ),
     "CA": (
         {"symbol": "^GSPTSE", "display_name": "S&P/TSX Composite", "currency": "CAD"},
         {"symbol": "XIU.TO", "display_name": "iShares S&P/TSX 60 ETF", "currency": "CAD"},
