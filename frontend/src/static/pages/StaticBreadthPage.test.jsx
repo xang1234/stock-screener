@@ -187,7 +187,7 @@ describe('StaticBreadthPage', () => {
             payload: {
               benchmark_symbol: 'SPY',
               benchmark_overlay: [],
-              current: { market: 'US', date: '2026-05-15', stocks_up_4pct: 4, stocks_down_4pct: 1 },
+              current: { market: 'US', date: '2026-05-15', stocks_up_4pct: 3, stocks_down_4pct: 1 },
               chart_data: [],
               history_90d: [],
               group_attribution: {
@@ -199,7 +199,7 @@ describe('StaticBreadthPage', () => {
                 history: [
                   {
                     date: '2026-05-15',
-                    stocks_up_4pct: 4,
+                    stocks_up_4pct: 3,
                     stocks_down_4pct: 1,
                     groups: [
                       {
