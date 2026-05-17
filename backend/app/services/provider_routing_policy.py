@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 # --- Policy version ---------------------------------------------------------
 
-POLICY_VERSION = "2026.05.09.1"
+POLICY_VERSION = "2026.05.17.1"
 """Bump (date-stamped) when routing semantics change.
 
 Consumed by audit logs, cache keys, and provenance tags so downstream
@@ -102,9 +102,10 @@ MARKET_TW = "TW"
 MARKET_CN = "CN"
 MARKET_CA = "CA"
 MARKET_DE = "DE"
+MARKET_SG = "SG"
 
 KNOWN_MARKETS: FrozenSet[str] = frozenset(
-    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA, MARKET_DE}
+    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA, MARKET_DE, MARKET_SG}
 )
 
 DEFAULT_MARKET = MARKET_US
@@ -147,6 +148,10 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # alphavantage free tier likewise excludes German listings. yfinance
     # natively supports the .DE and .F suffixes produced by SecurityMasterService.
     MARKET_DE: (PROVIDER_YFINANCE,),
+    # SG: yfinance only. Finviz screener does not cover SGX; the alphavantage
+    # free tier likewise excludes Singapore listings. yfinance natively
+    # supports the .SI suffix produced by SecurityMasterService.
+    MARKET_SG: (PROVIDER_YFINANCE,),
 }
 
 

@@ -1,4 +1,4 @@
-"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, CN, CA, and DE."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, CN, CA, DE, and SG."""
 
 from __future__ import annotations
 
@@ -40,6 +40,18 @@ _DE_SOURCE_NAME = "dbg_official"
 # and the bundled DE seed CSV is used instead. Distinct from `_DE_SOURCE_NAME`
 # so downstream coverage gates can tell live from fallback.
 _DE_FALLBACK_SOURCE_NAME = "de_manual_csv"
+_SG_SOURCE_NAME = "sgx_official"
+# Source identifier emitted on snapshot rows when the live SGX API is
+# unreachable / blanked and the bundled SG seed CSV is used instead.
+_SG_FALLBACK_SOURCE_NAME = "sg_manual_csv"
+# SGX issuer codes follow the same ``[A-Z0-9]{1,8}`` shape the SG ingestion
+# adapter enforces — reject Yahoo-incompatible codes from the live response
+# before they reach downstream consumers.
+_SG_LIVE_TICKER_RE = re.compile(r"^[A-Z0-9]{1,8}$")
+# SGX equity boards. Mainboard hosts established issuers; Catalist is the
+# sponsor-supervised growth board. Both are common-stock venues; everything
+# else (e.g., GlobalQuote, structured warrants) is excluded.
+_SG_EQUITY_BOARDS = frozenset({"MAINBOARD", "CATALIST"})
 # Yahoo-incompatible local codes are dropped from live results. The DE adapter
 # enforces ``[A-Z0-9]{1,8}`` and downstream yfinance only accepts well-formed
 # tickers — there is no value in publishing a row whose symbol cannot be
@@ -195,6 +207,8 @@ class OfficialMarketUniverseSourceService:
             return self.fetch_ca_snapshot()
         if normalized_market == "DE":
             return self.fetch_de_snapshot()
+        if normalized_market == "SG":
+            return self.fetch_sg_snapshot()
         raise ValueError(f"Official universe refresh is unsupported for market {market!r}")
 
     def fetch_hk_snapshot(self) -> OfficialMarketUniverseSnapshot:
@@ -1317,6 +1331,297 @@ class OfficialMarketUniverseSourceService:
                     "market_cap": None,
                     "isin": isin,
                     "wkn": "",
+                }
+            )
+        return sorted(rows, key=lambda row: row["symbol"])
+
+    def fetch_sg_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        """Fetch the SG equity universe from the SGX public JSON API.
+
+        Source: ``settings.sg_universe_source_url`` defaults to the SGX public
+        JSON API at ``https://api.sgx.com/securities/v1.1`` (no auth required;
+        widely used by community scrapers). The response carries one record
+        per listed security; this method parses Mainboard/Catalist equities,
+        normalizes ``nc`` (issuer code) to ``<NC>.SI``, and applies the same
+        Yahoo-compatible ticker regex the SG adapter enforces downstream.
+
+        Fallback path: when the live API is unreachable, returns no rows,
+        fails to parse, or yields fewer than ``settings.sg_live_min_universe_size``
+        rows, the fetcher falls back to the bundled seed CSV at
+        ``settings.sg_universe_fallback_csv_path``. The snapshot publishes
+        with ``source_name == 'sg_manual_csv'`` and ``fetch_mode == 'csv_fallback'``
+        so downstream coverage gates can see the snapshot is degraded.
+
+        Operators concerned about SGX terms of service can blank
+        ``sg_universe_source_url`` to force fallback unconditionally.
+        """
+        fetch_mode = "live_http"
+        fetch_errors: dict[str, str] = {}
+        fetched_at: str | None = None
+        last_modified: str | None = None
+        tls_verification_disabled = False
+        rows: list[dict[str, Any]] = []
+
+        if settings.sg_universe_source_url:
+            try:
+                live_meta = self._fetch_sg_live()
+            except (requests.exceptions.RequestException, ValueError) as exc:
+                live_error = str(exc)
+                print(
+                    f"[sg] Live universe fetch failed: {live_error!s}. "
+                    f"Falling back to bundled CSV at {settings.sg_universe_fallback_csv_path}.",
+                    flush=True,
+                )
+                logger.warning(
+                    "Live SG universe fetch failed (%s); falling back to bundled CSV at %s",
+                    live_error,
+                    settings.sg_universe_fallback_csv_path,
+                )
+                fetch_errors["live_http"] = live_error
+                rows = self._load_sg_csv_fallback()
+                fetch_mode = "csv_fallback"
+                fetched_at = datetime.now(UTC).isoformat()
+            else:
+                rows = live_meta["rows"]
+                fetched_at = live_meta.get("fetched_at")
+                last_modified = live_meta.get("http_last_modified")
+                tls_verification_disabled = bool(live_meta.get("tls_verification_disabled"))
+                print(
+                    f"[sg] Live universe fetch succeeded: {len(rows)} rows "
+                    f"from {settings.sg_universe_source_url}",
+                    flush=True,
+                )
+        else:
+            logger.info(
+                "SG universe source URL is blank; using bundled fallback CSV at %s",
+                settings.sg_universe_fallback_csv_path,
+            )
+            rows = self._load_sg_csv_fallback()
+            fetch_mode = "csv_fallback"
+            fetched_at = datetime.now(UTC).isoformat()
+
+        if not rows:
+            raise ValueError(
+                "SG official universe fetch returned no rows (live + fallback both empty)"
+            )
+
+        snapshot_as_of = (
+            self._date_from_http_header(last_modified) or self._utc_today()
+        ).isoformat()
+        source_name = (
+            _SG_FALLBACK_SOURCE_NAME if fetch_mode == "csv_fallback" else _SG_SOURCE_NAME
+        )
+        source_metadata: dict[str, Any] = {
+            "source_urls": [settings.sg_universe_source_url] if settings.sg_universe_source_url else [],
+            "fetched_at": fetched_at or datetime.now(UTC).isoformat(),
+            "http_last_modified": last_modified,
+            "tls_verification_disabled": tls_verification_disabled,
+            "fetch_mode": fetch_mode,
+            "fetch_errors": fetch_errors,
+            "row_counts": {
+                "xses": len(rows),
+                "total": len(rows),
+            },
+        }
+        if fetch_mode == "csv_fallback":
+            source_metadata["fallback_csv_path"] = settings.sg_universe_fallback_csv_path
+
+        snapshot_id_prefix = "sgx-securities" if fetch_mode == "live_http" else "sg-csv-fallback"
+        return OfficialMarketUniverseSnapshot(
+            market="SG",
+            source_name=source_name,
+            snapshot_id=f"{snapshot_id_prefix}-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            rows=tuple(rows),
+        )
+
+    def _fetch_sg_live(self) -> dict[str, Any]:
+        """Download and parse the SGX securities JSON API response.
+
+        Raises ``ValueError`` when the response cannot be parsed or fewer
+        than ``settings.sg_live_min_universe_size`` rows survive the filter.
+        """
+        url = settings.sg_universe_source_url
+        # SGX API serves CDN-cached JSON; a browser-like UA reduces 403s.
+        browser_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.sgx.com/securities/equities",
+        }
+        fetched = self._http_get(
+            url,
+            allow_insecure_fallback=settings.sg_universe_allow_insecure_fallback,
+            extra_headers=browser_headers,
+        )
+
+        rows = self._parse_sg_api_json(fetched.content)
+        if not rows:
+            raise ValueError("SGX API response yielded no equity rows after filtering")
+
+        min_universe_size = int(getattr(settings, "sg_live_min_universe_size", 0) or 0)
+        if min_universe_size > 0 and len(rows) < min_universe_size:
+            raise ValueError(
+                f"SG live universe has only {len(rows)} rows "
+                f"(below {min_universe_size} threshold); refusing to publish — "
+                "the SGX API response shape may have changed"
+            )
+
+        return {
+            "rows": sorted(rows, key=lambda row: row["symbol"]),
+            "fetched_at": fetched.fetched_at,
+            "http_last_modified": fetched.last_modified,
+            "tls_verification_disabled": fetched.tls_verification_disabled,
+        }
+
+    @classmethod
+    def _parse_sg_api_json(cls, content: bytes) -> list[dict[str, Any]]:
+        """Parse the SGX securities JSON payload.
+
+        Response shape verified 2026-05-15 against the live endpoint::
+
+            {
+              "meta": {"code": "200", "totalPages": 1, ...},
+              "data": {"prices": [
+                {"type": "stocks", "nc": "LVR", "n": "17LIVE GROUP",
+                 "m": "MAINBOARD", "issuer-name": "17LIVE GROUP", "sc": "K",
+                 "cur": "SGD", "trading_time": "...", ...},
+                {"type": "companywarrants", "nc": "VT2W", ...},
+                ...
+              ]}
+            }
+
+        SGX does not return ICB industry/subsector, ISIN, or market cap in the
+        default response. The ``params=`` query argument is not accepted by
+        the current endpoint (every known field list returns ``SGX_4015``),
+        so this parser consumes the default field set only.
+
+        Filters applied:
+
+        * ``type`` must equal ``"stocks"`` (drops ``companywarrants``,
+          ``listedcertificates``, ``etfs``, and placeholder/null rows).
+        * ``nc`` (issuer name code) must match ``[A-Z0-9]{1,8}`` for Yahoo
+          ticker compatibility.
+        * ``m`` (board) must be ``MAINBOARD`` or ``CATALIST`` (the equity
+          boards). Empty board is accepted as a permissive default.
+        * REITs, Business Trusts, and Stapled Securities are dropped based on
+          the issuer name (SGX does not expose ICB classification here).
+        """
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("utf-8", errors="replace")
+
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"SGX API response is not valid JSON: {exc}") from exc
+
+        records = cls._extract_sg_records(payload)
+        rows: list[dict[str, Any]] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            instrument_type = str(record.get("type") or "").strip().lower()
+            if instrument_type and instrument_type != "stocks":
+                continue
+            local_code = str(record.get("nc") or record.get("NC") or "").strip().upper()
+            if not local_code or not _SG_LIVE_TICKER_RE.fullmatch(local_code):
+                continue
+            board = str(record.get("m") or "").strip().upper()
+            if board and board not in _SG_EQUITY_BOARDS:
+                continue
+            name = str(
+                record.get("n")
+                or record.get("issuer-name")
+                or record.get("N")
+                or record.get("name")
+                or ""
+            ).strip()
+            if cls._sg_is_excluded_instrument(name, "", ""):
+                continue
+
+            rows.append(
+                {
+                    "symbol": f"{local_code}.SI",
+                    "name": name,
+                    "exchange": "XSES",
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                    "isin": "",
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _extract_sg_records(payload: Any) -> list[Any]:
+        """Walk the SGX response payload and return the list of security records."""
+        if isinstance(payload, list):
+            return payload
+        if not isinstance(payload, dict):
+            return []
+        for key in ("data", "securities", "items", "results", "rows"):
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                return candidate
+            if isinstance(candidate, dict):
+                for nested_key in ("prices", "securities", "items", "data"):
+                    nested = candidate.get(nested_key)
+                    if isinstance(nested, list):
+                        return nested
+        return []
+
+    @staticmethod
+    def _sg_is_excluded_instrument(name: str, industry: str, subsector: str) -> bool:
+        """Identify SGX rows that should be excluded from the supported universe.
+
+        SGX tags REITs and Business Trusts with ``LISTED_TYPE=Equity``, so the
+        LISTED_TYPE filter alone does not drop them. This helper matches on the
+        ICB industry/subsector strings and the issuer name. The bare ``trust``
+        token is matched at word boundaries so issuers like "Hutchison Port
+        Holdings Trust" are caught while names like "Trustco" are not.
+        """
+        haystack = " ".join(part for part in (industry, subsector, name) if part).lower()
+        if not haystack:
+            return False
+        if "reit" in haystack or "stapled" in haystack:
+            return True
+        tokens = re.split(r"[^a-z0-9]+", haystack)
+        return "trust" in tokens or "trusts" in tokens
+
+    @classmethod
+    def _load_sg_csv_fallback(cls) -> list[dict[str, Any]]:
+        """Read the bundled SG seed CSV into the same row schema as the live path."""
+        csv_path = Path(settings.sg_universe_fallback_csv_path)
+        if not csv_path.exists():
+            return []
+
+        frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        rows: list[dict[str, Any]] = []
+        for record in frame.to_dict("records"):
+            symbol = str(record.get("symbol") or "").strip().upper()
+            name = str(record.get("name") or "").strip()
+            exchange = str(record.get("exchange") or "XSES").strip().upper() or "XSES"
+            isin = str(record.get("isin") or "").strip().upper()
+            if not symbol or not name:
+                continue
+            if cls._sg_is_excluded_instrument(name, "", ""):
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "exchange": exchange,
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                    "isin": isin,
                 }
             )
         return sorted(rows, key=lambda row: row["symbol"])

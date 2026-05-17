@@ -49,6 +49,26 @@ class TestUniverseDefinitionConstruction:
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=exchange)
         assert u.exchange == exchange
 
+    def test_market_sg(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.SG)
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.SG
+        assert u.key() == "market:SG"
+        assert u.label() == "Singapore Market"
+
+    def test_exchange_xses(self):
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.XSES)
+        assert u.type == UniverseType.EXCHANGE
+        assert u.exchange == Exchange.XSES
+        assert u.key() == "exchange:XSES"
+
+    def test_index_sti(self):
+        u = UniverseDefinition(type=UniverseType.INDEX, index=IndexName.STI)
+        assert u.type == UniverseType.INDEX
+        assert u.index == IndexName.STI
+        assert u.key() == "index:STI"
+        assert u.label() == "Straits Times Index"
+
     def test_market_ca(self):
         u = UniverseDefinition(type=UniverseType.MARKET, market=Market.CA)
         assert u.type == UniverseType.MARKET
@@ -289,6 +309,11 @@ class TestFromLegacy:
         u = UniverseDefinition.from_legacy("market:de")
         assert u.type == UniverseType.MARKET
         assert u.market == Market.DE
+
+    def test_market_prefixed_singapore(self):
+        u = UniverseDefinition.from_legacy("market:sg")
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.SG
 
     def test_market_short_code_without_prefix_is_not_legacy(self):
         with pytest.raises(ValueError, match="Unknown universe"):
