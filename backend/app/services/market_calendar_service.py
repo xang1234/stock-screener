@@ -23,6 +23,8 @@ except ModuleNotFoundError:  # pragma: no cover - runtime guard
 class MarketCalendarService:
     """Unified market calendar contract backed by exchange_calendars."""
 
+    WEEKDAY_BOUNDS_FALLBACK_MARKETS = frozenset({"CN", "SG"})
+
     CALENDAR_ID_BY_MARKET: dict[str, str] = {
         profile.market.code: profile.calendar_id for profile in market_registry.profiles()
     }
@@ -72,7 +74,7 @@ class MarketCalendarService:
         provider = self._calendar_provider
         uses_pmc_provider = False
         if provider is None:
-            uses_pmc_provider = normalized in {"IN", "SG"}
+            uses_pmc_provider = normalized == "IN"
             provider = self._pmc_provider if uses_pmc_provider else self._xcals_provider
         if provider is None:
             required_package = (
@@ -147,7 +149,10 @@ class MarketCalendarService:
             calendar = self._get_calendar(normalized)
             return self._is_session(calendar, pd.Timestamp(candidate_day))
         except Exception as exc:
-            if normalized == "CN" and self._is_calendar_bounds_error(exc):
+            if (
+                normalized in self.WEEKDAY_BOUNDS_FALLBACK_MARKETS
+                and self._is_calendar_bounds_error(exc)
+            ):
                 return self._is_weekday(candidate_day)
             raise
 
@@ -219,7 +224,10 @@ class MarketCalendarService:
                 return current_session.date()
             return self._previous_session(calendar, current_session).date()
         except Exception as exc:
-            if normalized == "CN" and self._is_calendar_bounds_error(exc):
+            if (
+                normalized in self.WEEKDAY_BOUNDS_FALLBACK_MARKETS
+                and self._is_calendar_bounds_error(exc)
+            ):
                 if self._is_weekday(current_session.date()) and market_now.time().hour >= 16:
                     return current_session.date()
                 return self._previous_weekday(current_session.date())

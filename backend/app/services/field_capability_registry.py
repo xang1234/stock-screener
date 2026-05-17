@@ -407,6 +407,7 @@ class FieldCapabilityRegistryService:
                     routing_policy.MARKET_KR,
                     routing_policy.MARKET_TW,
                     routing_policy.MARKET_CN,
+                    routing_policy.MARKET_SG,
                     routing_policy.MARKET_CA,
                     routing_policy.MARKET_DE,
                 )

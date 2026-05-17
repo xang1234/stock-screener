@@ -318,3 +318,13 @@ def test_ca_missing_ownership_fields_surface_non_us_gap_reason():
     )
     assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_UNSUPPORTED
     assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP
+
+
+def test_sg_missing_ownership_fields_surface_non_us_gap_reason():
+    """SG routes to yfinance only — same non-US-gap classification as DE/HK."""
+    availability = field_capability_registry.derive_ownership_sentiment_availability(
+        data={},
+        market=MARKET_SG,
+    )
+    assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_UNSUPPORTED
+    assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP

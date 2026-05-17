@@ -132,6 +132,8 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "D05.SI", "display_name": "DBS Group", "currency": "SGD"},
         {"symbol": "C6L.SI", "display_name": "Singapore Airlines", "currency": "SGD"},
         {"symbol": "Z74.SI", "display_name": "Singtel", "currency": "SGD"},
+        {"symbol": "O39.SI", "display_name": "OCBC Bank", "currency": "SGD"},
+        {"symbol": "U11.SI", "display_name": "United Overseas Bank", "currency": "SGD"},
     ),
     "CA": (
         {"symbol": "^GSPTSE", "display_name": "S&P/TSX Composite", "currency": "CAD"},
@@ -146,13 +148,6 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "SAP.DE", "display_name": "SAP", "currency": "EUR"},
         {"symbol": "SIE.DE", "display_name": "Siemens", "currency": "EUR"},
         {"symbol": "ALV.DE", "display_name": "Allianz", "currency": "EUR"},
-    ),
-    "SG": (
-        {"symbol": "^STI", "display_name": "Straits Times Index", "currency": "SGD"},
-        {"symbol": "ES3.SI", "display_name": "SPDR Straits Times Index ETF", "currency": "SGD"},
-        {"symbol": "D05.SI", "display_name": "DBS Group", "currency": "SGD"},
-        {"symbol": "O39.SI", "display_name": "OCBC Bank", "currency": "SGD"},
-        {"symbol": "U11.SI", "display_name": "United Overseas Bank", "currency": "SGD"},
     ),
 }
 

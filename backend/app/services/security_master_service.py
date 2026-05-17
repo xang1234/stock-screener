@@ -42,7 +42,6 @@ _MARKET_BY_SUFFIX: tuple[tuple[str, str], ...] = (
     (".T", "JP"),
     (".DE", "DE"),
     (".F", "DE"),
-    (".SI", "SG"),
 )
 
 _SUFFIX_BY_MARKET: dict[str, str] = {
@@ -55,7 +54,6 @@ _SUFFIX_BY_MARKET: dict[str, str] = {
     "SG": ".SI",
     "CA": ".TO",
     "DE": ".DE",
-    "SG": ".SI",
 }
 
 _SUFFIX_BY_EXCHANGE: dict[str, str] = {
@@ -87,18 +85,6 @@ _SUFFIX_BY_EXCHANGE: dict[str, str] = {
     "BJSE": ".BJ",
     "XBSE": ".BJ",
     "XBEI": ".BJ",
-    "SGX": ".SI",
-    "SES": ".SI",
-    "XSES": ".SI",
-    "TSX": ".TO",
-    "XTSE": ".TO",
-    "TSXV": ".V",
-    "XTNX": ".V",
-    "XETR": ".DE",
-    "XETRA": ".DE",
-    "XFRA": ".F",
-    "FRA": ".F",
-    "FWB": ".F",
     "SGX": ".SI",
     "SES": ".SI",
     "XSES": ".SI",
