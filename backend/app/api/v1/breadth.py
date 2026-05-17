@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from ...config import settings
 from ...database import get_db
+from ...domain.markets.catalog import get_market_catalog
 from ...models.market_breadth import MarketBreadth
 from ...schemas.breadth import (
     BreadthResponse,
@@ -31,7 +32,15 @@ from ...wiring.bootstrap import get_ui_snapshot_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-SUPPORTED_BREADTH_MARKETS = set(SUPPORTED_MARKETS)
+# Restrict breadth requests to markets that declare ``breadth=True`` in the
+# market catalog. Markets like SG ship without the breadth dataset and would
+# otherwise return 404s for any request that reached the task layer.
+_market_catalog = get_market_catalog()
+SUPPORTED_BREADTH_MARKETS = {
+    code
+    for code in _market_catalog.supported_market_codes()
+    if _market_catalog.get(code).capabilities.breadth
+} & set(SUPPORTED_MARKETS)
 
 
 def _normalize_market_param(market: str | None) -> str:
