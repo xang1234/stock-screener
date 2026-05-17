@@ -155,7 +155,7 @@ describe('StaticBreadthPage', () => {
     expect(screen.getByTestId('breadth-chart')).toHaveTextContent('^HSI:1');
   });
 
-  it('renders the By Group tab with drill-down stock list when attribution data is present', async () => {
+  it('renders the By Group tab with drill-down stock list, hero chart, sparklines, and is sortable', async () => {
     globalThis.fetch = vi.fn(async (url) => {
       const path = String(url).split('/static-data/')[1];
 
@@ -227,6 +227,23 @@ describe('StaticBreadthPage', () => {
                       },
                     ],
                   },
+                  {
+                    date: '2026-05-14',
+                    stocks_up_4pct: 1,
+                    stocks_down_4pct: 0,
+                    groups: [
+                      {
+                        group: 'Computer Software-Database',
+                        up_count: 1,
+                        down_count: 0,
+                        net: 1,
+                        up_stocks: [
+                          { symbol: 'PLTR', name: 'Palantir', pct_change: 4.6, close: 26.4 },
+                        ],
+                        down_stocks: [],
+                      },
+                    ],
+                  },
                 ],
               },
             },
@@ -246,7 +263,34 @@ describe('StaticBreadthPage', () => {
     expect(await screen.findByText('Computer Software-Database')).toBeInTheDocument();
     expect(screen.getByText('No Group')).toBeInTheDocument();
 
-    // Drill-down: clicking the group row should reveal the stock list.
+    // The hero bar chart should be present once a session with groups is loaded.
+    expect(screen.getByTestId('group-activity-hero-chart')).toBeInTheDocument();
+
+    // Each row gets a 10-day net sparkline derived from the history payload.
+    expect(screen.getAllByTestId('net-trend-sparkline').length).toBeGreaterThanOrEqual(2);
+
+    // Default sort is Total desc; switching column defaults to desc too.
+    // Click Up header → sort by up_count desc: Software (up=2) ahead of No Group (up=1).
+    // Click again → asc: No Group (up=1) would lead, but "No Group" is pinned to the
+    // bottom regardless of direction, so Software still appears first.
+    const upHeader = screen.getByRole('button', { name: /^Up 4%\+/i });
+    fireEvent.click(upHeader); // desc
+    let rowNames = screen
+      .getAllByRole('row')
+      .map((row) => row.textContent || '')
+      .filter((text) => text.includes('Computer Software-Database') || text.includes('No Group'));
+    expect(rowNames[0]).toContain('Computer Software-Database');
+    expect(rowNames[rowNames.length - 1]).toContain('No Group');
+
+    fireEvent.click(upHeader); // asc, but No Group is pinned to bottom
+    rowNames = screen
+      .getAllByRole('row')
+      .map((row) => row.textContent || '')
+      .filter((text) => text.includes('Computer Software-Database') || text.includes('No Group'));
+    expect(rowNames[0]).toContain('Computer Software-Database');
+    expect(rowNames[rowNames.length - 1]).toContain('No Group');
+
+    // Drill-down: clicking the group name cell should reveal the stock list.
     fireEvent.click(screen.getByText('Computer Software-Database'));
     expect(await screen.findByText('PLTR')).toBeInTheDocument();
     expect(screen.getByText('AAPL')).toBeInTheDocument();
