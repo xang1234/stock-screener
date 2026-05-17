@@ -254,7 +254,7 @@
       "is_enabled": true,
       "last_run": null,
       "name": "daily-market-pipeline-sg",
-      "schedule_description": "4:30 ET, Mon-Fri (SG)",
+      "schedule_description": "5:00 ET, Mon-Fri (SG)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {

@@ -495,16 +495,23 @@ def test_build_weekly_reference_bundle_runs_de_official_path(monkeypatch, tmp_pa
 
 
 def test_build_weekly_reference_bundle_runs_sg_official_path(monkeypatch, tmp_path, capsys):
+    """Mirror of the DE official-path test for the SG fetcher.
+
+    Verifies the build script (1) fetches the SG snapshot via the official
+    source service, (2) routes the snapshot to ``ingest_sg_snapshot_rows``
+    rather than raising on ``Unsupported official weekly reference market``,
+    and (3) publishes/exports the resulting bundle.
+    """
     published_at = datetime(2026, 5, 17, 12, 10, 0)
     active_rows = [
         SimpleNamespace(
             symbol="D05.SI",
             market="SG",
             exchange="XSES",
-            name="DBS GROUP HOLDINGS LTD",
-            sector="Finance",
-            industry="Banking",
-            market_cap=100.0,
+            name="DBS Group Holdings",
+            sector="Banks",
+            industry="Banks",
+            market_cap=95.0,
         )
     ]
     fake_query = MagicMock()
@@ -520,17 +527,17 @@ def test_build_weekly_reference_bundle_runs_sg_official_path(monkeypatch, tmp_pa
         fetch_market_snapshot=lambda market: fetch_calls.append(market)
         or SimpleNamespace(
             market=market,
-            source_name="sgx_official",
-            snapshot_id="sgx-securities-2026-05-17",
+            source_name="sg_manual_csv",
+            snapshot_id="sg-csv-fallback-2026-05-17",
             snapshot_as_of="2026-05-17",
-            source_metadata={"source_urls": ["https://api.sgx.com/securities/v1.1"]},
+            source_metadata={"source_urls": [], "fetch_mode": "csv_fallback"},
             rows=(
                 {
                     "symbol": "D05.SI",
-                    "name": "DBS GROUP HOLDINGS LTD",
+                    "name": "DBS Group Holdings",
                     "exchange": "XSES",
-                    "sector": "Finance",
-                    "industry": "Banking",
+                    "sector": "",
+                    "industry": "",
                     "market_cap": None,
                     "isin": "SG1L01001701",
                 },
@@ -550,7 +557,7 @@ def test_build_weekly_reference_bundle_runs_sg_official_path(monkeypatch, tmp_pa
         yfinance_delay_per_ticker=1.5,
         fetch_fundamentals_batch=lambda symbols, **kwargs: (
             kwargs["progress_callback"](1, len(symbols))
-            or {"D05.SI": {"market_cap": 100.0, "sector": "Finance"}}
+            or {"D05.SI": {"market_cap": 95.0, "sector": "Banks"}}
         ),
         store_all_caches=lambda *args, **kwargs: {
             "fundamentals_stored": 1,
@@ -565,7 +572,7 @@ def test_build_weekly_reference_bundle_runs_sg_official_path(monkeypatch, tmp_pa
         build_script,
         "get_fundamentals_cache",
         lambda: SimpleNamespace(
-            get_many=lambda symbols: {"D05.SI": {"market_cap": 100.0, "sector": "Finance"}}
+            get_many=lambda symbols: {"D05.SI": {"market_cap": 95.0, "sector": "Banks"}}
         ),
     )
 
@@ -619,8 +626,8 @@ def test_build_weekly_reference_bundle_runs_sg_official_path(monkeypatch, tmp_pa
     assert build_script.main() == 0
     assert fetch_calls == ["SG"]
     assert len(ingest_calls) == 1
-    assert ingest_calls[0]["source_name"] == "sgx_official"
-    assert ingest_calls[0]["snapshot_id"] == "sgx-securities-2026-05-17"
+    assert ingest_calls[0]["source_name"] == "sg_manual_csv"
+    assert ingest_calls[0]["snapshot_id"] == "sg-csv-fallback-2026-05-17"
     assert export_calls[0]["output_path"] == (
         tmp_path / "weekly-reference-sg-20260517-fundamentals_v1_sg-20260517121000.json.gz"
     )

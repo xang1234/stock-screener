@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -116,8 +116,8 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -138,7 +138,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     assert calls == [
         "universe_refresh",
         "fundamentals_refresh",
-        "price_refresh",
+        *(["price_refresh"] * len(expected_markets)),
         *(["feature_snapshot"] * len(expected_markets)),
         "pointer:latest_published:77",
     ]
@@ -154,6 +154,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
             "publish_pointer_key": f"latest_published_market:{market}",
             "ignore_runtime_market_gate": True,
         }
+    assert set(results["price_refresh"]) == set(expected_markets)
     assert results["default_market_pointer"] == {
         "market": "US",
         "pointer_key": "latest_published",
@@ -191,8 +192,8 @@ def test_run_daily_refresh_uses_resolved_tracked_ibd_csv_path(monkeypatch, tmp_p
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(export_script, "_tracked_ibd_csv_path", lambda: resolved_csv)
     monkeypatch.setattr(
@@ -244,8 +245,8 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -275,7 +276,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
 
     assert warnings == []
     assert calls == [
-        "price_refresh",
+        *(["price_refresh"] * len(export_script.STATIC_EXPORT_MARKETS)),
         *(["feature_snapshot"] * len(export_script.STATIC_EXPORT_MARKETS)),
         "pointer:latest_published:77",
     ]
@@ -315,8 +316,8 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -366,8 +367,8 @@ def test_run_daily_refresh_warns_when_default_market_run_id_is_missing(monkeypat
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -413,8 +414,8 @@ def test_run_daily_refresh_does_not_repoint_default_pointer_for_unpublished_us_r
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -485,8 +486,8 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -521,8 +522,8 @@ def test_run_daily_refresh_limits_work_to_selected_market(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -555,6 +556,74 @@ def test_run_daily_refresh_limits_work_to_selected_market(monkeypatch):
     ]
 
 
+def test_run_daily_refresh_uses_per_market_trading_date_for_in(monkeypatch):
+    """Regression: ``build_daily_snapshot`` for IN must receive IN's latest
+    completed trading date, not NYSE's. Before the per-market calendar fix,
+    running ``--market IN`` on a day NSE was closed but NYSE was open caused
+    the snapshot to be silently skipped with ``reason='not_trading_day'``."""
+
+    snapshot_calls: list[dict] = []
+
+    def build_snapshot_run(**kwargs):
+        snapshot_calls.append(kwargs)
+        return {"status": "published", "run_id": 91}
+
+    # Simulate the failure scenario: NYSE traded on Apr 2 (US holiday for
+    # IN), so IN's latest completed session is Apr 1. The previous bug used
+    # Apr 2 for IN's snapshot, hitting the not_trading_day guard.
+    market_dates = {"US": date(2026, 4, 2), "IN": date(2026, 4, 1)}
+
+    monkeypatch.setattr(
+        universe_tasks,
+        "refresh_stock_universe",
+        SimpleNamespace(run=lambda **_kwargs: {"task": "universe_refresh"}),
+    )
+    monkeypatch.setattr(
+        fundamentals_tasks,
+        "refresh_all_fundamentals",
+        SimpleNamespace(run=lambda **_kwargs: {"task": "fundamentals_refresh"}),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot_run),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market=None: {
+            "task": "price_refresh",
+            "market": market,
+            "as_of_date": as_of_date.isoformat(),
+        },
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_trading_date",
+        lambda selected_market: market_dates[selected_market],
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, _warnings = export_script._run_daily_refresh(market="IN")  # noqa: SLF001
+
+    assert results["price_refresh"]["as_of_date"] == "2026-04-01"
+    assert snapshot_calls == [
+        {
+            "as_of_date_str": "2026-04-01",
+            "static_daily_mode": True,
+            "universe_name": "market:in",
+            "market": "IN",
+            "publish_pointer_key": "latest_published_market:IN",
+            "ignore_runtime_market_gate": True,
+        }
+    ]
+
+
 def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
@@ -575,8 +644,8 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -725,8 +794,8 @@ def test_run_daily_refresh_reenriches_ibd_metadata_after_group_rank_backfill(mon
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -801,8 +870,8 @@ def test_run_daily_refresh_skips_reenrich_when_group_rank_backfill_errored(monke
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -855,8 +924,8 @@ def test_run_daily_refresh_skips_reenrich_when_snapshot_not_ready(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -907,8 +976,8 @@ def test_run_daily_refresh_warns_when_non_default_market_snapshot_is_not_publish
     )
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_us_trading_date",
-        lambda: date(2026, 4, 2),
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.IBDIndustryService,
@@ -928,14 +997,31 @@ def test_run_daily_refresh_warns_when_non_default_market_snapshot_is_not_publish
     assert "Static export market HK snapshot returned status 'skipped' (market HK is disabled in local runtime preferences)." in warnings
 
 
-def test_resolve_latest_completed_us_trading_date_uses_last_market_close(monkeypatch):
+def test_resolve_latest_completed_trading_date_uses_market_calendar(monkeypatch):
+    """Per-market resolution: each market hits its own calendar instead of
+    NYSE's. Regression test for the IN-skipped-on-US-trading-day bug."""
+
+    calls: list[str] = []
+    market_dates = {
+        "US": date(2026, 4, 2),
+        "IN": date(2026, 4, 3),
+        "HK": date(2026, 4, 1),
+    }
+
+    def last_completed_trading_day(market: str) -> date:
+        calls.append(market)
+        return market_dates[market]
+
     monkeypatch.setattr(
         export_script,
-        "get_last_market_close",
-        lambda: datetime(2026, 4, 2, 16, 0),
+        "get_market_calendar_service",
+        lambda: SimpleNamespace(last_completed_trading_day=last_completed_trading_day),
     )
 
-    assert export_script._resolve_latest_completed_us_trading_date() == datetime(2026, 4, 2, 16, 0).date()
+    assert export_script._resolve_latest_completed_trading_date("IN") == date(2026, 4, 3)
+    assert export_script._resolve_latest_completed_trading_date("US") == date(2026, 4, 2)
+    assert export_script._resolve_latest_completed_trading_date("HK") == date(2026, 4, 1)
+    assert calls == ["IN", "US", "HK"]
 
 
 def test_main_rejects_market_in_combine_mode(monkeypatch, tmp_path):
@@ -1082,3 +1168,232 @@ def test_main_returns_skip_code_for_market_not_trading_day(monkeypatch, tmp_path
     captured = capsys.readouterr()
     assert "Static site export skipped for market TW because it is not a trading day." in captured.out
     assert export_calls == []
+
+
+def _seed_in_universe(session_factory):
+    """Insert three IN tickers — two with stale prices, one fresh — into a
+    sqlite session so ``_refresh_static_daily_prices`` has work to do."""
+    with session_factory() as db:
+        db.add_all(
+            [
+                StockUniverse(symbol="RELIANCE.NS", market="IN", is_active=True, market_cap=300.0),
+                StockUniverse(symbol="TCS.NS", market="IN", is_active=True, market_cap=200.0),
+                StockUniverse(symbol="INFY.NS", market="IN", is_active=True, market_cap=100.0),
+            ]
+        )
+        # All three rows have stale prices so the refresh loop will try Yahoo
+        # for all of them — that gives us deterministic batching.
+        for symbol in ("RELIANCE.NS", "TCS.NS", "INFY.NS"):
+            db.add(
+                StockPrice(
+                    symbol=symbol,
+                    date=date(2026, 4, 1),
+                    open=1.0,
+                    high=1.0,
+                    low=1.0,
+                    close=1.0,
+                    volume=1000,
+                )
+            )
+        db.commit()
+
+
+def test_refresh_static_daily_prices_retries_in_rate_limited_failures(monkeypatch):
+    """When the first IN pass leaves rate-limited failures behind, the script
+    waits ``STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS`` and retries only the
+    throttled symbols with ``STATIC_RATE_LIMITED_RETRY_BATCH_SIZE``. The
+    refreshed count must include the recovered symbols, and permanent
+    failures must NOT be retried."""
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[StockUniverse.__table__, StockPrice.__table__])
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+    _seed_in_universe(session_factory)
+
+    fetch_calls: list[dict] = []
+    stored_batches: list[dict] = []
+    sleeps: list[float] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            fetch_calls.append(
+                {
+                    "symbols": list(symbols),
+                    "period": period,
+                    "start_batch_size": start_batch_size,
+                    "market": market,
+                }
+            )
+            if len(fetch_calls) == 1:
+                return {
+                    "RELIANCE.NS": {
+                        "price_data": SimpleNamespace(empty=False),
+                        "has_error": False,
+                    },
+                    "TCS.NS": {
+                        "price_data": None,
+                        "has_error": True,
+                        "error": "Too Many Requests (429)",
+                    },
+                    "INFY.NS": {
+                        "price_data": None,
+                        "has_error": True,
+                        "error": "delisted: no price data",
+                    },
+                }
+            # Retry pass recovers TCS.
+            return {
+                "TCS.NS": {
+                    "price_data": SimpleNamespace(empty=False),
+                    "has_error": False,
+                },
+            }
+
+    monkeypatch.setattr(export_script, "SessionLocal", session_factory)
+    monkeypatch.setattr(export_script, "BulkDataFetcher", lambda: _FakeFetcher())
+    monkeypatch.setattr(
+        export_script,
+        "get_price_cache",
+        lambda: SimpleNamespace(
+            store_batch_in_cache=lambda payload, also_store_db=True: stored_batches.append(
+                {"symbols": sorted(payload.keys()), "also_store_db": also_store_db}
+            )
+        ),
+    )
+    monkeypatch.setattr(export_script.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = export_script._refresh_static_daily_prices(  # noqa: SLF001
+        as_of_date=date(2026, 4, 2),
+        market="IN",
+    )
+
+    assert sleeps == [export_script.STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS]
+    assert len(fetch_calls) == 2, "Expected one initial pass + one retry pass"
+    # Retry must only include the rate-limited symbol; the delisted INFY symbol
+    # is filtered out by ``_is_rate_limit_failure``.
+    assert fetch_calls[1]["symbols"] == ["TCS.NS"]
+    assert fetch_calls[1]["start_batch_size"] == export_script.STATIC_RATE_LIMITED_RETRY_BATCH_SIZE
+    assert fetch_calls[1]["market"] == "IN"
+    # Both the initial successful symbol and the recovered retry symbol are
+    # stored. INFY is never persisted.
+    stored_symbols = {symbol for batch in stored_batches for symbol in batch["symbols"]}
+    assert stored_symbols == {"RELIANCE.NS", "TCS.NS"}
+    assert result["rate_limited_retry"] == {
+        "attempted": 1,
+        "recovered": 1,
+        "still_failed": 0,
+        "wait_seconds": export_script.STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS,
+        "batch_size": export_script.STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
+    }
+    assert result["yahoo_fetched_symbols"] == 2  # 1 initial + 1 recovered
+    assert result["yahoo_failed_symbols"] == 1  # INFY remains permanent failure
+
+
+def test_refresh_static_daily_prices_skips_retry_for_non_in_markets(monkeypatch):
+    """The retry path is gated to markets in
+    ``STATIC_RATE_LIMITED_RETRY_MARKETS`` so it does not change behavior for
+    US/HK/JP/etc. Rate-limited failures from those markets fall through to
+    the existing DQ gate."""
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[StockUniverse.__table__, StockPrice.__table__])
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+
+    with session_factory() as db:
+        db.add(StockUniverse(symbol="0700.HK", market="HK", is_active=True, market_cap=100.0))
+        db.add(
+            StockPrice(
+                symbol="0700.HK",
+                date=date(2026, 4, 1),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1000,
+            )
+        )
+        db.commit()
+
+    fetch_calls: list[dict] = []
+    sleeps: list[float] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            fetch_calls.append({"symbols": list(symbols), "market": market})
+            return {
+                symbol: {
+                    "price_data": None,
+                    "has_error": True,
+                    "error": "429 rate limited",
+                }
+                for symbol in symbols
+            }
+
+    monkeypatch.setattr(export_script, "SessionLocal", session_factory)
+    monkeypatch.setattr(export_script, "BulkDataFetcher", lambda: _FakeFetcher())
+    monkeypatch.setattr(
+        export_script,
+        "get_price_cache",
+        lambda: SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(export_script.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = export_script._refresh_static_daily_prices(  # noqa: SLF001
+        as_of_date=date(2026, 4, 2),
+        market="HK",
+    )
+
+    assert len(fetch_calls) == 1, "HK must not trigger the rate-limited retry"
+    assert sleeps == [], "HK must not wait for a retry"
+    assert result["rate_limited_retry"] == {
+        "attempted": 0,
+        "recovered": 0,
+        "still_failed": 0,
+        "wait_seconds": 0,
+        "batch_size": export_script.STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
+    }
+
+
+def test_refresh_static_daily_prices_skips_retry_when_no_rate_limited_failures(monkeypatch):
+    """If the first IN pass succeeds (or all failures are permanent), the
+    retry path is a no-op — no sleep, no extra Yahoo call."""
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[StockUniverse.__table__, StockPrice.__table__])
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+    _seed_in_universe(session_factory)
+
+    fetch_calls: list[dict] = []
+    sleeps: list[float] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            fetch_calls.append({"symbols": list(symbols)})
+            # All permanent failures: delisted/unknown symbol.
+            return {
+                symbol: {
+                    "price_data": None,
+                    "has_error": True,
+                    "error": "delisted: no price data",
+                }
+                for symbol in symbols
+            }
+
+    monkeypatch.setattr(export_script, "SessionLocal", session_factory)
+    monkeypatch.setattr(export_script, "BulkDataFetcher", lambda: _FakeFetcher())
+    monkeypatch.setattr(
+        export_script,
+        "get_price_cache",
+        lambda: SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(export_script.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = export_script._refresh_static_daily_prices(  # noqa: SLF001
+        as_of_date=date(2026, 4, 2),
+        market="IN",
+    )
+
+    assert len(fetch_calls) == 1, "Permanent failures must not trigger a retry"
+    assert sleeps == []
+    assert result["rate_limited_retry"]["attempted"] == 0
+    assert result["yahoo_failed_symbols"] == 3

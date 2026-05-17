@@ -6,15 +6,18 @@ import {
   CircularProgress,
   Grid,
   Paper,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  Tabs,
   Typography,
 } from '@mui/material';
 import BreadthChart from '../../components/Charts/BreadthChart';
+import BreadthGroupAttribution from '../components/BreadthGroupAttribution';
 import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
 import { useStaticMarket } from '../StaticMarketContext';
 
@@ -47,8 +50,11 @@ function StaticBreadthPage() {
     staleTime: Infinity,
   });
   const [timeRange, setTimeRange] = useState('1M');
+  const [selectedTab, setSelectedTab] = useState(0);
 
   const payload = breadthQuery.data?.payload || {};
+  const groupAttribution = payload.group_attribution || null;
+  const attributionAvailable = Boolean(groupAttribution?.available);
   const displayName = marketEntry.display_name;
   const filteredChartData = useMemo(() => {
     const allData = payload.chart_data || payload.history_90d || [];
@@ -88,61 +94,80 @@ function StaticBreadthPage() {
         Breadth snapshot published {breadthQuery.data.published_at || breadthQuery.data.generated_at}.
       </Typography>
 
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <MetricCard label="Date" value={current.date} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <MetricCard label="Stocks Up 4%+" value={current.stocks_up_4pct} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <MetricCard label="Stocks Down 4%+" value={current.stocks_down_4pct} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <MetricCard label="10-day Ratio" value={current.ratio_10day?.toFixed?.(2) ?? '-'} />
-        </Grid>
-      </Grid>
+      <Tabs
+        value={selectedTab}
+        onChange={(_event, value) => setSelectedTab(value)}
+        sx={{ mb: 2, borderBottom: 1, borderColor: 'divider', minHeight: 36 }}
+      >
+        <Tab label="Overview" sx={{ minHeight: 36, fontSize: '12px' }} />
+        <Tab
+          label="By Group"
+          sx={{ minHeight: 36, fontSize: '12px' }}
+          disabled={!attributionAvailable && groupAttribution == null}
+        />
+      </Tabs>
 
-      <BreadthChart
-        breadthData={filteredChartData}
-        spyData={filteredSpyData}
-        benchmarkLabel={benchmarkLabel}
-        isLoading={false}
-        error={null}
-        timeRange={timeRange}
-        onTimeRangeChange={setTimeRange}
-        availableRanges={['1M', '3M']}
-      />
+      {selectedTab === 0 && (
+        <>
+          <Grid container spacing={1.5} sx={{ mb: 2 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <MetricCard label="Date" value={current.date} />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <MetricCard label="Stocks Up 4%+" value={current.stocks_up_4pct} />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <MetricCard label="Stocks Down 4%+" value={current.stocks_down_4pct} />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <MetricCard label="10-day Ratio" value={current.ratio_10day?.toFixed?.(2) ?? '-'} />
+            </Grid>
+          </Grid>
 
-      <Paper elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
-          Recent Sessions
-        </Typography>
-        <TableContainer>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Date</TableCell>
-                <TableCell align="right">Up 4%+</TableCell>
-                <TableCell align="right">Down 4%+</TableCell>
-                <TableCell align="right">5-day Ratio</TableCell>
-                <TableCell align="right">10-day Ratio</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {history.slice(0, 20).map((row) => (
-                <TableRow key={row.date}>
-                  <TableCell>{row.date}</TableCell>
-                  <TableCell align="right">{row.stocks_up_4pct}</TableCell>
-                  <TableCell align="right">{row.stocks_down_4pct}</TableCell>
-                  <TableCell align="right">{row.ratio_5day?.toFixed?.(2) ?? '-'}</TableCell>
-                  <TableCell align="right">{row.ratio_10day?.toFixed?.(2) ?? '-'}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Paper>
+          <BreadthChart
+            breadthData={filteredChartData}
+            spyData={filteredSpyData}
+            benchmarkLabel={benchmarkLabel}
+            isLoading={false}
+            error={null}
+            timeRange={timeRange}
+            onTimeRangeChange={setTimeRange}
+            availableRanges={['1M', '3M']}
+          />
+
+          <Paper elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider' }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
+              Recent Sessions
+            </Typography>
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Date</TableCell>
+                    <TableCell align="right">Up 4%+</TableCell>
+                    <TableCell align="right">Down 4%+</TableCell>
+                    <TableCell align="right">5-day Ratio</TableCell>
+                    <TableCell align="right">10-day Ratio</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {history.slice(0, 20).map((row) => (
+                    <TableRow key={row.date}>
+                      <TableCell>{row.date}</TableCell>
+                      <TableCell align="right">{row.stocks_up_4pct}</TableCell>
+                      <TableCell align="right">{row.stocks_down_4pct}</TableCell>
+                      <TableCell align="right">{row.ratio_5day?.toFixed?.(2) ?? '-'}</TableCell>
+                      <TableCell align="right">{row.ratio_10day?.toFixed?.(2) ?? '-'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+        </>
+      )}
+
+      {selectedTab === 1 && <BreadthGroupAttribution attribution={groupAttribution} />}
     </Box>
   );
 }

@@ -7,10 +7,10 @@ paginated results, filter options, and score explanations.
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..domain.scanning.models import ScanResultItemDomain, StockExplanation
-from ..infra.serialization import normalize_string_list
+from ..infra.serialization import normalize_string_list, sanitize_sparkline
 from .universe import UniverseDefinition
 
 
@@ -214,6 +214,11 @@ class ScanResultItem(BaseModel):
     unavailable_screeners: List[str] = Field(default_factory=list)
     composite_reason: Optional[str] = None
     ipo_bonus: Optional[float] = None
+
+    @field_validator("price_sparkline_data", "rs_sparkline_data", mode="before")
+    @classmethod
+    def _validate_sparkline(cls, value: Any) -> Optional[List[float]]:
+        return sanitize_sparkline(value)
 
     @classmethod
     def from_domain(

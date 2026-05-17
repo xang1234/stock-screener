@@ -1,0 +1,109 @@
+{
+  "meta": {
+    "code": "200",
+    "message": "success",
+    "totalPages": 1,
+    "totalItems": 1,
+    "processedTime": 1778953026776
+  },
+  "data": {
+    "prices": [
+      {
+        "type": "listedcertificates",
+        "nc": null,
+        "n": null,
+        "issuer-name": null,
+        "m": null,
+        "cur": null,
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "D05",
+        "n": "DBS GROUP HOLDINGS LTD",
+        "issuer-name": "DBS GROUP HOLDINGS LTD",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "O39",
+        "n": "OVERSEA-CHINESE BANKING CORP",
+        "issuer-name": "OVERSEA-CHINESE BANKING CORP",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "U11",
+        "n": "UNITED OVERSEAS BANK LTD",
+        "issuer-name": "UNITED OVERSEAS BANK LTD",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "A17U",
+        "n": "CAPITALAND ASCENDAS REIT",
+        "issuer-name": "CAPITALAND ASCENDAS REIT",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "NS8U",
+        "n": "HUTCHISON PORT HOLDINGS TRUST",
+        "issuer-name": "HUTCHISON PORT HOLDINGS TRUST",
+        "m": "MAINBOARD",
+        "cur": "USD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "C6L",
+        "n": "SINGAPORE AIRLINES LTD",
+        "issuer-name": "SINGAPORE AIRLINES LTD",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "5E2",
+        "n": "SEATRIUM LIMITED",
+        "issuer-name": "SEATRIUM LIMITED",
+        "m": "CATALIST",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "etfs",
+        "nc": "ES3",
+        "n": "SPDR STRAITS TIMES INDEX ETF",
+        "issuer-name": "SPDR STRAITS TIMES INDEX ETF",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "companywarrants",
+        "nc": "VT2W",
+        "n": "17LIVE W281207",
+        "issuer-name": "17LIVE W281207",
+        "m": "MAINBOARD",
+        "cur": "SGD",
+        "ls": "P"
+      },
+      {
+        "type": "stocks",
+        "nc": "BAD!CODE",
+        "n": "Invalid ticker shape",
+        "m": "MAINBOARD"
+      }
+    ]
+  }
+}

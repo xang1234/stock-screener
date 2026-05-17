@@ -52,8 +52,8 @@ MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "KR": ("KOSPI", "KOSDAQ", "XKRX"),
     "TW": ("TWSE", "TPEX", "XTAI"),
     "CN": ("SSE", "SZSE", "BJSE", "XSHG"),
-    "SG": ("SGX", "SES", "XSES"),
     "CA": ("TSX", "TSXV", "XTSE", "XTNX"),
+    "SG": ("SGX", "SES", "XSES"),
 }
 KR_ACTIVE_UNIVERSE_MIN_COUNT = 2526
 CN_ACTIVE_UNIVERSE_MIN_COUNT = 5217
@@ -952,12 +952,6 @@ class StockUniverseService:
                 field_name="asia_reconciliation_min_count_cn",
                 env_name="ASIA_RECONCILIATION_MIN_COUNT_CN",
                 default=max(default_min, CN_ACTIVE_UNIVERSE_MIN_COUNT),
-            )
-        if normalized_market == "SG":
-            return StockUniverseService._safety_int_setting(
-                field_name="asia_reconciliation_min_count_sg",
-                env_name="ASIA_RECONCILIATION_MIN_COUNT_SG",
-                default=default_min,
             )
         if normalized_market == "CA":
             return StockUniverseService._safety_int_setting(
@@ -3935,7 +3929,7 @@ class StockUniverseService:
                 "latest_seen_in_source_at": None,
                 "latest_snapshot": None,
             }
-            for market in ("US", "HK", "IN", "JP", "KR", "TW", "CN", "SG", "CA", "DE")
+            for market in ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE", "SG")
         }
 
         universe_rows = db.query(

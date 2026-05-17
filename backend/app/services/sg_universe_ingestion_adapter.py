@@ -1,8 +1,10 @@
 """SG market universe ingestion adapter with deterministic canonicalization.
 
-Singapore Exchange rows arrive as local SGX codes such as ``D05`` or Yahoo
-symbols such as ``D05.SI``. This adapter canonicalizes them to ``<CODE>.SI``
-with XSES identity fields and emits one deterministic row per symbol.
+Singapore lists primarily on SGX Mainboard and Catalist boards (MIC: XSES).
+SGX trading symbols are alphanumeric issuer codes (D05, O39, C6L, A17U, 5E2)
+that Yahoo Finance prefixes onto the ``.SI`` suffix. This adapter normalizes
+SGX-style and Yahoo-style inputs to ``<TICKER>.SI`` and emits a single
+deterministic row per canonical symbol.
 """
 
 from __future__ import annotations
@@ -21,15 +23,20 @@ _SG_EXCHANGE_ALIASES: dict[str, str] = {
     "XSES": "XSES",
 }
 
+# Sources that are considered policy-approved for SG universe ingestion.
 _APPROVED_SG_SOURCES: frozenset[str] = frozenset(
     {
         "sgx_official",
+        "ses_official",
         "xses_official",
         "sg_manual_csv",
         "sg_reference_bundle",
     }
 )
 
+# SGX issuer codes are 1-5 alphanumeric chars (D05, O39, C6L) with the
+# occasional REIT-style trailing letter (A17U, C38U, ME8U, BTOU). Cap at 8
+# to leave headroom for ETF-style codes like SG2D0898 or future schemes.
 _SG_LOCAL_CODE_RE = re.compile(r"^[A-Z0-9]{1,8}$")
 
 
@@ -89,7 +96,7 @@ class SGUniverseIngestionAdapter:
         normalized = cls.normalize_source_name(source_name)
         if normalized in _APPROVED_SG_SOURCES:
             return True
-        return normalized.startswith("sgx_") or normalized.startswith("sg_")
+        return normalized.startswith("sgx_") or normalized.startswith("ses_")
 
     @staticmethod
     def _normalize_source_symbol(raw_symbol: Any) -> str:
@@ -99,17 +106,18 @@ class SGUniverseIngestionAdapter:
         return symbol
 
     @staticmethod
-    def _normalize_exchange(raw_exchange: Any, *, default: str = "XSES") -> str:
-        exchange = str(raw_exchange or "").strip().upper() or default
+    def _normalize_exchange(raw_exchange: Any) -> str:
+        exchange = str(raw_exchange or "").strip().upper() or "XSES"
         normalized = _SG_EXCHANGE_ALIASES.get(exchange)
         if normalized is None:
             raise ValueError(
-                f"Unsupported SG exchange '{exchange}'. Expected one of: SGX, SES, XSES"
+                f"Unsupported SG exchange '{exchange}'. Expected one of: "
+                "SGX, SES, XSES"
             )
         return normalized
 
-    @classmethod
-    def _normalize_sg_local_code(cls, source_symbol: str) -> str:
+    @staticmethod
+    def _normalize_sg_local_code(source_symbol: str) -> str:
         token = source_symbol
         for prefix in ("SGX:", "SES:", "XSES:"):
             if token.startswith(prefix):
@@ -121,7 +129,7 @@ class SGUniverseIngestionAdapter:
         if not _SG_LOCAL_CODE_RE.fullmatch(token):
             raise ValueError(
                 f"Invalid SG symbol '{source_symbol}'. "
-                "Expected 1-8 alphanumeric chars with optional .SI suffix."
+                "Expected 1-8 alphanumeric local code with optional .SI suffix."
             )
         return token
 
@@ -266,14 +274,12 @@ class SGUniverseIngestionAdapter:
                 continue
 
             try:
+                exchange = self._normalize_exchange(raw_row.get("exchange"))
                 local_code = self._normalize_sg_local_code(source_symbol)
-                exchange = self._normalize_exchange(raw_row.get("exchange"), default="XSES")
                 identity = security_master_resolver.resolve_identity(
                     symbol=f"{local_code}.SI",
                     market="SG",
                     exchange=exchange,
-                    currency=raw_row.get("currency") or "SGD",
-                    timezone=raw_row.get("timezone") or "Asia/Singapore",
                     local_code=local_code,
                 )
                 row_name = str(raw_row.get("name") or raw_row.get("company") or "").strip()
@@ -282,11 +288,6 @@ class SGUniverseIngestionAdapter:
                 row_market_cap = self._parse_market_cap(
                     raw_row.get("market_cap") or raw_row.get("marketcap")
                 )
-                row_metadata = dict(metadata)
-                if raw_row.get("isin"):
-                    row_metadata["isin"] = str(raw_row["isin"]).strip()
-                if raw_row.get("source_category"):
-                    row_metadata["source_category"] = str(raw_row["source_category"]).strip()
 
                 lineage_payload = {
                     "source_name": normalized_source_name,
@@ -295,7 +296,7 @@ class SGUniverseIngestionAdapter:
                     "source_symbol": source_symbol,
                     "canonical_symbol": identity.canonical_symbol,
                 }
-                canonical_exchange = identity.exchange or exchange
+                canonical_exchange = identity.exchange or "XSES"
                 canonical_payload = {
                     "symbol": identity.canonical_symbol,
                     "market": identity.market,
@@ -324,7 +325,7 @@ class SGUniverseIngestionAdapter:
                     source_row_number=index,
                     snapshot_id=normalized_snapshot_id,
                     snapshot_as_of=snapshot_as_of,
-                    source_metadata=row_metadata,
+                    source_metadata=metadata,
                     lineage_hash=self._hash_payload(lineage_payload),
                     row_hash=self._hash_payload(canonical_payload),
                 )

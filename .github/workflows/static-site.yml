@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        market: [US, HK, IN, JP, KR, TW, CN, SG, CA, DE]
+        market: [US, HK, IN, JP, KR, TW, CN, CA, DE, SG]
     services:
       postgres:
         image: postgres:16-alpine
@@ -57,6 +57,11 @@ jobs:
     env:
       REDIS_ENABLED: "false"
       DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
+      # IN-specific yfinance throttle: smaller batches + 10s between batches to
+      # stay under Yahoo's 429 window for the ~4.4k IN universe. Other markets
+      # ignore these (the policy looks up settings.<provider>_<key>_<market>).
+      YFINANCE_BATCH_SIZE_IN: "25"
+      YFINANCE_BATCH_RATE_LIMIT_IN: "0.1"
 
     steps:
       - uses: actions/checkout@v4

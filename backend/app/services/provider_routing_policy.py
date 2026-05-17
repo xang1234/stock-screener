@@ -100,23 +100,12 @@ MARKET_JP = "JP"
 MARKET_KR = "KR"
 MARKET_TW = "TW"
 MARKET_CN = "CN"
-MARKET_SG = "SG"
 MARKET_CA = "CA"
 MARKET_DE = "DE"
+MARKET_SG = "SG"
 
 KNOWN_MARKETS: FrozenSet[str] = frozenset(
-    {
-        MARKET_US,
-        MARKET_HK,
-        MARKET_IN,
-        MARKET_JP,
-        MARKET_KR,
-        MARKET_TW,
-        MARKET_CN,
-        MARKET_SG,
-        MARKET_CA,
-        MARKET_DE,
-    }
+    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA, MARKET_DE, MARKET_SG}
 )
 
 DEFAULT_MARKET = MARKET_US
@@ -151,9 +140,6 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # coverage; BaoStock is a no-key fallback; yfinance is last and only useful
     # for .SS/.SZ fields where Yahoo coverage exists.
     MARKET_CN: (PROVIDER_AKSHARE, PROVIDER_BAOSTOCK, PROVIDER_YFINANCE),
-    # SG: yfinance only. Finviz screener is US-only and Yahoo supports the
-    # .SI suffixes produced by SecurityMasterService.
-    MARKET_SG: (PROVIDER_YFINANCE,),
     # CA: yfinance only. Finviz screener does not cover TSX/TSXV; the
     # alphavantage free tier likewise excludes Canadian listings. yfinance
     # natively supports the .TO and .V suffixes produced by SecurityMasterService.
@@ -162,6 +148,10 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # alphavantage free tier likewise excludes German listings. yfinance
     # natively supports the .DE and .F suffixes produced by SecurityMasterService.
     MARKET_DE: (PROVIDER_YFINANCE,),
+    # SG: yfinance only. Finviz screener does not cover SGX; the alphavantage
+    # free tier likewise excludes Singapore listings. yfinance natively
+    # supports the .SI suffix produced by SecurityMasterService.
+    MARKET_SG: (PROVIDER_YFINANCE,),
 }
 
 

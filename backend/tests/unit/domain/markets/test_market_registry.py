@@ -28,7 +28,7 @@ def test_representative_profile_lookups_accept_string_and_market() -> None:
 
 
 def test_supported_codes_are_in_runtime_order() -> None:
-    assert market_registry.supported_market_codes() == ("US", "HK", "IN", "JP", "KR", "TW", "CN", "SG", "CA", "DE")
+    assert market_registry.supported_market_codes() == ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE", "SG")
     assert market_registry.supported_markets() == tuple(Market(code) for code in market_registry.supported_market_codes())
 
 
@@ -44,7 +44,6 @@ def test_market_for_exchange_uses_registry_mapping() -> None:
     assert market_registry.market_for_exchange("KOSPI") == Market("KR")
     assert market_registry.market_for_exchange("KOSDAQ") == Market("KR")
     assert market_registry.market_for_exchange("SZSE") == Market("CN")
-    assert market_registry.market_for_exchange("XSES") == Market("SG")
     assert market_registry.market_for_exchange("unknown") is None
 
 

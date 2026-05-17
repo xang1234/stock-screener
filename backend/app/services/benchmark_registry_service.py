@@ -36,9 +36,9 @@ def _build_benchmark_entry(market: str, notes: str) -> BenchmarkRegistryEntry:
 
 
 class BenchmarkRegistryService:
-    """Operator-visible benchmark mapping table for US/HK/IN/JP/KR/TW/CN/SG/CA/DE."""
+    """Operator-visible benchmark mapping table for US/HK/IN/JP/KR/TW/CN/CA/DE/SG."""
 
-    TABLE_VERSION = "2026-05-17.v1"
+    TABLE_VERSION = "2026-05-09.v1"
 
     _NOTES_BY_MARKET: Dict[str, str] = {
         "US": "US baseline benchmark; ETF primary keeps behavior parity.",
@@ -48,9 +48,9 @@ class BenchmarkRegistryService:
         "KR": "KOSPI index-primary with KODEX 200 ETF fallback.",
         "TW": "TAIEX index-primary with TW50 ETF fallback.",
         "CN": "CSI 300 index-primary with Shanghai Composite fallback.",
-        "SG": "Straits Times Index primary with SPDR Straits Times Index ETF (ES3.SI) fallback.",
         "CA": "S&P/TSX Composite index-primary with iShares S&P/TSX 60 (XIU.TO) ETF fallback.",
         "DE": "DAX index-primary with iShares DAX UCITS ETF (EXS1.DE) fallback.",
+        "SG": "Straits Times Index index-primary with SPDR STI ETF (ES3.SI) fallback.",
     }
     _TABLE: Dict[str, BenchmarkRegistryEntry] = {
         market: _build_benchmark_entry(market, notes)

@@ -6,7 +6,35 @@ pandas) and Python-native types suitable for JSON/SQLAlchemy persistence.
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
+from typing import Any, Optional
+
+
+def sanitize_sparkline(value: Any) -> Optional[list[float]]:
+    """Return a finite-float list, or ``None`` if any element is null/non-finite.
+
+    Sparkline payloads serialised through ``convert_numpy_types`` get NaN/Inf
+    rewritten to ``None``, which then fails ``List[float]`` validation in the
+    response schemas.  Collapsing the whole sparkline to ``None`` keeps the
+    surrounding row exportable.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        return None
+    sanitized: list[float] = []
+    for element in value:
+        if element is None:
+            return None
+        try:
+            as_float = float(element)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(as_float):
+            return None
+        sanitized.append(as_float)
+    return sanitized
 
 
 def normalize_string_list(value: object) -> list[str]:

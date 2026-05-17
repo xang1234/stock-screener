@@ -697,106 +697,6 @@ def test_fetch_tw_snapshot_requires_explicit_opt_in_for_insecure_tls(monkeypatch
     ]
 
 
-def test_fetch_sg_snapshot_combines_equity_like_security_categories(monkeypatch):
-    service = OfficialMarketUniverseSourceService()
-    responses = {
-        "https://api.sgx.com/securities/v1.1/stocks": {
-            "data": {
-                "prices": [
-                    {
-                        "nc": "D05",
-                        "n": "DBS",
-                        "type": "stocks",
-                        "m": "MAINBOARD",
-                        "sc": "8",
-                        "cur": "SGD",
-                    }
-                ]
-            }
-        },
-        "https://api.sgx.com/securities/v1.1/reits": {
-            "data": {
-                "prices": [
-                    {
-                        "nc": "A17U",
-                        "n": "CapLand Ascendas REIT",
-                        "type": "reits",
-                        "m": "MAINBOARD",
-                        "sc": "L",
-                        "cur": "SGD",
-                    }
-                ]
-            }
-        },
-        "https://api.sgx.com/securities/v1.1/businesstrusts": {
-            "data": {
-                "prices": [
-                    {
-                        "nc": "J85",
-                        "n": "CDL HTrust",
-                        "type": "businesstrusts",
-                        "m": "MAINBOARD",
-                        "sc": "L",
-                        "cur": "SGD",
-                    }
-                ]
-            }
-        },
-        "https://api.sgx.com/marketmetadata/v2": {
-            "data": [
-                {
-                    "stockCode": "D05",
-                    "issuerName": "DBS GROUP HOLDINGS LTD",
-                    "isinCode": "SG1L01001701",
-                    "tradingCurrency": "SGD",
-                },
-                {
-                    "stockCode": "A17U",
-                    "issuerName": "CAPITALAND ASCENDAS REIT",
-                    "isinCode": "SG1M77906915",
-                    "tradingCurrency": "SGD",
-                },
-            ]
-        },
-    }
-    calls: list[str] = []
-
-    def fake_get(url, allow_insecure_fallback=False, extra_headers=None):
-        calls.append(url)
-        return _FetchedSource(
-            url=url,
-            content=json.dumps(responses[url]).encode("utf-8"),
-            fetched_at="2026-05-17T00:00:00+00:00",
-            last_modified=None,
-            tls_verification_disabled=False,
-        )
-
-    monkeypatch.setattr(service, "_http_get", fake_get)
-
-    snapshot = service.fetch_sg_snapshot()
-
-    assert calls == [
-        "https://api.sgx.com/securities/v1.1/stocks",
-        "https://api.sgx.com/securities/v1.1/reits",
-        "https://api.sgx.com/securities/v1.1/businesstrusts",
-        "https://api.sgx.com/marketmetadata/v2",
-    ]
-    assert snapshot.market == "SG"
-    assert snapshot.source_name == "sgx_official"
-    assert snapshot.snapshot_id == "sgx-securities-2026-05-17"
-    assert snapshot.snapshot_as_of == "2026-05-17"
-    assert [row["symbol"] for row in snapshot.rows] == ["D05.SI", "A17U.SI", "J85.SI"]
-    assert snapshot.rows[0]["name"] == "DBS GROUP HOLDINGS LTD"
-    assert snapshot.rows[0]["isin"] == "SG1L01001701"
-    assert snapshot.rows[0]["sector"] == "Finance"
-    assert snapshot.rows[1]["industry"] == "REIT"
-    assert snapshot.source_metadata["row_counts"] == {
-        "stocks": 1,
-        "reits": 1,
-        "businesstrusts": 1,
-    }
-
-
 def test_http_get_retries_timeouts_before_succeeding(monkeypatch):
     service = OfficialMarketUniverseSourceService(timeout_seconds=7)
     calls: list[dict[str, object]] = []
@@ -1776,3 +1676,233 @@ def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path
         "baseline CSV at" in record.message and "missing on disk" in record.message
         for record in caplog.records
     ), f"Expected missing-baseline warning, got: {[r.message for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# Singapore (SG) coverage
+# ---------------------------------------------------------------------------
+
+_SG_API_URL = "https://api.sgx.com/securities/v1.1?excludetypes=bonds"
+
+
+def _fetched_sg(content: bytes, *, last_modified: str | None = None) -> _FetchedSource:
+    return _FetchedSource(
+        url=_SG_API_URL,
+        content=content,
+        fetched_at="2026-05-15T00:00:00+00:00",
+        last_modified=last_modified,
+        tls_verification_disabled=False,
+    )
+
+
+def test_fetch_sg_snapshot_parses_sgx_api_json(monkeypatch):
+    """Live SGX API JSON yields canonical .SI rows from Mainboard and Catalist."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", _SG_API_URL)
+    monkeypatch.setattr(app_settings, "sg_live_min_universe_size", 1)
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_sg(
+            _fixture_bytes("sgx_securities_fixture.json")
+        ),
+    )
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.market == "SG"
+    assert snapshot.source_name == "sgx_official"
+    assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    symbols = {row["symbol"] for row in snapshot.rows}
+    # Mainboard + Catalist stocks survive. Dropped: placeholder/null row,
+    # REIT (A17U), Business Trust (NS8U), ETF (ES3, type=etfs),
+    # warrant (VT2W, type=companywarrants), and malformed ticker.
+    assert symbols == {"D05.SI", "O39.SI", "U11.SI", "C6L.SI", "5E2.SI"}
+    dbs = next(row for row in snapshot.rows if row["symbol"] == "D05.SI")
+    # SGX does not expose ICB classification, ISIN, or market cap in the
+    # default response, so these fields are emitted empty.
+    assert dbs["name"] == "DBS GROUP HOLDINGS LTD"
+    assert dbs["sector"] == ""
+    assert dbs["industry"] == ""
+    assert dbs["market_cap"] is None
+    assert dbs["isin"] == ""
+    assert snapshot.snapshot_id.startswith("sgx-securities-")
+
+
+def test_fetch_sg_snapshot_falls_back_on_http_error(monkeypatch, tmp_path):
+    """RequestException from the live fetch routes to the bundled CSV fallback."""
+    from app.config import settings as app_settings
+
+    fallback_csv = tmp_path / "sg_fallback.csv"
+    fallback_csv.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "D05.SI,DBS Group,XSES,STI,SG1L01001701\n"
+        "O39.SI,OCBC,XSES,STI,SG1S04926220\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", _SG_API_URL)
+    monkeypatch.setattr(app_settings, "sg_universe_fallback_csv_path", str(fallback_csv))
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: (_ for _ in ()).throw(
+            requests.exceptions.ConnectionError("synthetic SGX outage")
+        ),
+    )
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.market == "SG"
+    assert snapshot.source_name == "sg_manual_csv"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert "synthetic SGX outage" in snapshot.source_metadata["fetch_errors"]["live_http"]
+    assert {row["symbol"] for row in snapshot.rows} == {"D05.SI", "O39.SI"}
+    assert snapshot.snapshot_id.startswith("sg-csv-fallback-")
+
+
+def test_fetch_sg_snapshot_uses_fallback_when_url_blank(monkeypatch, tmp_path):
+    """Blank ``sg_universe_source_url`` forces CSV fallback without an HTTP attempt."""
+    from app.config import settings as app_settings
+
+    fallback_csv = tmp_path / "sg_fallback.csv"
+    fallback_csv.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "D05.SI,DBS Group,XSES,STI,SG1L01001701\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", "")
+    monkeypatch.setattr(app_settings, "sg_universe_fallback_csv_path", str(fallback_csv))
+
+    service = OfficialMarketUniverseSourceService()
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("_http_get must not be called when source URL is blank")
+
+    monkeypatch.setattr(service, "_http_get", fail_if_called)
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.source_name == "sg_manual_csv"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert {row["symbol"] for row in snapshot.rows} == {"D05.SI"}
+
+
+def test_fetch_sg_snapshot_falls_back_when_universe_too_small(monkeypatch, tmp_path):
+    """A live universe below the configured minimum size triggers fallback."""
+    from app.config import settings as app_settings
+
+    fallback_csv = tmp_path / "sg_fallback.csv"
+    fallback_csv.write_text(
+        "symbol,name,exchange,index,isin\n"
+        "D05.SI,DBS Group,XSES,STI,SG1L01001701\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_settings, "sg_universe_source_url", _SG_API_URL)
+    monkeypatch.setattr(app_settings, "sg_universe_fallback_csv_path", str(fallback_csv))
+    monkeypatch.setattr(app_settings, "sg_live_min_universe_size", 100)
+
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_sg(
+            json.dumps({"data": [
+                {"nc": "D05", "N": "DBS Group"},
+                {"nc": "O39", "N": "OCBC"},
+            ]}).encode("utf-8")
+        ),
+    )
+
+    snapshot = service.fetch_market_snapshot("SG")
+
+    assert snapshot.source_name == "sg_manual_csv"
+    assert snapshot.source_metadata["fetch_mode"] == "csv_fallback"
+    assert "below 100 threshold" in snapshot.source_metadata["fetch_errors"]["live_http"]
+    assert {row["symbol"] for row in snapshot.rows} == {"D05.SI"}
+
+
+def test_parse_sg_api_json_handles_alternate_payload_shapes():
+    """The SGX API has shipped several wrapping shapes; the parser must walk them."""
+    nested = json.dumps({"data": {"prices": [{"nc": "Z74", "N": "Singtel"}]}}).encode("utf-8")
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(nested)
+    assert [r["symbol"] for r in rows] == ["Z74.SI"]
+
+    bare = json.dumps([{"nc": "F34", "N": "Wilmar"}]).encode("utf-8")
+    rows_bare = OfficialMarketUniverseSourceService._parse_sg_api_json(bare)
+    assert [r["symbol"] for r in rows_bare] == ["F34.SI"]
+
+
+def test_parse_sg_api_json_raises_on_invalid_json():
+    with pytest.raises(ValueError, match="not valid JSON"):
+        OfficialMarketUniverseSourceService._parse_sg_api_json(b"not json")
+
+
+def test_parse_sg_api_json_drops_reits_business_trusts_and_stapled():
+    """SGX returns REITs/Business Trusts as ``type=stocks`` so the parser
+    relies on the issuer name to reject them. Stapled securities are also
+    excluded from supported SG coverage."""
+    payload = json.dumps({
+        "data": {"prices": [
+            {"type": "stocks", "nc": "A17U", "n": "CAPITALAND ASCENDAS REIT", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "NS8U", "n": "HUTCHISON PORT HOLDINGS TRUST", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "HMN", "n": "CAPITALAND ASCOTT TRUST", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "STPL", "n": "EXAMPLE STAPLED SECURITIES", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "D05", "n": "DBS GROUP HOLDINGS LTD", "m": "MAINBOARD"},
+        ]}
+    }).encode("utf-8")
+
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(payload)
+    assert [r["symbol"] for r in rows] == ["D05.SI"]
+
+
+def test_parse_sg_api_json_drops_non_stock_instrument_types():
+    """SGX returns warrants, listed certificates, ETFs, and other instrument
+    classes in the same payload. Only ``type=stocks`` rows survive."""
+    payload = json.dumps({
+        "data": {"prices": [
+            {"type": "stocks", "nc": "D05", "n": "DBS GROUP HOLDINGS LTD", "m": "MAINBOARD"},
+            {"type": "companywarrants", "nc": "VT2W", "n": "17LIVE W281207", "m": "MAINBOARD"},
+            {"type": "etfs", "nc": "ES3", "n": "SPDR STI ETF", "m": "MAINBOARD"},
+            {"type": "listedcertificates", "nc": None, "n": None, "m": None},
+            {"type": "structuredwarrants", "nc": "ABCW", "n": "Some Warrant", "m": "MAINBOARD"},
+        ]}
+    }).encode("utf-8")
+
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(payload)
+    assert [r["symbol"] for r in rows] == ["D05.SI"]
+
+
+def test_parse_sg_api_json_drops_non_equity_boards():
+    """Only Mainboard and Catalist listings survive. Other venues (e.g.,
+    GlobalQuote, structured-product boards) are excluded."""
+    payload = json.dumps({
+        "data": {"prices": [
+            {"type": "stocks", "nc": "D05", "n": "DBS", "m": "MAINBOARD"},
+            {"type": "stocks", "nc": "5E2", "n": "Seatrium", "m": "CATALIST"},
+            {"type": "stocks", "nc": "XXX", "n": "Foreign Quote", "m": "GLOBALQUOTE"},
+            {"type": "stocks", "nc": "YYY", "n": "No Board"},
+        ]}
+    }).encode("utf-8")
+
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(payload)
+    # MAINBOARD, CATALIST, and missing board (permissive) all survive.
+    assert {r["symbol"] for r in rows} == {"D05.SI", "5E2.SI", "YYY.SI"}
+
+
+def test_sg_is_excluded_instrument_matches_trust_at_word_boundary():
+    """Bare ``trust`` matches only as a whole token so ``Trustco`` and similar
+    issuer names are not falsely excluded."""
+    excluded = OfficialMarketUniverseSourceService._sg_is_excluded_instrument
+    assert excluded("Hutchison Port Holdings Trust", "", "") is True
+    assert excluded("CapitaLand Ascendas REIT", "Real Estate", "Industrial REITs") is True
+    assert excluded("Example Stapled Securities", "", "Stapled Securities") is True
+    assert excluded("Trustco Holdings", "Financials", "Diversified Financials") is False
+    assert excluded("DBS Group Holdings Ltd", "Banks", "Banks") is False
+
+
+def test_parse_sg_api_json_handles_empty_dict_payload():
+    """An unrecognized response shape returns no rows rather than raising."""
+    rows = OfficialMarketUniverseSourceService._parse_sg_api_json(b'{"foo": "bar"}')
+    assert rows == []

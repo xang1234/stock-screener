@@ -104,6 +104,33 @@ class TestRateInterval:
             interval = policy.get_rate_interval("yfinance", None)
         assert interval == pytest.approx(1.0)
 
+    def test_yfinance_batch_in_override_resolves_to_10s(self):
+        """YFINANCE_BATCH_RATE_LIMIT_IN=0.1 (req/s) should resolve to a 10s
+        interval between IN batch downloads. This is the IN throttle knob the
+        static-site workflow relies on to keep Yahoo happy."""
+        with patch("app.services.rate_budget_policy.settings") as mock_settings:
+            mock_settings.yfinance_batch_rate_limit_interval = 2.0
+            mock_settings.yfinance_batch_rate_limit_in = 0.1
+            policy = RateBudgetPolicy()
+            interval = policy.get_rate_interval("yfinance:batch", "IN")
+        assert interval == pytest.approx(10.0)
+
+    def test_yfinance_batch_override_does_not_affect_other_markets(self):
+        """The IN override must not leak to US (which gets the universe-weighted
+        share of the global ``yfinance_batch_rate_limit_interval``)."""
+        with patch("app.services.rate_budget_policy.RateBudgetPolicy._compute_weights_from_db") as m, \
+             patch("app.services.rate_budget_policy.settings") as mock_settings:
+            m.return_value = {"US": 0.5, "HK": 0.1, "IN": 0.1, "JP": 0.1, "KR": 0.1, "TW": 0.05, "CN": 0.05}
+            mock_settings.yfinance_batch_rate_limit_interval = 2.0
+            mock_settings.yfinance_batch_rate_limit_in = 0.1
+            # Other per-market overrides absent (None)
+            mock_settings.yfinance_batch_rate_limit_us = None
+            policy = RateBudgetPolicy()
+            us_interval = policy.get_rate_interval("yfinance:batch", "US")
+            in_interval = policy.get_rate_interval("yfinance:batch", "IN")
+        assert in_interval == pytest.approx(10.0)
+        assert us_interval == pytest.approx(2.0 / 0.5)  # 4.0s, not 10s
+
 
 class TestBatchSize:
     @pytest.mark.parametrize("market,expected_default", [
@@ -136,6 +163,19 @@ class TestBackoffParams:
             hk = policy.get_backoff_params("yfinance", "HK")
         assert us["max_s"] == 480
         assert hk["max_s"] == 600  # non-US gets longer cap
+
+    def test_us_base_s_preserves_legacy_30_60_120_schedule(self):
+        """US base_s=30 keeps the legacy ``30/60/120`` retry schedule used by
+        ``BulkDataFetcher._fetch_price_batch_with_retries``. IN bumps to
+        base_s=60 so its retries land at 60/120/240."""
+        with patch("app.services.rate_budget_policy.settings") as mock_settings:
+            mock_settings.yfinance_backoff_max_s_us = None
+            mock_settings.yfinance_backoff_max_s_in = None
+            policy = RateBudgetPolicy()
+            us = policy.get_backoff_params("yfinance", "US")
+            in_market = policy.get_backoff_params("yfinance", "IN")
+        assert us["base_s"] == 30
+        assert in_market["base_s"] == 60
 
     def test_max_s_override_wins(self):
         with patch("app.services.rate_budget_policy.settings") as mock_settings:
