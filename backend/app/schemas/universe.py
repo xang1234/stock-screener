@@ -32,6 +32,7 @@ class Market(str, Enum):
     CN = "CN"
     CA = "CA"
     DE = "DE"
+    SG = "SG"
 
 
 class Exchange(str, Enum):
@@ -46,13 +47,14 @@ class Exchange(str, Enum):
     BJSE = "BJSE"
     TSX = "TSX"
     TSXV = "TSXV"
+    XSES = "XSES"
 
 
 class IndexName(str, Enum):
     """Supported stock market indices.
 
     ``SP500`` membership is stored on ``StockUniverse.is_sp500`` (legacy).
-    Asia indices (``HSI``, ``NIKKEI225``, ``TAIEX``) resolve via the
+    Asia indices (``HSI``, ``NIKKEI225``, ``TAIEX``, ``STI``) resolve via the
     ``stock_universe_index_membership`` table so adding future indices
     only requires data, not a schema migration. ``TAIEX`` is narrowed to
     the top-50 constituents by weight to keep the scan set comparable to
@@ -65,6 +67,7 @@ class IndexName(str, Enum):
     DAX = "DAX"
     MDAX = "MDAX"
     SDAX = "SDAX"
+    STI = "STI"
 
 
 class UniverseDefinition(BaseModel):
@@ -207,6 +210,7 @@ class UniverseDefinition(BaseModel):
                 Market.KR: "South Korea Market",
                 Market.TW: "Taiwan Market",
                 Market.CN: "China A-shares",
+                Market.SG: "Singapore Market",
             }
             return market_labels.get(self.market, f"{self.market.value} Market")
         elif self.type == UniverseType.EXCHANGE:
@@ -214,6 +218,8 @@ class UniverseDefinition(BaseModel):
         elif self.type == UniverseType.INDEX:
             if self.index == IndexName.SP500:
                 return "S&P 500"
+            if self.index == IndexName.STI:
+                return "Straits Times Index"
             return self.index.value
         elif self.type == UniverseType.CUSTOM:
             n = len(self.symbols)

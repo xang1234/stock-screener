@@ -46,7 +46,7 @@ SUPPORTED_BREADTH_MARKETS = {
 def _normalize_market_param(market: str | None) -> str:
     normalized = str(market or "US").strip().upper()
     if normalized not in SUPPORTED_BREADTH_MARKETS:
-        supported = ", ".join(SUPPORTED_MARKETS)
+        supported = ", ".join(sorted(SUPPORTED_BREADTH_MARKETS))
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
