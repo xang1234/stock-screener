@@ -96,7 +96,7 @@ class StockUniverseStatusEvent(Base):
         index=True,
     )
     old_status = Column(String(32), nullable=True)
-    new_status = Column(String(32), nullable=False, index=True)
+    new_status = Column(String(32), nullable=True, index=True)
     trigger_source = Column(String(64), nullable=False)
     reason = Column(String(255))
     payload_json = Column(Text)

@@ -32,14 +32,16 @@ def test_status_event_defaults_to_status_changed_event_type() -> None:
 
 
 def test_status_event_can_record_listing_tier_change_without_status_transition() -> None:
-    event = StockUniverseStatusEvent(
+    assert StockUniverseStatusEvent.new_status.property.columns[0].nullable is True
+
+    event = StockUniverseService._build_metadata_event_record(
         symbol="0700.HK",
         event_type=UNIVERSE_EVENT_LISTING_TIER_CHANGED,
-        old_status=None,
-        new_status="active",
         trigger_source="test",
         reason="listing tier changed",
-        payload_json='{"previous": null, "current": "main_board"}',
+        payload={"previous": None, "current": "main_board"},
     )
 
     assert event.event_type == "listing_tier_changed"
+    assert event.old_status is None
+    assert event.new_status is None

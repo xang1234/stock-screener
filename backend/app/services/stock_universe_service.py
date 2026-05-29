@@ -146,7 +146,6 @@ class StockUniverseService:
         trigger_source: str,
         reason: str,
         payload: Optional[Dict[str, Any]] = None,
-        event_type: str = UNIVERSE_EVENT_STATUS_CHANGED,
     ) -> None:
         db.add(
             self._build_status_event_record(
@@ -156,7 +155,6 @@ class StockUniverseService:
                 trigger_source=trigger_source,
                 reason=reason,
                 payload=payload,
-                event_type=event_type,
             )
         )
 
@@ -169,13 +167,33 @@ class StockUniverseService:
         trigger_source: str,
         reason: str,
         payload: Optional[Dict[str, Any]] = None,
-        event_type: str = UNIVERSE_EVENT_STATUS_CHANGED,
     ) -> StockUniverseStatusEvent:
         return StockUniverseStatusEvent(
             symbol=symbol,
-            event_type=event_type,
+            event_type=UNIVERSE_EVENT_STATUS_CHANGED,
             old_status=old_status,
             new_status=new_status,
+            trigger_source=trigger_source,
+            reason=reason,
+            payload_json=json.dumps(payload, sort_keys=True) if payload else None,
+        )
+
+    @staticmethod
+    def _build_metadata_event_record(
+        *,
+        symbol: str,
+        event_type: str,
+        trigger_source: str,
+        reason: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> StockUniverseStatusEvent:
+        if event_type == UNIVERSE_EVENT_STATUS_CHANGED:
+            raise ValueError("Use _build_status_event_record for lifecycle events")
+        return StockUniverseStatusEvent(
+            symbol=symbol,
+            event_type=event_type,
+            old_status=None,
+            new_status=None,
             trigger_source=trigger_source,
             reason=reason,
             payload_json=json.dumps(payload, sort_keys=True) if payload else None,

@@ -35,6 +35,11 @@ def upgrade() -> None:
                 server_default="status_changed",
             )
         )
+        batch_op.alter_column(
+            "new_status",
+            existing_type=sa.String(length=32),
+            nullable=True,
+        )
         batch_op.create_index(
             "ix_stock_universe_status_events_event_type",
             ["event_type"],
@@ -48,9 +53,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        "UPDATE stock_universe_status_events "
+        "SET new_status = 'active' "
+        "WHERE new_status IS NULL"
+    )
     with op.batch_alter_table("stock_universe_status_events") as batch_op:
         batch_op.drop_index("idx_universe_status_events_type_created")
         batch_op.drop_index("ix_stock_universe_status_events_event_type")
+        batch_op.alter_column(
+            "new_status",
+            existing_type=sa.String(length=32),
+            nullable=False,
+        )
         batch_op.drop_column("event_type")
 
     with op.batch_alter_table("stock_universe") as batch_op:

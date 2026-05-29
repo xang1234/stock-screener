@@ -39,17 +39,36 @@ class MarketCatalogEntry:
     capabilities: MarketCapabilities
 
     def __post_init__(self) -> None:
+        if not self.mics:
+            raise ValueError(f"{self.code} must declare at least one MIC")
+        if len(set(self.mics)) != len(self.mics):
+            raise ValueError(f"{self.code} duplicate MICs are not allowed")
+        if not self.supported_currencies:
+            raise ValueError(f"{self.code} must declare at least one supported currency")
         if self.primary_mic not in self.mics:
             raise ValueError(f"{self.code} primary MIC must be present in mics")
         if self.default_currency not in self.supported_currencies:
             raise ValueError(
                 f"{self.code} default currency must be present in supported_currencies"
             )
-        fact_mics = {facts.mic for facts in self.mic_facts}
-        missing_facts = set(self.mics) - fact_mics
-        if missing_facts:
+        fact_mic_values = tuple(facts.mic for facts in self.mic_facts)
+        fact_mics = set(fact_mic_values)
+        if len(fact_mics) != len(fact_mic_values):
+            raise ValueError(f"{self.code} duplicate MIC facts are not allowed")
+        if fact_mics != set(self.mics):
+            raise ValueError(f"{self.code} MIC facts must match mics")
+        unsupported_fact_currencies = sorted(
+            {facts.default_currency for facts in self.mic_facts}
+            - set(self.supported_currencies)
+        )
+        if unsupported_fact_currencies:
             raise ValueError(
-                f"{self.code} missing MIC facts for: {', '.join(sorted(missing_facts))}"
+                f"{self.code} MIC default currencies must be present in "
+                f"supported_currencies: {', '.join(unsupported_fact_currencies)}"
+            )
+        if self.default_currency != self.primary_mic_facts.default_currency:
+            raise ValueError(
+                f"{self.code} default currency must match primary MIC default currency"
             )
 
     @property
@@ -168,33 +187,32 @@ def _market_entry(
     *,
     code: str,
     label: str,
-    default_currency: str,
-    timezone: str,
     primary_mic: str,
-    mics: tuple[str, ...],
+    mic_facts: tuple[MicFacts, ...],
     exchanges: tuple[str, ...],
     indexes: tuple[str, ...],
     capabilities: MarketCapabilities,
     supported_currencies: tuple[str, ...] | None = None,
-    provider_calendar_ids: dict[str, str] | None = None,
+    default_currency: str | None = None,
 ) -> MarketCatalogEntry:
-    provider_calendar_ids = provider_calendar_ids or {}
+    primary_mic_code = primary_mic.strip().upper()
+    primary_facts = next(
+        (facts for facts in mic_facts if facts.mic == primary_mic_code),
+        None,
+    )
+    if primary_facts is None:
+        raise ValueError(f"{code} primary MIC must have MIC facts")
+    derived_supported_currencies = tuple(
+        dict.fromkeys(facts.default_currency for facts in mic_facts)
+    )
     return MarketCatalogEntry(
         code=code,
         label=label,
-        primary_mic=primary_mic,
-        mics=mics,
-        supported_currencies=supported_currencies or (default_currency,),
-        default_currency=default_currency,
-        mic_facts=tuple(
-            _mic_facts(
-                mic,
-                timezone=timezone,
-                default_currency=default_currency,
-                provider_calendar_id=provider_calendar_ids.get(mic),
-            )
-            for mic in mics
-        ),
+        primary_mic=primary_mic_code,
+        mics=tuple(facts.mic for facts in mic_facts),
+        supported_currencies=supported_currencies or derived_supported_currencies,
+        default_currency=default_currency or primary_facts.default_currency,
+        mic_facts=mic_facts,
         exchanges=exchanges,
         indexes=indexes,
         capabilities=capabilities,
@@ -206,10 +224,24 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="US",
             label="United States",
-            default_currency="USD",
-            timezone="America/New_York",
             primary_mic="XNYS",
-            mics=("XNYS", "XNAS", "XASE"),
+            mic_facts=(
+                _mic_facts(
+                    "XNYS",
+                    timezone="America/New_York",
+                    default_currency="USD",
+                ),
+                _mic_facts(
+                    "XNAS",
+                    timezone="America/New_York",
+                    default_currency="USD",
+                ),
+                _mic_facts(
+                    "XASE",
+                    timezone="America/New_York",
+                    default_currency="USD",
+                ),
+            ),
             exchanges=("NYSE", "NASDAQ", "AMEX"),
             indexes=("SP500",),
             capabilities=MarketCapabilities(
@@ -225,10 +257,14 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="HK",
             label="Hong Kong",
-            default_currency="HKD",
-            timezone="Asia/Hong_Kong",
             primary_mic="XHKG",
-            mics=("XHKG",),
+            mic_facts=(
+                _mic_facts(
+                    "XHKG",
+                    timezone="Asia/Hong_Kong",
+                    default_currency="HKD",
+                ),
+            ),
             exchanges=("HKEX", "SEHK", "XHKG"),
             indexes=("HSI",),
             capabilities=FULL_CAPABILITIES,
@@ -236,22 +272,35 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="IN",
             label="India",
-            default_currency="INR",
-            timezone="Asia/Kolkata",
             primary_mic="XNSE",
-            mics=("XNSE", "XBOM"),
+            mic_facts=(
+                _mic_facts(
+                    "XNSE",
+                    timezone="Asia/Kolkata",
+                    default_currency="INR",
+                    provider_calendar_id="NSE",
+                ),
+                _mic_facts(
+                    "XBOM",
+                    timezone="Asia/Kolkata",
+                    default_currency="INR",
+                ),
+            ),
             exchanges=("NSE", "XNSE", "BSE", "XBOM"),
             indexes=(),
             capabilities=FULL_CAPABILITIES,
-            provider_calendar_ids={"XNSE": "NSE"},
         ),
         _market_entry(
             code="JP",
             label="Japan",
-            default_currency="JPY",
-            timezone="Asia/Tokyo",
             primary_mic="XTKS",
-            mics=("XTKS",),
+            mic_facts=(
+                _mic_facts(
+                    "XTKS",
+                    timezone="Asia/Tokyo",
+                    default_currency="JPY",
+                ),
+            ),
             exchanges=("TSE", "JPX", "XTKS"),
             indexes=("NIKKEI225",),
             capabilities=FULL_CAPABILITIES,
@@ -259,10 +308,14 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="KR",
             label="South Korea",
-            default_currency="KRW",
-            timezone="Asia/Seoul",
             primary_mic="XKRX",
-            mics=("XKRX",),
+            mic_facts=(
+                _mic_facts(
+                    "XKRX",
+                    timezone="Asia/Seoul",
+                    default_currency="KRW",
+                ),
+            ),
             exchanges=("KOSPI", "KOSDAQ", "KRX", "XKRX"),
             indexes=(),
             capabilities=FULL_CAPABILITIES,
@@ -270,10 +323,14 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="TW",
             label="Taiwan",
-            default_currency="TWD",
-            timezone="Asia/Taipei",
             primary_mic="XTAI",
-            mics=("XTAI",),
+            mic_facts=(
+                _mic_facts(
+                    "XTAI",
+                    timezone="Asia/Taipei",
+                    default_currency="TWD",
+                ),
+            ),
             exchanges=("TWSE", "TPEX", "XTAI"),
             indexes=("TAIEX",),
             capabilities=FULL_CAPABILITIES,
@@ -281,10 +338,24 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="CN",
             label="China A-shares",
-            default_currency="CNY",
-            timezone="Asia/Shanghai",
             primary_mic="XSHG",
-            mics=("XSHG", "XSHE", "XBSE"),
+            mic_facts=(
+                _mic_facts(
+                    "XSHG",
+                    timezone="Asia/Shanghai",
+                    default_currency="CNY",
+                ),
+                _mic_facts(
+                    "XSHE",
+                    timezone="Asia/Shanghai",
+                    default_currency="CNY",
+                ),
+                _mic_facts(
+                    "XBSE",
+                    timezone="Asia/Shanghai",
+                    default_currency="CNY",
+                ),
+            ),
             exchanges=("SSE", "SZSE", "BJSE", "XSHG", "XSHE", "XBSE"),
             indexes=(),
             capabilities=FULL_CAPABILITIES,
@@ -292,10 +363,19 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="CA",
             label="Canada",
-            default_currency="CAD",
-            timezone="America/Toronto",
             primary_mic="XTSE",
-            mics=("XTSE", "XTNX"),
+            mic_facts=(
+                _mic_facts(
+                    "XTSE",
+                    timezone="America/Toronto",
+                    default_currency="CAD",
+                ),
+                _mic_facts(
+                    "XTNX",
+                    timezone="America/Toronto",
+                    default_currency="CAD",
+                ),
+            ),
             exchanges=("TSX", "TSXV", "XTSE", "XTNX"),
             indexes=("TSX_COMPOSITE",),
             capabilities=FULL_CAPABILITIES,
@@ -303,10 +383,19 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="DE",
             label="Germany",
-            default_currency="EUR",
-            timezone="Europe/Berlin",
             primary_mic="XETR",
-            mics=("XETR", "XFRA"),
+            mic_facts=(
+                _mic_facts(
+                    "XETR",
+                    timezone="Europe/Berlin",
+                    default_currency="EUR",
+                ),
+                _mic_facts(
+                    "XFRA",
+                    timezone="Europe/Berlin",
+                    default_currency="EUR",
+                ),
+            ),
             exchanges=("XETR", "XETRA", "XFRA", "FRA", "FWB"),
             indexes=("DAX", "MDAX", "SDAX"),
             capabilities=MarketCapabilities(
@@ -322,10 +411,14 @@ MARKET_CATALOG = MarketCatalog(
         _market_entry(
             code="SG",
             label="Singapore",
-            default_currency="SGD",
-            timezone="Asia/Singapore",
             primary_mic="XSES",
-            mics=("XSES",),
+            mic_facts=(
+                _mic_facts(
+                    "XSES",
+                    timezone="Asia/Singapore",
+                    default_currency="SGD",
+                ),
+            ),
             exchanges=("SGX", "SES", "XSES"),
             indexes=("STI",),
             capabilities=MarketCapabilities(

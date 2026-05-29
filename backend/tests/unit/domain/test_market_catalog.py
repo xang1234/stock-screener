@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.markets import market_registry
+from app.domain.markets import (
+    MarketCapabilities,
+    MarketCatalogEntry,
+    MicFacts,
+    market_registry,
+)
 from app.domain.markets.catalog import MarketCatalogError, get_market_catalog
 
 
@@ -49,6 +54,80 @@ def test_market_catalog_entry_exposes_canonical_mic_and_currency_facts() -> None
     assert india.supported_currencies == ("INR",)
     assert india.primary_mic_facts.provider_calendar_id == "NSE"
     assert india.mic_facts_for("XBOM").calendar_id == "XBOM"
+
+
+def test_market_catalog_entry_rejects_mic_facts_outside_declared_mics() -> None:
+    with pytest.raises(ValueError, match="MIC facts must match mics"):
+        MarketCatalogEntry(
+            code="XX",
+            label="Example",
+            primary_mic="XAAA",
+            mics=("XAAA",),
+            supported_currencies=("USD",),
+            default_currency="USD",
+            mic_facts=(
+                MicFacts(
+                    mic="XAAA",
+                    calendar_id="XAAA",
+                    timezone="America/New_York",
+                    default_currency="USD",
+                ),
+                MicFacts(
+                    mic="XBBB",
+                    calendar_id="XBBB",
+                    timezone="America/Toronto",
+                    default_currency="USD",
+                ),
+            ),
+            exchanges=("XAAA",),
+            indexes=(),
+            capabilities=MarketCapabilities(
+                benchmark=False,
+                breadth=False,
+                fundamentals=False,
+                group_rankings=False,
+                feature_snapshot=False,
+                official_universe=False,
+                finviz_screening=False,
+            ),
+        )
+
+
+def test_market_catalog_entry_rejects_mic_fact_currency_outside_supported_currencies() -> None:
+    with pytest.raises(ValueError, match="MIC default currencies"):
+        MarketCatalogEntry(
+            code="XX",
+            label="Example",
+            primary_mic="XAAA",
+            mics=("XAAA", "XBBB"),
+            supported_currencies=("USD",),
+            default_currency="USD",
+            mic_facts=(
+                MicFacts(
+                    mic="XAAA",
+                    calendar_id="XAAA",
+                    timezone="America/New_York",
+                    default_currency="USD",
+                ),
+                MicFacts(
+                    mic="XBBB",
+                    calendar_id="XBBB",
+                    timezone="America/Toronto",
+                    default_currency="CAD",
+                ),
+            ),
+            exchanges=("XAAA", "XBBB"),
+            indexes=(),
+            capabilities=MarketCapabilities(
+                benchmark=False,
+                breadth=False,
+                fundamentals=False,
+                group_rankings=False,
+                feature_snapshot=False,
+                official_universe=False,
+                finviz_screening=False,
+            ),
+        )
 
 
 def test_market_catalog_rejects_unknown_market() -> None:

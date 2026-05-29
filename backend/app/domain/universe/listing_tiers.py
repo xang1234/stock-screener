@@ -20,7 +20,9 @@ class ListingTierRegistry:
 
     def __init__(self, definitions: Iterable[ListingTierDefinition]) -> None:
         self._definitions = tuple(definitions)
-        self._by_alias: dict[tuple[str, str | None, str], str] = {}
+        self._by_scoped_alias: dict[tuple[str, str | None, str], str] = {}
+        self._by_market_wide_alias: dict[tuple[str, str], str] = {}
+        self._by_market_alias_candidates: dict[tuple[str, str], set[str]] = {}
 
         for definition in self._definitions:
             market = definition.market.upper()
@@ -31,16 +33,29 @@ class ListingTierRegistry:
                 if not normalized_alias:
                     continue
                 scoped_key = (market, definition_mic, normalized_alias)
-                market_key = (market, None, normalized_alias)
+                market_key = (market, normalized_alias)
                 if (
-                    scoped_key in self._by_alias
-                    and self._by_alias[scoped_key] != definition.key
+                    scoped_key in self._by_scoped_alias
+                    and self._by_scoped_alias[scoped_key] != definition.key
                 ):
                     raise ValueError(
                         f"Duplicate listing tier alias for {market}: {alias!r}"
                     )
-                self._by_alias[scoped_key] = definition.key
-                self._by_alias.setdefault(market_key, definition.key)
+                self._by_scoped_alias[scoped_key] = definition.key
+                self._by_market_alias_candidates.setdefault(market_key, set()).add(
+                    definition.key
+                )
+                if definition_mic is None:
+                    existing_market_match = self._by_market_wide_alias.get(market_key)
+                    if (
+                        existing_market_match is not None
+                        and existing_market_match != definition.key
+                    ):
+                        raise ValueError(
+                            f"Duplicate market-wide listing tier alias for "
+                            f"{market}: {alias!r}"
+                        )
+                    self._by_market_wide_alias[market_key] = definition.key
 
     def definitions(
         self, market: str | None = None, *, mic: str | None = None
@@ -67,10 +82,20 @@ class ListingTierRegistry:
         market_code = str(market or "").strip().upper()
         mic_code = str(mic).strip().upper() if mic else None
         if mic_code:
-            scoped_match = self._by_alias.get((market_code, mic_code, normalized_alias))
+            scoped_match = self._by_scoped_alias.get(
+                (market_code, mic_code, normalized_alias)
+            )
             if scoped_match:
                 return scoped_match
-        return self._by_alias.get((market_code, None, normalized_alias))
+            return self._by_market_wide_alias.get((market_code, normalized_alias))
+
+        candidates = self._by_market_alias_candidates.get(
+            (market_code, normalized_alias),
+            set(),
+        )
+        if len(candidates) == 1:
+            return next(iter(candidates))
+        return None
 
     @staticmethod
     def _normalize_alias(value: str | None) -> str:
