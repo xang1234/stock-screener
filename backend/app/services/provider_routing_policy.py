@@ -46,9 +46,10 @@ Callers
 
 Extending the policy
 --------------------
-To add a new market or provider, bump ``POLICY_VERSION`` and update
-``_POLICY_MATRIX``. Keep this module the single source of truth — do NOT
-introduce per-caller routing logic.
+To add a new market or provider, update ``ProviderDataPlanRegistry`` in
+``app.domain.providers.data_plan`` and bump its ``PLAN_VERSION``. This module
+is the compatibility API for older callers; the provider data plan is the
+single source of truth for provider order, fallbacks, and provenance.
 """
 from __future__ import annotations
 
@@ -58,6 +59,7 @@ from typing import FrozenSet, Tuple
 from app.domain.markets.market import SUPPORTED_MARKET_CODES
 from app.domain.providers.data_plan import (
     DATASET_FUNDAMENTALS,
+    PLAN_VERSION,
     PROVIDER_AKSHARE,
     PROVIDER_ALPHAVANTAGE,
     PROVIDER_BAOSTOCK,
@@ -73,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 # --- Policy version ---------------------------------------------------------
 
-POLICY_VERSION = "2026.05.17.1"
+POLICY_VERSION = PLAN_VERSION
 """Bump (date-stamped) when routing semantics change.
 
 Consumed by audit logs, cache keys, and provenance tags so downstream

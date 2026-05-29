@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from app.domain.markets import Market
+from app.domain.providers.data_plan import DATASET_FUNDAMENTALS, PLAN_VERSION
 from app.services.benchmark_cache_service import BenchmarkCacheService
 from app.services.cache.market_cache_policy import MarketAwareCachePolicy
 from app.services.cache.price_cache_freshness import PriceCacheFreshnessPolicy
@@ -166,7 +167,7 @@ def test_fundamentals_bulk_db_fallback_warms_market_scoped_keys(monkeypatch):
     monkeypatch.setattr(
         service,
         "_get_many_from_database",
-        lambda symbols: {"0700.HK": (payload, datetime(2026, 5, 4, 12, 0, 0))},
+        lambda symbols: {"0700.HK": (payload, datetime.utcnow())},
     )
     monkeypatch.setattr(
         service,
@@ -176,8 +177,15 @@ def test_fundamentals_bulk_db_fallback_warms_market_scoped_keys(monkeypatch):
 
     result = service.get_many(["0700.HK"], market_by_symbol={"0700.HK": "HK"})
 
-    assert result["0700.HK"] == payload
-    assert stored == [("0700.HK", payload, "HK")]
+    assert result["0700.HK"]["market_cap"] == payload["market_cap"]
+    assert result["0700.HK"]["provider_data_plan"] == {
+        "version": PLAN_VERSION,
+        "dataset": DATASET_FUNDAMENTALS,
+        "market": "HK",
+        "mic": None,
+        "providers": ["yfinance"],
+    }
+    assert stored == [("0700.HK", result["0700.HK"], "HK")]
 
 
 def test_price_cache_invalidate_uses_market_scoped_keys():

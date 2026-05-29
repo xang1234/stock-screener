@@ -23,6 +23,7 @@ from .finviz_service import FinvizService
 from .price_cache_service import PriceCacheService
 from .institutional_ownership_service import InstitutionalOwnershipService
 from . import provider_routing_policy as routing_policy
+from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.domain.providers.data_plan import (
     DATASET_FUNDAMENTALS,
     ProviderDataPlan,
@@ -121,9 +122,9 @@ class HybridFundamentalsService:
         explicit = (market_by_symbol or {}).get(symbol)
         if explicit:
             return str(explicit).strip().upper()
-        normalized = str(symbol or "").strip().upper()
-        if normalized.endswith((".SS", ".SZ", ".BJ")):
-            return routing_policy.MARKET_CN
+        inferred = market_symbol_suffix_registry.market_for_symbol(symbol)
+        if inferred:
+            return inferred
         return routing_policy.MARKET_US
 
     def _is_cn_symbol(
@@ -241,7 +242,7 @@ class HybridFundamentalsService:
                 result.update(technicals)
 
         # Phase 3: finviz-only fields
-        if include_finviz:
+        if include_finviz and plan.allows(routing_policy.PROVIDER_FINVIZ):
             finviz_data = self.finviz_service.get_finviz_only_fields(symbol)
             if finviz_data:
                 result.update(finviz_data)

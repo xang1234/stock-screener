@@ -43,6 +43,29 @@ def _make_cn_data_source() -> MagicMock:
 
 
 class TestPhase3PolicyFiltering:
+    def test_single_symbol_hk_suffix_uses_hk_plan_and_skips_finviz(self):
+        svc = _make_service()
+        svc.bulk_fetcher.fetch_batch_fundamentals.return_value = {
+            "0700.HK": {"market_cap": 123.0}
+        }
+
+        result = svc.fetch_fundamentals(
+            "0700.HK",
+            include_technicals=False,
+            include_finviz=True,
+        )
+
+        svc.finviz_service.get_finviz_only_fields.assert_not_called()
+        svc.bulk_fetcher.fetch_batch_fundamentals.assert_called_once()
+        assert result["market_cap"] == 123.0
+        assert result["provider_data_plan"] == {
+            "version": PLAN_VERSION,
+            "dataset": DATASET_FUNDAMENTALS,
+            "market": "HK",
+            "mic": None,
+            "providers": ["yfinance"],
+        }
+
     def test_non_us_symbols_are_excluded_from_finviz_phase(self):
         svc = _make_service()
         symbols = ["AAPL", "0700.HK", "7203.T", "2330.TW"]

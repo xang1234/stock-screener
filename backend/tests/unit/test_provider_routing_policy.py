@@ -6,6 +6,7 @@ import logging
 import pytest
 
 from app.services import provider_routing_policy as policy
+from app.domain.providers.data_plan import PLAN_VERSION as DATA_PLAN_VERSION
 from app.services.provider_routing_policy import (
     MARKET_CA,
     MARKET_DE,
@@ -38,7 +39,7 @@ class TestPolicyVersion:
 
     def test_policy_version_is_date_stamped(self):
         # Format: YYYY.MM.DD.N — bump when routing semantics change.
-        assert POLICY_VERSION == "2026.05.17.1"
+        assert POLICY_VERSION == DATA_PLAN_VERSION
         assert policy_version() == POLICY_VERSION
 
 

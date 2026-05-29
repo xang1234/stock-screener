@@ -1380,7 +1380,21 @@ class FundamentalsCacheService:
             logger.warning("Redis not available for bulk get - using database fallback")
             # Fallback: query database directly
             db_results = self._get_many_from_database(symbols)
-            return {symbol: data for symbol, (data, _) in db_results.items()}
+            cached_data = {}
+            for symbol, (data, _) in db_results.items():
+                if data is not None:
+                    symbol_market = self._market_for_symbol(
+                        symbol,
+                        market=market,
+                        market_by_symbol=market_by_symbol,
+                    )
+                    self._ensure_field_availability_metadata(
+                        symbol,
+                        data,
+                        symbol_market,
+                    )
+                cached_data[symbol] = data
+            return cached_data
 
         try:
             # Build pipeline for bulk fetch from Redis
@@ -1444,20 +1458,25 @@ class FundamentalsCacheService:
                     fundamentals, last_update = db_results.get(symbol, (None, None))
 
                     if fundamentals is not None and self._is_data_fresh(last_update):
+                        symbol_market = self._market_for_symbol(
+                            symbol,
+                            market=market,
+                            market_by_symbol=market_by_symbol,
+                        )
                         if symbol in redis_needs_enrichment and cached_data.get(symbol):
                             cached_data[symbol] = self._merge_fundamentals(
                                 cached_data[symbol], fundamentals
                             )
                         else:
                             cached_data[symbol] = fundamentals
+                        self._ensure_field_availability_metadata(
+                            symbol,
+                            cached_data[symbol],
+                            symbol_market,
+                        )
                         db_hits.append(symbol)
 
                         # Warm Redis for next time
-                        symbol_market = self._market_for_symbol(
-                            symbol,
-                            market=market,
-                            market_by_symbol=market_by_symbol,
-                        )
                         self._store_in_redis_for_market(
                             symbol,
                             cached_data[symbol],
