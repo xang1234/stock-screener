@@ -128,13 +128,18 @@ class SecurityMasterResolver:
         resolved_mic = exchange_resolution.mic if exchange_resolution else None
         canonical_symbol = normalized_symbol
         if normalized_market != "US" and resolved_local_code:
+            symbol_market = market_symbol_suffix_registry.market_for_symbol(normalized_symbol)
             # Preserve explicit non-US suffix when no exchange override is provided.
             if (
                 normalized_exchange is None
-                and market_symbol_suffix_registry.market_for_symbol(normalized_symbol)
-                is not None
+                and symbol_market is not None
             ):
                 canonical_symbol = normalized_symbol
+                if symbol_market == normalized_market:
+                    resolved_mic = (
+                        market_symbol_suffix_registry.mic_for_symbol(normalized_symbol)
+                        or resolved_mic
+                    )
             else:
                 suffix = market_symbol_suffix_registry.suffix_for(
                     normalized_market,

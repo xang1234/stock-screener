@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 import sqlite3
 from unittest.mock import MagicMock
 import pandas as pd
+import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
@@ -27,6 +28,7 @@ from app.models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
 import app.services.bulk_data_fetcher as bulk_data_fetcher_module
+import app.services.provider_adapters.price_plan_executor as price_plan_executor_module
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.price_cache_service import PriceCacheService
 from app.services.stock_universe_service import StockUniverseService
@@ -322,15 +324,10 @@ def test_fetch_prices_in_batches_uses_price_plan_registry_for_routing(monkeypatc
             return plan
 
     monkeypatch.setattr(
-        bulk_data_fetcher_module,
+        price_plan_executor_module,
         "provider_data_plan_registry",
         _Registry(),
         raising=False,
-    )
-    monkeypatch.setattr(
-        fetcher,
-        "_fetch_kr_prices_with_yfinance_fallback",
-        MagicMock(side_effect=AssertionError("routing bypassed the price plan")),
     )
 
     calls = []
@@ -483,6 +480,54 @@ def test_price_cache_bulk_fallback_passes_market_to_batch_fetcher(monkeypatch):
     assert result["005930.KS"] is price_frame
 
 
+def test_price_cache_bulk_fallback_does_not_retry_without_market_on_type_error(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="005930.KS",
+            name="Samsung Electronics",
+            market="KR",
+            exchange="KOSPI",
+            currency="KRW",
+            timezone="Asia/Seoul",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+    db.close()
+
+    service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
+    calls = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            calls.append({"symbols": list(symbols), "market": market})
+            if market == "KR":
+                raise TypeError("market adapter boundary failed")
+            return {
+                symbol: {"price_data": _price_df(date(2026, 4, 29), 105.0), "has_error": False}
+                for symbol in symbols
+            }
+
+    import app.services.bulk_data_fetcher as bulk_module
+
+    monkeypatch.setattr(bulk_module, "BulkDataFetcher", lambda: _FakeFetcher())
+
+    with pytest.raises(TypeError, match="market adapter boundary failed"):
+        service._resolve_bulk_fallback(
+            ["005930.KS"],
+            period="7d",
+            expected_date=date(2026, 4, 29),
+            now_et=datetime(2026, 4, 29, 16, 0),
+        )
+
+    assert calls == [{"symbols": ["005930.KS"], "market": "KR"}]
+
+
 def test_store_in_database_replaces_latest_day_row(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -625,7 +670,8 @@ def test_get_many_reloads_after_close_if_redis_meta_marks_intraday_stale(monkeyp
 
     fetched_symbols = []
 
-    def fake_fetch(self, symbols, period="2y", start_batch_size=None):
+    def fake_fetch(self, symbols, period="2y", start_batch_size=None, market=None):
+        assert market == "US"
         fetched_symbols.append(list(symbols))
         return {
             "AAPL": {

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from .catalog import MarketCatalogError, get_market_catalog
-from .mic_aliases import mic_alias_registry
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +13,7 @@ class MarketSymbolSuffixDefinition:
     market: str
     suffix: str | None
     aliases: tuple[str, ...]
+    mic: str | None = None
     is_default: bool = False
 
 
@@ -31,9 +31,14 @@ class MarketSymbolSuffixRegistry:
         for definition in self._definitions:
             market = definition.market.strip().upper()
             try:
-                catalog.get(market)
+                market_entry = catalog.get(market)
             except MarketCatalogError as exc:
                 raise ValueError(f"Unsupported symbol suffix market: {market}") from exc
+            mic = str(definition.mic or "").strip().upper() or None
+            if mic is not None and mic not in market_entry.mics:
+                raise ValueError(
+                    f"Unsupported symbol suffix MIC {mic!r} for market {market}"
+                )
 
             if definition.is_default:
                 if market in self._default_by_market:
@@ -48,11 +53,8 @@ class MarketSymbolSuffixRegistry:
                         f"{existing_market} and {market}"
                     )
                 self._market_by_suffix[definition.suffix] = market
-                for alias in definition.aliases:
-                    resolved = mic_alias_registry.resolve(market, alias)
-                    if resolved is not None:
-                        self._mic_by_suffix[definition.suffix] = resolved.mic
-                        break
+                if mic is not None:
+                    self._mic_by_suffix[definition.suffix] = mic
 
             for alias in definition.aliases:
                 normalized_alias = self._normalize_alias(alias)
@@ -123,27 +125,45 @@ market_symbol_suffix_registry = MarketSymbolSuffixRegistry(
             "HK",
             ".HK",
             ("HKEX", "SEHK", "XHKG"),
+            mic="XHKG",
             is_default=True,
         ),
-        MarketSymbolSuffixDefinition("IN", ".NS", ("NSE", "XNSE"), is_default=True),
-        MarketSymbolSuffixDefinition("IN", ".BO", ("BSE", "XBOM")),
-        MarketSymbolSuffixDefinition("JP", ".T", ("TSE", "JPX", "XTKS"), is_default=True),
-        MarketSymbolSuffixDefinition("KR", ".KS", ("KOSPI", "KRX", "XKRX"), is_default=True),
-        MarketSymbolSuffixDefinition("KR", ".KQ", ("KOSDAQ",)),
-        MarketSymbolSuffixDefinition("TW", ".TW", ("TWSE", "XTAI"), is_default=True),
-        MarketSymbolSuffixDefinition("TW", ".TWO", ("TPEX",)),
+        MarketSymbolSuffixDefinition(
+            "IN", ".NS", ("NSE", "XNSE"), mic="XNSE", is_default=True
+        ),
+        MarketSymbolSuffixDefinition("IN", ".BO", ("BSE", "XBOM"), mic="XBOM"),
+        MarketSymbolSuffixDefinition(
+            "JP", ".T", ("TSE", "JPX", "XTKS"), mic="XTKS", is_default=True
+        ),
+        MarketSymbolSuffixDefinition(
+            "KR", ".KS", ("KOSPI", "KRX", "XKRX"), mic="XKRX", is_default=True
+        ),
+        MarketSymbolSuffixDefinition("KR", ".KQ", ("KOSDAQ",), mic="XKRX"),
+        MarketSymbolSuffixDefinition(
+            "TW", ".TW", ("TWSE", "XTAI"), mic="XTAI", is_default=True
+        ),
+        MarketSymbolSuffixDefinition("TW", ".TWO", ("TPEX",), mic="XTAI"),
         MarketSymbolSuffixDefinition(
             "CN",
             ".SS",
             ("SSE", "SHSE", "XSHG"),
+            mic="XSHG",
             is_default=True,
         ),
-        MarketSymbolSuffixDefinition("CN", ".SZ", ("SZSE", "XSHE")),
-        MarketSymbolSuffixDefinition("CN", ".BJ", ("BSE", "BJSE", "XBSE", "XBEI")),
-        MarketSymbolSuffixDefinition("SG", ".SI", ("SGX", "SES", "XSES"), is_default=True),
-        MarketSymbolSuffixDefinition("CA", ".TO", ("TSX", "XTSE"), is_default=True),
-        MarketSymbolSuffixDefinition("CA", ".V", ("TSXV", "XTNX")),
-        MarketSymbolSuffixDefinition("DE", ".DE", ("XETR", "XETRA"), is_default=True),
-        MarketSymbolSuffixDefinition("DE", ".F", ("XFRA", "FRA", "FWB")),
+        MarketSymbolSuffixDefinition("CN", ".SZ", ("SZSE", "XSHE"), mic="XSHE"),
+        MarketSymbolSuffixDefinition(
+            "CN", ".BJ", ("BSE", "BJSE", "XBSE", "XBEI"), mic="XBSE"
+        ),
+        MarketSymbolSuffixDefinition(
+            "SG", ".SI", ("SGX", "SES", "XSES"), mic="XSES", is_default=True
+        ),
+        MarketSymbolSuffixDefinition(
+            "CA", ".TO", ("TSX", "XTSE"), mic="XTSE", is_default=True
+        ),
+        MarketSymbolSuffixDefinition("CA", ".V", ("TSXV", "XTNX"), mic="XTNX"),
+        MarketSymbolSuffixDefinition(
+            "DE", ".DE", ("XETR", "XETRA"), mic="XETR", is_default=True
+        ),
+        MarketSymbolSuffixDefinition("DE", ".F", ("XFRA", "FRA", "FWB"), mic="XFRA"),
     )
 )

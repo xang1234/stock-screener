@@ -164,6 +164,21 @@ def test_resolve_identity_uses_china_suffixes_by_exchange():
     assert china_bse.canonical_symbol == "920118.BJ"
 
 
+def test_resolve_identity_infers_china_mic_from_suffix_without_exchange():
+    resolver = SecurityMasterResolver()
+
+    sse = resolver.resolve_identity(symbol="600519.SS")
+    szse = resolver.resolve_identity(symbol="000001.SZ")
+    bjse = resolver.resolve_identity(symbol="920118.BJ")
+
+    assert sse.market == "CN"
+    assert sse.mic == "XSHG"
+    assert szse.market == "CN"
+    assert szse.mic == "XSHE"
+    assert bjse.market == "CN"
+    assert bjse.mic == "XBSE"
+
+
 def test_resolve_identity_does_not_infer_market_from_ambiguous_bse_alias() -> None:
     resolver = SecurityMasterResolver()
 
