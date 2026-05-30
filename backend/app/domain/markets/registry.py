@@ -19,14 +19,6 @@ class BenchmarkFacts:
     primary_kind: str
     fallback_kind: str | None
 
-    @property
-    def symbol(self) -> str:
-        return self.primary_symbol
-
-    @property
-    def kind(self) -> str:
-        return self.primary_kind
-
 
 @dataclass(frozen=True, slots=True)
 class MarketProfile:
@@ -141,15 +133,6 @@ class MarketRegistry:
         if market_code is None:
             return None
         return Market(market_code)
-
-    def benchmark_for(self, market: Market | str) -> BenchmarkFacts:
-        profile = self.profile(market)
-        return BenchmarkFacts(
-            profile.primary_benchmark_symbol,
-            profile.benchmark_fallback_symbol,
-            profile.benchmark_primary_kind,
-            profile.benchmark_fallback_kind,
-        )
 
 
 _BENCHMARK_FACTS_BY_MARKET: Mapping[str, BenchmarkFacts] = {

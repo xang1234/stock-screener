@@ -40,3 +40,12 @@ def test_china_registry_uses_csi_300_with_shanghai_composite_fallback():
 
     assert entry.primary_symbol == "000300.SS"
     assert entry.fallback_symbol == "000001.SS"
+
+
+def test_australia_registry_uses_asx_200_index_with_etf_fallback():
+    entry = benchmark_registry.get_entry("AU")
+
+    assert entry.primary_symbol == "^AXJO"
+    assert entry.primary_kind == "index"
+    assert entry.fallback_symbol == "IOZ.AX"
+    assert entry.fallback_kind == "etf"

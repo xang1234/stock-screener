@@ -36,7 +36,7 @@ def _build_benchmark_entry(market: str, notes: str) -> BenchmarkRegistryEntry:
 
 
 class BenchmarkRegistryService:
-    """Operator-visible benchmark mapping table for US/HK/IN/JP/KR/TW/CN/CA/DE/SG/MY."""
+    """Operator-visible benchmark mapping table for supported markets."""
 
     TABLE_VERSION = "2026-05-17.v1"
 
@@ -51,6 +51,7 @@ class BenchmarkRegistryService:
         "CA": "S&P/TSX Composite index-primary with iShares S&P/TSX 60 (XIU.TO) ETF fallback.",
         "DE": "DAX index-primary with iShares DAX UCITS ETF (EXS1.DE) fallback.",
         "SG": "Straits Times Index index-primary with SPDR STI ETF (ES3.SI) fallback.",
+        "AU": "S&P/ASX 200 index-primary with iShares Core S&P/ASX 200 ETF (IOZ.AX) fallback.",
         "MY": "FBM KLCI index-primary; no FBM KLCI ETF is currently listed in Malaysia so no fallback symbol is configured.",
     }
     _TABLE: Dict[str, BenchmarkRegistryEntry] = {

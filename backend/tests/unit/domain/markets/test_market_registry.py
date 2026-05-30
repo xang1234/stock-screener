@@ -100,12 +100,12 @@ def test_mic_for_exchange_requires_market_context_for_ambiguous_aliases() -> Non
 
 
 def test_au_benchmark_facts_are_registered() -> None:
-    benchmark = market_registry.benchmark_for("AU")
+    profile = market_registry.profile("AU")
 
-    assert benchmark.symbol == "^AXJO"
-    assert benchmark.fallback_symbol == "IOZ.AX"
-    assert benchmark.kind == "index"
-    assert benchmark.fallback_kind == "etf"
+    assert profile.primary_benchmark_symbol == "^AXJO"
+    assert profile.benchmark_fallback_symbol == "IOZ.AX"
+    assert profile.benchmark_primary_kind == "index"
+    assert profile.benchmark_fallback_kind == "etf"
 
 
 def test_custom_registry_rejects_duplicate_market_profiles() -> None:
