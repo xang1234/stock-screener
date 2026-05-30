@@ -19,6 +19,14 @@ class BenchmarkFacts:
     primary_kind: str
     fallback_kind: str | None
 
+    @property
+    def symbol(self) -> str:
+        return self.primary_symbol
+
+    @property
+    def kind(self) -> str:
+        return self.primary_kind
+
 
 @dataclass(frozen=True, slots=True)
 class MarketProfile:
@@ -134,6 +142,15 @@ class MarketRegistry:
             return None
         return Market(market_code)
 
+    def benchmark_for(self, market: Market | str) -> BenchmarkFacts:
+        profile = self.profile(market)
+        return BenchmarkFacts(
+            profile.primary_benchmark_symbol,
+            profile.benchmark_fallback_symbol,
+            profile.benchmark_primary_kind,
+            profile.benchmark_fallback_kind,
+        )
+
 
 _BENCHMARK_FACTS_BY_MARKET: Mapping[str, BenchmarkFacts] = {
     "US": BenchmarkFacts("SPY", "IVV", "etf", "etf"),
@@ -146,6 +163,7 @@ _BENCHMARK_FACTS_BY_MARKET: Mapping[str, BenchmarkFacts] = {
     "CA": BenchmarkFacts("^GSPTSE", "XIU.TO", "index", "etf"),
     "DE": BenchmarkFacts("^GDAXI", "EXS1.DE", "index", "etf"),
     "SG": BenchmarkFacts("^STI", "ES3.SI", "index", "etf"),
+    "AU": BenchmarkFacts("^AXJO", "IOZ.AX", "index", "etf"),
     "MY": BenchmarkFacts("^KLSE", None, "index", None),
 }
 

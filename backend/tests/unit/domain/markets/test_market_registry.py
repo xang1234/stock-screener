@@ -67,6 +67,7 @@ def test_market_for_index_uses_registry_mapping() -> None:
     assert market_registry.market_for_index("NIKKEI225") == Market("JP")
     assert market_registry.market_for_index("TAIEX") == Market("TW")
     assert market_registry.market_for_index("CSI300") == Market("CN")
+    assert market_registry.market_for_index("ASX200") == Market("AU")
     assert market_registry.market_for_index("FBMKLCI") == Market("MY")
     assert market_registry.market_for_index("unknown") is None
 
@@ -83,6 +84,7 @@ def test_market_for_exchange_uses_registry_mapping() -> None:
     assert market_registry.market_for_exchange("KOSPI") == Market("KR")
     assert market_registry.market_for_exchange("KOSDAQ") == Market("KR")
     assert market_registry.market_for_exchange("SZSE") == Market("CN")
+    assert market_registry.market_for_exchange("ASX") == Market("AU")
     assert market_registry.market_for_exchange("KLSE") == Market("MY")
     assert market_registry.market_for_exchange("BSE") is None
     assert market_registry.market_for_exchange("unknown") is None
@@ -92,8 +94,18 @@ def test_mic_for_exchange_requires_market_context_for_ambiguous_aliases() -> Non
     assert market_registry.mic_for_exchange("IN", "BSE") == "XBOM"
     assert market_registry.mic_for_exchange("CN", "BSE") == "XBSE"
     assert market_registry.mic_for_exchange("HK", "SEHK") == "XHKG"
+    assert market_registry.mic_for_exchange("AU", "ASX") == "XASX"
     assert market_registry.mic_for_exchange("MY", "KLSE") == "XKLS"
     assert market_registry.mic_for_exchange("US", "unknown") is None
+
+
+def test_au_benchmark_facts_are_registered() -> None:
+    benchmark = market_registry.benchmark_for("AU")
+
+    assert benchmark.symbol == "^AXJO"
+    assert benchmark.fallback_symbol == "IOZ.AX"
+    assert benchmark.kind == "index"
+    assert benchmark.fallback_kind == "etf"
 
 
 def test_custom_registry_rejects_duplicate_market_profiles() -> None:

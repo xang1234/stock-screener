@@ -34,6 +34,26 @@ def test_market_catalog_entry_contains_stable_market_facts() -> None:
     assert hk.capabilities.finviz_screening is False
 
 
+def test_au_market_catalog_entry_is_harmonized() -> None:
+    entry = get_market_catalog().get("AU")
+
+    assert entry.label == "Australia"
+    assert entry.primary_mic == "XASX"
+    assert entry.mics == ("XASX",)
+    assert entry.supported_currencies == ("AUD",)
+    assert entry.default_currency == "AUD"
+    assert entry.timezone == "Australia/Sydney"
+    assert "ASX" in entry.exchanges
+    assert "XASX" in entry.exchanges
+    assert entry.capabilities.benchmark is True
+    assert entry.capabilities.breadth is False
+    assert entry.capabilities.fundamentals is True
+    assert entry.capabilities.group_rankings is False
+    assert entry.capabilities.feature_snapshot is True
+    assert entry.capabilities.official_universe is True
+    assert entry.capabilities.finviz_screening is False
+
+
 def test_market_catalog_index_summaries_derive_from_index_registry() -> None:
     catalog = get_market_catalog()
 

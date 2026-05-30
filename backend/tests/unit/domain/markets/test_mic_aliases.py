@@ -38,5 +38,15 @@ def test_mic_alias_registry_accepts_canonical_mic_as_alias() -> None:
     assert resolved.mic == "XBOM"
 
 
+def test_au_mic_aliases_resolve_to_xasx() -> None:
+    asx = mic_alias_registry.resolve("AU", "ASX")
+    xasx = mic_alias_registry.resolve("AU", "XASX")
+
+    assert asx is not None
+    assert asx.mic == "XASX"
+    assert xasx is not None
+    assert xasx.mic == "XASX"
+
+
 def test_mic_alias_registry_lists_canonical_and_legacy_aliases_for_mic() -> None:
     assert mic_alias_registry.aliases_for_mic("US", "XNYS") == ("XNYS", "NYSE")

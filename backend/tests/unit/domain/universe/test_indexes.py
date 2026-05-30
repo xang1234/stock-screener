@@ -9,6 +9,12 @@ def test_index_registry_normalizes_aliases_and_exposes_market() -> None:
     assert index_registry.normalize("s&p 500") == "SP500"
     assert index_registry.normalize("nikkei 225") == "NIKKEI225"
     assert index_registry.market_for("sti") == "SG"
+    assert index_registry.normalize("ASX 200") == "ASX200"
+    assert index_registry.normalize("S&P ASX 200") == "ASX200"
+    assert index_registry.normalize("XJO") == "ASX200"
+    assert index_registry.normalize("AXJO") == "ASX200"
+    assert index_registry.market_for("ASX200") == "AU"
+    assert index_registry.get("ASX200").label == "S&P/ASX 200"
 
 
 def test_index_registry_rejects_duplicate_aliases() -> None:

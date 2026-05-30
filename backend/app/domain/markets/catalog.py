@@ -439,6 +439,28 @@ MARKET_CATALOG = MarketCatalog(
             ),
         ),
         _market_entry(
+            code="AU",
+            label="Australia",
+            primary_mic="XASX",
+            mic_facts=(
+                _mic_facts(
+                    "XASX",
+                    timezone="Australia/Sydney",
+                    default_currency="AUD",
+                ),
+            ),
+            exchanges=("ASX", "XASX"),
+            capabilities=MarketCapabilities(
+                benchmark=True,
+                breadth=False,
+                fundamentals=True,
+                group_rankings=False,
+                feature_snapshot=True,
+                official_universe=True,
+                finviz_screening=False,
+            ),
+        ),
+        _market_entry(
             code="MY",
             label="Malaysia",
             primary_mic="XKLS",

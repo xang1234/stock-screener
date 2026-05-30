@@ -162,6 +162,12 @@ index_registry = IndexRegistry(
             aliases=("STRAITS TIMES",),
         ),
         IndexDefinition(
+            key="ASX200",
+            label="S&P/ASX 200",
+            market="AU",
+            aliases=("ASX 200", "S&P ASX 200", "XJO", "AXJO"),
+        ),
+        IndexDefinition(
             key="FBMKLCI",
             label="FTSE Bursa Malaysia KLCI",
             market="MY",
