@@ -13,6 +13,11 @@ def test_listing_tier_registry_normalizes_source_aliases_by_market() -> None:
     assert listing_tier_registry.normalize("SG", "Catalist") == "catalist"
 
 
+def test_listing_tier_registry_normalizes_au_asx_main_aliases() -> None:
+    assert listing_tier_registry.normalize("AU", "Main", mic="XASX") == "main"
+    assert listing_tier_registry.normalize("AU", "ASX Main", mic="XASX") == "main"
+
+
 def test_listing_tier_registry_returns_none_for_unknown_or_blank_tiers() -> None:
     assert listing_tier_registry.normalize("HK", "") is None
     assert listing_tier_registry.normalize("HK", "Not A Tier") is None

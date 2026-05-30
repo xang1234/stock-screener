@@ -132,5 +132,12 @@ listing_tier_registry = ListingTierRegistry(
             mic="XSES",
             aliases=("SGX CATALIST",),
         ),
+        ListingTierDefinition(
+            key="main",
+            label="Main",
+            market="AU",
+            mic="XASX",
+            aliases=("MAIN BOARD", "ASX MAIN", "ASX"),
+        ),
     )
 )

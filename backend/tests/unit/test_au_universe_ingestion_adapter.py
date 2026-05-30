@@ -62,6 +62,27 @@ def test_au_adapter_accepts_exchange_prefixed_symbols():
     assert canonical_symbols == {"BHP.AX", "CBA.AX"}
 
 
+def test_au_adapter_accepts_main_board_listing_tier():
+    result = au_universe_ingestion_adapter.canonicalize_rows(
+        [
+            {"symbol": "BHP", "name": "BHP", "exchange": "ASX", "board": "Main"},
+            {
+                "symbol": "CBA",
+                "name": "Commonwealth Bank",
+                "exchange": "ASX",
+                "listing_tier": "Main",
+            },
+        ],
+        source_name="asx_official",
+        snapshot_id="asx-2026-05-15",
+    )
+
+    assert result.rejected_rows == ()
+    by_symbol = {row.symbol: row for row in result.canonical_rows}
+    assert by_symbol["BHP.AX"].listing_tier == "main"
+    assert by_symbol["CBA.AX"].listing_tier == "main"
+
+
 def test_au_adapter_rejects_invalid_exchange_symbol_missing_and_too_long():
     result = au_universe_ingestion_adapter.canonicalize_rows(
         [
