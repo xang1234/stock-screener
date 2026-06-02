@@ -455,21 +455,26 @@ def test_llm_tier_caches_none_result():
 
 
 def test_llm_tier_raising_tiebreaker_is_charged_and_cached():
-    # A raising tiebreaker must not break the run, must still consume budget (so it
-    # can't bypass the ceiling), and its (None) outcome is cached.
+    # A raising tiebreaker must not break the run, must consume budget hard enough
+    # to block the next key (the ceiling holds under errors), and its (None) outcome
+    # is cached so the same key isn't retried.
     calls = {"n": 0}
 
     def tb(text, shortlist):
         calls["n"] += 1
         raise RuntimeError("provider down")
 
-    tier = _LLMTier(tb, model_id="m", max_calls=5, deadline_seconds=None, clock=lambda: 0.0)
+    tier = _LLMTier(tb, model_id="m", max_calls=1, deadline_seconds=None, clock=lambda: 0.0)
     a = StockContext("A", "SG", sector="Fin", industry="Banks")
+    b = StockContext("B", "SG", sector="Energy", industry="Oil")  # distinct key
 
     assert tier.choose(a, ["G1"]) is None     # swallowed → no match
     assert tier.calls == 1                    # budget charged despite the raise
-    assert tier.choose(a, ["G1"]) is None     # cached → not retried
-    assert calls["n"] == 1
+    assert tier.budget_exhausted is True      # the raise spent the only slot
+    assert tier.choose(a, ["G1"]) is None     # same key → cache hit, not retried
+    assert tier.cache_hits == 1
+    assert tier.choose(b, ["G2"]) is None     # distinct key, budget spent → declined
+    assert calls["n"] == 1                    # tiebreaker invoked exactly once total
 
 
 def test_llm_tier_without_tiebreaker_declines():
