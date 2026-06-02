@@ -192,8 +192,9 @@ def test_deadline_disables_llm_and_falls_back_to_deterministic():
     _seed_taxonomy(session)
     # Two neutral SG stocks → both would hit the LLM (threshold 0.9), but the
     # deadline trips before the 2nd, so it must fall back to a free soft attach.
-    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings")
-    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings")
+    # Distinct sectors → distinct LLM-cache keys, so the 2nd isn't served from cache.
+    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings", sector="SectorA")
+    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings", sector="SectorB")
     llm, calls = _counting_llm()
     svc = IBDClassificationService(
         crosswalk=None, embedding_engine=FakeEngine(),
@@ -220,8 +221,10 @@ def test_deadline_disables_llm_and_falls_back_to_deterministic():
 def test_max_llm_calls_budget_caps_calls():
     session = _make_session()
     _seed_taxonomy(session)
-    for sym in ("AAA.SG", "BBB.SG", "CCC.SG"):
-        _add_universe(session, sym, "SG", name=f"{sym} Holdings")
+    # Distinct sectors → distinct LLM-cache keys, so the budget (not the cache) is
+    # what forces the fallback here.
+    for sym, sec in [("AAA.SG", "S1"), ("BBB.SG", "S2"), ("CCC.SG", "S3")]:
+        _add_universe(session, sym, "SG", name=f"{sym} Holdings", sector=sec)
     llm, calls = _counting_llm()
     svc = IBDClassificationService(
         crosswalk=None, embedding_engine=FakeEngine(),
@@ -238,6 +241,52 @@ def test_max_llm_calls_budget_caps_calls():
     assert result.llm_budget_exhausted is True
     assert result.summary()["llm_budget_exhausted"] is True
     assert result.summary()["partial"] is False  # budget cap is by-design, not "partial"
+
+
+def test_llm_cache_dedupes_same_industry_calls():
+    session = _make_session()
+    _seed_taxonomy(session)
+    # Two neutral stocks with identical industry attributes → identical shortlist
+    # → one shared LLM decision; the second is a free cache hit.
+    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings", sector="Finance", industry="Banks")
+    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings", sector="Finance", industry="Banks")
+    llm, calls = _counting_llm()
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(),
+        llm_tiebreaker=llm, llm_model_id="test/model", attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "SG", soft_attach=True)
+
+    assert calls["n"] == 1                      # one network call serves both
+    assert result.llm_calls == 1
+    assert result.llm_cache_hits == 1
+    assert len(result.assignments) == 2
+    assert all(a.source == SOURCE_LLM for a in result.assignments)
+    assert result.summary()["llm_cache_hits"] == 1
+
+
+def test_llm_cache_hit_bypasses_budget():
+    session = _make_session()
+    _seed_taxonomy(session)
+    # All three share one industry+shortlist; with a budget of 1 the single distinct
+    # call is spent once and the other two are served free from cache — so all three
+    # keep full LLM coverage instead of being soft-attached.
+    for sym in ("AAA.SG", "BBB.SG", "CCC.SG"):
+        _add_universe(session, sym, "SG", name=f"{sym} Co", sector="Finance", industry="Banks")
+    llm, calls = _counting_llm()
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(),
+        llm_tiebreaker=llm, llm_model_id="test/model", attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "SG", max_llm_calls=1, soft_attach=True)
+
+    assert calls["n"] == 1
+    assert result.llm_calls == 1
+    assert result.llm_cache_hits == 2
+    assert len(result.assignments) == 3
+    assert all(a.source == SOURCE_LLM for a in result.assignments)  # none soft-attached
 
 
 def test_soft_attach_uses_relaxed_crosswalk_plurality():

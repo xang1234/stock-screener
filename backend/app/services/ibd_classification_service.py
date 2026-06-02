@@ -79,6 +79,7 @@ class ClassificationResult:
     # soft-attach keeps coverage high even after the deadline).
     processed: int = 0
     llm_calls: int = 0
+    llm_cache_hits: int = 0
     deadline_hit: bool = False
     llm_budget_exhausted: bool = False
 
@@ -99,6 +100,7 @@ class ClassificationResult:
             "coverage_pct": round(100.0 * classified / total_active, 2) if total_active else 0.0,
             "processed": self.processed,
             "llm_calls": self.llm_calls,
+            "llm_cache_hits": self.llm_cache_hits,
             # ``partial`` flags the *abnormal* case: the runtime deadline cut the
             # high-quality (LLM) tier short. Hitting the LLM call budget is a
             # by-design cost cap, reported separately so it doesn't dilute the
@@ -297,6 +299,18 @@ class IBDClassificationService:
         scored.sort(key=lambda gs: (-gs[1], gs[0]))
         return scored
 
+    @staticmethod
+    def _llm_cache_key(ctx: StockContext, shortlist: list[str]) -> tuple:
+        """Key for deduping LLM tiebreaker calls.
+
+        Stocks sharing the same industry attributes *and* the same candidate
+        shortlist get the same IBD group — that's the assumption the crosswalk's
+        sector/industry tiers already encode — so they can share one decision. The
+        company name (the only discriminator dropped) rarely changes the group. The
+        shortlist is sorted so candidate ordering doesn't fragment the cache.
+        """
+        return (ctx.sub_industry, ctx.sector, ctx.industry, tuple(sorted(shortlist)))
+
     def classify_one(
         self,
         ctx: StockContext,
@@ -304,14 +318,18 @@ class IBDClassificationService:
         *,
         allow_llm: bool = True,
         soft_attach: bool = False,
-    ) -> tuple[Optional[Assignment], bool]:
-        """Classify one stock. Returns ``(assignment_or_none, llm_called)``.
+        llm_cache: dict | None = None,
+    ) -> tuple[Optional[Assignment], bool, bool]:
+        """Classify one stock. Returns ``(assignment_or_none, llm_called, cache_hit)``.
 
         The cascade: strict crosswalk → confident embedding → (paid LLM, only when
         ``allow_llm``) → free deterministic fallbacks when ``soft_attach`` is set
-        (relaxed crosswalk plurality, then nearest embedding centroid). The
-        ``llm_called`` flag lets the caller meter a paid-call budget even when the
-        call returns no usable answer.
+        (relaxed crosswalk plurality, then nearest embedding centroid).
+
+        ``llm_cache`` memoizes tiebreaker decisions by industry+shortlist so the
+        many residuals in one industry collapse to a single paid call. A cache hit
+        is served even past the deadline/budget (it's free) and never counts as a
+        call; only a cache *miss* requires ``allow_llm`` to go to the network.
         """
         # Tier 2: strict deterministic crosswalk.
         if self.crosswalk is not None:
@@ -322,7 +340,7 @@ class IBDClassificationService:
                 return Assignment(
                     symbol=ctx.symbol, market=ctx.market, industry_group=hit.group,
                     source=SOURCE_CROSSWALK, confidence=hit.confidence, method=hit.method,
-                ), False
+                ), False, False
 
         # Tier 3: rank against group centroids; attach the nearest if confident.
         ranking = self._embedding_ranking(ctx, centroids)
@@ -333,21 +351,31 @@ class IBDClassificationService:
                     symbol=ctx.symbol, market=ctx.market, industry_group=best_group,
                     source=SOURCE_EMBEDDING, confidence=round(float(best_score), 4),
                     method="centroid_nn",
-                ), False
+                ), False, False
 
-        # Tier 4: paid LLM tiebreaker over the embedding shortlist (budget/deadline
-        # gated by the caller via allow_llm).
+        # Tier 4: LLM tiebreaker over the embedding shortlist, memoized. The cache is
+        # consulted regardless of allow_llm (a hit is free); only a miss makes a
+        # network call, which allow_llm (budget/deadline) gates.
         llm_called = False
-        if allow_llm and self.llm_tiebreaker is not None and ranking:
+        cache_hit = False
+        if self.llm_tiebreaker is not None and ranking:
             shortlist = [g for g, _ in ranking[: self.LLM_SHORTLIST_SIZE]]
-            chosen = self.llm_tiebreaker(ctx.text(), shortlist)
-            llm_called = True
+            cache_key = self._llm_cache_key(ctx, shortlist)
+            chosen = None
+            if llm_cache is not None and cache_key in llm_cache:
+                chosen = llm_cache[cache_key]
+                cache_hit = True
+            elif allow_llm:
+                chosen = self.llm_tiebreaker(ctx.text(), shortlist)
+                llm_called = True
+                if llm_cache is not None:
+                    llm_cache[cache_key] = chosen
             if chosen and chosen in shortlist:
                 return Assignment(
                     symbol=ctx.symbol, market=ctx.market, industry_group=chosen,
                     source=SOURCE_LLM, confidence=None, method="llm_shortlist",
                     model_id=self.llm_model_id,
-                ), True
+                ), llm_called, cache_hit
 
         # Free deterministic fallbacks — keep coverage high (without the LLM) when
         # the LLM is unavailable, over budget, past the deadline, or unhelpful.
@@ -362,16 +390,16 @@ class IBDClassificationService:
                         symbol=ctx.symbol, market=ctx.market, industry_group=soft.group,
                         source=SOURCE_CROSSWALK, confidence=soft.confidence,
                         method=f"{soft.method}_plurality",
-                    ), llm_called
+                    ), llm_called, cache_hit
             if ranking:
                 best_group, best_score = ranking[0]
                 return Assignment(
                     symbol=ctx.symbol, market=ctx.market, industry_group=best_group,
                     source=SOURCE_EMBEDDING, confidence=round(float(best_score), 4),
                     method="centroid_nn_soft",
-                ), llm_called
+                ), llm_called, cache_hit
 
-        return None, llm_called
+        return None, llm_called, cache_hit
 
     def classify_market(
         self,
@@ -415,6 +443,7 @@ class IBDClassificationService:
 
         total = len(contexts)
         start = clock()
+        llm_cache: dict = {}  # memoize tiebreaker decisions by industry+shortlist
         for i, ctx in enumerate(contexts, 1):
             past_deadline = (
                 deadline_seconds is not None and (clock() - start) >= deadline_seconds
@@ -431,11 +460,14 @@ class IBDClassificationService:
                 self.llm_tiebreaker is not None and not past_deadline and budget_ok
             )
 
-            assignment, llm_called = self.classify_one(
-                ctx, centroids, allow_llm=allow_llm, soft_attach=soft_attach
+            assignment, llm_called, cache_hit = self.classify_one(
+                ctx, centroids, allow_llm=allow_llm, soft_attach=soft_attach,
+                llm_cache=llm_cache,
             )
             if llm_called:
                 result.llm_calls += 1
+            if cache_hit:
+                result.llm_cache_hits += 1
             if assignment is not None:
                 result.assignments.append(assignment)
             else:
@@ -449,8 +481,8 @@ class IBDClassificationService:
                 record = {
                     "market": market, "processed": i, "total": total,
                     "assigned": len(result.assignments), "unresolved": len(result.unresolved),
-                    "llm_calls": result.llm_calls, "by_source": by_source,
-                    "elapsed_sec": round(clock() - start, 1),
+                    "llm_calls": result.llm_calls, "llm_cache_hits": result.llm_cache_hits,
+                    "by_source": by_source, "elapsed_sec": round(clock() - start, 1),
                 }
                 logger.info("IBD %s progress: %s", market, record)
                 if progress_callback is not None:
