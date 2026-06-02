@@ -244,7 +244,7 @@ def test_soft_attach_uses_relaxed_crosswalk_plurality():
     session = _make_session()
     _seed_taxonomy(session)
     _add_universe(session, "D05.SG", "SG", name="DBS", sector="Financials", industry="Banks")
-    # A 1–1 split → strict lookup (0.6/3) fails, but the relaxed plurality wins.
+    # A 1-1 split -> strict lookup (0.6/3) fails, but the relaxed plurality wins.
     crosswalk = IBDCrosswalk(build_crosswalk(
         symbol_to_group={"B0": "Banks-Money Center", "B1": "Banks-Regional"},
         symbol_to_sector_industry={
