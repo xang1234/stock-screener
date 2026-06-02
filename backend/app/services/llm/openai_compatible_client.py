@@ -103,6 +103,7 @@ class OpenAICompatibleTiebreaker:
         api_key: Optional[str],
         temperature: float = 0.1,
         max_tokens: int = 200,
+        timeout: float = 30.0,
         complete_fn: Optional[Callable[..., str]] = None,
     ):
         self.model = model
@@ -111,17 +112,14 @@ class OpenAICompatibleTiebreaker:
         self.api_key = api_key
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.timeout = timeout
         self._complete_fn = complete_fn  # injectable for tests
 
     @property
     def model_id(self) -> str:
         return self.model
 
-    def _complete(self, user_prompt: str) -> str:
-        if self._complete_fn is not None:
-            return self._complete_fn(user_prompt)
-        import litellm
-
+    def _litellm_params(self, user_prompt: str) -> dict:
         params = {
             "model": self.litellm_model,
             "messages": [
@@ -130,12 +128,23 @@ class OpenAICompatibleTiebreaker:
             ],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            # Bound every call: the classifier's runtime deadline is only checked
+            # between symbols, so without this a single hung request could run past
+            # the job cap. Worst-case overrun is one timeout, not unbounded.
+            "timeout": self.timeout,
         }
         if self.api_base:
             params["api_base"] = self.api_base
         if self.api_key:
             params["api_key"] = self.api_key
-        response = litellm.completion(**params)
+        return params
+
+    def _complete(self, user_prompt: str) -> str:
+        if self._complete_fn is not None:
+            return self._complete_fn(user_prompt)
+        import litellm
+
+        response = litellm.completion(**self._litellm_params(user_prompt))
         return response["choices"][0]["message"]["content"] or ""
 
     def __call__(self, text: str, shortlist: list[str]) -> Optional[str]:
@@ -162,12 +171,14 @@ def build_ibd_tiebreaker() -> tuple[Optional[Callable[[str, list[str]], Optional
     if model:
         temperature = float(_env("IBD_LLM_TEMPERATURE") or 0.1)
         max_tokens = int(_env("IBD_LLM_MAX_TOKENS") or 200)
+        timeout = float(_env("IBD_LLM_TIMEOUT") or 30.0)
         tb = OpenAICompatibleTiebreaker(
             model=model,
             api_base=_env("IBD_LLM_API_BASE"),
             api_key=_env("IBD_LLM_API_KEY"),
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout=timeout,
         )
         logger.info("IBD tiebreaker: env-driven OpenAI-compatible model %s", model)
         return tb, tb.model_id

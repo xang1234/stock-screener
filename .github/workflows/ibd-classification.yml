@@ -193,6 +193,9 @@ jobs:
       IBD_LLM_API_BASE: ${{ vars.IBD_LLM_API_BASE }}
       IBD_LLM_MODEL: ${{ vars.IBD_LLM_MODEL }}
       IBD_LLM_API_KEY: ${{ secrets.IBD_LLM_API_KEY }}
+      # Per-call timeout (seconds) so a hung request can't exceed the job cap;
+      # unset → 30s default in build_ibd_tiebreaker.
+      IBD_LLM_TIMEOUT: ${{ vars.IBD_LLM_TIMEOUT }}
 
     steps:
       - uses: actions/checkout@v4
@@ -304,6 +307,11 @@ jobs:
         env:
           MARKET: ${{ matrix.market }}
           PREV_BUNDLE: ${{ steps.prev.outputs.prev_bundle }}
+          # Bound the paid LLM tier so a large foreign universe finishes under the
+          # 120-min job cap: once the deadline or call budget trips, remaining
+          # symbols use the free deterministic fallback (soft attach, on by default).
+          MAX_RUNTIME_MINUTES: ${{ vars.IBD_MAX_RUNTIME_MINUTES || '100' }}
+          MAX_LLM_CALLS: ${{ vars.IBD_MAX_LLM_CALLS || '600' }}
         run: |
           cd backend
           PREV_ARG=()
@@ -313,6 +321,8 @@ jobs:
           python -m app.scripts.build_ibd_classification_bundle \
             --market "$MARKET" \
             --output-dir /tmp/ibd-classification \
+            --max-runtime-minutes "$MAX_RUNTIME_MINUTES" \
+            --max-llm-calls "$MAX_LLM_CALLS" \
             "${PREV_ARG[@]}"
 
       - name: Upload IBD health report

@@ -88,6 +88,30 @@ def main() -> int:
         help="Path to the previous week's bundle (.json.gz) for the churn diff. "
         "When omitted, the health report's diff is null (e.g. first run).",
     )
+    parser.add_argument(
+        "--max-runtime-minutes",
+        type=float,
+        default=0.0,
+        help="Soft deadline for the classification loop. Once reached, the paid LLM "
+        "tier is disabled and remaining symbols use the free deterministic "
+        "fallback so the job finishes under the CI cap. 0 = unbounded.",
+    )
+    parser.add_argument(
+        "--max-llm-calls",
+        type=int,
+        default=0,
+        help="Cap on paid LLM tiebreaker calls per run; remaining low-confidence "
+        "symbols use the free deterministic fallback. 0 = unbounded.",
+    )
+    parser.add_argument(
+        "--soft-attach",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When the crosswalk/embedding/LLM tiers don't produce a confident "
+        "match, attach the nearest deterministic guess (relaxed crosswalk "
+        "plurality, then nearest centroid) instead of leaving the symbol "
+        "unresolved. Keeps foreign-market coverage high off the paid tier.",
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -108,6 +132,12 @@ def main() -> int:
     as_of_compact = as_of_date.replace("-", "")
     source_revision = f"ibd:{now.strftime('%Y%m%d%H%M%S')}"
 
+    deadline_seconds = args.max_runtime_minutes * 60 if args.max_runtime_minutes > 0 else None
+    max_llm_calls = args.max_llm_calls if args.max_llm_calls > 0 else None
+
+    def _print_progress(record: dict) -> None:
+        print(f"  progress: {record}", flush=True)
+
     with SessionLocal() as db:
         service = IBDClassificationService(
             crosswalk=crosswalk,
@@ -115,7 +145,13 @@ def main() -> int:
             llm_tiebreaker=tiebreaker,
             llm_model_id=model_id,
         )
-        result = service.classify_market(db, market)
+        result = service.classify_market(
+            db, market,
+            deadline_seconds=deadline_seconds,
+            max_llm_calls=max_llm_calls,
+            soft_attach=args.soft_attach,
+            progress_callback=_print_progress,
+        )
 
     summary = result.summary()
     payload = build_payload(
@@ -166,6 +202,12 @@ def main() -> int:
     print(f"  - health:   {health_path}")
     if health.get("diff") is not None:
         print(f"  - churn:    {health['diff']['churn_pct']}%")
+    if result.deadline_hit:
+        print(
+            f"  - NOTE: runtime deadline reached after {result.processed}/{result.candidates} "
+            f"symbols; remainder classified via free deterministic fallback (partial-quality run)",
+            flush=True,
+        )
     return 0
 
 

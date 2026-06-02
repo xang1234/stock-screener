@@ -163,18 +163,192 @@ def test_unresolved_when_no_match_and_no_llm():
     assert result.summary()["coverage_pct"] == 0.0
 
 
-def test_canonical_taxonomy_ignores_non_us_and_derived_rows():
+class FakeClock:
+    """Deterministic monotonic clock: returns each value in ``seq`` per call,
+    then repeats the last one (so a deadline can be tripped on a chosen iteration)."""
+
+    def __init__(self, seq):
+        self.seq = list(seq)
+        self.i = 0
+
+    def __call__(self) -> float:
+        value = self.seq[min(self.i, len(self.seq) - 1)]
+        self.i += 1
+        return value
+
+
+def _counting_llm(return_value=None):
+    calls = {"n": 0}
+
+    def _llm(text, shortlist):
+        calls["n"] += 1
+        return shortlist[-1] if return_value is None else return_value
+
+    return _llm, calls
+
+
+def test_deadline_disables_llm_and_falls_back_to_deterministic():
+    session = _make_session()
+    _seed_taxonomy(session)
+    # Two neutral SG stocks → both would hit the LLM (threshold 0.9), but the
+    # deadline trips before the 2nd, so it must fall back to a free soft attach.
+    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings")
+    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings")
+    llm, calls = _counting_llm()
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(),
+        llm_tiebreaker=llm, llm_model_id="test/model", attach_threshold=0.9,
+    )
+
+    # start=0, iter1 clock=0 (<10 → LLM ok), iter2 clock=100 (>=10 → deadline).
+    result = svc.classify_market(
+        session, "SG", deadline_seconds=10, clock=FakeClock([0, 0, 100]),
+        soft_attach=True,
+    )
+
+    assert calls["n"] == 1                      # only the first symbol reached the LLM
+    assert result.deadline_hit is True
+    assert result.llm_calls == 1
+    assert len(result.assignments) == 2         # both still classified (coverage kept)
+    sources = sorted(a.source for a in result.assignments)
+    assert SOURCE_LLM in sources
+    assert any(a.method == "centroid_nn_soft" for a in result.assignments)
+    assert result.summary()["partial"] is True
+    assert result.summary()["processed"] == 2
+
+
+def test_max_llm_calls_budget_caps_calls():
+    session = _make_session()
+    _seed_taxonomy(session)
+    for sym in ("AAA.SG", "BBB.SG", "CCC.SG"):
+        _add_universe(session, sym, "SG", name=f"{sym} Holdings")
+    llm, calls = _counting_llm()
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(),
+        llm_tiebreaker=llm, llm_model_id="test/model", attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "SG", max_llm_calls=1, soft_attach=True)
+
+    assert calls["n"] == 1                      # budget capped the paid tier
+    assert result.llm_calls == 1
+    assert len(result.assignments) == 3         # the other two soft-attached for free
+    assert sum(1 for a in result.assignments if a.method == "centroid_nn_soft") == 2
+    # Budget exhaustion is reported distinctly from the deadline alarm.
+    assert result.llm_budget_exhausted is True
+    assert result.summary()["llm_budget_exhausted"] is True
+    assert result.summary()["partial"] is False  # budget cap is by-design, not "partial"
+
+
+def test_soft_attach_uses_relaxed_crosswalk_plurality():
+    session = _make_session()
+    _seed_taxonomy(session)
+    _add_universe(session, "D05.SG", "SG", name="DBS", sector="Financials", industry="Banks")
+    # A 1-1 split -> strict lookup (0.6/3) fails, but the relaxed plurality wins.
+    crosswalk = IBDCrosswalk(build_crosswalk(
+        symbol_to_group={"B0": "Banks-Money Center", "B1": "Banks-Regional"},
+        symbol_to_sector_industry={
+            "B0": ("Financials", "Banks"), "B1": ("Financials", "Banks"),
+        },
+    ))
+    svc = IBDClassificationService(
+        crosswalk=crosswalk, embedding_engine=FakeEngine(), attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "SG", soft_attach=True)
+
+    a = result.assignments[0]
+    assert a.source == SOURCE_CROSSWALK
+    assert a.industry_group == "Banks-Money Center"   # deterministic tie-break
+    assert a.confidence == 0.5                          # actual vote share
+    assert a.method == "sector_industry_plurality"
+
+
+def test_soft_attach_falls_back_to_embedding_top1():
+    session = _make_session()
+    _seed_taxonomy(session)
+    # Neutral name (no keyword) → best cosine ~0.577, below the 0.9 threshold, no
+    # crosswalk and no LLM → soft attach to the nearest centroid (lexicographic
+    # tie-break across the equal-distance one-hot centroids → Computers-Software).
+    _add_universe(session, "0700.HK", "HK", name="Generic Holdings")
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(), attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "HK", soft_attach=True)
+
+    a = result.assignments[0]
+    assert a.source == SOURCE_EMBEDDING
+    assert a.method == "centroid_nn_soft"
+    assert a.industry_group == "Computers-Software"
+
+
+def test_soft_attach_off_preserves_unresolved():
+    session = _make_session()
+    _seed_taxonomy(session)
+    _add_universe(session, "MIXED.SG", "SG", name="Conglomerate Holdings")
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(), attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "SG")  # soft_attach defaults False
+
+    assert result.assignments == []
+    assert result.unresolved == ["MIXED.SG"]
+
+
+def test_progress_callback_receives_counts():
+    session = _make_session()
+    _seed_taxonomy(session)
+    _add_universe(session, "0700.HK", "HK", name="Tencent Software")
+    seen = []
+    svc = IBDClassificationService(crosswalk=None, embedding_engine=FakeEngine())
+
+    svc.classify_market(session, "HK", progress_every=1, progress_callback=seen.append)
+
+    assert seen and seen[-1]["processed"] == 1
+    assert seen[-1]["market"] == "HK"
+    assert "by_source" in seen[-1]
+
+
+def test_canonical_taxonomy_excludes_machine_derived_rows():
     session = _make_session()
     _seed_taxonomy(session)  # US csv groups
-    # A derived non-US row with a novel group must NOT widen the taxonomy.
+    # Machine-derived rows (any market) must NOT widen the taxonomy — otherwise a
+    # bad guess becomes a "real" group and grows its own centroid (feedback loop).
     session.add(IBDIndustryGroup(
-        symbol="X.SG", industry_group="Bogus-Derived-Group",
+        symbol="X.SG", industry_group="Bogus-Embedding-Group",
         market="SG", source="embedding", confidence=0.3,
+    ))
+    session.add(IBDIndustryGroup(
+        symbol="Y.SG", industry_group="Bogus-LLM-Group", market="SG", source="llm",
     ))
     session.commit()
 
     svc = IBDClassificationService(crosswalk=None, embedding_engine=None)
     taxonomy = svc.canonical_taxonomy(session)
 
-    assert "Bogus-Derived-Group" not in taxonomy
+    assert "Bogus-Embedding-Group" not in taxonomy
+    assert "Bogus-LLM-Group" not in taxonomy
     assert set(taxonomy) == {"Computers-Software", "Medical-Drugs", "Energy-Oil"}
+
+
+def test_canonical_taxonomy_includes_manual_foreign_group():
+    session = _make_session()
+    _seed_taxonomy(session)  # US csv groups
+    # A human-curated (manual) row for a genuinely foreign industry extends the
+    # ONE shared namespace, regardless of market — the escape hatch for industries
+    # the US CSV doesn't cover (e.g. a CN-specific group).
+    session.add(IBDIndustryGroup(
+        symbol="600519.SS", industry_group="Beverages-Baijiu",
+        market="CN", source="manual",
+    ))
+    session.commit()
+
+    svc = IBDClassificationService(crosswalk=None, embedding_engine=None)
+    taxonomy = svc.canonical_taxonomy(session)
+
+    assert "Beverages-Baijiu" in taxonomy
+    assert set(taxonomy) == {
+        "Computers-Software", "Medical-Drugs", "Energy-Oil", "Beverages-Baijiu",
+    }

@@ -64,14 +64,34 @@ def test_tiebreaker_call_swallows_errors():
     assert tb("text", SHORTLIST) is None  # never propagates
 
 
+def test_litellm_params_include_timeout():
+    # Each request must carry a per-call timeout so a hung call can't run past the
+    # classifier's loop-level runtime deadline (checked only between symbols).
+    tb = OpenAICompatibleTiebreaker(
+        model="deepseek-chat", api_base="https://x/v1", api_key="k", timeout=12.5,
+    )
+    params = tb._litellm_params("a chip maker")
+    assert params["timeout"] == 12.5
+    assert params["model"] == "openai/deepseek-chat"
+    assert params["api_base"] == "https://x/v1"
+    assert any(m["role"] == "user" and "a chip maker" in m["content"] for m in params["messages"])
+
+
+def test_tiebreaker_default_timeout():
+    tb = OpenAICompatibleTiebreaker(model="x", api_base=None, api_key=None)
+    assert tb.timeout == 30.0
+
+
 def test_build_tiebreaker_env_driven(monkeypatch):
     monkeypatch.setenv("IBD_LLM_MODEL", "deepseek-chat")
     monkeypatch.setenv("IBD_LLM_API_BASE", "https://api.deepseek.com/v1")
     monkeypatch.setenv("IBD_LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("IBD_LLM_TIMEOUT", "45")
     tb, model_id = build_ibd_tiebreaker()
     assert model_id == "deepseek-chat"
     assert isinstance(tb, OpenAICompatibleTiebreaker)
     assert tb.api_base == "https://api.deepseek.com/v1"
+    assert tb.timeout == 45.0
 
 
 def test_build_tiebreaker_none_when_unconfigured(monkeypatch):

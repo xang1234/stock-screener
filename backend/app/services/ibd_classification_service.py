@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Optional, Protocol
 
@@ -72,6 +73,14 @@ class ClassificationResult:
     skipped_authoritative: int = 0
     unresolved: list[str] = field(default_factory=list)
     candidates: int = 0
+    # Operational fields (populated by classify_market): how many candidates were
+    # processed, how many paid LLM calls were made, and whether a runtime deadline
+    # cut the expensive tier short (a "partial-quality" run, not a partial set —
+    # soft-attach keeps coverage high even after the deadline).
+    processed: int = 0
+    llm_calls: int = 0
+    deadline_hit: bool = False
+    llm_budget_exhausted: bool = False
 
     def summary(self) -> dict:
         by_method: dict[str, int] = {}
@@ -88,6 +97,14 @@ class ClassificationResult:
             "unresolved": len(self.unresolved),
             "by_source": by_method,
             "coverage_pct": round(100.0 * classified / total_active, 2) if total_active else 0.0,
+            "processed": self.processed,
+            "llm_calls": self.llm_calls,
+            # ``partial`` flags the *abnormal* case: the runtime deadline cut the
+            # high-quality (LLM) tier short. Hitting the LLM call budget is a
+            # by-design cost cap, reported separately so it doesn't dilute the
+            # deadline alarm.
+            "partial": self.deadline_hit,
+            "llm_budget_exhausted": self.llm_budget_exhausted,
         }
 
 
@@ -118,6 +135,14 @@ class IBDClassificationService:
     LLM_SHORTLIST_SIZE = 6
     # Representative member texts blended into each group centroid (when present).
     MAX_MEMBERS_PER_CENTROID = 25
+    # Relaxed thresholds for the soft (plurality) crosswalk fallback: any tier with
+    # at least one vote wins. Foreign markets carry English/global sector+industry
+    # strings even when GICS sub-industry and US-name-biased embeddings fail, so
+    # this is a free, deterministic way to keep coverage off the paid LLM tier.
+    SOFT_CROSSWALK_MIN_SHARE = 0.0
+    SOFT_CROSSWALK_MIN_VOTES = 1
+    # How often classify_market emits a progress record.
+    PROGRESS_EVERY = 500
 
     def __init__(
         self,
@@ -142,15 +167,21 @@ class IBDClassificationService:
     # ---- taxonomy & centroids ------------------------------------------------
 
     def canonical_taxonomy(self, db: Session) -> list[str]:
-        """The canonical IBD group list (distinct US CSV/manual groups)."""
+        """The canonical IBD group list — one shared namespace across all markets.
+
+        Includes only *authoritative* rows (``csv``/``manual``), so a machine-derived
+        assignment (crosswalk/embedding/llm) can never widen the taxonomy on a later
+        run and grow a centroid for its own guess. Crucially this is **not** scoped to
+        ``market == "US"``: a human ``manual`` curation in *any* market extends the
+        shared namespace (the escape hatch for industries the US CSV doesn't cover,
+        e.g. a CN-specific group), keeping groups cross-market comparable for
+        ``IBDGroupRankService`` rather than forking a per-market taxonomy.
+        """
         if self._taxonomy is None:
-            # Authoritative US rows only — never let a derived (crosswalk/embedding/
-            # llm) or non-US assignment widen the canonical taxonomy on a later run.
             rows = (
                 db.query(IBDIndustryGroup.industry_group)
                 .filter(
                     IBDIndustryGroup.industry_group.isnot(None),
-                    IBDIndustryGroup.market == "US",
                     IBDIndustryGroup.source.in_(IBDIndustryService.AUTHORITATIVE_SOURCES),
                 )
                 .distinct()
@@ -266,8 +297,23 @@ class IBDClassificationService:
         scored.sort(key=lambda gs: (-gs[1], gs[0]))
         return scored
 
-    def classify_one(self, ctx: StockContext, centroids: dict[str, "np.ndarray"]) -> Optional[Assignment]:
-        # Tier 2: deterministic crosswalk.
+    def classify_one(
+        self,
+        ctx: StockContext,
+        centroids: dict[str, "np.ndarray"],
+        *,
+        allow_llm: bool = True,
+        soft_attach: bool = False,
+    ) -> tuple[Optional[Assignment], bool]:
+        """Classify one stock. Returns ``(assignment_or_none, llm_called)``.
+
+        The cascade: strict crosswalk → confident embedding → (paid LLM, only when
+        ``allow_llm``) → free deterministic fallbacks when ``soft_attach`` is set
+        (relaxed crosswalk plurality, then nearest embedding centroid). The
+        ``llm_called`` flag lets the caller meter a paid-call budget even when the
+        call returns no usable answer.
+        """
+        # Tier 2: strict deterministic crosswalk.
         if self.crosswalk is not None:
             hit = self.crosswalk.lookup(
                 sub_industry=ctx.sub_industry, sector=ctx.sector, industry=ctx.industry
@@ -276,35 +322,87 @@ class IBDClassificationService:
                 return Assignment(
                     symbol=ctx.symbol, market=ctx.market, industry_group=hit.group,
                     source=SOURCE_CROSSWALK, confidence=hit.confidence, method=hit.method,
-                )
+                ), False
 
-        # Tier 3/4: rank against group centroids; attach the nearest if confident,
-        # otherwise let the LLM tiebreaker pick from that shortlist.
+        # Tier 3: rank against group centroids; attach the nearest if confident.
         ranking = self._embedding_ranking(ctx, centroids)
-        if not ranking:
-            return None
+        if ranking:
+            best_group, best_score = ranking[0]
+            if best_score >= self.attach_threshold:
+                return Assignment(
+                    symbol=ctx.symbol, market=ctx.market, industry_group=best_group,
+                    source=SOURCE_EMBEDDING, confidence=round(float(best_score), 4),
+                    method="centroid_nn",
+                ), False
 
-        best_group, best_score = ranking[0]
-        if best_score >= self.attach_threshold:
-            return Assignment(
-                symbol=ctx.symbol, market=ctx.market, industry_group=best_group,
-                source=SOURCE_EMBEDDING, confidence=round(float(best_score), 4),
-                method="centroid_nn",
-            )
-
-        if self.llm_tiebreaker is not None:
+        # Tier 4: paid LLM tiebreaker over the embedding shortlist (budget/deadline
+        # gated by the caller via allow_llm).
+        llm_called = False
+        if allow_llm and self.llm_tiebreaker is not None and ranking:
             shortlist = [g for g, _ in ranking[: self.LLM_SHORTLIST_SIZE]]
             chosen = self.llm_tiebreaker(ctx.text(), shortlist)
+            llm_called = True
             if chosen and chosen in shortlist:
                 return Assignment(
                     symbol=ctx.symbol, market=ctx.market, industry_group=chosen,
                     source=SOURCE_LLM, confidence=None, method="llm_shortlist",
                     model_id=self.llm_model_id,
-                )
-        return None
+                ), True
 
-    def classify_market(self, db: Session, market: str) -> ClassificationResult:
+        # Free deterministic fallbacks — keep coverage high (without the LLM) when
+        # the LLM is unavailable, over budget, past the deadline, or unhelpful.
+        if soft_attach:
+            if self.crosswalk is not None:
+                soft = self.crosswalk.lookup(
+                    sub_industry=ctx.sub_industry, sector=ctx.sector, industry=ctx.industry,
+                    min_share=self.SOFT_CROSSWALK_MIN_SHARE, min_votes=self.SOFT_CROSSWALK_MIN_VOTES,
+                )
+                if soft is not None:
+                    return Assignment(
+                        symbol=ctx.symbol, market=ctx.market, industry_group=soft.group,
+                        source=SOURCE_CROSSWALK, confidence=soft.confidence,
+                        method=f"{soft.method}_plurality",
+                    ), llm_called
+            if ranking:
+                best_group, best_score = ranking[0]
+                return Assignment(
+                    symbol=ctx.symbol, market=ctx.market, industry_group=best_group,
+                    source=SOURCE_EMBEDDING, confidence=round(float(best_score), 4),
+                    method="centroid_nn_soft",
+                ), llm_called
+
+        return None, llm_called
+
+    def classify_market(
+        self,
+        db: Session,
+        market: str,
+        *,
+        deadline_seconds: float | None = None,
+        clock: Callable[[], float] | None = None,
+        max_llm_calls: int | None = None,
+        soft_attach: bool = False,
+        progress_every: int | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
+    ) -> ClassificationResult:
+        """Classify a market's residual universe.
+
+        ``deadline_seconds`` and ``max_llm_calls`` bound the expensive LLM tier so a
+        large foreign universe can't run past the CI job cap or an unbounded paid
+        bill; once either trips, remaining symbols use the free deterministic
+        fallbacks (when ``soft_attach``). ``clock`` is injectable for tests.
+        """
         market = (market or "US").upper()
+        clock = clock or time.monotonic
+        progress_every = self.PROGRESS_EVERY if progress_every is None else progress_every
+
+        if deadline_seconds is not None and not soft_attach and self.llm_tiebreaker is not None:
+            logger.warning(
+                "IBD %s: deadline set without soft_attach — symbols reached after the "
+                "deadline will be left unresolved (pass soft_attach=True to keep coverage)",
+                market,
+            )
+
         taxonomy = self.canonical_taxonomy(db)
         if not taxonomy:
             logger.warning("No canonical IBD taxonomy available; load the CSV first")
@@ -314,12 +412,52 @@ class IBDClassificationService:
         result = ClassificationResult(
             market=market, candidates=len(contexts), skipped_authoritative=skipped_authoritative
         )
-        for ctx in contexts:
-            assignment = self.classify_one(ctx, centroids)
+
+        total = len(contexts)
+        start = clock()
+        for i, ctx in enumerate(contexts, 1):
+            past_deadline = (
+                deadline_seconds is not None and (clock() - start) >= deadline_seconds
+            )
+            if past_deadline and not result.deadline_hit:
+                result.deadline_hit = True
+                logger.warning(
+                    "IBD %s: deadline (%ss) reached after %d/%d symbols; disabling the "
+                    "LLM tier for the remainder (deterministic fallback only)",
+                    market, deadline_seconds, i - 1, total,
+                )
+            budget_ok = max_llm_calls is None or result.llm_calls < max_llm_calls
+            allow_llm = (
+                self.llm_tiebreaker is not None and not past_deadline and budget_ok
+            )
+
+            assignment, llm_called = self.classify_one(
+                ctx, centroids, allow_llm=allow_llm, soft_attach=soft_attach
+            )
+            if llm_called:
+                result.llm_calls += 1
             if assignment is not None:
                 result.assignments.append(assignment)
             else:
                 result.unresolved.append(ctx.symbol)
+            result.processed = i
 
+            if progress_every and (i % progress_every == 0 or i == total):
+                by_source: dict[str, int] = {}
+                for a in result.assignments:
+                    by_source[a.source] = by_source.get(a.source, 0) + 1
+                record = {
+                    "market": market, "processed": i, "total": total,
+                    "assigned": len(result.assignments), "unresolved": len(result.unresolved),
+                    "llm_calls": result.llm_calls, "by_source": by_source,
+                    "elapsed_sec": round(clock() - start, 1),
+                }
+                logger.info("IBD %s progress: %s", market, record)
+                if progress_callback is not None:
+                    progress_callback(record)
+
+        result.llm_budget_exhausted = (
+            max_llm_calls is not None and result.llm_calls >= max_llm_calls
+        )
         logger.info("IBD classification %s: %s", market, result.summary())
         return result
