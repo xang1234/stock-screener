@@ -72,3 +72,34 @@ def test_unknown_key_returns_none():
     cw = IBDCrosswalk(_build(symbol_to_group={"A": "G"}, symbol_to_subindustry={"A": "K"}))
     assert cw.lookup(sub_industry="DOES-NOT-EXIST") is None
     assert cw.lookup() is None  # no attributes → nothing to resolve
+
+
+def test_resolve_returns_strict_and_plurality_from_different_tiers():
+    # Sub-industry is a 1–1 split (plurality, but below strict thresholds); the
+    # sector+industry tier is decisive. One pass must yield both, from different tiers.
+    cw = IBDCrosswalk(_build(
+        symbol_to_group={"M0": "G1", "M1": "G2", **{f"T{i}": "Strict-Group" for i in range(5)}},
+        symbol_to_subindustry={"M0": "SubMixed", "M1": "SubMixed"},
+        symbol_to_sector_industry={f"T{i}": ("Tech", "Software") for i in range(5)},
+    ))
+    res = cw.resolve(sub_industry="SubMixed", sector="Tech", industry="Software")
+
+    # plurality = most-specific tier with any data = the 1–1 sub-industry winner
+    assert res.plurality is not None
+    assert res.plurality.method == TIER_SUBINDUSTRY
+    assert res.plurality.group == "G1"
+    assert res.plurality.confidence == 0.5
+    # strict skips the sub-industry (below thresholds) and lands on sector+industry
+    assert res.strict is not None
+    assert res.strict.method == TIER_SECTOR_INDUSTRY
+    assert res.strict.group == "Strict-Group"
+    # lookup() is exactly resolve().strict
+    assert cw.lookup(
+        sub_industry="SubMixed", sector="Tech", industry="Software"
+    ).method == TIER_SECTOR_INDUSTRY
+
+
+def test_resolve_none_when_no_tier_has_data():
+    cw = IBDCrosswalk(_build(symbol_to_group={"A": "G"}, symbol_to_subindustry={"A": "K"}))
+    res = cw.resolve(sub_industry="UNKNOWN")
+    assert res.strict is None and res.plurality is None

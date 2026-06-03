@@ -16,6 +16,8 @@ from app.services.ibd_classification_service import (
     SOURCE_EMBEDDING,
     SOURCE_LLM,
     IBDClassificationService,
+    StockContext,
+    _LLMTier,
 )
 from app.services.ibd_crosswalk import IBDCrosswalk, build_crosswalk
 
@@ -163,20 +165,6 @@ def test_unresolved_when_no_match_and_no_llm():
     assert result.summary()["coverage_pct"] == 0.0
 
 
-class FakeClock:
-    """Deterministic monotonic clock: returns each value in ``seq`` per call,
-    then repeats the last one (so a deadline can be tripped on a chosen iteration)."""
-
-    def __init__(self, seq):
-        self.seq = list(seq)
-        self.i = 0
-
-    def __call__(self) -> float:
-        value = self.seq[min(self.i, len(self.seq) - 1)]
-        self.i += 1
-        return value
-
-
 def _counting_llm(return_value=None):
     calls = {"n": 0}
 
@@ -192,18 +180,21 @@ def test_deadline_disables_llm_and_falls_back_to_deterministic():
     _seed_taxonomy(session)
     # Two neutral SG stocks → both would hit the LLM (threshold 0.9), but the
     # deadline trips before the 2nd, so it must fall back to a free soft attach.
-    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings")
-    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings")
+    # Distinct sectors → distinct LLM-cache keys, so the 2nd isn't served from cache.
+    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings", sector="SectorA")
+    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings", sector="SectorB")
     llm, calls = _counting_llm()
     svc = IBDClassificationService(
         crosswalk=None, embedding_engine=FakeEngine(),
         llm_tiebreaker=llm, llm_model_id="test/model", attach_threshold=0.9,
     )
 
-    # start=0, iter1 clock=0 (<10 → LLM ok), iter2 clock=100 (>=10 → deadline).
+    # The deadline trips only after the first real LLM call: the 1st stock gets the
+    # LLM, the 2nd is past the deadline and must fall back to a free soft attach.
+    # Keyed on call count (not clock-call order) so it's robust to bookkeeping reads.
+    clock = lambda: 0.0 if calls["n"] == 0 else 100.0  # noqa: E731
     result = svc.classify_market(
-        session, "SG", deadline_seconds=10, clock=FakeClock([0, 0, 100]),
-        soft_attach=True,
+        session, "SG", deadline_seconds=10, clock=clock, soft_attach=True,
     )
 
     assert calls["n"] == 1                      # only the first symbol reached the LLM
@@ -220,8 +211,10 @@ def test_deadline_disables_llm_and_falls_back_to_deterministic():
 def test_max_llm_calls_budget_caps_calls():
     session = _make_session()
     _seed_taxonomy(session)
-    for sym in ("AAA.SG", "BBB.SG", "CCC.SG"):
-        _add_universe(session, sym, "SG", name=f"{sym} Holdings")
+    # Distinct sectors → distinct LLM-cache keys, so the budget (not the cache) is
+    # what forces the fallback here.
+    for sym, sec in [("AAA.SG", "S1"), ("BBB.SG", "S2"), ("CCC.SG", "S3")]:
+        _add_universe(session, sym, "SG", name=f"{sym} Holdings", sector=sec)
     llm, calls = _counting_llm()
     svc = IBDClassificationService(
         crosswalk=None, embedding_engine=FakeEngine(),
@@ -238,6 +231,52 @@ def test_max_llm_calls_budget_caps_calls():
     assert result.llm_budget_exhausted is True
     assert result.summary()["llm_budget_exhausted"] is True
     assert result.summary()["partial"] is False  # budget cap is by-design, not "partial"
+
+
+def test_llm_cache_dedupes_same_industry_calls():
+    session = _make_session()
+    _seed_taxonomy(session)
+    # Two neutral stocks with identical industry attributes → identical shortlist
+    # → one shared LLM decision; the second is a free cache hit.
+    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings", sector="Finance", industry="Banks")
+    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings", sector="Finance", industry="Banks")
+    llm, calls = _counting_llm()
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(),
+        llm_tiebreaker=llm, llm_model_id="test/model", attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "SG", soft_attach=True)
+
+    assert calls["n"] == 1                      # one network call serves both
+    assert result.llm_calls == 1
+    assert result.llm_cache_hits == 1
+    assert len(result.assignments) == 2
+    assert all(a.source == SOURCE_LLM for a in result.assignments)
+    assert result.summary()["llm_cache_hits"] == 1
+
+
+def test_llm_cache_hit_bypasses_budget():
+    session = _make_session()
+    _seed_taxonomy(session)
+    # All three share one industry+shortlist; with a budget of 1 the single distinct
+    # call is spent once and the other two are served free from cache — so all three
+    # keep full LLM coverage instead of being soft-attached.
+    for sym in ("AAA.SG", "BBB.SG", "CCC.SG"):
+        _add_universe(session, sym, "SG", name=f"{sym} Co", sector="Finance", industry="Banks")
+    llm, calls = _counting_llm()
+    svc = IBDClassificationService(
+        crosswalk=None, embedding_engine=FakeEngine(),
+        llm_tiebreaker=llm, llm_model_id="test/model", attach_threshold=0.9,
+    )
+
+    result = svc.classify_market(session, "SG", max_llm_calls=1, soft_attach=True)
+
+    assert calls["n"] == 1
+    assert result.llm_calls == 1
+    assert result.llm_cache_hits == 2
+    assert len(result.assignments) == 3
+    assert all(a.source == SOURCE_LLM for a in result.assignments)  # none soft-attached
 
 
 def test_soft_attach_uses_relaxed_crosswalk_plurality():
@@ -352,3 +391,108 @@ def test_canonical_taxonomy_includes_manual_foreign_group():
     assert set(taxonomy) == {
         "Computers-Software", "Medical-Drugs", "Energy-Oil", "Beverages-Baijiu",
     }
+
+
+# ---- _LLMTier (the rationed/deduped paid tier), unit-tested without a DB --------
+
+def _tier_tiebreaker():
+    calls = {"n": 0}
+
+    def tb(text, shortlist):
+        calls["n"] += 1
+        return shortlist[0]
+
+    return tb, calls
+
+
+def test_llm_tier_caches_and_caps_budget():
+    tb, calls = _tier_tiebreaker()
+    tier = _LLMTier(tb, model_id="m", max_calls=1, deadline_seconds=None, clock=lambda: 0.0)
+    a = StockContext("A", "SG", sector="Fin", industry="Banks")
+    b = StockContext("B", "SG", sector="Fin", industry="Banks")   # same key as a
+    c = StockContext("C", "SG", sector="Energy", industry="Oil")  # distinct key
+
+    assert tier.choose(a, ["G1", "G2"]) == "G1"   # miss → one paid call
+    assert tier.choose(b, ["G1", "G2"]) == "G1"   # same ranked shortlist → free cache hit
+    assert tier.choose(c, ["G3"]) is None         # budget spent → decline
+    assert tier.calls == 1 and tier.cache_hits == 1
+    assert tier.budget_exhausted is True
+    assert tier.choose(b, ["G1", "G2"]) == "G1"   # cached → still served over budget
+
+
+def test_llm_tier_reordered_shortlist_is_a_distinct_prompt():
+    # The LLM prompt renders candidates in order, so a reordered shortlist is a
+    # different prompt and must NOT reuse the cached answer.
+    tb, calls = _tier_tiebreaker()  # returns shortlist[0]
+    tier = _LLMTier(tb, model_id="m", max_calls=5, deadline_seconds=None, clock=lambda: 0.0)
+    a = StockContext("A", "SG", sector="Fin", industry="Banks")
+
+    assert tier.choose(a, ["G1", "G2"]) == "G1"   # miss → call (top candidate G1)
+    assert tier.choose(a, ["G2", "G1"]) == "G2"   # reordered → separate call (top G2)
+    assert calls["n"] == 2
+    assert tier.cache_hits == 0
+
+
+def test_llm_tier_declines_past_deadline_but_serves_cache():
+    tb, calls = _tier_tiebreaker()
+    now = {"v": 0.0}
+    tier = _LLMTier(tb, model_id="m", max_calls=None, deadline_seconds=10, clock=lambda: now["v"])
+    a = StockContext("A", "SG", sector="Fin", industry="Banks")
+    b = StockContext("B", "SG", sector="Energy", industry="Oil")
+
+    assert tier.choose(a, ["G1"]) == "G1"     # under deadline → call
+    now["v"] = 100.0                          # past deadline
+    assert tier.choose(b, ["G2"]) is None     # uncached → declined
+    assert tier.deadline_reached is True
+    assert tier.calls == 1
+    assert tier.choose(a, ["G1"]) == "G1"     # cached → served even past deadline
+    assert tier.cache_hits == 1
+
+
+def test_llm_tier_caches_none_result():
+    # A "no match" (LLM declined / hallucinated off-list) is cached too, so the same
+    # industry+shortlist is never re-queried.
+    calls = {"n": 0}
+
+    def tb(text, shortlist):
+        calls["n"] += 1
+        return None
+
+    tier = _LLMTier(tb, model_id="m", max_calls=5, deadline_seconds=None, clock=lambda: 0.0)
+    a = StockContext("A", "SG", sector="Fin", industry="Banks")
+
+    assert tier.choose(a, ["G1"]) is None     # miss → one call
+    assert tier.choose(a, ["G1"]) is None     # same key → cache hit, not a retry
+    assert calls["n"] == 1
+    assert tier.cache_hits == 1
+
+
+def test_llm_tier_raising_tiebreaker_is_charged_and_cached():
+    # A raising tiebreaker must not break the run, must consume budget hard enough
+    # to block the next key (the ceiling holds under errors), and its (None) outcome
+    # is cached so the same key isn't retried.
+    calls = {"n": 0}
+
+    def tb(text, shortlist):
+        calls["n"] += 1
+        raise RuntimeError("provider down")
+
+    tier = _LLMTier(tb, model_id="m", max_calls=1, deadline_seconds=None, clock=lambda: 0.0)
+    a = StockContext("A", "SG", sector="Fin", industry="Banks")
+    b = StockContext("B", "SG", sector="Energy", industry="Oil")  # distinct key
+
+    assert tier.choose(a, ["G1"]) is None     # swallowed → no match
+    assert tier.calls == 1                    # budget charged despite the raise
+    assert tier.budget_exhausted is True      # the raise spent the only slot
+    assert tier.choose(a, ["G1"]) is None     # same key → cache hit, not retried
+    assert tier.cache_hits == 1
+    assert tier.choose(b, ["G2"]) is None     # distinct key, budget spent → declined
+    assert calls["n"] == 1                    # tiebreaker invoked exactly once total
+
+
+def test_llm_tier_without_tiebreaker_declines():
+    tier = _LLMTier(None, model_id=None, max_calls=None, deadline_seconds=None, clock=lambda: 0.0)
+    a = StockContext("A", "SG", sector="Fin", industry="Banks")
+    assert tier.choose(a, ["G1"]) is None
+    assert tier.choose(a, []) is None
+    assert tier.calls == 0 and tier.cache_hits == 0

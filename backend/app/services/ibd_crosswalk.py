@@ -112,6 +112,19 @@ class CrosswalkHit:
     method: str  # one of TIER_* constants
 
 
+@dataclass
+class CrosswalkResolution:
+    """Both readings of one lookup, from a single pass over the tiers:
+
+    - ``strict``: the most-specific tier clearing the confidence thresholds (a
+      high-confidence deterministic match), or ``None``.
+    - ``plurality``: the most-specific tier with *any* votes (the best-effort
+      guess used as a free fallback for foreign markets), or ``None``.
+    """
+    strict: Optional[CrosswalkHit]
+    plurality: Optional[CrosswalkHit]
+
+
 class IBDCrosswalk:
     """Loads a crosswalk artifact and resolves stocks to IBD groups."""
 
@@ -125,7 +138,7 @@ class IBDCrosswalk:
         with open(path, "r", encoding="utf-8") as f:
             return cls(json.load(f))
 
-    def lookup(
+    def resolve(
         self,
         *,
         sub_industry: Optional[str] = None,
@@ -133,12 +146,12 @@ class IBDCrosswalk:
         industry: Optional[str] = None,
         min_share: float = 0.6,
         min_votes: int = 3,
-    ) -> Optional[CrosswalkHit]:
-        """Resolve a stock to an IBD group, most-specific tier first.
+    ) -> CrosswalkResolution:
+        """Resolve a stock in one most-specific-first pass over the tiers.
 
-        Returns the first tier whose winning group clears ``min_share`` and
-        ``min_votes``; ``None`` if no tier qualifies (defers to the next cascade
-        stage). ``confidence`` is the winning group's vote share.
+        Returns both the strict hit (first tier clearing ``min_share``/``min_votes``)
+        and the plurality hit (first tier with any votes), so the caller gets the
+        confident match and the best-effort fallback without walking the tiers twice.
         """
         sub = _norm(sub_industry)
         sector = _norm(sector)
@@ -154,12 +167,32 @@ class IBDCrosswalk:
         if sector:
             candidates.append((self._sec, sector, TIER_SECTOR))
 
+        strict: Optional[CrosswalkHit] = None
+        plurality: Optional[CrosswalkHit] = None
         for table, key, method in candidates:
             entry = table.get(key)
-            if not entry:
+            if not entry or entry["votes"] < 1:
                 continue
-            if entry["share"] >= min_share and entry["votes"] >= min_votes:
-                return CrosswalkHit(
-                    group=entry["group"], confidence=entry["share"], method=method
-                )
-        return None
+            hit = CrosswalkHit(group=entry["group"], confidence=entry["share"], method=method)
+            if plurality is None:
+                plurality = hit
+            if strict is None and entry["share"] >= min_share and entry["votes"] >= min_votes:
+                strict = hit
+        return CrosswalkResolution(strict=strict, plurality=plurality)
+
+    def lookup(
+        self,
+        *,
+        sub_industry: Optional[str] = None,
+        sector: Optional[str] = None,
+        industry: Optional[str] = None,
+        min_share: float = 0.6,
+        min_votes: int = 3,
+    ) -> Optional[CrosswalkHit]:
+        """The strict deterministic match (first tier clearing the thresholds), or
+        ``None``. Thin accessor over :meth:`resolve` for callers that only want the
+        confident hit."""
+        return self.resolve(
+            sub_industry=sub_industry, sector=sector, industry=industry,
+            min_share=min_share, min_votes=min_votes,
+        ).strict

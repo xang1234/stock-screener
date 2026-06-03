@@ -79,6 +79,7 @@ class ClassificationResult:
     # soft-attach keeps coverage high even after the deadline).
     processed: int = 0
     llm_calls: int = 0
+    llm_cache_hits: int = 0
     deadline_hit: bool = False
     llm_budget_exhausted: bool = False
 
@@ -99,6 +100,7 @@ class ClassificationResult:
             "coverage_pct": round(100.0 * classified / total_active, 2) if total_active else 0.0,
             "processed": self.processed,
             "llm_calls": self.llm_calls,
+            "llm_cache_hits": self.llm_cache_hits,
             # ``partial`` flags the *abnormal* case: the runtime deadline cut the
             # high-quality (LLM) tier short. Hitting the LLM call budget is a
             # by-design cost cap, reported separately so it doesn't dilute the
@@ -120,6 +122,77 @@ class EmbeddingEngine(Protocol):
 LLMTiebreaker = Callable[[str, list[str]], Optional[str]]
 
 
+class _LLMTier:
+    """The rationed, deduplicated paid tiebreaker.
+
+    Owns the single cross-cutting policy of the LLM stage — memoization, the call
+    budget, and the runtime deadline — so the classifier loop doesn't have to. A
+    cache hit is free (served even past the deadline/budget and never charged); a
+    miss makes a network call only while under budget and before the deadline.
+    ``choose`` returns the picked group, or ``None`` to decline (no tiebreaker,
+    empty shortlist, over budget, or past deadline) — the caller then falls back.
+    """
+
+    def __init__(
+        self,
+        tiebreaker: LLMTiebreaker | None,
+        *,
+        model_id: str | None,
+        max_calls: int | None,
+        deadline_seconds: float | None,
+        clock: Callable[[], float],
+    ):
+        self._tiebreaker = tiebreaker
+        self.model_id = model_id
+        self._max_calls = max_calls
+        self._deadline_seconds = deadline_seconds
+        self._clock = clock
+        self._start = clock()
+        self._cache: dict[tuple, Optional[str]] = {}
+        self.calls = 0
+        self.cache_hits = 0
+        self.deadline_reached = False
+
+    @property
+    def budget_exhausted(self) -> bool:
+        return self._max_calls is not None and self.calls >= self._max_calls
+
+    def _past_deadline(self) -> bool:
+        return (
+            self._deadline_seconds is not None
+            and (self._clock() - self._start) >= self._deadline_seconds
+        )
+
+    def choose(self, ctx: "StockContext", shortlist: list[str]) -> Optional[str]:
+        if self._tiebreaker is None or not shortlist:
+            return None
+        # Industry + ranked-shortlist key: the LLM prompt renders candidates in this
+        # order, so a reordered shortlist is a different prompt and must not reuse a
+        # cached answer. Same-industry stocks almost always produce the same ranking,
+        # so this still collapses the common case. The company name is the only input
+        # dropped from the key, and it rarely changes the IBD group.
+        key = (ctx.sub_industry, ctx.sector, ctx.industry, tuple(shortlist))
+        if key in self._cache:
+            self.cache_hits += 1
+            return self._cache[key]
+        if self._past_deadline():
+            self.deadline_reached = True
+            return None
+        if self.budget_exhausted:
+            return None
+        # Consume the budget slot *before* the call so a slow or raising tiebreaker
+        # can't bypass the ceiling, and cache the outcome (including None / a raised
+        # error) so the same industry+shortlist is never retried.
+        self.calls += 1
+        try:
+            chosen = self._tiebreaker(ctx.text(), shortlist)
+        except Exception:  # noqa: BLE001 — a misbehaving tiebreaker must not break the run
+            logger.warning("IBD LLM tier: tiebreaker raised; treating as no match")
+            chosen = None
+        self._cache[key] = chosen
+        return chosen
+
+
 def _clean_group_name_for_embedding(group: str) -> str:
     """Turn an IBD group code into descriptive text, e.g.
     'Oil&Gas-Refining/Mktg' -> 'Oil Gas Refining Mktg'."""
@@ -135,12 +208,6 @@ class IBDClassificationService:
     LLM_SHORTLIST_SIZE = 6
     # Representative member texts blended into each group centroid (when present).
     MAX_MEMBERS_PER_CENTROID = 25
-    # Relaxed thresholds for the soft (plurality) crosswalk fallback: any tier with
-    # at least one vote wins. Foreign markets carry English/global sector+industry
-    # strings even when GICS sub-industry and US-name-biased embeddings fail, so
-    # this is a free, deterministic way to keep coverage off the paid LLM tier.
-    SOFT_CROSSWALK_MIN_SHARE = 0.0
-    SOFT_CROSSWALK_MIN_VOTES = 1
     # How often classify_market emits a progress record.
     PROGRESS_EVERY = 500
 
@@ -297,81 +364,77 @@ class IBDClassificationService:
         scored.sort(key=lambda gs: (-gs[1], gs[0]))
         return scored
 
+    def _embedding_assignment(
+        self, ctx: StockContext, group: str, score: float, method: str
+    ) -> Assignment:
+        return Assignment(
+            symbol=ctx.symbol, market=ctx.market, industry_group=group,
+            source=SOURCE_EMBEDDING, confidence=round(float(score), 4), method=method,
+        )
+
     def classify_one(
         self,
         ctx: StockContext,
         centroids: dict[str, "np.ndarray"],
         *,
-        allow_llm: bool = True,
+        llm_tier: "_LLMTier | None" = None,
         soft_attach: bool = False,
-    ) -> tuple[Optional[Assignment], bool]:
-        """Classify one stock. Returns ``(assignment_or_none, llm_called)``.
-
-        The cascade: strict crosswalk → confident embedding → (paid LLM, only when
-        ``allow_llm``) → free deterministic fallbacks when ``soft_attach`` is set
-        (relaxed crosswalk plurality, then nearest embedding centroid). The
-        ``llm_called`` flag lets the caller meter a paid-call budget even when the
-        call returns no usable answer.
+    ) -> Optional[Assignment]:
+        """Classify one stock through the cascade: strict crosswalk → confident
+        embedding → LLM tiebreaker (rationed/deduped by ``llm_tier``) → free
+        deterministic fallbacks (relaxed crosswalk plurality, then nearest centroid)
+        when ``soft_attach`` is set. Returns ``None`` only when nothing matches.
         """
-        # Tier 2: strict deterministic crosswalk.
-        if self.crosswalk is not None:
-            hit = self.crosswalk.lookup(
+        # The crosswalk is walked once: ``strict`` is the confident tier-2 match,
+        # ``plurality`` the best-effort fallback reused below.
+        resolution = (
+            self.crosswalk.resolve(
                 sub_industry=ctx.sub_industry, sector=ctx.sector, industry=ctx.industry
             )
-            if hit is not None:
-                return Assignment(
-                    symbol=ctx.symbol, market=ctx.market, industry_group=hit.group,
-                    source=SOURCE_CROSSWALK, confidence=hit.confidence, method=hit.method,
-                ), False
+            if self.crosswalk is not None
+            else None
+        )
+
+        # Tier 2: strict deterministic crosswalk.
+        if resolution is not None and resolution.strict is not None:
+            hit = resolution.strict
+            return Assignment(
+                symbol=ctx.symbol, market=ctx.market, industry_group=hit.group,
+                source=SOURCE_CROSSWALK, confidence=hit.confidence, method=hit.method,
+            )
 
         # Tier 3: rank against group centroids; attach the nearest if confident.
         ranking = self._embedding_ranking(ctx, centroids)
-        if ranking:
+        if ranking and ranking[0][1] >= self.attach_threshold:
             best_group, best_score = ranking[0]
-            if best_score >= self.attach_threshold:
-                return Assignment(
-                    symbol=ctx.symbol, market=ctx.market, industry_group=best_group,
-                    source=SOURCE_EMBEDDING, confidence=round(float(best_score), 4),
-                    method="centroid_nn",
-                ), False
+            return self._embedding_assignment(ctx, best_group, best_score, "centroid_nn")
 
-        # Tier 4: paid LLM tiebreaker over the embedding shortlist (budget/deadline
-        # gated by the caller via allow_llm).
-        llm_called = False
-        if allow_llm and self.llm_tiebreaker is not None and ranking:
+        # Tier 4: rationed/deduped LLM tiebreaker over the embedding shortlist.
+        if ranking and llm_tier is not None:
             shortlist = [g for g, _ in ranking[: self.LLM_SHORTLIST_SIZE]]
-            chosen = self.llm_tiebreaker(ctx.text(), shortlist)
-            llm_called = True
+            chosen = llm_tier.choose(ctx, shortlist)
             if chosen and chosen in shortlist:
                 return Assignment(
                     symbol=ctx.symbol, market=ctx.market, industry_group=chosen,
                     source=SOURCE_LLM, confidence=None, method="llm_shortlist",
-                    model_id=self.llm_model_id,
-                ), True
+                    model_id=llm_tier.model_id,
+                )
 
         # Free deterministic fallbacks — keep coverage high (without the LLM) when
         # the LLM is unavailable, over budget, past the deadline, or unhelpful.
         if soft_attach:
-            if self.crosswalk is not None:
-                soft = self.crosswalk.lookup(
-                    sub_industry=ctx.sub_industry, sector=ctx.sector, industry=ctx.industry,
-                    min_share=self.SOFT_CROSSWALK_MIN_SHARE, min_votes=self.SOFT_CROSSWALK_MIN_VOTES,
+            if resolution is not None and resolution.plurality is not None:
+                soft = resolution.plurality
+                return Assignment(
+                    symbol=ctx.symbol, market=ctx.market, industry_group=soft.group,
+                    source=SOURCE_CROSSWALK, confidence=soft.confidence,
+                    method=f"{soft.method}_plurality",
                 )
-                if soft is not None:
-                    return Assignment(
-                        symbol=ctx.symbol, market=ctx.market, industry_group=soft.group,
-                        source=SOURCE_CROSSWALK, confidence=soft.confidence,
-                        method=f"{soft.method}_plurality",
-                    ), llm_called
             if ranking:
                 best_group, best_score = ranking[0]
-                return Assignment(
-                    symbol=ctx.symbol, market=ctx.market, industry_group=best_group,
-                    source=SOURCE_EMBEDDING, confidence=round(float(best_score), 4),
-                    method="centroid_nn_soft",
-                ), llm_called
+                return self._embedding_assignment(ctx, best_group, best_score, "centroid_nn_soft")
 
-        return None, llm_called
+        return None
 
     def classify_market(
         self,
@@ -415,32 +478,27 @@ class IBDClassificationService:
 
         total = len(contexts)
         start = clock()
+        llm_tier = _LLMTier(
+            self.llm_tiebreaker, model_id=self.llm_model_id,
+            max_calls=max_llm_calls, deadline_seconds=deadline_seconds, clock=clock,
+        )
         for i, ctx in enumerate(contexts, 1):
-            past_deadline = (
-                deadline_seconds is not None and (clock() - start) >= deadline_seconds
+            assignment = self.classify_one(
+                ctx, centroids, llm_tier=llm_tier, soft_attach=soft_attach
             )
-            if past_deadline and not result.deadline_hit:
-                result.deadline_hit = True
-                logger.warning(
-                    "IBD %s: deadline (%ss) reached after %d/%d symbols; disabling the "
-                    "LLM tier for the remainder (deterministic fallback only)",
-                    market, deadline_seconds, i - 1, total,
-                )
-            budget_ok = max_llm_calls is None or result.llm_calls < max_llm_calls
-            allow_llm = (
-                self.llm_tiebreaker is not None and not past_deadline and budget_ok
-            )
-
-            assignment, llm_called = self.classify_one(
-                ctx, centroids, allow_llm=allow_llm, soft_attach=soft_attach
-            )
-            if llm_called:
-                result.llm_calls += 1
             if assignment is not None:
                 result.assignments.append(assignment)
             else:
                 result.unresolved.append(ctx.symbol)
             result.processed = i
+
+            if llm_tier.deadline_reached and not result.deadline_hit:
+                result.deadline_hit = True
+                logger.warning(
+                    "IBD %s: deadline (%ss) reached after %d/%d symbols; the LLM tier is "
+                    "now disabled (deterministic fallback only)",
+                    market, deadline_seconds, i - 1, total,
+                )
 
             if progress_every and (i % progress_every == 0 or i == total):
                 by_source: dict[str, int] = {}
@@ -449,15 +507,15 @@ class IBDClassificationService:
                 record = {
                     "market": market, "processed": i, "total": total,
                     "assigned": len(result.assignments), "unresolved": len(result.unresolved),
-                    "llm_calls": result.llm_calls, "by_source": by_source,
-                    "elapsed_sec": round(clock() - start, 1),
+                    "llm_calls": llm_tier.calls, "llm_cache_hits": llm_tier.cache_hits,
+                    "by_source": by_source, "elapsed_sec": round(clock() - start, 1),
                 }
                 logger.info("IBD %s progress: %s", market, record)
                 if progress_callback is not None:
                     progress_callback(record)
 
-        result.llm_budget_exhausted = (
-            max_llm_calls is not None and result.llm_calls >= max_llm_calls
-        )
+        result.llm_calls = llm_tier.calls
+        result.llm_cache_hits = llm_tier.cache_hits
+        result.llm_budget_exhausted = llm_tier.budget_exhausted
         logger.info("IBD classification %s: %s", market, result.summary())
         return result

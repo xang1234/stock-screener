@@ -196,6 +196,10 @@ jobs:
       # Per-call timeout (seconds) so a hung request can't exceed the job cap;
       # unset → 30s default in build_ibd_tiebreaker.
       IBD_LLM_TIMEOUT: ${{ vars.IBD_LLM_TIMEOUT }}
+      # Authenticate sentence-transformers' all-MiniLM-L6-v2 download from the HF
+      # Hub (higher rate limits, no "unauthenticated requests" warning). Optional:
+      # unset → anonymous download still works.
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
