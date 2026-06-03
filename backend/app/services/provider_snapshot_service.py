@@ -437,6 +437,32 @@ class ProviderSnapshotService:
             ).delete(synchronize_session=False)
 
     @staticmethod
+    def _deserialize_universe_rows(rows: Iterable[Dict[str, Any]]) -> list[StockUniverse]:
+        """Deserialize bundle universe rows into StockUniverse objects, collapsing
+        any that canonicalize to the same symbol.
+
+        ``_deserialize_universe_row`` re-canonicalizes each row via the exchange
+        (intentionally — it rewrites bare/board-mismatched symbols). A bundle can
+        therefore contain two rows that resolve to the *same* canonical symbol: e.g.
+        a phantom TW ``.TWO`` copy of a ``.TW`` security whose stored exchange is the
+        TWSE ``XTAI``, which collapses ``.TWO`` -> ``.TW``. Inserting both would hit
+        the ``StockUniverse.symbol`` unique index, so we collapse by canonical symbol
+        (last write wins) and log the collision rather than crash the whole import.
+        """
+        deduped: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            deserialized = ProviderSnapshotService._deserialize_universe_row(row)
+            symbol = deserialized["symbol"]
+            if symbol in deduped:
+                logger.warning(
+                    "Collapsing duplicate universe row for %s on import "
+                    "(canonical symbol collision); keeping last occurrence.",
+                    symbol,
+                )
+            deduped[symbol] = deserialized
+        return [StockUniverse(**row) for row in deduped.values()]
+
+    @staticmethod
     def _replace_market_universe_rows(
         db: Session,
         *,
@@ -446,10 +472,7 @@ class ProviderSnapshotService:
         db.query(StockUniverse).filter(StockUniverse.market == market).delete(
             synchronize_session=False
         )
-        imported_universe = [
-            StockUniverse(**ProviderSnapshotService._deserialize_universe_row(row))
-            for row in rows
-        ]
+        imported_universe = ProviderSnapshotService._deserialize_universe_rows(rows)
         if imported_universe:
             db.bulk_save_objects(imported_universe)
         return len(imported_universe)
@@ -461,10 +484,7 @@ class ProviderSnapshotService:
         rows: Iterable[Dict[str, Any]],
     ) -> int:
         db.query(StockUniverse).delete(synchronize_session=False)
-        imported_universe = [
-            StockUniverse(**ProviderSnapshotService._deserialize_universe_row(row))
-            for row in rows
-        ]
+        imported_universe = ProviderSnapshotService._deserialize_universe_rows(rows)
         if imported_universe:
             db.bulk_save_objects(imported_universe)
         return len(imported_universe)

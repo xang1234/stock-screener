@@ -1700,3 +1700,32 @@ def test_publish_market_snapshot_run_dedups_colliding_canonical_symbols():
     assert run.symbols_total == 1  # clamped to actual persisted rows, not pre-dedup 2
     assert run.symbols_published == 1
     db.close()
+
+
+def test_replace_market_universe_rows_collapses_phantom_canonical_collisions():
+    # Observed in a published TW bundle: phantom .TWO copies of .TW securities,
+    # both carrying the TWSE 'XTAI' exchange (same name/sector as the .TW row).
+    # On import, _deserialize_universe_row re-canonicalizes .TWO + XTAI -> .TW
+    # (exchange wins, by design — see the TPEX test above), colliding with the
+    # genuine .TW row and crashing the import on ix_stock_universe_symbol.
+    # The import must collapse rows that canonicalize to the same symbol.
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    def _row(symbol):
+        return {
+            "symbol": symbol, "exchange": "XTAI", "market": "TW", "name": "MORNSUN",
+            "currency": "TWD", "timezone": "Asia/Taipei", "local_code": "1240",
+            "sector": "Agricultural Technology", "industry": "Agricultural Technology",
+        }
+
+    count = ProviderSnapshotService._replace_market_universe_rows(
+        db, market="TW", rows=[_row("1240.TW"), _row("1240.TWO")]
+    )
+    db.commit()
+
+    persisted = db.query(StockUniverse).filter(StockUniverse.market == "TW").all()
+    assert count == 1
+    assert len(persisted) == 1
+    assert persisted[0].symbol == "1240.TW"  # both phantoms canonicalize here
+    db.close()
