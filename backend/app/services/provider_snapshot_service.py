@@ -326,7 +326,18 @@ class ProviderSnapshotService:
         normalized_payload: Dict[str, Any],
         raw_payload: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        """Return a ProviderSnapshotRow-ready payload for a market-scoped bundle."""
+        """Return a ProviderSnapshotRow-ready payload for a market-scoped bundle.
+
+        The incoming ``symbol`` is already the canonical symbol (it is read from
+        ``StockUniverse.symbol``, which was canonicalized at ingest). We therefore
+        trust it as-is — applying only light normalization — and must NOT re-derive
+        it from ``(symbol, exchange)``. Re-canonicalizing here is unsafe: if a row's
+        stored exchange has drifted away from its explicit suffix (e.g. a TPEx
+        ``8906.TWO`` row carrying ``exchange="TWSE"``), ``resolve_identity`` would
+        rewrite it to ``8906.TW`` and collide with the genuine TWSE sibling, crashing
+        the whole market build on ``uq_provider_snapshot_row_run_symbol``. ``identity``
+        is still resolved, but only to fill missing payload metadata defaults.
+        """
         identity = security_master_resolver.resolve_identity(
             symbol=str(symbol or ""),
             market=market,
@@ -335,8 +346,9 @@ class ProviderSnapshotService:
             timezone=normalized_payload.get("timezone"),
             local_code=normalized_payload.get("local_code"),
         )
+        canonical_symbol = identity.normalized_symbol
         payload = dict(normalized_payload)
-        payload.setdefault("symbol", identity.canonical_symbol)
+        payload.setdefault("symbol", canonical_symbol)
         payload.setdefault("market", identity.market)
         payload.setdefault("exchange", identity.exchange)
         payload.setdefault("currency", identity.currency)
@@ -344,7 +356,7 @@ class ProviderSnapshotService:
         payload.setdefault("local_code", identity.local_code)
         payload_json = json.dumps(payload, sort_keys=True, default=str)
         return {
-            "symbol": identity.canonical_symbol,
+            "symbol": canonical_symbol,
             "exchange": identity.exchange,
             "row_hash": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
             "normalized_payload": payload,
@@ -508,7 +520,22 @@ class ProviderSnapshotService:
         db.add(run)
         db.flush()
 
-        materialized_rows = list(rows)
+        # Dedup by canonical symbol before insert. Two universe rows can resolve to
+        # the same canonical symbol (e.g. a drifted TW .TWO/.TW pair); without this
+        # the (run_id, symbol) unique constraint would abort the entire market build.
+        # Last write wins; collisions are logged rather than silently dropped.
+        deduped_by_symbol: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            symbol = row["symbol"]
+            if symbol in deduped_by_symbol:
+                logger.warning(
+                    "Collapsing duplicate snapshot row for %s in %s run (canonical "
+                    "symbol collision); keeping last occurrence.",
+                    symbol,
+                    normalized_market,
+                )
+            deduped_by_symbol[symbol] = row
+        materialized_rows = list(deduped_by_symbol.values())
         if materialized_rows:
             db.bulk_save_objects(
                 [
