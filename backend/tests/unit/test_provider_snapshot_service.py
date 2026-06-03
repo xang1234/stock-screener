@@ -1621,3 +1621,82 @@ def test_deserialize_universe_row_normalizes_tpex_symbol_to_two_suffix():
     assert row["symbol"] == "3008.TWO"
     assert row["exchange"] == "TPEX"
     assert row["market"] == "TW"
+
+
+def test_build_market_snapshot_row_trusts_already_canonical_symbol():
+    # StockUniverse.symbol is already canonical at ingest time. The weekly build
+    # must NOT re-derive it from (symbol, exchange): a TPEx row whose stored
+    # exchange drifted to a non-TPEX value (e.g. "TWSE") would otherwise be
+    # rewritten 8906.TWO -> 8906.TW, colliding with the genuine TWSE 8906.TW row
+    # and crashing the whole TW build on uq_provider_snapshot_row_run_symbol.
+    service = _make_provider_snapshot_service()
+
+    row = service.build_market_snapshot_row(
+        market="TW",
+        symbol="8906.TWO",
+        exchange="TWSE",  # drifted/wrong exchange on an explicit .TWO symbol
+        normalized_payload={"symbol": "8906.TWO"},
+    )
+
+    assert row["symbol"] == "8906.TWO"  # explicit suffix preserved, not collapsed
+    # The genuine TWSE sibling stays distinct.
+    sibling = service.build_market_snapshot_row(
+        market="TW",
+        symbol="8906.TW",
+        exchange="TWSE",
+        normalized_payload={"symbol": "8906.TW"},
+    )
+    assert sibling["symbol"] == "8906.TW"
+    assert row["symbol"] != sibling["symbol"]
+
+
+def test_publish_market_snapshot_run_dedups_colliding_canonical_symbols():
+    # Defensive: even if two universe rows resolve to the same canonical symbol,
+    # the publisher must not crash the market build on the (run_id, symbol)
+    # unique constraint. It should collapse them to a single snapshot row.
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+
+    def _row(symbol, marker):
+        return {
+            "symbol": symbol,
+            "exchange": "TWSE",
+            "row_hash": f"hash-{marker}",
+            "normalized_payload": {"symbol": symbol, "marker": marker},
+            "raw_payload": None,
+        }
+
+    rows = [_row("8906.TW", "first"), _row("8906.TW", "second")]
+    # coverage_stats reflects the PRE-dedup count, exactly as the weekly builder
+    # computes it (len(snapshot_rows) before this method dedups). Persisted run
+    # metadata must not claim more symbols than rows actually written.
+    coverage_stats = {
+        "active_symbols": 2,
+        "snapshot_symbols": 2,
+        "covered_active_symbols": 2,
+        "missing_active_symbols": 0,
+    }
+
+    result = service.publish_market_snapshot_run(
+        db,
+        snapshot_key="tw_weekly_reference",
+        market="TW",
+        source_revision="tw:test",
+        rows=rows,
+        coverage_stats=coverage_stats,
+        publish=False,
+    )
+
+    persisted = (
+        db.query(ProviderSnapshotRow)
+        .filter(ProviderSnapshotRow.run_id == result["run_id"])
+        .all()
+    )
+    assert len(persisted) == 1
+    assert persisted[0].symbol == "8906.TW"
+
+    run = db.query(ProviderSnapshotRun).filter(ProviderSnapshotRun.id == result["run_id"]).one()
+    assert run.symbols_total == 1  # clamped to actual persisted rows, not pre-dedup 2
+    assert run.symbols_published == 1
+    db.close()

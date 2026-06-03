@@ -326,7 +326,18 @@ class ProviderSnapshotService:
         normalized_payload: Dict[str, Any],
         raw_payload: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        """Return a ProviderSnapshotRow-ready payload for a market-scoped bundle."""
+        """Return a ProviderSnapshotRow-ready payload for a market-scoped bundle.
+
+        The incoming ``symbol`` is already the canonical symbol (it is read from
+        ``StockUniverse.symbol``, which was canonicalized at ingest). We therefore
+        trust it as-is — applying only light normalization — and must NOT re-derive
+        it from ``(symbol, exchange)``. Re-canonicalizing here is unsafe: if a row's
+        stored exchange has drifted away from its explicit suffix (e.g. a TPEx
+        ``8906.TWO`` row carrying ``exchange="TWSE"``), ``resolve_identity`` would
+        rewrite it to ``8906.TW`` and collide with the genuine TWSE sibling, crashing
+        the whole market build on ``uq_provider_snapshot_row_run_symbol``. ``identity``
+        is still resolved, but only to fill missing payload metadata defaults.
+        """
         identity = security_master_resolver.resolve_identity(
             symbol=str(symbol or ""),
             market=market,
@@ -335,8 +346,9 @@ class ProviderSnapshotService:
             timezone=normalized_payload.get("timezone"),
             local_code=normalized_payload.get("local_code"),
         )
+        canonical_symbol = identity.normalized_symbol
         payload = dict(normalized_payload)
-        payload.setdefault("symbol", identity.canonical_symbol)
+        payload.setdefault("symbol", canonical_symbol)
         payload.setdefault("market", identity.market)
         payload.setdefault("exchange", identity.exchange)
         payload.setdefault("currency", identity.currency)
@@ -344,7 +356,7 @@ class ProviderSnapshotService:
         payload.setdefault("local_code", identity.local_code)
         payload_json = json.dumps(payload, sort_keys=True, default=str)
         return {
-            "symbol": identity.canonical_symbol,
+            "symbol": canonical_symbol,
             "exchange": identity.exchange,
             "row_hash": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
             "normalized_payload": payload,
@@ -508,7 +520,25 @@ class ProviderSnapshotService:
         db.add(run)
         db.flush()
 
-        materialized_rows = list(rows)
+        # Defense-in-depth for the (run_id, symbol) unique constraint: collapse any
+        # rows that share a symbol before insert, so a collision can never abort the
+        # whole market build. build_market_snapshot_row now trusts the already-unique
+        # StockUniverse.symbol, so the primary collision source (re-canonicalizing a
+        # drifted TW .TWO/.TW pair) is gone; this guards only the residual case where
+        # light normalization maps two stored symbols together. Mirrors the US path,
+        # which already dedups via a symbol-keyed dict. Last write wins; logged.
+        deduped_by_symbol: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            symbol = row["symbol"]
+            if symbol in deduped_by_symbol:
+                logger.warning(
+                    "Collapsing duplicate snapshot row for %s in %s run (canonical "
+                    "symbol collision); keeping last occurrence.",
+                    symbol,
+                    normalized_market,
+                )
+            deduped_by_symbol[symbol] = row
+        materialized_rows = list(deduped_by_symbol.values())
         if materialized_rows:
             db.bulk_save_objects(
                 [
@@ -530,10 +560,16 @@ class ProviderSnapshotService:
                 ]
             )
 
-        run.symbols_total = int(coverage_stats.get("snapshot_symbols", len(materialized_rows)) or 0)
-        run.symbols_published = int(
-            coverage_stats.get("covered_active_symbols", len(materialized_rows)) or 0
-        )
+        # ``coverage_stats`` is computed by the caller before this method dedups, so
+        # clamp the persisted counts to the actual number of rows written — the run
+        # metadata must never claim more symbols than exist in provider_snapshot_row.
+        persisted_count = len(materialized_rows)
+
+        def _count(key: str) -> int:
+            return min(int(coverage_stats.get(key, persisted_count) or 0), persisted_count)
+
+        run.symbols_total = _count("snapshot_symbols")
+        run.symbols_published = _count("covered_active_symbols")
         run.coverage_stats_json = json.dumps(coverage_stats, sort_keys=True)
         run.parity_stats_json = json.dumps(parity_stats, sort_keys=True)
         run.warnings_json = json.dumps(all_warnings, sort_keys=True) if all_warnings else None
