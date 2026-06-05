@@ -234,11 +234,14 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
     )
     refreshed = stale_refreshed + bootstrap_refreshed
     failed = stale_failed + bootstrap_failed
-    rate_limited_symbols = stale_rate_limited + bootstrap_rate_limited
+    rate_limited_symbols_by_period = {
+        STATIC_DAILY_PRICE_REFRESH_PERIOD: stale_rate_limited,
+        STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD: bootstrap_rate_limited,
+    }
 
     retry_stats = _retry_rate_limited_failures(
         market=market,
-        rate_limited_symbols=rate_limited_symbols,
+        rate_limited_symbols_by_period=rate_limited_symbols_by_period,
         fetcher=fetcher,
         price_cache=price_cache,
     )
@@ -282,7 +285,7 @@ def _is_rate_limit_failure(payload: dict[str, Any]) -> bool:
 def _retry_rate_limited_failures(
     *,
     market: str | None,
-    rate_limited_symbols: list[str],
+    rate_limited_symbols_by_period: dict[str, list[str]],
     fetcher: BulkDataFetcher,
     price_cache: Any,
 ) -> dict[str, Any]:
@@ -301,54 +304,59 @@ def _retry_rate_limited_failures(
         "wait_seconds": 0,
         "batch_size": STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
     }
-    if not rate_limited_symbols:
+    retry_groups = [
+        (period, sorted(set(symbols)))
+        for period, symbols in rate_limited_symbols_by_period.items()
+        if symbols
+    ]
+    attempted = sum(len(symbols) for _period, symbols in retry_groups)
+    if not attempted:
         return skipped_payload
     normalized = (market or "").upper()
     if normalized not in STATIC_RATE_LIMITED_RETRY_MARKETS:
-        if rate_limited_symbols:
-            print(
-                f"[static-daily prices] Skipping rate-limited retry for market={normalized or 'shared'}: "
-                f"{len(rate_limited_symbols)} symbols looked throttled but market is outside the retry allowlist.",
-                flush=True,
-            )
+        print(
+            f"[static-daily prices] Skipping rate-limited retry for market={normalized or 'shared'}: "
+            f"{attempted} symbols looked throttled but market is outside the retry allowlist.",
+            flush=True,
+        )
         return skipped_payload
 
-    unique_symbols = sorted(set(rate_limited_symbols))
     print(
-        f"[static-daily prices:{normalized}] Yahoo flagged {len(unique_symbols)} symbols as rate-limited; "
+        f"[static-daily prices:{normalized}] Yahoo flagged {attempted} symbols as rate-limited; "
         f"waiting {STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS}s then retrying with batch size "
         f"{STATIC_RATE_LIMITED_RETRY_BATCH_SIZE}.",
         flush=True,
     )
     time.sleep(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
 
-    retry_results = fetcher.fetch_prices_in_batches(
-        unique_symbols,
-        period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
-        start_batch_size=STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
-        market=market,
-    )
-    recovered_payload: dict[str, Any] = {}
     recovered = 0
-    for symbol, payload in retry_results.items():
-        price_data = payload.get("price_data")
-        if not payload.get("has_error") and price_data is not None and not price_data.empty:
-            recovered_payload[symbol] = price_data
-            recovered += 1
-    if recovered_payload:
-        price_cache.store_batch_in_cache(
-            recovered_payload,
-            also_store_db=True,
+    for period, unique_symbols in retry_groups:
+        retry_results = fetcher.fetch_prices_in_batches(
+            unique_symbols,
+            period=period,
+            start_batch_size=STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
             market=market,
         )
-    still_failed = len(unique_symbols) - recovered
+        recovered_payload: dict[str, Any] = {}
+        for symbol, payload in retry_results.items():
+            price_data = payload.get("price_data")
+            if not payload.get("has_error") and price_data is not None and not price_data.empty:
+                recovered_payload[symbol] = price_data
+                recovered += 1
+        if recovered_payload:
+            price_cache.store_batch_in_cache(
+                recovered_payload,
+                also_store_db=True,
+                market=market,
+            )
+    still_failed = attempted - recovered
     print(
         f"[static-daily prices:{normalized}] Rate-limited retry complete: "
-        f"{recovered}/{len(unique_symbols)} recovered, {still_failed} still failed.",
+        f"{recovered}/{attempted} recovered, {still_failed} still failed.",
         flush=True,
     )
     return {
-        "attempted": len(unique_symbols),
+        "attempted": attempted,
         "recovered": recovered,
         "still_failed": still_failed,
         "wait_seconds": STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS,
