@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import date
 import json
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 import sys
 from unittest.mock import MagicMock
@@ -1333,10 +1334,18 @@ def test_write_market_diagnostics_records_quarantined_snapshot(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "No published feature run is available for static-site export market IN",
+        "No market-scoped published feature runs are available for static-site export",
+    ],
+)
 def test_main_returns_no_current_artifact_code_for_quarantined_selected_market(
     monkeypatch,
     tmp_path,
     capsys,
+    error_message,
 ):
     output_dir = tmp_path / "out"
 
@@ -1366,10 +1375,9 @@ def test_main_returns_no_current_artifact_code_for_quarantined_selected_market(
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def export(self, *_args, **_kwargs):
-            raise RuntimeError(
-                "No published feature run is available for static-site export market IN"
-            )
+        def export(self, output_dir_arg, *_args, **_kwargs):
+            shutil.rmtree(output_dir_arg, ignore_errors=True)
+            raise RuntimeError(error_message)
 
     monkeypatch.setattr(export_script, "StaticSiteExportService", ExportRaisesNoCurrentArtifact)
     monkeypatch.setattr(

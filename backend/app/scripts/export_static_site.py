@@ -792,7 +792,12 @@ def _market_refresh_skipped_not_trading_day(refresh_results: dict[str, Any], mar
 
 
 def _is_no_current_artifact_error(exc: RuntimeError) -> bool:
-    return "No published feature run is available for static-site export" in str(exc)
+    message = str(exc)
+    return (
+        "No published feature run is available for static-site export" in message
+        or "No market-scoped published feature runs are available for static-site export"
+        in message
+    )
 
 
 def main() -> int:
@@ -920,10 +925,13 @@ def main() -> int:
                 args.market is not None
                 and args.refresh_daily
                 and selected_market_non_publishable_snapshot is not None
-                and selected_market_diagnostics_path is not None
-                and selected_market_diagnostics_path.exists()
                 and _is_no_current_artifact_error(exc)
             ):
+                selected_market_diagnostics_path = _write_market_diagnostics(
+                    Path(args.output_dir),
+                    args.market,
+                    selected_market_non_publishable_snapshot,
+                )
                 print(
                     f"Static site export skipped for market {args.market}; "
                     "no current artifact was produced, diagnostics were uploaded, "
