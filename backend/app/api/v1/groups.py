@@ -19,6 +19,7 @@ from ...schemas.groups import (
     GroupRankingsResponse,
     GroupDetailResponse,
     MoversResponse,
+    RRGResponse,
     CalculationRequest,
     CalculationResponse,
     CalculationStatusResponse,
@@ -29,6 +30,7 @@ from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...domain.analytics.scope import market_scope_tag
 from ...domain.markets.catalog import get_market_catalog
 from ...services.market_group_ranking_service import get_market_group_ranking_service
+from ...services.rrg_service import RRGService
 from ...services.ui_snapshot_service import GroupsBootstrapUnavailableError
 from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
 
@@ -135,6 +137,49 @@ async def get_current_rankings(
         date=ranking_date,
         total_groups=len(rankings),
         rankings=[GroupRankResponse(**r) for r in rankings],
+        **market_scope_tag(normalized_market),
+    )
+
+
+@router.get("/rrg", response_model=RRGResponse)
+async def get_rrg(
+    tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
+    scope: str = Query(
+        "groups", pattern="^(groups|sectors)$", description="groups or sectors"
+    ),
+    limit: int = Query(197, ge=1, le=197, description="Top-N series by rank"),
+    market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
+    db: Session = Depends(get_db),
+):
+    """Relative Rotation Graph coordinates for IBD groups (or GICS-sector roll-ups).
+
+    Each series carries its current (RS-Ratio, RS-Momentum) point plus a weekly
+    tail tracing its path through the Leading/Weakening/Lagging/Improving
+    quadrants. Math is computed server-side (see ``services/rrg_service.py``).
+    """
+    normalized_market = _normalize_market_param(market)
+    service = RRGService(group_rank_service=_get_group_rank_service())
+    payload = service.get_rrg(
+        db, market=normalized_market, scope=scope, tail_weeks=tail_weeks
+    )
+
+    groups = payload["groups"][:limit]
+    if not groups:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No RRG data available for this market. "
+                "Run a group-ranking backfill first."
+            ),
+        )
+
+    return RRGResponse(
+        date=payload["date"],
+        market=normalized_market,
+        scope=scope,
+        tail_weeks=tail_weeks,
+        total_groups=len(groups),
+        groups=groups,
         **market_scope_tag(normalized_market),
     )
 

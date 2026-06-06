@@ -117,6 +117,45 @@ class MoversResponse(ScopedResponseMixin):
     losers: List[GroupRankResponse] = Field(..., description="Groups with biggest rank declines")
 
 
+class RRGPoint(BaseModel):
+    """A single point on a group's RRG tail."""
+
+    date: str = Field(..., description="Week-start date (YYYY-MM-DD, UTC Sunday origin)")
+    x: float = Field(..., description="RS-Ratio (centered at 100)")
+    y: float = Field(..., description="RS-Momentum (centered at 100)")
+
+
+class RRGGroupResponse(BaseModel):
+    """One group's (or sector's) RRG coordinate plus its recent tail."""
+
+    industry_group: str = Field(..., description="Group or sector name")
+    rank: Optional[int] = Field(None, description="Latest rank (1 = best)")
+    num_stocks: Optional[int] = Field(None, description="Constituent count (dot size)")
+    avg_rs_rating: Optional[float] = Field(None, description="Latest average RS rating")
+    quadrant: str = Field(
+        ..., description="Leading | Weakening | Lagging | Improving"
+    )
+    is_provisional: bool = Field(
+        False, description="True when history was too short for a full-confidence window"
+    )
+    current: RRGPoint = Field(..., description="Most recent point (== tail[-1])")
+    tail: List[RRGPoint] = Field(..., description="Weekly points, oldest -> newest")
+
+
+class RRGResponse(ScopedResponseMixin):
+    """Relative Rotation Graph payload for a market + scope."""
+
+    date: str = Field(..., description="As-of date (latest ranking date)")
+    market: str = Field(..., description="Market code")
+    scope: str = Field(..., description="groups | sectors")
+    normalization: str = Field(
+        "temporal", description="RS-Ratio/Momentum normalization frame"
+    )
+    tail_weeks: int = Field(..., description="Number of weekly tail points requested")
+    total_groups: int = Field(..., description="Number of plotted groups/sectors")
+    groups: List[RRGGroupResponse] = Field(..., description="Plotted series")
+
+
 class CalculationRequest(BaseModel):
     """Request model for manual ranking calculation"""
 

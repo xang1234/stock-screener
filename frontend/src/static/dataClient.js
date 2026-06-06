@@ -23,6 +23,17 @@ export const useStaticManifest = () => useQuery({
   gcTime: Infinity,
 });
 
+export const useStaticGroupsRRG = (marketEntry) => {
+  const path = marketEntry?.assets?.groups_rrg?.path;
+  return useQuery({
+    queryKey: ['staticGroupsRRG', path],
+    queryFn: () => fetchStaticJson(path),
+    enabled: Boolean(path),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+};
+
 export const getStaticSupportedMarkets = (manifest) => {
   if (Array.isArray(manifest?.supported_markets) && manifest.supported_markets.length > 0) {
     return manifest.supported_markets;

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 
@@ -96,5 +96,74 @@ describe('StaticGroupsPage', () => {
     expect(screen.getByRole('columnheader', { name: '1W' })).toBeInTheDocument();
     expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
     expect(screen.getByText('+3')).toBeInTheDocument();
+  });
+
+  it('renders the RRG chart from the baked bundle when the toggle is selected', async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            pages: { groups: { path: 'groups.json' } },
+            assets: { groups_rrg: { path: 'groups_rrg.json' } },
+          }),
+        };
+      }
+      if (path === 'groups.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            available: true,
+            payload: {
+              movers_period: '1w',
+              rankings: { date: '2026-03-31', rankings: [] },
+              movers: { gainers: [], losers: [] },
+            },
+          }),
+        };
+      }
+      if (path === 'groups_rrg.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            available: true,
+            payload: {
+              groups: {
+                date: '2026-03-31',
+                scope: 'groups',
+                groups: [
+                  {
+                    industry_group: 'Semiconductors',
+                    rank: 1,
+                    num_stocks: 14,
+                    avg_rs_rating: 92.5,
+                    quadrant: 'Leading',
+                    is_provisional: false,
+                    current: { date: '2026-03-31', x: 108.3, y: 106.1 },
+                    tail: [
+                      { date: '2026-02-01', x: 104.0, y: 98.0 },
+                      { date: '2026-03-31', x: 108.3, y: 106.1 },
+                    ],
+                  },
+                ],
+              },
+              sectors: { date: '2026-03-31', scope: 'sectors', groups: [] },
+            },
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'US Group Rankings' })).toBeInTheDocument();
+    // Switch from the table view to the Relative Rotation Graph.
+    fireEvent.click(screen.getByRole('button', { name: 'RRG' }));
+    expect(await screen.findByText(/Relative Rotation Graph/)).toBeInTheDocument();
   });
 });

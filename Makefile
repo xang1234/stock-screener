@@ -72,7 +72,8 @@ GATE_4 = \
 GATE_5 = \
   tests/unit/golden/test_golden_detectors.py \
   tests/unit/golden/test_golden_aggregator.py \
-  tests/unit/golden/test_golden_scanner.py
+  tests/unit/golden/test_golden_scanner.py \
+  tests/unit/golden/test_golden_rrg.py
 
 # ── Market-Parity Gate (E6) ─────────────────────────────────────────
 # US parity and non-US correctness for the market-normalization epic.

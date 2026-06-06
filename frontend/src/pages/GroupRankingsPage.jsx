@@ -38,9 +38,12 @@ import {
   getCurrentRankings,
   getRankMovers,
   getGroupDetail,
+  getRRG,
   triggerCalculation,
   getCalculationStatus,
 } from '../api/groups';
+import RRGChart from '../components/Charts/RRGChart';
+import RRGViewToggle from '../components/Charts/RRGViewToggle';
 import {
   LineChart,
   Line,
@@ -525,6 +528,8 @@ function GroupRankingsPage() {
       : (availableMarkets[0] || 'US');
   });
   const [selectedGroup, setSelectedGroup] = useState(null);
+  const [view, setView] = useState('table'); // 'table' | 'rrg'
+  const [rrgScope, setRrgScope] = useState('groups'); // 'groups' | 'sectors'
   const [orderBy, setOrderBy] = useState('rank');
   const [order, setOrder] = useState('asc');
   const [isCalculating, setIsCalculating] = useState(false);
@@ -611,6 +616,18 @@ function GroupRankingsPage() {
     queryKey: ['groupMovers', selectedPeriod, selectedMarket],
     queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket),
     enabled: liveQueriesEnabled,
+    staleTime: 60_000,
+  });
+
+  // Fetch RRG coordinates (only when the RRG view is active)
+  const {
+    data: rrgData,
+    isLoading: isLoadingRRG,
+    error: errorRRG,
+  } = useQuery({
+    queryKey: ['groupRRG', selectedMarket, rrgScope],
+    queryFn: () => getRRG(rrgScope, 8, 197, selectedMarket),
+    enabled: liveQueriesEnabled && view === 'rrg',
     staleTime: 60_000,
   });
 
@@ -789,7 +806,23 @@ function GroupRankingsPage() {
 
       {renderCalculationErrorAlert({ mb: 1.5 })}
 
-      {isLoadingRankings ? (
+      {/* View toggle: ranked table vs Relative Rotation Graph */}
+      <RRGViewToggle
+        view={view}
+        onView={setView}
+        scope={rrgScope}
+        onScope={setRrgScope}
+        sx={{ mb: 1.5 }}
+      />
+
+      {view === 'rrg' ? (
+        <RRGChart
+          data={rrgData}
+          isLoading={isLoadingRRG}
+          error={errorRRG}
+          onSelectGroup={(name) => rrgScope === 'groups' && setSelectedGroup(name)}
+        />
+      ) : isLoadingRankings ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
           <CircularProgress />
         </Box>
