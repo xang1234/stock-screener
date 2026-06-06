@@ -1,163 +1,11 @@
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
 import { createChart, CrosshairMode, CandlestickSeries, LineSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts';
-import { Box, CircularProgress, Alert, AlertTitle, Button, ToggleButtonGroup, ToggleButton, useTheme, Skeleton, Typography } from '@mui/material';
+import { Box, CircularProgress, Alert, AlertTitle, Button, ToggleButtonGroup, ToggleButton, useTheme, Typography } from '@mui/material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchPriceHistory, fetchRSLine, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../api/priceHistory';
 import { rsBandForRange } from './rsBand';
-
-/**
- * Chart skeleton placeholder that shows chart structure while loading
- */
-const ChartSkeleton = ({ height, isDarkMode }) => {
-  const bgColor = isDarkMode ? '#1e1e1e' : '#ffffff';
-  const lineColor = isDarkMode ? '#363a45' : '#e0e0e0';
-  const skeletonColor = isDarkMode ? '#2a2a2a' : '#f0f0f0';
-
-  return (
-    <Box
-      sx={{
-        width: '100%',
-        height: height,
-        bgcolor: bgColor,
-        position: 'relative',
-        display: 'flex',
-        flexDirection: 'column',
-        p: 2,
-      }}
-    >
-      {/* Y-axis area */}
-      <Box sx={{ display: 'flex', flex: 1 }}>
-        {/* Price axis labels (left side simulation) */}
-        <Box sx={{ width: 60, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pr: 1 }}>
-          {[...Array(6)].map((_, i) => (
-            <Skeleton
-              key={i}
-              variant="text"
-              width={40}
-              height={16}
-              sx={{ bgcolor: skeletonColor }}
-            />
-          ))}
-        </Box>
-
-        {/* Chart area */}
-        <Box sx={{ flex: 1, position: 'relative', borderLeft: `1px solid ${lineColor}`, borderBottom: `1px solid ${lineColor}` }}>
-          {/* Horizontal grid lines */}
-          {[...Array(5)].map((_, i) => (
-            <Box
-              key={i}
-              sx={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                top: `${(i + 1) * 16.67}%`,
-                borderTop: `1px dashed ${lineColor}`,
-                opacity: 0.5,
-              }}
-            />
-          ))}
-
-          {/* Candlestick skeleton bars */}
-          <Box sx={{
-            display: 'flex',
-            alignItems: 'flex-end',
-            height: '70%',
-            gap: '2px',
-            px: 1,
-            pt: 2,
-          }}>
-            {[...Array(40)].map((_, i) => {
-              // Create varied heights for realistic look
-              const minHeight = 20;
-              const height = minHeight + Math.sin(i * 0.3) * 30 + Math.random() * 20;
-
-              return (
-                <Box
-                  key={i}
-                  sx={{
-                    flex: 1,
-                    maxWidth: 12,
-                    height: `${height}%`,
-                    bgcolor: skeletonColor,
-                    borderRadius: 0.5,
-                    animation: 'pulse 1.5s ease-in-out infinite',
-                    animationDelay: `${i * 0.02}s`,
-                    '@keyframes pulse': {
-                      '0%, 100%': { opacity: 0.4 },
-                      '50%': { opacity: 0.7 },
-                    },
-                  }}
-                />
-              );
-            })}
-          </Box>
-
-          {/* Volume skeleton bars at bottom */}
-          <Box sx={{
-            display: 'flex',
-            alignItems: 'flex-end',
-            height: '25%',
-            gap: '2px',
-            px: 1,
-            borderTop: `1px solid ${lineColor}`,
-            pt: 0.5,
-          }}>
-            {[...Array(40)].map((_, i) => {
-              const height = 20 + Math.random() * 60;
-              return (
-                <Box
-                  key={i}
-                  sx={{
-                    flex: 1,
-                    maxWidth: 12,
-                    height: `${height}%`,
-                    bgcolor: skeletonColor,
-                    borderRadius: 0.5,
-                    opacity: 0.5,
-                    animation: 'pulse 1.5s ease-in-out infinite',
-                    animationDelay: `${i * 0.02}s`,
-                  }}
-                />
-              );
-            })}
-          </Box>
-        </Box>
-      </Box>
-
-      {/* X-axis area (time labels) */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-around', pt: 1, pl: 8 }}>
-        {[...Array(6)].map((_, i) => (
-          <Skeleton
-            key={i}
-            variant="text"
-            width={50}
-            height={16}
-            sx={{ bgcolor: skeletonColor }}
-          />
-        ))}
-      </Box>
-
-      {/* Loading indicator */}
-      <Box
-        sx={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 1,
-        }}
-      >
-        <CircularProgress size={32} sx={{ color: isDarkMode ? '#666' : '#bbb' }} />
-        <Typography variant="caption" color="text.secondary">
-          Loading chart...
-        </Typography>
-      </Box>
-    </Box>
-  );
-};
+import ChartSkeleton from './ChartSkeleton';
+import { transformToCandlestickData } from './candlestickData';
 
 // Debounce utility
 const debounce = (fn, ms) => {
@@ -170,118 +18,6 @@ const debounce = (fn, ms) => {
     clearTimeout(timer);
   };
   return debounced;
-};
-
-/**
- * Calculate EMA (Exponential Moving Average)
- */
-const calculateEMA = (data, period) => {
-  if (!data || data.length < period) return [];
-
-  const k = 2 / (period + 1);
-  const emaData = [];
-
-  // Calculate initial SMA as first EMA value
-  let ema = 0;
-  for (let i = 0; i < period; i++) {
-    ema += data[i].close;
-  }
-  ema = ema / period;
-  emaData.push({ time: data[period - 1].date, value: ema });
-
-  // Calculate EMA for remaining data
-  for (let i = period; i < data.length; i++) {
-    ema = data[i].close * k + ema * (1 - k);
-    emaData.push({ time: data[i].date, value: ema });
-  }
-
-  return emaData;
-};
-
-/**
- * Aggregate daily data to weekly
- */
-const aggregateToWeekly = (dailyData) => {
-  if (!dailyData || dailyData.length === 0) return [];
-
-  const weeklyData = [];
-  let currentWeek = null;
-
-  dailyData.forEach((day) => {
-    const date = new Date(day.date);
-    const weekStart = new Date(date);
-    weekStart.setDate(date.getDate() - date.getDay()); // Start of week (Sunday)
-    const weekKey = weekStart.toISOString().split('T')[0];
-
-    if (!currentWeek || currentWeek.weekKey !== weekKey) {
-      if (currentWeek) {
-        weeklyData.push(currentWeek.data);
-      }
-      currentWeek = {
-        weekKey,
-        data: {
-          date: day.date,
-          open: day.open,
-          high: day.high,
-          low: day.low,
-          close: day.close,
-          volume: day.volume,
-        }
-      };
-    } else {
-      currentWeek.data.high = Math.max(currentWeek.data.high, day.high);
-      currentWeek.data.low = Math.min(currentWeek.data.low, day.low);
-      currentWeek.data.close = day.close;
-      currentWeek.data.volume += day.volume;
-      currentWeek.data.date = day.date; // Use latest date for the week
-    }
-  });
-
-  if (currentWeek) {
-    weeklyData.push(currentWeek.data);
-  }
-
-  return weeklyData;
-};
-
-/**
- * Transform API data to TradingView Lightweight Charts format
- */
-const transformToCandlestickData = (apiData, timeframe = 'daily') => {
-  if (!apiData || apiData.length === 0) {
-    return { candlesticks: [], volume: [], ema10: [], ema20: [], ema50: [] };
-  }
-
-  // Aggregate to weekly if needed
-  const processedData = timeframe === 'weekly' ? aggregateToWeekly(apiData) : apiData;
-
-  const candlesticks = [];
-  const volume = [];
-
-  processedData.forEach((d) => {
-    // Candlestick data
-    candlesticks.push({
-      time: d.date,
-      open: d.open,
-      high: d.high,
-      low: d.low,
-      close: d.close,
-    });
-
-    // Volume data
-    volume.push({
-      time: d.date,
-      value: d.volume,
-      color: d.close >= d.open ? 'rgba(33, 150, 243, 0.5)' : 'rgba(230, 25, 205, 0.5)',
-    });
-  });
-
-  // Calculate EMAs
-  const ema10 = calculateEMA(processedData, 10);
-  const ema20 = calculateEMA(processedData, 20);
-  const ema50 = calculateEMA(processedData, 50);
-
-  return { candlesticks, volume, ema10, ema20, ema50 };
 };
 
 /**
@@ -762,13 +498,11 @@ function CandlestickChart({
     const volume = volumeSeriesRef.current;
     if (!candle || !volume || !chartRef.current) return;
 
-    if (rsStripShown) {
-      candle.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.34 } });
-      volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-    } else {
-      candle.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.22 } });
-      volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-    }
+    // RS shown -> compress price to a 0.66 floor (bottom 0.34) so [0.66, 0.78] is
+    // an always-empty strip the RS band lives in; hidden -> full height (0.78).
+    const candleBottom = rsStripShown ? 0.34 : 0.22;
+    candle.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: candleBottom } });
+    volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
   }, [rsStripShown, symbol, height, isDarkMode, compact]);
 
   // Dynamic RS band: size the RS overlay scale so the line fills the empty space
