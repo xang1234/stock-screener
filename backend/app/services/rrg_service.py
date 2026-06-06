@@ -254,6 +254,7 @@ class RRGService:
             .join(StockUniverse, StockUniverse.symbol == IBDIndustryGroup.symbol)
             .filter(
                 IBDIndustryGroup.market == market,
+                StockUniverse.market == market,
                 StockUniverse.sector.isnot(None),
             )
             .all()

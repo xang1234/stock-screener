@@ -451,10 +451,24 @@ class StaticSiteExportService:
         groups_path = path_prefix / "groups.json"
         groups_rrg_path = path_prefix / "groups_rrg.json"
         home_path = path_prefix / "home.json"
+        rrg_available = bool(rrg_payload.get("available", False))
         self._write_json(output_dir / breadth_path, breadth_payload)
         self._write_json(output_dir / groups_path, groups_payload)
-        self._write_json(output_dir / groups_rrg_path, rrg_payload)
         self._write_json(output_dir / home_path, home_payload)
+
+        assets: dict[str, Any] = {
+            "charts": {
+                "path": chart_manifest["path"],
+                "limit": chart_manifest["limit"],
+                "symbols_total": chart_manifest["symbols_total"],
+            },
+        }
+        # Only publish the RRG asset/file for markets that actually have it, so
+        # the static page hides the RRG toggle (gated on assets.groups_rrg.path)
+        # instead of offering an empty view that triggers a wasted fetch.
+        if rrg_available:
+            self._write_json(output_dir / groups_rrg_path, rrg_payload)
+            assets["groups_rrg"] = {"path": groups_rrg_path.as_posix()}
 
         return {
             "market": market,
@@ -464,7 +478,7 @@ class StaticSiteExportService:
                 "scan": True,
                 "breadth": bool(breadth_payload.get("available", True)),
                 "groups": bool(groups_payload.get("available", False)),
-                "rrg": bool(rrg_payload.get("available", False)),
+                "rrg": rrg_available,
                 "charts": bool(chart_manifest.get("available", False)),
             },
             "pages": {
@@ -473,14 +487,7 @@ class StaticSiteExportService:
                 "breadth": {"path": breadth_path.as_posix()},
                 "groups": {"path": groups_path.as_posix()},
             },
-            "assets": {
-                "charts": {
-                    "path": chart_manifest["path"],
-                    "limit": chart_manifest["limit"],
-                    "symbols_total": chart_manifest["symbols_total"],
-                },
-                "groups_rrg": {"path": groups_rrg_path.as_posix()},
-            },
+            "assets": assets,
             "freshness": home_payload.get("freshness", {}),
         }
 

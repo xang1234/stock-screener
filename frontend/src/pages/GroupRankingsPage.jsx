@@ -594,6 +594,11 @@ function GroupRankingsPage() {
     snapshotEnabled,
   ]);
 
+  // The RRG view has its own query (and the static-friendly RRGChart); the
+  // table-only rankings/movers fetches are skipped while it's active so a
+  // rankings-endpoint failure can't block a healthy RRG view.
+  const isRrgView = view === 'rrg';
+
   // Fetch current rankings
   const {
     data: rankings,
@@ -603,7 +608,7 @@ function GroupRankingsPage() {
   } = useQuery({
     queryKey: ['groupRankings', selectedMarket],
     queryFn: () => getCurrentRankings(197, selectedMarket),
-    enabled: liveQueriesEnabled,
+    enabled: liveQueriesEnabled && !isRrgView,
     refetchInterval: 60000,
     staleTime: 60_000,
   });
@@ -615,7 +620,7 @@ function GroupRankingsPage() {
   } = useQuery({
     queryKey: ['groupMovers', selectedPeriod, selectedMarket],
     queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket),
-    enabled: liveQueriesEnabled,
+    enabled: liveQueriesEnabled && !isRrgView,
     staleTime: 60_000,
   });
 
@@ -760,7 +765,7 @@ function GroupRankingsPage() {
     ) : null
   );
 
-  if (errorRankings) {
+  if (errorRankings && !isRrgView) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
