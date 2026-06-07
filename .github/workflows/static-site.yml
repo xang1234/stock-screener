@@ -244,10 +244,23 @@ jobs:
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [ "$status" -eq 79 ]; then
+            echo "Market ${{ matrix.market }} produced diagnostics but no current market artifact will be uploaded; combine will use fallback artifacts if available."
+            echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload market diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-market-diagnostics-${{ matrix.market }}
+          path: /tmp/static-data/diagnostics/${{ env.MARKET_LOWER }}
+          if-no-files-found: ignore
 
       - name: Build daily price bundle
         if: ${{ steps.export-market.outputs.has_artifact == 'true' }}

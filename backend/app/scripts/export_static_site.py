@@ -3,29 +3,31 @@
 from __future__ import annotations
 
 import argparse
-import time
+import json
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
-
-from sqlalchemy import func
 
 from app.config import settings
 from app.database import SessionLocal
 from app.infra.db.models.feature_store import FeatureRunPointer
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
-from app.models.stock import StockPrice
-from app.models.stock_universe import StockUniverse
 from app.domain.markets import market_registry
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
-from app.services.static_site_export_service import StaticSiteExportService
+from app.services.static_daily_price_refresh_service import (
+    StaticDailyPriceRefreshService,
+    static_daily_price_refresh_batch_size as _static_daily_price_refresh_batch_size,
+)
+from app.services.static_site_export_service import (
+    NoPublishedStaticMarketArtifact,
+    StaticSiteExportService,
+)
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
-from app.utils.symbol_support import split_supported_price_symbols
 from app.wiring.bootstrap import (
     get_group_rank_service,
     get_market_calendar_service,
@@ -34,8 +36,6 @@ from app.wiring.bootstrap import (
 )
 
 
-STATIC_DAILY_PRICE_REFRESH_PERIOD = "7d"
-STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE = 250
 STATIC_GROUP_HISTORY_LOOKBACK_DAYS = 100
 STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS = 20
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
@@ -44,17 +44,7 @@ STATIC_BUILD_MODE_FULL = "full"
 STATIC_EXPORT_MARKETS = market_registry.supported_market_codes()
 STATIC_DEFAULT_MARKET = "US"
 STATIC_EXPORT_SKIPPED_EXIT_CODE = 78
-
-# Markets where Yahoo's 429 backoff windows are long enough that a single
-# refresh pass routinely leaves a tail of rate-limited symbols. For these
-# markets we wait ``STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS`` after the main
-# loop and replay only the symbols whose failure looks transient, in a
-# smaller batch (``STATIC_RATE_LIMITED_RETRY_BATCH_SIZE``). The Yahoo 429
-# window typically clears in 2-5 minutes; 300s is a safe single retry that
-# doesn't double the IN job runtime.
-STATIC_RATE_LIMITED_RETRY_MARKETS = frozenset({"IN"})
-STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS = 300
-STATIC_RATE_LIMITED_RETRY_BATCH_SIZE = 25
+STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE = 79
 
 
 def _default_output_dir() -> Path:
@@ -74,10 +64,6 @@ def _resolve_latest_completed_trading_date(market: str) -> date:
     stale date when NYSE traded but the target exchange did not.
     """
     return get_market_calendar_service().last_completed_trading_day(market)
-
-
-def _iter_chunks(items: list[str], chunk_size: int) -> list[list[str]]:
-    return [items[index:index + chunk_size] for index in range(0, len(items), chunk_size)]
 
 
 def _market_pointer_key(market: str) -> str:
@@ -100,225 +86,71 @@ def _upsert_feature_run_pointer(*, pointer_key: str, run_id: int) -> None:
         db.commit()
 
 
-def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None) -> dict[str, Any]:
-    """Refresh recent price bars in batches without Redis or warmup metadata."""
-    price_cache = get_price_cache()
-    fetcher = BulkDataFetcher()
-
-    with SessionLocal() as db:
-        query = (
-            db.query(StockUniverse.symbol)
-            .filter(StockUniverse.is_active.is_(True))
-            .order_by(StockUniverse.market_cap.desc().nullslast(), StockUniverse.symbol.asc())
-        )
-        if market is not None:
-            query = query.filter(StockUniverse.market == market)
-        active_symbols = [symbol for symbol, in query.all()]
-        supported_symbols, skipped_symbols = split_supported_price_symbols(active_symbols)
-        latest_rows = (
-            db.query(StockPrice.symbol, func.max(StockPrice.date))
-            .filter(StockPrice.symbol.in_(supported_symbols))
-            .group_by(StockPrice.symbol)
-            .all()
-        )
-
-    latest_by_symbol = {symbol: latest_date for symbol, latest_date in latest_rows}
-    db_fresh_symbols = [
-        symbol for symbol in supported_symbols if latest_by_symbol.get(symbol) is not None and latest_by_symbol[symbol] >= as_of_date
-    ]
-    stale_symbols = [
-        symbol for symbol in supported_symbols if latest_by_symbol.get(symbol) is not None and latest_by_symbol[symbol] < as_of_date
-    ]
-    no_history_symbols = [
-        symbol for symbol in supported_symbols if symbol not in latest_by_symbol
-    ]
-
-    if not stale_symbols:
-        if no_history_symbols:
-            print(
-                "[static-daily prices] No reusable cached price history found; "
-                "relying on the batch-only feature snapshot path for full history fetch.",
-                flush=True,
-            )
-        else:
-            print(
-                f"[static-daily prices] Database already has fresh price rows for "
-                f"{len(db_fresh_symbols):,} supported symbols as of {as_of_date}.",
-                flush=True,
-            )
-        return {
-            "status": "skipped",
-            "market": market,
-            "as_of_date": as_of_date.isoformat(),
-            "total_active_symbols": len(active_symbols),
-            "supported_symbols": len(supported_symbols),
-            "db_fresh_symbols": len(db_fresh_symbols),
-            "stale_symbols": len(stale_symbols),
-            "no_history_symbols": len(no_history_symbols),
-            "skipped_unsupported_symbols": len(skipped_symbols),
-            "yahoo_fetched_symbols": 0,
-            "yahoo_failed_symbols": 0,
-        }
-
-    refreshed = 0
-    failed = 0
-    rate_limited_symbols: list[str] = []
-    total = len(stale_symbols)
-    total_batches = (total + STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE - 1) // STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE
-
-    print(
-        f"[static-daily prices] Refreshing {total:,} stale symbols in {total_batches} batches "
-        f"for {as_of_date} (DB fresh: {len(db_fresh_symbols):,}, unsupported skipped: {len(skipped_symbols):,}).",
-        flush=True,
-    )
-
-    for batch_index, batch_symbols in enumerate(
-        _iter_chunks(stale_symbols, STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE),
-        start=1,
+def _snapshot_publishable(snapshot: dict[str, Any]) -> bool:
+    status = snapshot.get("status")
+    if status == "published":
+        return True
+    if status == "skipped" and snapshot.get("reason") == "already_published":
+        return True
+    if status is None and (
+        snapshot.get("run_id") is not None
+        or snapshot.get("existing_run_id") is not None
     ):
-        processed_before = refreshed + failed
-        print(
-            f"[static-daily prices] Batch {batch_index}/{total_batches}: "
-            f"{processed_before:,}/{total:,} processed, fetching {len(batch_symbols):,} symbols from Yahoo.",
-            flush=True,
-        )
-        batch_results = fetcher.fetch_prices_in_batches(
-            batch_symbols,
-            period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
-            market=market,
-        )
-        batch_to_store: dict[str, Any] = {}
-        for symbol, payload in batch_results.items():
-            price_data = payload.get("price_data")
-            if not payload.get("has_error") and price_data is not None and not price_data.empty:
-                batch_to_store[symbol] = price_data
-                refreshed += 1
-            else:
-                failed += 1
-                if _is_rate_limit_failure(payload):
-                    rate_limited_symbols.append(symbol)
-        if batch_to_store:
-            price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
-        print(
-            f"[static-daily prices] Batch {batch_index}/{total_batches} complete: "
-            f"{refreshed + failed:,}/{total:,} processed, {refreshed:,} refreshed, {failed:,} failed.",
-            flush=True,
-        )
-
-    retry_stats = _retry_rate_limited_failures(
-        market=market,
-        rate_limited_symbols=rate_limited_symbols,
-        fetcher=fetcher,
-        price_cache=price_cache,
-    )
-    refreshed += retry_stats["recovered"]
-    failed -= retry_stats["recovered"]
-
-    return {
-        "status": "completed",
-        "market": market,
-        "as_of_date": as_of_date.isoformat(),
-        "total_active_symbols": len(active_symbols),
-        "supported_symbols": len(supported_symbols),
-        "db_fresh_symbols": len(db_fresh_symbols),
-        "stale_symbols": len(stale_symbols),
-        "no_history_symbols": len(no_history_symbols),
-        "skipped_unsupported_symbols": len(skipped_symbols),
-        "yahoo_fetched_symbols": refreshed,
-        "yahoo_failed_symbols": failed,
-        "rate_limited_retry": retry_stats,
-    }
+        return True
+    return False
 
 
-def _is_rate_limit_failure(payload: dict[str, Any]) -> bool:
-    """Return True when ``payload`` describes a transient 429/rate-limit miss.
-
-    Symbol-level Yahoo errors include "Too Many Requests" / "rate" / "429" /
-    "throttl" in the error string. Permanent failures (delisted ticker,
-    unknown symbol, empty data after retries) don't match — those must be
-    excluded so we don't waste another 5-min wait retrying tickers that will
-    never come back.
-    """
-    if not payload.get("has_error"):
-        return False
-    error = str(payload.get("error") or "").lower()
-    if not error:
-        return False
-    indicators = ("rate", "429", "too many", "limit", "throttl")
-    return any(token in error for token in indicators)
-
-
-def _retry_rate_limited_failures(
-    *,
+def _selected_market_non_publishable_snapshot(
+    refresh_results: dict[str, Any],
     market: str | None,
-    rate_limited_symbols: list[str],
-    fetcher: BulkDataFetcher,
-    price_cache: Any,
-) -> dict[str, Any]:
-    """One-shot retry of rate-limited symbols after a fixed cool-down.
+) -> dict[str, Any] | None:
+    if market is None:
+        return None
+    feature_snapshots = refresh_results.get("feature_snapshots", {})
+    if not isinstance(feature_snapshots, dict):
+        return None
+    snapshot = feature_snapshots.get(market.upper())
+    if not isinstance(snapshot, dict):
+        return None
+    return None if _snapshot_publishable(snapshot) else snapshot
 
-    Gated on ``market in STATIC_RATE_LIMITED_RETRY_MARKETS`` because only
-    IN currently sees Yahoo 429 windows long enough to leave a recoverable
-    tail after the first pass. Permanent-looking failures from the main
-    loop (delisted, no data) are excluded by ``_is_rate_limit_failure``,
-    so this retry replays only the slice that's plausibly recoverable.
-    """
-    skipped_payload: dict[str, Any] = {
-        "attempted": 0,
-        "recovered": 0,
-        "still_failed": 0,
-        "wait_seconds": 0,
-        "batch_size": STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
+
+def _snapshot_skipped_not_trading_day(snapshot: dict[str, Any] | None) -> bool:
+    if snapshot is None:
+        return False
+    return snapshot.get("status") == "skipped" and snapshot.get("reason") == "not_trading_day"
+
+
+def _write_market_diagnostics(output_dir: Path, market: str, snapshot: dict[str, Any]) -> Path:
+    diagnostics_dir = output_dir / "diagnostics" / market.lower()
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_path = diagnostics_dir / "snapshot-failure.json"
+    payload: dict[str, Any] = {
+        "market": market.upper(),
+        "status": snapshot.get("status"),
+        "failed_symbols": snapshot.get("failed_symbols", []),
+        "row_count": snapshot.get("row_count"),
+        "warnings": snapshot.get("warnings", []),
+        "failure_diagnostics": snapshot.get("failure_diagnostics", {}),
     }
-    if not rate_limited_symbols:
-        return skipped_payload
-    normalized = (market or "").upper()
-    if normalized not in STATIC_RATE_LIMITED_RETRY_MARKETS:
-        if rate_limited_symbols:
-            print(
-                f"[static-daily prices] Skipping rate-limited retry for market={normalized or 'shared'}: "
-                f"{len(rate_limited_symbols)} symbols looked throttled but market is outside the retry allowlist.",
-                flush=True,
-            )
-        return skipped_payload
+    for key in ("reason", "run_id", "existing_run_id"):
+        if key in snapshot:
+            payload[key] = snapshot[key]
+    diagnostics_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return diagnostics_path
 
-    unique_symbols = sorted(set(rate_limited_symbols))
-    print(
-        f"[static-daily prices:{normalized}] Yahoo flagged {len(unique_symbols)} symbols as rate-limited; "
-        f"waiting {STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS}s then retrying with batch size "
-        f"{STATIC_RATE_LIMITED_RETRY_BATCH_SIZE}.",
-        flush=True,
-    )
-    time.sleep(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
 
-    retry_results = fetcher.fetch_prices_in_batches(
-        unique_symbols,
-        period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
-        start_batch_size=STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
-        market=market,
+def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None) -> dict[str, Any]:
+    service = StaticDailyPriceRefreshService(
+        session_factory=SessionLocal,
+        price_cache=get_price_cache(),
+        fetcher=BulkDataFetcher(),
+        batch_size_for_market=_static_daily_price_refresh_batch_size,
     )
-    recovered_payload: dict[str, Any] = {}
-    recovered = 0
-    for symbol, payload in retry_results.items():
-        price_data = payload.get("price_data")
-        if not payload.get("has_error") and price_data is not None and not price_data.empty:
-            recovered_payload[symbol] = price_data
-            recovered += 1
-    if recovered_payload:
-        price_cache.store_batch_in_cache(recovered_payload, also_store_db=True)
-    still_failed = len(unique_symbols) - recovered
-    print(
-        f"[static-daily prices:{normalized}] Rate-limited retry complete: "
-        f"{recovered}/{len(unique_symbols)} recovered, {still_failed} still failed.",
-        flush=True,
-    )
-    return {
-        "attempted": len(unique_symbols),
-        "recovered": recovered,
-        "still_failed": still_failed,
-        "wait_seconds": STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS,
-        "batch_size": STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
-    }
+    return service.refresh(as_of_date=as_of_date, market=market)
 
 
 def _generate_trading_dates(
@@ -513,16 +345,6 @@ def _run_daily_refresh(
 
     warnings: list[str] = []
 
-    def _snapshot_ready(snapshot: dict[str, Any]) -> bool:
-        status = snapshot.get("status")
-        if status == "published":
-            return True
-        if status == "skipped" and snapshot.get("reason") == "already_published":
-            return True
-        if status is None and (snapshot.get("run_id") is not None or snapshot.get("existing_run_id") is not None):
-            return True
-        return False
-
     selected_markets = (market,) if market is not None else STATIC_EXPORT_MARKETS
     as_of_by_market: dict[str, date] = {
         selected_market: _resolve_latest_completed_trading_date(selected_market)
@@ -586,7 +408,7 @@ def _run_daily_refresh(
         group_rank_history: dict[str, Any] = {}
         for selected_market in selected_markets:
             snapshot = feature_snapshots.get(selected_market, {})
-            if not _snapshot_ready(snapshot):
+            if not _snapshot_publishable(snapshot):
                 group_rank_history[selected_market] = {
                     "status": "skipped",
                     "market": selected_market,
@@ -616,7 +438,7 @@ def _run_daily_refresh(
         ibd_metadata_refresh: dict[str, Any] = {}
         for selected_market in selected_markets:
             snapshot = feature_snapshots.get(selected_market, {})
-            if not _snapshot_ready(snapshot):
+            if not _snapshot_publishable(snapshot):
                 ibd_metadata_refresh[selected_market] = {
                     "status": "skipped",
                     "market": selected_market,
@@ -650,7 +472,7 @@ def _run_daily_refresh(
         for snapshot_market, snapshot in feature_snapshots.items():
             if snapshot_market == STATIC_DEFAULT_MARKET:
                 continue
-            if _snapshot_ready(snapshot):
+            if _snapshot_publishable(snapshot):
                 continue
             status = snapshot.get("status")
             reason = snapshot.get("reason")
@@ -664,7 +486,7 @@ def _run_daily_refresh(
         if STATIC_DEFAULT_MARKET in feature_snapshots:
             default_snapshot = feature_snapshots.get(STATIC_DEFAULT_MARKET, {})
             default_snapshot_status = default_snapshot.get("status")
-            default_snapshot_ready = _snapshot_ready(default_snapshot)
+            default_snapshot_ready = _snapshot_publishable(default_snapshot)
             default_run_id = (
                 default_snapshot.get("run_id")
                 or default_snapshot.get("existing_run_id")
@@ -691,18 +513,6 @@ def _run_daily_refresh(
                 )
 
     return results, warnings
-
-
-def _market_refresh_skipped_not_trading_day(refresh_results: dict[str, Any], market: str | None) -> bool:
-    if market is None:
-        return False
-    feature_snapshots = refresh_results.get("feature_snapshots", {})
-    if not isinstance(feature_snapshots, dict):
-        return False
-    snapshot = feature_snapshots.get(market.upper())
-    if not isinstance(snapshot, dict):
-        return False
-    return snapshot.get("status") == "skipped" and snapshot.get("reason") == "not_trading_day"
 
 
 def main() -> int:
@@ -766,6 +576,7 @@ def main() -> int:
         raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
 
     refresh_warnings: list[str] = []
+    selected_market_non_publishable_snapshot: dict[str, Any] | None = None
     if args.combine_artifacts_dir:
         result = StaticSiteExportService.combine_market_artifacts(
             Path(args.combine_artifacts_dir),
@@ -794,19 +605,42 @@ def main() -> int:
             for warning in refresh_warnings:
                 print(f"  - warning: {warning}")
 
-            if _market_refresh_skipped_not_trading_day(refresh_results, args.market):
+            selected_market_non_publishable_snapshot = _selected_market_non_publishable_snapshot(
+                refresh_results,
+                args.market,
+            )
+            if _snapshot_skipped_not_trading_day(selected_market_non_publishable_snapshot):
                 print(
                     f"Static site export skipped for market {args.market} because it is not a trading day."
                 )
                 return STATIC_EXPORT_SKIPPED_EXIT_CODE
 
         service = StaticSiteExportService(SessionLocal)
-        result = service.export(
-            Path(args.output_dir),
-            clean=not args.no_clean,
-            markets=((args.market,) if args.market else None),
-            write_manifest=args.market is None,
-        )
+        try:
+            result = service.export(
+                Path(args.output_dir),
+                clean=not args.no_clean,
+                markets=((args.market,) if args.market else None),
+                write_manifest=args.market is None,
+            )
+        except NoPublishedStaticMarketArtifact:
+            if (
+                args.market is not None
+                and args.refresh_daily
+                and selected_market_non_publishable_snapshot is not None
+            ):
+                _write_market_diagnostics(
+                    Path(args.output_dir),
+                    args.market,
+                    selected_market_non_publishable_snapshot,
+                )
+                print(
+                    f"Static site export skipped for market {args.market}; "
+                    "no current artifact was produced, diagnostics were uploaded, "
+                    "and the combine job can use fallback artifacts."
+                )
+                return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
+            raise
 
     print("Static site export complete:")
     print(f"  - output_dir: {result.output_dir}")

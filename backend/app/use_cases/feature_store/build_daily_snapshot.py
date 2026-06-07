@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -65,6 +66,8 @@ logger = logging.getLogger(__name__)
 
 # Singleton calendar instance (thread-safe, immutable schedule data).
 _nyse_calendar = mcal.get_calendar("NYSE")
+
+MAX_FAILURE_DIAGNOSTIC_SAMPLES = 50
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +134,27 @@ def _resolve_result_status(result_dict: object) -> str:
         return "insufficient_history"
 
     return "ok"
+
+
+def _extract_data_errors(result: object) -> dict[str, str]:
+    """Extract scanner data errors from a result payload."""
+    if not isinstance(result, dict):
+        return {}
+
+    details = result.get("details")
+    if not isinstance(details, dict):
+        return {}
+
+    data_errors = details.get("data_errors")
+    if not isinstance(data_errors, dict):
+        return {}
+
+    return {str(key): str(value) for key, value in data_errors.items()}
+
+
+def _format_exception(exc: Exception) -> str:
+    """Format an exception for bounded per-symbol diagnostics."""
+    return f"{exc.__class__.__name__}: {exc}"
 
 
 def _serialize_universe_definition(universe_def: object) -> dict[str, object]:
@@ -214,6 +238,43 @@ class BuildDailySnapshotResult:
     warnings: tuple[str, ...]
     row_count: int
     duration_seconds: float
+    failure_diagnostics: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class FailureDiagnosticsCollector:
+    """Bounded collection of per-symbol scan failure diagnostics."""
+
+    reason_counts: Counter[str] = field(default_factory=Counter)
+    samples: list[dict[str, object]] = field(default_factory=list)
+    sample_limit: int = MAX_FAILURE_DIAGNOSTIC_SAMPLES
+
+    def record(
+        self,
+        *,
+        symbol: str,
+        reason: str,
+        error: str | None = None,
+        data_errors: dict[str, str] | None = None,
+    ) -> None:
+        self.reason_counts[reason] += 1
+        if len(self.samples) >= self.sample_limit:
+            return
+        self.samples.append(
+            {
+                "symbol": symbol,
+                "reason": reason,
+                "error": error,
+                "data_errors": data_errors or {},
+            }
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "reason_counts": dict(self.reason_counts),
+            "samples": list(self.samples),
+            "sample_limit": self.sample_limit,
+        }
 
 
 class BootstrapCacheCoverageInsufficient(RuntimeError):
@@ -478,6 +539,7 @@ class BuildDailyFeatureSnapshotUseCase:
         progress_state: _SnapshotRunProgress,
     ) -> BuildDailySnapshotResult:
         start_time = time.monotonic()
+        failure_diagnostics = FailureDiagnosticsCollector()
         effective_chunk_size = (
             cmd.static_chunk_size
             if cmd.require_bulk_prefetch and cmd.static_chunk_size is not None
@@ -568,6 +630,7 @@ class BuildDailyFeatureSnapshotUseCase:
                     warnings=(*run_warnings, "Cancelled by user"),
                     row_count=uow.feature_store.count_by_run_id(run_id),
                     duration_seconds=round(duration, 2),
+                    failure_diagnostics=failure_diagnostics.to_dict(),
                 )
 
             # 3b — Scan each symbol in the chunk
@@ -601,11 +664,29 @@ class BuildDailyFeatureSnapshotUseCase:
                     pre_fetched_data = {}
 
             chunk_rows: list[FeatureRowWrite] = []
-            def _scan_symbol(symbol: str) -> tuple[str, FeatureRowWrite | None, bool]:
+
+            def _scan_symbol(
+                symbol: str,
+            ) -> tuple[
+                str,
+                FeatureRowWrite | None,
+                bool,
+                dict[str, object] | None,
+            ]:
                 sym = symbol.upper()
                 try:
                     if cache_only_symbol_data and sym not in pre_fetched_data:
-                        return sym, None, False
+                        return (
+                            sym,
+                            None,
+                            False,
+                            {
+                                "symbol": sym,
+                                "reason": "bulk_prefetch_missing",
+                                "error": None,
+                                "data_errors": {},
+                            },
+                        )
                     scan_kwargs: dict[str, object] = {}
                     if merged_requirements is not None:
                         scan_kwargs["pre_merged_requirements"] = merged_requirements
@@ -619,22 +700,48 @@ class BuildDailyFeatureSnapshotUseCase:
                         **scan_kwargs,
                     )
                     result_status = _resolve_result_status(result)
-                    if result and result_status != "error":
+                    if isinstance(result, dict) and result and result_status != "error":
                         row = _map_orchestrator_to_feature_row(
                             sym, cmd.as_of_date, result
                         )
-                        return sym, row, bool(result.get("passes_template"))
-                    return sym, None, False
-                except Exception:
+                        return sym, row, bool(result.get("passes_template")), None
+                    error = None
+                    if isinstance(result, dict) and result.get("error") is not None:
+                        error = str(result.get("error"))
+                    return (
+                        sym,
+                        None,
+                        False,
+                        {
+                            "symbol": sym,
+                            "reason": "scanner_error_result",
+                            "error": error,
+                            "data_errors": _extract_data_errors(result),
+                        },
+                    )
+                except Exception as exc:
                     logger.debug(
                         "Error scanning %s in run %d",
                         sym,
                         run_id,
                         exc_info=True,
                     )
-                    return sym, None, False
+                    return (
+                        sym,
+                        None,
+                        False,
+                        {
+                            "symbol": sym,
+                            "reason": "scan_exception",
+                            "error": _format_exception(exc),
+                            "data_errors": {},
+                        },
+                    )
 
-            outcomes_by_symbol: dict[str, tuple[FeatureRowWrite | None, bool]] = {}
+            outcomes_by_symbol: dict[
+                str,
+                tuple[FeatureRowWrite | None, bool, dict[str, object] | None],
+            ] = {}
             if (
                 cmd.require_bulk_prefetch
                 and cmd.static_parallel_workers > 1
@@ -646,20 +753,25 @@ class BuildDailyFeatureSnapshotUseCase:
                         executor.submit(_scan_symbol, symbol): symbol for symbol in chunk
                     }
                     for future in as_completed(futures):
-                        sym, row, passed = future.result()
-                        outcomes_by_symbol[sym] = (row, passed)
+                        sym, row, passed, diagnostic = future.result()
+                        outcomes_by_symbol[sym] = (row, passed, diagnostic)
             else:
                 for symbol in chunk:
-                    sym, row, passed = _scan_symbol(symbol)
-                    outcomes_by_symbol[sym] = (row, passed)
+                    sym, row, passed, diagnostic = _scan_symbol(symbol)
+                    outcomes_by_symbol[sym] = (row, passed, diagnostic)
 
             for symbol in chunk:
-                row, passed = outcomes_by_symbol.get(symbol.upper(), (None, False))
+                row, passed, diagnostic = outcomes_by_symbol.get(
+                    symbol.upper(),
+                    (None, False, None),
+                )
                 if row is not None:
                     chunk_rows.append(row)
                     if passed:
                         progress_state.passed_symbols += 1
                 else:
+                    if diagnostic is not None:
+                        failure_diagnostics.record(**diagnostic)
                     progress_state.failed_symbols += 1
                 progress_state.attempted_symbols += 1
 
@@ -762,6 +874,7 @@ class BuildDailyFeatureSnapshotUseCase:
             warnings=(*run_warnings, *pub_result.warnings),
             row_count=actual_count,
             duration_seconds=round(duration, 2),
+            failure_diagnostics=failure_diagnostics.to_dict(),
         )
 
 

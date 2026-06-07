@@ -59,6 +59,7 @@ class _FakeUseCase:
             duration_seconds=12.5,
             dq_passed=True,
             warnings=(),
+            failure_diagnostics={},
         )
 
 
@@ -115,6 +116,51 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
     assert fake_use_case.received_cmd is not None
     assert fake_use_case.received_cmd.universe_def.type == UniverseType.MARKET
     assert fake_use_case.received_cmd.universe_def.market.value == "US"
+
+
+def test_build_daily_snapshot_returns_failure_diagnostics(monkeypatch):
+    class _FakeUseCase:
+        def execute(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                run_id=7,
+                status="quarantined",
+                total_symbols=3,
+                processed_symbols=3,
+                failed_symbols=1,
+                skipped_symbols=0,
+                row_count=2,
+                duration_seconds=1.25,
+                dq_passed=False,
+                warnings=("Row count ratio 66.67% below threshold",),
+                failure_diagnostics={
+                    "reason_counts": {"scanner_error_result": 1},
+                    "samples": [{"symbol": "MSFT", "reason": "scanner_error_result"}],
+                    "sample_limit": 50,
+                },
+            )
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        lambda: _FakeUseCase(),
+    )
+    monkeypatch.setattr(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        lambda *_args, **_kwargs: True,
+    )
+
+    payload = _TASK_BODY(
+        _FakeTask(),
+        as_of_date_str="2026-06-04",
+        screener_names=["custom"],
+        universe_name="market:IN",
+        market="IN",
+        static_daily_mode=True,
+        ignore_runtime_market_gate=True,
+    )
+
+    assert payload["failure_diagnostics"]["reason_counts"] == {
+        "scanner_error_result": 1
+    }
 
 
 def test_bootstrap_coverage_total_preserves_zero_price_total():
@@ -1443,6 +1489,15 @@ def test_create_auto_scan_uses_saved_run_universe_count_for_total_stocks():
     universe_def = SimpleNamespace(
         label=lambda: "All Active Stocks",
         key=lambda: "all",
+        storage_projection=lambda: SimpleNamespace(
+            label="All Active Stocks",
+            key="all",
+            type="all",
+            market=None,
+            exchange=None,
+            index=None,
+            symbols=None,
+        ),
         type=SimpleNamespace(value="all"),
         exchange=None,
         index=None,

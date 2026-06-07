@@ -207,6 +207,14 @@ class StaticSiteExportResult:
     manifest: dict[str, Any]
 
 
+class NoPublishedStaticMarketArtifact(RuntimeError):
+    """Raised when static export cannot find a published market artifact source."""
+
+    def __init__(self, message: str, *, markets: tuple[str, ...] = ()) -> None:
+        self.markets = tuple(markets)
+        super().__init__(message)
+
+
 class StaticSiteSectionUnavailableError(RuntimeError):
     """Raised when an optional static-site section cannot be exported for the target date."""
 
@@ -253,9 +261,13 @@ class StaticSiteExportService:
             if not available_markets:
                 latest_run = self._get_latest_published_run(db)
                 if latest_run is None:
-                    raise RuntimeError("No published feature run is available for static-site export")
-                raise RuntimeError(
-                    "No market-scoped published feature runs are available for static-site export"
+                    raise NoPublishedStaticMarketArtifact(
+                        "No published feature run is available for static-site export",
+                        markets=selected_markets,
+                    )
+                raise NoPublishedStaticMarketArtifact(
+                    "No market-scoped published feature runs are available for static-site export",
+                    markets=selected_markets,
                 )
 
             for market in available_markets:
@@ -359,7 +371,10 @@ class StaticSiteExportService:
     ) -> dict[str, Any]:
         latest_run = self._get_latest_published_run(db, market=market)
         if latest_run is None:
-            raise RuntimeError(f"No published feature run is available for static-site export market {market}")
+            raise NoPublishedStaticMarketArtifact(
+                f"No published feature run is available for static-site export market {market}",
+                markets=(market,),
+            )
 
         path_prefix = Path("markets") / market.lower()
         scan_rows, filter_options = self._load_scan_export_source(db, latest_run)

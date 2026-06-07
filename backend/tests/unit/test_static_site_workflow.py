@@ -39,8 +39,12 @@ def _fallback_download_script() -> str:
 
 def test_static_site_market_build_failures_are_not_marked_continue_on_error() -> None:
     build_market_job = _build_market_job()
+    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+        "\n      - name: Upload market diagnostics",
+        1,
+    )[0]
 
-    assert "continue-on-error: true" not in build_market_job
+    assert "continue-on-error: true" not in export_step
 
 
 def test_static_site_daily_price_seed_allows_stale_bootstrap() -> None:
@@ -80,6 +84,33 @@ def test_static_site_market_export_skips_artifact_steps_for_closed_market() -> N
     assert "steps.export-market.outputs.has_artifact == 'true'" in build_price_step
     assert "steps.export-market.outputs.has_artifact == 'true'" in upload_price_step
     assert "steps.export-market.outputs.has_artifact == 'true'" in upload_market_step
+
+
+def test_static_site_market_export_soft_skips_no_current_artifact_exit_code() -> None:
+    build_market_job = _build_market_job()
+    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+        "\n      - name: Upload market diagnostics",
+        1,
+    )[0]
+
+    assert 'if [ "$status" -eq 79 ]; then' in export_step
+    assert "has_artifact=false" in export_step
+    assert "fallback artifacts" in export_step
+    assert "no current market artifact will be uploaded" in export_step
+
+
+def test_static_site_uploads_market_diagnostics_after_export() -> None:
+    build_market_job = _build_market_job()
+    diagnostics_step = build_market_job.split("      - name: Upload market diagnostics\n", 1)[1].split(
+        "\n      - name: Build daily price bundle",
+        1,
+    )[0]
+
+    assert "if: ${{ always() }}" in diagnostics_step
+    assert "uses: actions/upload-artifact@v4" in diagnostics_step
+    assert "name: static-market-diagnostics-${{ matrix.market }}" in diagnostics_step
+    assert "path: /tmp/static-data/diagnostics/${{ env.MARKET_LOWER }}" in diagnostics_step
+    assert "if-no-files-found: ignore" in diagnostics_step
 
 
 def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:

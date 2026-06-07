@@ -745,6 +745,81 @@ class TestBulkDataPreparation:
         assert uow.feature_store._universe[result.run_id] == ["AAPL", "MSFT"]
 
     @_PATCH_TRADING_DAY
+    def test_bulk_prefetch_missing_records_failure_diagnostics_in_parallel(self, _mock_td):
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT", "GOOGL"])
+
+        class PartialProvider(FakeStockDataProvider):
+            def prepare_data_bulk(
+                self,
+                symbols: list[str],
+                requirements: object,
+                *,
+                allow_partial: bool = True,
+                batch_only_prices: bool = False,
+                batch_only_fundamentals: bool = False,
+            ) -> dict[str, object]:
+                return {
+                    symbol: self._make_stock_data(symbol)
+                    for symbol in symbols
+                    if symbol == "AAPL"
+                }
+
+        class BulkAwareScanner:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
+                self.calls.append(symbol)
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        scanner = BulkAwareScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=PartialProvider(),
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                chunk_size=3,
+                require_bulk_prefetch=True,
+                batch_only_prices=True,
+                batch_only_fundamentals=True,
+                static_parallel_workers=2,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.failed_symbols == 2
+        assert scanner.calls == ["AAPL"]
+        assert result.failure_diagnostics["reason_counts"] == {
+            "bulk_prefetch_missing": 2
+        }
+        assert result.failure_diagnostics["samples"] == [
+            {
+                "symbol": "MSFT",
+                "reason": "bulk_prefetch_missing",
+                "error": None,
+                "data_errors": {},
+            },
+            {
+                "symbol": "GOOGL",
+                "reason": "bulk_prefetch_missing",
+                "error": None,
+                "data_errors": {},
+            },
+        ]
+
+    @_PATCH_TRADING_DAY
     def test_bootstrap_gate_fail_raises_before_live_fallback(self, _mock_td):
         uow, _ = _make_uow(symbols=["AAPL", "MSFT", "BAD-WT"])
 
@@ -1091,6 +1166,136 @@ class TestPartialFailures:
 
         assert result.processed_symbols == 3
         assert result.failed_symbols == 1
+
+    @_PATCH_TRADING_DAY
+    def test_error_result_is_reported_in_failure_diagnostics(self, _mock_td):
+        results = {
+            "AAPL": {
+                "composite_score": 85.0,
+                "rating": "Strong Buy",
+                "screeners_passed": 1,
+            },
+            "MSFT": {
+                "result_status": "error",
+                "error": "Screener execution failed: setup_engine",
+                "details": {
+                    "data_errors": {
+                        "price_data": "No price data returned from batch-only price path"
+                    }
+                },
+            },
+            "GOOGL": {
+                "composite_score": 70.0,
+                "rating": "Buy",
+                "screeners_passed": 1,
+            },
+        }
+        uow, scanner = _make_uow(scanner_results=results)
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        assert result.failed_symbols == 1
+        assert result.failure_diagnostics["reason_counts"] == {
+            "scanner_error_result": 1
+        }
+        assert result.failure_diagnostics["samples"] == [
+            {
+                "symbol": "MSFT",
+                "reason": "scanner_error_result",
+                "error": "Screener execution failed: setup_engine",
+                "data_errors": {
+                    "price_data": "No price data returned from batch-only price path"
+                },
+            }
+        ]
+
+    @_PATCH_TRADING_DAY
+    def test_scanner_exception_is_reported_in_failure_diagnostics(self, _mock_td):
+        class ExplodingScanner:
+            def scan_stock_multi(self, symbol, screener_names, **kw):
+                if symbol == "BOOM":
+                    raise RuntimeError("kaboom")
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "screeners_passed": 1,
+                }
+
+        uow, _ = _make_uow(symbols=["AAPL", "BOOM", "GOOGL"])
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=ExplodingScanner())
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        assert result.failed_symbols == 1
+        assert result.failure_diagnostics["reason_counts"] == {"scan_exception": 1}
+        assert result.failure_diagnostics["samples"] == [
+            {
+                "symbol": "BOOM",
+                "reason": "scan_exception",
+                "error": "RuntimeError: kaboom",
+                "data_errors": {},
+            }
+        ]
+
+    @_PATCH_TRADING_DAY
+    def test_error_result_diagnostics_coerce_non_string_error(self, _mock_td):
+        results = {
+            "AAPL": {
+                "result_status": "error",
+                "error": {"reason": "bad setup", "code": 42},
+            },
+        }
+        uow, scanner = _make_uow(symbols=["AAPL"], scanner_results=results)
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        assert result.failed_symbols == 1
+        assert result.failure_diagnostics["samples"] == [
+            {
+                "symbol": "AAPL",
+                "reason": "scanner_error_result",
+                "error": "{'reason': 'bad setup', 'code': 42}",
+                "data_errors": {},
+            }
+        ]
+
+    @_PATCH_TRADING_DAY
+    def test_failure_diagnostic_samples_are_capped(self, _mock_td):
+        symbols = [f"SYM{i:03d}" for i in range(55)]
+        results = {
+            symbol: {
+                "result_status": "error",
+                "error": f"failed {symbol}",
+            }
+            for symbol in symbols
+        }
+        uow, scanner = _make_uow(symbols=symbols, scanner_results=results)
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(chunk_size=55),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        samples = result.failure_diagnostics["samples"]
+        assert result.failed_symbols == 55
+        assert result.failure_diagnostics["reason_counts"] == {
+            "scanner_error_result": 55
+        }
+        assert result.failure_diagnostics["sample_limit"] == 50
+        assert len(samples) == 50
+        assert samples[0]["symbol"] == "SYM000"
+        assert samples[-1]["symbol"] == "SYM049"
 
     @_PATCH_TRADING_DAY
     def test_insufficient_history_rows_are_persisted_without_counting_as_failures(self, _mock_td):

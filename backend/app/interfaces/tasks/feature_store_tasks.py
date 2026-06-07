@@ -1051,6 +1051,14 @@ def build_daily_snapshot(
         result.failed_symbols, result.skipped_symbols, result.row_count,
         result.duration_seconds, result.dq_passed,
     )
+    failure_diagnostics = dict(result.failure_diagnostics or {})
+    diagnostic_counts = failure_diagnostics.get("reason_counts", {})
+    if diagnostic_counts:
+        logger.warning(
+            "build_daily_snapshot failure diagnostics for %s: %s",
+            effective_market,
+            diagnostic_counts,
+        )
 
     if result.status == "published":
         metadata_refresh_stats = _enrich_feature_run_with_ibd_metadata(
@@ -1103,4 +1111,5 @@ def build_daily_snapshot(
         "metadata_refresh": metadata_refresh_stats if result.status == "published" else None,
         "cleaned_stale_runs": cleaned_stale_runs,
         "warnings": list(result.warnings),
+        "failure_diagnostics": failure_diagnostics,
     }

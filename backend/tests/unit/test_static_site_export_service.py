@@ -16,6 +16,7 @@ from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.models.stock import StockPrice
 from app.services.static_site_export_service import (
+    NoPublishedStaticMarketArtifact,
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
     STATIC_DEFAULT_SCAN_FILTERS_FALLBACK,
     STATIC_MARKET_METADATA_FILENAME,
@@ -1465,8 +1466,11 @@ def test_export_rejects_legacy_unscoped_run_for_market_bundle(
         pointer_run_id=21,
     )
 
-    with pytest.raises(RuntimeError, match="No market-scoped published feature runs"):
-        service.export(tmp_path / "static-data")
+    with pytest.raises(NoPublishedStaticMarketArtifact) as exc_info:
+        service.export(tmp_path / "static-data", markets=("IN",))
+
+    assert exc_info.value.markets == ("IN",)
+    assert "No market-scoped published feature runs" in str(exc_info.value)
 
 
 def test_serialize_history_bars_clamps_to_end_date_and_skips_nan_rows(service_and_session_factory):
