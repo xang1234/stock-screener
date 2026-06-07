@@ -109,11 +109,23 @@ is_down_command() {
   return 1
 }
 
-mapfile -t PROVIDED_ENV_FILES < <(env_files_from_args "$@")
+# mapfile -t PROVIDED_ENV_FILES < <(env_files_from_args "$@")
+PROVIDED_ENV_FILES=()
+
+if type mapfile >/dev/null 2>&1; then
+    mapfile -t PROVIDED_ENV_FILES < <(env_files_from_args "$@")
+else
+    while IFS= read -r line; do
+        PROVIDED_ENV_FILES+=("$line")
+    done < <(env_files_from_args "$@")
+fi
+
 RESOLVED_ENV_FILES=()
-for ENV_FILE in "${PROVIDED_ENV_FILES[@]}"; do
-  RESOLVED_ENV_FILES+=("$(env_file_path "$ENV_FILE")")
-done
+if [[ ${#PROVIDED_ENV_FILES[@]} -gt 0 ]]; then
+  for ENV_FILE in "${PROVIDED_ENV_FILES[@]}"; do
+    RESOLVED_ENV_FILES+=("$(env_file_path "$ENV_FILE")")
+  done
+fi
 
 ENV_FILE_TO_FORWARD=""
 if [[ "${#RESOLVED_ENV_FILES[@]}" -eq 0 ]]; then
