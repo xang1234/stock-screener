@@ -5,7 +5,8 @@
 # Use for standalone VPS deployment (Hostinger, DigitalOcean, etc.)
 #
 # Usage:
-#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d
+#   scripts/docker-compose-enabled-markets.sh --env-file .env.docker \
+#     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d
 #
 # Prerequisites:
 #   1. DNS A record pointing your domain to server IP

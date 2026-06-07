@@ -30,6 +30,30 @@ def test_docker_compose_datafetch_queues_are_derived_from_enabled_markets():
     assert "-Q \"$$QUEUES\"" in compose
 
 
+def test_release_overlay_uses_release_image_for_every_market_worker():
+    release = (ROOT / "docker-compose.release.yml").read_text(encoding="utf-8")
+
+    for service in ("backend", "celery-general", "celery-datafetch", "celery-userscans", "celery-beat"):
+        assert (
+            f"  {service}:\n"
+            "    build: !reset null\n"
+            "    <<: *backend-release-service"
+        ) in release
+
+    for market in SUPPORTED_MARKETS:
+        suffix = market.lower()
+        assert (
+            f"  celery-marketjobs-{suffix}:\n"
+            "    build: !reset null\n"
+            "    <<: *backend-release-service"
+        ) in release
+        assert (
+            f"  celery-userscans-{suffix}:\n"
+            "    build: !reset null\n"
+            "    <<: *backend-release-service"
+        ) in release
+
+
 def test_docker_compose_forwards_opendart_api_key_to_app_env():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 

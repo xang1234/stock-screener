@@ -4,7 +4,8 @@
 # Adds production features: resource limits, health checks, logging, security.
 #
 # Usage:
-#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   scripts/docker-compose-enabled-markets.sh --env-file .env.docker \
+#     -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # Requires .env.docker file with at minimum:
 #   - CORS_ORIGINS (e.g., https://stocks.yourdomain.com)

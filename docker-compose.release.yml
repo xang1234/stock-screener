@@ -4,16 +4,16 @@
 # Uses immutable images published by GitHub Actions to GitHub Container Registry.
 #
 # Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-#     -f docker-compose.release.yml pull
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-#     -f docker-compose.release.yml up -d --no-build
+#   scripts/docker-compose-enabled-markets.sh --env-file .env.docker \
+#     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
+#   scripts/docker-compose-enabled-markets.sh --env-file .env.docker \
+#     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
 #
 # Optional HTTPS:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-#     -f docker-compose.release.yml -f docker-compose.https.yml pull
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-#     -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
+#   scripts/docker-compose-enabled-markets.sh --env-file .env.docker \
+#     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml pull
+#   scripts/docker-compose-enabled-markets.sh --env-file .env.docker \
+#     -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
 #
 # Requires .env.docker to define:
 #   - BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
@@ -22,33 +22,131 @@
 #
 # =============================================================================
 
+x-backend-release-service: &backend-release-service
+  image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+  pull_policy: always
+
+x-frontend-release-service: &frontend-release-service
+  image: ${FRONTEND_IMAGE:?set FRONTEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+  pull_policy: always
+
 services:
   backend:
     build: !reset null
-    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
-    pull_policy: always
+    <<: *backend-release-service
 
   celery-general:
     build: !reset null
-    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
-    pull_policy: always
+    <<: *backend-release-service
 
   celery-datafetch:
     build: !reset null
-    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
-    pull_policy: always
+    <<: *backend-release-service
 
   celery-userscans:
     build: !reset null
-    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
-    pull_policy: always
+    <<: *backend-release-service
 
   celery-beat:
     build: !reset null
-    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
-    pull_policy: always
+    <<: *backend-release-service
+
+  celery-marketjobs-us:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-hk:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-in:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-jp:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-kr:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-tw:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-cn:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-sg:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-ca:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-de:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-au:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-marketjobs-my:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-us:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-hk:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-in:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-jp:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-kr:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-tw:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-cn:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-sg:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-ca:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-de:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-au:
+    build: !reset null
+    <<: *backend-release-service
+
+  celery-userscans-my:
+    build: !reset null
+    <<: *backend-release-service
 
   frontend:
     build: !reset null
-    image: ${FRONTEND_IMAGE:?set FRONTEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
-    pull_policy: always
+    <<: *frontend-release-service

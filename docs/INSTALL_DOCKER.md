@@ -8,7 +8,7 @@ Docker deployments use **PostgreSQL** as the application database. The shared `.
 
 - Docker Engine 20.10+
 - Docker Compose v2 (`docker compose` or `docker-compose`)
-- Python 3 on the host for `scripts/docker-compose-enabled-markets.sh`
+- Python 3.11+ on the host for `scripts/docker-compose-enabled-markets.sh`; set `STOCKSCREEN_PYTHON=/path/to/python3.11` if your default `python3` is older.
 
 ## Quick Start (Local Development)
 
@@ -25,9 +25,9 @@ scripts/docker-compose-enabled-markets.sh up
 
 This starts PostgreSQL, Redis, the Backend API, the shared Celery workers, the market workers selected by `ENABLED_MARKETS`, and the Frontend. Access at **http://localhost**.
 
-> **Note:** Local backups are now opt-in so the default laptop stack stays lighter. Start `db-backup` with `docker-compose --profile backup up` (or add the profile in a local override) when you want local `pg_dump` snapshots under `./data/backups`.
+> **Note:** Local backups are now opt-in so the default laptop stack stays lighter. Start `db-backup` with `COMPOSE_PROFILES=backup scripts/docker-compose-enabled-markets.sh up -d db-backup` (or add the profile in a local override) when you want local `pg_dump` snapshots under `./data/backups`.
 
-> **Note:** Docker Compose reads environment variables from `.env` in the project root (not `.env.docker`). `SERVER_AUTH_PASSWORD` is required for server access, and LLM API keys are required for chatbot features.
+> **Note:** This local quick start reads environment variables from `.env` in the project root. The production examples below pass `--env-file .env.docker` explicitly. `SERVER_AUTH_PASSWORD` is required for server access, and LLM API keys are required for chatbot features.
 
 ## Homelab (Behind Reverse Proxy)
 
@@ -40,7 +40,7 @@ cp .env.docker.example .env.docker
 # and SERVER_AUTH_SECURE_COOKIE=true if your proxy terminates HTTPS
 
 # 2. Start with production settings
-ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml up -d
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # 3. Configure your reverse proxy to forward to port 80
 ```
@@ -57,28 +57,28 @@ cp .env.docker.example .env.docker
 # Edit .env.docker:
 #   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
 #   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
-#   APP_IMAGE_TAG=v1.1.1
+#   APP_IMAGE_TAG=v1.2.0
 #   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   CORS_ORIGINS=https://stocks.yourdomain.com
 
 # 2. Pull the tagged release images
-ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
 
 # 3. Deploy without rebuilding locally
-ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
 ```
 
 For HTTPS on a standalone VPS, add the Caddy overlay:
 ```bash
-ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml pull
-ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml pull
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
 ```
 
 ### Release and Rollback
 
 - Push to `main` to publish rolling `main`, `sha-*`, and `latest` image tags to GHCR
-- Push a git tag like `v1.1.1` to publish immutable release tags
-- **Deploy:** Set `APP_IMAGE_TAG=v1.1.1` in `.env.docker`, run `pull` + `up -d --no-build`
+- Push a git tag like `v1.2.0` to publish immutable release tags
+- **Deploy:** Set `APP_IMAGE_TAG=v1.2.0` in `.env.docker`, run `pull` + `up -d --no-build`
 - **Roll back:** Change `APP_IMAGE_TAG` to the previous tag and redeploy
 
 If the repository or package is private, authenticate first:
@@ -100,7 +100,7 @@ cp .env.docker.example .env.docker
 # 2. Ensure DNS A record points to your server IP
 
 # 3. Start with HTTPS
-ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d
+ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d
 ```
 
 Requirements:
@@ -159,19 +159,19 @@ pg_restore -d <database> <dump-file>
 Older installs that already have a populated PostgreSQL schema but no `alembic_version` marker should run the one-shot reconciliation script before the first post-upgrade boot:
 
 Use the same Compose file stack you deployed with for both commands below. Examples:
-- Local/default stack: `docker-compose ...`
-- Production overlay: `docker-compose -f docker-compose.yml -f docker-compose.prod.yml ...`
-- HTTPS overlay: `docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml ...`
+- Local/default stack: `scripts/docker-compose-enabled-markets.sh ...`
+- Production overlay: `scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml ...`
+- HTTPS overlay: `scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml ...`
 
 ```bash
-docker-compose run --rm backend python scripts/run_legacy_runtime_migrations.py
-docker-compose run --rm backend alembic upgrade head
+scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml run --rm backend python scripts/run_legacy_runtime_migrations.py
+scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml run --rm backend alembic upgrade head
 ```
 
 Fresh installs now auto-seed `ibd_industry_groups` from the bundled canonical CSV on backend startup when the table is empty.
 If you already have an existing database with an empty `ibd_industry_groups` table, repair it with:
 ```bash
-docker-compose run --rm backend python scripts/seed_ibd_industry_groups.py
+scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml run --rm backend python scripts/seed_ibd_industry_groups.py
 ```
 
 ## Troubleshooting
@@ -179,7 +179,7 @@ docker-compose run --rm backend python scripts/seed_ibd_industry_groups.py
 ### Chatbot not responding
 Docker Compose reads API keys from `.env` in the project root. If `.env` is missing or keys are empty, scanning still works but the chatbot won't. Check:
 ```bash
-docker-compose exec backend env | grep -i API_KEY
+docker compose exec backend env | grep -i API_KEY
 ```
 
 ### CORS errors in browser
@@ -193,8 +193,8 @@ sudo chown -R 1000:1000 ./data
 
 ### Container health checks failing
 ```bash
-docker-compose ps          # Check service status
-docker-compose logs backend # Check backend logs
-curl http://localhost:8000/readyz  # Direct health check
-curl http://localhost/nginx-health # Frontend/nginx health check
+docker compose ps
+docker compose logs backend
+docker compose exec backend curl -f http://localhost:8000/readyz
+curl -f http://localhost/nginx-health
 ```
