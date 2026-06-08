@@ -21,6 +21,7 @@ from ..services.market_activity_service import (
 from ..tasks.market_queues import (
     data_fetch_queue_for_market,
     market_jobs_queue_for_market,
+    normalize_market,
 )
 from ..celery_app import celery_app
 
@@ -87,6 +88,22 @@ def _apply_bootstrap_workflow(workflow, errback):
     return workflow.apply_async(link_error=errback)
 
 
+def _queue_market_bootstrap_workflow(
+    market_plan: MarketBootstrapPlan,
+    *,
+    completion_task,
+    completion_kwargs: dict,
+    errback_task,
+    errback_kwargs: dict,
+):
+    completion = completion_task.si(**completion_kwargs).set(queue="celery")
+    errback = errback_task.s(**errback_kwargs).set(queue="celery")
+    return _apply_bootstrap_workflow(
+        chain(*_build_market_bootstrap_signatures(market_plan), completion),
+        errback,
+    )
+
+
 def _readiness_failure(market_result) -> ReadinessFailure:
     if market_result is None or not market_result.core_ready:
         return ReadinessFailure(
@@ -104,17 +121,18 @@ def _readiness_failure(market_result) -> ReadinessFailure:
 def _evaluate_market_readiness(db, *, market: str, bootstrap_started_at=None) -> MarketReadinessCompletion:
     from ..services.bootstrap_readiness_service import BootstrapReadinessService
 
+    market_code = normalize_market(market)
     readiness = BootstrapReadinessService().evaluate(
         db,
-        enabled_markets=[market],
+        enabled_markets=[market_code],
         bootstrap_started_at=bootstrap_started_at,
     )
-    market_result = next(iter(readiness.market_results.values()), None)
-    market_code = market_result.market if market_result else str(market).upper()
+    market_result = readiness.market_results.get(market_code)
+    result_market = market_result.market if market_result else market_code
     if market_result and market_result.ready:
-        return MarketReadinessCompletion(market=market_code, ready=True)
+        return MarketReadinessCompletion(market=result_market, ready=True)
     return MarketReadinessCompletion(
-        market=market_code,
+        market=result_market,
         ready=False,
         failure=_readiness_failure(market_result),
     )
@@ -144,29 +162,23 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
 
     market_plans_by_code = {market_plan.market: market_plan for market_plan in plan.market_plans}
     primary_plan = market_plans_by_code[primary]
-    primary_completion = complete_local_runtime_bootstrap.si(
-        primary_market=primary,
-    ).set(queue="celery")
-    primary_errback = fail_local_runtime_bootstrap.s(
-        primary_market=primary,
-    ).set(queue="celery")
-    primary_task = _apply_bootstrap_workflow(
-        chain(*_build_market_bootstrap_signatures(primary_plan), primary_completion),
-        primary_errback,
+    primary_task = _queue_market_bootstrap_workflow(
+        primary_plan,
+        completion_task=complete_local_runtime_bootstrap,
+        completion_kwargs={"primary_market": primary},
+        errback_task=fail_local_runtime_bootstrap,
+        errback_kwargs={"primary_market": primary},
     )
 
     for market_plan in plan.market_plans:
         if market_plan.market == primary:
             continue
-        background_completion = complete_background_market_bootstrap.si(
-            market=market_plan.market,
-        ).set(queue="celery")
-        background_errback = fail_background_market_bootstrap.s(
-            market=market_plan.market,
-        ).set(queue="celery")
-        _apply_bootstrap_workflow(
-            chain(*_build_market_bootstrap_signatures(market_plan), background_completion),
-            background_errback,
+        _queue_market_bootstrap_workflow(
+            market_plan,
+            completion_task=complete_background_market_bootstrap,
+            completion_kwargs={"market": market_plan.market},
+            errback_task=fail_background_market_bootstrap,
+            errback_kwargs={"market": market_plan.market},
         )
 
     logger.info(
@@ -184,12 +196,17 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
     name="app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap",
     queue="celery",
 )
-def complete_local_runtime_bootstrap(primary_market: str, **_kwargs) -> dict:
+def complete_local_runtime_bootstrap(
+    primary_market: str,
+    enabled_markets: Iterable[str] | None = None,
+) -> dict:
     from ..services.runtime_preferences_service import (
         get_runtime_preferences,
         set_bootstrap_state,
     )
 
+    del enabled_markets  # Legacy Celery payload compatibility; readiness is primary-only.
+    primary_market = normalize_market(primary_market)
     db = SessionLocal()
     try:
         prefs = get_runtime_preferences(db)
@@ -258,9 +275,10 @@ def complete_background_market_bootstrap(market: str) -> dict:
     name="app.tasks.runtime_bootstrap_tasks.fail_local_runtime_bootstrap",
     queue="celery",
 )
-def fail_local_runtime_bootstrap(*args, primary_market: str, **kwargs) -> dict:
+def fail_local_runtime_bootstrap(*_celery_errback_args, primary_market: str) -> dict:
     from ..services.runtime_preferences_service import set_bootstrap_state
 
+    primary_market = normalize_market(primary_market)
     db = SessionLocal()
     try:
         set_bootstrap_state(db, "failed")
@@ -277,8 +295,7 @@ def fail_local_runtime_bootstrap(*args, primary_market: str, **kwargs) -> dict:
         "Marked local runtime bootstrap failed",
         extra={
             "primary_market": primary_market,
-            "callback_args": args,
-            "callback_kwargs": kwargs,
+            "callback_args": _celery_errback_args,
         },
     )
     return {
@@ -292,7 +309,8 @@ def fail_local_runtime_bootstrap(*args, primary_market: str, **kwargs) -> dict:
     name="app.tasks.runtime_bootstrap_tasks.fail_background_market_bootstrap",
     queue="celery",
 )
-def fail_background_market_bootstrap(*args, market: str, **kwargs) -> dict:
+def fail_background_market_bootstrap(*_celery_errback_args, market: str) -> dict:
+    market = normalize_market(market)
     db = SessionLocal()
     try:
         mark_current_market_activity_failed(
@@ -308,8 +326,7 @@ def fail_background_market_bootstrap(*args, market: str, **kwargs) -> dict:
         "Marked background market bootstrap failed",
         extra={
             "market": market,
-            "callback_args": args,
-            "callback_kwargs": kwargs,
+            "callback_args": _celery_errback_args,
         },
     )
     return {

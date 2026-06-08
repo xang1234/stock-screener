@@ -452,6 +452,69 @@ def test_complete_local_runtime_bootstrap_reports_primary_readiness_failure(monk
     ]
 
 
+def test_complete_local_runtime_bootstrap_uses_requested_market_readiness(monkeypatch):
+    from app.services.bootstrap_readiness_service import (
+        BootstrapReadiness,
+        MarketBootstrapReadiness,
+    )
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def close(self):
+            pass
+
+    class _FakeReadinessService:
+        def evaluate(self, db, *, enabled_markets, bootstrap_started_at=None):
+            calls["evaluate"] = (db, enabled_markets, bootstrap_started_at)
+            return BootstrapReadiness(
+                empty_system=False,
+                market_results={
+                    "HK": MarketBootstrapReadiness(
+                        market="HK",
+                        core_ready=False,
+                        scan_ready=False,
+                    ),
+                    "US": MarketBootstrapReadiness(
+                        market="US",
+                        core_ready=True,
+                        scan_ready=True,
+                    ),
+                },
+            )
+
+    calls = {}
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        "app.services.bootstrap_readiness_service.BootstrapReadinessService",
+        _FakeReadinessService,
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.get_runtime_preferences",
+        lambda _db: type("Prefs", (), {"bootstrap_started_at": "started-at"})(),
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.set_bootstrap_state",
+        lambda db, state: calls.setdefault("set_bootstrap_state", (db, state)),
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        lambda _db, **kwargs: calls.setdefault("mark_failed", kwargs),
+    )
+
+    result = module.complete_local_runtime_bootstrap.run(primary_market="us")
+
+    assert calls["evaluate"][1] == ["US"]
+    assert calls["set_bootstrap_state"][1] == "ready"
+    assert "mark_failed" not in calls
+    assert result == {
+        "status": "ready",
+        "primary_market": "US",
+        "market": "US",
+    }
+
+
 def test_complete_background_market_bootstrap_marks_market_failure_without_global_state(monkeypatch):
     from app.services.bootstrap_readiness_service import (
         BootstrapReadiness,
