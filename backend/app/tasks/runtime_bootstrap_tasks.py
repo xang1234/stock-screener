@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 class ReadinessFailure:
     stage_key: str
     activity_message: str
+    result_reason: str
+
+
+@dataclass(frozen=True)
+class MarketReadinessCompletion:
+    market: str
+    ready: bool
+    failure: ReadinessFailure | None = None
 
 
 def _bootstrap_universe_name(market: str) -> str:
@@ -76,10 +84,7 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
 
 
 def _apply_bootstrap_workflow(workflow, errback):
-    try:
-        return workflow.apply_async(link_error=errback)
-    except TypeError:
-        return workflow.apply_async()
+    return workflow.apply_async(link_error=errback)
 
 
 def _readiness_failure(market_result) -> ReadinessFailure:
@@ -87,47 +92,46 @@ def _readiness_failure(market_result) -> ReadinessFailure:
         return ReadinessFailure(
             stage_key="core",
             activity_message="Bootstrap core data incomplete",
+            result_reason="missing core market data",
         )
     return ReadinessFailure(
         stage_key="scan",
         activity_message="Bootstrap scan did not publish",
+        result_reason="missing published auto scan",
     )
 
 
-def _mark_missing_readiness_failures(db, readiness, markets: list[str]) -> tuple[list[str], list[str]]:
-    core_missing_markets = []
-    scan_missing_markets = []
-    for market in markets:
-        market_code = str(market).upper()
-        market_result = readiness.market_results.get(market_code) or readiness.market_results.get(market)
-        failure = _readiness_failure(market_result)
-        if failure.stage_key == "core":
-            core_missing_markets.append(market_code)
-        else:
-            scan_missing_markets.append(market_code)
-        mark_market_activity_failed(
-            db,
-            market=market_code,
-            stage_key=failure.stage_key,
-            lifecycle="bootstrap",
-            task_name="runtime_bootstrap",
-            task_id=None,
-            message=failure.activity_message,
-        )
-    return core_missing_markets, scan_missing_markets
+def _evaluate_market_readiness(db, *, market: str, bootstrap_started_at=None) -> MarketReadinessCompletion:
+    from ..services.bootstrap_readiness_service import BootstrapReadinessService
+
+    readiness = BootstrapReadinessService().evaluate(
+        db,
+        enabled_markets=[market],
+        bootstrap_started_at=bootstrap_started_at,
+    )
+    market_result = next(iter(readiness.market_results.values()), None)
+    market_code = market_result.market if market_result else str(market).upper()
+    if market_result and market_result.ready:
+        return MarketReadinessCompletion(market=market_code, ready=True)
+    return MarketReadinessCompletion(
+        market=market_code,
+        ready=False,
+        failure=_readiness_failure(market_result),
+    )
 
 
-def _format_missing_reason(core_missing_markets: list[str], scan_missing_markets: list[str]) -> str:
-    failure_reasons = []
-    if core_missing_markets:
-        failure_reasons.append(
-            "missing core market data for: " + ", ".join(core_missing_markets)
-        )
-    if scan_missing_markets:
-        failure_reasons.append(
-            "missing published auto scans for: " + ", ".join(scan_missing_markets)
-        )
-    return "; ".join(failure_reasons)
+def _mark_readiness_failure(db, completion: MarketReadinessCompletion) -> str:
+    failure = completion.failure or _readiness_failure(None)
+    mark_market_activity_failed(
+        db,
+        market=completion.market,
+        stage_key=failure.stage_key,
+        lifecycle="bootstrap",
+        task_name="runtime_bootstrap",
+        task_id=None,
+        message=failure.activity_message,
+    )
+    return failure.result_reason
 
 
 def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Iterable[str]) -> str:
@@ -142,11 +146,9 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
     primary_plan = market_plans_by_code[primary]
     primary_completion = complete_local_runtime_bootstrap.si(
         primary_market=primary,
-        enabled_markets=[primary],
     ).set(queue="celery")
     primary_errback = fail_local_runtime_bootstrap.s(
         primary_market=primary,
-        enabled_markets=[primary],
     ).set(queue="celery")
     primary_task = _apply_bootstrap_workflow(
         chain(*_build_market_bootstrap_signatures(primary_plan), primary_completion),
@@ -182,8 +184,7 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
     name="app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap",
     queue="celery",
 )
-def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[str]) -> dict:
-    from ..services.bootstrap_readiness_service import BootstrapReadinessService
+def complete_local_runtime_bootstrap(primary_market: str, **_kwargs) -> dict:
     from ..services.runtime_preferences_service import (
         get_runtime_preferences,
         set_bootstrap_state,
@@ -192,37 +193,18 @@ def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[
     db = SessionLocal()
     try:
         prefs = get_runtime_preferences(db)
-        readiness = BootstrapReadinessService().evaluate(
+        completion = _evaluate_market_readiness(
             db,
-            enabled_markets=enabled_markets,
+            market=primary_market,
             bootstrap_started_at=prefs.bootstrap_started_at,
         )
-        missing_markets = readiness.missing_markets
-        core_missing_markets, scan_missing_markets = _mark_missing_readiness_failures(
-            db,
-            readiness,
-            missing_markets,
-        )
-        primary_result = readiness.market_results.get(primary_market)
-        primary_ready = bool(primary_result and primary_result.ready)
-        if missing_markets:
-            reason = _format_missing_reason(core_missing_markets, scan_missing_markets)
-            if not primary_ready:
-                set_bootstrap_state(db, "failed")
-                return {
-                    "status": "failed",
-                    "primary_market": primary_market,
-                    "enabled_markets": enabled_markets,
-                    "reason": reason,
-                }
-            set_bootstrap_state(db, "ready")
+        if not completion.ready:
+            reason = _mark_readiness_failure(db, completion)
+            set_bootstrap_state(db, "failed")
             return {
-                "status": "ready_with_background_failures",
+                "status": "failed",
                 "primary_market": primary_market,
-                "enabled_markets": enabled_markets,
-                "background_failed_markets": [
-                    market for market in missing_markets if market != primary_market
-                ],
+                "market": completion.market,
                 "reason": reason,
             }
         set_bootstrap_state(db, "ready")
@@ -233,13 +215,12 @@ def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[
         "Completed local runtime bootstrap",
         extra={
             "primary_market": primary_market,
-            "enabled_markets": enabled_markets,
         },
     )
     return {
         "status": "ready",
         "primary_market": primary_market,
-        "enabled_markets": enabled_markets,
+        "market": completion.market,
     }
 
 
@@ -248,37 +229,25 @@ def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[
     queue="celery",
 )
 def complete_background_market_bootstrap(market: str) -> dict:
-    from ..services.bootstrap_readiness_service import BootstrapReadinessService
     from ..services.runtime_preferences_service import get_runtime_preferences
 
     db = SessionLocal()
     try:
         prefs = get_runtime_preferences(db)
-        readiness = BootstrapReadinessService().evaluate(
+        completion = _evaluate_market_readiness(
             db,
-            enabled_markets=[market],
+            market=market,
             bootstrap_started_at=prefs.bootstrap_started_at,
         )
-        market_result = readiness.market_results.get(str(market).upper())
-        if market_result and market_result.ready:
+        if completion.ready:
             return {
                 "status": "ready",
-                "market": str(market).upper(),
+                "market": completion.market,
             }
-        missing_markets = readiness.missing_markets or [str(market).upper()]
-        core_missing_markets, scan_missing_markets = _mark_missing_readiness_failures(
-            db,
-            readiness,
-            missing_markets,
-        )
-        reason = _format_missing_reason(core_missing_markets, scan_missing_markets)
-        if scan_missing_markets == [str(market).upper()] and not core_missing_markets:
-            reason = "missing published auto scan"
-        elif core_missing_markets == [str(market).upper()] and not scan_missing_markets:
-            reason = "missing core market data"
+        reason = _mark_readiness_failure(db, completion)
         return {
             "status": "failed",
-            "market": str(market).upper(),
+            "market": completion.market,
             "reason": reason,
         }
     finally:
@@ -289,19 +258,18 @@ def complete_background_market_bootstrap(market: str) -> dict:
     name="app.tasks.runtime_bootstrap_tasks.fail_local_runtime_bootstrap",
     queue="celery",
 )
-def fail_local_runtime_bootstrap(*args, primary_market: str, enabled_markets: list[str], **kwargs) -> dict:
+def fail_local_runtime_bootstrap(*args, primary_market: str, **kwargs) -> dict:
     from ..services.runtime_preferences_service import set_bootstrap_state
 
     db = SessionLocal()
     try:
         set_bootstrap_state(db, "failed")
-        for market in enabled_markets:
-            mark_current_market_activity_failed(
-                db,
-                market=str(market).upper(),
-                lifecycle="bootstrap",
-                message="Bootstrap failed",
-            )
+        mark_current_market_activity_failed(
+            db,
+            market=str(primary_market).upper(),
+            lifecycle="bootstrap",
+            message="Bootstrap failed",
+        )
     finally:
         db.close()
 
@@ -309,7 +277,6 @@ def fail_local_runtime_bootstrap(*args, primary_market: str, enabled_markets: li
         "Marked local runtime bootstrap failed",
         extra={
             "primary_market": primary_market,
-            "enabled_markets": enabled_markets,
             "callback_args": args,
             "callback_kwargs": kwargs,
         },
@@ -317,7 +284,7 @@ def fail_local_runtime_bootstrap(*args, primary_market: str, enabled_markets: li
     return {
         "status": "failed",
         "primary_market": primary_market,
-        "enabled_markets": enabled_markets,
+        "market": str(primary_market).upper(),
     }
 
 

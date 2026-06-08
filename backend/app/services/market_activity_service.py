@@ -513,13 +513,14 @@ def _bootstrap_progress_percent(record: dict[str, Any] | None) -> float:
     return round(((stage_index + stage_fraction) / len(STAGE_SEQUENCE)) * 100.0, 2)
 
 
-def _queued_bootstrap_market_payload(market: str, primary_market: str) -> dict[str, Any]:
-    queued_for_primary = str(market).upper() != str(primary_market).upper()
-    message = (
-        f"Queued until {primary_market.upper()} is ready."
-        if queued_for_primary
-        else "Bootstrap queued."
+def _is_active_bootstrap_payload(payload: dict[str, Any]) -> bool:
+    return (
+        payload.get("lifecycle") == "bootstrap"
+        and payload.get("status") in ACTIVE_STATUSES
     )
+
+
+def _queued_bootstrap_market_payload(market: str, _primary_market: str) -> dict[str, Any]:
     return {
         "market": str(market).upper(),
         "lifecycle": "bootstrap",
@@ -530,7 +531,7 @@ def _queued_bootstrap_market_payload(market: str, primary_market: str) -> dict[s
         "percent": None,
         "current": None,
         "total": None,
-        "message": message,
+        "message": "Bootstrap queued.",
         "task_name": None,
         "task_id": None,
         "updated_at": None,
@@ -619,13 +620,13 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
     secondary_active = [
         payload["market"]
         for payload in market_payloads
-        if payload["market"] != primary_market and payload.get("status") in ACTIVE_STATUSES
+        if payload["market"] != primary_market and _is_active_bootstrap_payload(payload)
     ]
     secondary_active_payload = next(
         (
             payload
             for payload in market_payloads
-            if payload["market"] != primary_market and payload.get("status") in ACTIVE_STATUSES
+            if payload["market"] != primary_market and _is_active_bootstrap_payload(payload)
         ),
         None,
     )

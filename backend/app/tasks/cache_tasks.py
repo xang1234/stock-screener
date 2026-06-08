@@ -28,6 +28,7 @@ from ..services.market_activity_service import (
     mark_market_activity_progress,
     mark_market_activity_started,
 )
+from ..services.price_refresh_execution import run_price_refresh_jobs
 from ..services.price_refresh_planning import LIVE_TOP_UP_MODES, plan_price_refresh
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
@@ -1948,16 +1949,66 @@ def smart_refresh_cache(
             symbol_markets.get(str(symbol).upper(), effective_market) for symbol in symbols
         )
         refreshed_by_market: Counter[str] = Counter()
-        failed_by_market: Counter[str] = Counter()
         batch_size = 100
-        total_batches = sum(
-            (len(job.symbols) + batch_size - 1) // batch_size
-            for job in live_refresh_jobs
-        )
         bulk_fetcher = BulkDataFetcher()
 
         def _market_for_symbol(symbol: str) -> str:
             return symbol_markets.get(str(symbol).upper(), effective_market)
+
+        def _update_live_task_state(
+            current: int,
+            total_symbols: int,
+            percent: float,
+            refreshed_count: int,
+            failed_count: int,
+        ) -> None:
+            self.update_state(
+                state="PROGRESS",
+                meta={
+                    "current": current,
+                    "total": total_symbols,
+                    "percent": percent,
+                    "refreshed": refreshed_count,
+                    "failed": failed_count,
+                },
+            )
+
+        def _mark_live_refresh_progress(
+            current: int,
+            total_symbols: int,
+            percent: float,
+            message: str,
+        ) -> None:
+            nonlocal processed
+            processed = current
+            price_cache.update_warmup_heartbeat(current, total_symbols, percent, market=market)
+            _mark_market_activity_progress_safely(
+                db,
+                market=effective_market,
+                stage_key="prices",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "smart_refresh_cache"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                current=current,
+                total=total_symbols,
+                percent=round(percent, 1),
+                message=message,
+            )
+
+        def _extend_live_refresh_lock() -> None:
+            task_id = self.request.id or "unknown"
+            from ..wiring.bootstrap import get_data_fetch_lock
+            lock = get_data_fetch_lock()
+            lock.extend_lock(task_id, 300, market=market)
+
+        def _wait_between_live_batches() -> None:
+            if market is not None:
+                get_rate_limiter().wait_for_market("yfinance:batch", market)
+            else:
+                get_rate_limiter().wait(
+                    "yfinance:batch",
+                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                )
 
         # Write initial heartbeat before batch loop to prevent false "stuck" detection.
         # Without this, the health endpoint sees lock held + no heartbeat = stuck.
@@ -1978,131 +2029,27 @@ def smart_refresh_cache(
         # Step 3: Batch fetch with progress tracking
         logger.info(f"[3/3] Fetching {total} symbols...")
 
-        processed_count = 0
-        batch_num = 0
-        for job in live_refresh_jobs:
-            job_symbols = list(job.symbols)
-            for batch_start in range(0, len(job_symbols), batch_size):
-                batch_symbols = job_symbols[batch_start:batch_start + batch_size]
-                batch_num += 1
-
-                logger.info(
-                    "Batch %d/%d: Fetching %d symbols (%s, period=%s)",
-                    batch_num,
-                    total_batches,
-                    len(batch_symbols),
-                    job.kind,
-                    job.period,
-                )
-
-                batch_successes = []
-                batch_failures = []
-                failure_details = {}
-
-                try:
-                    # Batch fetch using yf.download() (single HTTP request per batch)
-                    batch_results = _fetch_with_backoff(
-                        bulk_fetcher,
-                        batch_symbols,
-                        period=job.period,
-                        market=market,
-                    )
-
-                    # Separate successes from failures, then batch-store all successes
-                    batch_to_store = {}
-                    for symbol, data in batch_results.items():
-                        if not data.get('has_error') and data.get('price_data') is not None:
-                            price_df = data['price_data']
-                            if not price_df.empty:
-                                batch_to_store[symbol] = price_df
-                                refreshed += 1
-                                refreshed_by_market[_market_for_symbol(symbol)] += 1
-                                batch_successes.append(symbol)
-                            else:
-                                failed += 1
-                                failed_symbols.append(symbol)
-                                failed_by_market[_market_for_symbol(symbol)] += 1
-                                batch_failures.append(symbol)
-                                failure_details[symbol] = "Empty data returned"
-                        else:
-                            failed += 1
-                            failed_symbols.append(symbol)
-                            failed_by_market[_market_for_symbol(symbol)] += 1
-                            batch_failures.append(symbol)
-                            failure_details[symbol] = data.get('error', 'Unknown error')
-
-                    # Batch store in Redis (pipeline) + DB (single transaction)
-                    if batch_to_store:
-                        price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
-
-                except SoftTimeLimitExceeded:
-                    raise
-                except Exception as e:
-                    raise_if_transient_database_error(e)
-                    logger.error(f"Batch {batch_num} error: {e}")
-                    failed += len(batch_symbols)
-                    failed_symbols.extend(batch_symbols)
-                    failed_by_market.update(_market_for_symbol(symbol) for symbol in batch_symbols)
-                    batch_failures.extend(batch_symbols)
-                    failure_details.update({symbol: str(e) for symbol in batch_symbols})
-
-                # Track symbol failures for auto-deactivation of delisted symbols
-                _track_symbol_failures(
-                    price_cache,
-                    batch_successes,
-                    batch_failures,
-                    db,
-                    failure_details=failure_details,
-                )
-
-                # Update progress for UI and stuck detection
-                processed_count += len(batch_symbols)
-                progress = min(processed_count, total)
-                percent = (progress / total) * 100
-                processed = progress
-
-                # Update Celery task state
-                self.update_state(
-                    state='PROGRESS',
-                    meta={
-                        'current': progress,
-                        'total': total,
-                        'percent': percent,
-                        'refreshed': refreshed,
-                        'failed': failed
-                    }
-                )
-
-                # Update heartbeat for stuck detection
-                price_cache.update_warmup_heartbeat(progress, total, percent, market=market)
-                _mark_market_activity_progress_safely(
-                    db,
-                    market=effective_market,
-                    stage_key="prices",
-                    lifecycle=activity_lifecycle,
-                    task_name=getattr(self, "name", "smart_refresh_cache"),
-                    task_id=getattr(getattr(self, "request", None), "id", None),
-                    current=progress,
-                    total=total,
-                    percent=round(percent, 1),
-                    message=f"Batch {batch_num}/{total_batches} · refreshing prices",
-                )
-
-                # Extend lock TTL to prevent expiry during long-running tasks
-                task_id = self.request.id or 'unknown'
-                from ..wiring.bootstrap import get_data_fetch_lock
-                lock = get_data_fetch_lock()
-                lock.extend_lock(task_id, 300, market=market)
-
-                # Rate limit between batches (per-market key when scoped)
-                if processed_count < total:
-                    if market is not None:
-                        get_rate_limiter().wait_for_market("yfinance:batch", market)
-                    else:
-                        get_rate_limiter().wait(
-                            "yfinance:batch",
-                            min_interval_s=settings.yfinance_batch_rate_limit_interval,
-                        )
+        execution_result = run_price_refresh_jobs(
+            jobs=live_refresh_jobs,
+            total=total,
+            batch_size=batch_size,
+            bulk_fetcher=bulk_fetcher,
+            price_cache=price_cache,
+            db=db,
+            market=market,
+            fetch_with_backoff=_fetch_with_backoff,
+            track_symbol_failures=_track_symbol_failures,
+            market_for_symbol=_market_for_symbol,
+            mark_progress=_mark_live_refresh_progress,
+            update_task_state=_update_live_task_state,
+            extend_lock=_extend_live_refresh_lock,
+            wait_between_batches=_wait_between_live_batches,
+            raise_if_transient_database_error=raise_if_transient_database_error,
+        )
+        refreshed = execution_result.refreshed
+        failed = execution_result.failed
+        failed_symbols = execution_result.failed_symbols
+        refreshed_by_market = execution_result.refreshed_by_market
 
         # Save final warmup metadata (treat >95% success as "completed")
         success_rate = refreshed / total if total > 0 else 0

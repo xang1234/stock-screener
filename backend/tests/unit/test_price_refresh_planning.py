@@ -11,7 +11,7 @@ def _calendar(day: date):
 
 
 def test_price_history_coverage_splits_fresh_stale_and_no_history(universe_session):
-    from app.services.price_refresh_planning import classify_price_history
+    from app.services.price_history_coverage import classify_price_history
 
     universe_session.add_all(
         [

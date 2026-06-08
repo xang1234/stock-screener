@@ -260,12 +260,29 @@ def test_queue_local_runtime_bootstrap_splits_primary_and_background_market_chai
     assert applied_chains[0]["errback"].task == "app.tasks.runtime_bootstrap_tasks.fail_local_runtime_bootstrap"
     assert applied_chains[0]["errback"].kwargs == {
         "primary_market": "US",
-        "enabled_markets": ["US"],
     }
     assert [call["errback"].task for call in applied_chains[1:]] == [
         "app.tasks.runtime_bootstrap_tasks.fail_background_market_bootstrap",
         "app.tasks.runtime_bootstrap_tasks.fail_background_market_bootstrap",
     ]
+
+
+def test_apply_bootstrap_workflow_does_not_retry_without_errback_on_type_error():
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    calls = []
+
+    class _BrokenWorkflow:
+        def apply_async(self, **kwargs):
+            calls.append(kwargs)
+            raise TypeError("bad celery signature")
+
+    errback = object()
+
+    with pytest.raises(TypeError, match="bad celery signature"):
+        module._apply_bootstrap_workflow(_BrokenWorkflow(), errback)
+
+    assert calls == [{"link_error": errback}]
 
 
 def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):
@@ -290,20 +307,19 @@ def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):
 
     result = module.fail_local_runtime_bootstrap.run(
         primary_market="US",
-        enabled_markets=["HK"],
     )
 
     assert result["status"] == "failed"
     assert calls == [
         {
-            "market": "HK",
+            "market": "US",
             "lifecycle": "bootstrap",
             "message": "Bootstrap failed",
         }
     ]
 
 
-def test_complete_local_runtime_bootstrap_marks_ready_when_only_secondary_markets_are_missing(monkeypatch):
+def test_complete_local_runtime_bootstrap_evaluates_only_primary_market(monkeypatch):
     from app.services.bootstrap_readiness_service import (
         BootstrapReadiness,
         MarketBootstrapReadiness,
@@ -327,11 +343,6 @@ def test_complete_local_runtime_bootstrap_marks_ready_when_only_secondary_market
                         market="US",
                         core_ready=True,
                         scan_ready=True,
-                    ),
-                    "HK": MarketBootstrapReadiness(
-                        market="HK",
-                        core_ready=True,
-                        scan_ready=False,
                     ),
                 },
             )
@@ -363,34 +374,20 @@ def test_complete_local_runtime_bootstrap_marks_ready_when_only_secondary_market
         lambda _db, **kwargs: failed_markets.append(kwargs),
     )
 
-    result = module.complete_local_runtime_bootstrap.run(
-        primary_market="US",
-        enabled_markets=["US", "HK"],
-    )
+    result = module.complete_local_runtime_bootstrap.run(primary_market="US")
 
-    assert calls["evaluate"] == (session, ["US", "HK"], "bootstrap-started-at")
+    assert calls["evaluate"] == (session, ["US"], "bootstrap-started-at")
     assert calls["set_bootstrap_state"] == (session, "ready")
     assert result == {
-        "status": "ready_with_background_failures",
+        "status": "ready",
         "primary_market": "US",
-        "enabled_markets": ["US", "HK"],
-        "background_failed_markets": ["HK"],
-        "reason": "missing published auto scans for: HK",
+        "market": "US",
     }
-    assert failed_markets == [
-        {
-            "market": "HK",
-            "stage_key": "scan",
-            "lifecycle": "bootstrap",
-            "task_name": "runtime_bootstrap",
-            "task_id": None,
-            "message": "Bootstrap scan did not publish",
-        }
-    ]
+    assert failed_markets == []
     assert session.closed is True
 
 
-def test_complete_local_runtime_bootstrap_reports_core_and_scan_readiness_failures(monkeypatch):
+def test_complete_local_runtime_bootstrap_reports_primary_readiness_failure(monkeypatch):
     from app.services.bootstrap_readiness_service import (
         BootstrapReadiness,
         MarketBootstrapReadiness,
@@ -409,11 +406,6 @@ def test_complete_local_runtime_bootstrap_reports_core_and_scan_readiness_failur
                     "HK": MarketBootstrapReadiness(
                         market="HK",
                         core_ready=False,
-                        scan_ready=False,
-                    ),
-                    "TW": MarketBootstrapReadiness(
-                        market="TW",
-                        core_ready=True,
                         scan_ready=False,
                     ),
                 },
@@ -440,16 +432,13 @@ def test_complete_local_runtime_bootstrap_reports_core_and_scan_readiness_failur
         lambda _db, **kwargs: failed_markets.append(kwargs),
     )
 
-    result = module.complete_local_runtime_bootstrap.run(
-        primary_market="HK",
-        enabled_markets=["HK", "TW"],
-    )
+    result = module.complete_local_runtime_bootstrap.run(primary_market="HK")
 
     assert result == {
         "status": "failed",
         "primary_market": "HK",
-        "enabled_markets": ["HK", "TW"],
-        "reason": "missing core market data for: HK; missing published auto scans for: TW",
+        "market": "HK",
+        "reason": "missing core market data",
     }
     assert failed_markets == [
         {
@@ -459,14 +448,6 @@ def test_complete_local_runtime_bootstrap_reports_core_and_scan_readiness_failur
             "task_name": "runtime_bootstrap",
             "task_id": None,
             "message": "Bootstrap core data incomplete",
-        },
-        {
-            "market": "TW",
-            "stage_key": "scan",
-            "lifecycle": "bootstrap",
-            "task_name": "runtime_bootstrap",
-            "task_id": None,
-            "message": "Bootstrap scan did not publish",
         },
     ]
 

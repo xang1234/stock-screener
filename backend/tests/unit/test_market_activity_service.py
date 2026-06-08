@@ -746,6 +746,89 @@ def test_runtime_activity_status_reports_active_background_bootstrap_progress_af
     assert hk_market["progress_mode"] == "determinate"
 
 
+def test_runtime_activity_status_ignores_non_bootstrap_secondary_progress_after_primary_ready(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_completed(
+        db_session,
+        market="US",
+        stage_key="snapshot",
+        lifecycle="bootstrap",
+        task_name="build_daily_snapshot",
+        task_id="task-us",
+        message="Primary bootstrap complete",
+    )
+    module.mark_market_activity_started(
+        db_session,
+        market="HK",
+        stage_key="prices",
+        lifecycle="daily_refresh",
+        task_name="smart_refresh_cache",
+        task_id="task-hk",
+        current=50,
+        total=100,
+        message="Refreshing daily prices",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US", "HK"], state="ready"),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_data_fetch_lock",
+        lambda: _FakeLock(
+            {
+                "HK": {
+                    "task_id": "task-hk",
+                    "current": 50,
+                    "total": 100,
+                    "progress": 50.0,
+                }
+            }
+        ),
+    )
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    assert payload["bootstrap"]["state"] == "ready"
+    assert payload["bootstrap"]["progress_mode"] == "determinate"
+    assert payload["bootstrap"]["percent"] == 100.0
+    assert payload["bootstrap"]["current"] is None
+    assert payload["bootstrap"]["total"] is None
+    assert payload["bootstrap"]["message"] == "Primary market is ready."
+    assert payload["bootstrap"]["background_warning"] is None
+    assert payload["summary"]["active_markets"] == ["HK"]
+
+
+def test_runtime_activity_status_uses_bootstrap_queue_copy_for_secondary_markets(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(
+            required=True,
+            enabled=["US", "HK"],
+            primary="US",
+            state="running",
+        ),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
+    assert hk_market["status"] == "queued"
+    assert hk_market["message"] == "Bootstrap queued."
+
+
 def test_mark_market_activity_queued_does_not_overwrite_newer_state_for_same_task(
     db_session,
     monkeypatch,

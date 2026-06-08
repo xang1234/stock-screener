@@ -13,7 +13,7 @@ from app.database import SessionLocal
 from app.models.stock_universe import StockUniverse
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.bulk_data_fetcher import BulkDataFetcher
-from app.services.price_refresh_planning import classify_price_history
+from app.services.price_history_coverage import classify_price_history
 from app.wiring.bootstrap import get_daily_price_bundle_service
 
 
