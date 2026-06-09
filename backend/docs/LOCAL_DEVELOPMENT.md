@@ -317,6 +317,8 @@ Expected:
 
 Login:
 
+> **Note:** Replace `<PASSWORD>` with the value of `SERVER_AUTH_PASSWORD` from your backend `.env` file.
+
 ```bash
 curl -i -c cookies.txt \
   -X POST http://localhost:8000/api/v1/auth/login \
