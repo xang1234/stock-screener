@@ -228,6 +228,43 @@ def _classify_batch_results(
     )
 
 
+def classify_price_refresh_batch(
+    *,
+    batch_number: int,
+    total_batches: int,
+    job: PriceRefreshJob,
+    symbols: Sequence[str],
+    batch_results: MappingResult,
+    market_for_symbol: Callable[[str], str],
+) -> PriceRefreshBatchOutcome:
+    (
+        price_data_by_symbol,
+        successes,
+        failures,
+        failure_details,
+        failure_kinds,
+        refreshed_by_market,
+        failed_by_market,
+    ) = _classify_batch_results(
+        symbols=symbols,
+        batch_results=batch_results,
+        market_for_symbol=market_for_symbol,
+    )
+    return PriceRefreshBatchOutcome(
+        batch_number=batch_number,
+        total_batches=total_batches,
+        job=job,
+        symbols=tuple(symbols),
+        price_data_by_symbol=price_data_by_symbol,
+        successes=successes,
+        failures=failures,
+        failure_details=failure_details,
+        failure_kinds=failure_kinds,
+        refreshed_by_market=refreshed_by_market,
+        failed_by_market=failed_by_market,
+    )
+
+
 def iter_price_refresh_batches(
     *,
     jobs: Sequence[PriceRefreshJob],
@@ -258,19 +295,15 @@ def iter_price_refresh_batches(
                     period=job.period,
                     market=market,
                 )
-                (
-                    price_data_by_symbol,
-                    successes,
-                    failures,
-                    failure_details,
-                    failure_kinds,
-                    refreshed_by_market,
-                    failed_by_market,
-                ) = _classify_batch_results(
+                yield classify_price_refresh_batch(
+                    batch_number=batch_number,
+                    total_batches=total_batches,
+                    job=job,
                     symbols=batch_symbols,
                     batch_results=batch_results,
                     market_for_symbol=market_for_symbol,
                 )
+                continue
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:

@@ -4,6 +4,44 @@ from collections import Counter
 from types import SimpleNamespace
 
 
+def test_classify_price_refresh_batch_returns_shared_batch_outcome():
+    from app.services.price_refresh_execution import classify_price_refresh_batch
+    from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
+
+    job = PriceRefreshJob(
+        kind=PriceRefreshJobKind.NO_HISTORY,
+        symbols=("0143.T", "7203.T"),
+        period="2y",
+    )
+
+    outcome = classify_price_refresh_batch(
+        batch_number=1,
+        total_batches=1,
+        job=job,
+        symbols=job.symbols,
+        batch_results={
+            "0143.T": {
+                "has_error": True,
+                "price_data": None,
+                "error": "Provider returned no usable rows",
+                "error_kind": "no_price_data",
+            },
+            "7203.T": {
+                "has_error": False,
+                "price_data": SimpleNamespace(empty=False),
+            },
+        },
+        market_for_symbol=lambda _symbol: "JP",
+    )
+
+    assert outcome.job is job
+    assert outcome.successes == ("7203.T",)
+    assert outcome.failures == ("0143.T",)
+    assert outcome.failure_kinds == {"0143.T": "no_price_data"}
+    assert outcome.refreshed_by_market == Counter({"JP": 1})
+    assert outcome.failed_by_market == Counter({"JP": 1})
+
+
 def test_iter_price_refresh_batches_returns_batch_outcomes_without_side_effect_context():
     from app.services.price_refresh_execution import (
         iter_price_refresh_batches,

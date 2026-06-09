@@ -6,6 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 ACTIVE_ACTIVITY_STATUSES = frozenset({"queued", "running"})
+ACTIVE_PROGRESS_STATUSES = frozenset({
+    "queued",
+    "running",
+    "reserved",
+    "waiting",
+    "stale",
+    "stuck",
+})
 PERSISTED_RUNTIME_ACTIVITY_FIELDS = frozenset({
     "market",
     "lifecycle",
@@ -95,7 +103,7 @@ def progress_mode(
 ) -> str:
     resolved_percent = resolve_progress_percent(percent, current, total)
     if (
-        status in ACTIVE_ACTIVITY_STATUSES
+        status in ACTIVE_PROGRESS_STATUSES
         and resolved_percent is not None
         and resolved_percent >= 100.0
     ):

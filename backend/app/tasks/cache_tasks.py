@@ -32,8 +32,9 @@ from ..services.price_fetch_failures import (
     is_no_data_price_failure,
     is_rate_limit_error as is_price_rate_limit_error,
     is_retryable_price_failure,
-    normalize_price_fetch_failure_kind,
 )
+from ..services.price_refresh_execution import classify_price_refresh_batch
+from ..services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
 from ..services.price_refresh_plan_builder import build_market_price_refresh_plan
 from ..services.price_refresh_activity import (
     PriceRefreshActivityDependencies,
@@ -1346,6 +1347,7 @@ def retry_failed_price_symbols(
     price_cache = get_price_cache()
     bulk_fetcher = BulkDataFetcher()
     refreshed = 0
+    successes: list[str] = []
     failed_symbols: list[str] = []
     failure_details: dict[str, str] = {}
     failure_kinds: dict[str, str] = {}
@@ -1356,24 +1358,26 @@ def retry_failed_price_symbols(
             period="2y",
             market=market,
         )
-        batch_to_store = {}
-        for symbol, data in batch_results.items():
-            if not data.get("has_error") and data.get("price_data") is not None:
-                price_df = data["price_data"]
-                if not price_df.empty:
-                    batch_to_store[symbol] = price_df
-                    refreshed += 1
-                    continue
-            failed_symbols.append(symbol)
-            failure_details[symbol] = data.get("error", "Unknown error")
-            kind = normalize_price_fetch_failure_kind(data.get("error_kind"))
-            if kind is not None:
-                failure_kinds[symbol] = kind.value
-        missing = sorted(set(deduped_symbols) - set(batch_results))
-        failed_symbols.extend(missing)
-        failure_details.update({symbol: "Missing from retry result" for symbol in missing})
-        if batch_to_store:
-            price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
+        retry_job = PriceRefreshJob(
+            kind=PriceRefreshJobKind.NO_HISTORY,
+            symbols=tuple(deduped_symbols),
+            period="2y",
+        )
+        outcome = classify_price_refresh_batch(
+            batch_number=1,
+            total_batches=1,
+            job=retry_job,
+            symbols=tuple(deduped_symbols),
+            batch_results=batch_results,
+            market_for_symbol=lambda _symbol: market,
+        )
+        refreshed = outcome.refreshed
+        successes = list(outcome.successes)
+        failed_symbols = list(outcome.failures)
+        failure_details = dict(outcome.failure_details)
+        failure_kinds = dict(outcome.failure_kinds)
+        if outcome.price_data_by_symbol:
+            price_cache.store_batch_in_cache(dict(outcome.price_data_by_symbol), also_store_db=True)
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
@@ -1390,7 +1394,6 @@ def retry_failed_price_symbols(
         if kind is not None:
             failure_kinds = {symbol: kind.value for symbol in deduped_symbols}
 
-    successes = [symbol for symbol in deduped_symbols if symbol not in set(failed_symbols)]
     _track_symbol_failures(
         price_cache,
         successes,

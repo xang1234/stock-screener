@@ -11,6 +11,7 @@ from celery import chain
 
 from ..database import SessionLocal
 from ..domain.bootstrap.plan import (
+    BootstrapOperation,
     BootstrapQueueKind,
     MarketBootstrapPlan,
     build_bootstrap_plan,
@@ -46,6 +47,27 @@ class MarketReadinessCompletion:
     market: str
     ready: bool
     failure: ReadinessFailure | None = None
+
+
+class BootstrapDispatchError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        primary_market: str,
+        enabled_markets: Iterable[str],
+        primary_task_id: str | None = None,
+        market_task_ids: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.primary_market = primary_market
+        self.enabled_markets = list(enabled_markets)
+        self.primary_task_id = primary_task_id
+        self.market_task_ids = dict(market_task_ids or {})
+
+    @property
+    def dispatched_any(self) -> bool:
+        return self.primary_task_id is not None or bool(self.market_task_ids)
 
 
 @dataclass
@@ -117,6 +139,15 @@ class BootstrapQueueManifestRecorder:
             "market_task_ids": self.market_task_ids,
         }
 
+    def dispatch_error(self, exc: Exception) -> BootstrapDispatchError:
+        return BootstrapDispatchError(
+            str(exc),
+            primary_market=self.primary_market,
+            enabled_markets=self.enabled_markets,
+            primary_task_id=self.primary_task_id,
+            market_task_ids=self.market_task_ids,
+        )
+
 
 def _bootstrap_universe_name(market: str) -> str:
     return f"market:{market.upper()}"
@@ -142,18 +173,22 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
         refresh_stock_universe,
     )
 
-    task_by_name = {
-        "refresh_stock_universe": refresh_stock_universe,
-        "refresh_official_market_universe": refresh_official_market_universe,
-        "load_tracked_ibd_industry_groups": load_tracked_ibd_industry_groups,
-        "smart_refresh_cache": smart_refresh_cache,
-        "refresh_all_fundamentals": refresh_all_fundamentals,
-        "calculate_daily_breadth_with_gapfill": calculate_daily_breadth_with_gapfill,
-        "calculate_daily_group_rankings_with_gapfill": calculate_daily_group_rankings_with_gapfill,
-        "build_daily_snapshot": build_daily_snapshot,
+    task_by_operation = {
+        BootstrapOperation.REFRESH_STOCK_UNIVERSE: refresh_stock_universe,
+        BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE: refresh_official_market_universe,
+        BootstrapOperation.LOAD_TRACKED_IBD_INDUSTRY_GROUPS: load_tracked_ibd_industry_groups,
+        BootstrapOperation.SMART_REFRESH_CACHE: smart_refresh_cache,
+        BootstrapOperation.REFRESH_ALL_FUNDAMENTALS: refresh_all_fundamentals,
+        BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL: (
+            calculate_daily_breadth_with_gapfill
+        ),
+        BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL: (
+            calculate_daily_group_rankings_with_gapfill
+        ),
+        BootstrapOperation.BUILD_DAILY_SNAPSHOT: build_daily_snapshot,
     }
     return [
-        task_by_name[stage.task_name]
+        task_by_operation[stage.operation]
         .si(**stage.kwargs)
         .set(queue=_queue_for_stage(stage))
         for stage in market_plan.stages
@@ -297,9 +332,9 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
                 task_id=background_task.id,
             )
 
-    except Exception:
+    except Exception as exc:
         manifest_recorder.record_dispatch_failed_safely()
-        raise
+        raise manifest_recorder.dispatch_error(exc) from exc
 
     try:
         manifest_recorder.record_queued()

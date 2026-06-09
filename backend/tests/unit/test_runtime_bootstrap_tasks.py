@@ -28,6 +28,23 @@ class _FakeTask:
         return _FakeSignature(self.task, args=args, kwargs=kwargs)
 
 
+def test_bootstrap_plan_uses_semantic_operations_instead_of_task_name_strings():
+    from app.domain.bootstrap.plan import BootstrapOperation, build_bootstrap_plan
+
+    market_plan = build_bootstrap_plan(primary_market="US", enabled_markets=["US"]).market_plans[0]
+
+    assert [stage.operation for stage in market_plan.stages] == [
+        BootstrapOperation.REFRESH_STOCK_UNIVERSE,
+        BootstrapOperation.LOAD_TRACKED_IBD_INDUSTRY_GROUPS,
+        BootstrapOperation.SMART_REFRESH_CACHE,
+        BootstrapOperation.REFRESH_ALL_FUNDAMENTALS,
+        BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL,
+        BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL,
+        BootstrapOperation.BUILD_DAILY_SNAPSHOT,
+    ]
+    assert all(not hasattr(stage, "task_name") for stage in market_plan.stages)
+
+
 def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
     from app.domain.bootstrap.plan import build_bootstrap_plan
     from app.tasks import runtime_bootstrap_tasks as module

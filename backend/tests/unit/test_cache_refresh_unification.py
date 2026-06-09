@@ -994,6 +994,69 @@ def test_failed_price_retry_does_not_reschedule_permanent_no_data(monkeypatch):
     assert retry_calls == []
 
 
+def test_failed_price_retry_uses_shared_batch_classifier(monkeypatch):
+    from collections import Counter
+
+    import app.tasks.cache_tasks as module
+    from app.services.price_refresh_execution import PriceRefreshBatchOutcome
+
+    fake_price_cache = MagicMock()
+    classifier_calls = []
+    price_frame = _price_df(date(2026, 3, 20), 150.0)
+
+    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
+    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
+    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_with_backoff",
+        lambda _fetcher, batch_symbols, **kwargs: {
+            symbol: {
+                "has_error": False,
+                "error": None,
+                "price_data": price_frame,
+            }
+            for symbol in batch_symbols
+        },
+    )
+
+    def _classify_price_refresh_batch(**kwargs):
+        classifier_calls.append(kwargs)
+        return PriceRefreshBatchOutcome(
+            batch_number=kwargs["batch_number"],
+            total_batches=kwargs["total_batches"],
+            job=kwargs["job"],
+            symbols=tuple(kwargs["symbols"]),
+            price_data_by_symbol={"AAPL": price_frame},
+            successes=("AAPL",),
+            failures=(),
+            failure_details={},
+            failure_kinds={},
+            refreshed_by_market=Counter({"US": 1}),
+            failed_by_market=Counter(),
+        )
+
+    monkeypatch.setattr(module, "classify_price_refresh_batch", _classify_price_refresh_batch)
+
+    result = module.retry_failed_price_symbols.run.__wrapped__(
+        module.retry_failed_price_symbols,
+        symbols=["aapl"],
+        market="US",
+        attempt=1,
+        retry_countdown=30,
+    )
+
+    assert result["status"] == "completed"
+    assert result["refreshed"] == 1
+    assert len(classifier_calls) == 1
+    assert classifier_calls[0]["symbols"] == ("AAPL",)
+    assert classifier_calls[0]["batch_results"]["AAPL"]["price_data"] is price_frame
+    fake_price_cache.store_batch_in_cache.assert_called_once_with(
+        {"AAPL": price_frame},
+        also_store_db=True,
+    )
+
+
 def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
     import app.tasks.cache_tasks as module
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -27,9 +29,10 @@ from ...services.runtime_preferences_service import (
 from ...services.runtime_universe_options import build_runtime_universe_options_payload
 from ...services.market_activity_service import get_runtime_activity_status
 from ...services.runtime_activity_contract import bootstrap_stage_metadata
-from ...tasks.runtime_bootstrap_tasks import queue_local_runtime_bootstrap
+from ...tasks.runtime_bootstrap_tasks import BootstrapDispatchError, queue_local_runtime_bootstrap
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _bootstrap_status_payload(status: object) -> dict[str, object]:
@@ -127,6 +130,31 @@ async def start_runtime_bootstrap(
             primary_market=prefs.primary_market,
             enabled_markets=prefs.enabled_markets,
         )
+    except BootstrapDispatchError as exc:
+        if not exc.dispatched_any:
+            save_runtime_preferences(
+                db,
+                primary_market=prefs.primary_market,
+                enabled_markets=prefs.enabled_markets,
+                bootstrap_state=current_status.bootstrap_state,
+            )
+            raise
+        logger.warning(
+            "Bootstrap dispatch failed after queueing one or more market workflows",
+            extra={
+                "primary_market": exc.primary_market,
+                "enabled_markets": exc.enabled_markets,
+                "primary_task_id": exc.primary_task_id,
+                "market_task_ids": exc.market_task_ids,
+            },
+            exc_info=True,
+        )
+        status = get_runtime_bootstrap_status(db)
+        payload = {
+            **_bootstrap_status_payload(status),
+            "task_id": exc.primary_task_id,
+        }
+        return RuntimeBootstrapStartResponse(**payload)
     except Exception:
         save_runtime_preferences(
             db,

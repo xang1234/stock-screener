@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.domain.bootstrap.plan import BootstrapQueueKind, build_bootstrap_plan
+from app.domain.bootstrap.plan import (
+    BootstrapOperation,
+    BootstrapQueueKind,
+    build_bootstrap_plan,
+)
 
 
 def test_us_bootstrap_plan_includes_us_only_industry_group_seed() -> None:
@@ -23,13 +27,13 @@ def test_non_us_bootstrap_plan_uses_official_universe_without_industry_seed() ->
     hk_plan = plan.market_plans[0]
 
     assert hk_plan.market == "HK"
-    assert [stage.task_name for stage in hk_plan.stages] == [
-        "refresh_official_market_universe",
-        "smart_refresh_cache",
-        "refresh_all_fundamentals",
-        "calculate_daily_breadth_with_gapfill",
-        "calculate_daily_group_rankings_with_gapfill",
-        "build_daily_snapshot",
+    assert [stage.operation for stage in hk_plan.stages] == [
+        BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE,
+        BootstrapOperation.SMART_REFRESH_CACHE,
+        BootstrapOperation.REFRESH_ALL_FUNDAMENTALS,
+        BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL,
+        BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL,
+        BootstrapOperation.BUILD_DAILY_SNAPSHOT,
     ]
     assert hk_plan.stages[-1].kwargs == {
         "market": "HK",
@@ -50,7 +54,7 @@ def test_au_bootstrap_plan_refreshes_universe_before_prices_and_fundamentals() -
         "prices",
         "fundamentals",
     ]
-    assert au_plan.stages[0].task_name == "refresh_official_market_universe"
+    assert au_plan.stages[0].operation == BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE
     assert au_plan.stages[0].kwargs["market"] == "AU"
 
 
