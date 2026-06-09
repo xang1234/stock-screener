@@ -150,6 +150,7 @@ def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
         "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
         "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
     ]
+    assert signatures[2].queue == "celery"
     snapshot = signatures[-1]
     assert snapshot.kwargs["publish_pointer_key"] == "latest_published_market:HK"
 

@@ -106,29 +106,38 @@ def evaluate_warmup_metadata(
         )
 
     completed_at_raw = metadata.get("completed_at")
-    if completed_at_raw:
-        try:
-            completed_at = datetime.fromisoformat(str(completed_at_raw))
-        except ValueError:
-            return WarmupMetadataReadiness(
-                ready=False,
-                reason="Cache warmup metadata timestamp is invalid",
-                summary=summary,
-                status=status,
-                count=count,
-                total=total,
-                percent=percent,
-            )
-        if _reference_now(completed_at, now) - completed_at > max_age:
-            return WarmupMetadataReadiness(
-                ready=False,
-                reason=f"Cache warmup metadata is stale for {context}",
-                summary=summary,
-                status=status,
-                count=count,
-                total=total,
-                percent=percent,
-            )
+    if not completed_at_raw:
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Cache warmup metadata timestamp is missing for {context}",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
+    try:
+        completed_at = datetime.fromisoformat(str(completed_at_raw))
+    except ValueError:
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason="Cache warmup metadata timestamp is invalid",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
+    if _reference_now(completed_at, now) - completed_at > max_age:
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Cache warmup metadata is stale for {context}",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
 
     return WarmupMetadataReadiness(
         ready=True,

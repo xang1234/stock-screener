@@ -168,6 +168,8 @@ def _queue_for_stage(stage) -> str:
         return data_fetch_queue_for_market(stage.kwargs["market"])
     if stage.queue_kind == BootstrapQueueKind.MARKET_JOBS:
         return market_jobs_queue_for_market(stage.kwargs["market"])
+    if stage.queue_kind == BootstrapQueueKind.CELERY:
+        return "celery"
     raise ValueError(f"Unsupported bootstrap queue kind: {stage.queue_kind}")
 
 
@@ -258,7 +260,7 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
 @celery_app.task(
     bind=True,
     name=WAIT_FOR_BOOTSTRAP_PRICE_WARMUP_TASK_NAME,
-    queue="market_jobs",
+    queue="celery",
     soft_time_limit=300,
     max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,
 )

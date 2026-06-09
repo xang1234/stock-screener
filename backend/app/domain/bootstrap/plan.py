@@ -12,6 +12,7 @@ from app.domain.markets.catalog import get_market_catalog
 class BootstrapQueueKind(str, Enum):
     DATA_FETCH = "data_fetch"
     MARKET_JOBS = "market_jobs"
+    CELERY = "celery"
 
 
 class BootstrapOperation(str, Enum):
@@ -113,7 +114,7 @@ def _build_market_plan(market: str) -> MarketBootstrapPlan:
             _stage(
                 key="price_warmup",
                 operation=BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP,
-                queue_kind=BootstrapQueueKind.MARKET_JOBS,
+                queue_kind=BootstrapQueueKind.CELERY,
                 market=market,
             ),
             _stage(

@@ -194,3 +194,59 @@ def test_wait_for_bootstrap_price_warmup_retries_partial_coverage(monkeypatch):
     assert "waiting_for_bootstrap_price_coverage:HK" in str(retry_calls[0]["exc"])
     assert retry_calls[0]["countdown"] == 30
     assert retry_calls[0]["max_retries"] == 120
+
+
+def test_wait_for_bootstrap_price_warmup_marks_failed_when_retries_exhausted(
+    monkeypatch,
+):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    session = _FakeSession()
+    failed_calls = []
+    _patch_price_barrier_dependencies(
+        monkeypatch,
+        module,
+        session=session,
+        warmup_metadata={
+            "status": "completed",
+            "count": 31,
+            "total": 31,
+            "completed_at": "2026-06-09T08:00:00",
+        },
+        coverage_report={
+            "eligible": False,
+            "price_covered_symbols": 19,
+            "price_total_symbols": 31,
+            "price_missing_symbols": 12,
+            "price_coverage_ratio": 19 / 31,
+            "threshold": 0.95,
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        lambda _db, **kwargs: failed_calls.append(kwargs),
+    )
+    module.wait_for_bootstrap_price_warmup.request.id = "wait-task-456"
+    module.wait_for_bootstrap_price_warmup.request.retries = (
+        module.BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        module.wait_for_bootstrap_price_warmup.run(market="HK")
+
+    assert "Price cache coverage incomplete for HK" in str(exc_info.value)
+    assert failed_calls == [
+        {
+            "market": "HK",
+            "stage_key": "prices",
+            "lifecycle": "bootstrap",
+            "task_name": "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
+            "task_id": "wait-task-456",
+            "message": (
+                "Price cache warmup unavailable: Price cache coverage incomplete "
+                "for HK: 19/31 (61.3%, threshold=95.0%, missing=12)"
+            ),
+        }
+    ]
+    assert session.closed is True

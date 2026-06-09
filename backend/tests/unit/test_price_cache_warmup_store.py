@@ -116,3 +116,22 @@ def test_evaluate_warmup_metadata_rejects_stale_completed_metadata():
 
     assert readiness.ready is False
     assert readiness.reason == "Cache warmup metadata is stale for same-day group ranking run"
+
+
+def test_evaluate_warmup_metadata_rejects_completed_missing_completed_at():
+    readiness = evaluate_warmup_metadata(
+        {
+            "status": "completed",
+            "count": 31,
+            "total": 31,
+        },
+        context="same-day group ranking run",
+        max_age=timedelta(hours=12),
+        now=datetime(2026, 6, 9, 8, 1, 0),
+    )
+
+    assert readiness.ready is False
+    assert (
+        readiness.reason
+        == "Cache warmup metadata timestamp is missing for same-day group ranking run"
+    )

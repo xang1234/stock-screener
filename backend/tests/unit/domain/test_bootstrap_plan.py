@@ -21,6 +21,7 @@ def test_us_bootstrap_plan_includes_us_only_industry_group_seed() -> None:
         "snapshot",
     ]
     assert plan.market_plans[0].stages[1].queue_kind == BootstrapQueueKind.MARKET_JOBS
+    assert plan.market_plans[0].stages[3].queue_kind == BootstrapQueueKind.CELERY
 
 
 def test_non_us_bootstrap_plan_uses_official_universe_without_industry_seed() -> None:
