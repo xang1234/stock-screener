@@ -9,7 +9,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.services.operations_job_service import OperationsJobService, _JobRecord
-from app.services.runtime_activity_contract import progress_mode
 
 
 def _queued_message(*, task_id: str, task_name: str, args: list | None = None, kwargs: dict | None = None) -> bytes:
@@ -88,7 +87,6 @@ def test_list_jobs_marks_data_fetch_queue_as_waiting_for_global_external_lease()
     )
     service._inspect = lambda: _FakeInspect()
     service._runtime_activity_records = lambda _db: []
-    service._job_backend.get_status = MagicMock(return_value=None)
 
     lock = MagicMock()
     lock.get_current_task.return_value = None
@@ -121,7 +119,6 @@ def test_list_jobs_surfaces_stuck_lock_holder_without_worker_inspect():
     service._broker = lambda: _FakeBroker({})
     service._inspect = lambda: _FakeInspect()
     service._runtime_activity_records = lambda _db: []
-    service._job_backend.get_status = MagicMock(return_value=None)
 
     stale_heartbeat = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
     started_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
@@ -160,7 +157,6 @@ def test_list_jobs_marks_orphaned_market_lease_as_stale():
     service._broker = lambda: _FakeBroker({})
     service._inspect = lambda: _FakeInspect()
     service._runtime_activity_records = lambda _db: []
-    service._job_backend.get_status = MagicMock(return_value=None)
 
     lock = MagicMock()
     lock.get_current_task.return_value = None
@@ -194,7 +190,6 @@ def test_list_jobs_marks_near_expiry_market_lease_as_stuck():
     service._broker = lambda: _FakeBroker({})
     service._inspect = lambda: _FakeInspect()
     service._runtime_activity_records = lambda _db: []
-    service._job_backend.get_status = MagicMock(return_value=None)
 
     lock = MagicMock()
     lock.get_current_task.return_value = None
@@ -228,7 +223,6 @@ def test_market_lease_for_data_fetch_task_keeps_data_fetch_queue_label():
     service._broker = lambda: _FakeBroker({})
     service._inspect = lambda: _FakeInspect()
     service._runtime_activity_records = lambda _db: []
-    service._job_backend.get_status = MagicMock(return_value=None)
 
     lock = MagicMock()
     lock.get_current_task.return_value = None
@@ -302,13 +296,6 @@ def test_list_jobs_surfaces_runtime_activity_progress_fields():
     assert job["current"] == 420
     assert job["total"] == 1000
     assert job["message"] == "Batch 5/12 · refreshing prices"
-
-
-def test_progress_mode_keeps_active_100_percent_indeterminate():
-    assert progress_mode("running", 100.0, 3750, 3750) == "indeterminate"
-    assert progress_mode("waiting", None, 3750, 3750) == "indeterminate"
-    assert progress_mode("stale", 100.0, 3750, 3750) == "indeterminate"
-    assert progress_mode("completed", 100.0, 3750, 3750) == "determinate"
 
 
 def test_list_jobs_falls_back_to_job_backend_progress_for_active_worker_task():

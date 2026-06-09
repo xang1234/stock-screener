@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -223,97 +222,6 @@ class TestLookupChain:
         assert quote is not None
         assert quote.rate == 0.12
         assert quote.source == "yfinance"
-
-    def test_stale_database_fallback_suppresses_repeated_live_fetches(self):
-        stale_row = MagicMock()
-        stale_row.from_currency = "JPY"
-        stale_row.to_currency = "USD"
-        stale_row.rate = 0.0064
-        stale_row.as_of_date = date.today() - timedelta(days=1)
-        stale_row.source = "yfinance"
-        calls = []
-
-        def fetcher(currency):
-            calls.append(currency)
-            return None
-
-        svc = _make_service(rate_fetcher=fetcher, db_rows=stale_row)
-
-        first = svc.get_usd_rate("JPY")
-        second = svc.get_usd_rate("JPY")
-        third = svc.get_usd_rate("JPY")
-
-        assert first is not None and first.rate == 0.0064
-        assert second is not None and second.rate == 0.0064
-        assert third is not None and third.rate == 0.0064
-        assert calls == ["JPY"]
-
-    def test_quote_one_day_ahead_of_system_date_is_fresh(self, monkeypatch):
-        import app.services.fx_service as fx_module
-
-        class _UtcMonday(date):
-            @classmethod
-            def today(cls):
-                return cls(2026, 6, 8)  # Monday in UTC
-
-        monkeypatch.setattr(fx_module, "date", _UtcMonday)
-
-        calls = []
-
-        def fetcher(currency):
-            calls.append(currency)
-            return 0.0065
-
-        svc = _make_service(rate_fetcher=fetcher)
-        svc._memo["JPY"] = FXQuote(
-            from_currency="JPY",
-            to_currency="USD",
-            rate=0.0064,
-            as_of_date=_UtcMonday(2026, 6, 9),  # Tuesday in JP/TW/HK local time
-            source="yfinance",
-        )
-
-        quote = svc.get_usd_rate("JPY")
-
-        assert quote is not None
-        assert quote.rate == 0.0064
-        assert calls == []
-
-    def test_stale_fetch_suppression_still_accepts_fresh_redis_quote(self, monkeypatch):
-        stale_quote = FXQuote(
-            from_currency="JPY",
-            to_currency="USD",
-            rate=0.0064,
-            as_of_date=date.today() - timedelta(days=1),
-            source="yfinance",
-        )
-        fresh_quote = FXQuote(
-            from_currency="JPY",
-            to_currency="USD",
-            rate=0.0065,
-            as_of_date=date.today(),
-            source="yfinance",
-        )
-        calls = []
-
-        def fetcher(currency):
-            calls.append(currency)
-            return None
-
-        svc = _make_service(rate_fetcher=fetcher)
-        svc._memo["JPY"] = stale_quote
-        svc._stale_fallback_retry_after["JPY"] = (
-            stale_quote,
-            time.monotonic() + 60,
-            svc._latest_trading_close(date.today()),
-        )
-        monkeypatch.setattr(svc, "_read_redis", lambda _currency: fresh_quote)
-
-        quote = svc.get_usd_rate("JPY")
-
-        assert quote is fresh_quote
-        assert calls == []
-        assert "JPY" not in svc._stale_fallback_retry_after
 
     def test_database_source_is_preserved_on_rehydrate(self):
         db_row = MagicMock()

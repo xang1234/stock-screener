@@ -9,6 +9,7 @@ Provides background tasks for:
 All data-fetching tasks use the @serialized_data_fetch decorator
 to ensure only one task fetches external data at a time.
 """
+from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
@@ -27,29 +28,6 @@ from ..services.market_activity_service import (
     mark_market_activity_progress,
     mark_market_activity_started,
 )
-from ..services.price_fetch_failures import (
-    classify_price_fetch_error,
-    is_no_data_price_failure,
-    is_rate_limit_error as is_price_rate_limit_error,
-    is_retryable_price_failure,
-)
-from ..services.price_refresh_execution import classify_price_refresh_batch
-from ..services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
-from ..services.price_refresh_plan_builder import build_market_price_refresh_plan
-from ..services.price_refresh_activity import (
-    PriceRefreshActivityDependencies,
-    PriceRefreshActivityReporter,
-)
-from ..services.price_refresh_live_runner import (
-    LivePriceRefreshRunner,
-    LivePriceRefreshRunnerDependencies,
-    PriceRefreshRetryScheduler,
-)
-from ..services.price_refresh_workflow import (
-    PriceRefreshMarketGateway,
-    PriceRefreshWorkflow,
-    PriceRefreshWorkflowDependencies,
-)
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from ..wiring.bootstrap import (
@@ -63,6 +41,7 @@ from .data_fetch_lock import serialized_data_fetch
 from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
+_GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 
 _SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
     "smart_refresh_time_window_bypass",
@@ -1028,7 +1007,8 @@ def prewarm_all_active_symbols(self):
 
 def _is_rate_limit_error(error_str: str) -> bool:
     """Check if an error string indicates a rate limit."""
-    return is_price_rate_limit_error(error_str)
+    lower = error_str.lower()
+    return any(indicator in lower for indicator in ("rate", "429", "too many", "limit", "throttl"))
 
 
 class RateLimitExhaustedError(RuntimeError):
@@ -1120,7 +1100,17 @@ def _fetch_with_backoff(
 
 def _classify_no_data_failure(error_message: str) -> bool:
     """Heuristic classifier for delisted/no-data provider failures."""
-    return is_no_data_price_failure(error_message)
+    lower = (error_message or "").lower()
+    indicators = (
+        "no data",
+        "possibly delisted",
+        "delisted",
+        "missing from results",
+        "symbol not in download results",
+        "returned empty",
+        "empty data",
+    )
+    return any(indicator in lower for indicator in indicators)
 
 
 def _track_symbol_failures(
@@ -1347,10 +1337,8 @@ def retry_failed_price_symbols(
     price_cache = get_price_cache()
     bulk_fetcher = BulkDataFetcher()
     refreshed = 0
-    successes: list[str] = []
     failed_symbols: list[str] = []
     failure_details: dict[str, str] = {}
-    failure_kinds: dict[str, str] = {}
     try:
         batch_results = _fetch_with_backoff(
             bulk_fetcher,
@@ -1358,26 +1346,21 @@ def retry_failed_price_symbols(
             period="2y",
             market=market,
         )
-        retry_job = PriceRefreshJob(
-            kind=PriceRefreshJobKind.NO_HISTORY,
-            symbols=tuple(deduped_symbols),
-            period="2y",
-        )
-        outcome = classify_price_refresh_batch(
-            batch_number=1,
-            total_batches=1,
-            job=retry_job,
-            symbols=tuple(deduped_symbols),
-            batch_results=batch_results,
-            market_for_symbol=lambda _symbol: market,
-        )
-        refreshed = outcome.refreshed
-        successes = list(outcome.successes)
-        failed_symbols = list(outcome.failures)
-        failure_details = dict(outcome.failure_details)
-        failure_kinds = dict(outcome.failure_kinds)
-        if outcome.price_data_by_symbol:
-            price_cache.store_batch_in_cache(dict(outcome.price_data_by_symbol), also_store_db=True)
+        batch_to_store = {}
+        for symbol, data in batch_results.items():
+            if not data.get("has_error") and data.get("price_data") is not None:
+                price_df = data["price_data"]
+                if not price_df.empty:
+                    batch_to_store[symbol] = price_df
+                    refreshed += 1
+                    continue
+            failed_symbols.append(symbol)
+            failure_details[symbol] = data.get("error", "Unknown error")
+        missing = sorted(set(deduped_symbols) - set(batch_results))
+        failed_symbols.extend(missing)
+        failure_details.update({symbol: "Missing from retry result" for symbol in missing})
+        if batch_to_store:
+            price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
@@ -1390,27 +1373,17 @@ def retry_failed_price_symbols(
         )
         failed_symbols = deduped_symbols
         failure_details = {symbol: str(exc) for symbol in deduped_symbols}
-        kind = classify_price_fetch_error(str(exc))
-        if kind is not None:
-            failure_kinds = {symbol: kind.value for symbol in deduped_symbols}
 
+    successes = [symbol for symbol in deduped_symbols if symbol not in set(failed_symbols)]
     _track_symbol_failures(
         price_cache,
         successes,
         failed_symbols,
         failure_details=failure_details,
     )
-    retryable_failed_symbols = [
-        symbol
-        for symbol in failed_symbols
-        if is_retryable_price_failure(
-            kind=failure_kinds.get(symbol),
-            error=failure_details.get(symbol, ""),
-        )
-    ]
-    if retryable_failed_symbols and attempt < 3:
+    if failed_symbols and attempt < 3:
         _schedule_failed_symbol_retry(
-            retryable_failed_symbols,
+            failed_symbols,
             market=market,
             attempt=attempt + 1,
             countdown=retry_countdown,
@@ -1640,86 +1613,6 @@ def auto_refresh_after_close(self, market: str | None = None):
     return result
 
 
-def run_smart_price_refresh(
-    *,
-    task,
-    mode: str,
-    market: str | None,
-    activity_lifecycle: str | None,
-) -> dict:
-    from ..services.bulk_data_fetcher import BulkDataFetcher
-    from ..services.runtime_preferences_service import is_market_enabled_now
-    from ..wiring.bootstrap import get_data_fetch_lock, get_price_cache
-    from .market_queues import market_tag, log_extra, normalize_market
-
-    def build_refresh_plan(db, *, mode, market, effective_market, recently_refreshed_filter):
-        return build_market_price_refresh_plan(
-            db,
-            mode=mode,
-            market=market,
-            effective_market=effective_market,
-            normalize_market=normalize_market,
-            market_calendar_service=get_market_calendar_service(),
-            sync_github_seed=lambda sync_db, *, market, allow_stale: (
-                get_daily_price_bundle_service().sync_from_github(
-                    sync_db,
-                    market=market,
-                    allow_stale=allow_stale,
-                )
-            ),
-            recently_refreshed_filter=recently_refreshed_filter,
-        )
-
-    activity_reporter = PriceRefreshActivityReporter(
-        PriceRefreshActivityDependencies(
-            record_market_refresh_success=_record_market_refresh_success_safely,
-            mark_market_activity_started=mark_market_activity_started,
-            mark_market_activity_completed=mark_market_activity_completed,
-            mark_market_activity_progress_safely=_mark_market_activity_progress_safely,
-            mark_market_activity_failed_safely=_mark_market_activity_failed_safely,
-        )
-    )
-    live_runner = LivePriceRefreshRunner(
-        LivePriceRefreshRunnerDependencies(
-            fetch_with_backoff=_fetch_with_backoff,
-            track_symbol_failures=_track_symbol_failures,
-            data_fetch_lock_factory=get_data_fetch_lock,
-            raise_if_transient_database_error=raise_if_transient_database_error,
-        )
-    )
-    dependencies = PriceRefreshWorkflowDependencies(
-        session_factory=SessionLocal,
-        price_cache_factory=get_price_cache,
-        bulk_fetcher_factory=BulkDataFetcher,
-        warm_benchmarks=warm_spy_cache,
-        build_refresh_plan=build_refresh_plan,
-        last_completed_trading_day=lambda market_code: (
-            get_market_calendar_service().last_completed_trading_day(market_code)
-        ),
-        activity_reporter=activity_reporter,
-        live_runner=live_runner,
-        retry_scheduler=PriceRefreshRetryScheduler(_schedule_failed_symbol_retry),
-        market_gateway=PriceRefreshMarketGateway(
-            normalize_market=normalize_market,
-            market_tag=market_tag,
-            log_extra=log_extra,
-            get_eastern_now=get_eastern_now,
-            is_trading_day=is_trading_day,
-            format_market_status=format_market_status,
-            is_market_enabled_now=is_market_enabled_now,
-        ),
-        raise_if_transient_database_error=raise_if_transient_database_error,
-        safe_rollback=safe_rollback,
-        time_window_bypass_enabled=lambda: _SMART_REFRESH_TIME_WINDOW_BYPASS.get(),
-    )
-    return PriceRefreshWorkflow(dependencies).run(
-        task=task,
-        mode=mode,
-        market=market,
-        activity_lifecycle=activity_lifecycle,
-    )
-
-
 @celery_app.task(
     bind=True,
     name='app.tasks.cache_tasks.smart_refresh_cache',
@@ -1732,13 +1625,529 @@ def smart_refresh_cache(
     market: str | None = None,
     activity_lifecycle: str | None = None,
 ):
-    """Run the smart price refresh workflow behind the Celery data-fetch lock."""
-    return run_smart_price_refresh(
-        task=self,
-        mode=mode,
-        market=market,
-        activity_lifecycle=activity_lifecycle,
+    """
+    Smart cache refresh with market cap prioritization.
+
+    This is the unified refresh task that replaces the confusing split
+    between daily_cache_warmup and force_refresh_stale_intraday.
+
+    Key features:
+    1. Always warms benchmarks first (required for RS calculations)
+    2. Fetches symbols in market cap order (high cap first)
+    3. Updates heartbeat for stuck detection
+    4. Saves warmup metadata for partial completion tracking
+
+    Args:
+        mode: Refresh mode
+            - "auto": Full universe, skip symbols refreshed within 4h (smart refresh)
+            - "full": Full universe, force re-fetch everything regardless of freshness
+
+    Returns:
+        Dict with refresh statistics
+    """
+    import time
+    from ..wiring.bootstrap import get_price_cache
+    from ..services.bulk_data_fetcher import BulkDataFetcher
+    from ..models.stock_universe import StockUniverse
+    from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
+
+    effective_market = normalize_market(market) if market is not None else "US"
+    _market_label = effective_market.lower()
+    activity_lifecycle = activity_lifecycle or "daily_refresh"
+    _log_extra = log_extra(market)
+    logger.info("=" * 80)
+    logger.info(
+        "TASK: Smart Cache Refresh %s (mode=%s)", market_tag(market), mode,
+        extra=_log_extra,
     )
+    logger.info("Market status: %s", format_market_status(), extra=_log_extra)
+    logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
+    logger.info("=" * 80)
+
+    if market is not None and not is_market_enabled_now(normalize_market(market)):
+        logger.info("Skipping smart refresh for disabled market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {effective_market} is disabled in local runtime preferences',
+            'market': effective_market,
+            'mode': mode,
+            'timestamp': datetime.now().isoformat(),
+        }
+
+    # Time-window guard: reject Beat-scheduled full mode outside expected windows.
+    # This prevents catchup storms (Beat replaying missed schedules on restart).
+    # Manual API calls set headers={'origin': 'manual'} to bypass this guard.
+    is_manual = (
+        _SMART_REFRESH_TIME_WINDOW_BYPASS.get()
+        or (
+            getattr(self.request, 'headers', None)
+            and self.request.headers.get('origin') == 'manual'
+        )
+    )
+    # Time-window guard only applies to the legacy US-only scheduling path
+    # (market is None). Per-market beat entries fire at local-market
+    # hours in ET (e.g. HK at 4:30 AM ET, TW at 1:00 AM ET) which fall outside
+    # the legacy US window, so skip the guard when market is explicit.
+    if mode == "full" and not is_manual and market is None:
+        now_et = get_eastern_now()
+        weekday = now_et.weekday()  # 0=Mon, 6=Sun
+        hour = now_et.hour
+
+        # Allow: weekdays 4PM-midnight (daily refresh window)
+        # Allow: Sunday 1AM-6AM (weekly refresh window)
+        in_weekday_window = weekday < 5 and 16 <= hour < 24
+        in_sunday_window = weekday == 6 and 1 <= hour < 6
+
+        if not in_weekday_window and not in_sunday_window:
+            logger.warning(
+                f"Rejecting Beat-scheduled full refresh outside time window "
+                f"(weekday={weekday}, hour={hour}). Likely a catchup storm."
+            )
+            return {
+                'skipped': True,
+                'reason': f'Outside refresh window (weekday={weekday}, hour={hour})',
+                'mode': mode,
+                'timestamp': datetime.now().isoformat()
+            }
+
+    # Skip on non-trading days in auto mode (full mode can be on-demand)
+    if mode == "auto":
+        today = get_eastern_now().date()
+        if not is_trading_day(today):
+            logger.info(f"Skipping smart refresh (auto) - {today} is not a trading day")
+            return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat(), 'mode': mode}
+
+    price_cache = get_price_cache()
+    db = SessionLocal()
+
+    refreshed = 0
+    processed = 0
+    failed = 0
+    failed_symbols = []
+    github_sync: dict | None = None
+    used_github_seed = False
+
+    try:
+        mark_market_activity_started(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Refreshing market prices",
+        )
+        # Step 1: Always warm market benchmarks first (required for RS
+        # calculations). Scoped to caller's market to avoid redundant work
+        # across parallel per-market refreshes.
+        logger.info("[1/3] Warming market benchmarks...")
+        benchmark_result = warm_spy_cache(market=market)
+        if benchmark_result.get('error'):
+            logger.error(f"Benchmark warmup failed: {benchmark_result.get('error')}")
+
+        # Step 2: Get symbols to refresh, ordered by market cap
+        logger.info(f"[2/3] Determining symbols to refresh (mode={mode})...")
+
+        # Build universe query, optionally filtered by market.
+        _uni_q = db.query(StockUniverse.symbol, StockUniverse.market).filter(
+            StockUniverse.is_active == True
+        )
+        if market is not None:
+            _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
+        _uni_q = _uni_q.order_by(StockUniverse.market_cap.desc().nullslast())
+        universe_rows = _uni_q.all()
+        all_symbols = [r.symbol for r in universe_rows]
+        symbol_markets = {
+            str(r.symbol).upper(): normalize_market(
+                getattr(r, "market", None) or effective_market
+            )
+            for r in universe_rows
+        }
+
+        github_seed_allowed = (
+            all_symbols
+            and market is not None
+            and activity_lifecycle in {"daily_refresh", "bootstrap"}
+        )
+        github_sync = (
+            get_daily_price_bundle_service().sync_from_github(
+                db,
+                market=effective_market,
+            )
+            if github_seed_allowed
+            else {"status": "skipped", "reason": "empty_universe"}
+        )
+        if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
+            used_github_seed = True
+            symbols = get_daily_price_bundle_service().symbols_missing_as_of(
+                db,
+                symbols=all_symbols,
+                as_of_date=str(github_sync.get("as_of_date") or ""),
+            )
+            if symbols:
+                logger.info(
+                    "GitHub daily price bundle synced for %s; falling back to live refresh for %d missing/stale symbols",
+                    effective_market,
+                    len(symbols),
+                    extra=_log_extra,
+                )
+            else:
+                message = "GitHub daily price bundle is current - no live fetch needed"
+                price_cache.save_warmup_metadata(
+                    "completed",
+                    len(all_symbols),
+                    len(all_symbols),
+                    market=market,
+                )
+                price_cache.complete_warmup_heartbeat("completed", market=market)
+                mark_market_activity_completed(
+                    db,
+                    market=effective_market,
+                    stage_key="prices",
+                    lifecycle=activity_lifecycle,
+                    task_name=getattr(self, "name", "smart_refresh_cache"),
+                    task_id=getattr(getattr(self, "request", None), "id", None),
+                    current=len(all_symbols) if all_symbols else 0,
+                    total=len(all_symbols) if all_symbols else 0,
+                    message=message,
+                )
+                try:
+                    trading_day = datetime.fromisoformat(
+                        str(github_sync.get("as_of_date"))
+                    ).date()
+                except (TypeError, ValueError):
+                    trading_day = get_market_calendar_service().last_completed_trading_day(effective_market)
+                _record_market_refresh_success_safely(
+                    db,
+                    market=effective_market,
+                    trading_day=trading_day,
+                    success_rate=1.0,
+                )
+                return {
+                    "status": "completed",
+                    "source": "github",
+                    "github_sync_status": github_sync.get("status"),
+                    "source_revision": github_sync.get("source_revision"),
+                    "refreshed": 0,
+                    "failed": 0,
+                    "total": 0,
+                    "message": message,
+                    "mode": mode,
+                    "completed_at": datetime.now().isoformat(),
+                }
+        elif mode == "full":
+            # Full refresh: ALL active symbols for the market, ordered by market cap DESC
+            symbols = all_symbols
+            logger.info(
+                "Full refresh: %d symbols (market cap order) %s",
+                len(symbols), market_tag(market), extra=_log_extra,
+            )
+        else:
+            # Auto mode: Full universe for market, skip recently-refreshed symbols
+            symbols = all_symbols
+            logger.info(
+                "Auto refresh: %d active symbols (full universe, market cap order) %s",
+                len(symbols), market_tag(market), extra=_log_extra,
+            )
+
+            # Filter out symbols refreshed within skip window
+            original_count = len(symbols)
+            symbols = price_cache.get_symbols_needing_refresh(symbols, max_age_hours=settings.refresh_skip_hours)
+            skipped = original_count - len(symbols)
+            if skipped > 0:
+                logger.info(f"Skipping {skipped} recently-refreshed symbols (fresh within {settings.refresh_skip_hours}h)")
+
+        if not symbols:
+            message = (
+                "All symbols recently refreshed - nothing to do"
+                if mode == "auto" else
+                "No active symbols found in universe"
+            )
+            price_cache.save_warmup_metadata("completed", 0, 0, market=market)
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="prices",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "smart_refresh_cache"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                current=0,
+                total=0,
+                message=message,
+            )
+            return {
+                "status": "completed",
+                "refreshed": 0,
+                "failed": 0,
+                "total": 0,
+                "message": message,
+                "mode": mode,
+                "completed_at": datetime.now().isoformat()
+            }
+
+        total = len(symbols)
+        symbol_market_totals = Counter(
+            symbol_markets.get(str(symbol).upper(), effective_market) for symbol in symbols
+        )
+        refreshed_by_market: Counter[str] = Counter()
+        failed_by_market: Counter[str] = Counter()
+        batch_size = 100
+        total_batches = (total + batch_size - 1) // batch_size if total > 0 else 0
+        bulk_fetcher = BulkDataFetcher()
+
+        def _market_for_symbol(symbol: str) -> str:
+            return symbol_markets.get(str(symbol).upper(), effective_market)
+
+        # Write initial heartbeat before batch loop to prevent false "stuck" detection.
+        # Without this, the health endpoint sees lock held + no heartbeat = stuck.
+        price_cache.update_warmup_heartbeat(0, total, 0.0, market=market)
+        _mark_market_activity_progress_safely(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=0,
+            total=total,
+            percent=0,
+            message="Refreshing market prices",
+        )
+
+        # Step 3: Batch fetch with progress tracking
+        logger.info(f"[3/3] Fetching {total} symbols...")
+
+        for batch_start in range(0, total, batch_size):
+            batch_symbols = symbols[batch_start:batch_start + batch_size]
+            batch_num = (batch_start // batch_size) + 1
+
+            logger.info(f"Batch {batch_num}/{total_batches}: Fetching {len(batch_symbols)} symbols")
+
+            batch_successes = []
+            batch_failures = []
+            failure_details = {}
+
+            try:
+                # Batch fetch using yf.download() (single HTTP request per batch)
+                batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y", market=market)
+
+                # Separate successes from failures, then batch-store all successes
+                batch_to_store = {}
+                for symbol, data in batch_results.items():
+                    if not data.get('has_error') and data.get('price_data') is not None:
+                        price_df = data['price_data']
+                        if not price_df.empty:
+                            batch_to_store[symbol] = price_df
+                            refreshed += 1
+                            refreshed_by_market[_market_for_symbol(symbol)] += 1
+                            batch_successes.append(symbol)
+                        else:
+                            failed += 1
+                            failed_symbols.append(symbol)
+                            failed_by_market[_market_for_symbol(symbol)] += 1
+                            batch_failures.append(symbol)
+                            failure_details[symbol] = "Empty data returned"
+                    else:
+                        failed += 1
+                        failed_symbols.append(symbol)
+                        failed_by_market[_market_for_symbol(symbol)] += 1
+                        batch_failures.append(symbol)
+                        failure_details[symbol] = data.get('error', 'Unknown error')
+
+                # Batch store in Redis (pipeline) + DB (single transaction)
+                if batch_to_store:
+                    price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
+
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as e:
+                raise_if_transient_database_error(e)
+                logger.error(f"Batch {batch_num} error: {e}")
+                failed += len(batch_symbols)
+                failed_symbols.extend(batch_symbols)
+                failed_by_market.update(_market_for_symbol(symbol) for symbol in batch_symbols)
+                batch_failures.extend(batch_symbols)
+                failure_details.update({symbol: str(e) for symbol in batch_symbols})
+
+            # Track symbol failures for auto-deactivation of delisted symbols
+            _track_symbol_failures(
+                price_cache,
+                batch_successes,
+                batch_failures,
+                db,
+                failure_details=failure_details,
+            )
+
+            # Update progress for UI and stuck detection
+            progress = min((batch_start + batch_size), total)
+            percent = (progress / total) * 100
+            processed = progress
+
+            # Update Celery task state
+            self.update_state(
+                state='PROGRESS',
+                meta={
+                    'current': progress,
+                    'total': total,
+                    'percent': percent,
+                    'refreshed': refreshed,
+                    'failed': failed
+                }
+            )
+
+            # Update heartbeat for stuck detection
+            price_cache.update_warmup_heartbeat(progress, total, percent, market=market)
+            _mark_market_activity_progress_safely(
+                db,
+                market=effective_market,
+                stage_key="prices",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "smart_refresh_cache"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                current=progress,
+                total=total,
+                percent=round(percent, 1),
+                message=f"Batch {batch_num}/{total_batches} · refreshing prices",
+            )
+
+            # Extend lock TTL to prevent expiry during long-running tasks
+            task_id = self.request.id or 'unknown'
+            from ..wiring.bootstrap import get_data_fetch_lock
+            lock = get_data_fetch_lock()
+            lock.extend_lock(task_id, 300, market=market)
+
+            # Rate limit between batches (per-market key when scoped)
+            if batch_start + batch_size < total:
+                if market is not None:
+                    get_rate_limiter().wait_for_market("yfinance:batch", market)
+                else:
+                    get_rate_limiter().wait(
+                        "yfinance:batch",
+                        min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                    )
+
+        # Save final warmup metadata (treat >95% success as "completed")
+        success_rate = refreshed / total if total > 0 else 0
+        status = "completed" if success_rate >= 0.95 else "partial"
+        price_cache.save_warmup_metadata(status, refreshed, total, market=market)
+        price_cache.complete_warmup_heartbeat("completed", market=market)
+        for refresh_market, market_total in symbol_market_totals.items():
+            market_success_rate = (
+                refreshed_by_market[refresh_market] / market_total if market_total > 0 else 0
+            )
+            if market_success_rate < 0.95:
+                continue
+            _record_market_refresh_success_safely(
+                db,
+                market=refresh_market,
+                trading_day=get_market_calendar_service().last_completed_trading_day(refresh_market),
+                success_rate=market_success_rate,
+            )
+        if failed_symbols:
+            failed_symbols_by_market: dict[str, list[str]] = {}
+            for symbol in failed_symbols:
+                failed_symbols_by_market.setdefault(_market_for_symbol(symbol), []).append(symbol)
+            for retry_market, retry_symbols in failed_symbols_by_market.items():
+                if activity_lifecycle == "bootstrap":
+                    _schedule_failed_symbol_retry(
+                        retry_symbols,
+                        market=retry_market,
+                        attempt=1,
+                        countdown=30,
+                    )
+                else:
+                    _schedule_failed_symbol_retry(
+                        retry_symbols,
+                        market=retry_market,
+                        attempt=1,
+                    )
+
+        logger.info("=" * 80)
+        logger.info(f"✓ Smart refresh completed ({mode} mode):")
+        logger.info(f"  Refreshed: {refreshed}")
+        logger.info(f"  Failed: {failed}")
+        logger.info(f"  Total: {total}")
+        if failed_symbols:
+            logger.info(f"  Failed symbols: {failed_symbols[:10]}...")
+        logger.info("=" * 80)
+        mark_market_activity_completed(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=total,
+            total=total,
+            message=f"Price refresh {status}",
+        )
+
+        return {
+            "status": status,
+            "source": "github+live" if used_github_seed else "live",
+            "github_sync_status": github_sync.get("status") if github_sync else None,
+            "source_revision": github_sync.get("source_revision") if github_sync else None,
+            "refreshed": refreshed,
+            "failed": failed,
+            "total": total,
+            "failed_symbols": failed_symbols[:20],
+            "mode": mode,
+            "completed_at": datetime.now().isoformat()
+        }
+
+    except SoftTimeLimitExceeded:
+        logger.error("Soft time limit exceeded in smart_refresh_cache", exc_info=True)
+        safe_rollback(db)
+        price_cache.save_warmup_metadata(
+            "failed",
+            refreshed,
+            locals().get("total", 0),
+            "Soft time limit exceeded",
+            market=market,
+        )
+        price_cache.complete_warmup_heartbeat("failed", market=market)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=processed,
+            total=locals().get("total", 0),
+            message="Soft time limit exceeded",
+        )
+        raise
+    except Exception as e:
+        raise_if_transient_database_error(e)
+        logger.error(f"Error in smart_refresh_cache task: {e}", exc_info=True)
+        safe_rollback(db)
+        # Save partial progress
+        price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e), market=market)
+        price_cache.complete_warmup_heartbeat("failed", market=market)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=processed,
+            total=locals().get("total", 0),
+            message=str(e),
+        )
+        return {
+            "status": "failed",
+            "error": str(e),
+            "refreshed": refreshed,
+            "failed": failed,
+            "mode": mode,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    finally:
+        db.close()
 
 
 @celery_app.task(bind=True, name='app.tasks.cache_tasks.cleanup_old_price_data')

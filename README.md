@@ -156,7 +156,7 @@ On first launch the app boots into a setup screen — no pre-seeded database req
 The orchestrator runs a staged Celery pipeline for the primary market:
 
 1. **Universe refresh** — seeds the market's symbol list (S&P 500 / Russell / NDX for US via `refresh_stock_universe`; official exchange feeds for HK / IN / JP / KR / TW / CN / CA / DE / SG / MY / AU via `refresh_official_market_universe`).
-2. **Benchmark + price refresh** — imports the GitHub daily price bundle first, accepts recent stale bundles during bootstrap, then live-fetches only missing/current-session gaps (`7d` top-up for stale symbols, `2y` only for no-history symbols).
+2. **Benchmark + price refresh** — 5y OHLCV cached in Redis with PostgreSQL fallback.
 3. **Fundamentals refresh** — quarterly and annual financials.
 4. **Breadth calculation** — StockBee-style advance/decline with gap-fill.
 5. **Group rankings** — IBD-style relative strength across 197 industry groups.
@@ -167,7 +167,7 @@ The orchestrator runs a staged Celery pipeline for the primary market:
 
 *Per-stage progress with per-market queue status while the pipeline is running*
 
-The workspace opens as soon as the primary market reaches `ready`. Secondary markets keep hydrating in the background on their own queues (`data_fetch_{us,hk,in,jp,kr,tw,cn,de,ca,sg,my,au}`) so you can start scanning immediately. Scans against a market that's still refreshing return HTTP 409 `market_refresh_active`, and scans against a market whose data is not current yet return the usual stale-data response instead of triggering a first-run block.
+The workspace opens as soon as the primary market reaches `ready`. Secondary markets keep hydrating in the background on their own queues (`data_fetch_{us,hk,in,jp,kr,tw,cn,de,ca,sg,my,au}`) so you can start scanning immediately. Scans against a market that's still refreshing return HTTP 409 `market_refresh_active` — the UI surfaces this as a wait indicator rather than a failure.
 
 State is persisted in `AppSetting` under `runtime.primary_market`, `runtime.enabled_markets`, and `runtime.bootstrap_state` (`not_started` → `running` → `ready`). To re-run the wizard, reset `runtime.bootstrap_state` to `not_started`.
 

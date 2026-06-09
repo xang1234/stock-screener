@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -454,6 +455,34 @@ class DailyPriceBundleService:
             "imported_rows": imported_rows,
             "redis_warmed_symbols": redis_warmed_symbols,
         }
+
+    def symbols_missing_as_of(
+        self,
+        db: Session,
+        *,
+        symbols: list[str],
+        as_of_date: str | date,
+    ) -> list[str]:
+        if not symbols:
+            return []
+        expected_date = (
+            as_of_date if isinstance(as_of_date, date) else date.fromisoformat(str(as_of_date))
+        )
+        latest_by_symbol: dict[str, date | None] = {}
+        for chunk_start in range(0, len(symbols), 500):
+            chunk_symbols = symbols[chunk_start:chunk_start + 500]
+            rows = (
+                db.query(StockPrice.symbol, func.max(StockPrice.date))
+                .filter(StockPrice.symbol.in_(chunk_symbols))
+                .group_by(StockPrice.symbol)
+                .all()
+            )
+            for symbol, latest_date in rows:
+                latest_by_symbol[str(symbol)] = latest_date
+        return [
+            symbol for symbol in symbols
+            if latest_by_symbol.get(symbol) is None or latest_by_symbol[symbol] < expected_date
+        ]
 
     def sync_from_github(
         self,

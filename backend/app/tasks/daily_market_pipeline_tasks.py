@@ -134,7 +134,7 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
     market_code = _normalize_pipeline_market(market)
     as_of_date = trading_date.isoformat()
     return [
-        smart_refresh_cache.si(mode="delta", market=market_code).set(
+        smart_refresh_cache.si(mode="full", market=market_code).set(
             queue=data_fetch_queue_for_market(market_code)
         ),
         guard_price_refresh.s(market=market_code).set(

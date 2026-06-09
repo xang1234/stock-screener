@@ -287,6 +287,11 @@ def test_cn_daily_price_shard_bootstrap_fetches_missing_symbols_and_exports_shar
     class FakeService:
         DAILY_PRICE_BAR_PERIOD = "2y"
 
+        def symbols_missing_as_of(self, db, *, symbols, as_of_date):
+            assert symbols == ["000001.SZ", "600000.SS"]
+            assert as_of_date == date(2026, 5, 8)
+            return ["600000.SS"]
+
         def export_daily_price_bundle(self, db, **kwargs):
             captured["export"] = kwargs
             kwargs["output_path"].write_bytes(b"bundle")
@@ -303,16 +308,6 @@ def test_cn_daily_price_shard_bootstrap_fetches_missing_symbols_and_exports_shar
             )
             or len(batch)
         )
-
-    def fake_classify_price_history(db, *, symbols, as_of_date):
-        assert symbols == ["000001.SZ", "600000.SS"]
-        assert as_of_date == date(2026, 5, 8)
-        return SimpleNamespace(refresh_symbols=("600000.SS",))
-
-    monkeypatch.setattr(
-        "app.scripts.bootstrap_cn_daily_price_shard.classify_price_history",
-        fake_classify_price_history,
-    )
 
     class FakeFetcher:
         def fetch_prices_in_batches(self, symbols, *, period, market):

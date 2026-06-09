@@ -23,8 +23,6 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
           percent: 25,
-          current: 250,
-          total: 1000,
           message: 'Refreshing prices',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -64,57 +62,14 @@ describe('BootstrapSetupScreen', () => {
     );
 
     expect(screen.getByText('Price Refresh')).toBeInTheDocument();
-    expect(screen.getByText('25%')).toBeInTheDocument();
-    expect(screen.getByText('250 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('42%')).toBeInTheDocument();
+    expect(screen.getByText('420 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getAllByText(/Refreshing prices/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Additional data loading continues in the background/)).toBeInTheDocument();
     expect(screen.getByText('Enabled market queue')).toBeInTheDocument();
     expect(screen.getAllByText('US (primary)').length).toBeGreaterThan(0);
     expect(screen.getAllByText('HK').length).toBeGreaterThan(0);
     expect(screen.getByRole('progressbar', { name: 'Bootstrap progress' })).toBeInTheDocument();
-  });
-
-  it('does not invent a background warning when the API omits one', () => {
-    useRuntimeActivityMock.mockReturnValue({
-      data: {
-        bootstrap: {
-          primary_market: 'US',
-          current_stage: 'Price Refresh',
-          progress_mode: 'determinate',
-          percent: 25,
-          message: 'Refreshing prices',
-          background_warning: null,
-        },
-        markets: [
-          {
-            market: 'US',
-            stage_key: 'prices',
-            stage_label: 'Price Refresh',
-            status: 'running',
-            progress_mode: 'determinate',
-            percent: 25,
-            current: 250,
-            total: 1000,
-            message: 'Refreshing prices',
-          },
-        ],
-      },
-    });
-
-    renderWithProviders(
-      <BootstrapSetupScreen
-        primaryMarket="US"
-        enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
-        bootstrapState="running"
-        isStartingBootstrap={false}
-        bootstrapError={null}
-        onStartBootstrap={vi.fn()}
-      />
-    );
-
-    expect(screen.queryByText(/Additional enabled markets/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/continue loading after the workspace opens/i)).not.toBeInTheDocument();
   });
 
   it('renders indeterminate bootstrap progress when no real percent is available yet', () => {
@@ -161,7 +116,7 @@ describe('BootstrapSetupScreen', () => {
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
-  it('renders determinate fundamentals progress from the bootstrap summary', () => {
+  it('renders determinate fundamentals progress from the primary market activity row', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -169,8 +124,6 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Fundamentals Refresh',
           progress_mode: 'determinate',
           percent: 40,
-          current: 400,
-          total: 1000,
           message: 'Refreshing fundamentals',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -202,12 +155,12 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('40%')).toBeInTheDocument();
-    expect(screen.getByText('400 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('75%')).toBeInTheDocument();
+    expect(screen.getByText('750 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getByText('Fundamentals Refresh')).toBeInTheDocument();
   });
 
-  it('does not derive bootstrap summary percent from counts when percent is absent', () => {
+  it('derives stage-local bootstrap percent from counts when percent is absent', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -215,8 +168,6 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
           percent: null,
-          current: 250,
-          total: 1000,
           message: 'Refreshing prices',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -248,12 +199,12 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.queryByText('25%')).not.toBeInTheDocument();
-    expect(screen.getByText('250 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('55%')).toBeInTheDocument();
+    expect(screen.getByText('550 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
   });
 
-  it('does not override backend indeterminate progress with market row counts', () => {
+  it('derives stage-local progress from counts even when progress_mode is stale', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -292,11 +243,11 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.queryByText('55%')).not.toBeInTheDocument();
-    expect(screen.queryByText('550 / 1,000 stocks')).not.toBeInTheDocument();
+    expect(screen.getByText('55%')).toBeInTheDocument();
+    expect(screen.getByText('550 / 1,000 stocks')).toBeInTheDocument();
   });
 
-  it('keeps bootstrap progress independent from market-row stage labels', () => {
+  it('uses stage_key instead of the display label to unlock primary-market stage progress', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -304,8 +255,6 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Refreshing market data',
           progress_mode: 'determinate',
           percent: 30,
-          current: 300,
-          total: 1000,
           message: 'Batch 2/4 · refreshing prices',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -337,12 +286,12 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('30%')).toBeInTheDocument();
-    expect(screen.getByText('300 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('55%')).toBeInTheDocument();
+    expect(screen.getByText('550 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
   });
 
-  it('uses the bootstrap summary message instead of replacing it from market rows', () => {
+  it('prefers the primary market activity message over the bootstrap summary when stage-local progress is active', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -381,7 +330,8 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('Preparing bootstrap')).toBeInTheDocument();
+    expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Preparing bootstrap')).not.toBeInTheDocument();
   });
 
   it('keeps bootstrap percent sourced from a complete tuple', () => {
@@ -425,23 +375,20 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.queryByText('55%')).not.toBeInTheDocument();
+    expect(screen.getByText('55%')).toBeInTheDocument();
     expect(screen.queryByText('25%')).not.toBeInTheDocument();
-    expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
-  it('uses backend stage-weighted secondary bootstrap progress after the primary market completes', () => {
+  it('uses the active secondary market for stage-local progress after the primary market completes', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
           primary_market: 'US',
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
-          percent: 22,
-          current: 1200,
-          total: 3750,
-          message: 'Refreshing market prices',
-          background_warning: 'Additional enabled markets are still loading in the background.',
+          percent: 100,
+          message: 'Primary market is ready while additional market loading continues.',
+          background_warning: 'Bootstrap remains active until every enabled market has a published scan.',
         },
         markets: [
           {
@@ -482,77 +429,10 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('22%')).toBeInTheDocument();
+    expect(screen.getByText('32%')).toBeInTheDocument();
     expect(screen.getByText('1,200 / 3,750 stocks')).toBeInTheDocument();
     expect(screen.queryByText('100%')).not.toBeInTheDocument();
     expect(screen.getAllByText(/Refreshing market prices/).length).toBeGreaterThan(0);
-  });
-
-  it('does not synthesize queued market rows when runtime activity has no markets', () => {
-    useRuntimeActivityMock.mockReturnValue({
-      data: {
-        bootstrap: {
-          primary_market: 'US',
-          current_stage: 'Preparing bootstrap',
-          progress_mode: 'indeterminate',
-          percent: null,
-          message: 'Bootstrap queued.',
-          background_warning: null,
-        },
-        markets: [],
-      },
-    });
-
-    renderWithProviders(
-      <BootstrapSetupScreen
-        primaryMarket="US"
-        enabledMarkets={['US', 'HK']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
-        bootstrapState="running"
-        isStartingBootstrap={false}
-        bootstrapError={null}
-        onStartBootstrap={vi.fn()}
-      />
-    );
-
-    expect(screen.queryByText('Enabled market queue')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Waiting for bootstrap task/)).not.toBeInTheDocument();
-  });
-
-  it('renders bootstrap order from runtime activity stage metadata', () => {
-    useRuntimeActivityMock.mockReturnValue({
-      data: {
-        bootstrap: {
-          primary_market: 'US',
-          current_stage: 'Preparing bootstrap',
-          progress_mode: 'indeterminate',
-          percent: null,
-          message: 'Bootstrap queued.',
-          background_warning: null,
-          stages: [
-            { key: 'seed', label: 'Seed Import' },
-            { key: 'top_up', label: 'Live Top-Up' },
-          ],
-        },
-        markets: [],
-      },
-    });
-
-    renderWithProviders(
-      <BootstrapSetupScreen
-        primaryMarket="US"
-        enabledMarkets={['US']}
-        supportedMarkets={['US']}
-        bootstrapState="not_started"
-        isStartingBootstrap={false}
-        bootstrapError={null}
-        onStartBootstrap={vi.fn()}
-      />
-    );
-
-    expect(screen.getByText('1. Seed Import')).toBeInTheDocument();
-    expect(screen.getByText('2. Live Top-Up')).toBeInTheDocument();
-    expect(screen.queryByText('1. Universe refresh')).not.toBeInTheDocument();
   });
 
   it('renders Market Catalog labels while submitting Market codes', () => {

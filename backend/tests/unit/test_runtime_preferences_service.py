@@ -52,7 +52,7 @@ def test_non_empty_resume_state_does_not_require_bootstrap(monkeypatch):
     assert status.bootstrap_state == "not_started"
 
 
-def test_running_bootstrap_becomes_ready_when_primary_market_has_scan(monkeypatch):
+def test_running_bootstrap_stays_required_until_all_enabled_markets_have_scans(monkeypatch):
     from app.services import runtime_preferences_service as module
 
     prefs = module.RuntimePreferences(
@@ -78,11 +78,11 @@ def test_running_bootstrap_becomes_ready_when_primary_market_has_scan(monkeypatc
     status = module.get_runtime_bootstrap_status(object())
 
     assert status.empty_system is False
-    assert status.bootstrap_required is False
-    assert status.bootstrap_state == "ready"
+    assert status.bootstrap_required is True
+    assert status.bootstrap_state == "running"
 
 
-def test_failed_bootstrap_stays_required_until_primary_market_has_scan(monkeypatch):
+def test_failed_bootstrap_stays_required_until_all_enabled_markets_have_scans(monkeypatch):
     from app.services import runtime_preferences_service as module
 
     prefs = module.RuntimePreferences(
@@ -99,7 +99,7 @@ def test_failed_bootstrap_stays_required_until_primary_market_has_scan(monkeypat
             module,
             empty_system=False,
             market_results=[
-                ("US", True, False),
+                ("US", True, True),
                 ("HK", True, False),
             ],
         ),
@@ -112,7 +112,7 @@ def test_failed_bootstrap_stays_required_until_primary_market_has_scan(monkeypat
     assert status.bootstrap_state == "failed"
 
 
-def test_bootstrap_ready_does_not_wait_for_secondary_market_scans(monkeypatch):
+def test_bootstrap_ready_requires_completed_auto_scans_for_every_enabled_market(monkeypatch):
     from app.services import runtime_preferences_service as module
 
     prefs = module.RuntimePreferences(
@@ -130,7 +130,7 @@ def test_bootstrap_ready_does_not_wait_for_secondary_market_scans(monkeypatch):
             empty_system=False,
             market_results=[
                 ("US", True, True),
-                ("HK", True, False),
+                ("HK", True, True),
             ],
         ),
     )
@@ -170,8 +170,8 @@ def test_bootstrap_status_uses_readiness_service(monkeypatch):
     status = module.get_runtime_bootstrap_status(db)
 
     assert calls == [(db, ["US", "HK"], None)]
-    assert status.bootstrap_required is False
-    assert status.bootstrap_state == "ready"
+    assert status.bootstrap_required is True
+    assert status.bootstrap_state == "running"
 
 
 def test_bootstrap_status_passes_bootstrap_start_boundary_to_readiness(monkeypatch):

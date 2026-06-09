@@ -197,66 +197,6 @@ def test_fetch_price_batch_with_retries_uses_in_market_backoff(monkeypatch):
     assert sleeps == [60, 120, 240]
 
 
-def test_fetch_price_batch_with_retries_does_not_retry_permanent_no_data(monkeypatch):
-    fetcher = BulkDataFetcher()
-    calls: list[list[str]] = []
-    sleeps: list[float] = []
-    symbols = ["0143.T", "0194.T", "0190.T"]
-
-    def fake_fetch_batch_prices(batch_symbols, period="2y"):
-        calls.append(list(batch_symbols))
-        return {
-            symbol: {
-                "symbol": symbol,
-                "price_data": None,
-                "info": None,
-                "fundamentals": None,
-                "has_error": True,
-                "error": "YFPricesMissingError('possibly delisted; no price data found')",
-            }
-            for symbol in batch_symbols
-        }
-
-    monkeypatch.setattr(fetcher, "fetch_batch_prices", fake_fetch_batch_prices)
-    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", lambda seconds: sleeps.append(seconds))
-
-    results = fetcher._fetch_price_batch_with_retries(
-        symbols,
-        period="2y",
-        initial_batch_size=50,
-        market="JP",
-    )
-
-    assert calls == [symbols]
-    assert sleeps == []
-    assert set(results) == set(symbols)
-
-
-def test_fetch_batch_prices_tags_yfinance_missing_price_errors(monkeypatch):
-    import app.services.bulk_data_fetcher as module
-
-    symbols = ["0143.T", "0194.T"]
-    monkeypatch.setattr(module.yf.shared, "_ERRORS", {}, raising=False)
-
-    def fake_download(**kwargs):
-        assert kwargs["tickers"] == symbols
-        module.yf.shared._ERRORS.update(
-            {
-                "0143.T": "YFPricesMissingError('possibly delisted; no price data found')",
-                "0194.T": 'No data found, symbol may be delisted',
-            }
-        )
-        return pd.DataFrame()
-
-    monkeypatch.setattr(module.yf, "download", fake_download)
-
-    results = BulkDataFetcher().fetch_batch_prices(symbols, period="2y")
-
-    assert results["0143.T"]["error_kind"] == "no_price_data"
-    assert "possibly delisted" in results["0143.T"]["error"]
-    assert results["0194.T"]["error_kind"] == "no_price_data"
-
-
 def test_fetch_price_batch_with_retries_keeps_legacy_schedule_without_market():
     """When no market is supplied (legacy shared callers), the retry schedule
     stays at the original 30/60/120s so we don't slow down code paths that

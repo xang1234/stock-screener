@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
@@ -169,7 +168,6 @@ class FXService:
 
     REDIS_KEY_FORMAT = "fx:{source_currency}:USD"
     REDIS_TTL_SECONDS = 24 * 60 * 60  # 24h — FX rates are slow-moving
-    STALE_FETCH_RETRY_COOLDOWN_SECONDS = 15 * 60
 
     SOURCE_IDENTITY = "identity"
     SOURCE_YFINANCE = "yfinance"
@@ -200,7 +198,6 @@ class FXService:
         # In-process cache: avoids re-hitting Redis for the same currency
         # within a single batch refresh.
         self._memo: Dict[str, FXQuote] = {}
-        self._stale_fallback_retry_after: Dict[str, Tuple[FXQuote, float, date]] = {}
 
     # --- Public API --------------------------------------------------------
 
@@ -236,7 +233,6 @@ class FXService:
             today=today,
             latest_close=latest_close,
         ):
-            self._stale_fallback_retry_after.pop(currency, None)
             return memoed
         if memoed is not None:
             stale_quote = memoed
@@ -250,7 +246,6 @@ class FXService:
                 latest_close=latest_close,
             ):
                 self._memo[currency] = quote
-                self._stale_fallback_retry_after.pop(currency, None)
                 return quote
             stale_quote = quote
 
@@ -263,16 +258,10 @@ class FXService:
                 latest_close=latest_close,
             ):
                 self._memo[currency] = quote
-                self._stale_fallback_retry_after.pop(currency, None)
                 self._write_redis(quote)
                 return quote
             if stale_quote is None or quote.as_of_date > stale_quote.as_of_date:
                 stale_quote = quote
-
-        if stale_quote is not None:
-            suppressed_quote = self._retry_suppressed_stale_quote(currency, latest_close)
-            if suppressed_quote is not None:
-                return suppressed_quote
 
         # 4. Upstream fetch
         fetched = self._rate_fetcher(currency)
@@ -286,11 +275,6 @@ class FXService:
                     stale_quote.as_of_date,
                 )
                 self._memo[currency] = stale_quote
-                self._stale_fallback_retry_after[currency] = (
-                    stale_quote,
-                    time.monotonic() + self.STALE_FETCH_RETRY_COOLDOWN_SECONDS,
-                    latest_close,
-                )
                 self._write_redis(stale_quote)
                 return stale_quote
             logger.warning(
@@ -301,7 +285,6 @@ class FXService:
         self._persist_database(quote)
         self._write_redis(quote)
         self._memo[currency] = quote
-        self._stale_fallback_retry_after.pop(currency, None)
         return quote
 
     @staticmethod
@@ -319,28 +302,8 @@ class FXService:
         today: date,
         latest_close: date,
     ) -> bool:
-        """Treat the latest close, today's quote, or a near-future local-market date as fresh."""
-        if quote_date == today or quote_date == latest_close:
-            return True
-        # Celery containers may run in UTC while Asian market data providers
-        # stamp quotes in local exchange dates. A quote one calendar day ahead
-        # of the process date is fresh for the bootstrap; refetching it for
-        # every row only burns Yahoo quota.
-        return latest_close <= quote_date <= today + timedelta(days=1)
-
-    def _retry_suppressed_stale_quote(
-        self,
-        currency: str,
-        latest_close: date,
-    ) -> Optional[FXQuote]:
-        entry = self._stale_fallback_retry_after.get(currency)
-        if entry is None:
-            return None
-        quote, retry_after, retry_close = entry
-        if retry_close != latest_close or time.monotonic() >= retry_after:
-            self._stale_fallback_retry_after.pop(currency, None)
-            return None
-        return quote
+        """Treat either today's quote or latest trading close as fresh."""
+        return quote_date == today or quote_date == latest_close
 
     def convert_to_usd(
         self,

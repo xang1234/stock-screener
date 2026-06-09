@@ -50,28 +50,6 @@ def _postgres_recovery_error() -> OperationalError:
     )
 
 
-def _live_price_refresh_plan(symbol: str = "AAPL"):
-    from app.services.price_refresh_planning import (
-        NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
-        PriceRefreshJob,
-        PriceRefreshJobKind,
-        PriceRefreshPlan,
-    )
-
-    return PriceRefreshPlan(
-        symbols=(symbol,),
-        jobs=(
-            PriceRefreshJob(
-                kind=PriceRefreshJobKind.FULL,
-                symbols=(symbol,),
-                period=NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
-            ),
-        ),
-        all_symbols=(symbol,),
-        symbol_markets={symbol: "US"},
-    )
-
-
 @pytest_asyncio.fixture
 async def client():
     transport = httpx.ASGITransport(app=app)
@@ -140,7 +118,6 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     monkeypatch.setattr(module, "get_eastern_now", lambda: SimpleNamespace(weekday=lambda: 6, hour=2, date=lambda: date(2026, 3, 22)))
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
-    monkeypatch.setattr(module, "build_market_price_refresh_plan", lambda *args, **kwargs: _live_price_refresh_plan())
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_price_cache",
@@ -154,42 +131,6 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
     fake_price_cache.save_warmup_metadata.assert_called_once()
     fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed", market=None)
     fake_db.close.assert_called_once()
-
-
-def test_smart_refresh_cache_delegates_to_price_refresh_workflow(monkeypatch):
-    import app.tasks.cache_tasks as module
-
-    delegated_calls = []
-
-    def _run_workflow(*, task, mode, market, activity_lifecycle):
-        delegated_calls.append(
-            {
-                "task": task,
-                "mode": mode,
-                "market": market,
-                "activity_lifecycle": activity_lifecycle,
-            }
-        )
-        return {"status": "completed", "mode": mode, "market": market}
-
-    monkeypatch.setattr(module, "run_smart_price_refresh", _run_workflow)
-
-    result = module.smart_refresh_cache.run.__wrapped__(
-        module.smart_refresh_cache,
-        mode="bootstrap",
-        market="HK",
-        activity_lifecycle="bootstrap",
-    )
-
-    assert result == {"status": "completed", "mode": "bootstrap", "market": "HK"}
-    assert delegated_calls == [
-        {
-            "task": module.smart_refresh_cache,
-            "mode": "bootstrap",
-            "market": "HK",
-            "activity_lifecycle": "bootstrap",
-        }
-    ]
 
 
 def test_smart_refresh_cache_allows_in_process_bypass_outside_time_window(monkeypatch):
@@ -276,7 +217,6 @@ def test_smart_refresh_cache_publishes_failed_market_activity(monkeypatch):
         lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
     )
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=RuntimeError("benchmark unavailable")))
-    monkeypatch.setattr(module, "build_market_price_refresh_plan", lambda *args, **kwargs: _live_price_refresh_plan())
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_price_cache",
         lambda: fake_price_cache,
@@ -314,7 +254,6 @@ def test_smart_refresh_cache_retries_transient_database_errors_from_task_body(mo
         lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
     )
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=_postgres_recovery_error()))
-    monkeypatch.setattr(module, "build_market_price_refresh_plan", lambda *args, **kwargs: _live_price_refresh_plan())
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_price_cache",
@@ -346,7 +285,7 @@ def test_smart_refresh_cache_retries_transient_database_errors_from_task_body(mo
     fake_lock.release.assert_called_once_with("task-123", market=None)
     fake_coordination.release_external_fetch.assert_called_once_with("task-123")
     fake_coordination.release_market_workload.assert_called_once_with("task-123", market=None)
-    module.safe_rollback.assert_called_once_with(fake_db)
+    module.safe_rollback.assert_not_called()
 
 
 def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
@@ -363,7 +302,6 @@ def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
     fake_lock = MagicMock()
     bulk_fetcher = MagicMock()
     progress_updates: list[dict] = []
-    fetch_batches: list[tuple[str, ...]] = []
 
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
@@ -403,11 +341,14 @@ def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
         lambda: SimpleNamespace(wait_for_market=lambda *args, **kwargs: None, wait=lambda *args, **kwargs: None),
     )
     monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
-    def _fetch_with_backoff(_fetcher, batch_symbols, **kwargs):
-        fetch_batches.append(tuple(batch_symbols))
-        return {symbol: _success_result(symbol) for symbol in batch_symbols}
-
-    monkeypatch.setattr(module, "_fetch_with_backoff", _fetch_with_backoff)
+    monkeypatch.setattr(
+        module,
+        "_fetch_with_backoff",
+        lambda _fetcher, batch_symbols, **kwargs: {
+            symbol: _success_result(symbol)
+            for symbol in batch_symbols
+        },
+    )
     monkeypatch.setattr(
         module,
         "mark_market_activity_progress",
@@ -423,101 +364,14 @@ def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
     assert progress_updates[0]["current"] == 0
     assert progress_updates[0]["total"] == 101
     assert progress_updates[0]["percent"] == 0
-    assert len(fetch_batches) == 1
-    assert len(fetch_batches[0]) == 101
-    assert any(update["message"] == "Batch 1/1 · refreshing prices" for update in progress_updates)
+    assert any(update["message"] == "Batch 1/2 · refreshing prices" for update in progress_updates)
+    assert any(update["message"] == "Batch 2/2 · refreshing prices" for update in progress_updates)
     assert progress_updates[-1]["current"] == 101
     assert progress_updates[-1]["total"] == 101
     assert progress_updates[-1]["percent"] == pytest.approx(100.0)
 
 
-def test_smart_refresh_cache_failure_records_delegated_batch_progress(monkeypatch):
-    import app.tasks.cache_tasks as module
-
-    fake_db = MagicMock()
-    symbols = [SimpleNamespace(symbol=f"SYM{i}") for i in range(101)]
-    fake_query = MagicMock()
-    fake_query.filter.return_value.filter.return_value.order_by.return_value.all.return_value = symbols
-    fake_query.filter.return_value.order_by.return_value.all.return_value = symbols
-    fake_db.query.return_value = fake_query
-
-    fake_price_cache = MagicMock()
-    fake_lock = MagicMock()
-    bulk_fetcher = MagicMock()
-    progress_updates: list[dict] = []
-    failures: list[dict] = []
-    fetch_calls = 0
-
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
-    )
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_price_cache",
-        lambda: fake_price_cache,
-    )
-    monkeypatch.setattr(
-        module,
-        "get_daily_price_bundle_service",
-        lambda: SimpleNamespace(sync_from_github=lambda *_args, **_kwargs: {"status": "missing"}),
-    )
-    monkeypatch.setattr(
-        "app.services.bulk_data_fetcher.BulkDataFetcher",
-        lambda: bulk_fetcher,
-    )
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_data_fetch_lock",
-        lambda: fake_lock,
-    )
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_rate_limiter",
-        lambda: SimpleNamespace(wait_for_market=lambda *args, **kwargs: None, wait=lambda *args, **kwargs: None),
-    )
-    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
-
-    def _fetch_with_backoff(_fetcher, batch_symbols, **kwargs):
-        nonlocal fetch_calls
-        fetch_calls += 1
-        raise SoftTimeLimitExceeded()
-
-    monkeypatch.setattr(module, "_fetch_with_backoff", _fetch_with_backoff)
-    monkeypatch.setattr(
-        module,
-        "mark_market_activity_progress",
-        lambda *args, **kwargs: progress_updates.append(kwargs),
-    )
-    monkeypatch.setattr(
-        module,
-        "mark_market_activity_failed",
-        lambda *args, **kwargs: failures.append(kwargs),
-    )
-    monkeypatch.setattr(module.smart_refresh_cache, "update_state", lambda *args, **kwargs: None)
-
-    with pytest.raises(SoftTimeLimitExceeded):
-        module.smart_refresh_cache.run.__wrapped__(
-            module.smart_refresh_cache,
-            "full",
-            market="US",
-            activity_lifecycle="bootstrap",
-        )
-
-    assert fetch_calls == 1
-    assert progress_updates[-1]["current"] == 0
-    fake_price_cache.save_warmup_metadata.assert_called_once_with(
-        "failed",
-        0,
-        101,
-        "Soft time limit exceeded",
-        market="US",
-    )
-    assert failures[-1]["current"] == 0
-    assert failures[-1]["total"] == 101
-
-
-def test_smart_refresh_cache_delta_prefers_github_daily_bundle_and_skips_live_fetch(monkeypatch):
+def test_smart_refresh_cache_prefers_github_daily_bundle_and_skips_live_fetch(monkeypatch):
     import app.tasks.cache_tasks as module
 
     fake_db = MagicMock()
@@ -547,49 +401,14 @@ def test_smart_refresh_cache_delta_prefers_github_daily_bundle_and_skips_live_fe
         module,
         "get_daily_price_bundle_service",
         lambda: SimpleNamespace(
-            sync_from_github=lambda db, market, warm_redis_symbols=None, allow_stale=False: {
+            sync_from_github=lambda db, market, warm_redis_symbols=None: {
                 "status": "success",
                 "source": "github",
                 "market": market,
                 "as_of_date": "2026-04-21",
                 "source_revision": "daily_prices_us:20260421120000",
             },
-        ),
-    )
-
-    def _build_market_price_refresh_plan(db, **kwargs):
-        from app.services.price_refresh_planning import (
-            GitHubSeedOutcome,
-            PriceRefreshPlan,
-            PriceRefreshSource,
-        )
-
-        github_seed = GitHubSeedOutcome.from_mapping(
-            kwargs["sync_github_seed"](
-                db,
-                market=kwargs["effective_market"],
-                allow_stale=True,
-            )
-        )
-        assert github_seed.status.value == "success"
-        assert kwargs["mode"] == "delta"
-        plan = PriceRefreshPlan(
-            symbols=(),
-            jobs=(),
-            all_symbols=("AAPL", "MSFT"),
-            github_seed=github_seed,
-            github_seed_used=True,
-            completion_message="GitHub daily price bundle is current - no live fetch needed",
-        )
-        assert plan.source is PriceRefreshSource.GITHUB
-        return plan
-
-    monkeypatch.setattr(module, "build_market_price_refresh_plan", _build_market_price_refresh_plan)
-    monkeypatch.setattr(
-        module,
-        "get_market_calendar_service",
-        lambda: SimpleNamespace(
-            last_completed_trading_day=lambda market: date(2026, 4, 21)
+            symbols_missing_as_of=lambda db, symbols, as_of_date: [],
         ),
     )
 
@@ -599,7 +418,7 @@ def test_smart_refresh_cache_delta_prefers_github_daily_bundle_and_skips_live_fe
     monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
 
     result = module.smart_refresh_cache.run.__wrapped__(
-        module.smart_refresh_cache, "delta", market="US"
+        module.smart_refresh_cache, "full", market="US"
     )
 
     assert result["status"] == "completed"
@@ -758,6 +577,7 @@ def test_bootstrap_explicit_market_smart_refresh_uses_github_seed(monkeypatch):
         "as_of_date": "2026-03-24",
         "source_revision": "sha-123",
     }
+    github_service.symbols_missing_as_of.return_value = []
     retry_calls = []
 
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
@@ -768,35 +588,6 @@ def test_bootstrap_explicit_market_smart_refresh_uses_github_seed(monkeypatch):
     )
     monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
     monkeypatch.setattr(module, "get_daily_price_bundle_service", lambda: github_service)
-
-    def _build_market_price_refresh_plan(db, **kwargs):
-        from app.services.price_refresh_planning import (
-            GitHubSeedOutcome,
-            PriceRefreshPlan,
-            PriceRefreshSource,
-        )
-
-        github_seed = GitHubSeedOutcome.from_mapping(
-            kwargs["sync_github_seed"](
-                db,
-                market=kwargs["effective_market"],
-                allow_stale=True,
-            )
-        )
-        assert github_seed.status.value == "success"
-        assert kwargs["mode"] == "bootstrap"
-        plan = PriceRefreshPlan(
-            symbols=(),
-            jobs=(),
-            all_symbols=("0700.HK", "0005.HK"),
-            github_seed=github_seed,
-            github_seed_used=True,
-            completion_message="GitHub daily price bundle is current - no live fetch needed",
-        )
-        assert plan.source is PriceRefreshSource.GITHUB
-        return plan
-
-    monkeypatch.setattr(module, "build_market_price_refresh_plan", _build_market_price_refresh_plan)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
     monkeypatch.setattr(
@@ -821,17 +612,18 @@ def test_bootstrap_explicit_market_smart_refresh_uses_github_seed(monkeypatch):
 
     result = module.smart_refresh_cache.run.__wrapped__(
         module.smart_refresh_cache,
-        mode="bootstrap",
+        mode="full",
         market="HK",
         activity_lifecycle="bootstrap",
     )
 
     assert result["status"] == "completed"
     assert result["source"] == "github"
-    github_service.sync_from_github.assert_called_once_with(
+    github_service.sync_from_github.assert_called_once_with(fake_db, market="HK")
+    github_service.symbols_missing_as_of.assert_called_once_with(
         fake_db,
-        market="HK",
-        allow_stale=True,
+        symbols=["0700.HK", "0005.HK"],
+        as_of_date="2026-03-24",
     )
     assert retry_calls == []
 
@@ -951,112 +743,6 @@ def test_failed_price_retry_preserves_bootstrap_retry_delay(monkeypatch):
     ]
 
 
-def test_failed_price_retry_does_not_reschedule_permanent_no_data(monkeypatch):
-    import app.tasks.cache_tasks as module
-
-    fake_price_cache = MagicMock()
-    retry_calls = []
-
-    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
-    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
-    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        module,
-        "_fetch_with_backoff",
-        lambda _fetcher, batch_symbols, **kwargs: {
-            symbol: {
-                "has_error": True,
-                "error": "Provider returned no usable rows",
-                "error_kind": "no_price_data",
-                "price_data": None,
-            }
-            for symbol in batch_symbols
-        },
-    )
-    monkeypatch.setattr(
-        module,
-        "_schedule_failed_symbol_retry",
-        lambda symbols, *, market, attempt, countdown=600: retry_calls.append(
-            {"symbols": symbols, "market": market, "attempt": attempt, "countdown": countdown}
-        ),
-    )
-
-    result = module.retry_failed_price_symbols.run.__wrapped__(
-        module.retry_failed_price_symbols,
-        symbols=["0143.T"],
-        market="JP",
-        attempt=1,
-        retry_countdown=30,
-    )
-
-    assert result["status"] == "partial"
-    assert result["failed_symbols"] == ["0143.T"]
-    assert retry_calls == []
-
-
-def test_failed_price_retry_uses_shared_batch_classifier(monkeypatch):
-    from collections import Counter
-
-    import app.tasks.cache_tasks as module
-    from app.services.price_refresh_execution import PriceRefreshBatchOutcome
-
-    fake_price_cache = MagicMock()
-    classifier_calls = []
-    price_frame = _price_df(date(2026, 3, 20), 150.0)
-
-    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
-    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
-    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        module,
-        "_fetch_with_backoff",
-        lambda _fetcher, batch_symbols, **kwargs: {
-            symbol: {
-                "has_error": False,
-                "error": None,
-                "price_data": price_frame,
-            }
-            for symbol in batch_symbols
-        },
-    )
-
-    def _classify_price_refresh_batch(**kwargs):
-        classifier_calls.append(kwargs)
-        return PriceRefreshBatchOutcome(
-            batch_number=kwargs["batch_number"],
-            total_batches=kwargs["total_batches"],
-            job=kwargs["job"],
-            symbols=tuple(kwargs["symbols"]),
-            price_data_by_symbol={"AAPL": price_frame},
-            successes=("AAPL",),
-            failures=(),
-            failure_details={},
-            failure_kinds={},
-            refreshed_by_market=Counter({"US": 1}),
-            failed_by_market=Counter(),
-        )
-
-    monkeypatch.setattr(module, "classify_price_refresh_batch", _classify_price_refresh_batch)
-
-    result = module.retry_failed_price_symbols.run.__wrapped__(
-        module.retry_failed_price_symbols,
-        symbols=["aapl"],
-        market="US",
-        attempt=1,
-        retry_countdown=30,
-    )
-
-    assert result["status"] == "completed"
-    assert result["refreshed"] == 1
-    assert len(classifier_calls) == 1
-    assert classifier_calls[0]["symbols"] == ("AAPL",)
-    assert classifier_calls[0]["batch_results"]["AAPL"]["price_data"] is price_frame
-    fake_price_cache.store_batch_in_cache.assert_called_once_with(
-        {"AAPL": price_frame},
-        also_store_db=True,
-    )
-
-
 def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
     import app.tasks.cache_tasks as module
 
@@ -1069,7 +755,6 @@ def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
         lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
     )
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=RuntimeError("benchmark unavailable")))
-    monkeypatch.setattr(module, "build_market_price_refresh_plan", lambda *args, **kwargs: _live_price_refresh_plan())
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_price_cache",

@@ -247,22 +247,20 @@ def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
     empty_system = readiness.empty_system
 
     bootstrap_state = prefs.bootstrap_state
-    readiness_active = bootstrap_state in {"running", "ready", "failed"}
-    primary_result = readiness.market_results.get(prefs.primary_market)
-    primary_market_ready = (
-        bool(primary_result and primary_result.ready)
-        if readiness_active
+    all_markets_ready = (
+        readiness.ready
+        if bootstrap_state in {"running", "ready", "failed"}
         else False
     )
-    if primary_market_ready:
+    if all_markets_ready:
         bootstrap_state = "ready"
     elif empty_system and bootstrap_state == "ready":
         bootstrap_state = "not_started"
-    elif bootstrap_state == "ready" and not primary_market_ready:
+    elif bootstrap_state == "ready" and not all_markets_ready:
         bootstrap_state = "running"
 
     bootstrap_required = empty_system or (
-        bootstrap_state in {"running", "failed"} and not primary_market_ready
+        bootstrap_state in {"running", "failed"} and not all_markets_ready
     )
 
     return RuntimeBootstrapStatus(

@@ -25,7 +25,6 @@ from app.services.market_activity_service import (
     MARKET_ACTIVITY_KEY_PREFIX,
     RUNTIME_ACTIVITY_CATEGORY,
 )
-from app.services.runtime_activity_contract import progress_mode
 from app.services.ui_snapshot_service import safe_publish_scan_bootstrap
 from app.tasks.market_queues import (
     SHARED_DATA_FETCH_QUEUE,
@@ -207,6 +206,14 @@ def _cancel_strategy_for(record: _JobRecord) -> str:
     ):
         return "force_release_market_lease"
     return "unsupported"
+
+
+def _progress_mode(percent: float | None, current: int | None, total: int | None) -> str:
+    if percent is not None:
+        return "determinate"
+    if current is not None and total is not None:
+        return "determinate"
+    return "indeterminate"
 
 
 def _market_lease_state(holder: dict[str, Any]) -> tuple[str, float | None]:
@@ -494,12 +501,7 @@ class OperationsJobService:
             wait_reason=None,
             heartbeat_lag_seconds=heartbeat_lag,
             cancel_strategy="force_cancel_refresh" if state == "stuck" else "unsupported",
-            progress_mode=progress_mode(
-                state,
-                current_task.get("progress"),
-                current_task.get("current"),
-                current_task.get("total"),
-            ),
+            progress_mode=_progress_mode(current_task.get("progress"), current_task.get("current"), current_task.get("total")),
             percent=current_task.get("progress"),
             current=current_task.get("current"),
             total=current_task.get("total"),
@@ -542,12 +544,7 @@ class OperationsJobService:
             wait_reason=None,
             heartbeat_lag_seconds=None,
             cancel_strategy="unsupported",
-            progress_mode=progress_mode(
-                state,
-                runtime_record.get("percent"),
-                runtime_record.get("current"),
-                runtime_record.get("total"),
-            ),
+            progress_mode=_progress_mode(runtime_record.get("percent"), runtime_record.get("current"), runtime_record.get("total")),
             percent=runtime_record.get("percent"),
             current=runtime_record.get("current"),
             total=runtime_record.get("total"),
@@ -568,8 +565,7 @@ class OperationsJobService:
             record.current = runtime_record.get("current")
         if runtime_record.get("total") is not None:
             record.total = runtime_record.get("total")
-        record.progress_mode = progress_mode(
-            record.state,
+        record.progress_mode = _progress_mode(
             record.percent,
             record.current,
             record.total,
@@ -593,12 +589,7 @@ class OperationsJobService:
             record.current = snapshot.current
         if record.total is None and getattr(snapshot, "total", None) is not None:
             record.total = snapshot.total
-        record.progress_mode = progress_mode(
-            record.state,
-            record.percent,
-            record.current,
-            record.total,
-        )
+        record.progress_mode = _progress_mode(record.percent, record.current, record.total)
 
     def _apply_heartbeat_progress(self, record: _JobRecord) -> None:
         if _queue_family(record.queue) != "data_fetch" or record.market is None:
@@ -615,12 +606,7 @@ class OperationsJobService:
             record.current = current_task.get("current")
         if record.total is None and current_task.get("total") is not None:
             record.total = current_task.get("total")
-        record.progress_mode = progress_mode(
-            record.state,
-            record.percent,
-            record.current,
-            record.total,
-        )
+        record.progress_mode = _progress_mode(record.percent, record.current, record.total)
 
     def _augment_with_runtime_activity(
         self,
@@ -695,12 +681,7 @@ class OperationsJobService:
                 wait_reason=None,
                 heartbeat_lag_seconds=None,
                 cancel_strategy="unsupported",
-                progress_mode=progress_mode(
-                    state,
-                    runtime_record.get("percent"),
-                    runtime_record.get("current"),
-                    runtime_record.get("total"),
-                ),
+                progress_mode=_progress_mode(runtime_record.get("percent"), runtime_record.get("current"), runtime_record.get("total")),
                 percent=runtime_record.get("percent"),
                 current=runtime_record.get("current"),
                 total=runtime_record.get("total"),

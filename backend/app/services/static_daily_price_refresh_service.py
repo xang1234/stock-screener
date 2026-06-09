@@ -5,18 +5,16 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Callable
 
+from sqlalchemy import func
+
+from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.bulk_data_fetcher import BulkDataFetcher
-from app.services.price_history_coverage import classify_price_history
-from app.services.price_refresh_planning import (
-    NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
-    STALE_PRICE_TOP_UP_PERIOD,
-)
 from app.utils.symbol_support import split_supported_price_symbols
 
 
-STATIC_DAILY_PRICE_REFRESH_PERIOD = STALE_PRICE_TOP_UP_PERIOD
-STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD = NO_HISTORY_PRICE_BOOTSTRAP_PERIOD
+STATIC_DAILY_PRICE_REFRESH_PERIOD = "7d"
+STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD = "2y"
 STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE = 250
 
 # Markets where Yahoo's 429 backoff windows are long enough that a single
@@ -84,15 +82,29 @@ class StaticDailyPriceRefreshService:
                 query = query.filter(StockUniverse.market == market)
             active_symbols = [symbol for symbol, in query.all()]
             supported_symbols, skipped_symbols = split_supported_price_symbols(active_symbols)
-            coverage = classify_price_history(
-                db,
-                symbols=supported_symbols,
-                as_of_date=as_of_date,
+            latest_rows = (
+                db.query(StockPrice.symbol, func.max(StockPrice.date))
+                .filter(StockPrice.symbol.in_(supported_symbols))
+                .group_by(StockPrice.symbol)
+                .all()
             )
 
-        db_fresh_symbols = list(coverage.fresh)
-        stale_symbols = list(coverage.stale)
-        no_history_symbols = list(coverage.no_history)
+        latest_by_symbol = {symbol: latest_date for symbol, latest_date in latest_rows}
+        db_fresh_symbols = [
+            symbol
+            for symbol in supported_symbols
+            if latest_by_symbol.get(symbol) is not None
+            and latest_by_symbol[symbol] >= as_of_date
+        ]
+        stale_symbols = [
+            symbol
+            for symbol in supported_symbols
+            if latest_by_symbol.get(symbol) is not None
+            and latest_by_symbol[symbol] < as_of_date
+        ]
+        no_history_symbols = [
+            symbol for symbol in supported_symbols if symbol not in latest_by_symbol
+        ]
 
         if not stale_symbols and not no_history_symbols:
             print(

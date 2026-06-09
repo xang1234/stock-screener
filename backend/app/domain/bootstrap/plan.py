@@ -14,21 +14,10 @@ class BootstrapQueueKind(str, Enum):
     MARKET_JOBS = "market_jobs"
 
 
-class BootstrapOperation(str, Enum):
-    REFRESH_STOCK_UNIVERSE = "refresh_stock_universe"
-    REFRESH_OFFICIAL_MARKET_UNIVERSE = "refresh_official_market_universe"
-    LOAD_TRACKED_IBD_INDUSTRY_GROUPS = "load_tracked_ibd_industry_groups"
-    SMART_REFRESH_CACHE = "smart_refresh_cache"
-    REFRESH_ALL_FUNDAMENTALS = "refresh_all_fundamentals"
-    CALCULATE_DAILY_BREADTH_WITH_GAPFILL = "calculate_daily_breadth_with_gapfill"
-    CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL = "calculate_daily_group_rankings_with_gapfill"
-    BUILD_DAILY_SNAPSHOT = "build_daily_snapshot"
-
-
 @dataclass(frozen=True)
 class BootstrapStage:
     key: str
-    operation: BootstrapOperation
+    task_name: str
     queue_kind: BootstrapQueueKind
     kwargs: dict[str, Any]
 
@@ -63,14 +52,14 @@ def _normalize_markets(
 def _stage(
     *,
     key: str,
-    operation: BootstrapOperation,
+    task_name: str,
     queue_kind: BootstrapQueueKind,
     market: str,
     **kwargs: Any,
 ) -> BootstrapStage:
     return BootstrapStage(
         key=key,
-        operation=operation,
+        task_name=task_name,
         queue_kind=queue_kind,
         kwargs={"market": market, "activity_lifecycle": "bootstrap", **kwargs},
     )
@@ -80,10 +69,10 @@ def _build_market_plan(market: str) -> MarketBootstrapPlan:
     stages = [
         _stage(
             key="universe",
-            operation=(
-                BootstrapOperation.REFRESH_STOCK_UNIVERSE
+            task_name=(
+                "refresh_stock_universe"
                 if market == "US"
-                else BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE
+                else "refresh_official_market_universe"
             ),
             queue_kind=BootstrapQueueKind.DATA_FETCH,
             market=market,
@@ -94,7 +83,7 @@ def _build_market_plan(market: str) -> MarketBootstrapPlan:
         stages.append(
             _stage(
                 key="industry_groups",
-                operation=BootstrapOperation.LOAD_TRACKED_IBD_INDUSTRY_GROUPS,
+                task_name="load_tracked_ibd_industry_groups",
                 queue_kind=BootstrapQueueKind.MARKET_JOBS,
                 market=market,
             )
@@ -104,32 +93,32 @@ def _build_market_plan(market: str) -> MarketBootstrapPlan:
         [
             _stage(
                 key="prices",
-                operation=BootstrapOperation.SMART_REFRESH_CACHE,
+                task_name="smart_refresh_cache",
                 queue_kind=BootstrapQueueKind.DATA_FETCH,
                 market=market,
-                mode="bootstrap",
+                mode="full",
             ),
             _stage(
                 key="fundamentals",
-                operation=BootstrapOperation.REFRESH_ALL_FUNDAMENTALS,
+                task_name="refresh_all_fundamentals",
                 queue_kind=BootstrapQueueKind.DATA_FETCH,
                 market=market,
             ),
             _stage(
                 key="breadth",
-                operation=BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL,
+                task_name="calculate_daily_breadth_with_gapfill",
                 queue_kind=BootstrapQueueKind.MARKET_JOBS,
                 market=market,
             ),
             _stage(
                 key="groups",
-                operation=BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL,
+                task_name="calculate_daily_group_rankings_with_gapfill",
                 queue_kind=BootstrapQueueKind.MARKET_JOBS,
                 market=market,
             ),
             _stage(
                 key="snapshot",
-                operation=BootstrapOperation.BUILD_DAILY_SNAPSHOT,
+                task_name="build_daily_snapshot",
                 queue_kind=BootstrapQueueKind.MARKET_JOBS,
                 market=market,
                 universe_name=f"market:{market}",

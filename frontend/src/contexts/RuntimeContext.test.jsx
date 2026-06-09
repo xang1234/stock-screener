@@ -191,10 +191,6 @@ describe('RuntimeProvider', () => {
       enabled_markets: ['HK', 'US'],
       bootstrap_state: 'running',
       supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE', 'SG', 'AU', 'MY'],
-      bootstrap_stages: [
-        { key: 'seed', label: 'Seed Import' },
-        { key: 'scan', label: 'First Scan' },
-      ],
       task_id: 'task-bootstrap-123',
     });
 
@@ -221,23 +217,9 @@ describe('RuntimeProvider', () => {
     });
 
     await waitFor(() => {
-      expect(queryClient.getQueryData(['runtimeActivity'])?.bootstrap.stages).toEqual([
-        { key: 'seed', label: 'Seed Import' },
-        { key: 'scan', label: 'First Scan' },
-      ]);
       expect(queryClient.getQueryData(['runtimeActivity'])?.markets).toEqual([
-        expect.objectContaining({
-          market: 'HK',
-          stage_key: 'seed',
-          stage_label: 'Seed Import',
-          task_id: 'task-bootstrap-123',
-        }),
-        expect.objectContaining({
-          market: 'US',
-          stage_key: 'seed',
-          stage_label: 'Seed Import',
-          task_id: null,
-        }),
+        expect.objectContaining({ market: 'HK', task_id: 'task-bootstrap-123' }),
+        expect.objectContaining({ market: 'US', task_id: null }),
       ]);
       expect(queryClient.getQueryData(['appCapabilities'])?.market_catalog).toEqual(
         DEFAULT_CAPABILITIES.market_catalog
