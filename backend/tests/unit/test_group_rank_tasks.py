@@ -1022,7 +1022,7 @@ def test_orchestrator_marks_failed_when_inner_daily_result_has_error(monkeypatch
     failed.assert_called_once()
 
 
-def test_bootstrap_orchestrator_retries_when_inner_daily_warmup_incomplete(monkeypatch):
+def test_bootstrap_orchestrator_marks_failed_when_inner_daily_warmup_incomplete(monkeypatch):
     import app.tasks.group_rank_tasks as module
 
     fake_db = MagicMock()
@@ -1055,37 +1055,17 @@ def test_bootstrap_orchestrator_retries_when_inner_daily_warmup_incomplete(monke
         }),
     )
 
-    retry_calls = []
-
-    def fake_retry(*, exc=None, countdown=None, max_retries=None):
-        retry_calls.append(
-            {
-                "exc": exc,
-                "countdown": countdown,
-                "max_retries": max_retries,
-            }
-        )
-        raise Retry("retry")
-
-    monkeypatch.setattr(module.calculate_daily_group_rankings_with_gapfill, "retry", fake_retry)
-    module.calculate_daily_group_rankings_with_gapfill.request.id = "task-123"
-    module.calculate_daily_group_rankings_with_gapfill.request.retries = 0
-
     failed = MagicMock()
     monkeypatch.setattr(module, "mark_market_activity_failed", failed)
 
-    with pytest.raises(Retry):
-        module.calculate_daily_group_rankings_with_gapfill.run(
-            market="US",
-            activity_lifecycle="bootstrap",
-        )
+    result = module.calculate_daily_group_rankings_with_gapfill.run(
+        market="US",
+        activity_lifecycle="bootstrap",
+    )
 
-    fake_db.rollback.assert_called_once()
-    failed.assert_not_called()
-    assert len(retry_calls) == 1
-    assert "Daily group ranking waiting for cache warmup" in str(retry_calls[0]["exc"])
-    assert retry_calls[0]["countdown"] == 30
-    assert retry_calls[0]["max_retries"] == 120
+    assert result["error"] == "Daily group ranking failed: Cache warmup not complete"
+    assert result["today"]["error"] == "Cache warmup not complete"
+    failed.assert_called_once()
 
 
 def test_orchestrator_reraises_retry_from_inner_daily_call(monkeypatch):

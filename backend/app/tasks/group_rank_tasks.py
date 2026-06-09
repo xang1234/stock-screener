@@ -41,8 +41,6 @@ TAXONOMY_UNAVAILABLE_EXCEPTIONS = (
     MissingIBDIndustryMappingsError,
     TaxonomyLoadError,
 )
-BOOTSTRAP_GROUP_RANK_WARMUP_RETRY_COUNTDOWN_SECONDS = 30
-BOOTSTRAP_GROUP_RANK_WARMUP_MAX_RETRIES = 120
 
 
 class GroupRankReasonCode:
@@ -108,13 +106,6 @@ def _group_rank_result_error(result) -> str | None:
     if error:
         return str(error)
     return None
-
-
-def _group_rank_result_reason_code(result) -> str | None:
-    if not isinstance(result, dict):
-        return None
-    reason_code = result.get("reason_code")
-    return str(reason_code) if reason_code else None
 
 
 def _release_group_rank_gapfill_memory() -> None:
@@ -675,19 +666,6 @@ def calculate_daily_group_rankings_with_gapfill(
             result['today'] = today_result
             today_error = _group_rank_result_error(today_result)
             if today_error:
-                if (
-                    activity_lifecycle == "bootstrap"
-                    and _group_rank_result_reason_code(today_result)
-                    == GroupRankReasonCode.WARMUP_INCOMPLETE
-                ):
-                    raise self.retry(
-                        exc=RuntimeError(
-                            "Daily group ranking waiting for cache warmup: "
-                            f"{today_error}"
-                        ),
-                        countdown=BOOTSTRAP_GROUP_RANK_WARMUP_RETRY_COUNTDOWN_SECONDS,
-                        max_retries=BOOTSTRAP_GROUP_RANK_WARMUP_MAX_RETRIES,
-                    )
                 raise RuntimeError(f"Daily group ranking failed: {today_error}")
         else:
             last_trading = calendar_service.last_completed_trading_day(effective_market)

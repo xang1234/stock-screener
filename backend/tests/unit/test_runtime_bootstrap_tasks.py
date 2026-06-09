@@ -37,6 +37,7 @@ def test_bootstrap_plan_uses_semantic_operations_instead_of_task_name_strings():
         BootstrapOperation.REFRESH_STOCK_UNIVERSE,
         BootstrapOperation.LOAD_TRACKED_IBD_INDUSTRY_GROUPS,
         BootstrapOperation.SMART_REFRESH_CACHE,
+        BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP,
         BootstrapOperation.REFRESH_ALL_FUNDAMENTALS,
         BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL,
         BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL,
@@ -60,6 +61,10 @@ def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
     monkeypatch.setattr(
         "app.tasks.cache_tasks.smart_refresh_cache",
         _FakeTask("app.tasks.cache_tasks.smart_refresh_cache"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
+        _FakeTask("app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup"),
     )
     monkeypatch.setattr(
         "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
@@ -93,7 +98,7 @@ def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
     assert snapshot.kwargs["universe_name"] == "market:HK"
     assert snapshot.kwargs["publish_pointer_key"] == "latest_published_market:HK"
     assert snapshot.kwargs["bootstrap_cache_only_if_covered"] is True
-    assert [signature.kwargs.get("activity_lifecycle") for signature in signatures] == ["bootstrap"] * 6
+    assert [signature.kwargs.get("activity_lifecycle") for signature in signatures] == ["bootstrap"] * 7
 
 
 def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
@@ -111,6 +116,10 @@ def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
     monkeypatch.setattr(
         "app.tasks.cache_tasks.smart_refresh_cache",
         _FakeTask("app.tasks.cache_tasks.smart_refresh_cache"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
+        _FakeTask("app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup"),
     )
     monkeypatch.setattr(
         "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
@@ -135,6 +144,7 @@ def test_runtime_bootstrap_signatures_follow_bootstrap_plan(monkeypatch):
     assert [signature.task for signature in signatures] == [
         "app.tasks.universe_tasks.refresh_official_market_universe",
         "app.tasks.cache_tasks.smart_refresh_cache",
+        "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
         "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
         "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
         "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
@@ -165,6 +175,10 @@ def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
         _FakeTask("app.tasks.cache_tasks.smart_refresh_cache"),
     )
     monkeypatch.setattr(
+        "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
+        _FakeTask("app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup"),
+    )
+    monkeypatch.setattr(
         "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
         _FakeTask("app.tasks.fundamentals_tasks.refresh_all_fundamentals"),
     )
@@ -189,6 +203,7 @@ def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
         "app.tasks.universe_tasks.refresh_stock_universe",
         "app.tasks.industry_tasks.load_tracked_ibd_industry_groups",
         "app.tasks.cache_tasks.smart_refresh_cache",
+        "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
         "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
         "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
         "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
@@ -198,6 +213,117 @@ def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
         "market": "US",
         "activity_lifecycle": "bootstrap",
     }
+
+
+def test_wait_for_bootstrap_price_warmup_returns_ready_for_completed_metadata(monkeypatch):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class _FakePriceCache:
+        def get_warmup_metadata(self, *, market=None):
+            calls["metadata_market"] = market
+            return {
+                "status": "completed",
+                "count": 249,
+                "total": 249,
+            }
+
+    session = _FakeSession()
+    calls = {}
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: session)
+    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: _FakePriceCache())
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_completed",
+        lambda _db, **kwargs: calls.setdefault("completed", kwargs),
+    )
+
+    result = module.wait_for_bootstrap_price_warmup.run(market="us")
+
+    assert result["status"] == "ready"
+    assert result["market"] == "US"
+    assert result["warmup"]["count"] == 249
+    assert calls["metadata_market"] == "US"
+    assert calls["completed"] == {
+        "market": "US",
+        "stage_key": "prices",
+        "lifecycle": "bootstrap",
+        "task_name": "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
+        "task_id": None,
+        "message": "Price cache warmup ready",
+    }
+    assert session.closed is True
+
+
+def test_wait_for_bootstrap_price_warmup_retries_partial_metadata(monkeypatch):
+    from celery.exceptions import Retry
+
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def close(self):
+            pass
+
+    class _FakePriceCache:
+        def get_warmup_metadata(self, *, market=None):
+            return {
+                "status": "partial",
+                "count": 19,
+                "total": 31,
+                "completed_at": "2026-06-09T08:00:00",
+            }
+
+    progress_calls = []
+    retry_calls = []
+
+    def fake_retry(*, exc=None, countdown=None, max_retries=None):
+        retry_calls.append(
+            {
+                "exc": exc,
+                "countdown": countdown,
+                "max_retries": max_retries,
+            }
+        )
+        raise Retry("retry")
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: _FakePriceCache())
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_progress",
+        lambda _db, **kwargs: progress_calls.append(kwargs),
+    )
+    monkeypatch.setattr(module.wait_for_bootstrap_price_warmup, "retry", fake_retry)
+    module.wait_for_bootstrap_price_warmup.request.id = "wait-task-123"
+    module.wait_for_bootstrap_price_warmup.request.retries = 0
+
+    with pytest.raises(Retry):
+        module.wait_for_bootstrap_price_warmup.run(market="HK")
+
+    assert progress_calls == [
+        {
+            "market": "HK",
+            "stage_key": "prices",
+            "lifecycle": "bootstrap",
+            "task_name": "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup",
+            "task_id": "wait-task-123",
+            "percent": pytest.approx(61.2903),
+            "current": 19,
+            "total": 31,
+            "message": "Waiting for price cache warmup: partial, 19/31",
+        }
+    ]
+    assert len(retry_calls) == 1
+    assert "waiting_for_bootstrap_price_warmup:HK" in str(retry_calls[0]["exc"])
+    assert retry_calls[0]["countdown"] == 30
+    assert retry_calls[0]["max_retries"] == 120
 
 
 def test_bootstrap_universe_name_uses_uppercase_market_code():

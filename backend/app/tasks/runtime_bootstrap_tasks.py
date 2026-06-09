@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from celery import chain
+from celery.exceptions import Retry
 
 from ..database import SessionLocal
 from ..domain.bootstrap.plan import (
@@ -18,7 +19,9 @@ from ..domain.bootstrap.plan import (
 )
 from ..services.market_activity_service import (
     mark_current_market_activity_failed,
+    mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
 )
 from ..services.bootstrap_run_manifest import (
     BootstrapRunManifest,
@@ -33,6 +36,12 @@ from ..tasks.market_queues import (
 from ..celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+WAIT_FOR_BOOTSTRAP_PRICE_WARMUP_TASK_NAME = (
+    "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup"
+)
+BOOTSTRAP_PRICE_WARMUP_RETRY_COUNTDOWN_SECONDS = 30
+BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES = 120
+BOOTSTRAP_PRICE_WARMUP_METADATA_MAX_AGE = timedelta(hours=12)
 
 
 @dataclass(frozen=True)
@@ -161,6 +170,60 @@ def _queue_for_stage(stage) -> str:
     raise ValueError(f"Unsupported bootstrap queue kind: {stage.queue_kind}")
 
 
+def _warmup_int(metadata: dict | None, key: str) -> int | None:
+    if not metadata:
+        return None
+    value = metadata.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _warmup_summary(metadata: dict | None) -> str:
+    if not metadata:
+        return "missing metadata"
+    status = str(metadata.get("status") or "missing status")
+    current = _warmup_int(metadata, "count")
+    total = _warmup_int(metadata, "total")
+    if current is None and total is None:
+        return status
+    return f"{status}, {current}/{total}"
+
+
+def _warmup_percent(metadata: dict | None) -> float | None:
+    current = _warmup_int(metadata, "count")
+    total = _warmup_int(metadata, "total")
+    if current is None or total is None or total <= 0:
+        return None
+    return round((current / total) * 100, 4)
+
+
+def _bootstrap_price_warmup_wait_reason(metadata: dict | None) -> str | None:
+    if not metadata:
+        return "Missing price cache warmup metadata for bootstrap"
+
+    if metadata.get("status") != "completed":
+        return (
+            "Cache warmup not complete for bootstrap price run "
+            f"({_warmup_summary(metadata)})"
+        )
+
+    completed_at_raw = metadata.get("completed_at")
+    if completed_at_raw:
+        try:
+            completed_at = datetime.fromisoformat(str(completed_at_raw))
+        except ValueError:
+            return "Price cache warmup metadata timestamp is invalid"
+        now = datetime.now(completed_at.tzinfo) if completed_at.tzinfo else datetime.now()
+        if now - completed_at > BOOTSTRAP_PRICE_WARMUP_METADATA_MAX_AGE:
+            return "Price cache warmup metadata is stale for bootstrap"
+
+    return None
+
+
 def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list:
     from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
@@ -178,6 +241,7 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
         BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE: refresh_official_market_universe,
         BootstrapOperation.LOAD_TRACKED_IBD_INDUSTRY_GROUPS: load_tracked_ibd_industry_groups,
         BootstrapOperation.SMART_REFRESH_CACHE: smart_refresh_cache,
+        BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP: wait_for_bootstrap_price_warmup,
         BootstrapOperation.REFRESH_ALL_FUNDAMENTALS: refresh_all_fundamentals,
         BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL: (
             calculate_daily_breadth_with_gapfill
@@ -193,6 +257,82 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
         .set(queue=_queue_for_stage(stage))
         for stage in market_plan.stages
     ]
+
+
+@celery_app.task(
+    bind=True,
+    name=WAIT_FOR_BOOTSTRAP_PRICE_WARMUP_TASK_NAME,
+    queue="market_jobs",
+    soft_time_limit=300,
+    max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,
+)
+def wait_for_bootstrap_price_warmup(
+    self,
+    market: str,
+    activity_lifecycle: str | None = None,
+) -> dict:
+    from ..wiring.bootstrap import get_price_cache
+
+    market_code = normalize_market(market)
+    lifecycle = activity_lifecycle or "bootstrap"
+    task_name = getattr(self, "name", WAIT_FOR_BOOTSTRAP_PRICE_WARMUP_TASK_NAME)
+    task_id = getattr(getattr(self, "request", None), "id", None)
+    db = SessionLocal()
+    try:
+        warmup_metadata = get_price_cache().get_warmup_metadata(market=market_code)
+        wait_reason = _bootstrap_price_warmup_wait_reason(warmup_metadata)
+        if wait_reason is None:
+            mark_market_activity_completed(
+                db,
+                market=market_code,
+                stage_key="prices",
+                lifecycle=lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                message="Price cache warmup ready",
+            )
+            return {
+                "status": "ready",
+                "market": market_code,
+                "warmup": warmup_metadata,
+            }
+
+        retries = getattr(getattr(self, "request", None), "retries", 0) or 0
+        if retries >= BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES:
+            mark_market_activity_failed(
+                db,
+                market=market_code,
+                stage_key="prices",
+                lifecycle=lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                message=f"Price cache warmup unavailable: {wait_reason}",
+            )
+            raise RuntimeError(wait_reason)
+
+        mark_market_activity_progress(
+            db,
+            market=market_code,
+            stage_key="prices",
+            lifecycle=lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            percent=_warmup_percent(warmup_metadata),
+            current=_warmup_int(warmup_metadata, "count"),
+            total=_warmup_int(warmup_metadata, "total"),
+            message=f"Waiting for price cache warmup: {_warmup_summary(warmup_metadata)}",
+        )
+        raise self.retry(
+            exc=RuntimeError(
+                f"waiting_for_bootstrap_price_warmup:{market_code}: {wait_reason}"
+            ),
+            countdown=BOOTSTRAP_PRICE_WARMUP_RETRY_COUNTDOWN_SECONDS,
+            max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,
+        )
+    except Retry:
+        raise
+    finally:
+        db.close()
 
 
 def _apply_bootstrap_workflow(workflow, errback):

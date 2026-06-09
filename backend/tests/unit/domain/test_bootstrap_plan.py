@@ -14,6 +14,7 @@ def test_us_bootstrap_plan_includes_us_only_industry_group_seed() -> None:
         "universe",
         "industry_groups",
         "prices",
+        "price_warmup",
         "fundamentals",
         "breadth",
         "groups",
@@ -30,6 +31,7 @@ def test_non_us_bootstrap_plan_uses_official_universe_without_industry_seed() ->
     assert [stage.operation for stage in hk_plan.stages] == [
         BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE,
         BootstrapOperation.SMART_REFRESH_CACHE,
+        BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP,
         BootstrapOperation.REFRESH_ALL_FUNDAMENTALS,
         BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL,
         BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL,
@@ -52,7 +54,7 @@ def test_au_bootstrap_plan_refreshes_universe_before_prices_and_fundamentals() -
     assert [stage.key for stage in au_plan.stages[:3]] == [
         "universe",
         "prices",
-        "fundamentals",
+        "price_warmup",
     ]
     assert au_plan.stages[0].operation == BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE
     assert au_plan.stages[0].kwargs["market"] == "AU"
