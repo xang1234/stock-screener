@@ -21,11 +21,13 @@ import time
 from ..config import settings
 from .growth_cadence_service import compute_cadence_aware_growth
 from .price_fetch_failures import (
+    PriceFetchFailureKind,
     classify_price_fetch_error,
     is_no_data_price_failure,
     is_rate_limit_error,
     normalize_price_fetch_failure_kind,
 )
+from .price_symbol_validation import yahoo_price_no_data_error_for_symbol
 
 if TYPE_CHECKING:
     from .eps_rating_service import EPSRatingService
@@ -165,28 +167,24 @@ class BulkDataFetcher:
             if symbol in errors and errors[symbol]
         }
 
-    @staticmethod
-    def _is_zero_prefixed_jp_symbol(symbol: str) -> bool:
-        normalized = str(symbol or "").strip().upper()
-        if normalized.endswith(".T"):
-            local_code = normalized[:-2]
-        elif normalized.endswith(".JP"):
-            local_code = normalized[:-3]
-        else:
-            return False
-        if not local_code:
-            return False
-        numeric_part = local_code[:-1] if local_code[-1].isalpha() else local_code
-        return numeric_part.startswith("0") and numeric_part.isdigit()
-
     @classmethod
-    def _empty_download_error_for_symbol(cls, symbol: str) -> str:
-        if cls._is_zero_prefixed_jp_symbol(symbol):
-            return (
-                "JP local code is zero-prefixed; no price data expected "
-                "from Yahoo"
+    def _split_fetchable_price_symbols(
+        cls,
+        symbols: List[str],
+    ) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+        fetchable: List[str] = []
+        permanent_failures: Dict[str, Dict[str, Any]] = {}
+        for symbol in symbols:
+            error = yahoo_price_no_data_error_for_symbol(symbol)
+            if error is None:
+                fetchable.append(symbol)
+                continue
+            permanent_failures[symbol] = cls._build_error_result(
+                symbol,
+                error,
+                error_kind=PriceFetchFailureKind.NO_PRICE_DATA.value,
             )
-        return "yf.download returned empty"
+        return fetchable, permanent_failures
 
     def _transient_failure_rate(self, results: Dict[str, Dict[str, Any]]) -> float:
         if not results:
@@ -504,16 +502,21 @@ class BulkDataFetcher:
         if not symbols:
             return {}
 
-        logger.info(f"Batch fetching prices for {len(symbols)} symbols using yf.download()")
+        fetch_symbols, results = self._split_fetchable_price_symbols(symbols)
+        if not fetch_symbols:
+            return results
 
-        results = {}
+        logger.info(
+            "Batch fetching prices for %d symbols using yf.download()",
+            len(fetch_symbols),
+        )
 
         try:
             # yf.download with group_by='ticker' returns MultiIndex columns: (ticker, OHLCV)
             # threads=False avoids threading issues inside Celery workers
             # progress=False suppresses the tqdm progress bar
             download_kwargs = dict(
-                tickers=symbols,
+                tickers=fetch_symbols,
                 period=period,
                 group_by='ticker',
                 threads=False,
@@ -525,15 +528,12 @@ class BulkDataFetcher:
             if session is not None:
                 download_kwargs["session"] = session
             raw = yf.download(**download_kwargs)
-            download_errors = self._yfinance_download_errors(symbols)
+            download_errors = self._yfinance_download_errors(fetch_symbols)
 
             if raw is None or raw.empty:
                 logger.warning("yf.download returned empty DataFrame")
-                for symbol in symbols:
-                    error = (
-                        download_errors.get(symbol)
-                        or self._empty_download_error_for_symbol(symbol)
-                    )
+                for symbol in fetch_symbols:
+                    error = download_errors.get(symbol) or "yf.download returned empty"
                     results[symbol] = self._build_error_result(
                         symbol,
                         error,
@@ -543,8 +543,8 @@ class BulkDataFetcher:
 
             # Single symbol: yf.download returns flat columns (Open, High, etc.)
             # Multi-symbol: returns MultiIndex columns (AAPL/Open, AAPL/High, etc.)
-            if len(symbols) == 1:
-                symbol = symbols[0]
+            if len(fetch_symbols) == 1:
+                symbol = fetch_symbols[0]
                 df = raw.copy()
                 if df is not None and not df.empty:
                     results[symbol] = {
@@ -599,7 +599,7 @@ class BulkDataFetcher:
             logger.info(f"Batch price download: {success} successful, {failed} failed")
 
             # Add missing symbols as errors
-            for symbol in symbols:
+            for symbol in fetch_symbols:
                 if symbol not in results:
                     error = download_errors.get(symbol) or 'Missing from results'
                     results[symbol] = self._build_error_result(
@@ -613,14 +613,15 @@ class BulkDataFetcher:
         except Exception as e:
             logger.error(f"yf.download batch failed: {e}", exc_info=True)
             error = f"Batch download error: {str(e)}"
-            return {
+            failed_results = {
                 symbol: self._build_error_result(
                     symbol,
                     error,
                     error_kind=self._price_error_kind(error),
                 )
-                for symbol in symbols
+                for symbol in fetch_symbols
             }
+            return {**results, **failed_results}
 
     def fetch_prices_in_batches(
         self,
@@ -855,19 +856,28 @@ class BulkDataFetcher:
             self.MIN_PRICE_BATCH_SIZE,
             min(initial_batch_size, self.MAX_PRICE_BATCH_SIZE),
         )
+        fetch_symbols, permanent_failures = self._split_fetchable_price_symbols(
+            symbols
+        )
+        if not fetch_symbols:
+            return permanent_failures
         last_results: Dict[str, Dict] = {
-            symbol: self._build_error_result(symbol, "Batch not attempted")
-            for symbol in symbols
+            **permanent_failures,
+            **{
+                symbol: self._build_error_result(symbol, "Batch not attempted")
+                for symbol in fetch_symbols
+            },
         }
 
         for attempt in range(len(backoff_schedule) + 1):
-            attempt_results: Dict[str, Dict] = {}
-            for chunk_start in range(0, len(symbols), current_batch_size):
-                chunk_symbols = symbols[chunk_start:chunk_start + current_batch_size]
-                attempt_results.update(self.fetch_batch_prices(chunk_symbols, period=period))
+            fetch_results: Dict[str, Dict] = {}
+            for chunk_start in range(0, len(fetch_symbols), current_batch_size):
+                chunk_symbols = fetch_symbols[chunk_start:chunk_start + current_batch_size]
+                fetch_results.update(self.fetch_batch_prices(chunk_symbols, period=period))
 
+            attempt_results = {**permanent_failures, **fetch_results}
             last_results = attempt_results
-            failure_rate = self._transient_failure_rate(attempt_results)
+            failure_rate = self._transient_failure_rate(fetch_results)
             if failure_rate <= 0.20 or attempt == len(backoff_schedule):
                 return attempt_results
 

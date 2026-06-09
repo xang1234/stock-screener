@@ -201,7 +201,7 @@ def test_fetch_price_batch_with_retries_does_not_retry_permanent_no_data(monkeyp
     fetcher = BulkDataFetcher()
     calls: list[list[str]] = []
     sleeps: list[float] = []
-    symbols = ["0143.T", "0194.T", "0190.T"]
+    symbols = ["7203.T", "6758.T", "9984.T"]
 
     def fake_fetch_batch_prices(batch_symbols, period="2y"):
         calls.append(list(batch_symbols))
@@ -235,15 +235,15 @@ def test_fetch_price_batch_with_retries_does_not_retry_permanent_no_data(monkeyp
 def test_fetch_batch_prices_tags_yfinance_missing_price_errors(monkeypatch):
     import app.services.bulk_data_fetcher as module
 
-    symbols = ["0143.T", "0194.T"]
+    symbols = ["7203.T", "6758.T"]
     monkeypatch.setattr(module.yf.shared, "_ERRORS", {}, raising=False)
 
     def fake_download(**kwargs):
         assert kwargs["tickers"] == symbols
         module.yf.shared._ERRORS.update(
             {
-                "0143.T": "YFPricesMissingError('possibly delisted; no price data found')",
-                "0194.T": 'No data found, symbol may be delisted',
+                "7203.T": "YFPricesMissingError('possibly delisted; no price data found')",
+                "6758.T": 'No data found, symbol may be delisted',
             }
         )
         return pd.DataFrame()
@@ -252,20 +252,27 @@ def test_fetch_batch_prices_tags_yfinance_missing_price_errors(monkeypatch):
 
     results = BulkDataFetcher().fetch_batch_prices(symbols, period="2y")
 
-    assert results["0143.T"]["error_kind"] == "no_price_data"
-    assert "possibly delisted" in results["0143.T"]["error"]
-    assert results["0194.T"]["error_kind"] == "no_price_data"
+    assert results["7203.T"]["error_kind"] == "no_price_data"
+    assert "possibly delisted" in results["7203.T"]["error"]
+    assert results["6758.T"]["error_kind"] == "no_price_data"
 
 
-def test_fetch_batch_prices_tags_zero_prefixed_jp_empty_batch_as_no_price_data(monkeypatch):
+def test_fetch_batch_prices_short_circuits_zero_prefixed_jp_symbols(monkeypatch):
     import app.services.bulk_data_fetcher as module
 
     symbols = ["0130.T", "0246.T"]
+    calls = []
+
+    def fake_download(**kwargs):
+        calls.append(list(kwargs["tickers"]))
+        return pd.DataFrame()
+
     monkeypatch.setattr(module.yf.shared, "_ERRORS", {}, raising=False)
-    monkeypatch.setattr(module.yf, "download", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(module.yf, "download", fake_download)
 
     results = BulkDataFetcher().fetch_batch_prices(symbols, period="2y")
 
+    assert calls == []
     assert {results[symbol]["error_kind"] for symbol in symbols} == {"no_price_data"}
     assert "zero-prefixed" in results["0130.T"]["error"]
 
@@ -284,7 +291,10 @@ def test_fetch_price_batch_with_retries_does_not_retry_zero_prefixed_jp_empty_ba
 
     monkeypatch.setattr(module.yf.shared, "_ERRORS", {}, raising=False)
     monkeypatch.setattr(module.yf, "download", fake_download)
-    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
 
     results = fetcher._fetch_price_batch_with_retries(
         symbols,
@@ -293,9 +303,43 @@ def test_fetch_price_batch_with_retries_does_not_retry_zero_prefixed_jp_empty_ba
         market="JP",
     )
 
-    assert calls == [symbols]
+    assert calls == []
     assert sleeps == []
     assert {results[symbol]["error_kind"] for symbol in symbols} == {"no_price_data"}
+
+
+def test_fetch_price_batch_with_retries_ignores_invalid_jp_symbols_in_retry_rate(monkeypatch):
+    import app.services.bulk_data_fetcher as module
+
+    fetcher = BulkDataFetcher()
+    symbols = ["0130.T", "7203.T"]
+    calls = []
+    sleeps = []
+
+    def fake_download(**kwargs):
+        calls.append(list(kwargs["tickers"]))
+        if len(calls) == 1:
+            return pd.DataFrame()
+        return _price_df(date(2026, 3, 18), 100.0)
+
+    monkeypatch.setattr(module.yf.shared, "_ERRORS", {}, raising=False)
+    monkeypatch.setattr(module.yf, "download", fake_download)
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+
+    results = fetcher._fetch_price_batch_with_retries(
+        symbols,
+        period="2y",
+        initial_batch_size=50,
+        market="JP",
+    )
+
+    assert calls == [["7203.T"], ["7203.T"]]
+    assert sleeps == [60]
+    assert results["0130.T"]["error_kind"] == "no_price_data"
+    assert results["7203.T"]["has_error"] is False
 
 
 def test_fetch_price_batch_with_retries_keeps_legacy_schedule_without_market():
