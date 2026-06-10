@@ -52,8 +52,9 @@ from app.domain.scanning.ports import (
     StockScanner,
 )
 from app.services.bootstrap_cache_coverage import (
-    BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
+    BOOTSTRAP_CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE,
     MISSING_SYMBOL_PREVIEW_LIMIT,
+    bootstrap_price_min_coverage_for_market,
     evaluate_bootstrap_cache_coverage,
 )
 from app.domain.providers.price_symbol_support import split_supported_price_symbols
@@ -373,9 +374,20 @@ class BuildDailyFeatureSnapshotUseCase:
                 elif not bootstrap_gate_report:
                     bootstrap_gate_report = {"eligible": False}
                 eligible = bool(bootstrap_gate_report.get("eligible"))
+                price_threshold = float(
+                    bootstrap_gate_report.get("price_threshold")
+                    or bootstrap_gate_report.get("threshold")
+                    or bootstrap_price_min_coverage_for_market(cmd.market)
+                )
+                fundamentals_threshold = float(
+                    bootstrap_gate_report.get("fundamentals_threshold")
+                    or BOOTSTRAP_CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE
+                )
                 bootstrap_gate_report.update(
                     {
-                        "threshold": BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
+                        "threshold": price_threshold,
+                        "price_threshold": price_threshold,
+                        "fundamentals_threshold": fundamentals_threshold,
                         "mode": (
                             "cache_only"
                             if eligible

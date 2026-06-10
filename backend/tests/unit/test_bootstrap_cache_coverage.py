@@ -16,9 +16,12 @@ from app.models.provider_snapshot import (
 from app.models.stock import StockFundamental, StockPrice
 from app.services.bootstrap_cache_coverage import (
     BootstrapPriceCoverageReport,
+    bootstrap_fundamentals_min_coverage_for_market,
+    bootstrap_price_min_coverage_for_market,
     evaluate_bootstrap_cache_coverage,
     evaluate_bootstrap_price_cache_coverage,
 )
+from app.domain.markets.catalog import get_market_catalog
 
 
 def _session():
@@ -182,6 +185,80 @@ def test_bootstrap_price_cache_coverage_ignores_fundamentals_before_later_bootst
     assert report["price_covered_symbols"] == 19
     assert report["price_missing_symbols"] == 1
     assert report["price_missing_symbols_preview"] == ["SYM19"]
+
+
+def test_bootstrap_price_cache_coverage_uses_market_specific_threshold():
+    db = _session()
+    symbols = [f"SYM{i}" for i in range(20)]
+    as_of = date(2026, 4, 24)
+    db.add_all([_price(symbol, as_of) for symbol in symbols[:11]])
+    db.commit()
+
+    report = evaluate_bootstrap_price_cache_coverage(
+        db,
+        market="TW",
+        symbols=symbols,
+        as_of_date=as_of,
+    )
+
+    assert report["threshold"] == 0.50
+    assert report["price_coverage_ratio"] == 0.55
+    assert report["eligible"] is True
+
+
+def test_bootstrap_cache_coverage_keeps_fundamentals_threshold_strict_for_partial_price_markets():
+    db = _session()
+    symbols = [f"SYM{i}" for i in range(20)]
+    as_of = date(2026, 4, 24)
+    db.add_all([_price(symbol, as_of) for symbol in symbols[:11]])
+    db.add_all(
+        [
+            _fundamental(symbol, datetime(2026, 4, 21, tzinfo=timezone.utc))
+            for symbol in symbols[:18]
+        ]
+    )
+    db.commit()
+
+    report = evaluate_bootstrap_cache_coverage(
+        db,
+        market="TW",
+        symbols=symbols,
+        as_of_date=as_of,
+    )
+
+    assert report["price_threshold"] == 0.50
+    assert report["fundamentals_threshold"] == 0.95
+    assert report["price_coverage_ratio"] == 0.55
+    assert report["fundamentals_coverage_ratio"] == 0.90
+    assert report["eligible"] is False
+
+
+def test_bootstrap_price_thresholds_cover_every_supported_market():
+    expected_price_thresholds = {
+        "AU": 0.90,
+        "CA": 0.75,
+        "CN": 0.90,
+        "DE": 0.90,
+        "HK": 0.80,
+        "IN": 0.50,
+        "JP": 0.90,
+        "KR": 0.95,
+        "MY": 0.85,
+        "SG": 0.60,
+        "TW": 0.50,
+        "US": 0.95,
+    }
+
+    assert set(expected_price_thresholds) == set(
+        get_market_catalog().supported_market_codes()
+    )
+
+    for market, expected_threshold in expected_price_thresholds.items():
+        price_threshold = bootstrap_price_min_coverage_for_market(market)
+        fundamentals_threshold = bootstrap_fundamentals_min_coverage_for_market(market)
+
+        assert price_threshold == expected_threshold, market
+        assert fundamentals_threshold == 0.95, market
 
 
 def test_bootstrap_price_cache_coverage_rejects_empty_candidate_set():

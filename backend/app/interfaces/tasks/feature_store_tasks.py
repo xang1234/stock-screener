@@ -712,7 +712,6 @@ def build_daily_snapshot(
     from app.services.market_calendar_service import MarketCalendarService
     from app.services.universe_resolver import normalize_universe_definition
     from app.services.bootstrap_cache_coverage import (
-        BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
         evaluate_bootstrap_cache_coverage,
     )
     from app.tasks.market_queues import log_extra, normalize_market
