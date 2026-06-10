@@ -77,6 +77,7 @@ def evaluate_warmup_metadata(
     metadata: dict | None,
     *,
     context: str,
+    allow_partial_min_coverage: float | None = None,
     max_age: timedelta = WARMUP_METADATA_MAX_AGE,
     now: datetime | None = None,
 ) -> WarmupMetadataReadiness:
@@ -94,7 +95,7 @@ def evaluate_warmup_metadata(
     percent = _warmup_percent(count, total)
     summary = _warmup_summary(metadata, status=status, count=count, total=total)
 
-    if status != "completed":
+    if status not in {"completed", "partial"}:
         return WarmupMetadataReadiness(
             ready=False,
             reason=f"Cache warmup not complete for {context} ({summary})",
@@ -132,6 +133,36 @@ def evaluate_warmup_metadata(
         return WarmupMetadataReadiness(
             ready=False,
             reason=f"Cache warmup metadata is stale for {context}",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
+
+    if status == "partial":
+        coverage_ratio = (
+            count / total
+            if count is not None and total is not None and total > 0
+            else None
+        )
+        if (
+            allow_partial_min_coverage is not None
+            and coverage_ratio is not None
+            and coverage_ratio >= allow_partial_min_coverage
+        ):
+            return WarmupMetadataReadiness(
+                ready=True,
+                reason=None,
+                summary=summary,
+                status=status,
+                count=count,
+                total=total,
+                percent=percent,
+            )
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Cache warmup not complete for {context} ({summary})",
             summary=summary,
             status=status,
             count=count,

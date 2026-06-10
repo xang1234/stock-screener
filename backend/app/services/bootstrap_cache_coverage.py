@@ -16,35 +16,23 @@ from app.models.provider_snapshot import (
     ProviderSnapshotRun,
 )
 from app.models.stock import StockFundamental, StockPrice
+from app.services.price_coverage_policy import (
+    CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE,
+    CACHE_ONLY_MIN_PRICE_COVERAGE,
+    PRICE_MIN_COVERAGE_BY_MARKET,
+    PriceCoveragePolicy,
+    normalize_market_code,
+    price_coverage_policy_for_market,
+)
 from app.services.provider_snapshot_service import WEEKLY_REFERENCE_SNAPSHOT_KEYS
 
-BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE = 0.95
-BOOTSTRAP_CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE = 0.95
-# Price coverage thresholds are aligned to observed daily-price static bundle
-# availability, rounded down to conservative 5-point floors. They gate whether
-# bootstrap can build a cache-only snapshot without falling back to live fetches.
-BOOTSTRAP_PRICE_MIN_COVERAGE_BY_MARKET: dict[str, float] = {
-    "AU": 0.90,
-    "CA": 0.75,
-    "CN": 0.90,
-    "DE": 0.90,
-    "HK": 0.80,
-    "IN": 0.50,
-    "JP": 0.90,
-    "KR": 0.95,
-    "MY": 0.85,
-    "SG": 0.60,
-    "TW": 0.50,
-    "US": 0.95,
-}
+BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE = CACHE_ONLY_MIN_PRICE_COVERAGE
+BOOTSTRAP_CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE = (
+    CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE
+)
+BOOTSTRAP_PRICE_MIN_COVERAGE_BY_MARKET = PRICE_MIN_COVERAGE_BY_MARKET
+BootstrapCoveragePolicy = PriceCoveragePolicy
 MISSING_SYMBOL_PREVIEW_LIMIT = 20
-
-
-@dataclass(frozen=True)
-class BootstrapCoveragePolicy:
-    market: str
-    price_min_coverage: float
-    fundamentals_min_coverage: float
 
 
 @dataclass(frozen=True)
@@ -189,20 +177,8 @@ def _normalize_symbols(symbols: Sequence[str]) -> list[str]:
     return sorted({str(symbol).upper() for symbol in symbols if symbol})
 
 
-def _normalize_market_code(market: str | None) -> str:
-    return str(market or "US").strip().upper() or "US"
-
-
 def bootstrap_coverage_policy_for_market(market: str | None) -> BootstrapCoveragePolicy:
-    normalized_market = _normalize_market_code(market)
-    return BootstrapCoveragePolicy(
-        market=normalized_market,
-        price_min_coverage=BOOTSTRAP_PRICE_MIN_COVERAGE_BY_MARKET.get(
-            normalized_market,
-            BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
-        ),
-        fundamentals_min_coverage=BOOTSTRAP_CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE,
-    )
+    return price_coverage_policy_for_market(market)
 
 
 def _optional_float(value: object) -> float | None:
@@ -279,7 +255,7 @@ def evaluate_bootstrap_price_cache_coverage(
     as_of_date: date,
 ) -> BootstrapPriceCoverageReport:
     """Return bootstrap price coverage without requiring later fundamentals stages."""
-    normalized_market = _normalize_market_code(market)
+    normalized_market = normalize_market_code(market)
     normalized_symbols = _normalize_symbols(symbols)
     total = len(normalized_symbols)
 
@@ -318,7 +294,7 @@ def evaluate_bootstrap_cache_coverage(
     as_of_date: date,
 ) -> BootstrapCacheCoverageReport:
     """Return a JSON-ready coverage report for bootstrap cache-only eligibility."""
-    normalized_market = _normalize_market_code(market)
+    normalized_market = normalize_market_code(market)
     normalized_symbols = _normalize_symbols(symbols)
     total = len(normalized_symbols)
     price_report = evaluate_bootstrap_price_cache_coverage(

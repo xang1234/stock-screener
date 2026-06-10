@@ -542,6 +542,47 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
     store_rankings.assert_not_called()
 
 
+def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_session, monkeypatch):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["Software"],
+    )
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db, cache_only=False, **kw: (
+            price_data,
+            {"AAPL": price_data, "MSFT": None},
+            {"AAPL", "MSFT"},
+            {"AAPL": 1_000_000_000, "MSFT": 1_000_000_000},
+            {
+                "target_symbols": 2,
+                "symbols_with_prices": 1,
+                "cache_miss_symbols": 1,
+                "spy_cached": True,
+            },
+        ),
+    )
+    store_rankings = Mock()
+    monkeypatch.setattr(service, "_store_rankings", store_rankings)
+
+    with pytest.raises(IncompleteGroupRankingCacheError) as excinfo:
+        service.calculate_group_rankings(
+            db_session,
+            date(2026, 6, 10),
+            market="TW",
+            cache_only=True,
+            min_cache_coverage=0.55,
+        )
+
+    assert excinfo.value.stats["cache_coverage_ratio"] == 0.5
+    assert excinfo.value.stats["min_cache_coverage"] == 0.55
+    store_rankings.assert_not_called()
+
+
 def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback():
     service = _make_group_rank_service()
     db_session = _make_session()

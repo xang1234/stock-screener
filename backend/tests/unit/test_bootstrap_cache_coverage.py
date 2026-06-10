@@ -17,12 +17,12 @@ from app.models.stock import StockFundamental, StockPrice
 from app.services.bootstrap_cache_coverage import (
     BootstrapCacheCoverageReport,
     BootstrapPriceCoverageReport,
-    bootstrap_coverage_policy_for_market,
     evaluate_bootstrap_cache_coverage,
     evaluate_bootstrap_price_cache_coverage,
     normalize_bootstrap_gate_report,
 )
 from app.domain.markets.catalog import get_market_catalog
+from app.services.price_coverage_policy import price_coverage_policy_for_market
 
 
 def _session():
@@ -347,7 +347,7 @@ def test_bootstrap_price_thresholds_cover_every_supported_market():
     )
 
     for market, expected_threshold in expected_price_thresholds.items():
-        policy = bootstrap_coverage_policy_for_market(market)
+        policy = price_coverage_policy_for_market(market)
 
         assert policy.market == market
         assert policy.price_min_coverage == expected_threshold, market

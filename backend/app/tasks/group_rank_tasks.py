@@ -29,7 +29,7 @@ from ..services.market_activity_service import (
     mark_market_activity_started,
 )
 from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
-from ..services.bootstrap_cache_coverage import bootstrap_coverage_policy_for_market
+from ..services.price_coverage_policy import price_coverage_policy_for_market
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
@@ -68,6 +68,7 @@ _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS: ContextVar[bool] = ContextVar(
 class SameDayGroupRankWarmupDecision:
     error: Optional[str]
     require_complete_cache: bool
+    min_cache_coverage: float | None = None
 
 
 @contextmanager
@@ -138,39 +139,34 @@ def _evaluate_same_day_cache_only_group_rankings(
 ) -> SameDayGroupRankWarmupDecision:
     """Decide whether same-day group rankings can use the cache-only path."""
     warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
+    policy = price_coverage_policy_for_market(market)
     warmup_readiness = evaluate_warmup_metadata(
         warmup_meta,
         context="same-day group ranking run",
+        allow_partial_min_coverage=policy.price_min_coverage,
     )
-    if warmup_readiness.ready:
+    if not warmup_readiness.ready:
         return SameDayGroupRankWarmupDecision(
-            error=None,
+            error=warmup_readiness.reason,
             require_complete_cache=True,
         )
 
-    policy = bootstrap_coverage_policy_for_market(market)
-    count = warmup_readiness.count
-    total = warmup_readiness.total
-    coverage_ratio = count / total if count is not None and total and total > 0 else None
-    if (
-        warmup_readiness.status == "partial"
-        and coverage_ratio is not None
-        and coverage_ratio >= policy.price_min_coverage
-    ):
+    if warmup_readiness.status == "partial":
         logger.warning(
             "Allowing same-day group rankings with partial price warmup for %s: "
-            "%.1f%% >= %.1f%% bootstrap price threshold",
+            "%.1f%% >= %.1f%% price coverage threshold",
             policy.market,
-            coverage_ratio * 100,
+            warmup_readiness.percent or 0.0,
             policy.price_min_coverage * 100,
         )
         return SameDayGroupRankWarmupDecision(
             error=None,
             require_complete_cache=False,
+            min_cache_coverage=policy.price_min_coverage,
         )
 
     return SameDayGroupRankWarmupDecision(
-        error=warmup_readiness.reason,
+        error=None,
         require_complete_cache=True,
     )
 
@@ -275,6 +271,7 @@ def calculate_daily_group_rankings(
         service = get_group_rank_service()
         same_day_cache_only = force_cache_only or calc_date == today_local
         require_complete_group_cache = same_day_cache_only
+        min_group_cache_coverage = None
 
         if same_day_cache_only:
             if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
@@ -287,6 +284,7 @@ def calculate_daily_group_rankings(
                     market=market,
                 )
                 require_complete_group_cache = warmup_decision.require_complete_cache
+                min_group_cache_coverage = warmup_decision.min_cache_coverage
                 if warmup_decision.error:
                     logger.error("✗ Refusing to publish daily group rankings: %s", warmup_decision.error)
                     logger.info("=" * 60)
@@ -309,12 +307,17 @@ def calculate_daily_group_rankings(
 
         # Calculate rankings
         logger.info(f"Starting group ranking calculation for {calc_date}...")
+        ranking_kwargs = {
+            "market": effective_market,
+            "cache_only": same_day_cache_only,
+            "require_complete_cache": require_complete_group_cache,
+        }
+        if min_group_cache_coverage is not None:
+            ranking_kwargs["min_cache_coverage"] = min_group_cache_coverage
         results = service.calculate_group_rankings(
             db,
             calc_date,
-            market=effective_market,
-            cache_only=same_day_cache_only,
-            require_complete_cache=require_complete_group_cache,
+            **ranking_kwargs,
         )
 
         # Calculate duration

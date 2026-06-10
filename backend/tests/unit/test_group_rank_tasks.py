@@ -116,7 +116,38 @@ def test_daily_group_rankings_allow_tw_partial_warmup_above_bootstrap_price_poli
         market="TW",
         cache_only=True,
         require_complete_cache=False,
+        min_cache_coverage=0.50,
     )
+
+
+def test_daily_group_rankings_reject_stale_partial_warmup_above_policy(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 6, 10, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+
+    fake_price_cache = MagicMock()
+    fake_price_cache.get_warmup_metadata.return_value = {
+        "status": "partial",
+        "count": 1081,
+        "total": 1969,
+        "completed_at": "2020-01-01T00:00:00",
+    }
+    fake_service = MagicMock()
+    fake_service.price_cache = fake_price_cache
+
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.calculate_daily_group_rankings.run(market="TW")
+
+    assert "stale" in result["error"].lower()
+    fake_service.calculate_group_rankings.assert_not_called()
 
 
 def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
