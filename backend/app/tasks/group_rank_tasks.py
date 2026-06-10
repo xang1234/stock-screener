@@ -10,6 +10,7 @@ market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 import gc
 import logging
 import sys
@@ -28,6 +29,7 @@ from ..services.market_activity_service import (
     mark_market_activity_started,
 )
 from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
+from ..services.bootstrap_cache_coverage import bootstrap_coverage_policy_for_market
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
@@ -60,6 +62,12 @@ _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS: ContextVar[bool] = ContextVar(
     "propagate_in_process_group_rank_transient_errors",
     default=False,
 )
+
+
+@dataclass(frozen=True)
+class SameDayGroupRankWarmupDecision:
+    error: Optional[str]
+    require_complete_cache: bool
 
 
 @contextmanager
@@ -124,20 +132,47 @@ def _release_group_rank_gapfill_memory() -> None:
     logger.debug("Collected %d objects after group-ranking gap-fill", collected)
 
 
-def _validate_same_day_cache_only_group_rankings(
+def _evaluate_same_day_cache_only_group_rankings(
     price_cache,
     market: Optional[str] = None,
-) -> Optional[str]:
-    """Block same-day group rankings when the post-close warmup is incomplete."""
+) -> SameDayGroupRankWarmupDecision:
+    """Decide whether same-day group rankings can use the cache-only path."""
     warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
     warmup_readiness = evaluate_warmup_metadata(
         warmup_meta,
         context="same-day group ranking run",
     )
-    if not warmup_readiness.ready:
-        return warmup_readiness.reason
+    if warmup_readiness.ready:
+        return SameDayGroupRankWarmupDecision(
+            error=None,
+            require_complete_cache=True,
+        )
 
-    return None
+    policy = bootstrap_coverage_policy_for_market(market)
+    count = warmup_readiness.count
+    total = warmup_readiness.total
+    coverage_ratio = count / total if count is not None and total and total > 0 else None
+    if (
+        warmup_readiness.status == "partial"
+        and coverage_ratio is not None
+        and coverage_ratio >= policy.price_min_coverage
+    ):
+        logger.warning(
+            "Allowing same-day group rankings with partial price warmup for %s: "
+            "%.1f%% >= %.1f%% bootstrap price threshold",
+            policy.market,
+            coverage_ratio * 100,
+            policy.price_min_coverage * 100,
+        )
+        return SameDayGroupRankWarmupDecision(
+            error=None,
+            require_complete_cache=False,
+        )
+
+    return SameDayGroupRankWarmupDecision(
+        error=warmup_readiness.reason,
+        require_complete_cache=True,
+    )
 
 
 def _should_repair_current_us_metadata(
@@ -239,6 +274,7 @@ def calculate_daily_group_rankings(
         # Initialize service
         service = get_group_rank_service()
         same_day_cache_only = force_cache_only or calc_date == today_local
+        require_complete_group_cache = same_day_cache_only
 
         if same_day_cache_only:
             if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
@@ -246,12 +282,13 @@ def calculate_daily_group_rankings(
                     "Bypassing same-day group ranking warmup metadata gate for in-process static export"
                 )
             else:
-                completeness_error = _validate_same_day_cache_only_group_rankings(
+                warmup_decision = _evaluate_same_day_cache_only_group_rankings(
                     service.price_cache,
                     market=market,
                 )
-                if completeness_error:
-                    logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
+                require_complete_group_cache = warmup_decision.require_complete_cache
+                if warmup_decision.error:
+                    logger.error("✗ Refusing to publish daily group rankings: %s", warmup_decision.error)
                     logger.info("=" * 60)
                     _mark_market_activity_failed_safely(
                         db,
@@ -260,10 +297,10 @@ def calculate_daily_group_rankings(
                         lifecycle=activity_lifecycle,
                         task_name=getattr(self, "name", "calculate_daily_group_rankings"),
                         task_id=getattr(getattr(self, "request", None), "id", None),
-                        message=completeness_error,
+                        message=warmup_decision.error,
                     )
                     return {
-                        'error': completeness_error,
+                        'error': warmup_decision.error,
                         'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
                         'date': calc_date.strftime('%Y-%m-%d'),
                         'timestamp': datetime.now().isoformat(),
@@ -277,7 +314,7 @@ def calculate_daily_group_rankings(
             calc_date,
             market=effective_market,
             cache_only=same_day_cache_only,
-            require_complete_cache=same_day_cache_only,
+            require_complete_cache=require_complete_group_cache,
         )
 
         # Calculate duration

@@ -61,7 +61,7 @@ def test_daily_group_rankings_refuse_to_publish_when_warmup_incomplete(monkeypat
     fake_price_cache = MagicMock()
     fake_price_cache.get_warmup_metadata.return_value = {
         "status": "partial",
-        "count": 9500,
+        "count": 9000,
         "total": 10000,
         "completed_at": datetime.now().isoformat(),
     }
@@ -75,6 +75,48 @@ def test_daily_group_rankings_refuse_to_publish_when_warmup_incomplete(monkeypat
     assert "error" in result
     assert "warmup not complete" in result["error"].lower()
     fake_service.calculate_group_rankings.assert_not_called()
+
+
+def test_daily_group_rankings_allow_tw_partial_warmup_above_bootstrap_price_policy(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 6, 10, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+
+    fake_price_cache = MagicMock()
+    fake_price_cache.get_warmup_metadata.return_value = {
+        "status": "partial",
+        "count": 1081,
+        "total": 1969,
+        "completed_at": datetime.now().isoformat(),
+    }
+    fake_service = MagicMock()
+    fake_service.price_cache = fake_price_cache
+    fake_service.calculate_group_rankings.return_value = [
+        {"industry_group": "Semiconductors", "avg_rs_rating": 91.0, "rank": 1, "num_stocks": 18}
+    ]
+
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.calculate_daily_group_rankings.run(market="TW")
+
+    assert result.get("groups_ranked") == 1, result
+    assert result["cache_only"] is True
+    fake_service.calculate_group_rankings.assert_called_once_with(
+        fake_db,
+        datetime(2026, 6, 10, 17, 40, 0).date(),
+        market="TW",
+        cache_only=True,
+        require_complete_cache=False,
+    )
 
 
 def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
