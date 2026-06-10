@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import logging
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable
@@ -204,6 +205,25 @@ class MarketTaxonomyService:
             if entry.industry_group == group
         )
 
+    def sector_map_for_market(self, market: str) -> dict[str, str]:
+        """Return industry_group -> dominant native sector for one market."""
+        self._ensure_loaded()
+        normalized = security_master_resolver.normalize_market(market) or market.upper()
+        entries = self._entries.get(normalized, {})
+        votes: dict[str, Counter[str]] = defaultdict(Counter)
+        for entry in entries.values():
+            if entry.industry_group and entry.sector:
+                votes[entry.industry_group][entry.sector] += 1
+
+        result: dict[str, str] = {}
+        for group, counter in votes.items():
+            result[group] = sorted(counter.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        return result
+
+    def sector_for_group(self, market: str, group: str) -> str | None:
+        """Return the dominant native sector for a group, if the taxonomy has one."""
+        return self.sector_map_for_market(market).get(group)
+
     def entry_count_for_market(self, market: str) -> int:
         """Return the committed taxonomy row count loaded for one market."""
         self._ensure_loaded()
@@ -298,7 +318,11 @@ class MarketTaxonomyService:
         path = self._data_dir / "hk-deep.csv"
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
-            self._require_columns(path, reader, ("Symbol", "EM Industry (EN)", "Theme (EN)"))
+            self._require_columns(
+                path,
+                reader,
+                ("Symbol", "HSICS Sector", "EM Industry (EN)", "Theme (EN)"),
+            )
             for row in reader:
                 symbol = self._canonicalize_hk_symbol(row.get("Symbol"))
                 if symbol is None:
@@ -307,7 +331,7 @@ class MarketTaxonomyService:
                     market="HK",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("EM Industry (EN)")),
-                    sector=None,
+                    sector=self._normalize_text(row.get("HSICS Sector")),
                     industry=None,
                     themes=[row.get("Theme (EN)") or ""],
                 )

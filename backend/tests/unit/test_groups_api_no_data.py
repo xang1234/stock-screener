@@ -296,3 +296,55 @@ async def test_get_groups_bootstrap_supports_non_us_market_scope(monkeypatch, cl
     payload = response.json()
     assert payload["snapshot_revision"].startswith("groups:HK:")
     assert payload["payload"]["rankings"]["market_scope"] == "HK"
+
+
+@pytest.mark.asyncio
+async def test_get_rrg_scopes_returns_bundle_with_available_scopes(monkeypatch, client):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
+    class _FakeRRGService:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = kwargs
+
+        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400):  # noqa: ARG002
+            assert market == "HK"
+            assert scopes == ("groups", "sectors")
+            return {
+                "groups": {
+                    "date": "2026-04-18",
+                    "market": "HK",
+                    "scope": "groups",
+                    "groups": [
+                        {
+                            "industry_group": "Internet Services",
+                            "rank": 1,
+                            "num_stocks": 9,
+                            "avg_rs_rating": 82.0,
+                            "quadrant": "Leading",
+                            "is_provisional": False,
+                            "current": {"date": "2026-04-12", "x": 104.0, "y": 103.0},
+                            "tail": [{"date": "2026-04-12", "x": 104.0, "y": 103.0}],
+                        }
+                    ],
+                },
+                "sectors": {
+                    "date": "2026-04-18",
+                    "market": "HK",
+                    "scope": "sectors",
+                    "groups": [],
+                },
+            }
+
+    monkeypatch.setattr("app.api.v1.groups.RRGService", _FakeRRGService)
+
+    response = await client.get("/api/v1/groups/rrg/scopes", params={"market": "HK"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["market"] == "HK"
+    assert payload["available_scopes"] == ["groups"]
+    assert payload["payload"]["groups"]["total_groups"] == 1
+    assert payload["payload"]["sectors"]["total_groups"] == 0
+    assert payload["payload"]["groups"]["market_scope"] == "HK"

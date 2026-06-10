@@ -38,7 +38,7 @@ import {
   getCurrentRankings,
   getRankMovers,
   getGroupDetail,
-  getRRG,
+  getRRGBundle,
   triggerCalculation,
   getCalculationStatus,
 } from '../api/groups';
@@ -62,6 +62,7 @@ import {
   marketOptionsForCapability,
   normalizeMarketCode,
 } from '../utils/marketCapabilities';
+import { availableRrgScopesFromBundle } from '../utils/rrgScopes';
 
 const MARKET_LABELS = {
   US: 'US',
@@ -624,17 +625,32 @@ function GroupRankingsPage() {
     staleTime: 60_000,
   });
 
-  // Fetch RRG coordinates (only when the RRG view is active)
+  // Fetch RRG coordinates for all available scopes (only when the RRG view is active).
   const {
-    data: rrgData,
+    data: rrgBundle,
     isLoading: isLoadingRRG,
     error: errorRRG,
   } = useQuery({
-    queryKey: ['groupRRG', selectedMarket, rrgScope],
-    queryFn: () => getRRG(rrgScope, 8, 197, selectedMarket),
+    queryKey: ['groupRRGBundle', selectedMarket],
+    queryFn: () => getRRGBundle(8, 197, selectedMarket),
     enabled: liveQueriesEnabled && view === 'rrg',
     staleTime: 60_000,
   });
+  const availableRrgScopes = useMemo(() => availableRrgScopesFromBundle(rrgBundle), [rrgBundle]);
+  const rrgData = rrgBundle?.payload?.[rrgScope] ?? null;
+
+  useEffect(() => {
+    if (!isRrgView || !availableRrgScopes) {
+      return;
+    }
+    if (availableRrgScopes.length === 0) {
+      setView('table');
+      return;
+    }
+    if (!availableRrgScopes.includes(rrgScope)) {
+      setRrgScope(availableRrgScopes[0]);
+    }
+  }, [availableRrgScopes, isRrgView, rrgScope]);
 
   // Poll calculation status while task is running
   const { data: calcStatus } = useQuery({
@@ -817,6 +833,7 @@ function GroupRankingsPage() {
         onView={setView}
         scope={rrgScope}
         onScope={setRrgScope}
+        availableScopes={availableRrgScopes}
         sx={{ mb: 1.5 }}
       />
 

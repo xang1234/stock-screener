@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import quote
 
 import pandas as pd
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
@@ -39,6 +40,8 @@ from app.services.preset_screens import (
     resolve_preset_screens_for_defaults,
 )
 from app.services.rrg_service import RRGService
+from app.services.market_group_ranking_service import get_market_group_ranking_service
+from app.services.market_taxonomy_service import get_market_taxonomy_service
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
@@ -626,16 +629,30 @@ class StaticSiteExportService:
         groups[]}`` shape the shared ``RRGChart`` consumes. Both scopes
         (groups + sectors) are stored so the static page's toggle works offline.
 
-        US reads ``ibd_group_ranks`` directly; non-US markets have no such
-        history yet, so the section is reported unavailable (handled gracefully
-        by the caller). RRG tails want ~30 weekly points (~7 months) of
+        RRG tails want ~30 weekly points (~7 months) of
         ``avg_rs_rating`` history — when the exported DB is shallower, the math
         flags ``is_provisional`` / omits thin groups rather than fabricating.
+        If a lightweight export database lacks the RRG source tables entirely,
+        this optional section is reported unavailable without aborting export.
         """
-        service = RRGService(group_rank_service=get_group_rank_service())
-        scopes = service.get_rrg_scopes(db, market=market, scopes=("groups", "sectors"))
+        service = RRGService(
+            group_rank_service=get_group_rank_service(),
+            market_group_ranking_service=get_market_group_ranking_service(),
+            taxonomy_service=get_market_taxonomy_service(),
+        )
+        try:
+            scopes = service.get_rrg_scopes(db, market=market, scopes=("groups", "sectors"))
+        except SQLAlchemyError as exc:
+            raise StaticSiteSectionUnavailableError(
+                section=f"{market} rrg",
+                reason="RRG source tables are unavailable for this export database.",
+            ) from exc
         groups_rrg = scopes["groups"]
         sectors_rrg = scopes["sectors"]
+        available_scopes = [
+            scope for scope in ("groups", "sectors")
+            if scopes.get(scope, {}).get("groups")
+        ]
 
         if not groups_rrg.get("groups"):
             raise StaticSiteSectionUnavailableError(
@@ -652,6 +669,7 @@ class StaticSiteExportService:
             "available": True,
             "market": market,
             "as_of_date": groups_rrg.get("date") or expected_as_of_date.isoformat(),
+            "available_scopes": available_scopes,
             "payload": {
                 "groups": groups_rrg,
                 "sectors": sectors_rrg,

@@ -1,7 +1,7 @@
 """Pydantic schemas for IBD Industry Group Rankings API endpoints"""
 from pydantic import BaseModel, Field, field_validator
 from datetime import date as Date
-from typing import Any, Optional, List
+from typing import Any, Dict, Optional, List
 
 from ..infra.serialization import sanitize_sparkline
 from .scope import ScopedResponseMixin
@@ -154,6 +154,16 @@ class RRGResponse(ScopedResponseMixin):
     tail_weeks: int = Field(..., description="Number of weekly tail points requested")
     total_groups: int = Field(..., description="Number of plotted groups/sectors")
     groups: List[RRGGroupResponse] = Field(..., description="Plotted series")
+
+
+class RRGBundleResponse(ScopedResponseMixin):
+    """Relative Rotation Graph payload for all available scopes in one market."""
+
+    date: str = Field(..., description="As-of date (latest ranking date)")
+    market: str = Field(..., description="Market code")
+    tail_weeks: int = Field(..., description="Number of weekly tail points requested")
+    available_scopes: List[str] = Field(..., description="Scopes with plotted series")
+    payload: Dict[str, RRGResponse] = Field(..., description="Scope -> RRG payload")
 
 
 class CalculationRequest(BaseModel):

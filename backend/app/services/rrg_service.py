@@ -52,6 +52,9 @@ EPS = 1e-6
 DEFAULT_TAIL_WEEKS = 8
 DEFAULT_LOOKBACK_DAYS = 400  # enough daily rows to build Z_WINDOW + tail weeks
 
+RRG_GROUPS_ENABLED_MARKETS = frozenset({"US", "HK", "JP", "IN", "TW"})
+RRG_SECTORS_ENABLED_MARKETS = frozenset({"US", "HK", "JP", "IN"})
+
 
 @dataclass(frozen=True)
 class RRGParams:
@@ -235,8 +238,30 @@ class RRGService:
     dominant GICS sector and aggregates the same series.
     """
 
-    def __init__(self, *, group_rank_service: Any) -> None:
+    def __init__(
+        self,
+        *,
+        group_rank_service: Any,
+        market_group_ranking_service: Any | None = None,
+        taxonomy_service: Any | None = None,
+    ) -> None:
         self._group_rank_service = group_rank_service
+        self._market_group_ranking_service = market_group_ranking_service
+        self._taxonomy_service = taxonomy_service
+
+    def _get_market_group_ranking_service(self) -> Any:
+        if self._market_group_ranking_service is None:
+            from .market_group_ranking_service import get_market_group_ranking_service
+
+            self._market_group_ranking_service = get_market_group_ranking_service()
+        return self._market_group_ranking_service
+
+    def _get_taxonomy_service(self) -> Any:
+        if self._taxonomy_service is None:
+            from .market_taxonomy_service import get_market_taxonomy_service
+
+            self._taxonomy_service = get_market_taxonomy_service()
+        return self._taxonomy_service
 
     def get_group_sector_map(self, db: Any, market: str = "US") -> Dict[str, str]:
         """Map each IBD industry group -> its constituents' dominant GICS sector.
@@ -244,6 +269,12 @@ class RRGService:
         Derived from ``StockUniverse.sector`` (fully populated) via a majority
         vote, since the codebase has no IBD-native sector taxonomy.
         """
+        market = (market or "US").upper()
+        if market != "US" and market in RRG_SECTORS_ENABLED_MARKETS:
+            sector_map = self._get_taxonomy_service().sector_map_for_market(market)
+            if sector_map:
+                return sector_map
+
         from collections import Counter, defaultdict
 
         from ..models.industry import IBDIndustryGroup
@@ -299,17 +330,32 @@ class RRGService:
         sectors without re-querying. ``get_rrg`` is the single-scope shorthand.
         """
         market = (market or "US").upper()
+        if market not in RRG_GROUPS_ENABLED_MARKETS:
+            return self._empty_scopes(market, scopes)
+
+        if all(scope == "sectors" and market not in RRG_SECTORS_ENABLED_MARKETS for scope in scopes):
+            return self._empty_scopes(market, scopes)
+
         params = RRGParams(tail_weeks=tail_weeks)
         latest_date, meta, group_series = self._fetch_inputs(db, market, lookback_days)
         if latest_date is None:
-            return {
-                scope: {"date": None, "market": market, "scope": scope, "groups": []}
-                for scope in scopes
-            }
+            return self._empty_scopes(market, scopes)
         return {
             scope: self._build_scope_payload(
                 db, market, scope, latest_date, meta, group_series, params
             )
+            for scope in scopes
+        }
+
+    @staticmethod
+    def _empty_scopes(
+        market: str,
+        scopes: Sequence[str],
+        *,
+        latest_date: str | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        return {
+            scope: {"date": latest_date, "market": market, "scope": scope, "groups": []}
             for scope in scopes
         }
 
@@ -321,6 +367,22 @@ class RRGService:
         Dict[str, List[Tuple[date, float, int]]],
     ]:
         """Read the current rankings (metadata) + batched group history (one query)."""
+        if market != "US":
+            return self._get_market_group_ranking_service().get_all_groups_history(
+                db,
+                market=market,
+                days=lookback_days,
+            )
+
+        return self._fetch_us_inputs(db, market, lookback_days)
+
+    def _fetch_us_inputs(
+        self, db: Any, market: str, lookback_days: int
+    ) -> Tuple[
+        Optional[str],
+        Dict[str, Dict[str, Any]],
+        Dict[str, List[Tuple[date, float, int]]],
+    ]:
         from datetime import date as _date
 
         from ..models.industry import IBDGroupRank
@@ -359,6 +421,8 @@ class RRGService:
         params: RRGParams,
     ) -> Dict[str, Any]:
         if scope == "sectors":
+            if market not in RRG_SECTORS_ENABLED_MARKETS:
+                return {"date": latest_date, "market": market, "scope": scope, "groups": []}
             series, scope_meta = self._aggregate_sectors(db, market, group_series)
         else:
             series = {

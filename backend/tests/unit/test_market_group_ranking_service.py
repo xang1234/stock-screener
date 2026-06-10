@@ -118,3 +118,67 @@ def test_get_current_rank_map_skips_historical_rank_change_work(monkeypatch):
     rank_map = service.get_current_rank_map(Session(), market="HK")
 
     assert rank_map == {"Internet Services": 4, "Software": 7}
+
+
+def test_get_all_groups_history_loads_each_run_once_and_returns_ascending_series(monkeypatch):
+    service = MarketGroupRankingService()
+    latest_run = SimpleNamespace(id=3, as_of_date=date(2026, 4, 3))
+    middle_run = SimpleNamespace(id=2, as_of_date=date(2026, 4, 2))
+    oldest_run = SimpleNamespace(id=1, as_of_date=date(2026, 4, 1))
+    load_calls: list[int] = []
+
+    monkeypatch.setattr(
+        service,
+        "_get_latest_published_run",
+        lambda db, *, market, calculation_date=None: latest_run,  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_market_run_series",
+        lambda db, *, market, latest_run, cutoff_date, min_runs=0: [  # noqa: ARG005
+            latest_run,
+            middle_run,
+            oldest_run,
+        ],
+    )
+
+    def _load_rows(db, run_id, *, include_sparklines=True):  # noqa: ANN001, ARG001
+        assert include_sparklines is False
+        load_calls.append(run_id)
+        return [f"rows-{run_id}"]
+
+    def _rankings(rows, *, ranking_date):  # noqa: ANN001
+        run_id = int(str(rows[0]).split("-")[-1])
+        return [
+            {
+                "industry_group": "Internet Services",
+                "date": ranking_date.isoformat(),
+                "rank": 1,
+                "avg_rs_rating": 70.0 + run_id,
+                "num_stocks": 10 + run_id,
+            },
+            {
+                "industry_group": "Banks",
+                "date": ranking_date.isoformat(),
+                "rank": 2,
+                "avg_rs_rating": 55.0 + run_id,
+                "num_stocks": 5 + run_id,
+            },
+        ]
+
+    monkeypatch.setattr(service, "_load_run_rows", _load_rows)
+    monkeypatch.setattr(service, "compute_group_rankings_from_rows", _rankings)
+
+    latest_date, meta, series = service.get_all_groups_history(
+        Session(), market="HK", days=30
+    )
+
+    assert load_calls == [3, 2, 1]
+    assert latest_date == "2026-04-03"
+    assert meta["Internet Services"]["rank"] == 1
+    assert series["Internet Services"] == [
+        (date(2026, 4, 1), 71.0, 11),
+        (date(2026, 4, 2), 72.0, 12),
+        (date(2026, 4, 3), 73.0, 13),
+    ]
+    assert series["Banks"][-1] == (date(2026, 4, 3), 58.0, 8)

@@ -58,6 +58,11 @@ class _StubRankService:
         return [r for r in self._rows if r["market"] == market][:limit]
 
 
+class _ExplodingRankService:
+    def get_current_rankings(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("US IBDGroupRankService path should not be used")
+
+
 def test_get_rrg_groups_scope_returns_quadrants_and_tails():
     session = _session()
     dates = _weekly_fridays(40)
@@ -163,3 +168,71 @@ def test_get_group_sector_map_majority_vote():
         session, market="US"
     )
     assert mapping["AlphaTech"] == "Technology"  # 2 vs 1
+
+
+def test_get_rrg_non_us_uses_feature_run_history_provider():
+    session = _session()
+    dates = _weekly_fridays(40)
+
+    class _FakeMarketHistoryService:
+        def get_all_groups_history(self, db, *, market, days):  # noqa: ARG002
+            assert market == "HK"
+            latest = dates[-1].isoformat()
+            return (
+                latest,
+                {
+                    "Internet Services": {
+                        "industry_group": "Internet Services",
+                        "date": latest,
+                        "rank": 1,
+                        "num_stocks": 9,
+                        "avg_rs_rating": 80.0,
+                    }
+                },
+                {
+                    "Internet Services": [
+                        (d, 40.0 + index, 9)
+                        for index, d in enumerate(dates)
+                    ]
+                },
+            )
+
+    payload = RRGService(
+        group_rank_service=_ExplodingRankService(),
+        market_group_ranking_service=_FakeMarketHistoryService(),
+    ).get_rrg(session, market="HK")
+
+    assert payload["market"] == "HK"
+    assert [g["industry_group"] for g in payload["groups"]] == ["Internet Services"]
+
+
+def test_get_rrg_disabled_non_us_market_returns_empty_without_history_lookup():
+    session = _session()
+
+    class _FakeMarketHistoryService:
+        def get_all_groups_history(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("disabled RRG markets should not load history")
+
+    payload = RRGService(
+        group_rank_service=_ExplodingRankService(),
+        market_group_ranking_service=_FakeMarketHistoryService(),
+    ).get_rrg_scopes(session, market="KR", scopes=("groups", "sectors"))
+
+    assert payload["groups"]["groups"] == []
+    assert payload["sectors"]["groups"] == []
+
+
+def test_get_group_sector_map_uses_taxonomy_for_curated_rrg_market():
+    session = _session()
+
+    class _FakeTaxonomyService:
+        def sector_map_for_market(self, market):
+            assert market == "HK"
+            return {"Internet Services": "Information Technology"}
+
+    mapping = RRGService(
+        group_rank_service=_StubRankService([]),
+        taxonomy_service=_FakeTaxonomyService(),
+    ).get_group_sector_map(session, market="HK")
+
+    assert mapping == {"Internet Services": "Information Technology"}

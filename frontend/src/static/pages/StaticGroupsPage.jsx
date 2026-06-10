@@ -27,6 +27,7 @@ import RRGViewToggle from '../../components/Charts/RRGViewToggle';
 import RankChangeCell from '../../components/shared/RankChangeCell';
 import TickerCell from '../../components/common/TickerCell';
 import { useStaticMarket } from '../StaticMarketContext';
+import { availableRrgScopesFromBundle } from '../../utils/rrgScopes';
 
 function MoversCard({ title, rows }) {
   return (
@@ -143,6 +144,7 @@ function StaticGroupsPage() {
   const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
   const rrgQuery = useStaticGroupsRRG(marketEntry);
   const rrgAvailable = Boolean(marketEntry.assets?.groups_rrg?.path);
+  const availableRrgScopes = useMemo(() => availableRrgScopesFromBundle(rrgQuery.data), [rrgQuery.data]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [view, setView] = useState('table'); // 'table' | 'rrg'
   const [rrgScope, setRrgScope] = useState('groups'); // 'groups' | 'sectors'
@@ -154,6 +156,19 @@ function StaticGroupsPage() {
       setView('table');
     }
   }, [rrgAvailable, view]);
+
+  useEffect(() => {
+    if (!availableRrgScopes || view !== 'rrg') {
+      return;
+    }
+    if (availableRrgScopes.length === 0) {
+      setView('table');
+      return;
+    }
+    if (!availableRrgScopes.includes(rrgScope)) {
+      setRrgScope(availableRrgScopes[0]);
+    }
+  }, [availableRrgScopes, rrgScope, view]);
 
   if (manifestQuery.isLoading || groupsQuery.isLoading) {
     return (
@@ -192,6 +207,7 @@ function StaticGroupsPage() {
           onView={setView}
           scope={rrgScope}
           onScope={setRrgScope}
+          availableScopes={availableRrgScopes}
           sx={{ mb: 2 }}
         />
       )}

@@ -81,6 +81,59 @@ class MarketGroupRankingService:
             if row.get("industry_group") and row.get("rank") is not None
         }
 
+    def get_all_groups_history(
+        self,
+        db: Session,
+        *,
+        market: str,
+        days: int = 400,
+    ) -> tuple[str | None, dict[str, dict[str, Any]], dict[str, list[tuple[date, float, int]]]]:
+        """Return RRG-ready avg-RS history for every group in one market.
+
+        This loads full FeatureRun snapshots once per run, not once per group,
+        then computes the same group-ranking rows used by the live rankings page.
+        """
+        latest_run = self._get_latest_published_run(db, market=market)
+        if latest_run is None:
+            return None, {}, {}
+
+        cutoff_date = latest_run.as_of_date - timedelta(days=days)
+        market_runs = self._get_market_run_series(
+            db,
+            market=market,
+            latest_run=latest_run,
+            cutoff_date=cutoff_date,
+            min_runs=0,
+        )
+
+        rankings_by_run: dict[int, list[dict[str, Any]]] = {}
+        for run in market_runs:
+            rows = self._load_run_rows(db, run.id, include_sparklines=False)
+            rankings_by_run[run.id] = self.compute_group_rankings_from_rows(
+                rows,
+                ranking_date=run.as_of_date,
+            )
+
+        latest_rankings = rankings_by_run.get(latest_run.id, [])
+        meta = self._group_rank_map(latest_rankings)
+
+        series: dict[str, list[tuple[date, float, int]]] = defaultdict(list)
+        for run in reversed(market_runs):
+            for ranking in rankings_by_run.get(run.id, []):
+                group = ranking.get("industry_group")
+                avg_rs = ranking.get("avg_rs_rating")
+                if not group or avg_rs is None:
+                    continue
+                series[str(group)].append(
+                    (
+                        run.as_of_date,
+                        float(avg_rs),
+                        int(ranking.get("num_stocks") or 0),
+                    )
+                )
+
+        return latest_run.as_of_date.isoformat(), meta, dict(series)
+
     def get_rank_movers(
         self,
         db: Session,
@@ -356,13 +409,19 @@ class MarketGroupRankingService:
                 historical = reference_map.get(ranking["industry_group"])
                 ranking[key] = historical["rank"] - ranking["rank"] if historical is not None else None
 
-    def _load_run_rows(self, db: Session, run_id: int) -> list[Any]:
+    def _load_run_rows(
+        self,
+        db: Session,
+        run_id: int,
+        *,
+        include_sparklines: bool = True,
+    ) -> list[Any]:
         repo = SqlFeatureStoreRepository(db)
         return repo.query_all_as_scan_results(
             run_id,
             FilterSpec(),
             SortSpec(field="composite_score", order=SortOrder.DESC),
-            include_sparklines=True,
+            include_sparklines=include_sparklines,
         )
 
     def _get_latest_published_run(

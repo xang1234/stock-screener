@@ -69,6 +69,42 @@ class _FakePriceCache:
         return self.get_many_cached_only([symbol], period=period).get(symbol.upper())
 
 
+def _static_rrg_payload(market: str, as_of_date: str) -> dict:
+    return {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "generated_at": f"{as_of_date}T22:00:00Z",
+        "available": True,
+        "market": market,
+        "as_of_date": as_of_date,
+        "available_scopes": ["groups"],
+        "payload": {
+            "groups": {
+                "date": as_of_date,
+                "market": market,
+                "scope": "groups",
+                "groups": [
+                    {
+                        "industry_group": "Semiconductors",
+                        "rank": 1,
+                        "num_stocks": 14,
+                        "avg_rs_rating": 92.5,
+                        "quadrant": "Leading",
+                        "is_provisional": False,
+                        "current": {"date": as_of_date, "x": 104.0, "y": 103.0},
+                        "tail": [{"date": as_of_date, "x": 104.0, "y": 103.0}],
+                    }
+                ],
+            },
+            "sectors": {
+                "date": as_of_date,
+                "market": market,
+                "scope": "sectors",
+                "groups": [],
+            },
+        },
+    }
+
+
 def test_get_latest_published_run_prefers_latest_published_pointer(service_and_session_factory):
     service, session_factory = service_and_session_factory
     _insert_runs(
@@ -238,6 +274,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
     monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
+    monkeypatch.setattr(service, "_build_groups_rrg_payload", lambda **_kwargs: _static_rrg_payload("US", "2026-03-31"))
     monkeypatch.setattr(service, "_build_home_payload", lambda **_kwargs: home_payload)
 
     output_dir = tmp_path / "static-data"
@@ -255,8 +292,10 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert manifest["features"]["charts"] is True
     assert manifest["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["assets"]["charts"]["path"] == "charts/index.json"
+    assert manifest["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
     assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["markets"]["US"]["assets"]["charts"]["path"] == "charts/index.json"
+    assert manifest["markets"]["US"]["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
     assert "themes" not in manifest["features"]
     assert "themes" not in manifest["pages"]
     assert manifest["warnings"] == []
@@ -332,6 +371,7 @@ def test_export_writes_india_market_bundle_and_root_manifest(
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
     monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
+    monkeypatch.setattr(service, "_build_groups_rrg_payload", lambda **_kwargs: _static_rrg_payload("HK", "2026-03-31"))
     monkeypatch.setattr(service, "_build_home_payload", lambda **_kwargs: home_payload)
 
     output_dir = tmp_path / "static-data"
@@ -424,6 +464,7 @@ def test_export_can_write_single_market_artifact_without_root_manifest(
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
     monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
+    monkeypatch.setattr(service, "_build_groups_rrg_payload", lambda **_kwargs: _static_rrg_payload("HK", "2026-03-31"))
     monkeypatch.setattr(service, "_build_home_payload", lambda **_kwargs: home_payload)
 
     output_dir = tmp_path / "market-artifact"
@@ -438,6 +479,7 @@ def test_export_can_write_single_market_artifact_without_root_manifest(
     assert metadata["market"] == "HK"
     assert metadata["entry"]["pages"]["scan"]["path"] == "markets/hk/scan/manifest.json"
     assert metadata["entry"]["assets"]["charts"]["path"] == "markets/hk/charts/index.json"
+    assert metadata["entry"]["assets"]["groups_rrg"]["path"] == "markets/hk/groups_rrg.json"
     assert metadata["warnings"] == []
 
 
@@ -1203,7 +1245,8 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
     assert manifest["features"]["groups"] is False
     assert manifest["markets"]["US"]["features"]["breadth"] is False
     assert manifest["markets"]["US"]["features"]["groups"] is False
-    assert len(manifest["warnings"]) == 2
+    assert len(manifest["warnings"]) == 3
+    assert any("Static US rrg data unavailable" in warning for warning in manifest["warnings"])
     assert breadth["available"] is False
     assert breadth["expected_as_of_date"] == "2026-04-02"
     assert "No breadth snapshot is available" in breadth["message"]
@@ -1619,6 +1662,57 @@ def test_build_groups_payload_requires_target_date(service_and_session_factory, 
 
     assert rankings_calls == [(197, date(2026, 4, 2))]
     assert movers_calls == []
+
+
+def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_factory, monkeypatch):
+    service, session_factory = service_and_session_factory
+
+    class _FakeRRGService:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = kwargs
+
+        def get_rrg_scopes(self, db, *, market, scopes):  # noqa: ARG002
+            assert market == "HK"
+            assert scopes == ("groups", "sectors")
+            return {
+                "groups": {
+                    "date": "2026-04-18",
+                    "market": "HK",
+                    "scope": "groups",
+                    "groups": [
+                        {
+                            "industry_group": "Internet Services",
+                            "rank": 1,
+                            "num_stocks": 9,
+                            "avg_rs_rating": 82.0,
+                            "quadrant": "Leading",
+                            "is_provisional": False,
+                            "current": {"date": "2026-04-12", "x": 104.0, "y": 103.0},
+                            "tail": [{"date": "2026-04-12", "x": 104.0, "y": 103.0}],
+                        }
+                    ],
+                },
+                "sectors": {
+                    "date": "2026-04-18",
+                    "market": "HK",
+                    "scope": "sectors",
+                    "groups": [],
+                },
+            }
+
+    monkeypatch.setattr(export_module, "RRGService", _FakeRRGService)
+    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: SimpleNamespace())
+
+    with session_factory() as db:
+        payload = service._build_groups_rrg_payload(  # noqa: SLF001
+            db=db,
+            generated_at="2026-04-18T22:00:00Z",
+            expected_as_of_date=date(2026, 4, 18),
+            market="HK",
+        )
+
+    assert payload["available_scopes"] == ["groups"]
+    assert payload["payload"]["groups"]["groups"][0]["industry_group"] == "Internet Services"
 
 
 def test_export_chart_bundle_writes_top_ranked_payloads_with_sidebar_metadata(

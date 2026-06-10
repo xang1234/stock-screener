@@ -19,6 +19,7 @@ from ...schemas.groups import (
     GroupRankingsResponse,
     GroupDetailResponse,
     MoversResponse,
+    RRGBundleResponse,
     RRGResponse,
     CalculationRequest,
     CalculationResponse,
@@ -30,6 +31,7 @@ from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...domain.analytics.scope import market_scope_tag
 from ...domain.markets.catalog import get_market_catalog
 from ...services.market_group_ranking_service import get_market_group_ranking_service
+from ...services.market_taxonomy_service import get_market_taxonomy_service
 from ...services.rrg_service import RRGService
 from ...services.ui_snapshot_service import GroupsBootstrapUnavailableError
 from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
@@ -49,6 +51,14 @@ def _get_group_rank_service():
 
 def _get_market_group_service():
     return get_market_group_ranking_service()
+
+
+def _get_rrg_service():
+    return RRGService(
+        group_rank_service=_get_group_rank_service(),
+        market_group_ranking_service=_get_market_group_service(),
+        taxonomy_service=get_market_taxonomy_service(),
+    )
 
 
 def _normalize_market_param(market: str | None) -> str:
@@ -141,6 +151,76 @@ async def get_current_rankings(
     )
 
 
+def _build_rrg_response(
+    payload: dict,
+    *,
+    market: str,
+    scope: str,
+    tail_weeks: int,
+    limit: int,
+) -> RRGResponse:
+    groups = (payload.get("groups") or [])[:limit]
+    return RRGResponse(
+        date=payload.get("date"),
+        market=market,
+        scope=scope,
+        tail_weeks=tail_weeks,
+        total_groups=len(groups),
+        groups=groups,
+        **market_scope_tag(market),
+    )
+
+
+@router.get("/rrg/scopes", response_model=RRGBundleResponse)
+async def get_rrg_scopes(
+    tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
+    limit: int = Query(197, ge=1, le=197, description="Top-N series by rank"),
+    market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
+    db: Session = Depends(get_db),
+):
+    """Relative Rotation Graph coordinates for all scopes available to a market."""
+    normalized_market = _normalize_market_param(market)
+    service = _get_rrg_service()
+    scopes = service.get_rrg_scopes(
+        db,
+        market=normalized_market,
+        scopes=("groups", "sectors"),
+        tail_weeks=tail_weeks,
+    )
+    if not (scopes.get("groups") or {}).get("groups"):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No RRG data available for this market. "
+                "Run a group-ranking backfill first."
+            ),
+        )
+
+    responses = {
+        scope: _build_rrg_response(
+            scope_payload,
+            market=normalized_market,
+            scope=scope,
+            tail_weeks=tail_weeks,
+            limit=limit,
+        )
+        for scope, scope_payload in scopes.items()
+    }
+    available_scopes = [
+        scope for scope in ("groups", "sectors")
+        if responses.get(scope) and responses[scope].total_groups > 0
+    ]
+
+    return RRGBundleResponse(
+        date=responses["groups"].date,
+        market=normalized_market,
+        tail_weeks=tail_weeks,
+        available_scopes=available_scopes,
+        payload=responses,
+        **market_scope_tag(normalized_market),
+    )
+
+
 @router.get("/rrg", response_model=RRGResponse)
 async def get_rrg(
     tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
@@ -158,13 +238,12 @@ async def get_rrg(
     quadrants. Math is computed server-side (see ``services/rrg_service.py``).
     """
     normalized_market = _normalize_market_param(market)
-    service = RRGService(group_rank_service=_get_group_rank_service())
+    service = _get_rrg_service()
     payload = service.get_rrg(
         db, market=normalized_market, scope=scope, tail_weeks=tail_weeks
     )
 
-    groups = payload["groups"][:limit]
-    if not groups:
+    if not payload.get("groups"):
         raise HTTPException(
             status_code=404,
             detail=(
@@ -173,15 +252,15 @@ async def get_rrg(
             ),
         )
 
-    return RRGResponse(
-        date=payload["date"],
+    response = _build_rrg_response(
+        payload,
         market=normalized_market,
         scope=scope,
         tail_weeks=tail_weeks,
-        total_groups=len(groups),
-        groups=groups,
-        **market_scope_tag(normalized_market),
+        limit=limit,
     )
+
+    return response
 
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)

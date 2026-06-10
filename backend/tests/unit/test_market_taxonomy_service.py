@@ -13,7 +13,10 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
     _write_csv(
         tmp_path / "hk-deep.csv",
-        "Symbol,EM Industry (EN),Theme (EN)\n700,Internet Services,AI Infrastructure\n",
+        (
+            "Symbol,HSICS Sector,EM Industry (EN),Theme (EN)\n"
+            "700,Information Technology,Internet Services,AI Infrastructure\n"
+        ),
     )
     _write_csv(
         tmp_path / "india-deep.csv",
@@ -56,6 +59,7 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     assert hk is not None
     assert hk.symbol == "0700.HK"
     assert hk.industry_group == "Internet Services"
+    assert hk.sector == "Information Technology"
     assert hk.themes_list() == ["AI Infrastructure"]
 
     hk_unpadded = service.get("700", market="HK")
@@ -144,11 +148,11 @@ def test_groups_for_market_and_symbols_for_group(tmp_path):
     _write_csv(
         tmp_path / "hk-deep.csv",
         (
-            "Symbol,EM Industry (EN),Theme (EN)\n"
-            "700,Internet Services,AI Infrastructure\n"
-            "1,Conglomerates,\n"
-            "5,Banks,\n"
-            "11,Banks,\n"
+            "Symbol,HSICS Sector,EM Industry (EN),Theme (EN)\n"
+            "700,Information Technology,Internet Services,AI Infrastructure\n"
+            "1,Industrials,Conglomerates,\n"
+            "5,Financials,Banks,\n"
+            "11,Financials,Banks,\n"
         ),
     )
     # Other CSVs still need to be present so `refresh()` can load them.
@@ -178,9 +182,43 @@ def test_groups_for_market_and_symbols_for_group(tmp_path):
     assert service.groups_for_market("XX") == []
 
 
+def test_sector_map_for_market_majority_votes_native_taxonomy_sectors(tmp_path):
+    _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
+    _write_csv(
+        tmp_path / "hk-deep.csv",
+        (
+            "Symbol,HSICS Sector,EM Industry (EN),Theme (EN)\n"
+            "700,Information Technology,Internet Services,AI Infrastructure\n"
+            "9988,Information Technology,Internet Services,E-Commerce\n"
+            "388,Financials,Internet Services,Exchange Operators\n"
+            "5,Financials,Banks,\n"
+            "11,Financials,Banks,\n"
+        ),
+    )
+    _write_csv(
+        tmp_path / "india-deep.csv",
+        "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
+    )
+    _write_csv(
+        tmp_path / "kabutan_themes_en.csv",
+        "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
+    )
+    _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+    _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
+    _write_csv(tmp_path / "china-deep.csv", "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n")
+
+    service = MarketTaxonomyService(data_dir=tmp_path)
+
+    assert service.sector_for_group("HK", "Internet Services") == "Information Technology"
+    assert service.sector_map_for_market("HK") == {
+        "Banks": "Financials",
+        "Internet Services": "Information Technology",
+    }
+
+
 def test_entry_count_for_market_counts_loaded_rows_before_symbol_merge(tmp_path):
     _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
-    _write_csv(tmp_path / "hk-deep.csv", "Symbol,EM Industry (EN),Theme (EN)\n")
+    _write_csv(tmp_path / "hk-deep.csv", "Symbol,HSICS Sector,EM Industry (EN),Theme (EN)\n")
     _write_csv(
         tmp_path / "india-deep.csv",
         "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
@@ -251,7 +289,7 @@ def _write_minimum_required_csvs(tmp_path) -> None:
     """Write the seven CSVs required by the pre-CA loaders so a test can
     isolate CA-specific behaviour without tripping required-CSV errors."""
     _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
-    _write_csv(tmp_path / "hk-deep.csv", "Symbol,EM Industry (EN),Theme (EN)\n")
+    _write_csv(tmp_path / "hk-deep.csv", "Symbol,HSICS Sector,EM Industry (EN),Theme (EN)\n")
     _write_csv(
         tmp_path / "india-deep.csv",
         "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
@@ -329,7 +367,13 @@ def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp
     app_data = runtime_root / "app" / "data"
     app_data.mkdir(parents=True)
     _write_csv(app_data / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
-    _write_csv(app_data / "hk-deep.csv", "Symbol,EM Industry (EN),Theme (EN)\n700,Internet Services,AI Infrastructure\n")
+    _write_csv(
+        app_data / "hk-deep.csv",
+        (
+            "Symbol,HSICS Sector,EM Industry (EN),Theme (EN)\n"
+            "700,Information Technology,Internet Services,AI Infrastructure\n"
+        ),
+    )
     _write_csv(app_data / "india-deep.csv", "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\nRELIANCE.NS,XNSE,ENERGY (STOCKS),Oil & Gas,Integrated Oil & Gas\n")
     _write_csv(app_data / "kabutan_themes_en.csv", "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n7203,Transportation Equipment,Automobiles,Hybrid Vehicles\n")
     _write_csv(app_data / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n2330,TWSE,Semiconductors\n")

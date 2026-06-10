@@ -131,6 +131,7 @@ describe('StaticGroupsPage', () => {
           status: 200,
           json: async () => ({
             available: true,
+            available_scopes: ['groups'],
             payload: {
               groups: {
                 date: '2026-03-31',
@@ -165,5 +166,6 @@ describe('StaticGroupsPage', () => {
     // Switch from the table view to the Relative Rotation Graph.
     fireEvent.click(screen.getByRole('button', { name: 'RRG' }));
     expect(await screen.findByText(/Relative Rotation Graph/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sectors' })).not.toBeInTheDocument();
   });
 });
