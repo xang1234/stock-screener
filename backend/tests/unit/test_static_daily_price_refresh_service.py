@@ -219,6 +219,66 @@ def test_static_daily_price_refresh_batch_size_uses_market_policy(monkeypatch) -
     assert static_daily_price_refresh_batch_size(None) == STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE
 
 
+def test_static_daily_price_refresh_includes_us_key_market_data_symbols() -> None:
+    session_factory = _sqlite_session_factory()
+
+    fetch_calls: list[dict] = []
+    stored_batches: list[dict] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            fetch_calls.append(
+                {
+                    "symbols": list(symbols),
+                    "period": period,
+                    "start_batch_size": start_batch_size,
+                    "market": market,
+                }
+            )
+            return {
+                symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+                for symbol in symbols
+            }
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(
+            store_batch_in_cache=lambda payload, also_store_db=True, market=None: stored_batches.append(
+                {
+                    "symbols": sorted(payload.keys()),
+                    "also_store_db": also_store_db,
+                    "market": market,
+                }
+            )
+        ),
+        fetcher=_FakeFetcher(),
+        batch_size_for_market=lambda _market: 25,
+        sleep=lambda _seconds: None,
+    )
+
+    result = service.refresh(as_of_date=date(2026, 6, 4), market="US")
+
+    assert fetch_calls == [
+        {
+            "symbols": ["DX-Y.NYB", "SGD=X", "BTC-USD", "^VIX"],
+            "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+            "start_batch_size": 25,
+            "market": "US",
+        },
+    ]
+    assert stored_batches == [
+        {
+            "symbols": ["BTC-USD", "DX-Y.NYB", "SGD=X", "^VIX"],
+            "also_store_db": True,
+            "market": "US",
+        },
+    ]
+    assert result["total_active_symbols"] == 0
+    assert result["key_market_symbols"] == 4
+    assert result["no_history_symbols"] == 4
+    assert result["yahoo_fetched_symbols"] == 4
+
+
 def _seed_in_universe(session_factory) -> None:
     with session_factory() as db:
         db.add_all(

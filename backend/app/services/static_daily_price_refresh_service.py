@@ -13,6 +13,7 @@ from app.services.price_refresh_planning import (
     STALE_PRICE_TOP_UP_PERIOD,
 )
 from app.domain.providers.price_symbol_support import split_supported_price_symbols
+from app.domain.providers.price_symbol_aliases import YAHOO_PRICE_SYMBOL_ALIASES
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = STALE_PRICE_TOP_UP_PERIOD
@@ -27,6 +28,9 @@ STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE = 250
 STATIC_RATE_LIMITED_RETRY_MARKETS = frozenset({"IN"})
 STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS = 300
 STATIC_RATE_LIMITED_RETRY_BATCH_SIZE = 25
+STATIC_KEY_MARKET_PRICE_SYMBOLS_BY_MARKET = {
+    "US": tuple(YAHOO_PRICE_SYMBOL_ALIASES.values()),
+}
 
 
 def static_daily_price_refresh_batch_size(market: str | None) -> int:
@@ -49,6 +53,23 @@ def _is_rate_limit_failure(payload: dict[str, Any]) -> bool:
         return False
     indicators = ("rate", "429", "too many", "limit", "throttl")
     return any(token in error for token in indicators)
+
+
+def _key_market_price_symbols(market: str | None) -> list[str]:
+    normalized = str(market or "").strip().upper()
+    return list(STATIC_KEY_MARKET_PRICE_SYMBOLS_BY_MARKET.get(normalized, ()))
+
+
+def _dedupe_symbols(symbols: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in symbols:
+        symbol = str(raw or "").strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        result.append(symbol)
+    return result
 
 
 class StaticDailyPriceRefreshService:
@@ -83,7 +104,9 @@ class StaticDailyPriceRefreshService:
             if market is not None:
                 query = query.filter(StockUniverse.market == market)
             active_symbols = [symbol for symbol, in query.all()]
-            supported_symbols, skipped_symbols = split_supported_price_symbols(active_symbols)
+            key_market_symbols = _key_market_price_symbols(market)
+            refresh_candidates = _dedupe_symbols(active_symbols + key_market_symbols)
+            supported_symbols, skipped_symbols = split_supported_price_symbols(refresh_candidates)
             coverage = classify_price_history(
                 db,
                 symbols=supported_symbols,
@@ -106,6 +129,7 @@ class StaticDailyPriceRefreshService:
                 "as_of_date": as_of_date.isoformat(),
                 "total_active_symbols": len(active_symbols),
                 "supported_symbols": len(supported_symbols),
+                "key_market_symbols": len(key_market_symbols),
                 "db_fresh_symbols": len(db_fresh_symbols),
                 "stale_symbols": len(stale_symbols),
                 "no_history_symbols": len(no_history_symbols),
@@ -157,6 +181,7 @@ class StaticDailyPriceRefreshService:
             "as_of_date": as_of_date.isoformat(),
             "total_active_symbols": len(active_symbols),
             "supported_symbols": len(supported_symbols),
+            "key_market_symbols": len(key_market_symbols),
             "db_fresh_symbols": len(db_fresh_symbols),
             "stale_symbols": len(stale_symbols),
             "no_history_symbols": len(no_history_symbols),

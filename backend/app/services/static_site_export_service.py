@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.domain.markets.catalog import get_market_catalog
+from app.domain.providers.price_symbol_aliases import resolve_yahoo_price_symbol
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock import StockPrice
@@ -110,8 +111,12 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "SPY", "display_name": "S&P 500 ETF", "currency": "USD"},
         {"symbol": "QQQ", "display_name": "Nasdaq 100 ETF", "currency": "USD"},
         {"symbol": "IWM", "display_name": "Russell 2000 ETF", "currency": "USD"},
+        {"symbol": "TVC:DXY", "display_name": "US Dollar Index", "currency": "USD"},
+        {"symbol": "FX:USDSGD", "display_name": "USD/SGD", "currency": "SGD"},
+        {"symbol": "BITSTAMP:BTCUSD", "display_name": "Bitcoin", "currency": "USD"},
         {"symbol": "GLD", "display_name": "Gold ETF", "currency": "USD"},
         {"symbol": "TLT", "display_name": "20+ Year Treasury ETF", "currency": "USD"},
+        {"symbol": "TVC:VIX", "display_name": "Volatility Index", "currency": "USD"},
     ),
     "HK": (
         {"symbol": "^HSI", "display_name": "Hang Seng Index", "currency": "HKD"},
@@ -1383,9 +1388,10 @@ class StaticSiteExportService:
             db = market
             entries: list[dict[str, Any]] = []
             for item in _DEFAULT_KEY_MARKETS[STATIC_DEFAULT_MARKET]:
+                data_symbol = resolve_yahoo_price_symbol(item["symbol"])
                 rows = (
                     db.query(StockPrice)
-                    .filter(StockPrice.symbol == item["symbol"])
+                    .filter(StockPrice.symbol == data_symbol)
                     .order_by(StockPrice.date.desc())
                     .limit(30)
                     .all()
@@ -1418,7 +1424,8 @@ class StaticSiteExportService:
 
         entries: list[dict[str, Any]] = []
         for item in _DEFAULT_KEY_MARKETS.get(market, ()):
-            history = self._get_symbol_price_history(item["symbol"], period="6mo")
+            data_symbol = resolve_yahoo_price_symbol(item["symbol"])
+            history = self._get_symbol_price_history(data_symbol, period="6mo")
             ordered = self._serialize_close_history(history, days=30)
             latest = ordered[-1] if ordered else None
             previous = ordered[-2] if len(ordered) > 1 else None

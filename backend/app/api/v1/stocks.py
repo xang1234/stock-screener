@@ -26,7 +26,7 @@ from ...schemas.stock import (
 )
 from ...services.stock_event_context_service import StockEventContextService
 from ...services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
-from ...services.symbol_format import require_valid_symbol
+from ...services.symbol_format import require_valid_price_history_symbol, require_valid_symbol
 from ...schemas.validation import StockValidationResponse
 from ...services.validation_service import ValidationService
 from ...use_cases.scanning.explain_stock import ExplainStockUseCase
@@ -827,7 +827,7 @@ async def get_stock_peers(
 
 @router.get("/{symbol}/history", response_model=list[StockPriceHistoryPoint])
 async def get_price_history(
-    symbol: str = Depends(require_valid_symbol),
+    symbol: str = Depends(require_valid_price_history_symbol),
     period: str = "6mo",
 ):
     return _load_price_history(symbol, period)

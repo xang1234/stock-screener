@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 import httpx
 import pandas as pd
@@ -47,8 +48,15 @@ class _FakeCache:
     def __init__(self, frames):
         self._frames = frames
         self.last_period = None
+        self.last_symbol = None
         self.last_symbols = None
         self.last_method = None
+
+    def get_cached_only(self, symbol, period="2y"):
+        self.last_method = "get_cached_only"
+        self.last_symbol = symbol
+        self.last_period = period
+        return self._frames.get(symbol)
 
     def get_many_cached_only(self, symbols, period="2y"):
         self.last_method = "get_many_cached_only"
@@ -58,6 +66,37 @@ class _FakeCache:
 
     def get_many(self, symbols, period="2y"):
         raise AssertionError("history/batch must use the cache-only bulk path")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("display_symbol", "cache_symbol"),
+    [
+        ("TVC:DXY", "DX-Y.NYB"),
+        ("FX:USDSGD", "SGD=X"),
+        ("TVC:VIX", "^VIX"),
+        ("BITSTAMP:BTCUSD", "BTC-USD"),
+    ],
+)
+async def test_price_history_accepts_key_market_tradingview_symbols(
+    client,
+    monkeypatch,
+    display_symbol,
+    cache_symbol,
+):
+    fake = _FakeCache({cache_symbol: _make_ohlcv_frame(220)})
+    monkeypatch.setattr(stocks_module, "get_price_cache", lambda: fake)
+
+    response = await client.get(
+        f"/api/v1/stocks/{quote(display_symbol, safe='')}/history",
+        params={"period": "3mo"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()
+    assert fake.last_method == "get_cached_only"
+    assert fake.last_symbol == cache_symbol
+    assert fake.last_period == "2y"
 
 
 @pytest.mark.asyncio

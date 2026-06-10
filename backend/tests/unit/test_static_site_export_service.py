@@ -543,6 +543,50 @@ def test_static_key_markets_include_australia_benchmark_symbols(service_and_sess
     assert {"BHP.AX", "CBA.AX"} <= set(symbols)
 
 
+def test_static_key_markets_resolve_us_tradingview_symbols_to_cache_symbols(
+    service_and_session_factory,
+    monkeypatch,
+):
+    service, _session_factory = service_and_session_factory
+    lookup_symbols: list[str] = []
+    history = [
+        {"date": "2026-06-08", "close": 100.0},
+        {"date": "2026-06-09", "close": 101.0},
+    ]
+
+    def _fake_get_symbol_price_history(symbol, *, period):
+        lookup_symbols.append(symbol)
+        return [symbol, period]
+
+    monkeypatch.setattr(service, "_get_symbol_price_history", _fake_get_symbol_price_history)
+    monkeypatch.setattr(service, "_serialize_close_history", lambda history_payload, days=30: history)
+
+    markets = service._build_key_markets("US")  # noqa: SLF001 - intentional unit test coverage
+
+    assert [item["symbol"] for item in markets] == [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "TVC:DXY",
+        "FX:USDSGD",
+        "BITSTAMP:BTCUSD",
+        "GLD",
+        "TLT",
+        "TVC:VIX",
+    ]
+    assert lookup_symbols == [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DX-Y.NYB",
+        "SGD=X",
+        "BTC-USD",
+        "GLD",
+        "TLT",
+        "^VIX",
+    ]
+
+
 def test_static_default_min_volume_filters_notional_turnover_not_share_count():
     rows = [
         {"symbol": "LOCAL_LIQUID", "volume": 5_000_000, "avg_volume_shares": 1_000},
