@@ -18,8 +18,7 @@ def test_group_rank_warmup_policy_allows_partial_cache_above_market_threshold() 
     decision = evaluate_same_day_group_rank_warmup(price_cache, market="TW")
 
     assert decision.error is None
-    assert decision.require_complete_cache is False
-    assert decision.min_cache_coverage == 0.50
+    assert decision.cache_coverage_min == 0.50
 
 
 def test_group_rank_warmup_policy_requires_complete_cache_when_partial_is_too_low() -> None:
@@ -34,5 +33,4 @@ def test_group_rank_warmup_policy_requires_complete_cache_when_partial_is_too_lo
     decision = evaluate_same_day_group_rank_warmup(price_cache, market="US")
 
     assert decision.error is not None
-    assert decision.require_complete_cache is True
-    assert decision.min_cache_coverage is None
+    assert decision.cache_coverage_min is None

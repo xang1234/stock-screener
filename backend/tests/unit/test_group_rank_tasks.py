@@ -115,8 +115,7 @@ def test_daily_group_rankings_allow_tw_partial_warmup_above_bootstrap_price_poli
         datetime(2026, 6, 10, 17, 40, 0).date(),
         market="TW",
         cache_only=True,
-        require_complete_cache=False,
-        min_cache_coverage=0.50,
+        cache_coverage_min=0.50,
     )
 
 
@@ -180,7 +179,7 @@ def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
         datetime(2026, 3, 20, 17, 40, 0).date(),
         market="US",
         cache_only=True,
-        require_complete_cache=True,
+        cache_coverage_min=0.95,
     )
 
 
@@ -247,7 +246,6 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
         datetime(2026, 3, 19).date(),
         market="US",
         cache_only=False,
-        require_complete_cache=False,
     )
 
 
@@ -287,7 +285,7 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
         datetime(2026, 4, 2).date(),
         market="US",
         cache_only=True,
-        require_complete_cache=True,
+        cache_coverage_min=0.95,
     )
 
 

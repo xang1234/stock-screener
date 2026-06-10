@@ -287,7 +287,7 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
             date(2026, 5, 1),
             market="JP",
             cache_only=True,
-            require_complete_cache=True,
+            cache_coverage_min=0.95,
         )
 
     assert str(excinfo.value) == "^N225 benchmark data is missing from cache for JP"
@@ -535,7 +535,7 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
             db_session,
             date(2026, 3, 20),
             cache_only=True,
-            require_complete_cache=True,
+            cache_coverage_min=0.95,
         )
 
     assert excinfo.value.stats["cache_miss_symbols"] == 1
@@ -575,11 +575,11 @@ def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_sessio
             date(2026, 6, 10),
             market="TW",
             cache_only=True,
-            min_cache_coverage=0.55,
+            cache_coverage_min=0.55,
         )
 
     assert excinfo.value.stats["cache_coverage_ratio"] == 0.5
-    assert excinfo.value.stats["min_cache_coverage"] == 0.55
+    assert excinfo.value.stats["cache_coverage_min"] == 0.55
     store_rankings.assert_not_called()
 
 

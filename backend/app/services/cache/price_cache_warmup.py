@@ -28,6 +28,8 @@ class WarmupMetadataReadiness:
     count: int | None = None
     total: int | None = None
     percent: float | None = None
+    coverage_ratio: float | None = None
+    fresh: bool = False
 
 
 def _warmup_int(metadata: dict | None, key: str) -> int | None:
@@ -77,7 +79,6 @@ def evaluate_warmup_metadata(
     metadata: dict | None,
     *,
     context: str,
-    allow_partial_min_coverage: float | None = None,
     max_age: timedelta = WARMUP_METADATA_MAX_AGE,
     now: datetime | None = None,
 ) -> WarmupMetadataReadiness:
@@ -93,6 +94,9 @@ def evaluate_warmup_metadata(
     count = _warmup_int(metadata, "count")
     total = _warmup_int(metadata, "total")
     percent = _warmup_percent(count, total)
+    coverage_ratio = (
+        count / total if count is not None and total is not None and total > 0 else None
+    )
     summary = _warmup_summary(metadata, status=status, count=count, total=total)
 
     if status not in {"completed", "partial"}:
@@ -104,6 +108,7 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
         )
 
     completed_at_raw = metadata.get("completed_at")
@@ -116,6 +121,7 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
         )
     try:
         completed_at = datetime.fromisoformat(str(completed_at_raw))
@@ -128,6 +134,7 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
         )
     if _reference_now(completed_at, now) - completed_at > max_age:
         return WarmupMetadataReadiness(
@@ -138,28 +145,10 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
         )
 
     if status == "partial":
-        coverage_ratio = (
-            count / total
-            if count is not None and total is not None and total > 0
-            else None
-        )
-        if (
-            allow_partial_min_coverage is not None
-            and coverage_ratio is not None
-            and coverage_ratio >= allow_partial_min_coverage
-        ):
-            return WarmupMetadataReadiness(
-                ready=True,
-                reason=None,
-                summary=summary,
-                status=status,
-                count=count,
-                total=total,
-                percent=percent,
-            )
         return WarmupMetadataReadiness(
             ready=False,
             reason=f"Cache warmup not complete for {context} ({summary})",
@@ -168,6 +157,8 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
+            fresh=True,
         )
 
     return WarmupMetadataReadiness(
@@ -178,6 +169,8 @@ def evaluate_warmup_metadata(
         count=count,
         total=total,
         percent=percent,
+        coverage_ratio=coverage_ratio,
+        fresh=True,
     )
 
 

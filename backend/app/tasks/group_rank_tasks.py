@@ -24,17 +24,17 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
+from ..services.group_rank_warmup_policy import (
+    STRICT_GROUP_RANK_CACHE_COVERAGE,
+    evaluate_same_day_group_rank_warmup,
+)
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
 )
 from ..services.market_taxonomy_service import TaxonomyLoadError
 from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
-from .group_rank_helpers import (
-    group_rank_result_error as _group_rank_result_error,
-    release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory,
-)
+from .group_rank_memory import release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory
 from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
@@ -200,8 +200,9 @@ def calculate_daily_group_rankings(
         # Initialize service
         service = get_group_rank_service()
         same_day_cache_only = force_cache_only or calc_date == today_local
-        require_complete_group_cache = same_day_cache_only
-        min_group_cache_coverage = None
+        cache_coverage_min = (
+            STRICT_GROUP_RANK_CACHE_COVERAGE if same_day_cache_only else None
+        )
 
         if same_day_cache_only:
             if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
@@ -213,8 +214,7 @@ def calculate_daily_group_rankings(
                     service.price_cache,
                     market=market,
                 )
-                require_complete_group_cache = warmup_decision.require_complete_cache
-                min_group_cache_coverage = warmup_decision.min_cache_coverage
+                cache_coverage_min = warmup_decision.cache_coverage_min
                 if warmup_decision.error:
                     logger.error("✗ Refusing to publish daily group rankings: %s", warmup_decision.error)
                     logger.info("=" * 60)
@@ -240,10 +240,9 @@ def calculate_daily_group_rankings(
         ranking_kwargs = {
             "market": effective_market,
             "cache_only": same_day_cache_only,
-            "require_complete_cache": require_complete_group_cache,
         }
-        if min_group_cache_coverage is not None:
-            ranking_kwargs["min_cache_coverage"] = min_group_cache_coverage
+        if cache_coverage_min is not None:
+            ranking_kwargs["cache_coverage_min"] = cache_coverage_min
         results = service.calculate_group_rankings(
             db,
             calc_date,
@@ -624,7 +623,9 @@ def calculate_daily_group_rankings_with_gapfill(
                 activity_lifecycle=activity_lifecycle,
             )
             result['today'] = today_result
-            today_error = _group_rank_result_error(today_result)
+            today_error = None
+            if isinstance(today_result, dict) and today_result.get("error"):
+                today_error = str(today_result["error"])
             if today_error:
                 raise RuntimeError(f"Daily group ranking failed: {today_error}")
         else:

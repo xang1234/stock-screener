@@ -1,4 +1,4 @@
-"""Small helpers for group-rank task orchestration."""
+"""Memory cleanup for group-rank task orchestration."""
 
 from __future__ import annotations
 
@@ -10,17 +10,8 @@ import sys
 logger = logging.getLogger(__name__)
 
 
-def group_rank_result_error(result) -> str | None:
-    if not isinstance(result, dict):
-        return None
-    error = result.get("error")
-    if error:
-        return str(error)
-    return None
-
-
 def release_group_rank_gapfill_memory() -> None:
-    """Return freed pandas/SQLAlchemy heap pages before the same worker ranks today."""
+    """Return freed pandas/SQLAlchemy heap pages before ranking today."""
     collected = gc.collect()
     if sys.platform.startswith("linux"):
         try:

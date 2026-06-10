@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import app.domain.markets.key_markets as key_markets_module
 from app.domain.markets.key_markets import (
     key_market_instruments,
     key_market_price_symbols,
     key_market_watchlist_defaults,
-    resolve_key_market_price_symbol,
 )
 
 
@@ -17,8 +17,10 @@ def test_key_market_catalog_separates_display_symbols_from_price_symbols() -> No
     assert dxy.currency == "USD"
     assert dxy.price_symbol == "DX-Y.NYB"
     assert dxy.data_symbol == "DX-Y.NYB"
-    assert resolve_key_market_price_symbol("FX:USDSGD") == "SGD=X"
-    assert resolve_key_market_price_symbol("nvda") == "NVDA"
+
+
+def test_key_market_catalog_does_not_provide_global_price_symbol_resolution() -> None:
+    assert not hasattr(key_markets_module, "resolve_key_market_price_symbol")
 
 
 def test_key_market_catalog_provides_ui_watchlist_defaults() -> None:

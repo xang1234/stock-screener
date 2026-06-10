@@ -96,8 +96,7 @@ class IBDGroupRankService:
         *,
         market: str | None = None,
         cache_only: bool = False,
-        require_complete_cache: bool = False,
-        min_cache_coverage: float | None = None,
+        cache_coverage_min: float | None = None,
     ) -> List[Dict]:
         """
         Calculate and store rankings for all IBD groups for a given date.
@@ -139,10 +138,7 @@ class IBDGroupRankService:
         )
         prefetch_stats = prefetch.stats
 
-        effective_min_cache_coverage = min_cache_coverage
-        if require_complete_cache:
-            effective_min_cache_coverage = 1.0 - CACHE_MISS_TOLERANCE_RATIO
-        if effective_min_cache_coverage is not None:
+        if cache_coverage_min is not None:
             if not prefetch_stats.get("spy_cached"):
                 raise IncompleteGroupRankingCacheError(prefetch_stats)
             cache_miss_symbols = prefetch_stats.get("cache_miss_symbols", 0)
@@ -153,8 +149,8 @@ class IBDGroupRankService:
                 else 1.0
             )
             prefetch_stats["cache_coverage_ratio"] = coverage_ratio
-            prefetch_stats["min_cache_coverage"] = effective_min_cache_coverage
-            if coverage_ratio < effective_min_cache_coverage:
+            prefetch_stats["cache_coverage_min"] = cache_coverage_min
+            if coverage_ratio < cache_coverage_min:
                 raise IncompleteGroupRankingCacheError(prefetch_stats)
             if cache_miss_symbols > 0:
                 logger.warning(
@@ -163,7 +159,7 @@ class IBDGroupRankService:
                     cache_miss_symbols,
                     target_symbols,
                     coverage_ratio * 100,
-                    effective_min_cache_coverage * 100,
+                    cache_coverage_min * 100,
                 )
 
         if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:

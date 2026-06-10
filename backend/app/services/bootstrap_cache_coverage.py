@@ -17,27 +17,18 @@ from app.models.provider_snapshot import (
 )
 from app.models.stock import StockFundamental, StockPrice
 from app.services.price_coverage_policy import (
-    CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE,
-    CACHE_ONLY_MIN_PRICE_COVERAGE,
-    PRICE_MIN_COVERAGE_BY_MARKET,
     PriceCoveragePolicy,
     normalize_market_code,
     price_coverage_policy_for_market,
 )
 from app.services.provider_snapshot_service import WEEKLY_REFERENCE_SNAPSHOT_KEYS
 
-BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE = CACHE_ONLY_MIN_PRICE_COVERAGE
-BOOTSTRAP_CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE = (
-    CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE
-)
-BOOTSTRAP_PRICE_MIN_COVERAGE_BY_MARKET = PRICE_MIN_COVERAGE_BY_MARKET
-BootstrapCoveragePolicy = PriceCoveragePolicy
 MISSING_SYMBOL_PREVIEW_LIMIT = 20
 
 
 @dataclass(frozen=True)
 class BootstrapPriceCoverageReport(Mapping[str, Any]):
-    policy: BootstrapCoveragePolicy
+    policy: PriceCoveragePolicy
     price_coverage_date: date | str
     price_total_symbols: int
     price_covered_symbols: int
@@ -177,10 +168,6 @@ def _normalize_symbols(symbols: Sequence[str]) -> list[str]:
     return sorted({str(symbol).upper() for symbol in symbols if symbol})
 
 
-def bootstrap_coverage_policy_for_market(market: str | None) -> BootstrapCoveragePolicy:
-    return price_coverage_policy_for_market(market)
-
-
 def _optional_float(value: object) -> float | None:
     if value is None:
         return None
@@ -192,7 +179,7 @@ def _optional_float(value: object) -> float | None:
 
 def _report_meets_policy(
     payload: Mapping[str, Any],
-    policy: BootstrapCoveragePolicy,
+    policy: PriceCoveragePolicy,
 ) -> bool:
     price_ratio = _optional_float(payload.get("price_coverage_ratio"))
     fundamentals_ratio = _optional_float(payload.get("fundamentals_coverage_ratio"))
@@ -211,7 +198,7 @@ def normalize_bootstrap_gate_report(
     unsupported_symbols: Sequence[str],
 ) -> dict[str, Any]:
     payload = dict(report or {})
-    policy = bootstrap_coverage_policy_for_market(market)
+    policy = price_coverage_policy_for_market(market)
     eligible = _report_meets_policy(payload, policy)
     payload.update(
         {
@@ -276,7 +263,7 @@ def evaluate_bootstrap_price_cache_coverage(
         if latest_price_by_symbol.get(symbol) is None
         or latest_price_by_symbol[symbol] < as_of_date
     )
-    policy = bootstrap_coverage_policy_for_market(normalized_market)
+    policy = price_coverage_policy_for_market(normalized_market)
     return BootstrapPriceCoverageReport(
         policy=policy,
         price_coverage_date=as_of_date,

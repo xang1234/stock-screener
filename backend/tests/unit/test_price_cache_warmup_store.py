@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from inspect import signature
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -101,7 +102,11 @@ def test_evaluate_warmup_metadata_reports_partial_progress():
     )
 
 
-def test_evaluate_warmup_metadata_accepts_fresh_partial_above_minimum():
+def test_evaluate_warmup_metadata_does_not_own_workflow_partial_thresholds():
+    assert "allow_partial_min_coverage" not in signature(evaluate_warmup_metadata).parameters
+
+
+def test_evaluate_warmup_metadata_keeps_fresh_partial_not_ready():
     readiness = evaluate_warmup_metadata(
         {
             "status": "partial",
@@ -110,11 +115,10 @@ def test_evaluate_warmup_metadata_accepts_fresh_partial_above_minimum():
             "completed_at": "2026-06-09T08:00:00",
         },
         context="same-day group ranking run",
-        allow_partial_min_coverage=0.50,
         now=datetime(2026, 6, 9, 9, 0, 0),
     )
 
-    assert readiness.ready is True
+    assert readiness.ready is False
     assert readiness.status == "partial"
     assert readiness.percent == pytest.approx(54.901)
 
@@ -128,7 +132,6 @@ def test_evaluate_warmup_metadata_rejects_stale_partial_even_above_minimum():
             "completed_at": "2026-06-08T08:00:00",
         },
         context="same-day group ranking run",
-        allow_partial_min_coverage=0.50,
         max_age=timedelta(hours=12),
         now=datetime(2026, 6, 9, 8, 1, 0),
     )

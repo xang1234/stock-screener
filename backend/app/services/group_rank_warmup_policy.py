@@ -7,17 +7,20 @@ import logging
 from typing import Optional
 
 from app.services.cache.price_cache_warmup import evaluate_warmup_metadata
-from app.services.price_coverage_policy import price_coverage_policy_for_market
+from app.services.price_coverage_policy import (
+    CACHE_ONLY_MIN_PRICE_COVERAGE,
+    price_coverage_policy_for_market,
+)
 
 
 logger = logging.getLogger(__name__)
+STRICT_GROUP_RANK_CACHE_COVERAGE = CACHE_ONLY_MIN_PRICE_COVERAGE
 
 
 @dataclass(frozen=True)
 class SameDayGroupRankWarmupDecision:
     error: Optional[str]
-    require_complete_cache: bool
-    min_cache_coverage: float | None = None
+    cache_coverage_min: float | None = None
 
 
 def evaluate_same_day_group_rank_warmup(
@@ -30,29 +33,32 @@ def evaluate_same_day_group_rank_warmup(
     warmup_readiness = evaluate_warmup_metadata(
         warmup_meta,
         context="same-day group ranking run",
-        allow_partial_min_coverage=policy.price_min_coverage,
     )
-    if not warmup_readiness.ready:
+    if warmup_readiness.ready:
         return SameDayGroupRankWarmupDecision(
-            error=warmup_readiness.reason,
-            require_complete_cache=True,
+            error=None,
+            cache_coverage_min=STRICT_GROUP_RANK_CACHE_COVERAGE,
         )
 
-    if warmup_readiness.status == "partial":
+    if (
+        warmup_readiness.status == "partial"
+        and warmup_readiness.fresh
+        and warmup_readiness.coverage_ratio is not None
+        and warmup_readiness.coverage_ratio >= policy.price_min_coverage
+    ):
         logger.warning(
             "Allowing same-day group rankings with partial price warmup for %s: "
             "%.1f%% >= %.1f%% price coverage threshold",
             policy.market,
-            warmup_readiness.percent or 0.0,
+            warmup_readiness.coverage_ratio * 100,
             policy.price_min_coverage * 100,
         )
         return SameDayGroupRankWarmupDecision(
             error=None,
-            require_complete_cache=False,
-            min_cache_coverage=policy.price_min_coverage,
+            cache_coverage_min=policy.price_min_coverage,
         )
 
     return SameDayGroupRankWarmupDecision(
-        error=None,
-        require_complete_cache=True,
+        error=warmup_readiness.reason,
+        cache_coverage_min=None,
     )
