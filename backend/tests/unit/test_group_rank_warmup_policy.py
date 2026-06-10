@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import MagicMock
 
+from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
 
 
@@ -18,7 +19,25 @@ def test_group_rank_warmup_policy_allows_partial_cache_above_market_threshold() 
     decision = evaluate_same_day_group_rank_warmup(price_cache, market="TW")
 
     assert decision.error is None
-    assert decision.cache_coverage_min == 0.50
+    assert decision.cache_requirement == GroupRankCacheRequirement.minimum(
+        0.50,
+        reason="partial_warmup",
+    )
+
+
+def test_group_rank_warmup_policy_uses_strict_requirement_after_completed_warmup() -> None:
+    price_cache = MagicMock()
+    price_cache.get_warmup_metadata.return_value = {
+        "status": "completed",
+        "count": 100,
+        "total": 100,
+        "completed_at": datetime.now().isoformat(),
+    }
+
+    decision = evaluate_same_day_group_rank_warmup(price_cache, market="US")
+
+    assert decision.error is None
+    assert decision.cache_requirement == GroupRankCacheRequirement.strict()
 
 
 def test_group_rank_warmup_policy_requires_complete_cache_when_partial_is_too_low() -> None:
@@ -33,4 +52,4 @@ def test_group_rank_warmup_policy_requires_complete_cache_when_partial_is_too_lo
     decision = evaluate_same_day_group_rank_warmup(price_cache, market="US")
 
     assert decision.error is not None
-    assert decision.cache_coverage_min is None
+    assert decision.cache_requirement == GroupRankCacheRequirement.disabled()

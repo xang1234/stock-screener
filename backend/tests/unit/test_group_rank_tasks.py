@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 
+from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.ibd_group_rank_service import IncompleteGroupRankingCacheError
 from app.services.ibd_group_rank_service import MissingIBDIndustryMappingsError
 
@@ -115,7 +116,7 @@ def test_daily_group_rankings_allow_tw_partial_warmup_above_bootstrap_price_poli
         datetime(2026, 6, 10, 17, 40, 0).date(),
         market="TW",
         cache_only=True,
-        cache_coverage_min=0.50,
+        cache_requirement=GroupRankCacheRequirement.minimum(0.50, reason="partial_warmup"),
     )
 
 
@@ -179,7 +180,7 @@ def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
         datetime(2026, 3, 20, 17, 40, 0).date(),
         market="US",
         cache_only=True,
-        cache_coverage_min=0.95,
+        cache_requirement=GroupRankCacheRequirement.strict(),
     )
 
 
@@ -246,6 +247,7 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
         datetime(2026, 3, 19).date(),
         market="US",
         cache_only=False,
+        cache_requirement=GroupRankCacheRequirement.disabled(),
     )
 
 
@@ -285,7 +287,7 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
         datetime(2026, 4, 2).date(),
         market="US",
         cache_only=True,
-        cache_coverage_min=0.95,
+        cache_requirement=GroupRankCacheRequirement.strict(),
     )
 
 

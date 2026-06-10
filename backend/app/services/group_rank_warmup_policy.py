@@ -7,20 +7,19 @@ import logging
 from typing import Optional
 
 from app.services.cache.price_cache_warmup import evaluate_warmup_metadata
+from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.price_coverage_policy import (
-    CACHE_ONLY_MIN_PRICE_COVERAGE,
     price_coverage_policy_for_market,
 )
 
 
 logger = logging.getLogger(__name__)
-STRICT_GROUP_RANK_CACHE_COVERAGE = CACHE_ONLY_MIN_PRICE_COVERAGE
 
 
 @dataclass(frozen=True)
 class SameDayGroupRankWarmupDecision:
     error: Optional[str]
-    cache_coverage_min: float | None = None
+    cache_requirement: GroupRankCacheRequirement
 
 
 def evaluate_same_day_group_rank_warmup(
@@ -37,12 +36,12 @@ def evaluate_same_day_group_rank_warmup(
     if warmup_readiness.ready:
         return SameDayGroupRankWarmupDecision(
             error=None,
-            cache_coverage_min=STRICT_GROUP_RANK_CACHE_COVERAGE,
+            cache_requirement=GroupRankCacheRequirement.strict(),
         )
 
     if (
         warmup_readiness.status == "partial"
-        and warmup_readiness.fresh
+        and warmup_readiness.metadata_current
         and warmup_readiness.coverage_ratio is not None
         and warmup_readiness.coverage_ratio >= policy.price_min_coverage
     ):
@@ -55,10 +54,13 @@ def evaluate_same_day_group_rank_warmup(
         )
         return SameDayGroupRankWarmupDecision(
             error=None,
-            cache_coverage_min=policy.price_min_coverage,
+            cache_requirement=GroupRankCacheRequirement.minimum(
+                policy.price_min_coverage,
+                reason="partial_warmup",
+            ),
         )
 
     return SameDayGroupRankWarmupDecision(
         error=warmup_readiness.reason,
-        cache_coverage_min=None,
+        cache_requirement=GroupRankCacheRequirement.disabled(),
     )

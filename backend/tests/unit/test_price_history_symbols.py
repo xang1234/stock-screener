@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+import app.services.price_history_symbols as price_history_symbols_module
 from app.services.price_history_symbols import (
     normalize_price_history_symbol,
     require_valid_price_history_symbol,
@@ -23,6 +24,10 @@ def test_price_history_symbols_resolve_key_market_display_symbols(
     price_symbol: str,
 ) -> None:
     assert normalize_price_history_symbol(display_symbol) == price_symbol
+
+
+def test_price_history_symbols_use_key_market_catalog_for_display_aliases() -> None:
+    assert not hasattr(price_history_symbols_module, "PRICE_HISTORY_DISPLAY_SYMBOL_ALIASES")
 
 
 def test_price_history_symbols_accept_canonical_stock_symbols() -> None:

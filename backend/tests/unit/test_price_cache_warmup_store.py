@@ -106,7 +106,7 @@ def test_evaluate_warmup_metadata_does_not_own_workflow_partial_thresholds():
     assert "allow_partial_min_coverage" not in signature(evaluate_warmup_metadata).parameters
 
 
-def test_evaluate_warmup_metadata_keeps_fresh_partial_not_ready():
+def test_evaluate_warmup_metadata_keeps_current_partial_not_ready():
     readiness = evaluate_warmup_metadata(
         {
             "status": "partial",
@@ -120,6 +120,8 @@ def test_evaluate_warmup_metadata_keeps_fresh_partial_not_ready():
 
     assert readiness.ready is False
     assert readiness.status == "partial"
+    assert readiness.metadata_current is True
+    assert not hasattr(readiness, "fresh")
     assert readiness.percent == pytest.approx(54.901)
 
 

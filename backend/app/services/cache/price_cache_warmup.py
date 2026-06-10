@@ -29,7 +29,7 @@ class WarmupMetadataReadiness:
     total: int | None = None
     percent: float | None = None
     coverage_ratio: float | None = None
-    fresh: bool = False
+    metadata_current: bool = False
 
 
 def _warmup_int(metadata: dict | None, key: str) -> int | None:
@@ -158,7 +158,7 @@ def evaluate_warmup_metadata(
             total=total,
             percent=percent,
             coverage_ratio=coverage_ratio,
-            fresh=True,
+            metadata_current=True,
         )
 
     return WarmupMetadataReadiness(
@@ -170,7 +170,7 @@ def evaluate_warmup_metadata(
         total=total,
         percent=percent,
         coverage_ratio=coverage_ratio,
-        fresh=True,
+        metadata_current=True,
     )
 
 

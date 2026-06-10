@@ -134,3 +134,23 @@ def key_market_watchlist_defaults(market: str | None) -> tuple[dict[str, str], .
 
 def key_market_price_symbols(market: str | None) -> tuple[str, ...]:
     return tuple(instrument.data_symbol for instrument in key_market_instruments(market))
+
+
+def key_market_data_symbol_for_display(
+    display_symbol: str | None,
+    *,
+    market: str | None = None,
+) -> str | None:
+    normalized_symbol = _normalize_token(display_symbol)
+    if not normalized_symbol:
+        return None
+    instrument_groups = (
+        (key_market_instruments(market),)
+        if market is not None
+        else KEY_MARKET_INSTRUMENTS_BY_MARKET.values()
+    )
+    for instruments in instrument_groups:
+        for instrument in instruments:
+            if instrument.display_symbol == normalized_symbol:
+                return instrument.data_symbol
+    return None

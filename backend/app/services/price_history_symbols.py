@@ -2,15 +2,8 @@
 
 from __future__ import annotations
 
+from app.domain.markets.key_markets import key_market_data_symbol_for_display
 from app.services.symbol_format import normalize_symbol
-
-
-PRICE_HISTORY_DISPLAY_SYMBOL_ALIASES: dict[str, str] = {
-    "BITSTAMP:BTCUSD": "BTC-USD",
-    "FX:USDSGD": "SGD=X",
-    "TVC:DXY": "DX-Y.NYB",
-    "TVC:VIX": "^VIX",
-}
 
 
 def normalize_price_history_symbol(symbol: str | None) -> str | None:
@@ -26,8 +19,8 @@ def normalize_price_history_symbol(symbol: str | None) -> str | None:
     cleaned = symbol.strip().lstrip("$").upper()
     if not cleaned:
         return None
-    resolved = PRICE_HISTORY_DISPLAY_SYMBOL_ALIASES.get(cleaned, cleaned)
-    if resolved != cleaned:
+    resolved = key_market_data_symbol_for_display(cleaned)
+    if resolved is not None:
         return resolved
     return normalize_symbol(cleaned)
 

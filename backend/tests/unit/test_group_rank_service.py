@@ -11,6 +11,7 @@ from app.config import settings
 from app.database import Base
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
+from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
@@ -287,7 +288,7 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
             date(2026, 5, 1),
             market="JP",
             cache_only=True,
-            cache_coverage_min=0.95,
+            cache_requirement=GroupRankCacheRequirement.strict(),
         )
 
     assert str(excinfo.value) == "^N225 benchmark data is missing from cache for JP"
@@ -535,7 +536,7 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
             db_session,
             date(2026, 3, 20),
             cache_only=True,
-            cache_coverage_min=0.95,
+            cache_requirement=GroupRankCacheRequirement.strict(),
         )
 
     assert excinfo.value.stats["cache_miss_symbols"] == 1
@@ -575,7 +576,7 @@ def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_sessio
             date(2026, 6, 10),
             market="TW",
             cache_only=True,
-            cache_coverage_min=0.55,
+            cache_requirement=GroupRankCacheRequirement.minimum(0.55, reason="test"),
         )
 
     assert excinfo.value.stats["cache_coverage_ratio"] == 0.5

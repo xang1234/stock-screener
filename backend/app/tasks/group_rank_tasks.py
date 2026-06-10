@@ -24,10 +24,8 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..services.group_rank_warmup_policy import (
-    STRICT_GROUP_RANK_CACHE_COVERAGE,
-    evaluate_same_day_group_rank_warmup,
-)
+from ..services.group_rank_cache_policy import GroupRankCacheRequirement
+from ..services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
@@ -200,8 +198,10 @@ def calculate_daily_group_rankings(
         # Initialize service
         service = get_group_rank_service()
         same_day_cache_only = force_cache_only or calc_date == today_local
-        cache_coverage_min = (
-            STRICT_GROUP_RANK_CACHE_COVERAGE if same_day_cache_only else None
+        cache_requirement = (
+            GroupRankCacheRequirement.strict()
+            if same_day_cache_only
+            else GroupRankCacheRequirement.disabled()
         )
 
         if same_day_cache_only:
@@ -214,7 +214,7 @@ def calculate_daily_group_rankings(
                     service.price_cache,
                     market=market,
                 )
-                cache_coverage_min = warmup_decision.cache_coverage_min
+                cache_requirement = warmup_decision.cache_requirement
                 if warmup_decision.error:
                     logger.error("✗ Refusing to publish daily group rankings: %s", warmup_decision.error)
                     logger.info("=" * 60)
@@ -240,9 +240,8 @@ def calculate_daily_group_rankings(
         ranking_kwargs = {
             "market": effective_market,
             "cache_only": same_day_cache_only,
+            "cache_requirement": cache_requirement,
         }
-        if cache_coverage_min is not None:
-            ranking_kwargs["cache_coverage_min"] = cache_coverage_min
         results = service.calculate_group_rankings(
             db,
             calc_date,
