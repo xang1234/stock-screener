@@ -13,7 +13,7 @@ from app.services.price_refresh_planning import (
     STALE_PRICE_TOP_UP_PERIOD,
 )
 from app.domain.providers.price_symbol_support import split_supported_price_symbols
-from app.domain.providers.price_symbol_aliases import YAHOO_PRICE_SYMBOL_ALIASES
+from app.domain.markets.key_markets import key_market_price_symbols
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = STALE_PRICE_TOP_UP_PERIOD
@@ -28,11 +28,6 @@ STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE = 250
 STATIC_RATE_LIMITED_RETRY_MARKETS = frozenset({"IN"})
 STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS = 300
 STATIC_RATE_LIMITED_RETRY_BATCH_SIZE = 25
-STATIC_KEY_MARKET_PRICE_SYMBOLS_BY_MARKET = {
-    "US": tuple(YAHOO_PRICE_SYMBOL_ALIASES.values()),
-}
-
-
 def static_daily_price_refresh_batch_size(market: str | None) -> int:
     if market:
         from app.services.rate_budget_policy import get_rate_budget_policy
@@ -56,8 +51,7 @@ def _is_rate_limit_failure(payload: dict[str, Any]) -> bool:
 
 
 def _key_market_price_symbols(market: str | None) -> list[str]:
-    normalized = str(market or "").strip().upper()
-    return list(STATIC_KEY_MARKET_PRICE_SYMBOLS_BY_MARKET.get(normalized, ()))
+    return list(key_market_price_symbols(market))
 
 
 def _dedupe_symbols(symbols: list[str]) -> list[str]:

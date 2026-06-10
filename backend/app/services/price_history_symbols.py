@@ -1,0 +1,38 @@
+"""Symbol normalization for cache-backed price-history endpoints."""
+
+from __future__ import annotations
+
+from app.domain.markets.key_markets import resolve_key_market_price_symbol
+from app.services.symbol_format import normalize_symbol
+
+
+def normalize_price_history_symbol(symbol: str | None) -> str | None:
+    """Normalize symbols accepted by cache-backed price-history endpoints.
+
+    Daily Snapshot key-market cards store TradingView display symbols for chart
+    compatibility, while cached OHLCV rows use provider symbols. Resolve known
+    key-market display symbols at this boundary, then fall back to the stock
+    symbol contract for ordinary tickers.
+    """
+    if symbol is None:
+        return None
+    cleaned = symbol.strip().lstrip("$").upper()
+    if not cleaned:
+        return None
+    resolved = resolve_key_market_price_symbol(cleaned)
+    if resolved != cleaned:
+        return resolved
+    return normalize_symbol(cleaned)
+
+
+def require_valid_price_history_symbol(symbol: str) -> str:
+    """Validate + normalize a path-param symbol for price-history reads."""
+    from fastapi import HTTPException  # local import: keeps module DI-free
+
+    normalized = normalize_price_history_symbol(symbol)
+    if normalized is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid symbol format: {symbol!r}",
+        )
+    return normalized

@@ -8,6 +8,7 @@ from sqlalchemy import func
 from typing import List
 
 from ...database import get_db
+from ...domain.markets.key_markets import key_market_watchlist_defaults
 from ...models.market_scan import ScanWatchlist
 from ...schemas.market_scan import (
     WatchlistSymbolCreate,
@@ -19,17 +20,8 @@ from ...schemas.market_scan import (
 
 router = APIRouter()
 
-# Default symbols for Key Markets watchlist
-DEFAULT_KEY_MARKETS = [
-    {"symbol": "SPY", "display_name": "S&P 500 ETF"},
-    {"symbol": "QQQ", "display_name": "Nasdaq 100 ETF"},
-    {"symbol": "IWM", "display_name": "Russell 2000 ETF"},
-    {"symbol": "TVC:DXY", "display_name": "US Dollar Index"},
-    {"symbol": "FX:USDSGD", "display_name": "USD/SGD"},
-    {"symbol": "BITSTAMP:BTCUSD", "display_name": "Bitcoin"},
-    {"symbol": "GLD", "display_name": "Gold ETF"},
-    {"symbol": "TVC:VIX", "display_name": "Volatility Index"},
-]
+# Default symbols for the US Key Markets watchlist.
+DEFAULT_KEY_MARKETS = key_market_watchlist_defaults("US")
 
 
 @router.get("/watchlist/{list_name}", response_model=WatchlistResponse)

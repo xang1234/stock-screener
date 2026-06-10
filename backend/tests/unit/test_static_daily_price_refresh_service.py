@@ -20,6 +20,21 @@ from app.services.static_daily_price_refresh_service import (
 )
 
 
+IN_KEY_MARKET_PRICE_SYMBOLS = ["^NSEI", "NIFTYBEES.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"]
+HK_KEY_MARKET_PRICE_SYMBOLS = ["^HSI", "2800.HK", "0700.HK", "3690.HK", "0941.HK"]
+US_KEY_MARKET_PRICE_SYMBOLS = [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "DX-Y.NYB",
+    "SGD=X",
+    "BTC-USD",
+    "GLD",
+    "TLT",
+    "^VIX",
+]
+
+
 def _sqlite_session_factory():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
@@ -101,7 +116,7 @@ def test_static_daily_price_refresh_service_fetches_stale_and_no_history_groups(
             "market": "IN",
         },
         {
-            "symbols": ["NEW.NS"],
+            "symbols": ["NEW.NS", *IN_KEY_MARKET_PRICE_SYMBOLS],
             "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
             "start_batch_size": 25,
             "market": "IN",
@@ -109,11 +124,16 @@ def test_static_daily_price_refresh_service_fetches_stale_and_no_history_groups(
     ]
     assert stored_batches == [
         {"symbols": ["OLD.NS"], "also_store_db": True, "market": "IN"},
-        {"symbols": ["NEW.NS"], "also_store_db": True, "market": "IN"},
+        {
+            "symbols": ["HDFCBANK.NS", "NEW.NS", "NIFTYBEES.NS", "RELIANCE.NS", "TCS.NS", "^NSEI"],
+            "also_store_db": True,
+            "market": "IN",
+        },
     ]
     assert result["stale_symbols"] == 1
-    assert result["no_history_symbols"] == 1
-    assert result["yahoo_fetched_symbols"] == 2
+    assert result["key_market_symbols"] == len(IN_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["no_history_symbols"] == 6
+    assert result["yahoo_fetched_symbols"] == 7
 
 
 def test_static_daily_price_refresh_service_filters_to_selected_market() -> None:
@@ -180,7 +200,8 @@ def test_static_daily_price_refresh_service_filters_to_selected_market() -> None
 
     assert result["market"] == "HK"
     assert result["total_active_symbols"] == 3
-    assert result["supported_symbols"] == 2
+    assert result["supported_symbols"] == 6
+    assert result["key_market_symbols"] == len(HK_KEY_MARKET_PRICE_SYMBOLS)
     assert result["skipped_unsupported_symbols"] == 1
     assert fetch_calls == [
         {
@@ -190,7 +211,7 @@ def test_static_daily_price_refresh_service_filters_to_selected_market() -> None
             "market": "HK",
         },
         {
-            "symbols": ["9988.HK"],
+            "symbols": ["9988.HK", "^HSI", "2800.HK", "3690.HK", "0941.HK"],
             "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
             "start_batch_size": 25,
             "market": "HK",
@@ -198,7 +219,11 @@ def test_static_daily_price_refresh_service_filters_to_selected_market() -> None
     ]
     assert stored_batches == [
         {"symbols": ["0700.HK"], "also_store_db": True, "market": "HK"},
-        {"symbols": ["9988.HK"], "also_store_db": True, "market": "HK"},
+        {
+            "symbols": ["0941.HK", "2800.HK", "3690.HK", "9988.HK", "^HSI"],
+            "also_store_db": True,
+            "market": "HK",
+        },
     ]
 
 
@@ -260,7 +285,7 @@ def test_static_daily_price_refresh_includes_us_key_market_data_symbols() -> Non
 
     assert fetch_calls == [
         {
-            "symbols": ["DX-Y.NYB", "SGD=X", "BTC-USD", "^VIX"],
+            "symbols": US_KEY_MARKET_PRICE_SYMBOLS,
             "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
             "start_batch_size": 25,
             "market": "US",
@@ -268,15 +293,15 @@ def test_static_daily_price_refresh_includes_us_key_market_data_symbols() -> Non
     ]
     assert stored_batches == [
         {
-            "symbols": ["BTC-USD", "DX-Y.NYB", "SGD=X", "^VIX"],
+            "symbols": ["BTC-USD", "DX-Y.NYB", "GLD", "IWM", "QQQ", "SGD=X", "SPY", "TLT", "^VIX"],
             "also_store_db": True,
             "market": "US",
         },
     ]
     assert result["total_active_symbols"] == 0
-    assert result["key_market_symbols"] == 4
-    assert result["no_history_symbols"] == 4
-    assert result["yahoo_fetched_symbols"] == 4
+    assert result["key_market_symbols"] == len(US_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["no_history_symbols"] == len(US_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["yahoo_fetched_symbols"] == len(US_KEY_MARKET_PRICE_SYMBOLS)
 
 
 def _seed_in_universe(session_factory) -> None:
@@ -338,6 +363,11 @@ def test_static_daily_price_refresh_retries_rate_limited_failures() -> None:
                         "error": "delisted: no price data",
                     },
                 }
+            if period == STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD:
+                return {
+                    symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+                    for symbol in symbols
+                }
             return {
                 "TCS.NS": {
                     "price_data": SimpleNamespace(empty=False),
@@ -363,12 +393,13 @@ def test_static_daily_price_refresh_retries_rate_limited_failures() -> None:
     result = service.refresh(as_of_date=date(2026, 4, 2), market="IN")
 
     assert sleeps == [STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS]
-    assert len(fetch_calls) == 2
-    assert fetch_calls[1]["symbols"] == ["TCS.NS"]
-    assert fetch_calls[1]["start_batch_size"] == STATIC_RATE_LIMITED_RETRY_BATCH_SIZE
-    assert fetch_calls[1]["market"] == "IN"
+    assert len(fetch_calls) == 3
+    assert fetch_calls[1]["symbols"] == ["^NSEI", "NIFTYBEES.NS", "HDFCBANK.NS"]
+    assert fetch_calls[2]["symbols"] == ["TCS.NS"]
+    assert fetch_calls[2]["start_batch_size"] == STATIC_RATE_LIMITED_RETRY_BATCH_SIZE
+    assert fetch_calls[2]["market"] == "IN"
     stored_symbols = {symbol for batch in stored_batches for symbol in batch["symbols"]}
-    assert stored_symbols == {"RELIANCE.NS", "TCS.NS"}
+    assert stored_symbols == {"RELIANCE.NS", "TCS.NS", "^NSEI", "NIFTYBEES.NS", "HDFCBANK.NS"}
     assert result["rate_limited_retry"] == {
         "attempted": 1,
         "recovered": 1,
@@ -376,7 +407,8 @@ def test_static_daily_price_refresh_retries_rate_limited_failures() -> None:
         "wait_seconds": STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS,
         "batch_size": STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
     }
-    assert result["yahoo_fetched_symbols"] == 2
+    assert result["key_market_symbols"] == len(IN_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["yahoo_fetched_symbols"] == 5
     assert result["yahoo_failed_symbols"] == 1
 
 
@@ -437,7 +469,7 @@ def test_static_daily_price_refresh_retries_no_history_rate_limits_with_bootstra
     assert sleeps == [STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS]
     assert fetch_calls == [
         {
-            "symbols": ["NEW.NS"],
+            "symbols": ["NEW.NS", *IN_KEY_MARKET_PRICE_SYMBOLS],
             "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
             "start_batch_size": 25,
             "market": "IN",
@@ -452,6 +484,8 @@ def test_static_daily_price_refresh_retries_no_history_rate_limits_with_bootstra
     assert stored_batches == [
         {"symbols": ["NEW.NS"], "also_store_db": True, "market": "IN"},
     ]
+    assert result["key_market_symbols"] == len(IN_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["no_history_symbols"] == 6
     assert result["rate_limited_retry"]["recovered"] == 1
     assert result["yahoo_fetched_symbols"] == 1
     assert result["yahoo_failed_symbols"] == 0
@@ -499,7 +533,8 @@ def test_static_daily_price_refresh_skips_retry_for_non_in_markets() -> None:
 
     result = service.refresh(as_of_date=date(2026, 4, 2), market="HK")
 
-    assert len(fetch_calls) == 1
+    assert len(fetch_calls) == 2
+    assert fetch_calls[1]["symbols"] == ["^HSI", "2800.HK", "3690.HK", "0941.HK"]
     assert sleeps == []
     assert result["rate_limited_retry"] == {
         "attempted": 0,
@@ -538,7 +573,8 @@ def test_static_daily_price_refresh_skips_retry_when_no_rate_limited_failures() 
 
     result = service.refresh(as_of_date=date(2026, 4, 2), market="IN")
 
-    assert len(fetch_calls) == 1
+    assert len(fetch_calls) == 2
     assert sleeps == []
     assert result["rate_limited_retry"]["attempted"] == 0
-    assert result["yahoo_failed_symbols"] == 3
+    assert result["key_market_symbols"] == len(IN_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["yahoo_failed_symbols"] == 6

@@ -10,11 +10,7 @@ market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
-import gc
 import logging
-import sys
-from typing import Optional
 from datetime import datetime, date, timedelta
 import time
 
@@ -28,14 +24,17 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
-from ..services.price_coverage_policy import price_coverage_policy_for_market
+from ..services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
 )
 from ..services.market_taxonomy_service import TaxonomyLoadError
 from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
+from .group_rank_helpers import (
+    group_rank_result_error as _group_rank_result_error,
+    release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory,
+)
 from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
@@ -62,13 +61,6 @@ _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS: ContextVar[bool] = ContextVar(
     "propagate_in_process_group_rank_transient_errors",
     default=False,
 )
-
-
-@dataclass(frozen=True)
-class SameDayGroupRankWarmupDecision:
-    error: Optional[str]
-    require_complete_cache: bool
-    min_cache_coverage: float | None = None
 
 
 @contextmanager
@@ -107,68 +99,6 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
             },
             exc_info=True,
         )
-
-
-def _group_rank_result_error(result) -> str | None:
-    if not isinstance(result, dict):
-        return None
-    error = result.get("error")
-    if error:
-        return str(error)
-    return None
-
-
-def _release_group_rank_gapfill_memory() -> None:
-    """Return freed pandas/SQLAlchemy heap pages before the same worker ranks today."""
-    collected = gc.collect()
-    if sys.platform.startswith("linux"):
-        try:
-            import ctypes
-
-            malloc_trim = getattr(ctypes.CDLL("libc.so.6"), "malloc_trim", None)
-            if malloc_trim is not None:
-                malloc_trim(0)
-        except Exception:
-            logger.debug("malloc_trim unavailable after group-ranking gap-fill", exc_info=True)
-    logger.debug("Collected %d objects after group-ranking gap-fill", collected)
-
-
-def _evaluate_same_day_cache_only_group_rankings(
-    price_cache,
-    market: Optional[str] = None,
-) -> SameDayGroupRankWarmupDecision:
-    """Decide whether same-day group rankings can use the cache-only path."""
-    warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
-    policy = price_coverage_policy_for_market(market)
-    warmup_readiness = evaluate_warmup_metadata(
-        warmup_meta,
-        context="same-day group ranking run",
-        allow_partial_min_coverage=policy.price_min_coverage,
-    )
-    if not warmup_readiness.ready:
-        return SameDayGroupRankWarmupDecision(
-            error=warmup_readiness.reason,
-            require_complete_cache=True,
-        )
-
-    if warmup_readiness.status == "partial":
-        logger.warning(
-            "Allowing same-day group rankings with partial price warmup for %s: "
-            "%.1f%% >= %.1f%% price coverage threshold",
-            policy.market,
-            warmup_readiness.percent or 0.0,
-            policy.price_min_coverage * 100,
-        )
-        return SameDayGroupRankWarmupDecision(
-            error=None,
-            require_complete_cache=False,
-            min_cache_coverage=policy.price_min_coverage,
-        )
-
-    return SameDayGroupRankWarmupDecision(
-        error=None,
-        require_complete_cache=True,
-    )
 
 
 def _should_repair_current_us_metadata(
@@ -279,7 +209,7 @@ def calculate_daily_group_rankings(
                     "Bypassing same-day group ranking warmup metadata gate for in-process static export"
                 )
             else:
-                warmup_decision = _evaluate_same_day_cache_only_group_rankings(
+                warmup_decision = evaluate_same_day_group_rank_warmup(
                     service.price_cache,
                     market=market,
                 )

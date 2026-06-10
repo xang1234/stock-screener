@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.domain.markets.catalog import get_market_catalog
-from app.domain.providers.price_symbol_aliases import resolve_yahoo_price_symbol
+from app.domain.markets.key_markets import key_market_instruments
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock import StockPrice
@@ -106,101 +106,6 @@ STATIC_GROUP_TABLE_FALLBACK_OFFSETS = {
     period: STATIC_GROUP_CHANGE_OFFSETS[period]
     for period in ("1w", "1m", "3m")
 }
-_DEFAULT_KEY_MARKETS = {
-    "US": (
-        {"symbol": "SPY", "display_name": "S&P 500 ETF", "currency": "USD"},
-        {"symbol": "QQQ", "display_name": "Nasdaq 100 ETF", "currency": "USD"},
-        {"symbol": "IWM", "display_name": "Russell 2000 ETF", "currency": "USD"},
-        {"symbol": "TVC:DXY", "display_name": "US Dollar Index", "currency": "USD"},
-        {"symbol": "FX:USDSGD", "display_name": "USD/SGD", "currency": "SGD"},
-        {"symbol": "BITSTAMP:BTCUSD", "display_name": "Bitcoin", "currency": "USD"},
-        {"symbol": "GLD", "display_name": "Gold ETF", "currency": "USD"},
-        {"symbol": "TLT", "display_name": "20+ Year Treasury ETF", "currency": "USD"},
-        {"symbol": "TVC:VIX", "display_name": "Volatility Index", "currency": "USD"},
-    ),
-    "HK": (
-        {"symbol": "^HSI", "display_name": "Hang Seng Index", "currency": "HKD"},
-        {"symbol": "2800.HK", "display_name": "Tracker Fund Hong Kong", "currency": "HKD"},
-        {"symbol": "0700.HK", "display_name": "Tencent", "currency": "HKD"},
-        {"symbol": "3690.HK", "display_name": "Meituan", "currency": "HKD"},
-        {"symbol": "0941.HK", "display_name": "China Mobile", "currency": "HKD"},
-    ),
-    "IN": (
-        {"symbol": "^NSEI", "display_name": "Nifty 50", "currency": "INR"},
-        {"symbol": "NIFTYBEES.NS", "display_name": "Nippon India ETF Nifty 50 BeES", "currency": "INR"},
-        {"symbol": "RELIANCE.NS", "display_name": "Reliance Industries", "currency": "INR"},
-        {"symbol": "TCS.NS", "display_name": "Tata Consultancy Services", "currency": "INR"},
-        {"symbol": "HDFCBANK.NS", "display_name": "HDFC Bank", "currency": "INR"},
-    ),
-    "JP": (
-        {"symbol": "^N225", "display_name": "Nikkei 225", "currency": "JPY"},
-        {"symbol": "1306.T", "display_name": "TOPIX ETF", "currency": "JPY"},
-        {"symbol": "7203.T", "display_name": "Toyota", "currency": "JPY"},
-        {"symbol": "6758.T", "display_name": "Sony Group", "currency": "JPY"},
-        {"symbol": "9984.T", "display_name": "SoftBank Group", "currency": "JPY"},
-    ),
-    "KR": (
-        {"symbol": "^KS11", "display_name": "KOSPI Composite", "currency": "KRW"},
-        {"symbol": "069500.KS", "display_name": "KODEX 200 ETF", "currency": "KRW"},
-        {"symbol": "005930.KS", "display_name": "Samsung Electronics", "currency": "KRW"},
-        {"symbol": "000660.KS", "display_name": "SK hynix", "currency": "KRW"},
-        {"symbol": "035420.KS", "display_name": "NAVER", "currency": "KRW"},
-    ),
-    "TW": (
-        {"symbol": "^TWII", "display_name": "TAIEX", "currency": "TWD"},
-        {"symbol": "0050.TW", "display_name": "TW50 ETF", "currency": "TWD"},
-        {"symbol": "2330.TW", "display_name": "TSMC", "currency": "TWD"},
-        {"symbol": "2317.TW", "display_name": "Hon Hai", "currency": "TWD"},
-        {"symbol": "2454.TW", "display_name": "MediaTek", "currency": "TWD"},
-    ),
-    "CN": (
-        {"symbol": "000300.SS", "display_name": "CSI 300", "currency": "CNY"},
-        {"symbol": "000001.SS", "display_name": "Shanghai Composite", "currency": "CNY"},
-        {"symbol": "600519.SS", "display_name": "Kweichow Moutai", "currency": "CNY"},
-        {"symbol": "000001.SZ", "display_name": "Ping An Bank", "currency": "CNY"},
-        {"symbol": "300750.SZ", "display_name": "CATL", "currency": "CNY"},
-    ),
-    "SG": (
-        {"symbol": "^STI", "display_name": "Straits Times Index", "currency": "SGD"},
-        {"symbol": "ES3.SI", "display_name": "SPDR Straits Times Index ETF", "currency": "SGD"},
-        {"symbol": "D05.SI", "display_name": "DBS Group", "currency": "SGD"},
-        {"symbol": "C6L.SI", "display_name": "Singapore Airlines", "currency": "SGD"},
-        {"symbol": "Z74.SI", "display_name": "Singtel", "currency": "SGD"},
-        {"symbol": "O39.SI", "display_name": "OCBC Bank", "currency": "SGD"},
-        {"symbol": "U11.SI", "display_name": "United Overseas Bank", "currency": "SGD"},
-    ),
-    "CA": (
-        {"symbol": "^GSPTSE", "display_name": "S&P/TSX Composite", "currency": "CAD"},
-        {"symbol": "XIU.TO", "display_name": "iShares S&P/TSX 60 ETF", "currency": "CAD"},
-        {"symbol": "RY.TO", "display_name": "Royal Bank of Canada", "currency": "CAD"},
-        {"symbol": "SHOP.TO", "display_name": "Shopify", "currency": "CAD"},
-        {"symbol": "CNR.TO", "display_name": "Canadian National Railway", "currency": "CAD"},
-    ),
-    "DE": (
-        {"symbol": "^GDAXI", "display_name": "DAX", "currency": "EUR"},
-        {"symbol": "EXS1.DE", "display_name": "iShares DAX UCITS ETF", "currency": "EUR"},
-        {"symbol": "SAP.DE", "display_name": "SAP", "currency": "EUR"},
-        {"symbol": "SIE.DE", "display_name": "Siemens", "currency": "EUR"},
-        {"symbol": "ALV.DE", "display_name": "Allianz", "currency": "EUR"},
-    ),
-    "AU": (
-        {"symbol": "^AXJO", "display_name": "S&P/ASX 200", "currency": "AUD"},
-        {"symbol": "IOZ.AX", "display_name": "iShares Core S&P/ASX 200 ETF", "currency": "AUD"},
-        {"symbol": "BHP.AX", "display_name": "BHP Group", "currency": "AUD"},
-        {"symbol": "CBA.AX", "display_name": "Commonwealth Bank", "currency": "AUD"},
-        {"symbol": "CSL.AX", "display_name": "CSL", "currency": "AUD"},
-    ),
-    "MY": (
-        {"symbol": "^KLSE", "display_name": "FBM KLCI", "currency": "MYR"},
-        {"symbol": "1155.KL", "display_name": "Maybank", "currency": "MYR"},
-        {"symbol": "1295.KL", "display_name": "Public Bank", "currency": "MYR"},
-        {"symbol": "1023.KL", "display_name": "CIMB Group", "currency": "MYR"},
-        {"symbol": "5347.KL", "display_name": "Tenaga Nasional", "currency": "MYR"},
-        {"symbol": "5183.KL", "display_name": "Petronas Chemicals", "currency": "MYR"},
-    ),
-}
-
-
 @dataclass(frozen=True)
 class StaticSiteExportResult:
     """Summary of one static-site export run."""
@@ -1387,11 +1292,10 @@ class StaticSiteExportService:
         if isinstance(market, Session):
             db = market
             entries: list[dict[str, Any]] = []
-            for item in _DEFAULT_KEY_MARKETS[STATIC_DEFAULT_MARKET]:
-                data_symbol = resolve_yahoo_price_symbol(item["symbol"])
+            for instrument in key_market_instruments(STATIC_DEFAULT_MARKET):
                 rows = (
                     db.query(StockPrice)
-                    .filter(StockPrice.symbol == data_symbol)
+                    .filter(StockPrice.symbol == instrument.data_symbol)
                     .order_by(StockPrice.date.desc())
                     .limit(30)
                     .all()
@@ -1409,8 +1313,8 @@ class StaticSiteExportService:
                     change_1d = round(((latest.close - previous.close) / previous.close) * 100, 2)
                 entries.append(
                     {
-                        "symbol": item["symbol"],
-                        "display_name": item["display_name"],
+                        "symbol": instrument.display_symbol,
+                        "display_name": instrument.display_name,
                         "latest_close": latest.close if latest is not None else None,
                         "latest_date": latest.date.isoformat() if latest is not None else None,
                         "change_1d": change_1d,
@@ -1423,9 +1327,8 @@ class StaticSiteExportService:
             return entries
 
         entries: list[dict[str, Any]] = []
-        for item in _DEFAULT_KEY_MARKETS.get(market, ()):
-            data_symbol = resolve_yahoo_price_symbol(item["symbol"])
-            history = self._get_symbol_price_history(data_symbol, period="6mo")
+        for instrument in key_market_instruments(market):
+            history = self._get_symbol_price_history(instrument.data_symbol, period="6mo")
             ordered = self._serialize_close_history(history, days=30)
             latest = ordered[-1] if ordered else None
             previous = ordered[-2] if len(ordered) > 1 else None
@@ -1434,9 +1337,9 @@ class StaticSiteExportService:
                 change_1d = round(((latest["close"] - previous["close"]) / previous["close"]) * 100, 2)
             entries.append(
                 {
-                    "symbol": item["symbol"],
-                    "display_name": item["display_name"],
-                    "currency": item.get("currency"),
+                    "symbol": instrument.display_symbol,
+                    "display_name": instrument.display_name,
+                    "currency": instrument.currency,
                     "latest_close": latest["close"] if latest is not None else None,
                     "latest_date": latest["date"] if latest is not None else None,
                     "change_1d": change_1d,

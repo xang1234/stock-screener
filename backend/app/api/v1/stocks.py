@@ -26,7 +26,8 @@ from ...schemas.stock import (
 )
 from ...services.stock_event_context_service import StockEventContextService
 from ...services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
-from ...services.symbol_format import require_valid_price_history_symbol, require_valid_symbol
+from ...services.price_history_symbols import require_valid_price_history_symbol
+from ...services.symbol_format import require_valid_symbol
 from ...schemas.validation import StockValidationResponse
 from ...services.validation_service import ValidationService
 from ...use_cases.scanning.explain_stock import ExplainStockUseCase
