@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, timedelta
+import json
 import logging
-import pickle
 from typing import Any, TypeAlias
 
 import pandas as pd
+try:
+    from redis.exceptions import RedisError
+except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
+    RedisError = RuntimeError  # type: ignore[assignment]
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -32,6 +36,7 @@ GroupRankingHistoryResult: TypeAlias = tuple[
     dict[str, list[tuple[date, float, int]]],
 ]
 RRG_HISTORY_CACHE_TTL_SECONDS = 604800
+RRG_HISTORY_CACHE_SCHEMA_VERSION = 1
 _REDIS_CLIENT_UNSET = object()
 
 
@@ -88,8 +93,8 @@ class MarketGroupRankingService:
             cached_bytes = self._redis_client.get(cache_key)
             if not cached_bytes:
                 return None
-            return pickle.loads(cached_bytes)
-        except Exception as exc:
+            return self._deserialize_rrg_history(cached_bytes)
+        except (RedisError, TypeError, ValueError, OSError) as exc:
             logger.warning("Error reading RRG history cache from Redis: %s", exc)
             return None
 
@@ -104,10 +109,54 @@ class MarketGroupRankingService:
             self._redis_client.setex(
                 cache_key,
                 self._rrg_history_cache_ttl_seconds,
-                pickle.dumps(result),
+                self._serialize_rrg_history(result),
             )
-        except Exception as exc:
+        except (RedisError, TypeError, ValueError, OSError) as exc:
             logger.warning("Error storing RRG history cache in Redis: %s", exc)
+
+    @staticmethod
+    def _serialize_rrg_history(result: GroupRankingHistoryResult) -> bytes:
+        latest_date, meta, series = result
+        payload = {
+            "schema_version": RRG_HISTORY_CACHE_SCHEMA_VERSION,
+            "latest_date": latest_date,
+            "meta": meta,
+            "series": {
+                group: [
+                    [point_date.isoformat(), avg_rs, num_stocks]
+                    for point_date, avg_rs, num_stocks in points
+                ]
+                for group, points in series.items()
+            },
+        }
+        return json.dumps(
+            payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+    @staticmethod
+    def _deserialize_rrg_history(cached_bytes: bytes | str) -> GroupRankingHistoryResult:
+        payload = json.loads(cached_bytes)
+        if not isinstance(payload, dict):
+            raise ValueError("RRG history cache payload must be a JSON object")
+        if payload.get("schema_version") != RRG_HISTORY_CACHE_SCHEMA_VERSION:
+            raise ValueError("Unsupported RRG history cache schema version")
+
+        meta = payload.get("meta") or {}
+        series_payload = payload.get("series") or {}
+        if not isinstance(meta, dict) or not isinstance(series_payload, dict):
+            raise ValueError("Malformed RRG history cache payload")
+
+        series: dict[str, list[tuple[date, float, int]]] = {}
+        for group, points in series_payload.items():
+            series[str(group)] = [
+                (date.fromisoformat(str(point[0])), float(point[1]), int(point[2]))
+                for point in points
+            ]
+
+        return payload.get("latest_date"), dict(meta), series
 
     def get_current_rankings(
         self,
@@ -584,7 +633,7 @@ class MarketGroupRankingService:
         latest_run_id: int,
     ) -> str:
         return (
-            "rrg_history:"
+            "rrg_history:v1:"
             f"{self._db_bind_identity(db)}:"
             f"{market}:"
             f"{int(days)}:"

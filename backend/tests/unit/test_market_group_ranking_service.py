@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import json
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine
@@ -210,6 +211,16 @@ def test_market_group_ranking_service_loads_rrg_runs_once_and_returns_ascending_
     )
     assert load_calls == [3, 2, 1]
     assert len(fake_redis.set_calls) == 1
+    cache_key, ttl_seconds = fake_redis.set_calls[0]
+    assert cache_key.startswith("rrg_history:v1:")
+    assert ttl_seconds == 604800
+    stored_payload = json.loads(fake_redis.values[cache_key])
+    assert stored_payload["schema_version"] == 1
+    assert stored_payload["series"]["Internet Services"] == [
+        ["2026-04-01", 71.0, 11],
+        ["2026-04-02", 72.0, 12],
+        ["2026-04-03", 73.0, 13],
+    ]
 
 
 def test_rrg_history_dispatcher_uses_market_group_service_directly_for_non_us():
