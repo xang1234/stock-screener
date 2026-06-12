@@ -487,91 +487,100 @@ function CandlestickChart({
         flexDirection: 'column',
       }}
     >
-      {/* Timeframe Toggle - only show when chart has data */}
-      {!compact && !hideTimeframeToggle && !showLoading && !showError && !showNoData && (
-        <Box
-          sx={{
-            position: 'absolute',
-            top: 10,
-            right: 10,
-            zIndex: 10,
-            bgcolor: 'background.paper',
-            borderRadius: 1,
-            boxShadow: 1,
-          }}
-        >
-          <Box sx={{ display: 'flex', gap: 0.5 }}>
-            <ToggleButtonGroup
-              value={timeframe}
-              exclusive
-              onChange={(e, newTimeframe) => {
-                if (newTimeframe !== null) {
-                  setTimeframe(newTimeframe);
-                }
-              }}
-              size="small"
-            >
-              <ToggleButton value="daily">Daily</ToggleButton>
-              <ToggleButton value="weekly">Weekly</ToggleButton>
-            </ToggleButtonGroup>
-            {/* RS line overlay toggle — shown only where RS data can load
-                (live charts, or static charts whose bundle carries rs_line). */}
-            {rsAvailable && (
-              <ToggleButtonGroup size="small">
-                <ToggleButton
-                  value="rs"
-                  selected={showRSLine}
-                  disabled={effectiveTimeframe !== 'daily'}
-                  onClick={() => setShowRSLine((prev) => !prev)}
-                  title="RS line (stock vs. benchmark) with blue-dot leadership signals"
-                >
-                  RS
-                </ToggleButton>
-              </ToggleButtonGroup>
-            )}
-          </Box>
-        </Box>
-      )}
-
-      {/* OHLC Legend - show when hovering over chart */}
-      {!compact && !showLoading && !showError && !showNoData && legendData && (
+      {/* Top-left overlay row: OHLC legend with the timeframe/RS toggles
+          immediately to its right, so the buttons never cover the price. */}
+      {!compact && !showLoading && !showError && !showNoData && (
         <Box
           sx={{
             position: 'absolute',
             top: 10,
             left: 10,
             zIndex: 10,
-            bgcolor: 'rgba(30, 30, 30, 0.85)',
-            borderRadius: 1,
-            px: 1.5,
-            py: 0.5,
             display: 'flex',
-            gap: 2,
-            fontFamily: 'monospace',
-            fontSize: '0.8rem',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 1,
           }}
         >
-          <span style={{ color: '#999' }}>
-            O <span style={{ color: '#fff' }}>{legendData.open.toFixed(2)}</span>
-          </span>
-          <span style={{ color: '#999' }}>
-            H <span style={{ color: '#fff' }}>{legendData.high.toFixed(2)}</span>
-          </span>
-          <span style={{ color: '#999' }}>
-            L <span style={{ color: '#fff' }}>{legendData.low.toFixed(2)}</span>
-          </span>
-          <span style={{ color: '#999' }}>
-            C <span style={{ color: '#fff' }}>{legendData.close.toFixed(2)}</span>
-          </span>
-          {legendData.changePercent !== null && (
-            <span
-              style={{
-                color: legendData.changePercent >= 0 ? '#4CF64D' : '#E619CD',
-                fontWeight: 500,
+          {/* OHLC Legend - tracks the hovered candle */}
+          {legendData && (
+            <Box
+              sx={{
+                bgcolor: 'rgba(30, 30, 30, 0.85)',
+                borderRadius: 1,
+                px: 1.5,
+                py: 0.5,
+                display: 'flex',
+                gap: 2,
+                fontFamily: 'monospace',
+                fontSize: '0.8rem',
               }}
             >
-              {legendData.changePercent >= 0 ? '+' : ''}{legendData.changePercent.toFixed(2)}%
-            </span>
+              <span style={{ color: '#999' }}>
+                O <span style={{ color: '#fff' }}>{legendData.open.toFixed(2)}</span>
+              </span>
+              <span style={{ color: '#999' }}>
+                H <span style={{ color: '#fff' }}>{legendData.high.toFixed(2)}</span>
+              </span>
+              <span style={{ color: '#999' }}>
+                L <span style={{ color: '#fff' }}>{legendData.low.toFixed(2)}</span>
+              </span>
+              <span style={{ color: '#999' }}>
+                C <span style={{ color: '#fff' }}>{legendData.close.toFixed(2)}</span>
+              </span>
+              {legendData.changePercent !== null && (
+                <span
+                  style={{
+                    color: legendData.changePercent >= 0 ? '#4CF64D' : '#E619CD',
+                    fontWeight: 500,
+                  }}
+                >
+                  {legendData.changePercent >= 0 ? '+' : ''}{legendData.changePercent.toFixed(2)}%
+                </span>
+              )}
+            </Box>
+          )}
+
+          {/* Timeframe toggle */}
+          {!hideTimeframeToggle && (
+            <Box
+              sx={{
+                display: 'flex',
+                gap: 0.5,
+                bgcolor: 'background.paper',
+                borderRadius: 1,
+                boxShadow: 1,
+              }}
+            >
+              <ToggleButtonGroup
+                value={timeframe}
+                exclusive
+                onChange={(e, newTimeframe) => {
+                  if (newTimeframe !== null) {
+                    setTimeframe(newTimeframe);
+                  }
+                }}
+                size="small"
+              >
+                <ToggleButton value="daily">Daily</ToggleButton>
+                <ToggleButton value="weekly">Weekly</ToggleButton>
+              </ToggleButtonGroup>
+              {/* RS line overlay toggle — shown only where RS data can load
+                  (live charts, or static charts whose bundle carries rs_line). */}
+              {rsAvailable && (
+                <ToggleButtonGroup size="small">
+                  <ToggleButton
+                    value="rs"
+                    selected={showRSLine}
+                    disabled={effectiveTimeframe !== 'daily'}
+                    onClick={() => setShowRSLine((prev) => !prev)}
+                    title="RS line (stock vs. benchmark) with blue-dot leadership signals"
+                  >
+                    RS
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              )}
+            </Box>
           )}
         </Box>
       )}

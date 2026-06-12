@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { weeksAgo, buildTailPoints, filterGroups } from './rrgTrace';
+import {
+  weeksAgo,
+  buildTailPoints,
+  filterGroups,
+  catmullRomPath,
+  splineSegmentMidpoint,
+  layoutLabels,
+} from './rrgTrace';
 
 describe('weeksAgo', () => {
   it('is 0 for the as-of date itself', () => {
@@ -90,5 +97,70 @@ describe('filterGroups', () => {
   it('combines name, quadrant, and rank filters with AND', () => {
     expect(filterGroups(groups, { names: ['A', 'C'], rankRange: [1, 10] }).map((g) => g.industry_group)).toEqual(['A']);
     expect(filterGroups(groups, { quadrants: ['Leading'], rankRange: [1, 10] }).map((g) => g.industry_group)).toEqual(['A']);
+  });
+});
+
+describe('catmullRomPath', () => {
+  it('returns an empty path for fewer than 2 points', () => {
+    expect(catmullRomPath([])).toBe('');
+    expect(catmullRomPath([{ x: 1, y: 2 }])).toBe('');
+    expect(catmullRomPath(null)).toBe('');
+  });
+
+  it('starts at the first point and emits one cubic segment per pair', () => {
+    const pts = [{ x: 0, y: 0 }, { x: 10, y: 5 }, { x: 20, y: 0 }];
+    const d = catmullRomPath(pts);
+    expect(d.startsWith('M0,0')).toBe(true);
+    expect(d.match(/C/g)).toHaveLength(2);
+    expect(d.endsWith('20,0')).toBe(true); // interpolates through the last vertex
+  });
+
+  it('degenerates to the straight chord for collinear points', () => {
+    const pts = [{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 20 }];
+    const d = catmullRomPath(pts);
+    // Every emitted coordinate (control points included) lies on y = x.
+    const nums = d.match(/-?\d+(\.\d+)?/g).map(Number);
+    for (let i = 0; i < nums.length; i += 2) {
+      expect(nums[i + 1]).toBeCloseTo(nums[i], 8);
+    }
+  });
+});
+
+describe('splineSegmentMidpoint', () => {
+  it('returns the chord midpoint and heading for a straight run', () => {
+    const p = (x, y) => ({ x, y });
+    const mid = splineSegmentMidpoint(p(0, 0), p(10, 0), p(20, 0), p(30, 0));
+    expect(mid.x).toBeCloseTo(15, 5);
+    expect(mid.y).toBeCloseTo(0, 5);
+    expect(mid.angle).toBeCloseTo(0, 5);
+  });
+
+  it('tolerates missing neighbours at the ends of the tail', () => {
+    const mid = splineSegmentMidpoint(undefined, { x: 0, y: 0 }, { x: 10, y: 10 }, undefined);
+    expect(mid.x).toBeCloseTo(5, 5);
+    expect(mid.y).toBeCloseTo(5, 5);
+    expect(mid.angle).toBeCloseTo(Math.PI / 4, 5);
+  });
+});
+
+describe('layoutLabels', () => {
+  it('places an unobstructed label above-right of its dot', () => {
+    expect(layoutLabels([{ cx: 100, cy: 100, text: 'Solo' }])).toEqual([{ x: 107, y: 93 }]);
+  });
+
+  it('moves the second of two coincident labels to a non-overlapping spot', () => {
+    const [a, b] = layoutLabels([
+      { cx: 100, cy: 100, text: 'First' },
+      { cx: 100, cy: 100, text: 'Second' },
+    ]);
+    expect(a).toEqual({ x: 107, y: 93 });
+    expect(b).not.toEqual(a);
+    // Vertical separation: boxes are 12px tall, so the fallback spot clears it.
+    expect(Math.abs(b.y - a.y)).toBeGreaterThanOrEqual(12);
+  });
+
+  it('returns positions in input order and handles empty input', () => {
+    expect(layoutLabels([])).toEqual([]);
+    expect(layoutLabels(null)).toEqual([]);
   });
 });
