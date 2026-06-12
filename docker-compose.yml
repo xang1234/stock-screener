@@ -47,7 +47,10 @@ x-app-env: &app-env
   LLM_RESEARCH_MODEL: ${LLM_RESEARCH_MODEL:-}
   LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-true}
   STATIC_EXPORT_ENABLED: ${STATIC_EXPORT_ENABLED:-false}
-  STATIC_EXPORT_OUTPUT_DIR: ${STATIC_EXPORT_OUTPUT_DIR:-/app/data/static-site}
+  # Output path is intentionally NOT configurable in Docker: the backend's
+  # /app/data/static-site (via the ./data:/app/data mount) must stay aligned
+  # with the frontend's ./data/static-site:/usr/share/nginx/static-data bind.
+  STATIC_EXPORT_OUTPUT_DIR: /app/data/static-site
 
 x-celery-env: &celery-env
   <<: *app-env

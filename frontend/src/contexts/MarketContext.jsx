@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { useRuntime } from './RuntimeContext';
@@ -48,6 +48,17 @@ export function MarketProvider({ children }) {
     }
     return null;
   });
+
+  // The provider stays mounted across navigations, so the initializer above
+  // only sees the first URL. Keep a later ?market= change (back/forward, an
+  // in-app link) in sync. An absent param keeps the current selection: tab
+  // navigation drops query params and must not reset the market.
+  useEffect(() => {
+    const fromQuery = normalizeMarketCode(searchParams.get('market'));
+    if (fromQuery && fromQuery !== explicitMarket) {
+      setExplicitMarket(fromQuery);
+    }
+  }, [searchParams, explicitMarket]);
 
   const selectedMarket = explicitMarket
     ? clampMarket(explicitMarket, selectableMarkets, defaultMarket)

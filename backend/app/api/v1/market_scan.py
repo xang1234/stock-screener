@@ -16,6 +16,7 @@ from ...domain.markets.catalog import get_market_catalog
 from ...domain.markets.key_markets import key_market_watchlist_defaults
 from ...models.market_scan import ScanWatchlist
 from ...schemas.market_scan import (
+    DailySnapshotResponse,
     WatchlistSymbolCreate,
     WatchlistSymbolUpdate,
     WatchlistSymbolResponse,
@@ -42,7 +43,27 @@ _market_catalog = get_market_catalog()
 DEFAULT_KEY_MARKETS = key_market_watchlist_defaults("US")
 
 
-@router.get("/daily-snapshot")
+def _if_none_match_matches(header_value: str | None, etag: str) -> bool:
+    """RFC 7232 weak comparison against a (possibly comma-separated) If-None-Match."""
+    if not header_value:
+        return False
+
+    def opaque(tag: str) -> str:
+        return tag[2:] if tag.startswith("W/") else tag
+
+    target = opaque(etag)
+    for token in header_value.split(","):
+        token = token.strip()
+        if token and (token == "*" or opaque(token) == target):
+            return True
+    return False
+
+
+# The handler returns a raw Response so the cached JSON string is served
+# byte-for-byte (the ETag hashes those exact bytes); response_model documents
+# the contract in OpenAPI, and the payload is validated against it on the
+# cache-miss path below.
+@router.get("/daily-snapshot", response_model=DailySnapshotResponse)
 async def get_daily_snapshot(
     request: Request,
     market: str = Query("US", description="Market code (e.g. US, HK, JP, TW)"),
@@ -87,6 +108,7 @@ async def get_daily_snapshot(
             uow=uow,
             scan_results_use_case=use_case,
         )
+        DailySnapshotResponse.model_validate(payload)
         payload_json = json.dumps(payload, separators=(",", ":"))
         if redis is not None:
             try:
@@ -95,7 +117,7 @@ async def get_daily_snapshot(
                 logger.warning("Daily snapshot cache write failed: %s", exc)
 
     etag = daily_snapshot_etag(payload_json)
-    if request.headers.get("if-none-match") == etag:
+    if _if_none_match_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers={"ETag": etag})
     return Response(
         content=payload_json,

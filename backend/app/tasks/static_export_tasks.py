@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 @celery_app.task(
     bind=True,
     name="app.tasks.static_export_tasks.export_static_site_data",
+    queue="celery",
     soft_time_limit=3600,
 )
 def export_static_site_data(
@@ -44,12 +45,20 @@ def export_static_site_data(
     build_dir = target.with_name(target.name + ".tmp")
     stale_dir = target.with_name(target.name + ".old")
 
+    # Published feature runs are keyed by uppercase market codes; lowercase
+    # input would silently match nothing and abort the export.
+    normalized_markets = (
+        tuple(code for code in (str(m).strip().upper() for m in markets) if code)
+        if markets
+        else None
+    )
+
     service = StaticSiteExportService(SessionLocal)
     try:
         result = service.export(
             build_dir,
             clean=True,
-            markets=tuple(markets) if markets else None,
+            markets=normalized_markets,
         )
     except NoPublishedStaticMarketArtifact as exc:
         logger.warning("Static export skipped: %s", exc)
@@ -59,7 +68,14 @@ def export_static_site_data(
         shutil.rmtree(stale_dir)
     if target.exists():
         target.rename(stale_dir)
-    build_dir.rename(target)
+    try:
+        build_dir.rename(target)
+    except Exception:
+        # Promote failed: restore the previous export so nginx keeps serving
+        # the last good bundle instead of 404ing until the next run.
+        if stale_dir.exists() and not target.exists():
+            stale_dir.rename(target)
+        raise
     if stale_dir.exists():
         shutil.rmtree(stale_dir)
 

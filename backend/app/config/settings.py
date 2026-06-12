@@ -555,6 +555,28 @@ class Settings(BaseSettings):
             raise ValueError(f"cache_warm_minute must be 0-59, got {v}")
         return v
 
+    @field_validator('static_export_hours')
+    @classmethod
+    def validate_static_export_hours(cls, v: str) -> str:
+        # Fed directly into crontab(hour=...) by celery_app; reject malformed
+        # values here so a bad env var fails at startup, not inside Beat.
+        parts = [part.strip() for part in str(v).split(',') if part.strip()]
+        if not parts:
+            raise ValueError("static_export_hours must list at least one hour (0-23)")
+        for part in parts:
+            if not part.isdigit() or not 0 <= int(part) <= 23:
+                raise ValueError(
+                    f"static_export_hours must be comma-separated hours 0-23, got {v!r}"
+                )
+        return ",".join(parts)
+
+    @field_validator('static_export_minute')
+    @classmethod
+    def validate_static_export_minute(cls, v: int) -> int:
+        if not 0 <= v <= 59:
+            raise ValueError(f"static_export_minute must be 0-59, got {v}")
+        return v
+
     @field_validator(
         'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in',
         'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw',

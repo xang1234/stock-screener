@@ -3,6 +3,11 @@
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
+from app.api.v1.market_scan import _if_none_match_matches
+from app.schemas.market_scan import DailySnapshotResponse
 from app.services.daily_snapshot_service import (
     DAILY_SNAPSHOT_SCHEMA_VERSION,
     _scan_freshness,
@@ -91,3 +96,96 @@ class TestScanFreshness:
         freshness = _scan_freshness(scan)
         assert freshness["scan_as_of_date"] == "2026-06-11"
         assert freshness["scan_published_at"].startswith("2026-06-11T01:00")
+
+
+class TestIfNoneMatchMatching:
+    ETAG = 'W/"abc123"'
+
+    def test_exact_match(self):
+        assert _if_none_match_matches('W/"abc123"', self.ETAG)
+
+    def test_comma_separated_list(self):
+        assert _if_none_match_matches('W/"other", W/"abc123"', self.ETAG)
+
+    def test_weak_comparison_ignores_weak_prefix(self):
+        # RFC 7232 If-None-Match uses weak comparison on both sides.
+        assert _if_none_match_matches('"abc123"', self.ETAG)
+
+    def test_star_matches_anything(self):
+        assert _if_none_match_matches("*", self.ETAG)
+
+    def test_no_match(self):
+        assert not _if_none_match_matches('W/"other"', self.ETAG)
+        assert not _if_none_match_matches("", self.ETAG)
+        assert not _if_none_match_matches(None, self.ETAG)
+
+
+class TestDailySnapshotResponseSchema:
+    @staticmethod
+    def _payload():
+        return {
+            "schema_version": DAILY_SNAPSHOT_SCHEMA_VERSION,
+            "generated_at": "2026-06-12T00:00:00+00:00",
+            "market": "US",
+            "market_display_name": "United States",
+            "scan_id": "scan-abc",
+            "freshness": {
+                "scan_id": "scan-abc",
+                "scan_as_of_date": "2026-06-11",
+                "scan_published_at": "2026-06-11T23:00:00+00:00",
+                "breadth_latest_date": "2026-06-11",
+                "groups_latest_date": "2026-06-11",
+            },
+            "key_markets": [
+                {
+                    "symbol": "SPY",
+                    "display_name": "S&P 500",
+                    "currency": "USD",
+                    "latest_close": 500.0,
+                    "latest_date": "2026-06-11",
+                    "change_1d": 0.5,
+                    "history": [
+                        {"date": "2026-06-10", "close": 497.5},
+                        {"date": "2026-06-11", "close": None},
+                    ],
+                },
+            ],
+            "top_candidates": {"min_dollar_volume": 100_000_000, "rows": []},
+            "leaders": {
+                "criteria": {
+                    "max_group_rank": 40,
+                    "min_rs_rating": 80,
+                    "min_dollar_volume": 100_000_000,
+                },
+                "rows": [],
+            },
+            "top_groups": [
+                {
+                    "industry_group": "Semiconductors",
+                    "rank": 1,
+                    "rank_change_1w": 2,
+                    "rank_change_1m": 5,
+                    "top_symbol": "NVDA",
+                    "top_symbol_name": "NVIDIA",
+                    "top_rs_rating": 99,
+                },
+            ],
+        }
+
+    def test_accepts_the_documented_payload_shape(self):
+        DailySnapshotResponse.model_validate(self._payload())
+
+    def test_rejects_payload_drift(self):
+        # extra="forbid" keeps the schema in lockstep with the builder: an
+        # undeclared field fails on the cache-miss path instead of silently
+        # widening the public contract.
+        payload = self._payload()
+        payload["surprise_field"] = True
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)
+
+    def test_rejects_nested_drift(self):
+        payload = self._payload()
+        payload["freshness"]["surprise_field"] = True
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)

@@ -119,9 +119,18 @@ async def list_scans(
     uow: Any = Depends(get_uow),
 ):
     """Get list of all scans ordered by most recent first."""
+    normalized_market: str | None = None
+    if market is not None:
+        normalized_market = market.strip().upper()
+        if normalized_market not in _market_catalog.supported_market_codes():
+            supported = ", ".join(_market_catalog.supported_market_codes())
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
+            )
     try:
         with uow:
-            scans = uow.scans.list_recent(limit=limit, market=market)
+            scans = uow.scans.list_recent(limit=limit, market=normalized_market)
 
             scan_items = []
             for scan in scans:
