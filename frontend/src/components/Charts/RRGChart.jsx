@@ -19,7 +19,7 @@
  * component is purely presentational. It is shared by the live Group Rankings
  * page and the static-site Groups page — both pass the same `{ groups: [...] }`.
  */
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import {
   ScatterChart,
   Scatter,
@@ -45,8 +45,9 @@ import {
   FormControlLabel,
   Switch,
 } from '@mui/material';
-import { QUADRANT_COLORS, QUADRANT_FILLS, quadrantColor } from './rrgColors';
+import { QUADRANT_COLORS, QUADRANT_FILLS, QUADRANT_LAYOUT, quadrantColor } from './rrgColors';
 import { buildTailPoints, catmullRomPath, splineSegmentMidpoint, layoutLabels } from './rrgTrace';
+import { useDragZoom } from './useDragZoom';
 import { useRRGFilters } from './useRRGFilters';
 import RRGFilters from './RRGFilters';
 
@@ -164,18 +165,17 @@ const RRGOverlay = ({ shown, perSegment, showLabels, xAxisMap, yAxisMap }) => {
       if (cx < clip.x || cx > clip.x + clip.width || cy < clip.y || cy > clip.y + clip.height) return;
       anchors.push({ cx, cy, text: g.industry_group, color: quadrantColor(g.quadrant) });
     });
-    const positions = layoutLabels(anchors);
-    labels = anchors.map((a, i) => (
+    labels = layoutLabels(anchors).map((l) => (
       <text
-        key={`label-${a.text}`}
-        x={positions[i].x}
-        y={positions[i].y}
+        key={`label-${l.text}`}
+        x={l.x}
+        y={l.y}
         fontSize={10}
         fontWeight={600}
-        fill={a.color}
+        fill={l.color}
         pointerEvents="none"
       >
-        {a.text}
+        {l.text}
       </text>
     ));
   }
@@ -250,21 +250,13 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
   // scope/market switches, unlike the filters in useRRGFilters.
   const [showLabels, setShowLabels] = useState(false);
 
-  // Drag-to-zoom: `drag` is the in-progress selection rectangle (data coords),
-  // `zoom` the committed axis domains. A zoom into another dataset would be
-  // meaningless, so it resets when the scope or market switches.
-  const [drag, setDrag] = useState(null);
-  const [zoom, setZoom] = useState(null);
-  useEffect(() => {
-    setZoom(null);
-  }, [data?.scope, data?.market]);
-
   const bound = useMemo(() => computeBound(shown), [shown]);
   const lo = 100 - bound;
   const hi = 100 + bound;
 
-  const [xLo, xHi] = zoom?.x ?? [lo, hi];
-  const [yLo, yHi] = zoom?.y ?? [lo, hi];
+  const zoom = useDragZoom({ x: [lo, hi], y: [lo, hi] }, `${data?.scope}|${data?.market}`);
+  const [xLo, xHi] = zoom.xDomain;
+  const [yLo, yHi] = zoom.yDomain;
   // The 100/100 cross, clamped into the visible window so the quadrant
   // backdrops always tile exactly the visible plot area when zoomed.
   const xMid = Math.min(Math.max(100, xLo), xHi);
@@ -276,29 +268,6 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
   const tickDecimals = span > 8 ? 0 : span > 2 ? 1 : 2;
   const formatTick = (v) => v.toFixed(tickDecimals);
 
-  // Drags smaller than this (in axis units) are treated as clicks, so the
-  // head-dot click-to-select behaviour survives the zoom handlers.
-  const MIN_DRAG = 0.4;
-
-  const handleChartMouseDown = (e) => {
-    if (e?.xValue == null || e?.yValue == null) return;
-    setDrag({ x1: e.xValue, y1: e.yValue, x2: e.xValue, y2: e.yValue });
-  };
-  const handleChartMouseMove = (e) => {
-    if (!drag || e?.xValue == null || e?.yValue == null) return;
-    setDrag((d) => (d ? { ...d, x2: e.xValue, y2: e.yValue } : d));
-  };
-  const handleChartMouseUp = () => {
-    if (!drag) return;
-    const { x1, y1, x2, y2 } = drag;
-    setDrag(null);
-    if (Math.abs(x2 - x1) < MIN_DRAG || Math.abs(y2 - y1) < MIN_DRAG) return;
-    setZoom({
-      x: [Math.min(x1, x2), Math.max(x1, x2)],
-      y: [Math.min(y1, y2), Math.max(y1, y2)],
-    });
-  };
-
   // Single "detail level" driving both tail-dot richness and arrow density, so
   // the default (all-series) view stays light and the filtered view gets the
   // full per-week detail.
@@ -308,9 +277,12 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
     () => shown.map((g) => ({ ...g, ...g.current, isCurrent: true })),
     [shown],
   );
+  // Hoverable per-week tail dots exist only in the detailed view (the trail
+  // itself is RRGOverlay's spline), so the point enrichment is skipped — and
+  // no tail Scatters are mounted — when many series are shown.
   const tails = useMemo(
-    () => shown.map((g) => ({ name: g.industry_group, points: buildTailPoints(g, asOf) })),
-    [shown, asOf],
+    () => (detailed ? shown.map((g) => ({ name: g.industry_group, points: buildTailPoints(g, asOf) })) : []),
+    [detailed, shown, asOf],
   );
 
   if (isLoading) {
@@ -359,8 +331,8 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
             drag to zoom
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
-          {zoom && (
-            <Button size="small" variant="outlined" onClick={() => setZoom(null)}>
+          {zoom.isZoomed && (
+            <Button size="small" variant="outlined" onClick={zoom.reset}>
               Reset zoom
             </Button>
           )}
@@ -394,32 +366,30 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
           <ResponsiveContainer width="100%" height={height}>
             <ScatterChart
               margin={{ top: 20, right: 30, bottom: 20, left: 10 }}
-              onMouseDown={handleChartMouseDown}
-              onMouseMove={handleChartMouseMove}
-              onMouseUp={handleChartMouseUp}
-              onMouseLeave={() => setDrag(null)}
+              {...zoom.mouseHandlers}
               style={{ cursor: 'crosshair', userSelect: 'none' }}
             >
               <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
 
               {/* Quadrant backdrops, clamped to the (possibly zoomed) window.
                   A quadrant fully outside the window collapses and is skipped. */}
-              {xMid < xHi && yMid < yHi && (
-                <ReferenceArea x1={xMid} x2={xHi} y1={yMid} y2={yHi} fill={QUADRANT_FILLS.Leading} fillOpacity={1}
-                  label={{ value: 'Leading', position: 'insideTopRight', fill: QUADRANT_COLORS.Leading, fontSize: 12 }} />
-              )}
-              {xMid < xHi && yLo < yMid && (
-                <ReferenceArea x1={xMid} x2={xHi} y1={yLo} y2={yMid} fill={QUADRANT_FILLS.Weakening} fillOpacity={1}
-                  label={{ value: 'Weakening', position: 'insideBottomRight', fill: QUADRANT_COLORS.Weakening, fontSize: 12 }} />
-              )}
-              {xLo < xMid && yLo < yMid && (
-                <ReferenceArea x1={xLo} x2={xMid} y1={yLo} y2={yMid} fill={QUADRANT_FILLS.Lagging} fillOpacity={1}
-                  label={{ value: 'Lagging', position: 'insideBottomLeft', fill: QUADRANT_COLORS.Lagging, fontSize: 12 }} />
-              )}
-              {xLo < xMid && yMid < yHi && (
-                <ReferenceArea x1={xLo} x2={xMid} y1={yMid} y2={yHi} fill={QUADRANT_FILLS.Improving} fillOpacity={1}
-                  label={{ value: 'Improving', position: 'insideTopLeft', fill: QUADRANT_COLORS.Improving, fontSize: 12 }} />
-              )}
+              {QUADRANT_LAYOUT.map(({ name, x, y, labelPosition }) => {
+                const [x1, x2] = x === 'hi' ? [xMid, xHi] : [xLo, xMid];
+                const [y1, y2] = y === 'hi' ? [yMid, yHi] : [yLo, yMid];
+                if (!(x1 < x2 && y1 < y2)) return null;
+                return (
+                  <ReferenceArea
+                    key={name}
+                    x1={x1}
+                    x2={x2}
+                    y1={y1}
+                    y2={y2}
+                    fill={QUADRANT_FILLS[name]}
+                    fillOpacity={1}
+                    label={{ value: name, position: labelPosition, fill: QUADRANT_COLORS[name], fontSize: 12 }}
+                  />
+                );
+              })}
 
               {xLo < 100 && 100 < xHi && <ReferenceLine x={100} stroke="#9e9e9e" strokeDasharray="4 4" />}
               {yLo < 100 && 100 < yHi && <ReferenceLine y={100} stroke="#9e9e9e" strokeDasharray="4 4" />}
@@ -447,14 +417,13 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
               <ZAxis type="number" dataKey="num_stocks" range={[60, 500]} name="Constituents" />
               <Tooltip content={<RRGTooltip />} cursor={{ strokeDasharray: '3 3' }} />
 
-              {/* Tails: graduated hoverable per-week dots in the detailed
-                  (filtered) view. The connecting trail itself is the smoothed
-                  spline drawn by RRGOverlay below. */}
+              {/* Graduated hoverable per-week tail dots (empty unless detailed).
+                  The connecting trail itself is RRGOverlay's spline below. */}
               {tails.map((t) => (
                 <Scatter
                   key={`tail-${t.name}`}
                   data={t.points}
-                  shape={detailed ? <TailDot /> : () => null}
+                  shape={<TailDot />}
                   isAnimationActive={false}
                   legendType="none"
                 />
@@ -469,12 +438,12 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
               />
 
               {/* In-progress drag-to-zoom selection rectangle. */}
-              {drag && (
+              {zoom.drag && (
                 <ReferenceArea
-                  x1={drag.x1}
-                  x2={drag.x2}
-                  y1={drag.y1}
-                  y2={drag.y2}
+                  x1={zoom.drag.x1}
+                  x2={zoom.drag.x2}
+                  y1={zoom.drag.y1}
+                  y2={zoom.drag.y2}
                   fill="#90caf9"
                   fillOpacity={0.2}
                   stroke="#90caf9"

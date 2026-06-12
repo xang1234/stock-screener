@@ -23,3 +23,15 @@ export const quadrantColor = (q) => QUADRANT_COLORS[q] || '#9e9e9e';
  * for the quadrant filter buttons so they stay consistent with the colors above.
  */
 export const QUADRANTS = ['Improving', 'Leading', 'Weakening', 'Lagging'];
+
+/**
+ * Per-quadrant plot geometry: which half of each axis the quadrant occupies
+ * relative to the 100/100 cross ('lo' below, 'hi' above) and where its
+ * backdrop label sits. Drives the RRG quadrant backdrops.
+ */
+export const QUADRANT_LAYOUT = [
+  { name: 'Leading', x: 'hi', y: 'hi', labelPosition: 'insideTopRight' },
+  { name: 'Weakening', x: 'hi', y: 'lo', labelPosition: 'insideBottomRight' },
+  { name: 'Lagging', x: 'lo', y: 'lo', labelPosition: 'insideBottomLeft' },
+  { name: 'Improving', x: 'lo', y: 'hi', labelPosition: 'insideTopLeft' },
+];

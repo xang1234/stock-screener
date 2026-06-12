@@ -144,8 +144,9 @@ describe('splineSegmentMidpoint', () => {
 });
 
 describe('layoutLabels', () => {
-  it('places an unobstructed label above-right of its dot', () => {
-    expect(layoutLabels([{ cx: 100, cy: 100, text: 'Solo' }])).toEqual([{ x: 107, y: 93 }]);
+  it('places an unobstructed label above-right of its dot, preserving anchor fields', () => {
+    const [solo] = layoutLabels([{ cx: 100, cy: 100, text: 'Solo', color: '#4caf50' }]);
+    expect(solo).toEqual({ cx: 100, cy: 100, text: 'Solo', color: '#4caf50', x: 107, y: 93 });
   });
 
   it('moves the second of two coincident labels to a non-overlapping spot', () => {
@@ -153,8 +154,7 @@ describe('layoutLabels', () => {
       { cx: 100, cy: 100, text: 'First' },
       { cx: 100, cy: 100, text: 'Second' },
     ]);
-    expect(a).toEqual({ x: 107, y: 93 });
-    expect(b).not.toEqual(a);
+    expect(a).toMatchObject({ x: 107, y: 93 });
     // Vertical separation: boxes are 12px tall, so the fallback spot clears it.
     expect(Math.abs(b.y - a.y)).toBeGreaterThanOrEqual(12);
   });

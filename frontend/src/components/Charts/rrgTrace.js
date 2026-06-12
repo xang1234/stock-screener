@@ -101,14 +101,16 @@ const boxesOverlap = (a, b) =>
 
 /**
  * Greedy collision-avoiding placement for head-dot labels. Each anchor is
- * `{cx, cy, text}` in pixel space; the default spot is above-right of the dot,
- * falling back to below-right / above-left / below-left / further out until a
- * spot free of already-placed labels is found. Returns `{x, y}` text positions
- * (SVG baseline coords) in the same order as the input.
+ * `{cx, cy, text, ...}` in pixel space; the default spot is above-right of the
+ * dot, falling back to below-right / above-left / below-left / further out
+ * until a spot free of already-placed labels is found. Returns the anchors
+ * (extra fields preserved) with `{x, y}` text positions (SVG baseline coords)
+ * added, in input order.
  */
 export const layoutLabels = (anchors) => {
   const placed = [];
-  return (anchors ?? []).map(({ cx, cy, text }) => {
+  return (anchors ?? []).map((anchor) => {
+    const { cx, cy, text } = anchor;
     const w = String(text ?? '').length * LABEL_CHAR_WIDTH;
     const candidates = [
       { x: cx + 7, y: cy - 7 },
@@ -127,6 +129,6 @@ export const layoutLabels = (anchors) => {
       }
     }
     placed.push({ x: pick.x, y: pick.y - LABEL_HEIGHT, w, h: LABEL_HEIGHT + 2 });
-    return { x: pick.x, y: pick.y };
+    return { ...anchor, x: pick.x, y: pick.y };
   });
 };
