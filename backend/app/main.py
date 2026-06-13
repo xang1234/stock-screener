@@ -143,6 +143,12 @@ app = FastAPI(
     openapi_url=_openapi_url,
 )
 
+# NOTE: response compression is intentionally NOT done here. Every supported
+# deployment compresses API JSON at the edge (nginx gzip_types includes
+# application/json; the Caddy HTTPS overlay sets `encode zstd gzip`), which
+# also correctly skips SSE (text/event-stream). Backend-level GZipMiddleware
+# would duplicate that work on this container's CPU budget and gzip SSE.
+
 
 @app.middleware("http")
 async def bind_runtime_services_context(request: Request, call_next):

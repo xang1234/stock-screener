@@ -109,6 +109,11 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = ""
+    # Per-process connection pool. Total Postgres connections scale with
+    # WEB_CONCURRENCY × (db_pool_size + db_max_overflow) plus Celery workers —
+    # keep the product comfortably under Postgres max_connections (default 100).
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
 
     # Server
     api_host: str = "0.0.0.0"

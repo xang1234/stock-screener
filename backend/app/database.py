@@ -35,8 +35,8 @@ if _allow_test_sqlite:
 else:
     _engine_kwargs.update(
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=5,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
     )
 
 engine = create_engine(settings.database_url, **_engine_kwargs)

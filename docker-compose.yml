@@ -143,6 +143,9 @@ services:
     build: *backend-build
     environment:
       <<: *app-env
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
     volumes:
       - ./data:/app/data
     depends_on:
