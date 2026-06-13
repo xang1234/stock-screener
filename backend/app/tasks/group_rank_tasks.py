@@ -299,6 +299,9 @@ def calculate_daily_group_rankings(
 
             repair_stats = _repair_current_us_group_metadata(ranking_date=calc_date)
 
+        from ..services.group_rankings_cache import bump_group_rankings_epoch
+
+        bump_group_rankings_epoch(effective_market)
         try:
             from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
 
@@ -789,6 +792,9 @@ def backfill_group_rankings(self, start_date: str, end_date: str, market: str = 
         logger.info(f"Total duration: {total_duration:.2f}s")
         logger.info("=" * 60)
 
+        from ..services.group_rankings_cache import bump_group_rankings_epoch
+
+        bump_group_rankings_epoch(market)
         try:
             from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
 
@@ -887,6 +893,9 @@ def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
         logger.info(f"Duration: {duration:.2f}s")
         logger.info("=" * 60)
 
+        from ..services.group_rankings_cache import bump_group_rankings_epoch
+
+        bump_group_rankings_epoch(market)
         try:
             from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
 

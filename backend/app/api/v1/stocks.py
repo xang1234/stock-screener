@@ -15,6 +15,8 @@ from ...models.stock_universe import StockUniverse
 from ...models.theme import ThemeCluster, ThemeConstituent, ThemeMetrics
 from ...schemas.scanning import ExplainResponse, ScanResultItem
 from ...schemas.stock import (
+    FundamentalsBatchRequest,
+    FundamentalsBatchResponse,
     PriceHistoryBatchRequest,
     PriceHistoryBatchResponse,
     StockData,
@@ -891,6 +893,41 @@ async def get_price_history_batch(payload: PriceHistoryBatchRequest):
         len(missing),
         payload.period,
     )
+    return {"data": data, "missing": missing}
+
+
+@router.post("/fundamentals/batch", response_model=FundamentalsBatchResponse)
+async def get_stock_fundamentals_batch(payload: FundamentalsBatchRequest):
+    """Return cached fundamentals for many symbols in a single round-trip.
+
+    Read-only batch (Redis pipeline with DB fallback — never an upstream
+    fetch), used by the chart viewer to prefetch adjacent symbols. Partial
+    success: symbols with no cached data are reported in `missing` rather
+    than triggering a 404.
+    """
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw in payload.symbols:
+        if not raw or not isinstance(raw, str):
+            continue
+        sym = raw.strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        normalized.append(sym)
+
+    if not normalized:
+        raise HTTPException(status_code=422, detail="symbols must be a non-empty list")
+
+    if len(normalized) > _BATCH_MAX_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many symbols ({len(normalized)}); maximum is {_BATCH_MAX_SYMBOLS}",
+        )
+
+    results = get_fundamentals_cache().get_many(normalized)
+    data = {sym: value for sym, value in results.items() if value}
+    missing = [sym for sym in normalized if sym not in data]
     return {"data": data, "missing": missing}
 
 

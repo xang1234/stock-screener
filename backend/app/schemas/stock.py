@@ -103,6 +103,19 @@ class PriceHistoryBatchResponse(BaseModel):
     missing: List[str]
 
 
+class FundamentalsBatchRequest(BaseModel):
+    """Request body for the multi-symbol fundamentals endpoint."""
+
+    symbols: List[str]
+
+
+class FundamentalsBatchResponse(BaseModel):
+    """Per-symbol fundamentals payloads plus the symbols that had no cached data."""
+
+    data: Dict[str, Dict]
+    missing: List[str]
+
+
 class RSLinePoint(BaseModel):
     """A single point on the RS line (stock / benchmark ratio)."""
 

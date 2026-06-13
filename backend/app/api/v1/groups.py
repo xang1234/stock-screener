@@ -28,6 +28,7 @@ from ...schemas.groups import (
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...domain.analytics.scope import market_scope_tag
 from ...domain.markets.catalog import get_market_catalog
+from ...services.group_rankings_cache import cached_group_payload
 from ...services.market_group_ranking_service import get_market_group_ranking_service
 from ...services.ui_snapshot_service import GroupsBootstrapUnavailableError
 from ...wiring.bootstrap import (
@@ -85,11 +86,48 @@ def _normalize_rrg_market_param(market: str | None) -> str:
     return normalized
 
 
+# Rankings change once per trading day; these wrappers cache the computed
+# service payloads in Redis (epoch-invalidated by the calculation tasks) so
+# the 60s frontend refetch loop doesn't recompute ~26K-row rank histories.
+def _fetch_rankings_cached(db: Session, *, market: str, limit: int) -> list:
+    return cached_group_payload(
+        market=market,
+        name="rankings",
+        params=f"limit={limit}",
+        compute=lambda: _get_group_rank_service().get_current_rankings(
+            db, limit=limit, market=market
+        ),
+    )
+
+
+def _fetch_movers_cached(db: Session, *, market: str, period: str, limit: int) -> dict:
+    return cached_group_payload(
+        market=market,
+        name="movers",
+        params=f"period={period}:limit={limit}",
+        compute=lambda: _get_group_rank_service().get_rank_movers(
+            db, period=period, limit=limit, market=market
+        ),
+        should_cache=lambda v: bool(v.get("gainers") or v.get("losers")),
+    )
+
+
+def _fetch_rrg_scopes_cached(db: Session, *, market: str, scopes: list, tail_weeks: int) -> dict:
+    return cached_group_payload(
+        market=market,
+        name="rrg_scopes",
+        params=f"tail={tail_weeks}:scopes={','.join(scopes)}",
+        compute=lambda: _get_rrg_service().get_rrg_scopes(
+            db, market=market, scopes=scopes, tail_weeks=tail_weeks
+        ),
+        should_cache=lambda v: any(_rrg_scope_has_data(v.get(s)) for s in scopes),
+    )
+
+
 def _build_groups_payload(db: Session, *, market: str) -> dict:
-    service = _get_group_rank_service()
-    rankings = service.get_current_rankings(db, limit=197, market=market)
-    movers = service.get_rank_movers(
-        db, period=DEFAULT_GROUP_PERIOD, limit=10, market=market
+    rankings = _fetch_rankings_cached(db, market=market, limit=197)
+    movers = _fetch_movers_cached(
+        db, market=market, period=DEFAULT_GROUP_PERIOD, limit=10
     )
 
     if not rankings:
@@ -138,12 +176,7 @@ async def get_current_rankings(
     for 1 week, 1 month, 3 months, and 6 months.
     """
     normalized_market = _normalize_market_param(market)
-    service = _get_group_rank_service()
-    rankings = service.get_current_rankings(
-        db,
-        limit=limit,
-        market=normalized_market,
-    )
+    rankings = _fetch_rankings_cached(db, market=normalized_market, limit=limit)
 
     if not rankings:
         raise HTTPException(
@@ -197,7 +230,7 @@ async def get_rrg_scopes(
     normalized_market = _normalize_rrg_market_param(market)
     service = _get_rrg_service()
     requested_scopes = service.available_scopes_for_market(normalized_market)
-    scopes = service.get_rrg_scopes(
+    scopes = _fetch_rrg_scopes_cached(
         db,
         market=normalized_market,
         scopes=requested_scopes,
@@ -340,12 +373,8 @@ async def get_rank_movers(
         Lists of rank gainers and losers
     """
     normalized_market = _normalize_market_param(market)
-    service = _get_group_rank_service()
-    movers = service.get_rank_movers(
-        db,
-        period=period,
-        limit=limit,
-        market=normalized_market,
+    movers = _fetch_movers_cached(
+        db, market=normalized_market, period=period, limit=limit
     )
 
     if not movers.get('gainers') and not movers.get('losers'):
