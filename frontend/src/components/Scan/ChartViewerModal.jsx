@@ -15,7 +15,7 @@ import PeopleIcon from '@mui/icons-material/People';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAllFilteredSymbols, getSetupDetails, getSingleResult } from '../../api/scans';
 import { prefetchPriceHistoryBatch } from '../../api/priceHistory';
-import { getStockFundamentals } from '../../api/stocks';
+import { getStockFundamentals, prefetchFundamentalsBatch } from '../../api/stocks';
 import { getGroupDetail } from '../../api/groups';
 import { useChartNavigation } from '../../hooks/useChartNavigation';
 import { buildFilterParams, getStableFilterKey } from '../../utils/filterUtils';
@@ -257,8 +257,10 @@ function ChartViewerModal({
   }, [currentSymbol]);
 
   // Prefetch adjacent stocks (next 5 / prev 5) for smooth navigation.
-  // Price history fetches in a single batch; fundamentals + scan result still
-  // go individually (no batch endpoints for those yet).
+  // Price history and fundamentals each fetch in a single batch; the
+  // remaining per-symbol calls are the lean single-row scan result and the
+  // group rank (derivable up front from current-page rows, and shared across
+  // symbols in the same group).
   useEffect(() => {
     if (!open || !currentSymbol || !navigationSymbols) return;
 
@@ -267,29 +269,41 @@ function ChartViewerModal({
     const adjacent = [...nextSymbols, ...prevSymbols].filter(Boolean);
     if (adjacent.length === 0) return;
 
-    let cancelled = false;
     prefetchPriceHistoryBatch(queryClient, adjacent, '6mo');
+    prefetchFundamentalsBatch(queryClient, adjacent);
 
-    adjacent.forEach((symbol) => {
-      if (cancelled) return;
-      queryClient.prefetchQuery({
-        queryKey: ['fundamentals', symbol],
-        queryFn: () => getStockFundamentals(symbol),
-        staleTime: 300000,
-      });
-      if (scanId) {
+    if (scanId) {
+      adjacent.forEach((symbol) => {
         queryClient.prefetchQuery({
           queryKey: ['stockResult', scanId, symbol],
           queryFn: () => getSingleResult(scanId, symbol),
           staleTime: 300000,
         });
+      });
+    }
+
+    // Adjacent symbols on the current page expose their industry group, so
+    // their group-rank lookups (the chart header's slowest dependent fetch)
+    // can warm before the user lands on them.
+    const adjacentGroups = new Map();
+    (currentPageResults || []).forEach((row) => {
+      if (row?.symbol && row?.ibd_industry_group && adjacent.includes(row.symbol)) {
+        const market = row.market || inferMarketFromSymbol(row.symbol);
+        adjacentGroups.set(`${market}:${row.ibd_industry_group}`, {
+          market,
+          group: row.ibd_industry_group,
+        });
       }
     });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, currentSymbol, currentIndex, navigationSymbols, queryClient, scanId]);
+    adjacentGroups.forEach(({ market, group }) => {
+      queryClient.prefetchQuery({
+        queryKey: ['groupRank', market, group],
+        queryFn: () => getGroupDetail(group, 1, market),
+        staleTime: 300000,
+        retry: false,
+      });
+    });
+  }, [open, currentSymbol, currentIndex, navigationSymbols, queryClient, scanId, currentPageResults]);
 
   const chartHeight = window.innerHeight - 60; // Full height minus header
 

@@ -14,6 +14,33 @@ export const getStockInfo = async (symbol) => {
 };
 
 /**
+ * Prefetch fundamentals for many symbols in one round-trip and seed the
+ * per-symbol ['fundamentals', symbol] query cache entries. The backend batch
+ * is cache-only (no upstream fetches) and this helper is best-effort:
+ * failures are swallowed so a prefetch can never break navigation.
+ * @param {import('@tanstack/react-query').QueryClient} queryClient
+ * @param {Array<string>} symbols - Symbols to warm
+ */
+export const prefetchFundamentalsBatch = async (queryClient, symbols) => {
+  const missing = (symbols || []).filter(
+    (sym) => sym && queryClient.getQueryData(['fundamentals', sym]) === undefined
+  );
+  if (missing.length === 0) return;
+  try {
+    const response = await apiClient.post('/v1/stocks/fundamentals/batch', {
+      symbols: missing,
+    });
+    Object.entries(response.data?.data ?? {}).forEach(([sym, fundamentals]) => {
+      if (fundamentals) {
+        queryClient.setQueryData(['fundamentals', sym], fundamentals);
+      }
+    });
+  } catch {
+    // Per-symbol queries fetch on demand as before.
+  }
+};
+
+/**
  * Get stock fundamentals
  * @param {string} symbol - Stock ticker symbol
  * @param {boolean} forceRefresh - Force cache refresh
