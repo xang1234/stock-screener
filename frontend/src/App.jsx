@@ -27,6 +27,10 @@ import { MarketProvider } from './contexts/MarketContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
 import { StrategyProfileProvider } from './contexts/StrategyProfileContext';
 import { ColorModeContext } from './contexts/ColorModeContext';
+import {
+  PERSISTED_QUERY_CACHE_BUSTER,
+  shouldDehydratePersistedQuery,
+} from './appQueryPersistence';
 
 // All pages are lazy-loaded so the initial bundle stays free of heavy
 // page-specific chunks (MarketScanPage alone pulls in recharts, ~400KB).
@@ -60,8 +64,8 @@ const PageLoadingFallback = () => (
 // Renders only static header chrome — no nav links, no providers, no data
 // queries — so it's safe to show before auth state is known, while still giving
 // the user immediate visual structure instead of a bare spinner. On refresh,
-// persisted capabilities make runtimeReady true synchronously, so this is only
-// seen on a genuinely cold first load.
+// persisted page data can still paint quickly once live capabilities confirm
+// whether the app shell, login screen, or bootstrap setup should render.
 const AppLoadingScreen = () => (
   <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
     <AppBar position="static" sx={{ minHeight: 48 }}>
@@ -115,25 +119,14 @@ const queryCachePersister = createSyncStoragePersister({
   throttleTime: 1000,
 });
 
-// High-churn or bulky query families that are cheap to refetch are excluded:
-// persisting them would re-serialize the whole cache on every poll/prefetch
-// and risk blowing the localStorage quota.
-const NON_PERSISTED_QUERY_ROOTS = new Set([
-  'priceHistory',
-  'runtimeActivity',
-  'allFilteredSymbols',
-  'calculationStatus',
-  'setupDetails',
-]);
-
+// Keep persistence policy outside this component file so Fast Refresh remains
+// limited to React component exports.
 const persistOptions = {
   persister: queryCachePersister,
   maxAge: 24 * 60 * 60 * 1000,
-  buster: 'v1',
+  buster: PERSISTED_QUERY_CACHE_BUSTER,
   dehydrateOptions: {
-    shouldDehydrateQuery: (query) =>
-      query.state.status === 'success'
-      && !NON_PERSISTED_QUERY_ROOTS.has(query.queryKey[0]),
+    shouldDehydrateQuery: shouldDehydratePersistedQuery,
   },
 };
 
