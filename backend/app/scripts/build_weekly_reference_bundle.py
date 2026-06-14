@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import SessionLocal
+from app.models.provider_snapshot import ProviderSnapshotRow
 from app.models.stock_universe import StockUniverse
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.official_market_universe_source_service import (
@@ -249,6 +250,125 @@ def _raise_publish_blocked(
     )
 
 
+def _snapshot_row_payload(row: ProviderSnapshotRow) -> dict[str, Any]:
+    return {
+        "symbol": row.symbol,
+        "exchange": row.exchange,
+        "row_hash": row.row_hash,
+        "normalized_payload": json.loads(row.normalized_payload_json),
+        "raw_payload": json.loads(row.raw_payload_json) if row.raw_payload_json else None,
+    }
+
+
+def _publish_us_seeded_cache_fallback(
+    db,
+    *,
+    provider_snapshot_service,
+    market: str,
+    snapshot_key: str,
+    blocked_snapshot_stats: dict[str, Any],
+) -> dict[str, Any]:
+    blocked_run_id = blocked_snapshot_stats.get("run_id")
+    if not blocked_run_id:
+        return blocked_snapshot_stats
+
+    active_rows = (
+        db.query(StockUniverse)
+        .filter(
+            StockUniverse.active_filter(),
+            StockUniverse.market == market,
+        )
+        .order_by(StockUniverse.symbol.asc())
+        .all()
+    )
+    active_symbols = {row.symbol for row in active_rows}
+    current_rows = (
+        db.query(ProviderSnapshotRow)
+        .filter(ProviderSnapshotRow.run_id == blocked_run_id)
+        .all()
+    )
+    rows_by_symbol = {
+        row.symbol: _snapshot_row_payload(row)
+        for row in current_rows
+        if row.symbol in active_symbols
+    }
+    missing_rows = [row for row in active_rows if row.symbol not in rows_by_symbol]
+    if not missing_rows:
+        return blocked_snapshot_stats
+
+    try:
+        seeded_payloads = get_fundamentals_cache().get_many(
+            [row.symbol for row in missing_rows]
+        )
+    except Exception as exc:
+        print(
+            f"[publish] US seeded cache fallback unavailable: {exc}",
+            flush=True,
+        )
+        return blocked_snapshot_stats
+
+    backfilled_symbols: list[str] = []
+    for universe_row in missing_rows:
+        payload = dict(seeded_payloads.get(universe_row.symbol) or {})
+        if not payload:
+            continue
+        payload.setdefault("company_name", universe_row.name)
+        payload.setdefault("sector", universe_row.sector)
+        payload.setdefault("industry", universe_row.industry)
+        payload.setdefault("market_cap", universe_row.market_cap)
+        payload.setdefault("symbol", universe_row.symbol)
+        payload.setdefault("market", market)
+        payload.setdefault("exchange", universe_row.exchange)
+        payload.setdefault("currency", universe_row.currency)
+        payload.setdefault("timezone", universe_row.timezone)
+        payload.setdefault("local_code", universe_row.local_code)
+        fallback_row = provider_snapshot_service.build_market_snapshot_row(
+            market=market,
+            symbol=universe_row.symbol,
+            exchange=universe_row.exchange,
+            normalized_payload=payload,
+            raw_payload={"source": "seeded_weekly_reference_cache"},
+        )
+        rows_by_symbol[universe_row.symbol] = fallback_row
+        backfilled_symbols.append(universe_row.symbol)
+
+    if not backfilled_symbols:
+        return blocked_snapshot_stats
+
+    missing_active = sorted(
+        symbol for symbol in active_symbols if symbol not in rows_by_symbol
+    )
+    coverage_stats = {
+        "active_symbols": len(active_symbols),
+        "snapshot_symbols": len(rows_by_symbol),
+        "covered_active_symbols": len(active_symbols.intersection(rows_by_symbol)),
+        "missing_active_symbols": len(missing_active),
+        "backfilled_active_symbols": len(backfilled_symbols),
+    }
+    warnings = list(blocked_snapshot_stats.get("warnings") or [])
+    warnings.append(
+        "Backfilled "
+        f"{len(backfilled_symbols)} US active symbols from seeded weekly reference cache "
+        "because the current Finviz snapshot omitted them: "
+        f"{', '.join(sorted(backfilled_symbols)[:25])}"
+        + ("..." if len(backfilled_symbols) > 25 else "")
+    )
+    source_revision = (
+        f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-seeded-fallback"
+    )
+
+    return provider_snapshot_service.publish_market_snapshot_run(
+        db,
+        snapshot_key=snapshot_key,
+        market=market,
+        source_revision=source_revision,
+        rows=[rows_by_symbol[symbol] for symbol in sorted(rows_by_symbol)],
+        coverage_stats=coverage_stats,
+        warnings=warnings,
+        publish=True,
+    )
+
+
 def _build_us_bundle(
     db,
     *,
@@ -280,6 +400,15 @@ def _build_us_bundle(
         "universe_refresh": universe_stats,
         "snapshot_publish": snapshot_stats,
     }
+    if not snapshot_stats.get("published"):
+        snapshot_stats = _publish_us_seeded_cache_fallback(
+            db,
+            provider_snapshot_service=provider_snapshot_service,
+            market=market,
+            snapshot_key=snapshot_key,
+            blocked_snapshot_stats=snapshot_stats,
+        )
+        summary["snapshot_publish"] = snapshot_stats
     if not snapshot_stats.get("published"):
         _raise_publish_blocked(
             market=market,

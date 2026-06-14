@@ -763,6 +763,40 @@ def test_fetch_tw_snapshot_fails_when_exchange_dates_do_not_match(monkeypatch):
         service.fetch_tw_snapshot()
 
 
+def test_fetch_tw_snapshot_does_not_retry_permanent_row_parser_errors(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    twse_html = _fixture_bytes("twse_stocks_fixture.html")
+    tpex_html = _fixture_bytes("tpex_stocks_fixture.html")
+    calls: list[str] = []
+
+    def fake_get(url, allow_insecure_fallback=False):
+        calls.append(url)
+        return _FetchedSource(
+            url=url,
+            content=twse_html if "strMode=2" in url else tpex_html,
+            fetched_at="2026-04-16T01:00:00+00:00",
+            last_modified=None,
+            tls_verification_disabled=False,
+        )
+
+    monkeypatch.setattr(service, "_http_get", fake_get)
+    monkeypatch.setattr(
+        service,
+        "parse_tw_rows",
+        lambda html, *, exchange: (_ for _ in ()).throw(
+            ValueError(f"permanent {exchange} schema error")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="permanent TWSE schema error"):
+        service.fetch_tw_snapshot()
+
+    assert calls == [
+        "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2",
+        "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=4",
+    ]
+
+
 def test_fetch_tw_snapshot_requires_explicit_opt_in_for_insecure_tls(monkeypatch):
     service = OfficialMarketUniverseSourceService()
     html_twse = _fixture_bytes("twse_stocks_fixture.html")

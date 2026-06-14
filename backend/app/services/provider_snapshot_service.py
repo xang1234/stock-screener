@@ -361,48 +361,6 @@ class ProviderSnapshotService:
             "raw_payload": raw_payload,
         }
 
-    def _backfill_missing_us_active_rows_from_cache(
-        self,
-        *,
-        active_rows: Iterable[StockUniverse],
-        merged_rows: dict[str, dict[str, Any]],
-    ) -> list[str]:
-        missing_rows = [row for row in active_rows if row.symbol not in merged_rows]
-        if not missing_rows:
-            return []
-
-        try:
-            cached_payloads = self.fundamentals_cache.get_many([row.symbol for row in missing_rows])
-        except Exception as exc:
-            logger.warning("Unable to read seeded fundamentals cache for US backfill: %s", exc)
-            return []
-        backfilled_symbols: list[str] = []
-        for universe_row in missing_rows:
-            payload = dict(cached_payloads.get(universe_row.symbol) or {})
-            if not payload:
-                continue
-
-            payload.setdefault("company_name", universe_row.name)
-            payload.setdefault("sector", universe_row.sector)
-            payload.setdefault("industry", universe_row.industry)
-            payload.setdefault("market_cap", universe_row.market_cap)
-            payload.setdefault("symbol", universe_row.symbol)
-            payload.setdefault("market", "US")
-            payload.setdefault("exchange", universe_row.exchange)
-            payload.setdefault("currency", universe_row.currency)
-            payload.setdefault("timezone", universe_row.timezone)
-            payload.setdefault("local_code", universe_row.local_code)
-            merged_rows[universe_row.symbol] = self.build_market_snapshot_row(
-                market="US",
-                symbol=universe_row.symbol,
-                exchange=universe_row.exchange,
-                normalized_payload=payload,
-                raw_payload={"source": "seeded_weekly_reference_cache"},
-            )
-            backfilled_symbols.append(universe_row.symbol)
-
-        return sorted(backfilled_symbols)
-
     def _coverage_gate(
         self,
         coverage_stats: Dict[str, Any],
@@ -832,44 +790,30 @@ class ProviderSnapshotService:
             progress_callback=progress_callback,
             show_finviz_progress=show_finviz_progress,
         )
-        normalized_market = market or self.market_for_snapshot_key(snapshot_key)
+        normalized_market = (
+            str(market or self.market_for_snapshot_key(snapshot_key)).strip().upper()
+        )
         active_rows_query = db.query(StockUniverse).filter(StockUniverse.active_filter())
         if normalized_market in WEEKLY_REFERENCE_MARKETS:
             active_rows_query = active_rows_query.filter(
-                StockUniverse.market == str(normalized_market).strip().upper()
+                StockUniverse.market == normalized_market
             )
         active_rows = active_rows_query.all()
         active_symbols = {row.symbol for row in active_rows}
-        backfilled_active_symbols: list[str] = []
-        if str(normalized_market).strip().upper() == "US":
-            backfilled_active_symbols = self._backfill_missing_us_active_rows_from_cache(
-                active_rows=active_rows,
-                merged_rows=merged_rows,
-            )
         missing_active = sorted(symbol for symbol in active_symbols if symbol not in merged_rows)
         coverage_stats = {
             "active_symbols": len(active_symbols),
             "snapshot_symbols": len(merged_rows),
             "covered_active_symbols": len(active_symbols.intersection(merged_rows)),
             "missing_active_symbols": len(missing_active),
-            "backfilled_active_symbols": len(backfilled_active_symbols),
         }
         parity_stats = {
             "missing_active_symbols": missing_active[:100],
-            "backfilled_active_symbols": backfilled_active_symbols[:100],
         }
         coverage_ok, coverage_warnings, coverage_thresholds = self._coverage_gate(
             coverage_stats,
             market=normalized_market,
         )
-        if backfilled_active_symbols:
-            coverage_warnings.append(
-                "Backfilled "
-                f"{len(backfilled_active_symbols)} US active symbols from seeded weekly "
-                "reference cache because Finviz omitted them: "
-                f"{', '.join(backfilled_active_symbols[:25])}"
-                + ("..." if len(backfilled_active_symbols) > 25 else "")
-            )
 
         rows = [
             ProviderSnapshotRow(

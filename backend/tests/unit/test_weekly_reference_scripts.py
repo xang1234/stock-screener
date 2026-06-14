@@ -12,6 +12,8 @@ import pytest
 import app.scripts.build_weekly_reference_bundle as build_script
 import app.scripts.import_weekly_reference_bundle as import_script
 import app.scripts.load_ibd_industry_groups as load_ibd_script
+from app.models.provider_snapshot import ProviderSnapshotRow
+from app.models.stock_universe import StockUniverse
 
 
 @contextmanager
@@ -187,6 +189,167 @@ def test_build_weekly_reference_bundle_writes_summary_when_us_publish_is_blocked
     assert "| Active coverage | 80.00% |" in summary_text
     assert "| Minimum coverage | 98.00% |" in summary_text
     assert "| Bundle rows exported | 0 |" in summary_text
+
+
+def test_build_weekly_reference_bundle_us_publishes_seeded_cache_fallback(
+    monkeypatch,
+    tmp_path,
+):
+    published_at = datetime(2026, 4, 4, 12, 10, 0)
+    active_rows = [
+        SimpleNamespace(
+            symbol="AAPL",
+            market="US",
+            exchange="NASDAQ",
+            name="Apple Inc.",
+            sector="Technology",
+            industry="Consumer Electronics",
+            market_cap=3_000_000_000_000,
+            currency="USD",
+            timezone="America/New_York",
+            local_code="AAPL",
+        ),
+        SimpleNamespace(
+            symbol="MSFT",
+            market="US",
+            exchange="NASDAQ",
+            name="Microsoft Corp.",
+            sector="Technology",
+            industry="Software",
+            market_cap=3_100_000_000_000,
+            currency="USD",
+            timezone="America/New_York",
+            local_code="MSFT",
+        ),
+    ]
+    blocked_rows = [
+        SimpleNamespace(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            row_hash="hash-aapl",
+            normalized_payload_json=json.dumps(
+                {"symbol": "AAPL", "exchange": "NASDAQ", "market": "US"}
+            ),
+            raw_payload_json=json.dumps({"overview": {"Ticker": "AAPL"}}),
+        )
+    ]
+
+    fake_db = MagicMock()
+
+    def fake_query(model):
+        query = MagicMock()
+        if model is StockUniverse:
+            query.filter.return_value.order_by.return_value.all.return_value = active_rows
+        elif model is ProviderSnapshotRow:
+            query.filter.return_value.all.return_value = blocked_rows
+        return query
+
+    fake_db.query.side_effect = fake_query
+
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(
+            get_many=lambda symbols: {
+                "MSFT": {
+                    "symbol": "MSFT",
+                    "company_name": "Microsoft Corp.",
+                    "market_cap": 3_100_000_000_000,
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(populate_universe=lambda db: {"added": 0, "updated": 2}),
+    )
+
+    publish_calls: list[dict[str, object]] = []
+    export_calls: list[dict[str, object]] = []
+    provider_snapshot_service = SimpleNamespace(
+        create_snapshot_run=lambda db, run_mode, publish, snapshot_key, market, **kwargs: {
+            "run_id": 42,
+            "published": False,
+            "warnings": ["Missing active symbol ratio 50.00% above maximum 0.50%"],
+            "source_revision": "fundamentals_v1_us:20260404121000",
+            "snapshot_key": snapshot_key,
+            "market": market,
+            "coverage": {
+                "snapshot_symbols": 1,
+                "active_symbols": 2,
+                "covered_active_symbols": 1,
+                "missing_active_symbols": 1,
+            },
+            "coverage_thresholds": {
+                "market": "US",
+                "active_coverage": 0.5,
+                "min_active_coverage": 0.98,
+                "missing_ratio": 0.5,
+                "max_missing_ratio": 0.005,
+            },
+        },
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": f"hash-{kwargs['symbol'].lower()}",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: publish_calls.append(kwargs)
+        or {
+            "published": True,
+            "source_revision": "fundamentals_v1_us:20260404121100-seeded-fallback",
+            "snapshot_key": kwargs["snapshot_key"],
+            "market": kwargs["market"],
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+            "coverage_thresholds": {
+                "market": "US",
+                "active_coverage": 1.0,
+                "min_active_coverage": 0.98,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": 0.005,
+            },
+        },
+        get_published_run=lambda db, snapshot_key: type(
+            "Run",
+            (),
+            {
+                "published_at": published_at,
+                "created_at": published_at,
+                "source_revision": "fundamentals_v1_us:20260404121100-seeded-fallback",
+            },
+        )(),
+        hydrate_published_snapshot=lambda db, snapshot_key, progress_callback=None: {
+            "hydrated": 2,
+        },
+        export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
+        or {"bundle_path": str(kwargs["output_path"])},
+    )
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "US",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert build_script.main() == 0
+
+    publish_kwargs = publish_calls[0]
+    assert [row["symbol"] for row in publish_kwargs["rows"]] == ["AAPL", "MSFT"]
+    assert publish_kwargs["coverage_stats"]["backfilled_active_symbols"] == 1
+    assert publish_kwargs["coverage_stats"]["missing_active_symbols"] == 0
+    assert any("Backfilled 1 US active symbols" in w for w in publish_kwargs["warnings"])
+    assert export_calls, "Bundle export should run after seeded fallback publish"
 
 
 def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_path, capsys):

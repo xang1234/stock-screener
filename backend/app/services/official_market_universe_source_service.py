@@ -163,6 +163,12 @@ _JP_ALLOWED_MARKET_SECTIONS = frozenset(
 _TW_UPDATED_AT_RE = re.compile(r"Date\s+Stock\s+Updated:\s*(\d{4}/\d{2}/\d{2})", re.IGNORECASE)
 _TW_CODE_NAME_RE = re.compile(r"^([0-9A-Z]{3,6}[A-Z]?)\s+(.+?)$")
 _HTTP_GET_MAX_ATTEMPTS = 3
+
+
+class _RetryableTwSnapshotError(ValueError):
+    """TW official source shape looked transiently invalid and may recover."""
+
+
 _NSE_ARCHIVE_SOURCE_URL = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
 _NSE_SOURCE_HEADERS = {
     "Accept": "text/csv,*/*",
@@ -726,11 +732,11 @@ class OfficialMarketUniverseSourceService:
         )
 
     def fetch_tw_snapshot(self) -> OfficialMarketUniverseSnapshot:
-        last_error: ValueError | None = None
+        last_error: _RetryableTwSnapshotError | None = None
         for attempt in range(1, _HTTP_GET_MAX_ATTEMPTS + 1):
             try:
                 return self._fetch_tw_snapshot_once()
-            except ValueError as exc:
+            except _RetryableTwSnapshotError as exc:
                 last_error = exc
                 if attempt >= _HTTP_GET_MAX_ATTEMPTS:
                     raise
@@ -760,17 +766,17 @@ class OfficialMarketUniverseSourceService:
         try:
             twse_date = self._parse_tw_updated_at(twse_html)
         except ValueError as exc:
-            raise ValueError(
+            raise _RetryableTwSnapshotError(
                 f"{exc}; {self._tw_response_diagnostic('twse', twse_fetched, twse_html)}"
             ) from exc
         try:
             tpex_date = self._parse_tw_updated_at(tpex_html)
         except ValueError as exc:
-            raise ValueError(
+            raise _RetryableTwSnapshotError(
                 f"{exc}; {self._tw_response_diagnostic('tpex', tpex_fetched, tpex_html)}"
             ) from exc
         if twse_date != tpex_date:
-            raise ValueError(
+            raise _RetryableTwSnapshotError(
                 "TW reference bundle date mismatch between TWSE and TPEx "
                 f"({twse_date.isoformat()} vs {tpex_date.isoformat()}); "
                 f"{self._tw_response_diagnostic('twse', twse_fetched, twse_html)}; "

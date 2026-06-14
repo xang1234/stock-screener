@@ -29,17 +29,13 @@ class _StubFundamentalsCache:
         self,
         cached: dict[str, dict] | None = None,
         *,
-        fail_get_many: bool = False,
         fail_symbols: set[str] | None = None,
     ):
         self.stored: dict[str, dict] = {}
         self.cached = cached or {}
-        self.fail_get_many = fail_get_many
         self.fail_symbols = fail_symbols or set()
 
     def get_many(self, symbols):
-        if self.fail_get_many:
-            raise RuntimeError("cache unavailable")
         return {symbol: dict(self.cached.get(symbol) or {}) for symbol in symbols}
 
     @staticmethod
@@ -205,7 +201,7 @@ def test_create_snapshot_run_market_scope_ignores_other_markets(monkeypatch):
     db.close()
 
 
-def test_create_snapshot_run_backfills_missing_us_active_symbols_from_seeded_cache(
+def test_create_snapshot_run_does_not_backfill_weekly_seed_cache_in_generic_path(
     monkeypatch,
 ):
     TestingSessionLocal = _make_session()
@@ -268,20 +264,18 @@ def test_create_snapshot_run_backfills_missing_us_active_symbols_from_seeded_cac
     )
 
     rows = db.query(ProviderSnapshotRow).order_by(ProviderSnapshotRow.symbol.asc()).all()
-    assert result["published"] is True
+    assert result["published"] is False
     assert result["coverage"]["active_symbols"] == 2
-    assert result["coverage"]["covered_active_symbols"] == 2
-    assert result["coverage"]["missing_active_symbols"] == 0
-    assert result["coverage"]["backfilled_active_symbols"] == 1
-    assert result["parity"]["backfilled_active_symbols"] == ["MSFT"]
-    assert any("Backfilled 1 US active symbols" in warning for warning in result["warnings"])
-    assert [row.symbol for row in rows] == ["AAPL", "MSFT"]
+    assert result["coverage"]["covered_active_symbols"] == 1
+    assert result["coverage"]["missing_active_symbols"] == 1
+    assert "backfilled_active_symbols" not in result["coverage"]
+    assert "backfilled_active_symbols" not in result["parity"]
+    assert not any("Backfilled" in warning for warning in result["warnings"])
+    assert [row.symbol for row in rows] == ["AAPL"]
     db.close()
 
 
-def test_create_snapshot_run_treats_cache_backfill_failure_as_missing_coverage(
-    monkeypatch,
-):
+def test_create_snapshot_run_normalizes_lowercase_market_before_scoping(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
     db.add_all(
@@ -296,10 +290,10 @@ def test_create_snapshot_run_treats_cache_backfill_failure_as_missing_coverage(
                 status_reason="active",
             ),
             StockUniverse(
-                symbol="MSFT",
-                market="US",
-                exchange="NASDAQ",
-                name="Microsoft Corp.",
+                symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                name="Tencent",
                 is_active=True,
                 status=UNIVERSE_STATUS_ACTIVE,
                 status_reason="active",
@@ -308,9 +302,7 @@ def test_create_snapshot_run_treats_cache_backfill_failure_as_missing_coverage(
     )
     db.commit()
 
-    service = _make_provider_snapshot_service(
-        fundamentals_cache=_StubFundamentalsCache(fail_get_many=True)
-    )
+    service = _make_provider_snapshot_service()
     monkeypatch.setattr(
         service,
         "_build_snapshot_rows",
@@ -329,15 +321,15 @@ def test_create_snapshot_run_treats_cache_backfill_failure_as_missing_coverage(
     result = service.create_snapshot_run(
         db,
         run_mode="publish",
-        market="US",
+        market="us",
         publish=True,
     )
 
-    assert result["published"] is False
-    assert result["coverage"]["missing_active_symbols"] == 1
-    assert result["coverage"]["backfilled_active_symbols"] == 0
-    assert result["parity"]["backfilled_active_symbols"] == []
-    assert not any("Backfilled" in warning for warning in result["warnings"])
+    assert result["published"] is True
+    assert result["coverage"]["active_symbols"] == 1
+    assert result["coverage"]["covered_active_symbols"] == 1
+    assert result["coverage"]["missing_active_symbols"] == 0
+    assert result["coverage_thresholds"]["market"] == "US"
     db.close()
 
 
