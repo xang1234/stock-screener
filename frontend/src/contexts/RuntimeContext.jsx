@@ -273,6 +273,7 @@ export function RuntimeProvider({ children }) {
     placeholderData: DEFAULT_CAPABILITIES,
     retry: 1,
     staleTime: 60_000,
+    refetchOnMount: 'always',
     refetchInterval: (query) => {
       const bootstrapRequired = Boolean(query.state.data?.bootstrap_required);
       const bootstrapState = query.state.data?.bootstrap_state;

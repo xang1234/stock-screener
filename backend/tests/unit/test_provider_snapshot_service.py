@@ -201,6 +201,138 @@ def test_create_snapshot_run_market_scope_ignores_other_markets(monkeypatch):
     db.close()
 
 
+def test_create_snapshot_run_does_not_backfill_weekly_seed_cache_in_generic_path(
+    monkeypatch,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                name="Apple Inc.",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="MSFT",
+                market="US",
+                exchange="NASDAQ",
+                name="Microsoft Corp.",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service(
+        fundamentals_cache=_StubFundamentalsCache(
+            cached={
+                "MSFT": {
+                    "symbol": "MSFT",
+                    "company_name": "Microsoft Corp.",
+                    "market_cap": 3_000_000_000_000,
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_snapshot_rows",
+        lambda exchange_filter=None, **kwargs: {
+            "AAPL": {
+                "exchange": "NASDAQ",
+                "row_hash": "hash-aapl",
+                "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ"},
+                "raw_payload": {"overview": {"Ticker": "AAPL"}},
+            }
+        },
+    )
+    monkeypatch.setattr(settings, "provider_snapshot_min_active_coverage_us", 0.98)
+    monkeypatch.setattr(settings, "provider_snapshot_max_missing_ratio_us", 0.005)
+
+    result = service.create_snapshot_run(
+        db,
+        run_mode="publish",
+        market="US",
+        publish=True,
+    )
+
+    rows = db.query(ProviderSnapshotRow).order_by(ProviderSnapshotRow.symbol.asc()).all()
+    assert result["published"] is False
+    assert result["coverage"]["active_symbols"] == 2
+    assert result["coverage"]["covered_active_symbols"] == 1
+    assert result["coverage"]["missing_active_symbols"] == 1
+    assert "backfilled_active_symbols" not in result["coverage"]
+    assert "backfilled_active_symbols" not in result["parity"]
+    assert not any("Backfilled" in warning for warning in result["warnings"])
+    assert [row.symbol for row in rows] == ["AAPL"]
+    db.close()
+
+
+def test_create_snapshot_run_normalizes_lowercase_market_before_scoping(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                name="Apple Inc.",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                name="Tencent",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    monkeypatch.setattr(
+        service,
+        "_build_snapshot_rows",
+        lambda exchange_filter=None, **kwargs: {
+            "AAPL": {
+                "exchange": "NASDAQ",
+                "row_hash": "hash-aapl",
+                "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ"},
+                "raw_payload": {"overview": {"Ticker": "AAPL"}},
+            }
+        },
+    )
+    monkeypatch.setattr(settings, "provider_snapshot_min_active_coverage_us", 0.98)
+    monkeypatch.setattr(settings, "provider_snapshot_max_missing_ratio_us", 0.005)
+
+    result = service.create_snapshot_run(
+        db,
+        run_mode="publish",
+        market="us",
+        publish=True,
+    )
+
+    assert result["published"] is True
+    assert result["coverage"]["active_symbols"] == 1
+    assert result["coverage"]["covered_active_symbols"] == 1
+    assert result["coverage"]["missing_active_symbols"] == 0
+    assert result["coverage_thresholds"]["market"] == "US"
+    db.close()
+
+
 def test_create_snapshot_run_uses_market_specific_thresholds_for_hk(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()

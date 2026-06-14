@@ -790,12 +790,16 @@ class ProviderSnapshotService:
             progress_callback=progress_callback,
             show_finviz_progress=show_finviz_progress,
         )
-        active_symbols_query = db.query(StockUniverse.symbol).filter(StockUniverse.active_filter())
-        if market is not None:
-            active_symbols_query = active_symbols_query.filter(
-                StockUniverse.market == str(market).strip().upper()
+        normalized_market = (
+            str(market or self.market_for_snapshot_key(snapshot_key)).strip().upper()
+        )
+        active_rows_query = db.query(StockUniverse).filter(StockUniverse.active_filter())
+        if normalized_market in WEEKLY_REFERENCE_MARKETS:
+            active_rows_query = active_rows_query.filter(
+                StockUniverse.market == normalized_market
             )
-        active_symbols = {row[0] for row in active_symbols_query.all()}
+        active_rows = active_rows_query.all()
+        active_symbols = {row.symbol for row in active_rows}
         missing_active = sorted(symbol for symbol in active_symbols if symbol not in merged_rows)
         coverage_stats = {
             "active_symbols": len(active_symbols),
@@ -808,7 +812,7 @@ class ProviderSnapshotService:
         }
         coverage_ok, coverage_warnings, coverage_thresholds = self._coverage_gate(
             coverage_stats,
-            market=market or self.market_for_snapshot_key(snapshot_key),
+            market=normalized_market,
         )
 
         rows = [

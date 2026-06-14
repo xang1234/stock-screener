@@ -75,8 +75,8 @@ function RuntimeProbe() {
   );
 }
 
-function renderRuntime() {
-  const queryClient = new QueryClient({
+function createTestQueryClient() {
+  return new QueryClient({
     defaultOptions: {
       queries: {
         retryDelay: 1,
@@ -84,7 +84,9 @@ function renderRuntime() {
       },
     },
   });
+}
 
+function renderRuntime(queryClient = createTestQueryClient()) {
   const rendered = render(
     <QueryClientProvider client={queryClient}>
       <RuntimeProvider>
@@ -123,6 +125,35 @@ describe('RuntimeProvider', () => {
 
     expect(screen.getByTestId('auth-required')).toHaveTextContent('false');
     expect(getAppCapabilities).toHaveBeenCalledTimes(2);
+  });
+
+  it('refetches app capabilities on mount even when cached auth state is fresh', async () => {
+    const queryClient = createTestQueryClient();
+    queryClient.setQueryData(['appCapabilities'], {
+      ...DEFAULT_CAPABILITIES,
+      auth: {
+        ...DEFAULT_CAPABILITIES.auth,
+        required: true,
+        authenticated: false,
+      },
+    });
+    getAppCapabilities.mockResolvedValue({
+      ...DEFAULT_CAPABILITIES,
+      auth: {
+        ...DEFAULT_CAPABILITIES.auth,
+        required: true,
+        authenticated: true,
+      },
+    });
+
+    renderRuntime(queryClient);
+
+    expect(screen.getByTestId('auth-required')).toHaveTextContent('true');
+
+    await waitFor(() => {
+      expect(queryClient.getQueryData(['appCapabilities'])?.auth.authenticated).toBe(true);
+    });
+    expect(getAppCapabilities).toHaveBeenCalledTimes(1);
   });
 
   it('exposes bootstrap metadata from app capabilities', async () => {

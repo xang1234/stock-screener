@@ -72,6 +72,14 @@ def test_static_workflow_fails_fast_when_weekly_reference_assets_cannot_be_liste
     assert "Failed to list weekly-reference release assets" in content
 
 
+def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():
+    content = (_PROJECT_ROOT / ".github/workflows/weekly-reference-data.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '[ "$MATRIX_MARKET" = "CN" ] || [ "$MATRIX_MARKET" = "TW" ]' in content
+
+
 def test_local_celery_startup_derives_market_workers_from_backend_topology():
     content = (_PROJECT_ROOT / "backend" / "start_celery.sh").read_text(encoding="utf-8")
 

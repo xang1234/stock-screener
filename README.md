@@ -2,15 +2,21 @@
 
 A stock screening platform with multi-methodology scans across **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-share, Germany, Canada, Singapore, Malaysia, and Australia** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
 
-### Scan Workflow Demo
+### Daily Market Dashboard
 
-![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
+![Daily Snapshot — key index cards, trend sparklines, and top scan candidates](docs/screenshots/daily-snapshot.png)
+*At-a-glance home dashboard: key index/ETF cards with trend sparklines plus the day's top composite-ranked scan candidates*
+
+### Live App Tour
+
+![Live app tour — Daily Snapshot, multi-screener scan with stock detail, market breadth, and industry-group RRG](docs/gifs/scan-workflow.gif)
+*A walkthrough of the live app: Daily Snapshot → multi-screener Scan with a drill-in to an individual stock's chart and scores → Market Breadth → Group Rankings with the Relative Rotation Graph*
 
 ---
 
 ### Static Site Page Tour
 
-![Static site page tour — Daily, Scan, Breadth, Groups](docs/gifs/static-site-tour.gif)
+![Static site page tour — Daily Snapshot, Scan with stock detail, Breadth, and Group Rankings with the RRG](docs/gifs/static-site-tour.gif)
 
 Static demo: [https://xang1234.github.io/stock-screener/](https://xang1234.github.io/stock-screener/)
 
@@ -70,8 +76,8 @@ StockBee-style advance/decline analysis with SPY overlay, daily movers (stocks u
 
 A MarketSmith/Bloomberg-style quadrant view of the same 197-group dataset: every industry group (or GICS-sector roll-up) is plotted by **RS-Ratio** vs **RS-Momentum**, with a smooth spline tail and direction arrows tracing its weekly path through **Leading → Weakening → Lagging → Improving**. One screen answers *"what's rotating in, what's rolling over."* Drag a rectangle to zoom into crowded clusters, toggle collision-avoiding group labels, filter by quadrant, name, or current rank, and click any dot to drill into its constituents. Available for every enabled market, in group or sector scope.
 
-![Relative Rotation Graph](docs/screenshots/rrg-rotation.svg)
-*RRG: industry-group rotation with direction-arrowed weekly tails*
+![Relative Rotation Graph](docs/screenshots/rrg-rotation.png)
+*RRG: GICS-sector rotation with direction-arrowed weekly tails — group scope (all 197 industry groups) available from the same view*
 
 ### Watchlists with Sparklines
 

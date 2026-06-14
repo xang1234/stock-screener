@@ -36,10 +36,10 @@ on:
         default: ''
       allow_partial_publish:
         description: >-
-          Whether to publish the bundle when the deadline trips. "default"
-          keeps the per-market default (CN=enable, others=disable); "enable"
-          forces partial publish on; "disable" forces it off (useful for
-          first-time CN runs where there is no prior bundle to fall back to).
+          Whether to publish the bundle when the deadline trips or a seeded
+          fallback can cover a transient official-source failure. "default"
+          keeps the per-market default (CN/TW=enable, others=disable);
+          "enable" forces partial publish on; "disable" forces it off.
         required: false
         type: choice
         default: default
@@ -226,7 +226,7 @@ jobs:
               PARTIAL=""
               ;;
             *)
-              if [ "$MATRIX_MARKET" = "CN" ]; then
+              if [ "$MATRIX_MARKET" = "CN" ] || [ "$MATRIX_MARKET" = "TW" ]; then
                 PARTIAL="--allow-partial-publish"
               else
                 PARTIAL=""
