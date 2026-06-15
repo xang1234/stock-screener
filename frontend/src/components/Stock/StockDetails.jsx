@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -142,9 +142,17 @@ function InfoBox({ label, value }) {
 function StockDetails() {
   const { ticker: symbol } = useParams();
   const navigate = useNavigate();
-  const { activeProfile, activeProfileDetail } = useStrategyProfile();
+  const {
+    activeProfile,
+    activeProfileDetail,
+    requestProfileData,
+  } = useStrategyProfile();
   const [peerModalOpen, setPeerModalOpen] = useState(false);
   const [validationLookbackDays, setValidationLookbackDays] = useState(365);
+
+  useEffect(() => {
+    requestProfileData();
+  }, [requestProfileData]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['stockDecisionDashboard', symbol, activeProfile],

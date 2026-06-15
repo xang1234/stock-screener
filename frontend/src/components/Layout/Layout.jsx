@@ -98,7 +98,13 @@ function Layout({ children }) {
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
   const { auth, features, isLoggingOut, logout } = useRuntime();
-  const { activeProfile, activeProfileDetail, profiles, setActiveProfile } = useStrategyProfile();
+  const {
+    activeProfile,
+    activeProfileDetail,
+    profiles,
+    requestProfileData,
+    setActiveProfile,
+  } = useStrategyProfile();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
 
@@ -164,7 +170,10 @@ function Layout({ children }) {
           })}
           <IconButton
             sx={{ ml: 1 }}
-            onClick={(event) => setProfileMenuAnchor(event.currentTarget)}
+            onClick={(event) => {
+              requestProfileData();
+              setProfileMenuAnchor(event.currentTarget);
+            }}
             color="inherit"
             title={`Profile: ${activeProfileLabel}`}
             aria-label="Select strategy profile"

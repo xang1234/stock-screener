@@ -28,6 +28,7 @@ vi.mock('../hooks/useRuntimeActivity', () => ({
 vi.mock('../contexts/StrategyProfileContext', () => ({
   useStrategyProfile: () => ({
     activeProfileDetail: null,
+    requestProfileData: vi.fn(),
   }),
 }));
 

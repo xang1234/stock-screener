@@ -67,7 +67,10 @@ function getMutationErrorDetail(error) {
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults, universeOptions } = useRuntime();
   const { selectedMarket: globalMarket } = useMarket();
-  const { activeProfileDetail } = useStrategyProfile();
+  const {
+    activeProfileDetail,
+    requestProfileData,
+  } = useStrategyProfile();
   const scanDefaultsAppliedRef = useRef(null);
   // Market whose latest scan is already auto-loaded. Changing the global
   // market re-arms the auto-load for the new market. The sentinel can never
@@ -105,6 +108,10 @@ function ScanPage() {
     () => buildRuntimeUniverseSelections(universeOptions, runtimeActivityQuery.data),
     [runtimeActivityQuery.data, universeOptions]
   );
+
+  useEffect(() => {
+    requestProfileData();
+  }, [requestProfileData]);
 
   useEffect(() => {
     if (!runtimeReady) {

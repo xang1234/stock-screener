@@ -24,6 +24,7 @@ vi.mock('../../contexts/StrategyProfileContext', () => ({
         weaknesses_title: 'Top Weaknesses',
       },
     },
+    requestProfileData: vi.fn(),
   }),
 }));
 

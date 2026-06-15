@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getStrategyProfile, getStrategyProfiles } from '../api/strategyProfiles';
 
@@ -19,17 +19,19 @@ function getStoredProfile() {
 
 export function StrategyProfileProvider({ children }) {
   const [activeProfile, setActiveProfileState] = useState(getStoredProfile);
+  const [profileDataRequested, setProfileDataRequested] = useState(false);
 
   const profilesQuery = useQuery({
     queryKey: ['strategyProfiles'],
     queryFn: getStrategyProfiles,
+    enabled: profileDataRequested,
     staleTime: 5 * 60 * 1000,
   });
 
   const profileDetailQuery = useQuery({
     queryKey: ['strategyProfile', activeProfile],
     queryFn: () => getStrategyProfile(activeProfile),
-    enabled: Boolean(activeProfile),
+    enabled: profileDataRequested && Boolean(activeProfile),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -58,13 +60,26 @@ export function StrategyProfileProvider({ children }) {
     return profiles.find((profile) => profile.profile === activeProfile) || null;
   }, [activeProfile, profileDetailQuery.data, profiles]);
 
+  const requestProfileData = useCallback(() => {
+    setProfileDataRequested(true);
+  }, []);
+
   const value = useMemo(() => ({
     activeProfile,
     setActiveProfile: (nextProfile) => setActiveProfileState(nextProfile || DEFAULT_PROFILE),
     profiles,
     activeProfileDetail,
-    isLoadingProfiles: profilesQuery.isLoading || profileDetailQuery.isLoading,
-  }), [activeProfile, activeProfileDetail, profileDetailQuery.isLoading, profiles, profilesQuery.isLoading]);
+    isLoadingProfiles: profileDataRequested && (profilesQuery.isLoading || profileDetailQuery.isLoading),
+    requestProfileData,
+  }), [
+    activeProfile,
+    activeProfileDetail,
+    profileDataRequested,
+    profileDetailQuery.isLoading,
+    profiles,
+    profilesQuery.isLoading,
+    requestProfileData,
+  ]);
 
   return (
     <StrategyProfileContext.Provider value={value}>

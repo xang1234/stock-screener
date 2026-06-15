@@ -28,6 +28,7 @@ vi.mock('../contexts/StrategyProfileContext', () => ({
         section_order: ['market', 'leaders', 'themes', 'validation', 'watchlists', 'risks'],
       },
     },
+    requestProfileData: vi.fn(),
   }),
 }));
 

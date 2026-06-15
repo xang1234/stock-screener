@@ -17,6 +17,7 @@ vi.mock('../../api/userWatchlists', () => ({
 vi.mock('../../contexts/StrategyProfileContext', () => ({
   useStrategyProfile: () => ({
     activeProfile: 'default',
+    requestProfileData: vi.fn(),
   }),
 }));
 

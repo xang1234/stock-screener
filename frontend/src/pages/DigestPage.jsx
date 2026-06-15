@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link as RouterLink } from 'react-router-dom';
 import {
@@ -145,11 +145,19 @@ function SymbolList({ symbols }) {
 }
 
 function DigestPage() {
-  const { activeProfile, activeProfileDetail } = useStrategyProfile();
+  const {
+    activeProfile,
+    activeProfileDetail,
+    requestProfileData,
+  } = useStrategyProfile();
   const queryClient = useQueryClient();
   const [exportError, setExportError] = useState('');
   const [exportMessage, setExportMessage] = useState('');
   const [isExporting, setIsExporting] = useState(false);
+
+  useEffect(() => {
+    requestProfileData();
+  }, [requestProfileData]);
 
   const cachedDigest =
     queryClient.getQueryData(['dailyDigest', activeProfile]) ||
