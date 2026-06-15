@@ -15,8 +15,14 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models.industry import IBDIndustryGroup
+from .github_release_sync_service import GitHubReleaseSyncService
 from .ibd_industry_service import IBDIndustryService
+
+# fetch_latest_bundle statuses that are not a hard failure: there was simply no
+# bundle to import (live_only deployment, or already up to date).
+NON_FATAL_SYNC_STATUSES = frozenset({"live_only", "up_to_date"})
 
 # String schema identifiers, matching the weekly-reference convention. The
 # GitHub release-sync service compares the manifest's schema_version against the
@@ -163,3 +169,46 @@ def import_classifications(db: Session, payload: dict) -> dict:
         "updated": updated,
         "skipped_authoritative": skipped_authoritative,
     }
+
+
+def sync_ibd_classification_from_github(
+    db: Session,
+    *,
+    market: str,
+    allow_stale: bool = True,
+    output_dir: str | None = None,
+    github_sync_service: GitHubReleaseSyncService | None = None,
+) -> dict:
+    """Fetch the latest per-market IBD bundle from the release and import it.
+
+    Mirrors ``DailyPriceBundleService.sync_from_github``: the caller owns ``db``.
+    Returns ``{"market", "status", "imported"|None, "reason"|None}``. ``live_only``
+    and ``up_to_date`` are non-fatal — there is simply no bundle to import (see
+    ``NON_FATAL_SYNC_STATUSES``). Authoritative csv/manual rows are preserved by
+    ``import_classifications``.
+    """
+    normalized_market = market.strip().upper()
+    sync_service = github_sync_service or GitHubReleaseSyncService(
+        api_base=settings.github_data_api_base
+    )
+    result = sync_service.fetch_latest_bundle(
+        repository_full_name=settings.github_data_repository,
+        release_tag=RELEASE_TAG,
+        manifest_asset_name=latest_manifest_name(normalized_market),
+        source_mode=settings.market_data_source_mode,
+        expected_manifest_schema=IBD_CLASSIFICATION_MANIFEST_SCHEMA_VERSION,
+        required_manifest_keys=("bundle_asset_name", "sha256"),
+        allow_stale=allow_stale,
+        github_token=settings.github_data_token,
+        request_timeout_seconds=settings.github_data_timeout_seconds,
+        output_dir=output_dir or str(Path(".tmp") / "ibd-classification"),
+    )
+
+    status = result.get("status")
+    if status != "success":
+        reason = result.get("reason") or result.get("stale_reason") or result.get("error")
+        return {"market": normalized_market, "status": status, "imported": None, "reason": reason}
+
+    payload = read_bundle(Path(result["bundle_path"]))
+    stats = import_classifications(db, payload)
+    return {"market": normalized_market, "status": status, "imported": stats, "reason": None}
