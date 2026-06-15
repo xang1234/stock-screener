@@ -16,12 +16,8 @@ import {
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 
 import { STATIC_SITE_MODE } from './config/runtimeMode';
-import StaticAppShell from './static/StaticAppShell';
 
 import Layout from './components/Layout/Layout';
-import BootstrapSetupScreen from './components/App/BootstrapSetupScreen';
-import ServerLoginScreen from './components/App/ServerLoginScreen';
-import { AssistantChatProvider } from './contexts/AssistantChatContext';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { MarketProvider } from './contexts/MarketContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
@@ -34,6 +30,8 @@ import {
 
 // All pages are lazy-loaded so the initial bundle stays free of heavy
 // page-specific chunks (MarketScanPage alone pulls in recharts, ~400KB).
+const BootstrapSetupScreen = lazy(() => import('./components/App/BootstrapSetupScreen'));
+const ServerLoginScreen = lazy(() => import('./components/App/ServerLoginScreen'));
 const MarketScanPage = lazy(() => import('./pages/MarketScanPage'));
 const ScanPage = lazy(() => import('./pages/ScanPage'));
 const StockDetails = lazy(() => import('./components/Stock/StockDetails'));
@@ -43,6 +41,7 @@ const ValidationPage = lazy(() => import('./pages/ValidationPage'));
 const ThemesPage = lazy(() => import('./pages/ThemesPage'));
 const ChatbotPage = lazy(() => import('./pages/ChatbotPage'));
 const OperationsPage = lazy(() => import('./pages/OperationsPage'));
+const StaticAppShell = lazy(() => import('./static/StaticAppShell'));
 
 // In-app fallback for lazy page transitions (Layout chrome is already mounted,
 // so a spinner in the content area is the right scope).
@@ -298,7 +297,11 @@ function App() {
 
   const theme = useMemo(() => createTheme(getDesignTokens(mode)), [mode]);
 
-  const appShell = STATIC_SITE_MODE ? <StaticAppShell /> : (
+  const appShell = STATIC_SITE_MODE ? (
+    <Suspense fallback={<PageLoadingFallback />}>
+      <StaticAppShell />
+    </Suspense>
+  ) : (
     <RuntimeProvider>
       <AppShell />
     </RuntimeProvider>
@@ -352,35 +355,33 @@ function AppShell() {
 
   if (auth?.required && !auth?.authenticated) {
     return (
-      <ServerLoginScreen
-        auth={auth}
-        isLoggingIn={isLoggingIn}
-        loginError={loginError}
-        onLogin={login}
-      />
+      <Suspense fallback={<AppLoadingScreen />}>
+        <ServerLoginScreen
+          auth={auth}
+          isLoggingIn={isLoggingIn}
+          loginError={loginError}
+          onLogin={login}
+        />
+      </Suspense>
     );
   }
 
   if (bootstrapRequired) {
     return (
-      <BootstrapSetupScreen
-        primaryMarket={primaryMarket}
-        enabledMarkets={enabledMarkets}
-        supportedMarkets={supportedMarkets}
-        marketCatalog={marketCatalog}
-        bootstrapState={bootstrapState}
-        isStartingBootstrap={isStartingBootstrap}
-        bootstrapError={bootstrapError}
-        onStartBootstrap={startBootstrap}
-      />
+      <Suspense fallback={<AppLoadingScreen />}>
+        <BootstrapSetupScreen
+          primaryMarket={primaryMarket}
+          enabledMarkets={enabledMarkets}
+          supportedMarkets={supportedMarkets}
+          marketCatalog={marketCatalog}
+          bootstrapState={bootstrapState}
+          isStartingBootstrap={isStartingBootstrap}
+          bootstrapError={bootstrapError}
+          onStartBootstrap={startBootstrap}
+        />
+      </Suspense>
     );
   }
-
-  const assistantChatbotRoute = (
-    <AssistantChatProvider>
-      <ChatbotPage />
-    </AssistantChatProvider>
-  );
 
   const appRoutes = (
     <Router>
@@ -394,7 +395,7 @@ function AppShell() {
               <Route path="/groups" element={<GroupRankingsPage />} />
               <Route path="/validation" element={<ValidationPage />} />
               {features.themes && <Route path="/themes" element={<ThemesPage />} />}
-              {features.chatbot && <Route path="/chatbot" element={assistantChatbotRoute} />}
+              {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
               <Route path="/stocks/:ticker" element={<StockDetails />} />
               <Route path="/operations" element={<OperationsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />

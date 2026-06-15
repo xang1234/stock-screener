@@ -1,8 +1,30 @@
+import { useEffect, useState } from 'react';
 import { Box, Button, Chip, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { useRuntimeActivity } from '../../hooks/useRuntimeActivity';
 
-function buildSummary(activity) {
+// Header status is best-effort chrome; let route-critical data requests start first.
+const HEADER_ACTIVITY_DELAY_MS = 1500;
+
+function buildSummary(activity, { isPending = false, isError = false } = {}) {
+  if (isError && isPending) {
+    return {
+      badge: 'Warn',
+      badgeColor: 'warning',
+      title: 'Activity unavailable',
+      detail: 'View operations',
+    };
+  }
+
+  if (isPending) {
+    return {
+      badge: '...',
+      badgeColor: 'default',
+      title: 'Checking activity',
+      detail: 'View operations',
+    };
+  }
+
   const bootstrap = activity?.bootstrap ?? {};
   const summary = activity?.summary ?? {};
   const markets = activity?.markets ?? [];
@@ -59,8 +81,20 @@ function buildSummary(activity) {
 }
 
 export default function RuntimeActivityStatusButton() {
-  const activityQuery = useRuntimeActivity();
-  const summary = buildSummary(activityQuery.data);
+  const [activityEnabled, setActivityEnabled] = useState(false);
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      setActivityEnabled(true);
+    }, HEADER_ACTIVITY_DELAY_MS);
+
+    return () => window.clearTimeout(timerId);
+  }, []);
+
+  const activityQuery = useRuntimeActivity({ enabled: activityEnabled });
+  const summary = buildSummary(activityQuery.data, {
+    isError: activityQuery.isError,
+    isPending: !activityQuery.dataUpdatedAt,
+  });
 
   return (
     <Button

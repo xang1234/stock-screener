@@ -23,12 +23,13 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { getWatchlists, getWatchlistData, getWatchlistStewardship } from '../../api/userWatchlists';
 import WatchlistTable from './WatchlistTable';
 import UserWatchlistManager from './UserWatchlistManager';
+import { useStrategyProfileData } from '../../contexts/StrategyProfileContext';
+
 // Defers the lightweight-charts bundle until a chart is actually opened.
 const WatchlistChartModal = lazy(() => import('./WatchlistChartModal'));
-import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
 function WatchlistsTab() {
-  const { activeProfile } = useStrategyProfile();
+  const { requestProfile } = useStrategyProfileData();
   const [selectedWatchlistId, setSelectedWatchlistId] = useState(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
@@ -64,15 +65,17 @@ function WatchlistsTab() {
     enabled: !!selectedWatchlistId,
   });
 
+  const canLoadStewardship = !!selectedWatchlistId && !!watchlistData && !!requestProfile;
+
   const {
     data: stewardshipData,
     isLoading: stewardshipLoading,
     error: stewardshipError,
     refetch: refetchStewardship,
   } = useQuery({
-    queryKey: ['userWatchlistStewardship', selectedWatchlistId, activeProfile],
-    queryFn: () => getWatchlistStewardship(selectedWatchlistId, activeProfile),
-    enabled: !!selectedWatchlistId && !!watchlistData,
+    queryKey: ['userWatchlistStewardship', selectedWatchlistId, requestProfile],
+    queryFn: () => getWatchlistStewardship(selectedWatchlistId, requestProfile),
+    enabled: canLoadStewardship,
   });
 
   const stewardshipBySymbol = useMemo(
@@ -102,7 +105,9 @@ function WatchlistsTab() {
     refetchWatchlists();
     if (selectedWatchlistId) {
       refetchData();
-      refetchStewardship();
+      if (canLoadStewardship) {
+        refetchStewardship();
+      }
     }
   };
 
@@ -202,7 +207,7 @@ function WatchlistsTab() {
             </span>
           </Tooltip>
           <Tooltip title="Refresh data">
-            <IconButton onClick={handleRefresh} size="small">
+            <IconButton aria-label="Refresh data" onClick={handleRefresh} size="small">
               <RefreshIcon fontSize="small" />
             </IconButton>
           </Tooltip>

@@ -1,6 +1,6 @@
 import { createTheme, ThemeProvider } from '@mui/material';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketScanPage from './MarketScanPage';
 
@@ -9,13 +9,17 @@ const runtimeState = {
     themes: false,
   },
 };
+const keyMarketsRenderSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
 }));
 
 vi.mock('../components/MarketScan/KeyMarketsTab', () => ({
-  default: () => <div>key-markets</div>,
+  default: () => {
+    keyMarketsRenderSpy();
+    return <div>key-markets</div>;
+  },
 }));
 
 vi.mock('../components/MarketScan/DailyMarketSnapshotTab', () => ({
@@ -35,6 +39,11 @@ vi.mock('../components/MarketScan/StockbeeMmTab', () => ({
 }));
 
 describe('MarketScanPage capability gating', () => {
+  beforeEach(() => {
+    keyMarketsRenderSpy.mockClear();
+    runtimeState.features = { themes: false };
+  });
+
   it('removes the Themes tab when themes are disabled', () => {
     render(
       <ThemeProvider theme={createTheme()}>
@@ -47,5 +56,22 @@ describe('MarketScanPage capability gating', () => {
     expect(screen.getByRole('tab', { name: 'Daily Snapshot' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Watchlists' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Stockbee MM' })).toBeInTheDocument();
+  });
+
+  it('does not mount the Key Markets tab until the user selects it', async () => {
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <MarketScanPage />
+      </ThemeProvider>
+    );
+
+    expect(screen.getByText('daily-snapshot-tab')).toBeInTheDocument();
+    expect(screen.queryByText('key-markets')).not.toBeInTheDocument();
+    expect(keyMarketsRenderSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Key Markets' }));
+
+    expect(await screen.findByText('key-markets')).toBeInTheDocument();
+    expect(keyMarketsRenderSpy).toHaveBeenCalled();
   });
 });

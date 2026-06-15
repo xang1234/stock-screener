@@ -1,8 +1,9 @@
-import { useContext, useState } from 'react';
+import { lazy, Suspense, useContext, useState } from 'react';
 import {
   AppBar,
   Box,
   Button,
+  CircularProgress,
   Container,
   Drawer,
   Fab,
@@ -23,14 +24,99 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import PersonIcon from '@mui/icons-material/Person';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
-import { AssistantChat } from '../AssistantChat';
-import PipelineProgressCard from '../PipelineProgressCard';
-import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import MarketSelector from './MarketSelector';
 import RuntimeActivityStatusButton from './RuntimeActivityStatusButton';
-import { AssistantChatProvider } from '../../contexts/AssistantChatContext';
 import { useRuntime } from '../../contexts/RuntimeContext';
-import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
+import { usePipeline } from '../../contexts/usePipeline';
+import { useStrategyProfile, useStrategyProfileData } from '../../contexts/StrategyProfileContext';
+
+const AssistantDrawerContent = lazy(() => import('../AssistantChat/AssistantDrawerContent'));
+const PipelineProgressCard = lazy(() => import('../PipelineProgressCard'));
+const TaskSettingsModal = lazy(() => import('../Settings/TaskSettingsModal'));
+
+function DrawerLoadingFallback() {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+      <CircularProgress size={24} />
+    </Box>
+  );
+}
+
+function PipelineProgressOverlay() {
+  const { isCardVisible } = usePipeline();
+
+  if (!isCardVisible) return null;
+
+  return (
+    <Suspense fallback={null}>
+      <PipelineProgressCard />
+    </Suspense>
+  );
+}
+
+function StrategyProfileMenu({ anchorEl, onClose }) {
+  const {
+    activeProfile,
+    activeProfileDetail,
+    profiles,
+    setActiveProfile,
+  } = useStrategyProfileData();
+  const profileOptions = profiles.length
+    ? profiles
+    : [{ profile: activeProfile, label: activeProfileDetail?.label || activeProfile }];
+
+  return (
+    <Menu
+      anchorEl={anchorEl}
+      open={Boolean(anchorEl)}
+      onClose={onClose}
+      anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+    >
+      {profileOptions.map((profile) => (
+        <MenuItem
+          key={profile.profile}
+          selected={profile.profile === activeProfile}
+          onClick={() => {
+            setActiveProfile(profile.profile);
+            onClose();
+          }}
+        >
+          <ListItemText primary={profile.label} />
+        </MenuItem>
+      ))}
+    </Menu>
+  );
+}
+
+function StrategyProfileControl() {
+  const { activeProfile } = useStrategyProfile();
+  const [profileMenuAnchor, setProfileMenuAnchor] = useState(null);
+  const profileMenuOpen = Boolean(profileMenuAnchor);
+
+  return (
+    <>
+      <IconButton
+        sx={{ ml: 1 }}
+        onClick={(event) => setProfileMenuAnchor(event.currentTarget)}
+        color="inherit"
+        title={`Profile: ${activeProfile}`}
+        aria-label="Select strategy profile"
+        aria-haspopup="menu"
+        aria-expanded={profileMenuOpen}
+        size="small"
+      >
+        <PersonIcon fontSize="small" />
+      </IconButton>
+      {profileMenuOpen && (
+        <StrategyProfileMenu
+          anchorEl={profileMenuAnchor}
+          onClose={() => setProfileMenuAnchor(null)}
+        />
+      )}
+    </>
+  );
+}
 
 function TickerSearch() {
   const navigate = useNavigate();
@@ -76,7 +162,6 @@ function Layout({ children }) {
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
   const { auth, features, isLoggingOut, logout } = useRuntime();
-  const { activeProfile, activeProfileDetail, profiles, setActiveProfile } = useStrategyProfile();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
 
@@ -91,15 +176,6 @@ function Layout({ children }) {
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Assistant' }] : []),
   ];
-
-  const [profileMenuAnchor, setProfileMenuAnchor] = useState(null);
-  const profileMenuOpen = Boolean(profileMenuAnchor);
-  const profileOptions = profiles.length
-    ? profiles
-    : [{ profile: activeProfile, label: activeProfileDetail?.label || activeProfile }];
-  const activeProfileLabel = profileOptions.find((p) => p.profile === activeProfile)?.label
-    || activeProfileDetail?.label
-    || activeProfile;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -140,38 +216,7 @@ function Layout({ children }) {
               </Button>
             );
           })}
-          <IconButton
-            sx={{ ml: 1 }}
-            onClick={(event) => setProfileMenuAnchor(event.currentTarget)}
-            color="inherit"
-            title={`Profile: ${activeProfileLabel}`}
-            aria-label="Select strategy profile"
-            aria-haspopup="menu"
-            aria-expanded={profileMenuOpen}
-            size="small"
-          >
-            <PersonIcon fontSize="small" />
-          </IconButton>
-          <Menu
-            anchorEl={profileMenuAnchor}
-            open={profileMenuOpen}
-            onClose={() => setProfileMenuAnchor(null)}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          >
-            {profileOptions.map((profile) => (
-              <MenuItem
-                key={profile.profile}
-                selected={profile.profile === activeProfile}
-                onClick={() => {
-                  setActiveProfile(profile.profile);
-                  setProfileMenuAnchor(null);
-                }}
-              >
-                <ListItemText primary={profile.label} />
-              </MenuItem>
-            ))}
-          </Menu>
+          <StrategyProfileControl />
           {features.tasks && (
             <IconButton
               sx={{ ml: 0.5 }}
@@ -210,9 +255,13 @@ function Layout({ children }) {
         {children}
       </Container>
 
-      {features.themes && <PipelineProgressCard />}
+      {features.themes && <PipelineProgressOverlay />}
 
-      {features.tasks && <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
+      {features.tasks && settingsOpen && (
+        <Suspense fallback={null}>
+          <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
 
       {assistantAvailable && location.pathname !== '/chatbot' && (
         <>
@@ -241,9 +290,9 @@ function Layout({ children }) {
             }}
           >
             {assistantOpen && (
-              <AssistantChatProvider>
-                <AssistantChat mode="drawer" onClose={() => setAssistantOpen(false)} />
-              </AssistantChatProvider>
+              <Suspense fallback={<DrawerLoadingFallback />}>
+                <AssistantDrawerContent onClose={() => setAssistantOpen(false)} />
+              </Suspense>
             )}
           </Drawer>
         </>

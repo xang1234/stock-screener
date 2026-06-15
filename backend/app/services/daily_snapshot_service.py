@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from time import monotonic
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,7 @@ from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
 from app.schemas.scanning import ScanResultItem
 from app.services.key_market_history import build_key_market_entries
+from app.services.redis_pool import get_redis_client
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
@@ -31,6 +34,16 @@ DAILY_SNAPSHOT_TOP_RESULTS = 20
 LEADERS_MAX_GROUP_RANK = 40
 LEADERS_MIN_RS_RATING = 80
 TOP_GROUPS_LIMIT = 10
+DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES = 32
+
+
+@dataclass(frozen=True)
+class _DailySnapshotMemoryCacheEntry:
+    payload_json: str
+    expires_at: float
+
+
+_daily_snapshot_memory_cache: dict[str, _DailySnapshotMemoryCacheEntry] = {}
 
 
 def daily_snapshot_cache_key(market: str, scan_id: str | None) -> str:
@@ -43,6 +56,130 @@ def daily_snapshot_cache_key(market: str, scan_id: str | None) -> str:
 
 def daily_snapshot_etag(payload_json: str) -> str:
     return 'W/"{}"'.format(hashlib.sha1(payload_json.encode("utf-8")).hexdigest())
+
+
+def _prune_daily_snapshot_memory_cache(now: float) -> None:
+    expired_keys = [
+        key
+        for key, entry in _daily_snapshot_memory_cache.items()
+        if entry.expires_at <= now
+    ]
+    for key in expired_keys:
+        _daily_snapshot_memory_cache.pop(key, None)
+
+
+def get_daily_snapshot_memory_cache(cache_key: str, *, now: float | None = None) -> str | None:
+    now = monotonic() if now is None else now
+    entry = _daily_snapshot_memory_cache.get(cache_key)
+    if entry is None:
+        return None
+    if entry.expires_at <= now:
+        _daily_snapshot_memory_cache.pop(cache_key, None)
+        return None
+    return entry.payload_json
+
+
+def set_daily_snapshot_memory_cache(
+    cache_key: str,
+    payload_json: str,
+    *,
+    ttl_seconds: int = DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
+    now: float | None = None,
+) -> None:
+    now = monotonic() if now is None else now
+    _prune_daily_snapshot_memory_cache(now)
+    if (
+        cache_key not in _daily_snapshot_memory_cache
+        and len(_daily_snapshot_memory_cache) >= DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES
+    ):
+        _daily_snapshot_memory_cache.pop(next(iter(_daily_snapshot_memory_cache)), None)
+    _daily_snapshot_memory_cache[cache_key] = _DailySnapshotMemoryCacheEntry(
+        payload_json=payload_json,
+        expires_at=now + ttl_seconds,
+    )
+
+
+def _clear_daily_snapshot_memory_cache() -> None:
+    _daily_snapshot_memory_cache.clear()
+
+
+def _decode_cached_payload(cached: Any) -> str | None:
+    if not cached:
+        return None
+    return cached.decode("utf-8") if isinstance(cached, bytes) else cached
+
+
+def _read_daily_snapshot_redis_cache(
+    cache_key: str,
+    *,
+    redis: Any,
+    now: float | None = None,
+) -> str | None:
+    try:
+        payload_json = _decode_cached_payload(redis.get(cache_key))
+    except Exception as exc:  # noqa: BLE001 - cache read failures should degrade to rebuilds.
+        logger.warning("Daily snapshot cache read failed: %s", exc)
+        return None
+    if payload_json is not None:
+        try:
+            ttl_seconds = redis.ttl(cache_key)
+        except Exception as exc:  # noqa: BLE001 - TTL failures should not block Redis hits.
+            logger.warning("Daily snapshot cache TTL read failed: %s", exc)
+        else:
+            if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+                logger.warning(
+                    "Daily snapshot cache entry has no positive TTL; refreshing: %s",
+                    ttl_seconds,
+                )
+                return None
+            set_daily_snapshot_memory_cache(
+                cache_key,
+                payload_json,
+                ttl_seconds=ttl_seconds,
+                now=now,
+            )
+    return payload_json
+
+
+def _write_daily_snapshot_redis_cache(
+    cache_key: str,
+    payload_json: str,
+    *,
+    redis: Any | None,
+) -> None:
+    if redis is None:
+        return
+    try:
+        redis.setex(cache_key, DAILY_SNAPSHOT_CACHE_TTL_SECONDS, payload_json)
+    except Exception as exc:  # noqa: BLE001 - cache write failures should not fail requests.
+        logger.warning("Daily snapshot cache write failed: %s", exc)
+
+
+def get_or_build_daily_snapshot_payload(
+    cache_key: str,
+    build_payload_json: Callable[[], str],
+    *,
+    redis_client_factory: Callable[[], Any | None] = get_redis_client,
+    now: float | None = None,
+) -> str:
+    payload_json = get_daily_snapshot_memory_cache(cache_key, now=now)
+    if payload_json is not None:
+        return payload_json
+
+    try:
+        redis = redis_client_factory()
+    except Exception as exc:  # noqa: BLE001 - Redis outages should fall back to rebuilding.
+        logger.warning("Daily snapshot cache client acquisition failed: %s", exc)
+        redis = None
+    if redis is not None:
+        payload_json = _read_daily_snapshot_redis_cache(cache_key, redis=redis, now=now)
+        if payload_json is not None:
+            return payload_json
+
+    payload_json = build_payload_json()
+    _write_daily_snapshot_redis_cache(cache_key, payload_json, redis=redis)
+    set_daily_snapshot_memory_cache(cache_key, payload_json, now=now)
+    return payload_json
 
 
 def latest_completed_scan(db: Session, market: str) -> Scan | None:

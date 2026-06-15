@@ -4,7 +4,6 @@ Handles CRUD operations for market scan watchlists and the aggregated
 Daily Snapshot payload.
 """
 import json
-import logging
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -24,16 +23,13 @@ from ...schemas.market_scan import (
     ReorderRequest,
 )
 from ...services.daily_snapshot_service import (
-    DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
     build_daily_snapshot_payload,
     daily_snapshot_cache_key,
     daily_snapshot_etag,
+    get_or_build_daily_snapshot_payload,
     latest_completed_scan,
 )
-from ...services.redis_pool import get_redis_client
 from ...wiring.bootstrap import get_get_scan_results_use_case, get_uow
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -89,17 +85,8 @@ async def get_daily_snapshot(
     # so cached snapshots invalidate immediately (TTL is just a backstop).
     scan = latest_completed_scan(db, code)
     cache_key = daily_snapshot_cache_key(code, scan.scan_id if scan else None)
-    payload_json: str | None = None
-    redis = get_redis_client()
-    if redis is not None:
-        try:
-            cached = redis.get(cache_key)
-            if cached:
-                payload_json = cached.decode("utf-8") if isinstance(cached, bytes) else cached
-        except Exception as exc:
-            logger.warning("Daily snapshot cache read failed: %s", exc)
 
-    if payload_json is None:
+    def build_payload_json() -> str:
         payload = build_daily_snapshot_payload(
             db,
             market=code,
@@ -109,12 +96,9 @@ async def get_daily_snapshot(
             scan_results_use_case=use_case,
         )
         DailySnapshotResponse.model_validate(payload)
-        payload_json = json.dumps(payload, separators=(",", ":"))
-        if redis is not None:
-            try:
-                redis.setex(cache_key, DAILY_SNAPSHOT_CACHE_TTL_SECONDS, payload_json)
-            except Exception as exc:
-                logger.warning("Daily snapshot cache write failed: %s", exc)
+        return json.dumps(payload, separators=(",", ":"))
+
+    payload_json = get_or_build_daily_snapshot_payload(cache_key, build_payload_json)
 
     etag = daily_snapshot_etag(payload_json)
     if _if_none_match_matches(request.headers.get("if-none-match"), etag):
