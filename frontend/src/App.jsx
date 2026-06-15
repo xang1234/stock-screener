@@ -18,8 +18,6 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { STATIC_SITE_MODE } from './config/runtimeMode';
 
 import Layout from './components/Layout/Layout';
-import BootstrapSetupScreen from './components/App/BootstrapSetupScreen';
-import ServerLoginScreen from './components/App/ServerLoginScreen';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { MarketProvider } from './contexts/MarketContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
@@ -32,6 +30,8 @@ import {
 
 // All pages are lazy-loaded so the initial bundle stays free of heavy
 // page-specific chunks (MarketScanPage alone pulls in recharts, ~400KB).
+const BootstrapSetupScreen = lazy(() => import('./components/App/BootstrapSetupScreen'));
+const ServerLoginScreen = lazy(() => import('./components/App/ServerLoginScreen'));
 const MarketScanPage = lazy(() => import('./pages/MarketScanPage'));
 const ScanPage = lazy(() => import('./pages/ScanPage'));
 const StockDetails = lazy(() => import('./components/Stock/StockDetails'));
@@ -355,27 +355,31 @@ function AppShell() {
 
   if (auth?.required && !auth?.authenticated) {
     return (
-      <ServerLoginScreen
-        auth={auth}
-        isLoggingIn={isLoggingIn}
-        loginError={loginError}
-        onLogin={login}
-      />
+      <Suspense fallback={<AppLoadingScreen />}>
+        <ServerLoginScreen
+          auth={auth}
+          isLoggingIn={isLoggingIn}
+          loginError={loginError}
+          onLogin={login}
+        />
+      </Suspense>
     );
   }
 
   if (bootstrapRequired) {
     return (
-      <BootstrapSetupScreen
-        primaryMarket={primaryMarket}
-        enabledMarkets={enabledMarkets}
-        supportedMarkets={supportedMarkets}
-        marketCatalog={marketCatalog}
-        bootstrapState={bootstrapState}
-        isStartingBootstrap={isStartingBootstrap}
-        bootstrapError={bootstrapError}
-        onStartBootstrap={startBootstrap}
-      />
+      <Suspense fallback={<AppLoadingScreen />}>
+        <BootstrapSetupScreen
+          primaryMarket={primaryMarket}
+          enabledMarkets={enabledMarkets}
+          supportedMarkets={supportedMarkets}
+          marketCatalog={marketCatalog}
+          bootstrapState={bootstrapState}
+          isStartingBootstrap={isStartingBootstrap}
+          bootstrapError={bootstrapError}
+          onStartBootstrap={startBootstrap}
+        />
+      </Suspense>
     );
   }
 
