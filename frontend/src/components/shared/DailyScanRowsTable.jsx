@@ -11,8 +11,7 @@ import {
   Typography,
 } from '@mui/material';
 
-import PriceSparkline from '../Scan/PriceSparkline';
-import RSSparkline from '../Scan/RSSparkline';
+import { MiniPriceSparkline, MiniRSSparkline } from '../Scan/MiniSparkline';
 import TickerCell from '../common/TickerCell';
 import { getGroupRankColor } from '../../utils/colorUtils';
 import { formatLocalCurrency } from '../../utils/formatUtils';
@@ -143,7 +142,7 @@ function DailyScanRowsTable({
                   <TableCell align="center">
                     {row.price_sparkline_data ? (
                       <Box display="flex" justifyContent="center">
-                        <PriceSparkline
+                        <MiniPriceSparkline
                           data={row.price_sparkline_data}
                           trend={row.price_trend}
                           change1d={row.price_change_1d}
@@ -158,7 +157,7 @@ function DailyScanRowsTable({
                   <TableCell align="center">
                     {row.rs_sparkline_data ? (
                       <Box display="flex" justifyContent="center">
-                        <RSSparkline
+                        <MiniRSSparkline
                           data={row.rs_sparkline_data}
                           trend={row.rs_trend}
                           width={117}

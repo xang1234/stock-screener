@@ -16,12 +16,10 @@ import {
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 
 import { STATIC_SITE_MODE } from './config/runtimeMode';
-import StaticAppShell from './static/StaticAppShell';
 
 import Layout from './components/Layout/Layout';
 import BootstrapSetupScreen from './components/App/BootstrapSetupScreen';
 import ServerLoginScreen from './components/App/ServerLoginScreen';
-import { AssistantChatProvider } from './contexts/AssistantChatContext';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { MarketProvider } from './contexts/MarketContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
@@ -43,6 +41,7 @@ const ValidationPage = lazy(() => import('./pages/ValidationPage'));
 const ThemesPage = lazy(() => import('./pages/ThemesPage'));
 const ChatbotPage = lazy(() => import('./pages/ChatbotPage'));
 const OperationsPage = lazy(() => import('./pages/OperationsPage'));
+const StaticAppShell = lazy(() => import('./static/StaticAppShell'));
 
 // In-app fallback for lazy page transitions (Layout chrome is already mounted,
 // so a spinner in the content area is the right scope).
@@ -298,7 +297,11 @@ function App() {
 
   const theme = useMemo(() => createTheme(getDesignTokens(mode)), [mode]);
 
-  const appShell = STATIC_SITE_MODE ? <StaticAppShell /> : (
+  const appShell = STATIC_SITE_MODE ? (
+    <Suspense fallback={<PageLoadingFallback />}>
+      <StaticAppShell />
+    </Suspense>
+  ) : (
     <RuntimeProvider>
       <AppShell />
     </RuntimeProvider>
@@ -376,12 +379,6 @@ function AppShell() {
     );
   }
 
-  const assistantChatbotRoute = (
-    <AssistantChatProvider>
-      <ChatbotPage />
-    </AssistantChatProvider>
-  );
-
   const appRoutes = (
     <Router>
       <MarketProvider>
@@ -394,7 +391,7 @@ function AppShell() {
               <Route path="/groups" element={<GroupRankingsPage />} />
               <Route path="/validation" element={<ValidationPage />} />
               {features.themes && <Route path="/themes" element={<ThemesPage />} />}
-              {features.chatbot && <Route path="/chatbot" element={assistantChatbotRoute} />}
+              {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
               <Route path="/stocks/:ticker" element={<StockDetails />} />
               <Route path="/operations" element={<OperationsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />

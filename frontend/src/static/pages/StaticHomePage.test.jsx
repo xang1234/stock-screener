@@ -11,6 +11,7 @@ const useStaticChartIndex = vi.fn();
 const useStaticMarket = vi.fn();
 const modalSpy = vi.fn();
 const priceSparklineSpy = vi.fn();
+const miniPriceSparklineSpy = vi.fn();
 
 vi.mock('../dataClient', () => ({
   fetchStaticJson: (...args) => fetchStaticJson(...args),
@@ -47,6 +48,14 @@ vi.mock('../../components/Scan/PriceSparkline', () => ({
 
 vi.mock('../../components/Scan/RSSparkline', () => ({
   default: () => <span data-testid="rs-sparkline" />,
+}));
+
+vi.mock('../../components/Scan/MiniSparkline', () => ({
+  MiniPriceSparkline: (props) => {
+    miniPriceSparklineSpy(props);
+    return <span data-testid="mini-price-sparkline" />;
+  },
+  MiniRSSparkline: () => <span data-testid="mini-rs-sparkline" />,
 }));
 
 const manifest = {
@@ -105,6 +114,7 @@ describe('StaticHomePage', () => {
     vi.clearAllMocks();
     modalSpy.mockClear();
     priceSparklineSpy.mockClear();
+    miniPriceSparklineSpy.mockClear();
     useStaticManifest.mockReturnValue({
       data: manifest,
       isLoading: false,
@@ -259,7 +269,7 @@ describe('StaticHomePage', () => {
     renderWithProviders(<StaticHomePage />);
 
     expect(await screen.findByText('0700.HK')).toBeInTheDocument();
-    expect(priceSparklineSpy).toHaveBeenCalledWith(expect.objectContaining({
+    expect(miniPriceSparklineSpy).toHaveBeenCalledWith(expect.objectContaining({
       data: [20, 22, 24],
       width: 137,
       sparklineWidth: 86,

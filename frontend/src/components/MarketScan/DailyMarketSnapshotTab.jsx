@@ -21,7 +21,7 @@ import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 
 import { getDailySnapshot } from '../../api/marketScan';
 import { getScanResults } from '../../api/scans';
-import PriceSparkline from '../Scan/PriceSparkline';
+import { MiniPriceSparkline } from '../Scan/MiniSparkline';
 import ChartViewerModal from '../Scan/ChartViewerModalLazy';
 import DailyScanRowsTable from '../shared/DailyScanRowsTable';
 import RankChangeCell from '../shared/RankChangeCell';
@@ -183,7 +183,7 @@ function DailyMarketSnapshotTab() {
                   </Typography>
                 </Box>
                 <Box sx={{ mt: 0.75 }}>
-                  <PriceSparkline
+                  <MiniPriceSparkline
                     data={item.closes}
                     trend={trend}
                     change1d={null}

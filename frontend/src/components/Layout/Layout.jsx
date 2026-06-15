@@ -1,8 +1,9 @@
-import { useContext, useState } from 'react';
+import { lazy, Suspense, useContext, useState } from 'react';
 import {
   AppBar,
   Box,
   Button,
+  CircularProgress,
   Container,
   Drawer,
   Fab,
@@ -23,14 +24,35 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import PersonIcon from '@mui/icons-material/Person';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
-import { AssistantChat } from '../AssistantChat';
-import PipelineProgressCard from '../PipelineProgressCard';
-import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import MarketSelector from './MarketSelector';
 import RuntimeActivityStatusButton from './RuntimeActivityStatusButton';
-import { AssistantChatProvider } from '../../contexts/AssistantChatContext';
 import { useRuntime } from '../../contexts/RuntimeContext';
+import { usePipeline } from '../../contexts/usePipeline';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
+
+const AssistantDrawerContent = lazy(() => import('../AssistantChat/AssistantDrawerContent'));
+const PipelineProgressCard = lazy(() => import('../PipelineProgressCard'));
+const TaskSettingsModal = lazy(() => import('../Settings/TaskSettingsModal'));
+
+function DrawerLoadingFallback() {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+      <CircularProgress size={24} />
+    </Box>
+  );
+}
+
+function PipelineProgressOverlay() {
+  const { isCardVisible } = usePipeline();
+
+  if (!isCardVisible) return null;
+
+  return (
+    <Suspense fallback={null}>
+      <PipelineProgressCard />
+    </Suspense>
+  );
+}
 
 function TickerSearch() {
   const navigate = useNavigate();
@@ -210,9 +232,13 @@ function Layout({ children }) {
         {children}
       </Container>
 
-      {features.themes && <PipelineProgressCard />}
+      {features.themes && <PipelineProgressOverlay />}
 
-      {features.tasks && <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
+      {features.tasks && settingsOpen && (
+        <Suspense fallback={null}>
+          <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
 
       {assistantAvailable && location.pathname !== '/chatbot' && (
         <>
@@ -241,9 +267,9 @@ function Layout({ children }) {
             }}
           >
             {assistantOpen && (
-              <AssistantChatProvider>
-                <AssistantChat mode="drawer" onClose={() => setAssistantOpen(false)} />
-              </AssistantChatProvider>
+              <Suspense fallback={<DrawerLoadingFallback />}>
+                <AssistantDrawerContent onClose={() => setAssistantOpen(false)} />
+              </Suspense>
             )}
           </Drawer>
         </>
