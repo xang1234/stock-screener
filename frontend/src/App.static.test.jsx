@@ -43,8 +43,6 @@ vi.mock('./components/Charts/BreadthChart', () => ({
     <div data-testid="breadth-chart-ranges">{availableRanges.join(',')}</div>
   ),
 }));
-vi.mock('./components/Scan/PriceSparkline', () => ({ default: () => <span data-testid="price-sparkline" /> }));
-vi.mock('./components/Scan/RSSparkline', () => ({ default: () => <span data-testid="rs-sparkline" /> }));
 
 const staticPayloads = {
   'manifest.json': {
