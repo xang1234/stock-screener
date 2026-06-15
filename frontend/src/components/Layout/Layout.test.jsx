@@ -1,5 +1,6 @@
 import { MemoryRouter } from 'react-router-dom';
 import { screen } from '@testing-library/react';
+import { act } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Layout from './Layout';
@@ -35,6 +36,31 @@ vi.mock('../../hooks/useRuntimeActivity', () => ({
 describe('Layout', () => {
   beforeEach(() => {
     useRuntimeActivityMock.mockReset();
+  });
+
+  it('defers the header runtime activity request until after initial paint', () => {
+    vi.useFakeTimers();
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+
+    try {
+      renderWithProviders(
+        <MemoryRouter initialEntries={['/']}>
+          <Layout>
+            <div>content</div>
+          </Layout>
+        </MemoryRouter>
+      );
+
+      expect(useRuntimeActivityMock).toHaveBeenLastCalledWith({ enabled: false });
+
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+
+      expect(useRuntimeActivityMock).toHaveBeenLastCalledWith({ enabled: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows the runtime activity header summary and removes Digest navigation', () => {

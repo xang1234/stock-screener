@@ -1,6 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Box, Button, Chip, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { useRuntimeActivity } from '../../hooks/useRuntimeActivity';
+
+// Header status is best-effort chrome; let route-critical data requests start first.
+const HEADER_ACTIVITY_DELAY_MS = 1500;
 
 function buildSummary(activity) {
   const bootstrap = activity?.bootstrap ?? {};
@@ -59,7 +63,16 @@ function buildSummary(activity) {
 }
 
 export default function RuntimeActivityStatusButton() {
-  const activityQuery = useRuntimeActivity();
+  const [activityEnabled, setActivityEnabled] = useState(false);
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      setActivityEnabled(true);
+    }, HEADER_ACTIVITY_DELAY_MS);
+
+    return () => window.clearTimeout(timerId);
+  }, []);
+
+  const activityQuery = useRuntimeActivity({ enabled: activityEnabled });
   const summary = buildSummary(activityQuery.data);
 
   return (
