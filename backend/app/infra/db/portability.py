@@ -151,13 +151,14 @@ def trigger_names(bind_or_conn: BindLike, table_name: str) -> set[str]:
 def _json_key_literal(segment: str) -> ColumnElement:
     """Render a JSON key as an inline SQL literal, not a bind parameter.
 
-    The final ``->>`` key must be inline so a Postgres expression index on
-    ``details_json ->> 'key'`` matches the query in *every* plan mode. Left as a
-    bind parameter it renders ``->> $1``, which a generic plan can't match — the
-    index would silently go unused and the filter would fall back to a full scan
-    (psycopg2 happens to mogrify params client-side, but psycopg3/asyncpg and
-    server-side prepared statements would not). Keys come from the static
-    ``_JSON_FIELD_MAP``, never user input; the quote-doubling is defensive.
+    Every key in a JSON path must be inline so a Postgres expression index on
+    ``details_json -> 'a' ->> 'b'`` matches the query in *every* plan mode. Left
+    as a bind parameter a key renders ``-> $1``, which a generic plan can't
+    match — the index would silently go unused and the filter would fall back to
+    a full scan (psycopg2 happens to mogrify params client-side, but
+    psycopg3/asyncpg and server-side prepared statements would not). Keys come
+    from the static ``_JSON_FIELD_MAP``, never user input; the quote-doubling is
+    defensive.
     """
     return literal_column("'" + str(segment).replace("'", "''") + "'")
 
@@ -172,7 +173,7 @@ def json_text(
         return cast(column, Text)
     expr = column
     for segment in path_segments[:-1]:
-        expr = expr[segment]
+        expr = expr.op("->")(_json_key_literal(segment))
     return expr.op("->>")(_json_key_literal(path_segments[-1]))
 
 
