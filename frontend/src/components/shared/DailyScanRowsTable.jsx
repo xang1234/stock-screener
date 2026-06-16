@@ -83,7 +83,7 @@ function DailyScanRowsTable({
         {action}
       </Box>
       <TableContainer>
-        <Table size="small">
+        <Table size="small" sx={{ minWidth: 720 }}>
           <TableHead>
             <TableRow>
               <TableCell align="center">Symbol</TableCell>

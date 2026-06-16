@@ -2349,14 +2349,15 @@ def test_export_chart_bundle_skips_preset_symbols_without_cached_prices(
     assert manifest["symbols_total"] == 1
 
 
-def test_export_chart_bundle_expands_coverage_for_top_groups_constituents(
+def test_export_chart_bundle_expands_coverage_for_all_group_constituents(
     service_and_session_factory,
     monkeypatch,
     tmp_path,
 ):
-    """Pass 3 should export charts for every constituent of the top-N IBD
-    industry groups even when those symbols fall outside the composite-score
-    top-N from Pass 1 and the preset-screen expansion from Pass 2.
+    """Pass 3 should export charts for the constituents of *every* IBD industry
+    group (every group is clickable in the static UI), even when those symbols
+    fall outside the composite-score top-N from Pass 1 and the preset-screen
+    expansion from Pass 2 — including low-ranked groups.
     """
     service, session_factory = service_and_session_factory
     _insert_runs(
@@ -2374,7 +2375,6 @@ def test_export_chart_bundle_expands_coverage_for_top_groups_constituents(
     monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
     monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
     monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 0)
-    monkeypatch.setattr(export_module, "STATIC_CHART_TOP_N_GROUPS", 2)
 
     service._price_cache = _FakePriceCache(
         get_many_cached_only=lambda symbols, period="2y": {
@@ -2461,9 +2461,43 @@ def test_export_chart_bundle_expands_coverage_for_top_groups_constituents(
     index_payload = json.loads((tmp_path / "charts" / "index.json").read_text(encoding="utf-8"))
     exported = {entry["symbol"] for entry in index_payload["symbols"]}
 
-    assert exported == {"NVDA", "GROUP_A1", "GROUP_B1"}
-    assert "OUTSIDE_TOP" not in exported
-    assert manifest["symbols_total"] == 3
+    # Group C is rank 3 — formerly excluded by the top-N cap, now covered.
+    assert exported == {"NVDA", "GROUP_A1", "GROUP_B1", "OUTSIDE_TOP"}
+    assert manifest["symbols_total"] == 4
+
+
+def test_collect_group_constituents_covers_all_ranks_and_caps_per_group():
+    """The collector must (a) include constituents of low-ranked groups and
+    (b) cap each group at ``max_per_group`` to match the static UI's per-group
+    chart limit.
+    """
+    groups_payload = {
+        "available": True,
+        "payload": {
+            "group_details": {
+                "Big": {
+                    "current_rank": 1,
+                    "stocks": [{"symbol": f"B{i}"} for i in range(60)],
+                },
+                "LowRanked": {
+                    "current_rank": 999,
+                    "stocks": [{"symbol": "LOW1"}, {"symbol": "LOW2"}],
+                },
+            },
+        },
+    }
+
+    symbols = StaticSiteExportService._collect_top_group_constituent_symbols(  # noqa: SLF001
+        groups_payload=groups_payload,
+        max_per_group=50,
+    )
+
+    # (a) a deeply-ranked group still contributes its constituents
+    assert {"LOW1", "LOW2"} <= symbols
+    # (b) a group with >50 constituents is capped at the first 50
+    big_symbols = {s for s in symbols if s.startswith("B")}
+    assert len(big_symbols) == 50
+    assert "B0" in big_symbols and "B59" not in big_symbols
 
 
 def test_build_key_market_entries_skips_change_when_latest_close_is_null(service_and_session_factory):

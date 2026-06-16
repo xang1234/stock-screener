@@ -140,7 +140,7 @@ function StaticBreadthPage() {
               Recent Sessions
             </Typography>
             <TableContainer>
-              <Table size="small">
+              <Table size="small" sx={{ minWidth: 520 }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Date</TableCell>

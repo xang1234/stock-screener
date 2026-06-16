@@ -13,6 +13,10 @@ import CandlestickChart from '../components/Charts/CandlestickChart';
 import { getGroupRankColor } from '../utils/colorUtils';
 import { fetchStaticChartPayload, staticChartKeys } from './chartClient';
 
+// Keep in sync with backend STATIC_CHART_MAX_PER_GROUP
+// (static_site_export_service.py): the export only generates chart payloads for
+// this many constituents per group, so rendering more here would show "No price
+// data" cards.
 const MAX_SYMBOLS = 50;
 const CHART_HEIGHT = 360;
 

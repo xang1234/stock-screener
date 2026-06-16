@@ -73,7 +73,10 @@ STATIC_DEFAULT_SCAN_FILTERS_FALLBACK = DEFAULT_SCAN_FILTERS_FALLBACK
 
 
 STATIC_CHART_PRESET_TOP_N = 200
-STATIC_CHART_TOP_N_GROUPS = 50
+# Per-group cap for chart export. The static UI only renders the first
+# MAX_SYMBOLS charts per group (frontend StaticGroupChartsGrid.jsx), so there is
+# no value exporting more than this many constituents for any single group.
+STATIC_CHART_MAX_PER_GROUP = 50
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS = 10
@@ -864,15 +867,18 @@ class StaticSiteExportService:
                 log_label="Preset screen expansion",
             )
 
-        # --- Pass 3: expand coverage to all constituents of top-N groups ---
+        # --- Pass 3: expand coverage to the top constituents of *every* group ---
+        # Group details are built for all ranked groups (every group is clickable
+        # in the static UI), so every group's visible constituents need charts —
+        # not just the top-ranked groups.
         group_symbols = self._collect_top_group_constituent_symbols(
             groups_payload=groups_payload,
-            top_n=STATIC_CHART_TOP_N_GROUPS,
+            max_per_group=STATIC_CHART_MAX_PER_GROUP,
         )
         if group_symbols:
             _expand_extra_charts(
                 group_symbols,
-                log_label=f"Top-{STATIC_CHART_TOP_N_GROUPS} groups expansion",
+                log_label=f"All-groups expansion (<= {STATIC_CHART_MAX_PER_GROUP}/group)",
             )
 
         index_rel_path = normalized_prefix / "charts" / "index.json"
@@ -898,12 +904,18 @@ class StaticSiteExportService:
     def _collect_top_group_constituent_symbols(
         *,
         groups_payload: dict[str, Any] | None,
-        top_n: int,
+        max_per_group: int,
     ) -> set[str]:
-        """Return constituent symbols across the top-N IBD industry groups.
+        """Return the top constituent symbols across *all* IBD industry groups.
 
         Pulls from `groups_payload['payload']['group_details']`, which maps
-        group name → details (including `current_rank` and `stocks`).
+        group name → details (including `stocks`). Each group's `stocks` list is
+        already sorted by RS rating then composite score (see
+        ``_build_group_details``), so we take the first ``max_per_group`` of each
+        to mirror the static UI, which only renders that many charts per group
+        (frontend ``StaticGroupChartsGrid.jsx``). Every group is covered — group
+        details are built for all ranks, so lower-ranked groups must not be
+        skipped or their constituent charts show "No price data".
         """
         if not groups_payload or not groups_payload.get("available"):
             return set()
@@ -913,10 +925,7 @@ class StaticSiteExportService:
         for detail in group_details.values():
             if not isinstance(detail, dict):
                 continue
-            rank = detail.get("current_rank")
-            if rank is None or rank > top_n:
-                continue
-            for stock in detail.get("stocks") or []:
+            for stock in (detail.get("stocks") or [])[:max_per_group]:
                 if isinstance(stock, dict):
                     symbol = stock.get("symbol")
                     if symbol:
