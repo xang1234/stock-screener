@@ -45,7 +45,14 @@ import {
   FormControlLabel,
   Switch,
 } from '@mui/material';
-import { QUADRANT_COLORS, QUADRANT_FILLS, QUADRANT_LAYOUT, quadrantColor } from './rrgColors';
+import {
+  QUADRANT_COLORS,
+  QUADRANT_FILLS,
+  QUADRANT_LAYOUT,
+  quadrantColor,
+  HIGHLIGHT,
+  HIGHLIGHT_HALO,
+} from './rrgColors';
 import { buildTailPoints, catmullRomPath, splineSegmentMidpoint, layoutLabels } from './rrgTrace';
 import { useDragZoom } from './useDragZoom';
 import { useRRGFilters } from './useRRGFilters';
@@ -56,6 +63,14 @@ import RRGFilters from './RRGFilters';
 // the unfiltered ~197-series view) tails are line-only with a single most-recent
 // arrow per series, to stay light and readable. Filter down to get the detail.
 const DETAIL_LIMIT = 20;
+
+const DIM = 0.18; // opacity for the other series while one is hovered
+
+// Hover emphasis for a series given the hovered group: 'hovered' gets the silver
+// highlight, 'dimmed' fades back, 'normal' is the resting look. Classified once
+// here instead of re-deriving the same booleans at every render site.
+const emphasis = (group, hovered) =>
+  !hovered ? 'normal' : group === hovered ? 'hovered' : 'dimmed';
 
 /** Symmetric axis bounds around the 100/100 cross, padded to the data extent. */
 const computeBound = (groups) => {
@@ -71,16 +86,19 @@ const computeBound = (groups) => {
 
 /** Graduated tail vertex: faint/small when old, brighter toward the head. The
  *  head itself is drawn by the larger "current" dot, so it's skipped here. */
-const TailDot = ({ cx, cy, payload }) => {
+const TailDot = ({ cx, cy, payload, hovered }) => {
   if (cx == null || cy == null || payload?.isHead) return null;
   const t = payload.t ?? 0.5;
+  if (emphasis(payload.industry_group, hovered) === 'hovered') {
+    return <circle cx={cx} cy={cy} r={3 + 2.5 * t} fill={HIGHLIGHT} stroke={HIGHLIGHT_HALO} strokeWidth={1} />;
+  }
   return (
     <circle
       cx={cx}
       cy={cy}
       r={2 + 2.5 * t}
       fill={quadrantColor(payload.quadrant)}
-      fillOpacity={0.25 + 0.5 * t}
+      fillOpacity={(0.25 + 0.5 * t) * (hovered ? DIM : 1)}
     />
   );
 };
@@ -97,18 +115,74 @@ const ArrowHead = ({ x, y, angle, color }) => {
   );
 };
 
+/** Per-series pixel geometry for the trails — the expensive part (Catmull-Rom
+ *  path + arrow midpoints). Built independent of hover so it can be memoized and
+ *  reused across hover changes, which only restyle the trails, never re-shape them. */
+const buildTrailGeometry = (shown, perSegment, xScale, yScale) => {
+  const out = [];
+  shown.forEach((g) => {
+    const tail = g.tail || [];
+    if (tail.length < 2) return;
+    const pts = tail.map((p) => ({ x: xScale(p.x), y: yScale(p.y) }));
+    if (pts.some((p) => p.x == null || p.y == null || Number.isNaN(p.x) || Number.isNaN(p.y))) return;
+    const arrows = [];
+    const from = perSegment ? 1 : pts.length - 1;
+    for (let i = from; i < pts.length; i += 1) {
+      arrows.push(splineSegmentMidpoint(pts[i - 2], pts[i - 1], pts[i], pts[i + 1]));
+    }
+    out.push({ group: g.industry_group, color: quadrantColor(g.quadrant), path: catmullRomPath(pts), arrows });
+  });
+  return out;
+};
+
+const trailArrows = (s, color, keyPrefix) =>
+  s.arrows.map((m, i) => (
+    <ArrowHead key={`${keyPrefix}-${s.group}-${i}`} x={m.x} y={m.y} angle={m.angle} color={color} />
+  ));
+
+/** A series at rest: thin quadrant-colored spline + arrows. */
+const renderTrail = (s) => [
+  <path key={`spline-${s.group}`} d={s.path} fill="none" stroke={s.color} strokeWidth={1.5} strokeOpacity={0.5} />,
+  ...trailArrows(s, s.color, 'arr'),
+];
+
+/** The hovered series: dark-haloed silver spline + silver arrows, drawn on top. */
+const renderHot = (s) => [
+  <path key={`halo-${s.group}`} d={s.path} fill="none" stroke={HIGHLIGHT_HALO} strokeWidth={5} />,
+  <path key={`hi-${s.group}`} d={s.path} fill="none" stroke={HIGHLIGHT} strokeWidth={3} />,
+  ...trailArrows(s, HIGHLIGHT, 'harr'),
+];
+
 /** Recharts <Customized> child: draws everything that lives in pixel space —
  *  the smoothed Catmull-Rom trail per series, direction arrows riding the
  *  curve, and (when toggled) collision-avoiding head labels. All of it is
  *  clipped to the plot area so nothing spills over the axes when zoomed.
  *  Degrades to nothing if scales aren't ready (e.g. SSR/jsdom). */
-const RRGOverlay = ({ shown, perSegment, showLabels, xAxisMap, yAxisMap }) => {
+const RRGOverlay = ({ shown, perSegment, showLabels, showTails, hovered, xAxisMap, yAxisMap }) => {
   const clipId = useId();
   const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
   const yAxis = yAxisMap && yAxisMap[Object.keys(yAxisMap)[0]];
   const xScale = xAxis?.scale;
   const yScale = yAxis?.scale;
-  if (typeof xScale !== 'function' || typeof yScale !== 'function') return null;
+  const ready = typeof xScale === 'function' && typeof yScale === 'function';
+
+  // Recharts hands us a fresh scale function every render, so key the geometry
+  // memo on the scale's domain+range (its real identity): that changes on
+  // zoom/resize/data but NOT on hover, so hovering never re-shapes the trails.
+  const sig = ready
+    ? `${xScale.domain().join()}|${xScale.range().join()}|${yScale.domain().join()}|${yScale.range().join()}`
+    : '';
+  const geometry = useMemo(
+    () => (ready && showTails ? buildTrailGeometry(shown, perSegment, xScale, yScale) : []),
+    // sig stands in for xScale/yScale identity; listing the functions would bust every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shown, perSegment, showTails, sig],
+  );
+  // The resting trails are hover-independent, so React reuses these elements
+  // (stable reference) and skips re-rendering them when only the hover changes.
+  const baseTrails = useMemo(() => geometry.flatMap(renderTrail), [geometry]);
+
+  if (!ready) return null;
 
   const [rx0, rx1] = xScale.range();
   const [ry0, ry1] = yScale.range();
@@ -119,38 +193,7 @@ const RRGOverlay = ({ shown, perSegment, showLabels, xAxisMap, yAxisMap }) => {
     height: Math.abs(ry1 - ry0),
   };
 
-  const splines = [];
-  const arrows = [];
-  shown.forEach((g) => {
-    const tail = g.tail || [];
-    if (tail.length < 2) return;
-    const pts = tail.map((p) => ({ x: xScale(p.x), y: yScale(p.y) }));
-    if (pts.some((p) => p.x == null || p.y == null || Number.isNaN(p.x) || Number.isNaN(p.y))) return;
-    const color = quadrantColor(g.quadrant);
-    splines.push(
-      <path
-        key={`spline-${g.industry_group}`}
-        d={catmullRomPath(pts)}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.5}
-        strokeOpacity={0.5}
-      />,
-    );
-    const from = perSegment ? 1 : pts.length - 1;
-    for (let i = from; i < pts.length; i += 1) {
-      const mid = splineSegmentMidpoint(pts[i - 2], pts[i - 1], pts[i], pts[i + 1]);
-      arrows.push(
-        <ArrowHead
-          key={`${g.industry_group}-${i}`}
-          x={mid.x}
-          y={mid.y}
-          angle={mid.angle}
-          color={color}
-        />,
-      );
-    }
-  });
+  const hot = hovered ? geometry.find((s) => s.group === hovered) : null;
 
   let labels = null;
   if (showLabels) {
@@ -188,8 +231,10 @@ const RRGOverlay = ({ shown, perSegment, showLabels, xAxisMap, yAxisMap }) => {
         </clipPath>
       </defs>
       <g clipPath={`url(#${clipId})`}>
-        {splines}
-        {arrows}
+        {/* Fade the resting trails as one group while a series is hovered; the
+            hovered series is then drawn at full strength on top. */}
+        <g opacity={hovered ? DIM : 1}>{baseTrails}</g>
+        {hot && renderHot(hot)}
         {labels}
       </g>
     </g>
@@ -246,9 +291,12 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
 
   const { shown, filter } = useRRGFilters(groups, { scope: data?.scope, market: data?.market });
 
-  // Display preference (not a filter) — kept local so it persists across
+  // Display preferences (not filters) — kept local so they persist across
   // scope/market switches, unlike the filters in useRRGFilters.
   const [showLabels, setShowLabels] = useState(false);
+  const [showTails, setShowTails] = useState(true);
+  // Group whose trail/points are currently silver-highlighted (set on hover).
+  const [hoveredGroup, setHoveredGroup] = useState(null);
 
   const bound = useMemo(() => computeBound(shown), [shown]);
   const lo = 100 - bound;
@@ -340,6 +388,17 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
             control={
               <Switch
                 size="small"
+                checked={showTails}
+                onChange={(e) => setShowTails(e.target.checked)}
+              />
+            }
+            label="Tails"
+            sx={{ mr: 0 }}
+          />
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
                 checked={showLabels}
                 onChange={(e) => setShowLabels(e.target.checked)}
               />
@@ -419,21 +478,31 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
 
               {/* Graduated hoverable per-week tail dots (empty unless detailed).
                   The connecting trail itself is RRGOverlay's spline below. */}
-              {tails.map((t) => (
-                <Scatter
-                  key={`tail-${t.name}`}
-                  data={t.points}
-                  shape={<TailDot />}
-                  isAnimationActive={false}
-                  legendType="none"
-                />
-              ))}
+              {showTails &&
+                tails.map((t) => (
+                  <Scatter
+                    key={`tail-${t.name}`}
+                    data={t.points}
+                    shape={<TailDot hovered={hoveredGroup} />}
+                    isAnimationActive={false}
+                    legendType="none"
+                    onMouseEnter={() => setHoveredGroup(t.name)}
+                    onMouseLeave={() => setHoveredGroup(null)}
+                  />
+                ))}
 
               {/* Spline trails, direction arrows (per-segment when detailed),
                   and collision-avoiding head labels (toggle). */}
               <Customized
                 component={(props) => (
-                  <RRGOverlay shown={shown} perSegment={detailed} showLabels={showLabels} {...props} />
+                  <RRGOverlay
+                    shown={shown}
+                    perSegment={detailed}
+                    showLabels={showLabels}
+                    showTails={showTails}
+                    hovered={hoveredGroup}
+                    {...props}
+                  />
                 )}
               />
 
@@ -456,16 +525,23 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
                 data={currentPoints}
                 isAnimationActive={false}
                 onClick={(pt) => onSelectGroup?.(pt?.industry_group)}
+                onMouseEnter={(pt) => setHoveredGroup(pt?.industry_group ?? pt?.payload?.industry_group)}
+                onMouseLeave={() => setHoveredGroup(null)}
                 cursor="pointer"
               >
-                {currentPoints.map((p) => (
-                  <Cell
-                    key={`dot-${p.industry_group}`}
-                    fill={quadrantColor(p.quadrant)}
-                    fillOpacity={p.is_provisional ? 0.35 : 0.9}
-                    stroke={quadrantColor(p.quadrant)}
-                  />
-                ))}
+                {currentPoints.map((p) => {
+                  const e = emphasis(p.industry_group, hoveredGroup);
+                  const base = p.is_provisional ? 0.35 : 0.9;
+                  return (
+                    <Cell
+                      key={`dot-${p.industry_group}`}
+                      fill={quadrantColor(p.quadrant)}
+                      fillOpacity={e === 'dimmed' ? DIM : base}
+                      stroke={e === 'hovered' ? HIGHLIGHT : quadrantColor(p.quadrant)}
+                      strokeWidth={e === 'hovered' ? 3 : 1}
+                    />
+                  );
+                })}
               </Scatter>
             </ScatterChart>
           </ResponsiveContainer>
