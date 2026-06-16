@@ -18,7 +18,7 @@ from app.domain.scanning.filter_spec import (
     SortSpec,
     TextSearchFilter,
 )
-from app.infra.db.portability import is_postgres, json_number, json_text
+from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
@@ -176,20 +176,6 @@ def requires_python_sort(field: str) -> bool:
 # ── Public API ──────────────────────────────────────────────────────────
 
 
-def _lean_count(query: Query) -> int:
-    """Count matching rows without wrapping the heavy SELECT in a subquery.
-
-    ``Query.count()`` emits ``SELECT count(*) FROM (<full entity SELECT>)``;
-    that inner SELECT projects the large ``details`` JSON + sparkline blobs
-    and two outer joins, so a *filtered* count read every row's blobs and
-    dominated query time (25-90s on large scans, even when the filter matched
-    few rows). ``with_entities(func.count())`` emits a flat
-    ``SELECT count(*) FROM ... WHERE ...`` instead. The StockUniverse /
-    StockFundamental joins are 1:1 on symbol, so the total is unchanged.
-    """
-    return query.order_by(None).with_entities(func.count()).scalar() or 0
-
-
 def apply_filters(query: Query, filters: FilterSpec) -> Query:
     """Apply all FilterSpec constraints as SQLAlchemy WHERE clauses."""
     for rf in filters.range_filters:
@@ -214,7 +200,7 @@ def apply_sort_and_paginate(
     If it's a JSON details field, we fetch up to _PYTHON_SORT_LIMIT rows,
     sort in Python, and slice for the requested page.
     """
-    total = _lean_count(query)
+    total = lean_count(query)
     python_sorted = sort.field in _PYTHON_SORT_FIELDS
 
     if python_sorted:

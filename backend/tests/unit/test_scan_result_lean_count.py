@@ -4,7 +4,7 @@
 ``SELECT count(*) FROM (<full entity SELECT>)`` — wrapping the heavy
 multi-column, double-outer-join SELECT (details JSON + sparkline blobs) in a
 subquery. On large scans a *filtered* count then read every row's blobs and
-dominated query time (25-90s observed live). ``_lean_count`` emits a flat
+dominated query time (25-90s observed live). ``lean_count`` emits a flat
 ``SELECT count(*) FROM ... WHERE ...`` instead.
 
 These tests pin two invariants:
@@ -19,8 +19,9 @@ from __future__ import annotations
 from sqlalchemy import func
 
 from app.domain.scanning.filter_spec import FilterSpec
+from app.infra.db.portability import lean_count
 from app.infra.db.repositories.scan_result_repo import _scan_results_query
-from app.infra.query.scan_result_query import _lean_count, apply_filters
+from app.infra.query.scan_result_query import apply_filters
 from app.models.scan_result import ScanResult
 
 _SCAN_ID = "scan-lean-count"
@@ -58,21 +59,21 @@ def _filtered_query(session, spec: FilterSpec):
 def test_lean_count_matches_orm_count_no_filter(universe_session):
     _seed(universe_session)
     q = _filtered_query(universe_session, FilterSpec())
-    assert _lean_count(q) == q.count() == 6
+    assert lean_count(q) == q.count() == 6
 
 
 def test_lean_count_matches_orm_count_sql_column_filter(universe_session):
     _seed(universe_session)
     spec = FilterSpec().add_range("rs_rating", 80, None)  # AAA, BBB, EEE
     q = _filtered_query(universe_session, spec)
-    assert _lean_count(q) == q.count() == 3
+    assert lean_count(q) == q.count() == 3
 
 
 def test_lean_count_matches_orm_count_boolean_json_filter(universe_session):
     _seed(universe_session)
     spec = FilterSpec().add_boolean("ma_alignment", True)  # AAA, BBB, EEE
     q = _filtered_query(universe_session, spec)
-    assert _lean_count(q) == q.count() == 3
+    assert lean_count(q) == q.count() == 3
 
 
 def test_lean_count_matches_orm_count_combined_filter(universe_session):
@@ -84,7 +85,7 @@ def test_lean_count_matches_orm_count_combined_filter(universe_session):
         .add_boolean("ma_alignment", True)
     )  # AAA (90/88/T), BBB (70/82/T); EEE has null composite -> excluded
     q = _filtered_query(universe_session, spec)
-    assert _lean_count(q) == q.count() == 2
+    assert lean_count(q) == q.count() == 2
 
 
 def test_lean_count_sql_is_flat(universe_session):

@@ -30,19 +30,24 @@ down_revision = "20260601_0020"
 branch_labels = None
 depends_on = None
 
-# Hot preset filter/sort fields stored in details_json. Each is filtered via
-# FilterSpec.add_range -> json_number -> CAST(details_json ->> 'f' AS FLOAT).
-# rs_rating is the workhorse (nearly every preset constrains it); the rest seed
-# the bitmap for score / growth / pattern / mover presets. Booleans and
-# pattern-string fields are intentionally omitted — they co-occur with one of
-# these and filter cheaply on the already-narrowed heap set.
+# Hot preset filter/sort fields stored at the TOP LEVEL of details_json. Each
+# is filtered via FilterSpec.add_range -> json_number -> the flat
+# CAST(details_json ->> 'f' AS FLOAT) expression below. rs_rating is the
+# workhorse (nearly every preset constrains it); the rest seed the bitmap for
+# score / growth / mover presets.
+#
+# Only flat top-level keys belong here — nested setup-engine fields (e.g.
+# se_setup_score -> details_json -> 'setup_engine' ->> 'setup_score') would
+# need a different expression and are deliberately excluded: SE presets already
+# constrain rs_rating, so the filter uses that index and the residual sort runs
+# over the narrowed set. test_feature_store_index_drift enforces the flat-path
+# invariant for every entry here.
 _FIELDS = [
     "rs_rating",
     "minervini_score",
     "canslim_score",
     "stage",
     "eps_growth_qq",
-    "se_setup_score",
     "volume_breakthrough_score",
     "ipo_score",
     "perf_week",
@@ -54,15 +59,26 @@ def _index_name(field: str) -> str:
     return f"ix_sfd_run_{field}"
 
 
+def _index_expr(field: str) -> str:
+    """SQL for the indexed value.
+
+    This MUST stay byte-identical (minus the table qualifier) to what
+    ``feature_store_query.json_number()`` compiles to on Postgres for the same
+    field — otherwise the planner silently declines the index and the filter
+    falls back to a full scan. ``test_feature_store_index_drift`` pins that
+    invariant so the linkage can't rot unnoticed.
+    """
+    return f"CAST(details_json ->> '{field}' AS FLOAT)"
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
     for field in _FIELDS:
         op.execute(
-            f'CREATE INDEX IF NOT EXISTS {_index_name(field)} '
-            f'ON stock_feature_daily '
-            f"(run_id, (CAST(details_json ->> '{field}' AS FLOAT)))"
+            f"CREATE INDEX IF NOT EXISTS {_index_name(field)} "
+            f"ON stock_feature_daily (run_id, ({_index_expr(field)}))"
         )
 
 

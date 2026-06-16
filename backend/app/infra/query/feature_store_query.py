@@ -18,7 +18,7 @@ from app.domain.common.query import (
     SortSpec,
     TextSearchFilter,
 )
-from app.infra.db.portability import is_postgres, json_number, json_text
+from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
 from app.infra.db.models.feature_store import StockFeatureDaily
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
@@ -192,26 +192,13 @@ def apply_filters(query: Query, filters: FilterSpec) -> Query:
     return query
 
 
-def _lean_count(query: Query) -> int:
-    """Count matching rows without wrapping the heavy SELECT in a subquery.
-
-    ``Query.count()`` emits ``SELECT count(*) FROM (<full entity SELECT>)``;
-    the inner SELECT projects the large ``details_json`` blob and two outer
-    joins, so a count over the whole run was needlessly heavy. ``with_entities
-    (func.count())`` emits a flat ``SELECT count(*) FROM ... WHERE ...``. The
-    StockUniverse / StockFundamental joins are 1:1 on symbol, so the total is
-    unchanged. (JSON-field *filters* remain slow until WS1B indexes them.)
-    """
-    return query.order_by(None).with_entities(func.count()).scalar() or 0
-
-
 def apply_sort_and_paginate(
     query: Query,
     sort: SortSpec,
     page: PageSpec,
 ) -> tuple[list, int]:
     """Apply sort + pagination.  Returns (rows, total_count)."""
-    total = _lean_count(query)
+    total = lean_count(query)
 
     col = _COLUMN_MAP.get(sort.field)
     if col is not None:
