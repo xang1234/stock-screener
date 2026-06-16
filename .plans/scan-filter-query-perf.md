@@ -99,7 +99,7 @@ Create a bead for results-query abort/stale handling so this symptom can't silen
 ## Verification
 
 1. **Baseline (exact, per preset × market).** Before changes, from the authenticated live page console, record the **exact** filtered result `total` for a fixed set — e.g. *Minervini*, *CANSLIM*, *Cup with Handle* (JSON/SE filter) — on US, HK, JP. (Don't conflate with scan pass-summary counts.) Capture wall-clock too.
-2. **After Workstream 1.** Re-run the same calls; assert each returns the **same exact total** as baseline (correctness preserved) and now well under 30 s (sub-second on `scan_results`). Add a backend pytest asserting the selection/count query emits no joins and no `details`/sparkline projection when no joined column is filtered.
+2. **After Workstream 1.** Re-run the same calls; assert each returns the **same total** as baseline (correctness preserved) and now well under 30 s (sub-second on `scan_results`). Add a backend pytest asserting the selection/count query emits no joins and no `details`/sparkline projection when no joined column is filtered.
 3. **End-to-end on live.** Load a previous US scan, apply *Minervini*; confirm the network request returns `200` (not `ERR_ABORTED`) and "Results: N (filtered)" shows the reduced exact N from step 1, not 9,867. Repeat for one HK + one JP scan and the *Cup with Handle* preset (exercises a `details_json` filter on both paths).
 4. **Regression.** `make gates` (backend; includes golden) + `npm run test:run` (frontend, Node 22 via nvm). Run the new migration + backfill (1B) on a copy first; verify feature-store reads still hydrate all display fields.
 

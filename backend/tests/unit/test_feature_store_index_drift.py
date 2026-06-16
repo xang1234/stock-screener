@@ -40,11 +40,16 @@ def _load_migration():
 
 def _builder_expr(field: str) -> str:
     """The flat extraction the query builder compiles for *field* on Postgres,
-    minus the table qualifier (the index DDL is unqualified)."""
+    minus the table qualifier (the index DDL is unqualified).
+
+    Compiled WITHOUT ``literal_binds`` on purpose: this is the runtime form, so
+    if the JSON key ever regresses to a bind parameter (``->> $1``) the string
+    won't match the literal-key index expression and this test fails — that bind
+    param is precisely what makes a generic plan skip the index.
+    """
     compiled = str(
         json_number(StockFeatureDaily.details_json, (field,)).compile(
             dialect=postgresql.dialect(),
-            compile_kwargs={"literal_binds": True},
         )
     )
     return compiled.replace("stock_feature_daily.", "")
