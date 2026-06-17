@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.domain.markets.market_context import market_context_instruments
 from app.models.stock import StockPrice
 
-MARKET_CONTEXT_HISTORY_POINTS = 63
+MARKET_CONTEXT_HISTORY_POINTS = 64
 
 # Roughly 3 months of trading days
 MARKET_CONTEXT_HISTORY_CALENDAR_DAYS = 120
