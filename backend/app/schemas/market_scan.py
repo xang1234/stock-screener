@@ -49,7 +49,7 @@ class ReorderRequest(BaseModel):
     symbol_ids: List[int]
 
 
-class KeyMarketHistoryPoint(BaseModel):
+class PriceHistoryPoint(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     date: str
@@ -65,8 +65,25 @@ class KeyMarketEntry(BaseModel):
     latest_close: Optional[float] = None
     latest_date: Optional[str] = None
     change_1d: Optional[float] = None
-    history: List[KeyMarketHistoryPoint]
+    history: List[PriceHistoryPoint]
 
+class MarketContextEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str
+    symbol: str
+    data_symbol: str
+    display_name: Optional[str] = None
+    currency: Optional[str] = None
+    latest_close: Optional[float] = None
+    latest_date: Optional[str] = None
+
+    change_1d: float | None = None
+    change_5d: float | None = None
+    change_21d: float | None = None
+    change_63d: float | None = None
+
+    history: List[PriceHistoryPoint]
 
 class DailySnapshotFreshness(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -129,6 +146,7 @@ class DailySnapshotResponse(BaseModel):
     scan_id: Optional[str] = None
     freshness: DailySnapshotFreshness
     key_markets: List[KeyMarketEntry]
+    market_context: List[MarketContextEntry]
     top_candidates: DailySnapshotTopCandidates
     leaders: DailySnapshotLeaders
     top_groups: List[DailySnapshotTopGroup]

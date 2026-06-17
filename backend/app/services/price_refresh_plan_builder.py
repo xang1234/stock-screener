@@ -60,6 +60,34 @@ def _key_market_refresh_symbols(
     supported, _skipped = split_supported_price_symbols(list(by_symbol))
     return {symbol: by_symbol[symbol] for symbol in supported}
 
+def _market_context_refresh_symbols(
+    market: str | None,
+    normalize_market: Callable[[str], str],
+) -> dict[str, str]:
+    """Provider-supported Market Context symbols keyed to their market.
+
+    Market Context is a broader Daily Snapshot evidence layer than Key Markets.
+    Some instruments overlap with Key Markets, but others are additional
+    intermarket context symbols such as RSP, SLV, COPX, IYT, SOXX, XLF, XLE,
+    and ETH-USD.
+
+    This helper only returns provider-supported data symbols. The merge step
+    decides which ones are actually new relative to the existing refresh
+    universe.
+    """
+    from ..domain.markets.market_context import market_context_instruments
+    from ..domain.providers.price_symbol_support import split_supported_price_symbols
+
+    instruments = market_context_instruments(market)
+
+    by_symbol = {
+        instrument.data_symbol.upper(): normalize_market(market or "US")
+        for instrument in instruments
+    }
+
+    supported, _skipped = split_supported_price_symbols(list(by_symbol))
+
+    return {symbol: by_symbol[symbol] for symbol in supported}
 
 def load_active_price_refresh_universe(
     db: Session,
@@ -92,22 +120,45 @@ def extend_universe_with_key_market_symbols(
     market: str | None,
     normalize_market: Callable[[str], str],
 ) -> PriceRefreshUniverse:
-    """Append Daily Snapshot key-market symbols to a refresh universe.
+    """Append Daily Snapshot symbols to a refresh universe.
 
-    Composed into refresh planning only — readiness gating loads the plain
-    universe and must not count instruments outside it.
+    Key Markets and Market Context both require price history even though
+    many of these instruments are not members of the stock universe.
     """
-    key_market_symbols = _key_market_refresh_symbols(market, normalize_market)
-    extra_symbols = tuple(
-        symbol for symbol in key_market_symbols if symbol not in universe.symbol_markets
+    key_market_symbols = _key_market_refresh_symbols(
+        market,
+        normalize_market,
     )
+
+    market_context_symbols = _market_context_refresh_symbols(
+        market,
+        normalize_market,
+    )
+
+    # Market Context is a superset of Key Markets in many cases.
+    # Merge both sources and de-duplicate symbols.
+    refresh_symbols = {
+        **key_market_symbols,
+        **market_context_symbols,
+    }
+
+    extra_symbols = tuple(
+        symbol
+        for symbol in refresh_symbols
+        if symbol not in universe.symbol_markets
+    )
+
     if not extra_symbols:
         return universe
+
     return PriceRefreshUniverse(
         symbols=universe.symbols + extra_symbols,
         symbol_markets={
             **universe.symbol_markets,
-            **{symbol: key_market_symbols[symbol] for symbol in extra_symbols},
+            **{
+                symbol: refresh_symbols[symbol]
+                for symbol in extra_symbols
+            },
         },
     )
 

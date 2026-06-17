@@ -108,7 +108,13 @@ async def get_daily_snapshot(
             uow=uow,
             scan_results_use_case=use_case,
         )
-        DailySnapshotResponse.model_validate(payload)
+        # DailySnapshotResponse.model_validate(payload)
+        try:
+            DailySnapshotResponse.model_validate(payload)
+        except Exception as exc:
+            logger.exception("Daily snapshot validation failed")
+            raise
+
         payload_json = json.dumps(payload, separators=(",", ":"))
         if redis is not None:
             try:

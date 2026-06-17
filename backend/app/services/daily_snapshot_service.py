@@ -21,6 +21,7 @@ from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
 from app.schemas.scanning import ScanResultItem
 from app.services.key_market_history import build_key_market_entries
+from app.services.market_context_history import build_market_context_entries
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,7 @@ def build_daily_snapshot_payload(
         "scan_id": freshness["scan_id"],
         "freshness": freshness,
         "key_markets": build_key_market_entries(db, normalized),
+        "market_context": build_market_context_entries(db, normalized),
         "top_candidates": {
             "min_dollar_volume": min_volume,
             "rows": top_candidates,
