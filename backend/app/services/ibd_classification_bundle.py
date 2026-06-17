@@ -15,8 +15,14 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models.industry import IBDIndustryGroup
+from .github_release_sync_service import GitHubReleaseSyncService
 from .ibd_industry_service import IBDIndustryService
+
+# fetch_latest_bundle statuses that are not a hard failure: there was simply no
+# bundle to import (live_only deployment, or already up to date).
+NON_FATAL_SYNC_STATUSES = frozenset({"live_only", "up_to_date"})
 
 # String schema identifiers, matching the weekly-reference convention. The
 # GitHub release-sync service compares the manifest's schema_version against the
@@ -163,3 +169,66 @@ def import_classifications(db: Session, payload: dict) -> dict:
         "updated": updated,
         "skipped_authoritative": skipped_authoritative,
     }
+
+
+def sync_ibd_classification_from_github(
+    db: Session,
+    *,
+    market: str,
+    allow_stale: bool = True,
+    output_dir: str | None = None,
+    github_sync_service: GitHubReleaseSyncService | None = None,
+) -> dict:
+    """Fetch the latest per-market IBD bundle from the release and import it.
+
+    Mirrors ``DailyPriceBundleService.sync_from_github``: the caller owns ``db``.
+    Returns ``{"market", "status", "imported"|None, "reason"|None}``. ``live_only``
+    and ``up_to_date`` are non-fatal — there is simply no bundle to import (see
+    ``NON_FATAL_SYNC_STATUSES``). Authoritative csv/manual rows are preserved by
+    ``import_classifications``.
+    """
+    normalized_market = market.strip().upper()
+    sync_service = github_sync_service or GitHubReleaseSyncService(
+        api_base=settings.github_data_api_base
+    )
+    result = sync_service.fetch_latest_bundle(
+        repository_full_name=settings.github_data_repository,
+        release_tag=RELEASE_TAG,
+        manifest_asset_name=latest_manifest_name(normalized_market),
+        source_mode=settings.market_data_source_mode,
+        expected_manifest_schema=IBD_CLASSIFICATION_MANIFEST_SCHEMA_VERSION,
+        required_manifest_keys=("bundle_asset_name", "sha256"),
+        allow_stale=allow_stale,
+        github_token=settings.github_data_token,
+        request_timeout_seconds=settings.github_data_timeout_seconds,
+        output_dir=output_dir or str(Path(".tmp") / "ibd-classification"),
+    )
+
+    status = result.get("status")
+    if status != "success":
+        reason = result.get("reason") or result.get("stale_reason") or result.get("error")
+        return {"market": normalized_market, "status": status, "imported": None, "reason": reason}
+
+    # The downloaded bundle is transient: read it, import, then delete it so
+    # long-lived live workers don't accumulate one gzip per market per run.
+    # (DailyPriceBundleService uses a temp dir + rmtree; here output_dir is
+    # shared/default, so we unlink just this run's file.)
+    bundle_path = Path(result["bundle_path"])
+    try:
+        payload = read_bundle(bundle_path)
+        # Guard the download/trust boundary: the manifest asset is market-specific,
+        # so a market mismatch means a mispublished bundle. Mirror
+        # DailyPriceBundleService.sync_from_github, which rejects the same case.
+        payload_market = str(payload.get("market") or "").strip().upper()
+        if payload_market and payload_market != normalized_market:
+            return {
+                "market": normalized_market,
+                "status": "market_mismatch",
+                "imported": None,
+                "reason": f"bundle market {payload_market!r} does not match requested {normalized_market!r}",
+            }
+
+        stats = import_classifications(db, payload)
+        return {"market": normalized_market, "status": status, "imported": stats, "reason": None}
+    finally:
+        bundle_path.unlink(missing_ok=True)

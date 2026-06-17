@@ -46,7 +46,7 @@ import {
   getScoreColor,
 } from '../../utils/formatUtils';
 import { resolveMarketCapDisplay } from '../../utils/marketCapUtils';
-import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
+import { useStrategyProfileData } from '../../contexts/StrategyProfileContext';
 
 const CriteriaList = ({ title, items, emptyText }) => (
   <Box sx={{ flex: 1 }}>
@@ -142,14 +142,18 @@ function InfoBox({ label, value }) {
 function StockDetails() {
   const { ticker: symbol } = useParams();
   const navigate = useNavigate();
-  const { activeProfile, activeProfileDetail } = useStrategyProfile();
+  const {
+    activeProfileDetail,
+    isLoadingProfiles,
+    requestProfile,
+  } = useStrategyProfileData();
   const [peerModalOpen, setPeerModalOpen] = useState(false);
   const [validationLookbackDays, setValidationLookbackDays] = useState(365);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['stockDecisionDashboard', symbol, activeProfile],
-    queryFn: () => getStockDecisionDashboard(symbol, activeProfile),
-    enabled: Boolean(symbol),
+    queryKey: ['stockDecisionDashboard', symbol, requestProfile],
+    queryFn: () => getStockDecisionDashboard(symbol, requestProfile),
+    enabled: Boolean(symbol && requestProfile),
     staleTime: 60_000,
   });
   const {
@@ -168,11 +172,19 @@ function StockDetails() {
     [data]
   );
 
-  if (isLoading) {
+  if (isLoading || (isLoadingProfiles && !requestProfile)) {
     return (
       <Box display="flex" justifyContent="center" py={6}>
         <CircularProgress />
       </Box>
+    );
+  }
+
+  if (!requestProfile) {
+    return (
+      <Alert severity="warning">
+        Strategy profile data is unavailable.
+      </Alert>
     );
   }
 

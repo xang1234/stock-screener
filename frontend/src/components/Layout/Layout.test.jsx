@@ -1,5 +1,6 @@
 import { MemoryRouter } from 'react-router-dom';
 import { screen } from '@testing-library/react';
+import { act } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Layout from './Layout';
@@ -14,8 +15,6 @@ const runtimeState = {
 
 const strategyState = {
   activeProfile: 'default',
-  activeProfileDetail: { label: 'Default' },
-  profiles: [{ profile: 'default', label: 'Default' }],
   setActiveProfile: vi.fn(),
 };
 const useRuntimeActivityMock = vi.hoisted(() => vi.fn());
@@ -26,6 +25,12 @@ vi.mock('../../contexts/RuntimeContext', () => ({
 
 vi.mock('../../contexts/StrategyProfileContext', () => ({
   useStrategyProfile: () => strategyState,
+  useStrategyProfileData: () => ({
+    ...strategyState,
+    activeProfileDetail: { label: 'Default' },
+    profiles: [{ profile: 'default', label: 'Default' }],
+    isLoadingProfiles: false,
+  }),
 }));
 
 vi.mock('../../hooks/useRuntimeActivity', () => ({
@@ -37,8 +42,37 @@ describe('Layout', () => {
     useRuntimeActivityMock.mockReset();
   });
 
+  it('defers the header runtime activity request until after initial paint', () => {
+    vi.useFakeTimers();
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+
+    try {
+      renderWithProviders(
+        <MemoryRouter initialEntries={['/']}>
+          <Layout>
+            <div>content</div>
+          </Layout>
+        </MemoryRouter>
+      );
+
+      expect(useRuntimeActivityMock).toHaveBeenLastCalledWith({ enabled: false });
+      expect(screen.getByText('Checking activity')).toBeInTheDocument();
+      expect(screen.getByText('View operations')).toBeInTheDocument();
+      expect(screen.queryByText('Markets ready')).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+
+      expect(useRuntimeActivityMock).toHaveBeenLastCalledWith({ enabled: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows the runtime activity header summary and removes Digest navigation', () => {
     useRuntimeActivityMock.mockReturnValue({
+      dataUpdatedAt: 1,
       data: {
         bootstrap: { state: 'ready' },
         summary: { active_market_count: 1, status: 'active' },
@@ -67,6 +101,7 @@ describe('Layout', () => {
 
   it('does not show a fake 0 percent for indeterminate bootstrap progress', () => {
     useRuntimeActivityMock.mockReturnValue({
+      dataUpdatedAt: 1,
       data: {
         bootstrap: {
           state: 'running',

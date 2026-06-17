@@ -23,7 +23,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 
 import { getDailyDigest, getDailyDigestMarkdown } from '../api/digest';
 import { ValidationDegradedAlert, ValidationSummaryCards } from '../components/Validation/ValidationPanels';
-import { useStrategyProfile } from '../contexts/StrategyProfileContext';
+import { useStrategyProfileData } from '../contexts/StrategyProfileContext';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -145,19 +145,26 @@ function SymbolList({ symbols }) {
 }
 
 function DigestPage() {
-  const { activeProfile, activeProfileDetail } = useStrategyProfile();
+  const {
+    activeProfile,
+    activeProfileDetail,
+    isLoadingProfiles,
+    requestProfile,
+  } = useStrategyProfileData();
   const queryClient = useQueryClient();
   const [exportError, setExportError] = useState('');
   const [exportMessage, setExportMessage] = useState('');
   const [isExporting, setIsExporting] = useState(false);
+  const displayedProfile = requestProfile ?? activeProfile;
 
   const cachedDigest =
-    queryClient.getQueryData(['dailyDigest', activeProfile]) ||
+    queryClient.getQueryData(['dailyDigest', displayedProfile]) ||
     queryClient.getQueryData(['dailyDigest']);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['dailyDigest', activeProfile],
-    queryFn: () => getDailyDigest(undefined, activeProfile),
+    queryKey: ['dailyDigest', requestProfile],
+    queryFn: () => getDailyDigest(undefined, requestProfile),
+    enabled: Boolean(requestProfile),
     staleTime: 60_000,
     placeholderData: (previousData) => previousData || cachedDigest,
   });
@@ -178,10 +185,10 @@ function DigestPage() {
 
   const handleMarkdownExport = async (mode) => {
     setExportError('');
-      setExportMessage('');
-      setIsExporting(true);
-      try {
-      const markdown = await getDailyDigestMarkdown(digestData?.as_of_date, activeProfile);
+    setExportMessage('');
+    setIsExporting(true);
+    try {
+      const markdown = await getDailyDigestMarkdown(digestData?.as_of_date, displayedProfile);
       if (mode === 'copy') {
         if (!navigator?.clipboard?.writeText) {
           throw new Error('Clipboard access is unavailable in this environment.');
@@ -207,11 +214,19 @@ function DigestPage() {
     }
   };
 
-  if (isLoading && !digestData) {
+  if ((isLoading || (isLoadingProfiles && !requestProfile)) && !digestData) {
     return (
       <Box display="flex" justifyContent="center" py={6}>
         <CircularProgress />
       </Box>
+    );
+  }
+
+  if (!requestProfile && !digestData) {
+    return (
+      <Alert severity="warning">
+        Strategy profile data is unavailable.
+      </Alert>
     );
   }
 

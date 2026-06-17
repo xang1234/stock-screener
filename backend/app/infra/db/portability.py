@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Float as SAFloat, Text, cast, inspect as sa_inspect
+from sqlalchemy import Float as SAFloat, Text, cast, func, inspect as sa_inspect, literal_column
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.orm import Query, Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -148,18 +148,33 @@ def trigger_names(bind_or_conn: BindLike, table_name: str) -> set[str]:
     return {row[0] for row in rows}
 
 
+def _json_key_literal(segment: str) -> ColumnElement:
+    """Render a JSON key as an inline SQL literal, not a bind parameter.
+
+    Every key in a JSON path must be inline so a Postgres expression index on
+    ``details_json -> 'a' ->> 'b'`` matches the query in *every* plan mode. Left
+    as a bind parameter a key renders ``-> $1``, which a generic plan can't
+    match — the index would silently go unused and the filter would fall back to
+    a full scan (psycopg2 happens to mogrify params client-side, but
+    psycopg3/asyncpg and server-side prepared statements would not). Keys come
+    from the static ``_JSON_FIELD_MAP``, never user input; the quote-doubling is
+    defensive.
+    """
+    return literal_column("'" + str(segment).replace("'", "''") + "'")
+
+
 def json_text(
     column: ColumnElement,
     path_segments: tuple[str, ...],
     *,
     bind_or_session: BindLike | None = None,
 ) -> ColumnElement:
-    expr = column
-    for segment in path_segments[:-1]:
-        expr = expr[segment]
     if not path_segments:
         return cast(column, Text)
-    return expr.op("->>")(path_segments[-1])
+    expr = column
+    for segment in path_segments[:-1]:
+        expr = expr.op("->")(_json_key_literal(segment))
+    return expr.op("->>")(_json_key_literal(path_segments[-1]))
 
 
 def json_number(
@@ -181,3 +196,20 @@ def json_bool(
     bind_or_session: BindLike | None = None,
 ) -> ColumnElement:
     return json_text(column, path_segments, bind_or_session=bind_or_session)
+
+
+def lean_count(query: Query) -> int:
+    """Count matching rows without wrapping the query's SELECT in a subquery.
+
+    ``Query.count()`` emits ``SELECT count(*) FROM (<full entity SELECT>)``.
+    When the query projects large JSON/blob columns and outer joins — as the
+    scan-result and feature-store builders do — that subquery makes a *filtered*
+    count read every row's blobs and dominate query time (25-90s on large
+    scans, even when the filter matched few rows). ``with_entities(func.count())``
+    emits a flat ``SELECT count(*) FROM ... WHERE ...`` over the same
+    FROM/joins/WHERE instead.
+
+    Callers must keep their joins 1:1 with the base row (both builders join
+    StockUniverse/StockFundamental on symbol), so the total is unchanged.
+    """
+    return query.order_by(None).with_entities(func.count()).scalar() or 0

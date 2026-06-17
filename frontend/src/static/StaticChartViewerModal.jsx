@@ -8,6 +8,8 @@ import {
   IconButton,
   Modal,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
@@ -27,6 +29,8 @@ function StaticChartViewerModal({
   navigationSymbols = null,
 }) {
   const queryClient = useQueryClient();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [visibleRange, setVisibleRange] = useState(null);
 
   const entries = useMemo(() => chartIndex?.symbols || [], [chartIndex]);
@@ -139,7 +143,9 @@ function StaticChartViewerModal({
   const epsRating = stockData?.eps_rating ?? fundamentals?.eps_rating ?? null;
   const groupRank = stockData?.ibd_group_rank ?? null;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 900;
-  const chartHeight = Math.max(viewportHeight - 60, 500);
+  const chartHeight = isMobile
+    ? Math.round(viewportHeight * 0.6)
+    : Math.max(viewportHeight - 60, 500);
   const dataUpdatedAtOverride = chartPayload?.generated_at ? Date.parse(chartPayload.generated_at) : null;
 
   return (
@@ -162,17 +168,20 @@ function StaticChartViewerModal({
         >
           <Box
             sx={{
-              height: 60,
+              minHeight: 60,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              px: 3,
+              flexWrap: 'wrap',
+              rowGap: 1,
+              px: { xs: 1.5, md: 3 },
+              py: 0.5,
               borderBottom: 1,
               borderColor: 'divider',
               bgcolor: 'background.default',
             }}
           >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 1, gap: 2 }}>
               <Typography variant="h5" fontWeight="bold">
                 {currentSymbol || 'Loading...'}
               </Typography>
@@ -310,10 +319,27 @@ function StaticChartViewerModal({
             </Box>
           </Box>
 
-          <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-            <StockMetricsSidebar stockData={stockData} fundamentals={fundamentals} />
+          {/* On mobile, stack the chart above the metrics. The chart is the
+              second child, so column-reverse puts it on top without reordering
+              the DOM; the chart wrapper below uses flex:none so the column does
+              not shrink the canvas back toward zero width. */}
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: { xs: 'column-reverse', md: 'row' },
+              flex: 1,
+              overflowY: { xs: 'auto', md: 'hidden' },
+              overflowX: 'hidden',
+            }}
+          >
+            <StockMetricsSidebar
+              stockData={stockData}
+              fundamentals={fundamentals}
+              width={{ xs: '100%', md: 450 }}
+              height={{ xs: 'auto', md: '100%' }}
+            />
 
-            <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'background.paper' }}>
+            <Box sx={{ flex: { xs: 'none', md: 1 }, overflow: 'hidden', bgcolor: 'background.paper' }}>
               {isError ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: chartHeight, p: 3 }}>
                   <Alert severity="error">Failed to load the static chart payload.</Alert>
@@ -352,7 +378,7 @@ function StaticChartViewerModal({
               bgcolor: 'background.paper',
               borderTop: 1,
               borderColor: 'divider',
-              display: 'flex',
+              display: { xs: 'none', sm: 'flex' },
               justifyContent: 'center',
               gap: 3,
             }}

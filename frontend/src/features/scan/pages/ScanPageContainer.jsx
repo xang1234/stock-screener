@@ -26,7 +26,7 @@ import { useFilterPresets } from '../../../hooks/useFilterPresets';
 import { useRuntimeActivity } from '../../../hooks/useRuntimeActivity';
 import { useRuntime } from '../../../contexts/RuntimeContext';
 import { useMarket } from '../../../contexts/MarketContext';
-import { useStrategyProfile } from '../../../contexts/StrategyProfileContext';
+import { useStrategyProfileData } from '../../../contexts/StrategyProfileContext';
 import { DEFAULT_SCAN_DEFAULTS } from '../../../constants/scanDefaults';
 import { buildDefaultScanFilters } from '../defaultFilters';
 import { normalizeScanFilterOptions } from '../filterOptions';
@@ -67,7 +67,7 @@ function getMutationErrorDetail(error) {
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults, universeOptions } = useRuntime();
   const { selectedMarket: globalMarket } = useMarket();
-  const { activeProfileDetail } = useStrategyProfile();
+  const { activeProfileDetail } = useStrategyProfileData();
   const scanDefaultsAppliedRef = useRef(null);
   // Market whose latest scan is already auto-loaded. Changing the global
   // market re-arms the auto-load for the new market. The sentinel can never

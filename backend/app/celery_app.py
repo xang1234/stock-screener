@@ -297,6 +297,7 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
 
 _MARKET_JOB_TASKS = (
     'app.tasks.industry_tasks.load_tracked_ibd_industry_groups',
+    'app.tasks.industry_tasks.sync_ibd_classification',
     'app.tasks.breadth_tasks.calculate_daily_breadth',
     'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
     'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
@@ -386,6 +387,19 @@ if settings.cache_warmup_enabled:
             ),
             'schedule': crontab(hour=3, minute=0, day_of_week=0),
             'options': {'queue': _qname},
+            'kwargs': {'market': _market},
+        }
+
+        # Weekly IBD classification sync from the published GitHub bundle.
+        # Sunday 6 AM ET — after the Saturday GitHub classifier publishes and
+        # after the Sunday 3 AM universe refresh. Non-US markets get the IBD
+        # coverage they otherwise lack on the live site.
+        # ponytail: fixed Sun 6am, no new config knob — the task no-ops for
+        # live_only deployments and swallows GitHub outages.
+        beat_schedule[f'weekly-ibd-classification-sync-{_m_lower}'] = {
+            'task': 'app.tasks.industry_tasks.sync_ibd_classification',
+            'schedule': crontab(hour=6, minute=0, day_of_week=0),
+            'options': {'queue': market_jobs_queue_for_market(_market)},
             'kwargs': {'market': _market},
         }
 

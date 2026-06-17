@@ -321,7 +321,7 @@ function StaticHomePage() {
           Top 10 Groups
         </Typography>
         <TableContainer>
-          <Table size="small">
+          <Table size="small" sx={{ minWidth: 520 }}>
             <TableHead>
               <TableRow>
                 <TableCell align="center">Rank</TableCell>

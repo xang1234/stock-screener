@@ -18,7 +18,7 @@ from app.domain.scanning.filter_spec import (
     SortSpec,
     TextSearchFilter,
 )
-from app.infra.db.portability import is_postgres, json_number, json_text
+from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
@@ -200,7 +200,7 @@ def apply_sort_and_paginate(
     If it's a JSON details field, we fetch up to _PYTHON_SORT_LIMIT rows,
     sort in Python, and slice for the requested page.
     """
-    total = query.count()
+    total = lean_count(query)
     python_sorted = sort.field in _PYTHON_SORT_FIELDS
 
     if python_sorted:

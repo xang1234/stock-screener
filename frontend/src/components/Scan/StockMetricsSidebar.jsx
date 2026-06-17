@@ -70,11 +70,18 @@ const SectionHeader = ({ children }) => (
  * @param {Object} props.stockData - Stock result data from scan (optional for watchlists)
  * @param {Object} props.fundamentals - Fundamentals data from cache
  */
-function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetupDetails }) {
+function StockMetricsSidebar({
+  stockData,
+  fundamentals,
+  width = 450,
+  height = '100%',
+  onViewPeers,
+  onViewSetupDetails,
+}) {
   // Show loading only if neither stockData nor fundamentals are available
   if (!stockData && !fundamentals) {
     return (
-      <Box sx={{ p: 2, width: 450 }}>
+      <Box sx={{ p: 2, width }}>
         <Typography variant="body2" color="text.secondary">
           Loading stock data...
         </Typography>
@@ -89,8 +96,8 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
     return (
       <Box
         sx={{
-          width: 450,
-          height: '100%',
+          width,
+          height,
           bgcolor: 'background.paper',
           borderRight: 1,
           borderColor: 'divider',
@@ -199,8 +206,8 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
   return (
     <Box
       sx={{
-        width: 450,
-        height: '100%',
+        width,
+        height,
         bgcolor: 'background.paper',
         borderRight: 1,
         borderColor: 'divider',

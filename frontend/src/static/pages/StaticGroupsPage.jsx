@@ -36,7 +36,7 @@ function MoversCard({ title, rows }) {
         {title}
       </Typography>
       <TableContainer>
-        <Table size="small">
+        <Table size="small" sx={{ minWidth: 360 }}>
           <TableHead>
             <TableRow>
               <TableCell>Group</TableCell>
@@ -78,7 +78,7 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
           Current Rankings
         </Typography>
         <TableContainer>
-          <Table size="small">
+          <Table size="small" sx={{ minWidth: 720 }}>
             <TableHead>
               <TableRow>
                 <TableCell align="center">Rank</TableCell>

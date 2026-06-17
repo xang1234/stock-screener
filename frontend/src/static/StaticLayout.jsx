@@ -2,12 +2,13 @@ import { useContext } from 'react';
 import {
   AppBar,
   Box,
-  Button,
   Chip,
   Container,
   FormControl,
   MenuItem,
   Select,
+  Tab,
+  Tabs,
   Toolbar,
   Typography,
   IconButton,
@@ -41,7 +42,7 @@ function StaticLayout({ children }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <AppBar position="static" sx={{ minHeight: 48 }}>
-        <Toolbar variant="dense" sx={{ minHeight: 48 }}>
+        <Toolbar variant="dense" sx={{ minHeight: 48, flexWrap: 'wrap', rowGap: 0.5 }}>
           <ShowChartIcon sx={{ mr: 1, fontSize: 20 }} />
           <Typography variant="subtitle1" component="div" sx={{ fontWeight: 600 }}>
             STOCK SCANNER DAILY
@@ -84,32 +85,26 @@ function StaticLayout({ children }) {
             </FormControl>
           </Box>
           <Box sx={{ flexGrow: 1 }} />
-          {NAV_ITEMS.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <Button
+          <Tabs
+            value={NAV_ITEMS.some((item) => item.path === location.pathname) ? location.pathname : false}
+            variant="scrollable"
+            scrollButtons="auto"
+            allowScrollButtonsMobile
+            textColor="inherit"
+            TabIndicatorProps={{ sx: { bgcolor: 'common.white' } }}
+            sx={{ minHeight: 40, '& .MuiTab-root': { minHeight: 40 } }}
+          >
+            {NAV_ITEMS.map((item) => (
+              <Tab
                 key={item.path}
-                color="inherit"
                 component={RouterLink}
                 to={item.path}
-                size="small"
-                sx={{
-                  backgroundColor: isActive ? 'rgba(255, 255, 255, 0.15)' : 'transparent',
-                  borderBottom: isActive ? '2px solid white' : '2px solid transparent',
-                  borderRadius: 0,
-                  fontWeight: isActive ? 600 : 400,
-                  fontSize: '12px',
-                  px: 1.5,
-                  py: 0.5,
-                  '&:hover': {
-                    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-                  },
-                }}
-              >
-                {item.label}
-              </Button>
-            );
-          })}
+                value={item.path}
+                label={item.label}
+                sx={{ fontSize: '12px', textTransform: 'none', px: 1.5, py: 0.5 }}
+              />
+            ))}
+          </Tabs>
           <IconButton
             sx={{ ml: 0.5 }}
             onClick={colorMode.toggleColorMode}

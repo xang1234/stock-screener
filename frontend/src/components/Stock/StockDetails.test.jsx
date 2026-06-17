@@ -1,6 +1,6 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
 import StockDetails from './StockDetails';
@@ -8,15 +8,10 @@ import StockDetails from './StockDetails';
 const getStockDecisionDashboard = vi.fn();
 const getStockValidation = vi.fn();
 const candlestickChartPropsSpy = vi.fn();
-
-vi.mock('../../api/stocks', () => ({
-  getStockDecisionDashboard: (...args) => getStockDecisionDashboard(...args),
-  getStockValidation: (...args) => getStockValidation(...args),
-}));
-
-vi.mock('../../contexts/StrategyProfileContext', () => ({
-  useStrategyProfile: () => ({
+const strategyProfileState = vi.hoisted(() => ({
+  current: {
     activeProfile: 'default',
+    effectiveProfile: 'default',
     activeProfileDetail: {
       profile: 'default',
       stock_action: {
@@ -24,7 +19,19 @@ vi.mock('../../contexts/StrategyProfileContext', () => ({
         weaknesses_title: 'Top Weaknesses',
       },
     },
-  }),
+    hasProfileLoadError: false,
+    isLoadingProfiles: false,
+    requestProfile: 'default',
+  },
+}));
+
+vi.mock('../../api/stocks', () => ({
+  getStockDecisionDashboard: (...args) => getStockDecisionDashboard(...args),
+  getStockValidation: (...args) => getStockValidation(...args),
+}));
+
+vi.mock('../../contexts/StrategyProfileContext', () => ({
+  useStrategyProfileData: () => strategyProfileState.current,
 }));
 
 vi.mock('../Charts/CandlestickChart', () => ({
@@ -43,8 +50,25 @@ vi.mock('../Scan/StockMetricsSidebar', () => ({
 }));
 
 describe('StockDetails', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    strategyProfileState.current = {
+      activeProfile: 'default',
+      effectiveProfile: 'default',
+      activeProfileDetail: {
+        profile: 'default',
+        stock_action: {
+          strengths_title: 'Top Strengths',
+          weaknesses_title: 'Top Weaknesses',
+        },
+      },
+      hasProfileLoadError: false,
+      isLoadingProfiles: false,
+      requestProfile: 'default',
+    };
+  });
+
   it('renders the decision workspace from dashboard payload', async () => {
-    candlestickChartPropsSpy.mockClear();
     getStockDecisionDashboard.mockResolvedValue({
       symbol: 'NVDA',
       info: {
@@ -325,4 +349,51 @@ describe('StockDetails', () => {
     expect(screen.queryByText('Scan Picks')).not.toBeInTheDocument();
     expect(screen.queryByText('Theme Alerts')).not.toBeInTheDocument();
   }, 10000);
+
+  it('falls back to the stored profile when profile metadata is unavailable', async () => {
+    strategyProfileState.current = {
+      ...strategyProfileState.current,
+      effectiveProfile: null,
+      activeProfileDetail: null,
+      hasProfileLoadError: true,
+      isLoadingProfiles: false,
+      requestProfile: 'default',
+    };
+    getStockDecisionDashboard.mockResolvedValue({
+      symbol: 'NVDA',
+      info: {
+        symbol: 'NVDA',
+        name: 'NVIDIA Corp',
+      },
+      chart: {
+        price_history: [],
+        chart_data: { current_price: 921.45 },
+      },
+      screener_explanations: [],
+      peers: [],
+      themes: [],
+      degraded_reasons: [],
+    });
+    getStockValidation.mockResolvedValue({
+      symbol: 'NVDA',
+      lookback_days: 365,
+      source_breakdown: null,
+      recent_events: [],
+      failure_clusters: [],
+      freshness: {},
+      degraded_reasons: [],
+    });
+
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/stocks/NVDA']}>
+        <Routes>
+          <Route path="/stocks/:ticker" element={<StockDetails />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { name: 'NVDA' })).toBeInTheDocument();
+    expect(getStockDecisionDashboard).toHaveBeenCalledWith('NVDA', 'default');
+    expect(screen.queryByText(/strategy profile data is unavailable/i)).not.toBeInTheDocument();
+  });
 });

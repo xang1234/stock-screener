@@ -19,6 +19,14 @@ export const QUADRANT_FILLS = {
 export const quadrantColor = (q) => QUADRANT_COLORS[q] || '#9e9e9e';
 
 /**
+ * Hover-highlight colors. A dark outline under a silver core reads on both
+ * themes: the outline gives the silver an edge on the white paper, while the
+ * silver core already contrasts on the near-black dark paper — so no theme lookup.
+ */
+export const HIGHLIGHT = '#C9CCD1'; // silver core
+export const HIGHLIGHT_HALO = 'rgba(0,0,0,0.55)'; // outline beneath the silver
+
+/**
  * Canonical quadrant order (clockwise rotation cycle) — single source of truth
  * for the quadrant filter buttons so they stay consistent with the colors above.
  */

@@ -18,7 +18,7 @@ from app.domain.common.query import (
     SortSpec,
     TextSearchFilter,
 )
-from app.infra.db.portability import is_postgres, json_number, json_text
+from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
 from app.infra.db.models.feature_store import StockFeatureDaily
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
@@ -198,7 +198,7 @@ def apply_sort_and_paginate(
     page: PageSpec,
 ) -> tuple[list, int]:
     """Apply sort + pagination.  Returns (rows, total_count)."""
-    total = query.count()
+    total = lean_count(query)
 
     col = _COLUMN_MAP.get(sort.field)
     if col is not None:

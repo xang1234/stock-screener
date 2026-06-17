@@ -12,15 +12,10 @@ const getDailyDigestMarkdown = vi.fn();
 const originalClipboard = navigator.clipboard;
 const originalCreateObjectURL = window.URL.createObjectURL;
 const originalRevokeObjectURL = window.URL.revokeObjectURL;
-
-vi.mock('../api/digest', () => ({
-  getDailyDigest: (...args) => getDailyDigest(...args),
-  getDailyDigestMarkdown: (...args) => getDailyDigestMarkdown(...args),
-}));
-
-vi.mock('../contexts/StrategyProfileContext', () => ({
-  useStrategyProfile: () => ({
+const strategyProfileState = vi.hoisted(() => ({
+  current: {
     activeProfile: 'default',
+    effectiveProfile: 'default',
     activeProfileDetail: {
       profile: 'default',
       label: 'Default',
@@ -28,12 +23,38 @@ vi.mock('../contexts/StrategyProfileContext', () => ({
         section_order: ['market', 'leaders', 'themes', 'validation', 'watchlists', 'risks'],
       },
     },
-  }),
+    hasProfileLoadError: false,
+    isLoadingProfiles: false,
+    requestProfile: 'default',
+  },
+}));
+
+vi.mock('../api/digest', () => ({
+  getDailyDigest: (...args) => getDailyDigest(...args),
+  getDailyDigestMarkdown: (...args) => getDailyDigestMarkdown(...args),
+}));
+
+vi.mock('../contexts/StrategyProfileContext', () => ({
+  useStrategyProfileData: () => strategyProfileState.current,
 }));
 
 describe('DigestPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    strategyProfileState.current = {
+      activeProfile: 'default',
+      effectiveProfile: 'default',
+      activeProfileDetail: {
+        profile: 'default',
+        label: 'Default',
+        digest: {
+          section_order: ['market', 'leaders', 'themes', 'validation', 'watchlists', 'risks'],
+        },
+      },
+      hasProfileLoadError: false,
+      isLoadingProfiles: false,
+      requestProfile: 'default',
+    };
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
@@ -261,5 +282,129 @@ describe('DigestPage', () => {
     expect(screen.getByText('Cached digest remains available.')).toBeInTheDocument();
     await waitFor(() => expect(getDailyDigest).toHaveBeenCalled());
     expect(screen.queryByText(/failed to load daily digest/i)).not.toBeInTheDocument();
+  });
+
+  it('exports cached digest markdown with the displayed profile while metadata is loading', async () => {
+    strategyProfileState.current = {
+      ...strategyProfileState.current,
+      activeProfile: 'growth',
+      effectiveProfile: null,
+      requestProfile: null,
+      isLoadingProfiles: true,
+    };
+    const cachedDigest = {
+      as_of_date: '2026-04-04',
+      freshness: {},
+      market: {
+        stance: 'balanced',
+        summary: 'Cached growth digest remains available.',
+        breadth_metrics: {},
+      },
+      leaders: [],
+      themes: {
+        leaders: [],
+        laggards: [],
+        recent_alerts: [],
+      },
+      validation: {
+        lookback_days: 90,
+        scan_pick: {
+          source_kind: 'scan_pick',
+          horizons: [],
+          degraded_reasons: [],
+        },
+        theme_alert: {
+          source_kind: 'theme_alert',
+          horizons: [],
+          degraded_reasons: [],
+        },
+      },
+      watchlists: [],
+      risks: [],
+      degraded_reasons: [],
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+    queryClient.setQueryData(['dailyDigest', 'growth'], cachedDigest);
+    getDailyDigestMarkdown.mockResolvedValue('# Growth Digest\n');
+
+    renderWithProviders(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={createTheme()}>
+          <MemoryRouter>
+            <DigestPage />
+          </MemoryRouter>
+        </ThemeProvider>
+      </QueryClientProvider>,
+      { wrapper: ({ children }) => children }
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Daily Digest' })).toBeInTheDocument();
+    expect(screen.getByText('Cached growth digest remains available.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Markdown' }));
+
+    await waitFor(() => {
+      expect(getDailyDigestMarkdown).toHaveBeenCalledWith('2026-04-04', 'growth');
+    });
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('# Growth Digest\n');
+  });
+
+  it('falls back to the stored profile when profile metadata is unavailable', async () => {
+    strategyProfileState.current = {
+      ...strategyProfileState.current,
+      effectiveProfile: null,
+      activeProfileDetail: null,
+      hasProfileLoadError: true,
+      isLoadingProfiles: false,
+      requestProfile: 'default',
+    };
+    getDailyDigest.mockResolvedValue({
+      as_of_date: '2026-04-04',
+      freshness: {},
+      market: {
+        stance: 'balanced',
+        summary: 'Digest loaded through fallback profile.',
+        breadth_metrics: {},
+      },
+      leaders: [],
+      themes: {
+        leaders: [],
+        laggards: [],
+        recent_alerts: [],
+      },
+      validation: {
+        lookback_days: 90,
+        scan_pick: {
+          source_kind: 'scan_pick',
+          horizons: [],
+          degraded_reasons: [],
+        },
+        theme_alert: {
+          source_kind: 'theme_alert',
+          horizons: [],
+          degraded_reasons: [],
+        },
+      },
+      watchlists: [],
+      risks: [],
+      degraded_reasons: [],
+    });
+
+    renderWithProviders(
+      <MemoryRouter>
+        <DigestPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Daily Digest' })).toBeInTheDocument();
+    expect(getDailyDigest).toHaveBeenCalledWith(undefined, 'default');
+    expect(screen.getByText('Digest loaded through fallback profile.')).toBeInTheDocument();
+    expect(screen.queryByText(/strategy profile data is unavailable/i)).not.toBeInTheDocument();
   });
 });

@@ -9,16 +9,44 @@ from pydantic import ValidationError
 from app.api.v1.market_scan import _if_none_match_matches
 from app.schemas.market_scan import DailySnapshotResponse
 from app.services.daily_snapshot_service import (
+    DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
+    DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES,
     DAILY_SNAPSHOT_SCHEMA_VERSION,
+    _clear_daily_snapshot_memory_cache,
     _scan_freshness,
     daily_snapshot_cache_key,
     daily_snapshot_etag,
+    get_or_build_daily_snapshot_payload,
+    get_daily_snapshot_memory_cache,
+    set_daily_snapshot_memory_cache,
 )
 from app.services.price_refresh_plan_builder import _key_market_refresh_symbols
 
 
 def _norm(market):
     return str(market).upper()
+
+
+class FakeRedis:
+    def __init__(self, *, payload=None, ttl_seconds=10):
+        self.payload = payload
+        self.ttl_seconds = ttl_seconds
+        self.get_calls = []
+        self.setex_calls = []
+        self.ttl_calls = []
+
+    def get(self, key):
+        self.get_calls.append(key)
+        return self.payload
+
+    def ttl(self, key):
+        self.ttl_calls.append(key)
+        if isinstance(self.ttl_seconds, Exception):
+            raise self.ttl_seconds
+        return self.ttl_seconds
+
+    def setex(self, key, ttl_seconds, payload_json):
+        self.setex_calls.append((key, ttl_seconds, payload_json))
 
 
 class TestKeyMarketRefreshSymbols:
@@ -45,6 +73,12 @@ class TestKeyMarketRefreshSymbols:
 
 
 class TestSnapshotCacheHelpers:
+    def setup_method(self):
+        _clear_daily_snapshot_memory_cache()
+
+    def teardown_method(self):
+        _clear_daily_snapshot_memory_cache()
+
     def test_cache_key_is_scoped_to_market_and_scan_run(self):
         key = daily_snapshot_cache_key("us", "scan-abc")
         assert key == f"daily_snapshot:v{DAILY_SNAPSHOT_SCHEMA_VERSION}:US:scan-abc"
@@ -61,6 +95,141 @@ class TestSnapshotCacheHelpers:
         assert first == second
         assert first.startswith('W/"')
         assert daily_snapshot_etag('{"a":2}') != first
+
+    def test_memory_cache_serves_payload_until_ttl(self):
+        key = daily_snapshot_cache_key("us", "scan-abc")
+
+        set_daily_snapshot_memory_cache(key, '{"ok":true}', ttl_seconds=10, now=100.0)
+
+        assert get_daily_snapshot_memory_cache(key, now=109.0) == '{"ok":true}'
+        assert get_daily_snapshot_memory_cache(key, now=110.0) is None
+
+    def test_memory_cache_is_bounded(self):
+        for index in range(DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES + 1):
+            set_daily_snapshot_memory_cache(
+                daily_snapshot_cache_key("us", f"scan-{index}"),
+                f'{{"index":{index}}}',
+                ttl_seconds=10_000,
+                now=100.0,
+            )
+
+        assert get_daily_snapshot_memory_cache(
+            daily_snapshot_cache_key("us", "scan-0"),
+            now=100.0,
+        ) is None
+        assert get_daily_snapshot_memory_cache(
+            daily_snapshot_cache_key("us", f"scan-{DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES}"),
+            now=100.0,
+        ) == f'{{"index":{DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES}}}'
+
+    def test_memory_cache_hit_does_not_touch_redis(self):
+        key = daily_snapshot_cache_key("us", "scan-abc")
+        set_daily_snapshot_memory_cache(key, '{"ok":true}', ttl_seconds=10, now=100.0)
+
+        def fail_if_called():
+            raise AssertionError("Redis should not be requested on a memory hit")
+
+        def fail_if_built():
+            raise AssertionError("Payload should not be rebuilt on a memory hit")
+
+        payload = get_or_build_daily_snapshot_payload(
+            key,
+            fail_if_built,
+            redis_client_factory=fail_if_called,
+            now=101.0,
+        )
+
+        assert payload == '{"ok":true}'
+
+    def test_redis_hit_warms_memory_for_remaining_redis_ttl(self):
+        key = daily_snapshot_cache_key("us", "scan-abc")
+        redis = FakeRedis(payload=b'{"ok":true}', ttl_seconds=4)
+
+        def fail_if_built():
+            raise AssertionError("Payload should not be rebuilt on a Redis hit")
+
+        payload = get_or_build_daily_snapshot_payload(
+            key,
+            fail_if_built,
+            redis_client_factory=lambda: redis,
+            now=100.0,
+        )
+
+        assert payload == '{"ok":true}'
+        assert redis.get_calls == [key]
+        assert redis.ttl_calls == [key]
+        assert get_daily_snapshot_memory_cache(key, now=103.0) == '{"ok":true}'
+        assert get_daily_snapshot_memory_cache(key, now=104.0) is None
+
+    def test_redis_hit_without_positive_ttl_rebuilds_payload(self):
+        key = daily_snapshot_cache_key("us", "scan-abc")
+        redis = FakeRedis(payload='{"ok":true}', ttl_seconds=-1)
+
+        payload = get_or_build_daily_snapshot_payload(
+            key,
+            lambda: '{"rebuilt":true}',
+            redis_client_factory=lambda: redis,
+            now=100.0,
+        )
+
+        assert payload == '{"rebuilt":true}'
+        assert redis.get_calls == [key]
+        assert redis.ttl_calls == [key]
+        assert redis.setex_calls == [(key, DAILY_SNAPSHOT_CACHE_TTL_SECONDS, '{"rebuilt":true}')]
+        assert get_daily_snapshot_memory_cache(key, now=100.0) == '{"rebuilt":true}'
+
+    def test_redis_hit_still_serves_payload_when_ttl_read_fails(self):
+        key = daily_snapshot_cache_key("us", "scan-abc")
+        redis = FakeRedis(payload='{"ok":true}', ttl_seconds=RuntimeError("ttl unavailable"))
+
+        payload = get_or_build_daily_snapshot_payload(
+            key,
+            lambda: '{"rebuilt":true}',
+            redis_client_factory=lambda: redis,
+            now=100.0,
+        )
+
+        assert payload == '{"ok":true}'
+        assert get_daily_snapshot_memory_cache(key, now=100.0) is None
+
+    def test_redis_client_factory_failure_builds_payload_and_warms_memory(self):
+        key = daily_snapshot_cache_key("us", "scan-abc")
+
+        def fail_to_create_redis():
+            raise RuntimeError("redis unavailable")
+
+        payload = get_or_build_daily_snapshot_payload(
+            key,
+            lambda: '{"ok":true}',
+            redis_client_factory=fail_to_create_redis,
+            now=100.0,
+        )
+
+        assert payload == '{"ok":true}'
+        assert get_daily_snapshot_memory_cache(key, now=100.0) == '{"ok":true}'
+
+    def test_cache_miss_builds_payload_then_updates_redis_and_memory(self):
+        key = daily_snapshot_cache_key("us", "scan-abc")
+        redis = FakeRedis()
+
+        payload = get_or_build_daily_snapshot_payload(
+            key,
+            lambda: '{"ok":true}',
+            redis_client_factory=lambda: redis,
+            now=100.0,
+        )
+
+        assert payload == '{"ok":true}'
+        assert redis.get_calls == [key]
+        assert redis.setex_calls == [(key, DAILY_SNAPSHOT_CACHE_TTL_SECONDS, '{"ok":true}')]
+        assert get_daily_snapshot_memory_cache(
+            key,
+            now=100.0 + DAILY_SNAPSHOT_CACHE_TTL_SECONDS - 1,
+        ) == '{"ok":true}'
+        assert get_daily_snapshot_memory_cache(
+            key,
+            now=100.0 + DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
+        ) is None
 
 
 class TestScanFreshness:
