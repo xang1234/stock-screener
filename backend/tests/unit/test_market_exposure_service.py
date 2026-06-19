@@ -156,6 +156,36 @@ def test_ensure_exposure_history_seeds_then_skips(monkeypatch):
         db.close()
 
 
+def test_build_exposure_payload_marks_follow_through_event_day():
+    from app.database import SessionLocal
+    from app.models.market_exposure import MarketExposure
+    from app.schemas.market_scan import MarketHealthExposure
+
+    d1, d2, d3 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)
+    db = SessionLocal()
+    try:
+        db.add_all([
+            # event day: the detected FTD date is this row's own date
+            MarketExposure(market="US", date=d1, exposure_score=70.0, stance="Confirmed Uptrend",
+                           follow_through_day=True, follow_through_date=d1),
+            # post-FTD day: still sees d1's FTD in its window, but is not the event
+            MarketExposure(market="US", date=d2, exposure_score=72.0, stance="Confirmed Uptrend",
+                           follow_through_day=True, follow_through_date=d1),
+            MarketExposure(market="US", date=d3, exposure_score=68.0, stance="Confirmed Uptrend",
+                           follow_through_day=False, follow_through_date=None),
+        ])
+        db.commit()
+
+        payload = build_exposure_payload(db, "US")
+        MarketHealthExposure.model_validate(payload)  # schema now carries follow_through
+        flags = {p["date"]: p["follow_through"] for p in payload["history"]}
+        assert flags[d1.isoformat()] is True
+        assert flags[d2.isoformat()] is False
+        assert flags[d3.isoformat()] is False
+    finally:
+        db.close()
+
+
 def test_compute_and_store_skips_write_when_no_benchmark(monkeypatch):
     from app.database import SessionLocal
     from app.models.market_exposure import MarketExposure

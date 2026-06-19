@@ -7,6 +7,7 @@ import {
   PolarAngleAxis,
   RadialBar,
   RadialBarChart,
+  ReferenceDot,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -22,6 +23,9 @@ const STANCE_COLORS = {
   'Downtrend/Caution': '#ef6c00',
   'Correction — In Cash': '#c62828',
 };
+
+// Follow-through day marker — a deliberate contrast to the stance colors.
+const FTD_COLOR = '#1565c0';
 
 function stanceColor(stance) {
   return STANCE_COLORS[stance] || '#9e9e9e';
@@ -50,6 +54,11 @@ function TimelineTooltip({ active, payload }) {
       <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace' }}>
         {fmt(point.exposure_score, 0)} · {point.stance}
       </Typography>
+      {point.follow_through && (
+        <Typography variant="caption" sx={{ display: 'block', color: FTD_COLOR, fontWeight: 600 }}>
+          ● follow-through day
+        </Typography>
+      )}
     </Paper>
   );
 }
@@ -77,6 +86,8 @@ function MarketHealthExposure({ exposure }) {
     () => Object.entries(exposure?.components || {}).filter(([key]) => key !== 'base'),
     [exposure?.components],
   );
+
+  const ftdPoints = useMemo(() => history.filter((p) => p.follow_through), [history]);
 
   if (!exposure) {
     return (
@@ -151,12 +162,17 @@ function MarketHealthExposure({ exposure }) {
 
         {/* Right: score-over-time timeline */}
         <Grid item xs={12} md={5}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-            Exposure over time
-          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">Exposure over time</Typography>
+            {ftdPoints.length > 0 && (
+              <Typography variant="caption" sx={{ color: FTD_COLOR, fontSize: 10, fontWeight: 600 }}>
+                ● follow-through day
+              </Typography>
+            )}
+          </Box>
           <Box sx={{ height: 170 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+              <AreaChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="exposureFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={color} stopOpacity={0.4} />
@@ -165,9 +181,21 @@ function MarketHealthExposure({ exposure }) {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
                 <XAxis dataKey="label" tick={{ fontSize: 10 }} minTickGap={24} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} width={28} />
+                <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10 }} width={30} />
                 <Tooltip content={<TimelineTooltip />} />
                 <Area type="monotone" dataKey="exposure_score" stroke={color} strokeWidth={2} fill="url(#exposureFill)" />
+                {ftdPoints.map((p) => (
+                  <ReferenceDot
+                    key={p.date}
+                    x={p.label}
+                    y={p.exposure_score}
+                    r={4}
+                    fill={FTD_COLOR}
+                    stroke="#fff"
+                    strokeWidth={1.5}
+                    ifOverflow="extendDomain"
+                  />
+                ))}
               </AreaChart>
             </ResponsiveContainer>
           </Box>
@@ -181,7 +209,7 @@ function MarketHealthExposure({ exposure }) {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
               <Typography variant="caption" color="text.secondary">Base</Typography>
-              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>100</Typography>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{fmt(exposure?.components?.base ?? 0, 0)}</Typography>
             </Box>
             {contributions.map(([key, value]) => {
               const isCap = key.endsWith('_cap');

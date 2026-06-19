@@ -15,8 +15,8 @@ const SAMPLE = {
   benchmark_symbol: 'SPY',
   components: { base: 50, dist_from_200dma: 23, ma_alignment: 8, distribution_drag: -9, heavy_distribution_cap: 45 },
   history: [
-    { date: '2026-06-12', exposure_score: 60, stance: 'Uptrend Under Pressure' },
-    { date: '2026-06-16', exposure_score: 42, stance: 'Uptrend Under Pressure' },
+    { date: '2026-06-12', exposure_score: 60, stance: 'Uptrend Under Pressure', follow_through: true },
+    { date: '2026-06-16', exposure_score: 42, stance: 'Uptrend Under Pressure', follow_through: false },
   ],
 };
 
@@ -28,6 +28,14 @@ describe('MarketHealthExposure', () => {
     expect(screen.getByText('Distribution days')).toBeInTheDocument();
     // a "_cap" contribution renders as "cap N"
     expect(screen.getByText('cap 45')).toBeInTheDocument();
+    // the timeline shows a follow-through-day legend when any history point is flagged
+    expect(screen.getByText('● follow-through day')).toBeInTheDocument();
+  });
+
+  it('omits the follow-through legend when no day is flagged', () => {
+    const noFtd = { ...SAMPLE, history: SAMPLE.history.map((p) => ({ ...p, follow_through: false })) };
+    renderWithProviders(<MarketHealthExposure exposure={noFtd} />);
+    expect(screen.queryByText('● follow-through day')).not.toBeInTheDocument();
   });
 
   it('renders a placeholder when there is no exposure data', () => {

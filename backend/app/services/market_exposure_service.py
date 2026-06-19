@@ -370,8 +370,16 @@ def build_exposure_payload(db: Session, market: str, history_days: int = 180) ->
         .order_by(MarketExposure.date.asc())
         .all()
     )
+    # follow_through marks the actual FTD *event* day: the row whose detected
+    # follow_through_date is its own date (later rows still see that FTD in their
+    # trailing window, but only the event day has date == follow_through_date).
     history = [
-        {"date": r.date.isoformat(), "exposure_score": r.exposure_score, "stance": r.stance}
+        {
+            "date": r.date.isoformat(),
+            "exposure_score": r.exposure_score,
+            "stance": r.stance,
+            "follow_through": bool(r.follow_through_day and r.follow_through_date == r.date),
+        }
         for r in rows
     ]
     return {

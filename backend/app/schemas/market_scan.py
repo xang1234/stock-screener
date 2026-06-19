@@ -118,6 +118,7 @@ class MarketHealthExposureHistoryPoint(BaseModel):
     date: str
     exposure_score: float
     stance: str
+    follow_through: bool = False
 
 
 class MarketHealthExposure(BaseModel):
