@@ -214,6 +214,9 @@ def test_build_exposure_payload_pins_to_as_of_date():
         pinned = build_exposure_payload(db, "US", as_of_date=d2)
         assert pinned["date"] == d2.isoformat()
         assert all(p["date"] <= d2.isoformat() for p in pinned["history"])  # excludes newer d3
+
+        # Pinned to a date with no exposure row -> omit (no stale earlier-row fallback)
+        assert build_exposure_payload(db, "US", as_of_date=date(2026, 6, 10)) is None
     finally:
         db.close()
 

@@ -376,7 +376,10 @@ def build_exposure_payload(
     market = (market or "US").upper()
     latest_q = db.query(MarketExposure).filter(MarketExposure.market == market)
     if as_of_date is not None:
-        latest_q = latest_q.filter(MarketExposure.date <= as_of_date)
+        # Pinned (static) mode: require the EXACT export date so the section stays
+        # coherent with the exact-date-gated breadth/groups — omit the section
+        # (None) rather than fall back to a stale earlier row.
+        latest_q = latest_q.filter(MarketExposure.date == as_of_date)
     latest = latest_q.order_by(MarketExposure.date.desc()).first()
     if latest is None:
         return None
