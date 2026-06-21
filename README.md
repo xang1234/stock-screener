@@ -79,6 +79,8 @@ A MarketSmith/Bloomberg-style quadrant view of the same 197-group dataset: every
 ![Relative Rotation Graph](docs/screenshots/rrg-rotation.png)
 *RRG: GICS-sector rotation with direction-arrowed weekly tails — group scope (all 197 industry groups) available from the same view*
 
+> **How it's computed.** This RRG is an *adaptation* of Julius de Kempenaer's method — not the proprietary JdK formula. Canonical RRG derives RS-Ratio / RS-Momentum from a security's *price relative to a benchmark*; here both axes come from each group's stored IBD-style average RS rating (`avg_rs_rating`, already a 0-100 cross-sectional percentile), normalized **temporally**: RS-Ratio is a trailing z-score of the EMA-smoothed weekly series, RS-Momentum the z-scored rate-of-change of that line — both recentered at 100. Quadrants, the 100/100 cross, and clockwise rotation match standard RRG; full math and parameters live in [`backend/app/services/rrg_service.py`](backend/app/services/rrg_service.py). References: [StockCharts ChartSchool](https://chartschool.stockcharts.com/table-of-contents/chart-analysis/chart-types/relative-rotation-graphs-rrg-charts) · [RRG Research — construction](https://www.relativerotationgraphs.com/blog/resources/construction-of-relative-rotation-graphs).
+
 ### Watchlists with Sparklines
 
 Visual performance tracking with RS and price sparklines (30-day trends), price change bars across 7 time periods, drag-and-drop organization with folders, and full-screen chart navigation.
