@@ -6,8 +6,9 @@ fetched once and shared across all screeners. Combines results and
 calculates composite scores.
 """
 import logging
-from typing import Dict, List, Optional
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional
 
 from .base_screener import (
     BaseStockScreener,
@@ -883,8 +884,20 @@ class ScanOrchestrator:
                     avg_volume = int(vol_series.mean())
 
         # Calculate dollar volume if we have both avg_volume and price
-        if avg_volume and current_price:
+        if (
+            avg_volume is not None
+            and current_price is not None
+            and not math.isnan(float(avg_volume))
+            and not math.isnan(float(current_price))
+        ):
             result["avg_dollar_volume"] = int(avg_volume * current_price)
+        else:
+            logger.debug(
+                "Skipping avg_dollar_volume for %s avg_volume=%s current_price=%s",
+                symbol,
+                avg_volume,
+                current_price,
+            )
 
         return result
 
