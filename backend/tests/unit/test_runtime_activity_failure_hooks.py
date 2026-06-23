@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from celery.exceptions import Retry
 from celery.worker.request import Request
 
 
@@ -56,6 +57,45 @@ def test_publish_runtime_activity_failure_marks_smart_refresh_failed(monkeypatch
     lock.release.assert_called_once_with("lost-task", market="US")
     coordination.release_market_workload.assert_called_once_with("lost-task", market="US")
     coordination.release_external_fetch.assert_called_once_with("lost-task")
+    db.close.assert_called_once_with()
+
+
+def test_publish_runtime_activity_failure_keeps_shared_cleanup_scope_for_missing_market(
+    monkeypatch,
+):
+    import app.tasks.runtime_activity_failure_hooks as module
+
+    db = MagicMock()
+    failed_activity_calls = []
+    lock = MagicMock()
+    coordination = MagicMock()
+    price_cache = MagicMock()
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: lock)
+    monkeypatch.setattr(module, "get_workload_coordination", lambda: coordination)
+    monkeypatch.setattr(module, "get_price_cache", lambda: price_cache)
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        lambda db_arg, **kwargs: failed_activity_calls.append((db_arg, kwargs)),
+    )
+
+    module.publish_runtime_activity_failure(
+        SMART_REFRESH_TASK,
+        "shared-task",
+        {"mode": "auto"},
+        RuntimeError("worker lost"),
+    )
+
+    assert failed_activity_calls[0][1]["market"] == "US"
+    price_cache.complete_warmup_heartbeat.assert_called_once_with("failed", market=None)
+    lock.release.assert_called_once_with("shared-task", market=None)
+    coordination.release_market_workload.assert_called_once_with(
+        "shared-task",
+        market=None,
+    )
+    coordination.release_external_fetch.assert_called_once_with("shared-task")
     db.close.assert_called_once_with()
 
 
@@ -125,3 +165,30 @@ def test_request_hook_delegates_failure_publication(monkeypatch):
             "exception": exception,
         }
     ]
+
+
+def test_request_hook_skips_failure_publication_for_retry(monkeypatch):
+    import app.tasks.runtime_activity_failure_hooks as module
+
+    delegated_calls = []
+
+    monkeypatch.setattr(
+        Request,
+        "on_failure",
+        lambda self, exc_info, send_failed_event=True, return_ok=False: "retry-result",
+    )
+    monkeypatch.setattr(
+        module,
+        "publish_runtime_activity_failure",
+        lambda *args, **kwargs: delegated_calls.append((args, kwargs)),
+    )
+
+    request = object.__new__(module.RuntimeActivityFailureRequest)
+    request._task = SimpleNamespace(name=SMART_REFRESH_TASK)
+    request.id = "retry-task"
+    request._kwargs = {"market": "US"}
+
+    result = request.on_failure(SimpleNamespace(exception=Retry("retry later")))
+
+    assert result == "retry-result"
+    assert delegated_calls == []

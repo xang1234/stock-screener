@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from billiard.einfo import ExceptionWithTraceback
 from celery import Task
+from celery.exceptions import Retry
 from celery.worker.request import Request
 
 from ..database import SessionLocal
@@ -15,7 +17,7 @@ from ..wiring.bootstrap import (
     get_price_cache,
     get_workload_coordination,
 )
-from .market_queues import normalize_market
+from .market_queues import SHARED_SENTINEL, normalize_market
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +37,29 @@ def _exception_detail(exception: BaseException | None) -> str:
     return str(exception) or exception.__class__.__name__
 
 
+def _cleanup_market_scope(raw_market: Any) -> str | None:
+    normalized_market = normalize_market(raw_market)
+    if normalized_market == SHARED_SENTINEL:
+        return None
+    return normalized_market
+
+
+def _unwrap_failure_exception(exception: Any) -> Any:
+    if isinstance(exception, ExceptionWithTraceback):
+        return exception.exc
+    return exception
+
+
+def _is_retry_failure(exception: Any) -> bool:
+    return isinstance(_unwrap_failure_exception(exception), Retry)
+
+
 def _warn_cleanup_failure(
     action: str,
     *,
     task_name: str,
     task_id: str,
-    market: str,
+    market: str | None,
 ) -> None:
     logger.warning(
         "Failed to %s after runtime activity failure",
@@ -65,7 +84,9 @@ def publish_runtime_activity_failure(
         return
 
     kwargs = kwargs or {}
-    market = normalize_market(kwargs.get("market") or "US")
+    raw_market = kwargs.get("market")
+    activity_market = normalize_market(raw_market or "US")
+    cleanup_market = _cleanup_market_scope(raw_market)
     lifecycle = kwargs.get("activity_lifecycle") or tracked_task["default_lifecycle"]
     stage_key = tracked_task["stage_key"]
     message = f"Task worker exited before cleanup: {_exception_detail(exception)}"
@@ -75,7 +96,7 @@ def publish_runtime_activity_failure(
         db = SessionLocal()
         mark_market_activity_failed(
             db,
-            market=market,
+            market=activity_market,
             stage_key=stage_key,
             lifecycle=lifecycle,
             task_name=task_name,
@@ -88,7 +109,7 @@ def publish_runtime_activity_failure(
             extra={
                 "task_name": task_name,
                 "task_id": task_id,
-                "market": market,
+                "market": activity_market,
                 "stage_key": stage_key,
             },
             exc_info=True,
@@ -102,27 +123,27 @@ def publish_runtime_activity_failure(
                     "close runtime activity database session",
                     task_name=task_name,
                     task_id=task_id,
-                    market=market,
+                    market=activity_market,
                 )
 
     try:
-        get_price_cache().complete_warmup_heartbeat("failed", market=market)
+        get_price_cache().complete_warmup_heartbeat("failed", market=cleanup_market)
     except Exception:
         _warn_cleanup_failure(
             "complete warmup heartbeat",
             task_name=task_name,
             task_id=task_id,
-            market=market,
+            market=cleanup_market,
         )
 
     try:
-        get_data_fetch_lock().release(task_id, market=market)
+        get_data_fetch_lock().release(task_id, market=cleanup_market)
     except Exception:
         _warn_cleanup_failure(
             "release data fetch lock",
             task_name=task_name,
             task_id=task_id,
-            market=market,
+            market=cleanup_market,
         )
 
     try:
@@ -132,18 +153,18 @@ def publish_runtime_activity_failure(
             "load workload coordination",
             task_name=task_name,
             task_id=task_id,
-            market=market,
+            market=cleanup_market,
         )
         return
 
     try:
-        coordination.release_market_workload(task_id, market=market)
+        coordination.release_market_workload(task_id, market=cleanup_market)
     except Exception:
         _warn_cleanup_failure(
             "release market workload",
             task_name=task_name,
             task_id=task_id,
-            market=market,
+            market=cleanup_market,
         )
 
     try:
@@ -153,7 +174,7 @@ def publish_runtime_activity_failure(
             "release external fetch",
             task_name=task_name,
             task_id=task_id,
-            market=market,
+            market=cleanup_market,
         )
 
 
@@ -164,12 +185,14 @@ class RuntimeActivityFailureRequest(Request):
             send_failed_event=send_failed_event,
             return_ok=return_ok,
         )
-        publish_runtime_activity_failure(
-            getattr(getattr(self, "task", None), "name", None),
-            getattr(self, "id", None),
-            getattr(self, "kwargs", None),
-            getattr(exc_info, "exception", None),
-        )
+        exception = getattr(exc_info, "exception", None)
+        if not _is_retry_failure(exception):
+            publish_runtime_activity_failure(
+                getattr(getattr(self, "task", None), "name", None),
+                getattr(self, "id", None),
+                getattr(self, "kwargs", None),
+                _unwrap_failure_exception(exception),
+            )
         return result
 
 
