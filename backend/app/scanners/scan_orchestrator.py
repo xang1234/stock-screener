@@ -6,8 +6,9 @@ fetched once and shared across all screeners. Combines results and
 calculates composite scores.
 """
 import logging
-from typing import Dict, List, Optional
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional
 
 from .base_screener import (
     BaseStockScreener,
@@ -62,7 +63,21 @@ def _series_last_float(series) -> float | None:
     return float(value)
 
 
-def _build_precomputed_scan_context(stock_data: StockData) -> PrecomputedScanContext | None:
+def _finite_float(value: object) -> float | None:
+    if value is None:
+        return None
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    return numeric if math.isfinite(numeric) else None
+
+
+def _build_precomputed_scan_context(
+    stock_data: StockData,
+) -> PrecomputedScanContext | None:
     """Build shared derived scan metrics once per symbol."""
     price_data = stock_data.price_data
     if price_data is None or price_data.empty or "Close" not in price_data.columns:
@@ -883,8 +898,18 @@ class ScanOrchestrator:
                     avg_volume = int(vol_series.mean())
 
         # Calculate dollar volume if we have both avg_volume and price
-        if avg_volume and current_price:
-            result["avg_dollar_volume"] = int(avg_volume * current_price)
+        avg_volume_value = _finite_float(avg_volume)
+        current_price_value = _finite_float(current_price)
+
+        if avg_volume_value is not None and current_price_value is not None:
+            result["avg_dollar_volume"] = int(avg_volume_value * current_price_value)
+        else:
+            logger.debug(
+                "Skipping avg_dollar_volume for %s avg_volume=%s current_price=%s",
+                symbol,
+                avg_volume,
+                current_price,
+            )
 
         return result
 
