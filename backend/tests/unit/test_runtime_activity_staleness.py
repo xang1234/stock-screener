@@ -20,6 +20,18 @@ def _record(**overrides):
     return RuntimeActivityRecord.create(**values)
 
 
+def test_parse_activity_timestamp_treats_naive_strings_as_utc():
+    from app.services.runtime_activity_staleness import parse_activity_timestamp
+
+    parsed = parse_activity_timestamp("2026-06-23T05:39:46")
+
+    assert parsed == datetime(2026, 6, 23, 5, 39, 46, tzinfo=timezone.utc)
+    assert (
+        parsed.tzinfo == timezone.utc
+        or parsed.utcoffset() == timezone.utc.utcoffset(parsed)
+    )
+
+
 def test_running_activity_is_stale_after_threshold():
     from app.services.runtime_activity_staleness import is_stale_running_activity
 

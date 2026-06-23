@@ -11,7 +11,11 @@ RUNNING_ACTIVITY_STALE_AFTER_SECONDS = 30 * 60
 
 
 def parse_activity_timestamp(value: Any) -> datetime | None:
-    """Parse a runtime activity timestamp as a timezone-aware UTC datetime."""
+    """Parse a runtime activity timestamp as a timezone-aware UTC datetime.
+
+    Naive strings are treated as UTC for legacy/backwards compatibility with
+    the runtime activity contract.
+    """
     if not isinstance(value, str):
         return None
 
