@@ -63,7 +63,13 @@ def _persist_activity_row(db_session, payload):
     db_session.commit()
 
 
-def _persisted_running_price_record(*, task_id: str):
+def _persisted_running_record(
+    *,
+    stage_key: str,
+    task_name: str,
+    task_id: str,
+    message: str,
+):
     from app.services.runtime_activity_contract import (
         PersistedRuntimeActivity,
         RuntimeActivityRecord,
@@ -72,14 +78,23 @@ def _persisted_running_price_record(*, task_id: str):
     record = RuntimeActivityRecord.create(
         market="US",
         lifecycle="daily_refresh",
-        stage_key="prices",
+        stage_key=stage_key,
         status="running",
-        task_name="app.tasks.cache_tasks.smart_refresh_cache",
+        task_name=task_name,
         task_id=task_id,
-        message="Refreshing market prices",
+        message=message,
         updated_at="2026-06-23T05:00:00+00:00",
     )
     return PersistedRuntimeActivity.from_record(record).to_payload()
+
+
+def _persisted_running_price_record(*, task_id: str):
+    return _persisted_running_record(
+        stage_key="prices",
+        task_name="app.tasks.cache_tasks.smart_refresh_cache",
+        task_id=task_id,
+        message="Refreshing market prices",
+    )
 
 
 def test_stale_running_activity_allows_new_task_owner_to_start(db_session, monkeypatch):
@@ -246,3 +261,99 @@ def test_runtime_activity_status_marks_orphaned_running_row_stale(
     assert "No live data-fetch lock owns task old-task" in us_market["message"]
     assert payload["summary"]["status"] == "warning"
     assert payload["summary"]["active_market_count"] == 0
+
+
+def test_runtime_activity_status_does_not_mark_workload_stage_stale_without_data_fetch_lock(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    _persist_activity_row(
+        db_session,
+        _persisted_running_record(
+            stage_key="groups",
+            task_name="app.tasks.group_rank_tasks.calculate_daily_group_rankings",
+            task_id="group-task",
+            message="Calculating group rankings",
+        ),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US"], state="ready"),
+    )
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["status"] == "running"
+    assert us_market["stage_key"] == "groups"
+    assert us_market["message"] == "Calculating group rankings"
+
+
+def test_stale_workload_stage_does_not_allow_new_owner_override_from_data_fetch_lock(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    _persist_activity_row(
+        db_session,
+        _persisted_running_record(
+            stage_key="groups",
+            task_name="app.tasks.group_rank_tasks.calculate_daily_group_rankings",
+            task_id="old-group-task",
+            message="Calculating group rankings",
+        ),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+    monkeypatch.setattr(
+        module,
+        "_utcnow_iso",
+        lambda: "2026-06-23T06:00:00+00:00",
+    )
+
+    result = module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="groups",
+        lifecycle="daily_refresh",
+        task_name="app.tasks.group_rank_tasks.calculate_daily_group_rankings",
+        task_id="new-group-task",
+        message="Calculating group rankings",
+    )
+
+    assert result["status"] == "running"
+    assert result["task_id"] == "old-group-task"
+
+
+def test_runtime_activity_status_logs_lock_lookup_failure(
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    from app.services import market_activity_service as module
+
+    class FailingLock:
+        def get_current_task(self, market=None):
+            raise RuntimeError("redis unavailable")
+
+    _persist_activity_row(
+        db_session,
+        _persisted_running_price_record(task_id="old-task"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: FailingLock())
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US"], state="ready"),
+    )
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["status"] == "running"
+    assert "Runtime activity lock lookup failed" in caplog.text
+    assert "old-task" in caplog.text

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,7 +35,9 @@ from ..wiring.bootstrap import get_data_fetch_lock
 
 RUNTIME_ACTIVITY_CATEGORY = "runtime_activity"
 MARKET_ACTIVITY_KEY_PREFIX = "runtime.activity.market."
+DATA_FETCH_RUNTIME_STAGE_KEYS = frozenset({"prices"})
 _LIVE_RUNTIME_TASK_LOOKUP_FAILED = object()
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
@@ -98,6 +101,12 @@ def _live_runtime_activity_task(
             ):
                 return current_task
     except Exception:
+        logger.warning(
+            "Runtime activity lock lookup failed; market=%s task_id=%s",
+            record.market,
+            record.task_id,
+            exc_info=True,
+        )
         return _LIVE_RUNTIME_TASK_LOOKUP_FAILED
     return None
 
@@ -115,6 +124,8 @@ def _should_override_stale_running_owner(
     incoming_payload: RuntimeActivityUpdate | RuntimeActivityRecord | dict[str, Any],
 ) -> bool:
     if existing is None or existing.status != "running":
+        return False
+    if existing.stage_key not in DATA_FETCH_RUNTIME_STAGE_KEYS:
         return False
 
     incoming_task_id, incoming_stage_key, incoming_status = _incoming_owner(
@@ -452,6 +463,8 @@ def _overlay_stale_runtime_activity(record: dict[str, Any]) -> dict[str, Any]:
     except ValueError:
         return record
     if not is_stale_running_activity(typed_record):
+        return record
+    if typed_record.stage_key not in DATA_FETCH_RUNTIME_STAGE_KEYS:
         return record
     if _running_activity_has_live_owner(typed_record):
         return record
