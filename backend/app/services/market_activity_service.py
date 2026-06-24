@@ -21,6 +21,7 @@ from ..services.runtime_activity_contract import (
     progress_mode,
     resolve_progress_percent,
 )
+from ..services.runtime_activity_ownership import lock_markets_for_runtime_activity
 from ..services.runtime_activity_presenter import build_runtime_activity_status
 from ..services.runtime_activity_reducer import reduce_market_activity
 from ..services.runtime_activity_staleness import (
@@ -33,6 +34,7 @@ from ..wiring.bootstrap import get_data_fetch_lock
 
 RUNTIME_ACTIVITY_CATEGORY = "runtime_activity"
 MARKET_ACTIVITY_KEY_PREFIX = "runtime.activity.market."
+_LIVE_RUNTIME_TASK_LOOKUP_FAILED = object()
 
 
 def _utcnow_iso() -> str:
@@ -81,24 +83,30 @@ def _incoming_owner(
     return payload.get("task_id"), payload.get("stage_key"), payload.get("status")
 
 
-def _running_activity_has_live_owner(record: RuntimeActivityRecord) -> bool:
+def _live_runtime_activity_task(
+    record: RuntimeActivityRecord,
+) -> dict[str, Any] | None | object:
     if not record.task_id:
-        return False
-    lock_markets = [record.market]
-    if record.market == "US":
-        lock_markets.append(None)
+        return None
     try:
         lock = get_data_fetch_lock()
-        current_tasks = [
-            lock.get_current_task(market=lock_market)
-            for lock_market in lock_markets
-        ]
+        for lock_market in lock_markets_for_runtime_activity(record.market):
+            current_task = lock.get_current_task(market=lock_market)
+            if (
+                isinstance(current_task, dict)
+                and current_task.get("task_id") == record.task_id
+            ):
+                return current_task
     except Exception:
-        return True
-    return any(
-        isinstance(current_task, dict)
-        and current_task.get("task_id") == record.task_id
-        for current_task in current_tasks
+        return _LIVE_RUNTIME_TASK_LOOKUP_FAILED
+    return None
+
+
+def _running_activity_has_live_owner(record: RuntimeActivityRecord) -> bool:
+    current_task = _live_runtime_activity_task(record)
+    return (
+        current_task is _LIVE_RUNTIME_TASK_LOOKUP_FAILED
+        or isinstance(current_task, dict)
     )
 
 
@@ -403,16 +411,17 @@ def mark_current_market_activity_failed(
     )
 
 
-def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any]:
-    if record.get("status") != "running":
-        return record
-    if record.get("stage_key") != "prices":
-        return record
+def _overlay_live_progress(record: dict[str, Any]) -> dict[str, Any]:
     try:
-        current_task = get_data_fetch_lock().get_current_task(market=market)
-    except Exception:
-        current_task = None
-    if not current_task or current_task.get("task_id") != record.get("task_id"):
+        typed_record = RuntimeActivityRecord.from_payload(record)
+    except ValueError:
+        return record
+    if typed_record.status != "running":
+        return record
+    if typed_record.stage_key != "prices":
+        return record
+    current_task = _live_runtime_activity_task(typed_record)
+    if not isinstance(current_task, dict):
         return record
     merged = dict(record)
     if merged.get("percent") is None and current_task.get("progress") is not None:
@@ -437,7 +446,7 @@ def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any
     return merged
 
 
-def _overlay_stale_runtime_activity(record: dict[str, Any], _market: str) -> dict[str, Any]:
+def _overlay_stale_runtime_activity(record: dict[str, Any]) -> dict[str, Any]:
     try:
         typed_record = RuntimeActivityRecord.from_payload(record)
     except ValueError:
@@ -510,8 +519,8 @@ def _market_payload(
         )
     if record is None:
         return _idle_market_payload(market, None)
-    live_record = _overlay_live_progress(record, market)
-    stale_checked_record = _overlay_stale_runtime_activity(live_record, market)
+    live_record = _overlay_live_progress(record)
+    stale_checked_record = _overlay_stale_runtime_activity(live_record)
     return _idle_market_payload(market, stale_checked_record)
 
 

@@ -5,6 +5,7 @@ import { useRuntimeActivity } from '../../hooks/useRuntimeActivity';
 
 // Header status is best-effort chrome; let route-critical data requests start first.
 const HEADER_ACTIVITY_DELAY_MS = 1500;
+const WARNING_MARKET_STATUSES = new Set(['failed', 'stale', 'stuck']);
 
 function buildSummary(activity, { isPending = false, isError = false } = {}) {
   if (isError && isPending) {
@@ -32,7 +33,7 @@ function buildSummary(activity, { isPending = false, isError = false } = {}) {
     market.status === 'running' || market.status === 'queued'
   ));
   const warningMarket = markets.find((market) => (
-    market.status === 'failed' || market.status === 'stale' || market.status === 'stuck'
+    WARNING_MARKET_STATUSES.has(market.status)
   ));
 
   if (bootstrap.state === 'running') {

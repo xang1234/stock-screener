@@ -12,12 +12,15 @@ from celery.worker.request import Request
 
 from ..database import SessionLocal
 from ..services.market_activity_service import mark_market_activity_failed
+from ..services.runtime_activity_ownership import (
+    activity_market_for_runtime_task,
+    cleanup_market_for_runtime_task,
+)
 from ..wiring.bootstrap import (
     get_data_fetch_lock,
     get_price_cache,
     get_workload_coordination,
 )
-from .market_queues import SHARED_SENTINEL, normalize_market
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +38,6 @@ def _exception_detail(exception: BaseException | None) -> str:
     if exception is None:
         return "unknown failure"
     return str(exception) or exception.__class__.__name__
-
-
-def _cleanup_market_scope(raw_market: Any) -> str | None:
-    normalized_market = normalize_market(raw_market)
-    if normalized_market == SHARED_SENTINEL:
-        return None
-    return normalized_market
 
 
 def _unwrap_failure_exception(exception: Any) -> Any:
@@ -85,8 +81,8 @@ def publish_runtime_activity_failure(
 
     kwargs = kwargs or {}
     raw_market = kwargs.get("market")
-    activity_market = normalize_market(raw_market or "US")
-    cleanup_market = _cleanup_market_scope(raw_market)
+    activity_market = activity_market_for_runtime_task(raw_market)
+    cleanup_market = cleanup_market_for_runtime_task(raw_market)
     lifecycle = kwargs.get("activity_lifecycle") or tracked_task["default_lifecycle"]
     stage_key = tracked_task["stage_key"]
     message = f"Task worker exited before cleanup: {_exception_detail(exception)}"
