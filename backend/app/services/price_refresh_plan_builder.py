@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,10 @@ from .price_refresh_planning import (
     PriceRefreshPlanningInput,
     plan_price_refresh_from_input,
 )
+from .runtime_diagnostics import log_runtime_stage
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -124,28 +129,53 @@ def build_price_refresh_planning_input(
     recently_refreshed_filter: Callable[[Sequence[str]], Sequence[str]] | None = None,
 ) -> PriceRefreshPlanningInput:
     parsed_mode = PriceRefreshMode.parse(mode)
-    universe = extend_universe_with_key_market_symbols(
-        load_active_price_refresh_universe(
-            db,
-            market=market,
-            effective_market=effective_market,
-            normalize_market=normalize_market,
-        ),
-        market,
-        normalize_market,
-    )
+    with log_runtime_stage(
+        logger,
+        "price_refresh.load_universe",
+        market=effective_market,
+        mode=parsed_mode.value,
+    ):
+        universe = extend_universe_with_key_market_symbols(
+            load_active_price_refresh_universe(
+                db,
+                market=market,
+                effective_market=effective_market,
+                normalize_market=normalize_market,
+            ),
+            market,
+            normalize_market,
+        )
     all_symbols = _normalize_symbols(universe.symbols)
     github_seed = None
     if parsed_mode in LIVE_TOP_UP_MODES and all_symbols and market is not None:
-        github_seed = GitHubSeedOutcome.from_mapping(
-            sync_github_seed(db, market=effective_market, allow_stale=True)
-        )
+        with log_runtime_stage(
+            logger,
+            "price_refresh.sync_github_seed",
+            market=effective_market,
+            mode=parsed_mode.value,
+            symbol_count=len(all_symbols),
+        ):
+            github_seed = GitHubSeedOutcome.from_mapping(
+                sync_github_seed(db, market=effective_market, allow_stale=True)
+            )
 
     target_as_of = None
     coverage = None
     if parsed_mode in LIVE_TOP_UP_MODES and all_symbols:
         target_as_of = market_calendar_service.last_completed_trading_day(effective_market)
-        coverage = classify_price_history(db, symbols=all_symbols, as_of_date=target_as_of)
+        with log_runtime_stage(
+            logger,
+            "price_refresh.classify_coverage",
+            market=effective_market,
+            mode=parsed_mode.value,
+            symbol_count=len(all_symbols),
+            target_as_of=target_as_of.isoformat() if target_as_of else None,
+        ):
+            coverage = classify_price_history(
+                db,
+                symbols=all_symbols,
+                as_of_date=target_as_of,
+            )
 
     auto_refresh_symbols = None
     if parsed_mode is PriceRefreshMode.AUTO and recently_refreshed_filter is not None:
