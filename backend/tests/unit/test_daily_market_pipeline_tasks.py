@@ -142,6 +142,25 @@ def test_guard_price_refresh_uses_coverage_denominator_when_present():
     }
 
 
+def test_guard_price_refresh_falls_back_when_coverage_values_are_null():
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    result = {
+        "status": "partial",
+        "refreshed": 900,
+        "failed": 100,
+        "total": 1000,
+        "coverage_refreshed": None,
+        "coverage_total": None,
+    }
+
+    assert module.guard_price_refresh.run(result, market="HK") == {
+        "status": "ok",
+        "market": "HK",
+        "stage": "prices",
+    }
+
+
 def test_guard_price_refresh_fails_low_coverage_partial_result():
     from app.tasks import daily_market_pipeline_tasks as module
 

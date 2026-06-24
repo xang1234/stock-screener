@@ -58,8 +58,18 @@ def _result_failed(result: Any) -> bool:
 
 def _partial_price_refresh_meets_minimum(result: dict) -> bool:
     try:
-        refreshed = float(result.get("coverage_refreshed", result.get("refreshed", 0)))
-        total = float(result.get("coverage_total", result.get("total", 0)))
+        coverage_refreshed = result.get("coverage_refreshed")
+        coverage_total = result.get("coverage_total")
+        refreshed = float(
+            coverage_refreshed
+            if coverage_refreshed is not None
+            else result.get("refreshed", 0)
+        )
+        total = float(
+            coverage_total
+            if coverage_total is not None
+            else result.get("total", 0)
+        )
     except (TypeError, ValueError):
         return False
     return total > 0 and refreshed / total >= _MIN_DAILY_PRICE_REFRESH_SUCCESS_RATE
