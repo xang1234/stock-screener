@@ -57,6 +57,15 @@ def test_terminal_completion_helper_returns_terminal_completion():
     assert completion.outcome.source is PriceRefreshSource.GITHUB
     assert completion.outcome.github_seed is github_seed
     assert completion.outcome.message == plan.completion_message
+    assert completion.outcome.refreshed == 2
+    assert completion.outcome.failed == 0
+    assert completion.outcome.total == 2
+    assert completion.outcome.coverage_refreshed == 2
+    assert completion.outcome.coverage_failed == 0
+    assert completion.outcome.coverage_total == 2
+    assert completion.outcome.live_top_up_refreshed == 0
+    assert completion.outcome.live_top_up_failed == 0
+    assert completion.outcome.live_top_up_total == 0
     assert completion.finalization.metadata_refreshed == 2
     assert completion.finalization.metadata_total == 2
     assert completion.finalization.market_success_rates == {

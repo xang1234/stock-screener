@@ -611,7 +611,15 @@ def test_smart_refresh_cache_delta_prefers_github_daily_bundle_and_skips_live_fe
 
     assert result["status"] == "completed"
     assert result["source"] == "github"
-    assert result["refreshed"] == 0
+    assert result["refreshed"] == 2
+    assert result["failed"] == 0
+    assert result["total"] == 2
+    assert result["coverage_refreshed"] == 2
+    assert result["coverage_failed"] == 0
+    assert result["coverage_total"] == 2
+    assert result["live_top_up_refreshed"] == 0
+    assert result["live_top_up_failed"] == 0
+    assert result["live_top_up_total"] == 0
     assert started[0]["stage_key"] == "prices"
     assert completed[0]["stage_key"] == "prices"
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +11,7 @@ from typing import Any
 from celery.exceptions import SoftTimeLimitExceeded
 
 from ..config import settings
+from ..services.price_refresh_accounting import account_live_refresh
 from ..services.price_refresh_actions import (
     PriceRefreshTerminalCompletion,
     build_terminal_completion,
@@ -19,7 +19,6 @@ from ..services.price_refresh_actions import (
 from ..services.price_refresh_activity import (
     CeleryTaskLike,
     PriceRefreshActivityReporter,
-    PriceRefreshFinalization,
     PriceRefreshOutcome,
 )
 from ..services.price_refresh_live_runner import (
@@ -32,7 +31,6 @@ from ..services.price_refresh_planning import (
     GitHubSeedOutcome,
     PriceRefreshMode,
     PriceRefreshPlan,
-    PriceRefreshCoverageSummary,
     PriceRefreshSource,
 )
 
@@ -405,10 +403,6 @@ class PriceRefreshWorkflow:
         refresh_plan: PriceRefreshPlan,
     ) -> PriceRefreshOutcome:
         total = len(refresh_plan.symbols)
-        symbol_market_totals = Counter(
-            refresh_plan.symbol_markets.get(str(symbol).upper(), effective_market)
-            for symbol in refresh_plan.symbols
-        )
         bulk_fetcher = self._deps.bulk_fetcher_factory()
 
         self._deps.activity_reporter.publish_progress(
@@ -442,41 +436,6 @@ class PriceRefreshWorkflow:
             activity_reporter=self._deps.activity_reporter,
         )
 
-        coverage_summary = refresh_plan.coverage_summary
-        use_seeded_coverage = (
-            refresh_plan.used_github_seed
-            and coverage_summary is not None
-            and coverage_summary.universe_total > 0
-        )
-        if use_seeded_coverage:
-            coverage_refreshed = min(
-                coverage_summary.universe_total,
-                coverage_summary.already_fresh + execution_result.refreshed,
-            )
-            coverage_total = coverage_summary.universe_total
-            coverage_failed = max(coverage_total - coverage_refreshed, 0)
-            success_rate = coverage_refreshed / coverage_total if coverage_total else 0
-            result_refreshed = coverage_refreshed
-            result_failed = coverage_failed
-            result_total = coverage_total
-            market_success_rates = self._coverage_market_success_rates(
-                coverage_summary=coverage_summary,
-                refreshed_by_market=execution_result.refreshed_by_market,
-            )
-        else:
-            coverage_refreshed = None
-            coverage_failed = None
-            coverage_total = None
-            success_rate = execution_result.refreshed / total if total > 0 else 0
-            result_refreshed = execution_result.refreshed
-            result_failed = execution_result.failed
-            result_total = total
-            market_success_rates = self._market_success_rates(
-                symbol_market_totals=symbol_market_totals,
-                refreshed_by_market=execution_result.refreshed_by_market,
-            )
-        status = "completed" if success_rate >= 0.95 else "partial"
-
         self._deps.retry_scheduler.schedule(
             execution_result.failed_symbols,
             failure_kinds=execution_result.failure_kinds,
@@ -484,32 +443,29 @@ class PriceRefreshWorkflow:
             symbol_markets=refresh_plan.symbol_markets,
             activity_lifecycle=activity_lifecycle,
         )
+        accounting = account_live_refresh(
+            refresh_plan,
+            execution_result,
+            effective_market=effective_market,
+            last_completed_trading_day=self._deps.last_completed_trading_day,
+        )
 
         logger.info("=" * 80)
         logger.info("Smart refresh completed (%s mode):", mode.value)
-        logger.info("  Refreshed: %s", result_refreshed)
-        logger.info("  Failed: %s", result_failed)
-        logger.info("  Total: %s", result_total)
-        if use_seeded_coverage:
+        logger.info("  Refreshed: %s", accounting.refreshed)
+        logger.info("  Failed: %s", accounting.failed)
+        logger.info("  Total: %s", accounting.total)
+        if accounting.live_top_up_total is not None:
             logger.info(
                 "  Live top-up: %s refreshed, %s failed, %s total",
-                execution_result.refreshed,
-                execution_result.failed,
-                total,
+                accounting.live_top_up_refreshed,
+                accounting.live_top_up_failed,
+                accounting.live_top_up_total,
             )
         if execution_result.failed_symbols:
             logger.info("  Failed symbols: %s...", execution_result.failed_symbols[:10])
         logger.info("=" * 80)
 
-        finalization = PriceRefreshFinalization(
-            metadata_status=status,
-            metadata_refreshed=result_refreshed,
-            metadata_total=result_total,
-            activity_current=result_total,
-            activity_total=result_total,
-            message=f"Price refresh {status}",
-            market_success_rates=market_success_rates,
-        )
         self._deps.activity_reporter.finalize_success(
             db,
             price_cache,
@@ -517,80 +473,10 @@ class PriceRefreshWorkflow:
             market=market,
             effective_market=effective_market,
             lifecycle=activity_lifecycle,
-            finalization=finalization,
+            finalization=accounting.to_finalization(),
         )
 
-        return PriceRefreshOutcome(
-            status=status,
-            source=(
-                PriceRefreshSource.GITHUB_AND_LIVE
-                if refresh_plan.used_github_seed
-                else PriceRefreshSource.LIVE
-            ),
-            mode=mode,
-            refreshed=result_refreshed,
-            failed=result_failed,
-            total=result_total,
-            failed_symbols=execution_result.failed_symbols,
-            github_seed=refresh_plan.github_seed,
-            coverage_refreshed=coverage_refreshed,
-            coverage_failed=coverage_failed,
-            coverage_total=coverage_total,
-            coverage_success_rate=success_rate if use_seeded_coverage else None,
-            already_fresh=(
-                coverage_summary.already_fresh
-                if use_seeded_coverage and coverage_summary is not None
-                else None
-            ),
-            live_top_up_refreshed=execution_result.refreshed if use_seeded_coverage else None,
-            live_top_up_failed=execution_result.failed if use_seeded_coverage else None,
-            live_top_up_total=total if use_seeded_coverage else None,
-            unsupported_top_up_total=(
-                coverage_summary.unsupported_top_up_total
-                if use_seeded_coverage and coverage_summary is not None
-                else None
-            ),
-        )
-
-    def _market_success_rates(
-        self,
-        *,
-        symbol_market_totals: Mapping[str, int],
-        refreshed_by_market: Mapping[str, int],
-    ) -> dict[str, tuple[Any, float]]:
-        market_success_rates = {}
-        for refresh_market, market_total in symbol_market_totals.items():
-            market_success_rate = (
-                refreshed_by_market.get(refresh_market, 0) / market_total
-                if market_total > 0
-                else 0
-            )
-            if market_success_rate >= 0.95:
-                market_success_rates[refresh_market] = (
-                    self._deps.last_completed_trading_day(refresh_market),
-                    market_success_rate,
-                )
-        return market_success_rates
-
-    def _coverage_market_success_rates(
-        self,
-        *,
-        coverage_summary: PriceRefreshCoverageSummary,
-        refreshed_by_market: Mapping[str, int],
-    ) -> dict[str, tuple[Any, float]]:
-        market_success_rates = {}
-        for refresh_market, market_total in coverage_summary.universe_total_by_market.items():
-            market_refreshed = (
-                coverage_summary.already_fresh_by_market.get(refresh_market, 0)
-                + refreshed_by_market.get(refresh_market, 0)
-            )
-            market_success_rate = market_refreshed / market_total if market_total > 0 else 0
-            if market_success_rate >= 0.95:
-                market_success_rates[refresh_market] = (
-                    self._deps.last_completed_trading_day(refresh_market),
-                    market_success_rate,
-                )
-        return market_success_rates
+        return accounting.to_outcome(mode=mode)
 
     def _should_reject_full_refresh(
         self,
