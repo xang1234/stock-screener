@@ -7,10 +7,12 @@ Scan and track **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-sh
 ![Live app tour — Daily Snapshot, multi-screener Scan with stock detail, Market Breadth, and the Relative Rotation Graph](docs/gifs/scan-workflow.gif)
 *Daily Snapshot → Scans → Stock chart and details →  Breadth → Group Rankings*
 
-## Try it without installing
+## Use it without installing
 
 Read-only daily snapshot running on GitHub Pages:
 **[xang1234.github.io/stock-screener](https://xang1234.github.io/stock-screener/)**
+
+Updated daily after market close. 
 
 See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in static mode.
 
