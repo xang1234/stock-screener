@@ -1,32 +1,37 @@
 # Stock Screener 🇺🇸 🇨🇳 🇭🇰 🇯🇵 🇰🇷 🇹🇼 🇮🇳 🇩🇪 🇨🇦 🇸🇬 🇲🇾 🇦🇺
 
-**Multi-market stock screening with multi-methodology scans, AI-assisted research, theme discovery, and real-time market breadth — across 12 markets.**
+**Multi-market stock screening with technical and fundamental scans, market breadth, group rankings, theme discovery, AI-assisted research - across multiple markets.**
 
-Scan and track **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-shares, Germany, Canada, Singapore, Malaysia, and Australia**. Each market runs on its own exchange calendar and independent refresh queues, so regions hydrate in parallel without blocking each other. The supported deployment is a single-tenant server stack built on **Docker, PostgreSQL, Redis, and nginx**.
+Scan and track **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-shares, Germany, Canada, Singapore, Malaysia, and Australia** markets. Deployed as a single-tenant server stack built on **Docker, PostgreSQL, Redis, and nginx**.
 
 ![Live app tour — Daily Snapshot, multi-screener Scan with stock detail, Market Breadth, and the Relative Rotation Graph](docs/gifs/scan-workflow.gif)
-*Daily Snapshot → multi-screener Scan → drill into a stock's chart and scores → Market Breadth → Group Rankings with the Relative Rotation Graph*
+*Daily Snapshot → Scans → Stock chart and details →  Breadth → Group Rankings*
 
 ## Try it without installing
 
-A live read-only daily snapshot runs on GitHub Pages:
+Read-only daily snapshot running on GitHub Pages:
 **[xang1234.github.io/stock-screener](https://xang1234.github.io/stock-screener/)**
 
-This is a demo with reduced functionality compared to the server-backed app. See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in static mode.
+See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in static mode.
 
 ## Features
 
-- **12-market coverage** — per-market exchange calendars, independent Celery refresh queues, and scan-time freshness guards; switch markets from the scan bar, with per-row colored badges on mixed-universe results.
-- **6 screening methodologies** — Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, and Custom, run simultaneously with composite scoring across **80+ configurable filters**, saved presets, and CSV export.
-- **Market breadth dashboard** — StockBee-style advance/decline analysis with a benchmark overlay, daily movers (±4%), and quarterly / monthly / 34-day trend windows.
-- **197 IBD industry groups + RRG** — groups ranked by relative strength with movers (1W/1M/3M/6M) and constituent analysis, plus a MarketSmith/Bloomberg-style **Relative Rotation Graph** plotting RS-Ratio vs RS-Momentum through Leading → Weakening → Lagging → Improving.
-- **Watchlists** — RS and price sparklines, multi-period change bars, drag-and-drop folders, and full-screen chart navigation.
-- **AI research chatbot** — Groq-powered research with optional Tavily/Serper web search and persistent conversation history.
-- **Theme discovery** — AI theme identification from RSS, Twitter/X, and news feeds; tracks trending vs. emerging themes and alerts on momentum shifts.
-- **Operations & backtest** — server login, first-run market bootstrap, runtime status in the header, an Operations console for queues/jobs/telemetry, and a Backtest page that validates published scan picks and theme alerts against price history.
+- **12-market coverage** -  exchange calendars, independent data and scans.
+- **Multiple screening methodologies** - Minervini, CANSLIM, IPO, Volume Breakthrough, etc. with composite scoring.
+- **Market Health and Exposure** - Market-regime overlay for position sizing and risk posture.
+- **Market Breadth** - StockBee-style advance/decline analysis with a benchmark overlay, daily movers (±4%), and quarterly / monthly / 34-day trend windows.
+- **Industry groups with Relative Rotation Graph** - groups ranked by relative strength with movers (1W/1M/3M/6M) and constituent analysis, plus RRG charts plotting RS-Ratio vs RS-Momentum through (Leading → Weakening → Lagging → Improving).
+- **Watchlists and Themes** - RS and price sparklines, multi-period change bars, drag-and-drop folders, and full-screen chart navigation.
+- **Theme discovery** - AI theme identification from RSS, Twitter/X, and news feeds; tracks trending vs. emerging themes and alerts on momentum shifts.
+- **AI research chatbot** - LLM powered chatbot with optional web search and persistent conversation history.
+- **Operations** -  startup data bootstrap, runtime status, and Operations console for queues/jobs/telemetry.
+- **Backtest** -  Backtest page that validates published scan picks and theme alerts against price history.
+
+![Market Health and Exposure](docs/screenshots/health-exposure.jpg)
+*Market Health and Exposure*
 
 ![Scan results with composite scores, RS sparklines, multi-screener ratings, and classification columns](docs/screenshots/scan-results.png)
-*Scan results: composite scores, RS sparklines, multi-screener ratings, and per-row GICS Sector / IBD Industry / theme / group-rank columns*
+*Scan results table*
 
 ![Relative Rotation Graph — sector rotation with direction-arrowed weekly tails](docs/screenshots/rrg-rotation.png)
 *RRG: sector rotation with direction-arrowed weekly tails; full 197-group scope available from the same view*
