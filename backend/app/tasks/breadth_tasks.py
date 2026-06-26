@@ -368,7 +368,7 @@ def calculate_market_exposure(self, market: str | None = None, calculation_date:
     it into every stage's kwargs uniformly; exposure does not emit activity
     events, so it is unused here.
     """
-    from ..services.market_exposure_service import compute_and_store, ensure_exposure_history
+    from ..services.market_exposure_service import refresh_market_exposure_for_date
 
     effective_market = (market or "US").upper()
     calendar_service = get_market_calendar_service()
@@ -385,19 +385,16 @@ def calculate_market_exposure(self, market: str | None = None, calculation_date:
 
     db = SessionLocal()
     try:
-        result = compute_and_store(effective_market, calc_date, db)
+        result = refresh_market_exposure_for_date(db, effective_market, calc_date)
         if result.get('error'):
             logger.error("✗ Market exposure not stored for %s: %s", effective_market, result['error'])
             return result
 
-        # Seed history once so the timeline isn't empty on launch; no-ops after
-        # the first run (idempotent). Avoids a manual post-deploy backfill.
-        try:
-            seed = ensure_exposure_history(db, effective_market)
-            if seed.get('seeded'):
-                logger.info("Seeded %d historical exposure rows for %s", seed['seeded'], effective_market)
-        except Exception as seed_error:
-            logger.warning("Exposure history seed skipped for %s: %s", effective_market, seed_error)
+        history_seed = result.get('history_seed')
+        if isinstance(history_seed, dict) and history_seed.get('error'):
+            logger.warning("Exposure history seed skipped for %s: %s", effective_market, history_seed['error'])
+        elif isinstance(history_seed, dict) and history_seed.get('seeded'):
+            logger.info("Seeded %d historical exposure rows for %s", history_seed['seeded'], effective_market)
 
         try:
             from ..services.ui_snapshot_service import safe_publish_breadth_bootstrap

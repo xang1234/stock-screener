@@ -357,6 +357,26 @@ def compute_and_store(market: str, as_of_date: date, db: Session) -> dict:
     return result
 
 
+def refresh_market_exposure_for_date(
+    db: Session,
+    market: str,
+    as_of_date: date,
+    *,
+    seed_history: bool = True,
+) -> dict:
+    """Compute/store exposure and run the canonical launch-history self-heal."""
+    normalized_market = (market or "US").upper()
+    result = compute_and_store(normalized_market, as_of_date, db)
+    if result.get("error") or not seed_history:
+        return result
+
+    try:
+        history_seed = ensure_exposure_history(db, normalized_market)
+    except Exception as exc:
+        return {**result, "history_seed": {"error": str(exc)}}
+    return {**result, "history_seed": history_seed}
+
+
 def build_exposure_payload(
     db: Session,
     market: str,

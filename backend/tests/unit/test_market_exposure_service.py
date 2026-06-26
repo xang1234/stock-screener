@@ -11,6 +11,7 @@ from app.services.market_exposure_service import (
     compute_and_store,
     count_distribution_days,
     compute_trend,
+    refresh_market_exposure_for_date,
     _score,
     _stance,
 )
@@ -166,6 +167,64 @@ def test_ensure_exposure_history_seeds_then_skips(monkeypatch):
         assert db.query(MarketExposure).filter(MarketExposure.market == "US").count() == count
     finally:
         db.close()
+
+
+def test_refresh_market_exposure_for_date_computes_and_seeds_history(monkeypatch):
+    db = object()
+    as_of = date(2026, 6, 25)
+    calls: list[tuple] = []
+
+    def fake_compute(market, as_of_date, db_arg):
+        calls.append(("compute", market, as_of_date, db_arg))
+        return {
+            "market": market,
+            "date": as_of_date,
+            "exposure_score": 78.0,
+            "stance": "Confirmed Uptrend",
+        }
+
+    def fake_seed(db_arg, market):
+        calls.append(("seed", db_arg, market))
+        return {"seeded": 4, "failed": 0}
+
+    monkeypatch.setattr(svc, "compute_and_store", fake_compute)
+    monkeypatch.setattr(svc, "ensure_exposure_history", fake_seed)
+
+    result = refresh_market_exposure_for_date(db, "us", as_of)
+
+    assert calls == [
+        ("compute", "US", as_of, db),
+        ("seed", db, "US"),
+    ]
+    assert result == {
+        "market": "US",
+        "date": as_of,
+        "exposure_score": 78.0,
+        "stance": "Confirmed Uptrend",
+        "history_seed": {"seeded": 4, "failed": 0},
+    }
+
+
+def test_refresh_market_exposure_for_date_does_not_seed_after_compute_error(monkeypatch):
+    db = object()
+    as_of = date(2026, 6, 25)
+    calls: list[tuple] = []
+
+    def fake_compute(market, as_of_date, db_arg):
+        calls.append(("compute", market, as_of_date, db_arg))
+        return {"market": market, "date": as_of_date.isoformat(), "error": "no_benchmark_data"}
+
+    monkeypatch.setattr(svc, "compute_and_store", fake_compute)
+    monkeypatch.setattr(
+        svc,
+        "ensure_exposure_history",
+        lambda *_args, **_kwargs: calls.append(("seed",)),
+    )
+
+    result = refresh_market_exposure_for_date(db, "us", as_of)
+
+    assert calls == [("compute", "US", as_of, db)]
+    assert result == {"market": "US", "date": "2026-06-25", "error": "no_benchmark_data"}
 
 
 def test_build_exposure_payload_marks_follow_through_event_day():

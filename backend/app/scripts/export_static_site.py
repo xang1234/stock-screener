@@ -87,10 +87,10 @@ def _upsert_feature_run_pointer(*, pointer_key: str, run_id: int) -> None:
 
 
 def _compute_static_market_exposure(*, as_of_date: date, market: str) -> dict[str, Any]:
-    from app.services.market_exposure_service import compute_and_store
+    from app.services.market_exposure_service import refresh_market_exposure_for_date
 
     with SessionLocal() as db:
-        return compute_and_store(market, as_of_date, db)
+        return refresh_market_exposure_for_date(db, market, as_of_date)
 
 
 def _snapshot_publishable(snapshot: dict[str, Any]) -> bool:
@@ -120,6 +120,41 @@ def _selected_market_non_publishable_snapshot(
     if not isinstance(snapshot, dict):
         return None
     return None if _snapshot_publishable(snapshot) else snapshot
+
+
+def _selected_market_exposure_failure(
+    refresh_results: dict[str, Any],
+    market: str | None,
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    if market is None:
+        return None
+    normalized_market = market.upper()
+    exposure_by_market = refresh_results.get("market_exposure", {})
+    if not isinstance(exposure_by_market, dict):
+        return None
+    exposure = exposure_by_market.get(normalized_market)
+    if not isinstance(exposure, dict) or not exposure.get("error"):
+        return None
+
+    market_warnings = [
+        warning for warning in warnings if f"market {normalized_market} exposure" in warning
+    ]
+    if not market_warnings:
+        market_warnings = [
+            f"Static export market {normalized_market} exposure not stored "
+            f"for {exposure.get('date') or 'unknown date'}: {exposure['error']}."
+        ]
+    return {
+        "status": "errored",
+        "reason": "market_exposure_not_ready",
+        "market": normalized_market,
+        "warnings": market_warnings,
+        "failure_diagnostics": {
+            "date": exposure.get("date"),
+            "error": exposure["error"],
+        },
+    }
 
 
 def _snapshot_skipped_not_trading_day(snapshot: dict[str, Any] | None) -> bool:
@@ -417,6 +452,16 @@ def _run_daily_refresh(
                     f"Static export market {selected_market} exposure not stored "
                     f"for {market_as_of.isoformat()}: {exposure_result['error']}."
                 )
+            history_seed = (
+                exposure_result.get("history_seed")
+                if isinstance(exposure_result, dict)
+                else None
+            )
+            if isinstance(history_seed, dict) and history_seed.get("error"):
+                warnings.append(
+                    f"Static export market {selected_market} exposure history seed skipped: "
+                    f"{history_seed['error']}."
+                )
         results["market_exposure"] = market_exposure
 
         feature_snapshots: dict[str, Any] = {}
@@ -643,6 +688,23 @@ def main() -> int:
                     f"Static site export skipped for market {args.market} because it is not a trading day."
                 )
                 return STATIC_EXPORT_SKIPPED_EXIT_CODE
+            selected_market_exposure_failure = _selected_market_exposure_failure(
+                refresh_results,
+                args.market,
+                refresh_warnings,
+            )
+            if selected_market_exposure_failure is not None:
+                _write_market_diagnostics(
+                    Path(args.output_dir),
+                    args.market,
+                    selected_market_exposure_failure,
+                )
+                print(
+                    f"Static site export skipped for market {args.market}; "
+                    "exposure was not stored, diagnostics were uploaded, "
+                    "and the combine job can use fallback artifacts."
+                )
+                return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
 
         service = StaticSiteExportService(SessionLocal)
         try:
