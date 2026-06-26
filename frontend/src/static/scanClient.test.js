@@ -215,7 +215,7 @@ describe('static scan client', () => {
     expect(filtered.map((row) => row.symbol)).toEqual(['0100.HK']);
   });
 
-  it('sorts full rows ahead of ipo-weighted rows and listing-only rows for composite score', () => {
+  it('sorts default composite score by score across scan modes', () => {
     const sorted = sortStaticScanRows([
       { symbol: 'IPO95', scan_mode: 'ipo_weighted', composite_score: 95 },
       { symbol: 'FULL80', scan_mode: 'full', composite_score: 80 },
@@ -223,7 +223,7 @@ describe('static scan client', () => {
       { symbol: 'FULL70', scan_mode: 'full', composite_score: 70 },
     ], 'composite_score', 'desc');
 
-    expect(sorted.map((row) => row.symbol)).toEqual(['FULL80', 'FULL70', 'IPO95', 'NEW1']);
+    expect(sorted.map((row) => row.symbol)).toEqual(['IPO95', 'FULL80', 'FULL70', 'NEW1']);
   });
 
   it('can sort composite score exactly for preset-defined rankings', () => {
@@ -231,12 +231,12 @@ describe('static scan client', () => {
       { symbol: 'IPO95', scan_mode: 'ipo_weighted', composite_score: 95 },
       { symbol: 'FULL80', scan_mode: 'full', composite_score: 80 },
       { symbol: 'FULL70', scan_mode: 'full', composite_score: 70 },
-    ], 'composite_score', 'desc', { prioritizeCompositeScanMode: false });
+    ], 'composite_score', 'desc');
 
     expect(sorted.map((row) => row.symbol)).toEqual(['IPO95', 'FULL80', 'FULL70']);
   });
 
-  it('keeps null composite scores last within the same scan-mode bucket for desc sorting', () => {
+  it('keeps null composite scores last while sorting desc across scan modes', () => {
     const sorted = sortStaticScanRows([
       { symbol: 'FULLNULL', scan_mode: 'full', composite_score: null },
       { symbol: 'FULL80', scan_mode: 'full', composite_score: 80 },
@@ -244,7 +244,7 @@ describe('static scan client', () => {
       { symbol: 'IPO95', scan_mode: 'ipo_weighted', composite_score: 95 },
     ], 'composite_score', 'desc');
 
-    expect(sorted.map((row) => row.symbol)).toEqual(['FULL80', 'FULL70', 'FULLNULL', 'IPO95']);
+    expect(sorted.map((row) => row.symbol)).toEqual(['IPO95', 'FULL80', 'FULL70', 'FULLNULL']);
   });
 
   it('keeps ascending composite sorts numeric instead of forcing scan-mode grouping', () => {

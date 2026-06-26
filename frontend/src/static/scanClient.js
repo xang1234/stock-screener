@@ -104,20 +104,6 @@ const compareValues = (left, right) => {
   return Number(left) - Number(right);
 };
 
-const getScanModeSortPriority = (row) => {
-  const scanMode = row?.scan_mode;
-  if (!scanMode || scanMode === 'full') {
-    return 0;
-  }
-  if (scanMode === 'ipo_weighted') {
-    return 1;
-  }
-  if (scanMode === 'listing_only') {
-    return 2;
-  }
-  return 3;
-};
-
 const getSortValue = (row, sortBy) => {
   if (sortBy === 'rating') {
     return RATING_SORT_ORDER[row.rating] ?? 0;
@@ -204,22 +190,9 @@ export const sortStaticScanRows = (
   rows,
   sortBy,
   sortOrder = 'desc',
-  { prioritizeCompositeScanMode = true } = {},
 ) => {
   const direction = sortOrder === 'asc' ? 1 : -1;
-  const useCompositeModePriority = prioritizeCompositeScanMode &&
-    sortBy === 'composite_score' &&
-    sortOrder === 'desc';
   return [...rows].sort((left, right) => {
-    if (useCompositeModePriority) {
-      const modeComparison = compareValues(
-        getScanModeSortPriority(left),
-        getScanModeSortPriority(right),
-      );
-      if (modeComparison !== 0) {
-        return modeComparison;
-      }
-    }
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
     if (sortBy === 'composite_score' && sortOrder === 'desc') {
@@ -233,15 +206,6 @@ export const sortStaticScanRows = (
     const comparison = compareValues(leftValue, rightValue);
     if (comparison !== 0) {
       return comparison * direction;
-    }
-    if (useCompositeModePriority) {
-      const modeComparison = compareValues(
-        getScanModeSortPriority(left),
-        getScanModeSortPriority(right),
-      );
-      if (modeComparison !== 0) {
-        return modeComparison;
-      }
     }
     return compareValues(left.symbol, right.symbol);
   });

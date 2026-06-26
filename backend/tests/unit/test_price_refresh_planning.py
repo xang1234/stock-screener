@@ -53,6 +53,57 @@ def test_price_history_coverage_splits_fresh_stale_and_no_history(universe_sessi
     assert coverage.no_history == ("9999.HK",)
 
 
+def test_price_history_coverage_can_require_positive_latest_volume(universe_session):
+    from app.services.price_history_coverage import classify_price_history
+
+    universe_session.add_all(
+        [
+            StockPrice(symbol="GOOD", date=date(2026, 6, 8), close=100, volume=1000),
+            StockPrice(symbol="ZERO", date=date(2026, 6, 8), close=50, volume=0),
+            StockPrice(symbol="MISSING", date=date(2026, 6, 8), close=25, volume=None),
+            StockPrice(symbol="OLD", date=date(2026, 6, 5), close=10, volume=1000),
+        ]
+    )
+    universe_session.commit()
+
+    coverage = classify_price_history(
+        universe_session,
+        symbols=["GOOD", "ZERO", "MISSING", "OLD", "NONE"],
+        as_of_date=date(2026, 6, 8),
+        require_positive_volume=True,
+    )
+
+    assert coverage.fresh == ("GOOD",)
+    assert coverage.stale == ("ZERO", "MISSING", "OLD")
+    assert coverage.no_history == ("NONE",)
+
+
+def test_price_history_coverage_can_require_positive_volume_for_selected_symbols(universe_session):
+    from app.services.price_history_coverage import classify_price_history
+
+    universe_session.add_all(
+        [
+            StockPrice(symbol="STOCK", date=date(2026, 6, 1), close=100, volume=1000),
+            StockPrice(symbol="STOCK", date=date(2026, 6, 8), close=101, volume=0),
+            StockPrice(symbol="BENCH", date=date(2026, 6, 8), close=50, volume=0),
+            StockPrice(symbol="FX", date=date(2026, 6, 8), close=1.3, volume=None),
+            StockPrice(symbol="GOOD", date=date(2026, 6, 8), close=25, volume=1000),
+        ]
+    )
+    universe_session.commit()
+
+    coverage = classify_price_history(
+        universe_session,
+        symbols=["STOCK", "BENCH", "FX", "GOOD", "NONE"],
+        as_of_date=date(2026, 6, 8),
+        symbols_requiring_positive_volume=["STOCK"],
+    )
+
+    assert coverage.fresh == ("BENCH", "FX", "GOOD")
+    assert coverage.stale == ("STOCK",)
+    assert coverage.no_history == ("NONE",)
+
+
 def test_bootstrap_plan_uses_stale_top_up_and_full_bootstrap_for_no_history(universe_session):
     from app.services.price_history_coverage import PriceHistoryCoverage
     from app.services.price_refresh_planning import (

@@ -1883,17 +1883,6 @@ class StaticSiteExportService:
             if row.get("volume") is not None and row["volume"] >= min_volume
         ]
 
-    @staticmethod
-    def _static_scan_mode_sort_priority(row: dict[str, Any]) -> int:
-        mode = row.get("scan_mode")
-        if not mode or mode == "full":
-            return 0
-        if mode == "ipo_weighted":
-            return 1
-        if mode == "listing_only":
-            return 2
-        return 3
-
     @classmethod
     def _sort_static_scan_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         def _score_key(row: dict[str, Any]) -> float:
@@ -1905,8 +1894,7 @@ class StaticSiteExportService:
         return sorted(
             rows,
             key=lambda row: (
-                cls._static_scan_mode_sort_priority(row),
-                -_score_key(row) if row.get("scan_mode") != "listing_only" else 0,
+                -_score_key(row),
                 row.get("symbol") or "",
             ),
         )

@@ -121,8 +121,7 @@ function StaticHomePage() {
     return sortStaticScanRows(
       filterStaticScanRows(scanRows, buildFiltersFromPreset(leadingGroupScreen)),
       leadingGroupScreen.sort_by,
-      leadingGroupScreen.sort_order,
-      { prioritizeCompositeScanMode: false }
+      leadingGroupScreen.sort_order
     ).slice(0, DEFAULT_TOP_RESULTS);
   }, [leadingGroupScreen, scanRows]);
 

@@ -225,12 +225,10 @@ function StaticScanPage() {
   const sortedRows = useMemo(
     () => (
       hydrationComplete
-        ? sortStaticScanRows(filteredRows, sortBy, sortOrder, {
-          prioritizeCompositeScanMode: !activeScreenId,
-        })
+        ? sortStaticScanRows(filteredRows, sortBy, sortOrder)
         : filteredRows
     ),
-    [activeScreenId, filteredRows, hydrationComplete, sortBy, sortOrder]
+    [filteredRows, hydrationComplete, sortBy, sortOrder]
   );
   const pagedRows = useMemo(
     () => (hydrationComplete ? paginateStaticScanRows(sortedRows, page, perPage) : filteredRows),

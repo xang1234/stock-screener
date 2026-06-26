@@ -815,7 +815,7 @@ def test_export_scan_bundle_unknown_market_disables_volume_filter(
     assert manifest["default_filtered_rows_total"] == manifest["rows_total"] == 2
 
 
-def test_export_scan_bundle_prioritizes_full_rows_before_ipo_weighted_and_listing_only(
+def test_export_scan_bundle_sorts_composite_score_across_scan_modes(
     service_and_session_factory,
     monkeypatch,
     tmp_path,
@@ -875,21 +875,9 @@ def test_export_scan_bundle_prioritizes_full_rows_before_ipo_weighted_and_listin
             market="US",
         )
 
-    assert [row["symbol"] for row in manifest["initial_rows"]] == ["FULL80", "FULL70", "IPO95"]
+    assert [row["symbol"] for row in manifest["initial_rows"]] == ["IPO95", "FULL80", "FULL70"]
     chunk = json.loads((tmp_path / "scan" / "chunks" / "chunk-0001.json").read_text(encoding="utf-8"))
-    assert [row["symbol"] for row in chunk["rows"]] == ["FULL80", "FULL70", "IPO95", "NEW1"]
-
-
-def test_static_scan_mode_sort_priority_matches_frontend_unknown_mode_fallback(
-    service_and_session_factory,
-):
-    service, _session_factory = service_and_session_factory
-
-    assert service._static_scan_mode_sort_priority({"scan_mode": None}) == 0  # noqa: SLF001
-    assert service._static_scan_mode_sort_priority({"scan_mode": "full"}) == 0  # noqa: SLF001
-    assert service._static_scan_mode_sort_priority({"scan_mode": "ipo_weighted"}) == 1  # noqa: SLF001
-    assert service._static_scan_mode_sort_priority({"scan_mode": "listing_only"}) == 2  # noqa: SLF001
-    assert service._static_scan_mode_sort_priority({"scan_mode": "mystery_mode"}) == 3  # noqa: SLF001
+    assert [row["symbol"] for row in chunk["rows"]] == ["IPO95", "FULL80", "FULL70", "NEW1"]
 
 
 def test_serialize_scan_row_preserves_young_ipo_partial_metrics(service_and_session_factory):

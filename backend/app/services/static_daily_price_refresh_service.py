@@ -101,10 +101,16 @@ class StaticDailyPriceRefreshService:
             key_market_symbols = _key_market_price_symbols(market)
             refresh_candidates = _dedupe_symbols(active_symbols + key_market_symbols)
             supported_symbols, skipped_symbols = split_supported_price_symbols(refresh_candidates)
+            active_symbol_set = set(_dedupe_symbols(active_symbols))
+            volume_required_symbols = [
+                symbol for symbol in supported_symbols
+                if symbol in active_symbol_set
+            ]
             coverage = classify_price_history(
                 db,
                 symbols=supported_symbols,
                 as_of_date=as_of_date,
+                symbols_requiring_positive_volume=volume_required_symbols,
             )
 
         db_fresh_symbols = list(coverage.fresh)
