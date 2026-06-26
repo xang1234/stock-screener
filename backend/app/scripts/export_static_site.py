@@ -122,39 +122,41 @@ def _selected_market_non_publishable_snapshot(
     return None if _snapshot_publishable(snapshot) else snapshot
 
 
-def _selected_market_exposure_failure(
+def _market_exposure_failures(
     refresh_results: dict[str, Any],
     market: str | None,
     warnings: list[str],
-) -> dict[str, Any] | None:
-    if market is None:
-        return None
-    normalized_market = market.upper()
+) -> dict[str, dict[str, Any]]:
     exposure_by_market = refresh_results.get("market_exposure", {})
     if not isinstance(exposure_by_market, dict):
-        return None
-    exposure = exposure_by_market.get(normalized_market)
-    if not isinstance(exposure, dict) or not exposure.get("error"):
-        return None
+        return {}
 
-    market_warnings = [
-        warning for warning in warnings if f"market {normalized_market} exposure" in warning
-    ]
-    if not market_warnings:
+    failures: dict[str, dict[str, Any]] = {}
+    selected_markets = (market.upper(),) if market is not None else tuple(exposure_by_market)
+    for selected_market in selected_markets:
+        exposure = exposure_by_market.get(selected_market)
+        if not isinstance(exposure, dict) or not exposure.get("error"):
+            continue
+
         market_warnings = [
-            f"Static export market {normalized_market} exposure not stored "
-            f"for {exposure.get('date') or 'unknown date'}: {exposure['error']}."
+            warning for warning in warnings if f"market {selected_market} exposure" in warning
         ]
-    return {
-        "status": "errored",
-        "reason": "market_exposure_not_ready",
-        "market": normalized_market,
-        "warnings": market_warnings,
-        "failure_diagnostics": {
-            "date": exposure.get("date"),
-            "error": exposure["error"],
-        },
-    }
+        if not market_warnings:
+            market_warnings = [
+                f"Static export market {selected_market} exposure not stored "
+                f"for {exposure.get('date') or 'unknown date'}: {exposure['error']}."
+            ]
+        failures[selected_market] = {
+            "status": "errored",
+            "reason": "market_exposure_not_ready",
+            "market": selected_market,
+            "warnings": market_warnings,
+            "failure_diagnostics": {
+                "date": exposure.get("date"),
+                "error": exposure["error"],
+            },
+        }
+    return failures
 
 
 def _snapshot_skipped_not_trading_day(snapshot: dict[str, Any] | None) -> bool:
@@ -706,19 +708,22 @@ def main() -> int:
                     f"Static site export skipped for market {args.market} because it is not a trading day."
                 )
                 return STATIC_EXPORT_SKIPPED_EXIT_CODE
-            selected_market_exposure_failure = _selected_market_exposure_failure(
+            market_exposure_failures = _market_exposure_failures(
                 refresh_results,
                 args.market,
                 refresh_warnings,
             )
-            if selected_market_exposure_failure is not None:
-                _write_market_diagnostics(
-                    Path(args.output_dir),
-                    args.market,
-                    selected_market_exposure_failure,
-                )
+            if market_exposure_failures:
+                for failed_market, exposure_failure in market_exposure_failures.items():
+                    _write_market_diagnostics(
+                        Path(args.output_dir),
+                        failed_market,
+                        exposure_failure,
+                    )
+                failed_markets = ", ".join(market_exposure_failures)
+                market_label = args.market or failed_markets
                 print(
-                    f"Static site export skipped for market {args.market}; "
+                    f"Static site export skipped for market {market_label}; "
                     "exposure was not stored, diagnostics were uploaded, "
                     "and the combine job can use fallback artifacts."
                 )

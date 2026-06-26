@@ -1350,6 +1350,92 @@ def test_main_returns_no_current_artifact_code_for_selected_market_exposure_erro
     assert export_calls == []
 
 
+def test_main_returns_no_current_artifact_code_for_all_market_exposure_error(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    export_calls: list[object] = []
+    output_dir = tmp_path / "out"
+
+    monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(
+        export_script,
+        "_run_daily_refresh",
+        lambda **_kwargs: (
+            {
+                "market_exposure": {
+                    "US": {
+                        "market": "US",
+                        "date": "2026-06-25",
+                        "exposure_score": 75.0,
+                    },
+                    "IN": {
+                        "market": "IN",
+                        "date": "2026-06-25",
+                        "error": "no_benchmark_data",
+                    },
+                },
+                "feature_snapshots": {
+                    "US": {
+                        "status": "published",
+                        "market": "US",
+                        "run_id": 90,
+                    },
+                    "IN": {
+                        "status": "skipped",
+                        "reason": "market_exposure_not_ready",
+                        "market": "IN",
+                        "as_of_date": "2026-06-25",
+                    },
+                },
+            },
+            ["Static export market IN exposure not stored for 2026-06-25: no_benchmark_data."],
+        ),
+    )
+
+    class ExportShouldNotRun:
+        def __init__(self, *_args, **_kwargs):
+            export_calls.append("constructed")
+
+        def export(self, *_args, **_kwargs):
+            raise AssertionError("all-market export should not run when any exposure is missing")
+
+    monkeypatch.setattr(export_script, "StaticSiteExportService", ExportShouldNotRun)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(output_dir),
+            "--refresh-daily",
+        ],
+    )
+
+    assert export_script.main() == export_script.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
+
+    diagnostics_path = output_dir / "diagnostics" / "in" / "snapshot-failure.json"
+    assert diagnostics_path.exists()
+    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert payload == {
+        "market": "IN",
+        "status": "errored",
+        "reason": "market_exposure_not_ready",
+        "failed_symbols": [],
+        "row_count": None,
+        "warnings": ["Static export market IN exposure not stored for 2026-06-25: no_benchmark_data."],
+        "failure_diagnostics": {
+            "date": "2026-06-25",
+            "error": "no_benchmark_data",
+        },
+    }
+    captured = capsys.readouterr()
+    assert "market IN" in captured.out
+    assert "exposure was not stored" in captured.out
+    assert export_calls == []
+
+
 def test_write_market_diagnostics_records_quarantined_snapshot(tmp_path):
     path = export_script._write_market_diagnostics(  # noqa: SLF001 - intentional unit test coverage
         tmp_path / "out",
