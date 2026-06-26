@@ -32,7 +32,7 @@ Stage details, stale/failure handling, and re-runs: [Operations Guide](OPERATION
 
 `MARKET_DATA_SOURCE_MODE` (a deploy-time setting) controls data sourcing:
 
-- **`github_first`** *(default)* — imports prebuilt daily-price and weekly-reference bundles published to the project's GitHub releases, then live-fetches only missing or stale symbols. Faster, with fewer provider rate limits; any GitHub miss falls back to live automatically.
+- **`github_first`** *(default)* — imports prebuilt daily-price and weekly-reference bundles from the project's GitHub releases, then live-fetches only missing/stale symbols. Prices, universe, and fundamentals fall back to live on a GitHub miss; IBD classification is GitHub-only. Faster, with fewer provider rate limits.
 - **`live_only`** — skips the GitHub bundles and fetches live from yfinance / Finviz (IBD classification is GitHub-only, so it won't refresh in this mode).
 
 It is read once at startup, so changing it means editing `.env` and recreating the stack — see [Operations Guide → Market Data Source Mode](OPERATIONS.md#market-data-source-mode).
