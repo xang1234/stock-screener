@@ -28,6 +28,15 @@ Enabling many markets at once noticeably slows the first run. Start with one, ad
 
 Stage details, stale/failure handling, and re-runs: [Operations Guide](OPERATIONS.md).
 
+### Where market data comes from
+
+`MARKET_DATA_SOURCE_MODE` (a deploy-time setting) controls data sourcing:
+
+- **`github_first`** *(default)* — imports prebuilt daily-price and weekly-reference bundles published to the project's GitHub releases, then live-fetches only missing or stale symbols. Faster, with fewer provider rate limits; any GitHub miss falls back to live automatically.
+- **`live_only`** — skips GitHub and fetches everything live from yfinance / Finviz.
+
+It is read once at startup, so changing it means editing `.env` and recreating the stack — see [Operations Guide → Market Data Source Mode](OPERATIONS.md#market-data-source-mode).
+
 ---
 
 ## Global Controls (header)
