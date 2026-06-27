@@ -69,6 +69,7 @@ celerybeat-schedule
 
 # Playwright MCP
 .playwright-mcp/
+frontend/test-results/
 
 # Generated agent runtime state
 .superpowers/brainstorm/**/state/**

@@ -38,7 +38,7 @@ def test_build_static_groups_payload_emits_the_response_envelope_once():
             }
         ],
         movers={
-            "period": "1w",
+            "period": "1m",
             "gainers": [],
             "losers": [],
         },
@@ -57,7 +57,8 @@ def test_build_static_groups_payload_emits_the_response_envelope_once():
     assert payload["market"] == "HK"
     assert payload["payload"]["rankings"]["date"] == "2026-04-04"
     assert payload["payload"]["rankings"]["total_groups"] == 1
-    assert payload["payload"]["movers_period"] == "1w"
+    assert payload["payload"]["movers_period"] == "1m"
+    assert payload["payload"]["movers"]["period"] == "1m"
     assert payload["payload"]["group_details"] == {
         "Semiconductors": {"industry_group": "Semiconductors"}
     }

@@ -21,10 +21,7 @@ from ..models.stock_universe import StockUniverse
 from ..domain.providers.price_symbol_support import is_unsupported_yahoo_price_symbol
 from .group_constituent_source import GroupConstituentSource
 from .group_detail_payloads import constituent_stock_payloads_from_scan_items
-from .group_ranking_history import (
-    GROUP_RANK_CHANGE_OFFSETS,
-    build_group_detail_payload_from_parts,
-)
+from .group_ranking_history import build_group_detail_payload_from_parts
 from .group_rank_cache_policy import GroupRankCacheRequirement
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
@@ -33,6 +30,12 @@ from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
 
 logger = logging.getLogger(__name__)
 CACHE_MISS_TOLERANCE_RATIO = 0.05  # Allow up to 5% cache misses in cache-only group ranking runs
+GROUP_RANK_CHANGE_CALENDAR_DAYS = {
+    "1w": 7,
+    "1m": 30,
+    "3m": 90,
+    "6m": 180,
+}
 
 
 class IncompleteGroupRankingCacheError(RuntimeError):
@@ -498,7 +501,7 @@ class IBDGroupRankService:
         # Calendar-day target offsets for rank changes. The lookup below picks
         # the closest stored ranking within a small window; these are not exact
         # trading-session offsets.
-        period_days = dict(GROUP_RANK_CHANGE_OFFSETS)
+        period_days = dict(GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
         # Batch fetch all historical ranks in ONE query instead of 197*4=788 queries
         group_names = [r.industry_group for r in rankings]
@@ -705,7 +708,7 @@ class IBDGroupRankService:
         current = records[0]
 
         # Get rank changes using calendar-day target offsets with closest-record matching.
-        period_days = dict(GROUP_RANK_CHANGE_OFFSETS)
+        period_days = dict(GROUP_RANK_CHANGE_CALENDAR_DAYS)
         rank_changes = {}
 
         historical_ranks = self._get_historical_ranks_batch(

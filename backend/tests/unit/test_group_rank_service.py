@@ -173,7 +173,7 @@ def test_get_group_history_uses_universe_lookup_for_top_symbol_name(monkeypatch)
         db_session.close()
 
 
-def test_get_group_history_uses_shared_rank_change_offsets(monkeypatch):
+def test_get_group_history_uses_calendar_rank_change_offsets(monkeypatch):
     service = _make_group_rank_service()
     db_session = _make_session()
     group = f"TEST_GROUP_UNIT_{uuid4().hex}"
@@ -199,7 +199,7 @@ def test_get_group_history_uses_shared_rank_change_offsets(monkeypatch):
         )
         db_session.commit()
 
-        monkeypatch.setattr(group_rank_module, "GROUP_RANK_CHANGE_OFFSETS", {"1w": 1})
+        expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
         def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
             captured_period_days.append(dict(period_days))
@@ -210,9 +210,43 @@ def test_get_group_history_uses_shared_rank_change_offsets(monkeypatch):
 
         result = service.get_group_history(db_session, group, days=30, market="US")
 
-        assert captured_period_days == [{"1w": 1}]
+        assert captured_period_days == [expected_period_days]
         assert result["rank_change_1w"] == 2
         assert result["rank_change_1m"] is None
+    finally:
+        db_session.rollback()
+        db_session.close()
+
+
+def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
+    service = _make_group_rank_service()
+    db_session = _make_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+    current_date = date(2026, 4, 18)
+    captured_period_days: list[dict[str, int]] = []
+
+    try:
+        _add_rank(db_session, group, current_date, 4)
+        db_session.commit()
+
+        expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
+
+        def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
+            captured_period_days.append(dict(period_days))
+            return {(group, "1w"): 6}
+
+        monkeypatch.setattr(service, "_get_historical_ranks_batch", fake_historical_batch)
+
+        rankings = service.get_current_rankings(
+            db_session,
+            limit=10,
+            calculation_date=current_date,
+            market="US",
+        )
+
+        assert captured_period_days == [expected_period_days]
+        assert rankings[0]["rank_change_1w"] == 2
+        assert rankings[0]["rank_change_1m"] is None
     finally:
         db_session.rollback()
         db_session.close()

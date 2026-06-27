@@ -299,31 +299,31 @@
           <!-- Beat scheduler (control) -->
           <rect x="300" y="64" width="250" height="42" rx="7" fill="#edf0f3" stroke="#6d7680" stroke-opacity="0.5"/>
           <text x="425" y="82"  font-size="12" font-weight="700" fill="#6d7680">Celery Beat</text>
-          <text x="425" y="98"  font-size="10" fill="#667789">per-market crontab · dispatches all below</text>
+          <text x="425" y="98"  font-size="10" fill="#667789">schedules daily-market-pipeline-{market}</text>
 
           <rect x="300" y="120" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
           <text x="425" y="138" font-size="12" font-weight="600" fill="#18262f">smart_refresh_cache</text>
-          <text x="425" y="154" font-size="10" fill="#667789">BulkDataFetcher → prices · beat</text>
+          <text x="425" y="154" font-size="10" fill="#667789">BulkDataFetcher → prices · pipeline</text>
 
           <rect x="300" y="170" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
           <text x="425" y="188" font-size="12" font-weight="600" fill="#18262f">refresh_*_universe</text>
-          <text x="425" y="204" font-size="10" fill="#667789">stock_universe ingest · beat</text>
+          <text x="425" y="204" font-size="10" fill="#667789">stock_universe ingest · pipeline</text>
 
           <rect x="300" y="220" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
           <text x="425" y="238" font-size="12" font-weight="600" fill="#18262f">refresh_all_fundamentals</text>
-          <text x="425" y="254" font-size="10" fill="#667789">fundamentals hydrate · beat</text>
+          <text x="425" y="254" font-size="10" fill="#667789">fundamentals hydrate · pipeline</text>
 
           <rect x="300" y="270" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
           <text x="425" y="288" font-size="12" font-weight="600" fill="#18262f">calculate_daily_breadth</text>
-          <text x="425" y="304" font-size="10" fill="#667789">+ market_exposure · beat</text>
+          <text x="425" y="304" font-size="10" fill="#667789">+ market_exposure · pipeline</text>
 
           <rect x="300" y="320" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
           <text x="425" y="338" font-size="12" font-weight="600" fill="#18262f">calculate_group_rankings</text>
-          <text x="425" y="354" font-size="10" fill="#667789">IBD 197 groups · beat</text>
+          <text x="425" y="354" font-size="10" fill="#667789">IBD 197 groups · pipeline</text>
 
           <rect x="300" y="370" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
           <text x="425" y="388" font-size="12" font-weight="600" fill="#18262f">build_daily_snapshot</text>
-          <text x="425" y="404" font-size="10" fill="#667789">feature store + pointer swap · beat</text>
+          <text x="425" y="404" font-size="10" fill="#667789">feature store + pointer swap · pipeline</text>
 
           <rect x="300" y="420" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
           <text x="425" y="438" font-size="12" font-weight="600" fill="#18262f">run_bulk_scan / finalize</text>

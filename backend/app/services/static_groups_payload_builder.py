@@ -33,7 +33,7 @@ def build_static_groups_payload(
                 total_groups=len(snapshot.rankings),
                 rankings=[GroupRankResponse(**row) for row in snapshot.rankings],
             ).model_dump(mode="json"),
-            "movers_period": "1w",
+            "movers_period": snapshot.movers["period"],
             "movers": MoversResponse(
                 period=snapshot.movers["period"],
                 gainers=[

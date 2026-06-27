@@ -61,11 +61,41 @@ def test_select_market_run_series_filters_market_dedupes_dates_and_honors_min_ru
         engine.dispose()
 
 
+def test_select_market_run_series_without_cutoff_returns_all_market_runs():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[FeatureRun.__table__])
+    try:
+        with Session(engine) as db:
+            latest = _run(5, date(2026, 4, 5), "HK")
+            db.add_all(
+                [
+                    latest,
+                    _run(4, date(2026, 4, 4), "HK"),
+                    _run(3, date(2026, 4, 4), "HK", published_hour=20),
+                    _run(2, date(2026, 4, 3), "JP"),
+                    _run(1, date(2026, 4, 2), "HK"),
+                ]
+            )
+            db.commit()
+
+            runs = select_market_run_series(
+                db,
+                market="HK",
+                latest_run=latest,
+            )
+
+        assert [run.id for run in runs] == [5, 4, 1]
+    finally:
+        engine.dispose()
+
+
 def test_feature_run_market_is_not_owned_by_group_history_module():
     module = import_module("app.domain.feature_store.run_metadata")
 
     assert not hasattr(history_module, "feature_run_market")
     assert module.feature_run_market(_run(1, date(2026, 4, 4), "HK")) == "HK"
+    assert module.feature_run_market(_run(2, date(2026, 4, 4), " hk ")) == "HK"
+    assert module.feature_run_market(_run(3, date(2026, 4, 4), "   ")) is None
 
 
 def test_select_group_history_runs_includes_visible_history_and_change_offsets():

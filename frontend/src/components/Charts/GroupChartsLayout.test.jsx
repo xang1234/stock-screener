@@ -1,7 +1,7 @@
-import { ThemeProvider, createTheme } from '@mui/material/styles';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { renderWithProviders } from '../../test/renderWithProviders';
 import GroupChartsLayout, { GroupChartCell } from './GroupChartsLayout';
 
 const useMediaQuerySpy = vi.hoisted(() => vi.fn(() => true));
@@ -16,13 +16,11 @@ vi.mock('@mui/material', async () => {
 
 describe('GroupChartsLayout', () => {
   it('provides the shared two-column desktop chart grid contract', () => {
-    render(
-      <ThemeProvider theme={createTheme()}>
-        <GroupChartsLayout data-testid="shared-group-charts-layout" gap={2}>
-          <GroupChartCell data-testid="shared-group-chart-cell">AAA</GroupChartCell>
-          <GroupChartCell>BBB</GroupChartCell>
-        </GroupChartsLayout>
-      </ThemeProvider>,
+    renderWithProviders(
+      <GroupChartsLayout data-testid="shared-group-charts-layout" gap={2}>
+        <GroupChartCell data-testid="shared-group-chart-cell">AAA</GroupChartCell>
+        <GroupChartCell>BBB</GroupChartCell>
+      </GroupChartsLayout>,
     );
 
     const layout = screen.getByTestId('shared-group-charts-layout');
@@ -36,12 +34,10 @@ describe('GroupChartsLayout', () => {
   });
 
   it('keeps the responsive contract in CSS instead of JS media-query state', () => {
-    render(
-      <ThemeProvider theme={createTheme()}>
-        <GroupChartsLayout data-testid="shared-group-charts-layout-css-only">
-          <GroupChartCell>AAA</GroupChartCell>
-        </GroupChartsLayout>
-      </ThemeProvider>,
+    renderWithProviders(
+      <GroupChartsLayout data-testid="shared-group-charts-layout-css-only">
+        <GroupChartCell>AAA</GroupChartCell>
+      </GroupChartsLayout>,
     );
 
     expect(screen.getByTestId('shared-group-charts-layout-css-only')).toBeInTheDocument();

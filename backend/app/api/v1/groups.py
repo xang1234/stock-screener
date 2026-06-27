@@ -221,9 +221,9 @@ def _rrg_scope_has_data(payload: dict | None) -> bool:
 
 def _group_detail_response(detail: dict, *, market: str) -> GroupDetailResponse:
     payload = dict(detail)
-    for key, value in market_scope_tag(market).items():
-        if payload.get(key) is None:
-            payload[key] = value
+    scope = market_scope_tag(market)
+    payload["market_scope"] = scope["market_scope"]
+    payload["scope_reason"] = scope.get("scope_reason")
     return GroupDetailResponse(**payload)
 
 

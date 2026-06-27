@@ -12,6 +12,7 @@ def feature_run_market(run: Any) -> str | None:
     universe = config.get("universe")
     if isinstance(universe, dict):
         market = universe.get("market")
-        if market:
-            return str(market).upper()
+        if market is not None:
+            normalized = str(market).strip().upper()
+            return normalized or None
     return None

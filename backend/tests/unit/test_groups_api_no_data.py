@@ -254,7 +254,8 @@ async def test_get_group_detail_accepts_pre_scoped_us_payload(monkeypatch, clien
         def get_group_history(self, db, group, days=180):  # noqa: ARG002
             assert group == "Computer-Data Storage"
             return {
-                "market_scope": "US",
+                "market_scope": "HK",
+                "scope_reason": "stale pre-scoped service payload",
                 "industry_group": "Computer-Data Storage",
                 "current_rank": 1,
                 "current_avg_rs": 96.9,
@@ -293,6 +294,7 @@ async def test_get_group_detail_accepts_pre_scoped_us_payload(monkeypatch, clien
     assert response.status_code == 200
     payload = response.json()
     assert payload["market_scope"] == "US"
+    assert payload["scope_reason"] is None
     assert payload["industry_group"] == "Computer-Data Storage"
 
 

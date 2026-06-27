@@ -1,8 +1,7 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { renderWithProviders } from '../../test/renderWithProviders';
 import GroupChartsGrid from './GroupChartsGrid';
 
 vi.mock('./CandlestickChart', () => ({
@@ -30,23 +29,11 @@ vi.mock('../../api/priceHistory', () => ({
 }));
 
 const renderGrid = (props = {}) => {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  });
-
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={createTheme()}>
-        <GroupChartsGrid
-          symbols={['NVDA', 'AAPL', 'MSFT', 'META']}
-          {...props}
-        />
-      </ThemeProvider>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <GroupChartsGrid
+      symbols={['NVDA', 'AAPL', 'MSFT', 'META']}
+      {...props}
+    />,
   );
 };
 
