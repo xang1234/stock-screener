@@ -637,12 +637,26 @@ class StaticSiteExportService:
                 return str(market).upper()
         return None
 
-    def _load_scan_export_source(self, db: Session, run: FeatureRun) -> tuple[list[Any], Any]:
+    def _load_scan_export_rows(
+        self,
+        db: Session,
+        run: FeatureRun,
+        *,
+        include_sparklines: bool,
+    ) -> list[Any]:
         repo = SqlFeatureStoreRepository(db)
-        rows = repo.query_all_as_scan_results(
+        return repo.query_all_as_scan_results(
             run.id,
             FilterSpec(),
             SortSpec(field="composite_score", order=SortOrder.DESC),
+            include_sparklines=include_sparklines,
+        )
+
+    def _load_scan_export_source(self, db: Session, run: FeatureRun) -> tuple[list[Any], Any]:
+        repo = SqlFeatureStoreRepository(db)
+        rows = self._load_scan_export_rows(
+            db,
+            run,
             include_sparklines=True,
         )
         filter_options = repo.get_filter_options_for_run(run.id)
@@ -1194,7 +1208,7 @@ class StaticSiteExportService:
         history_runs = self._select_group_history_runs(market_runs)
         historical_rankings = {
             run.id: self._compute_group_rankings_from_rows(
-                self._load_scan_export_source(db, run)[0],
+                self._load_scan_export_rows(db, run, include_sparklines=False),
                 ranking_date=run.as_of_date,
             )
             for run in history_runs

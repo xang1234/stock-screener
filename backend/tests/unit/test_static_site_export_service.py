@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 import app.services.static_site_export_service as export_module
 import app.services.static_groups_rrg_export as rrg_export_module
 from app.database import Base
+from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
@@ -2636,3 +2637,96 @@ def test_apply_group_rank_changes_from_table_swallows_lookup_errors(
         )
 
     assert all(rankings[0][f"rank_change_{period}"] is None for period in ("1w", "1m", "3m", "6m"))
+
+
+def test_build_groups_payload_loads_static_history_rows_without_sparklines(
+    service_and_session_factory,
+    monkeypatch,
+):
+    service, session_factory = service_and_session_factory
+    latest_run = FeatureRun(
+        id=3,
+        as_of_date=date(2026, 4, 4),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 4, 21, 30, 0),
+    )
+    prior_run = FeatureRun(
+        id=2,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 21, 30, 0),
+    )
+    query_calls: list[tuple[int, bool]] = []
+    filter_options_calls: list[int] = []
+
+    monkeypatch.setattr(
+        service,
+        "_get_market_run_series",
+        lambda db, market, latest_run: [latest_run, prior_run],  # noqa: ARG005
+    )
+    monkeypatch.setattr(service, "_select_group_history_runs", lambda runs: runs)
+    monkeypatch.setattr(
+        service,
+        "_apply_group_rank_changes_from_table",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _history_row(run_id: int) -> ScanResultItemDomain:
+        return ScanResultItemDomain(
+            symbol=f"HK{run_id}",
+            composite_score=90.0,
+            rating="Buy",
+            current_price=100.0,
+            screener_outputs={},
+            screeners_run=[],
+            composite_method="weighted_average",
+            screeners_passed=0,
+            screeners_total=0,
+            extended_fields={
+                "ibd_industry_group": "Internet Services",
+                "rs_rating": 88.0,
+            },
+        )
+
+    def fake_query(self, run_id, *_args, include_sparklines=True, **_kwargs):  # noqa: ANN001
+        query_calls.append((run_id, include_sparklines))
+        return [_history_row(run_id)]
+
+    def fake_filter_options(self, run_id):  # noqa: ANN001
+        filter_options_calls.append(run_id)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "query_all_as_scan_results",
+        fake_query,
+    )
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "get_filter_options_for_run",
+        fake_filter_options,
+    )
+
+    with session_factory() as db:
+        payload = service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage
+            db=db,
+            generated_at="2026-04-04T22:00:00Z",
+            expected_as_of_date=date(2026, 4, 4),
+            market="HK",
+            latest_run=latest_run,
+            serialized_rows=[
+                {
+                    "symbol": "HK3",
+                    "company_name": "HK3 Corp",
+                    "ibd_industry_group": "Internet Services",
+                    "rs_rating": 88.0,
+                    "composite_score": 90.0,
+                }
+            ],
+        )
+
+    assert payload["available"] is True
+    assert query_calls == [(3, False), (2, False)]
+    assert filter_options_calls == []

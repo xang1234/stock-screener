@@ -209,7 +209,7 @@ class MarketGroupRankingService:
         )
         historical_rankings = {
             run.id: self.compute_group_rankings_from_rows(
-                self._load_run_rows(db, run.id),
+                self._load_run_rows(db, run.id, include_sparklines=False),
                 ranking_date=run.as_of_date,
             )
             for index, run in enumerate(market_runs)
