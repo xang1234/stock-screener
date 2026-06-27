@@ -237,6 +237,11 @@ export const fullSeRow = {
   se_bb_width_pctile_252: 15,
   se_volume_vs_50d: 1.8,
   se_rs_line_new_high: true,
+  se_rs_line_blue_dot: true,
+  rs_line_new_high: true,
+  rs_line_new_high_before_price: true,
+  rs_line_blue_dot_recent: true,
+  rs_line_new_high_date: '2026-01-06',
   se_pivot_price: 198.50,
 };
 
@@ -250,6 +255,11 @@ export const nullSeRow = {
   se_bb_width_pctile_252: null,
   se_volume_vs_50d: null,
   se_rs_line_new_high: null,
+  se_rs_line_blue_dot: null,
+  rs_line_new_high: null,
+  rs_line_new_high_before_price: null,
+  rs_line_blue_dot_recent: null,
+  rs_line_new_high_date: null,
   se_pivot_price: null,
 };
 
@@ -263,6 +273,11 @@ export const mixedSeRow = {
   se_bb_width_pctile_252: null,
   se_volume_vs_50d: 2.3,
   se_rs_line_new_high: false,
+  se_rs_line_blue_dot: false,
+  rs_line_new_high: false,
+  rs_line_new_high_before_price: false,
+  rs_line_blue_dot_recent: false,
+  rs_line_new_high_date: null,
   se_pivot_price: null,
 };
 

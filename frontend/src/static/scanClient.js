@@ -44,6 +44,8 @@ const RANGE_FILTER_TO_FIELD = {
 const BOOLEAN_FILTER_TO_FIELD = {
   seSetupReady: 'se_setup_ready',
   seRsLineNewHigh: 'se_rs_line_new_high',
+  seRsLineBlueDot: 'se_rs_line_blue_dot',
+  rsLineBlueDotRecent: 'rs_line_blue_dot_recent',
   vcpDetected: 'vcp_detected',
   vcpReady: 'vcp_ready_for_breakout',
   maAlignment: 'ma_alignment',

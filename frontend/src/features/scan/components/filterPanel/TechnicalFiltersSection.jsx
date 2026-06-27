@@ -89,6 +89,13 @@ function TechnicalFiltersSection({
             minOnly
           />
         </Grid>
+        <Grid item xs={6} sm={3} md={1}>
+          <CompactCheckbox
+            label="BD <=5d"
+            value={filters.rsLineBlueDotRecent}
+            onChange={(value) => updateFilter('rsLineBlueDotRecent', value)}
+          />
+        </Grid>
         <Grid item xs={6} sm={4} md={1.5}>
           <CompactRangeInput
             label="Beta"

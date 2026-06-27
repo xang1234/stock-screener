@@ -88,6 +88,10 @@ describe('ResultsTable', () => {
     it('renders se_pivot_price as $198.50', () => {
       expect(screen.getByText('$198.50')).toBeInTheDocument();
     });
+
+    it('renders first-class RS blue dot with the new-high date tooltip', () => {
+      expect(screen.getByTitle('RS line new high: 2026-01-06')).toBeInTheDocument();
+    });
   });
 
   // ── SE column rendering — null data ──────────────────────────────────
@@ -166,7 +170,7 @@ describe('ResultsTable', () => {
   describe('SE column headers', () => {
     it('renders all 7 SE header labels', () => {
       renderWithProviders(<ResultsTable {...defaultProps} />);
-      const headers = ['SE', 'Pat', 'Pvt%', 'Sqz', 'V50', 'RSH', 'Pvt$'];
+      const headers = ['SE', 'Pat', 'Pvt%', 'Sqz', 'V50', 'RSH', 'BD', 'BD5', 'Pvt$'];
       headers.forEach((label) => {
         expect(screen.getByText(label)).toBeInTheDocument();
       });

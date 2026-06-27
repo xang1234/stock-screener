@@ -77,6 +77,7 @@ export const buildFilterParams = (filters, options = {}) => {
   if (filters.seSetupReady != null) params.se_setup_ready = filters.seSetupReady;
   if (filters.seRsLineNewHigh != null) params.se_rs_line_new_high = filters.seRsLineNewHigh;
   if (filters.seRsLineBlueDot != null) params.se_rs_line_blue_dot = filters.seRsLineBlueDot;
+  if (filters.rsLineBlueDotRecent != null) params.rs_line_blue_dot_recent = filters.rsLineBlueDotRecent;
 
   // RS ranges
   if (filters.rsRating?.min != null) params.min_rs = filters.rsRating.min;

@@ -52,7 +52,7 @@ export const SE_PATTERN_OPTIONS = [
 ];
 
 export const TECHNICAL_KEYS = [
-  'stage', 'rsRating', 'rs1m', 'rs3m', 'rs12m', 'maAlignment',
+  'stage', 'rsRating', 'rs1m', 'rs3m', 'rs12m', 'rsLineBlueDotRecent', 'maAlignment',
   'adrPercent', 'perfDay', 'perfWeek', 'perfMonth',
   'perf3m', 'perf6m', 'gapPercent', 'volumeSurge',
   'ema10Distance', 'ema20Distance', 'ema50Distance',

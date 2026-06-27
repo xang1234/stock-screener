@@ -63,6 +63,7 @@ BOOLEAN_FILTER_TO_FIELD: dict[str, str] = {
     "seSetupReady": "se_setup_ready",
     "seRsLineNewHigh": "se_rs_line_new_high",
     "seRsLineBlueDot": "se_rs_line_blue_dot",
+    "rsLineBlueDotRecent": "rs_line_blue_dot_recent",
     "vcpDetected": "vcp_detected",
     "vcpReady": "vcp_ready_for_breakout",
     "maAlignment": "ma_alignment",
@@ -132,7 +133,7 @@ PRESET_SCREENS: list[dict] = [
         "tier": 1,
         "filters": {
             "stage": 2,
-            "seRsLineBlueDot": True,
+            "rsLineBlueDotRecent": True,
             "rsRating": {"min": 80, "max": None},
         },
         "sort_by": "rs_rating",

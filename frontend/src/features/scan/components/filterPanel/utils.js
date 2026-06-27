@@ -11,6 +11,7 @@ const BOOLEAN_RESET_KEYS = new Set([
   'seSetupReady',
   'seRsLineNewHigh',
   'seRsLineBlueDot',
+  'rsLineBlueDotRecent',
   'pocketPivot',
   'powerTrend',
 ]);
@@ -196,6 +197,9 @@ export function buildActiveFilters(filters) {
   }
   if (filters.seRsLineBlueDot != null) {
     active.push({ key: 'seRsLineBlueDot', label: `Blue Dot: ${filters.seRsLineBlueDot ? 'Yes' : 'No'}` });
+  }
+  if (filters.rsLineBlueDotRecent != null) {
+    active.push({ key: 'rsLineBlueDotRecent', label: `BD <=5d: ${filters.rsLineBlueDotRecent ? 'Yes' : 'No'}` });
   }
   if (filters.pocketPivot != null) {
     active.push({ key: 'pocketPivot', label: `Pocket Pivot: ${filters.pocketPivot ? 'Yes' : 'No'}` });
