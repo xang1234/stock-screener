@@ -175,6 +175,10 @@ class ScanResultItem(BaseModel):
     # RS Sparkline data (30-day stock/SPY ratio trend)
     rs_sparkline_data: Optional[List[float]] = None
     rs_trend: Optional[int] = None  # -1=declining, 0=flat, 1=improving
+    rs_line_new_high: Optional[bool] = None
+    rs_line_new_high_before_price: Optional[bool] = None
+    rs_line_blue_dot_recent: Optional[bool] = None
+    rs_line_new_high_date: Optional[str] = None
 
     # Price Sparkline data (30-day normalized price trend)
     price_sparkline_data: Optional[List[float]] = None
@@ -319,6 +323,10 @@ class ScanResultItem(BaseModel):
             # Sparklines
             rs_sparkline_data=ef.get("rs_sparkline_data"),
             rs_trend=ef.get("rs_trend"),
+            rs_line_new_high=ef.get("rs_line_new_high"),
+            rs_line_new_high_before_price=ef.get("rs_line_new_high_before_price"),
+            rs_line_blue_dot_recent=ef.get("rs_line_blue_dot_recent"),
+            rs_line_new_high_date=ef.get("rs_line_new_high_date"),
             price_sparkline_data=ef.get("price_sparkline_data"),
             price_change_1d=ef.get("price_change_1d"),
             price_trend=ef.get("price_trend"),

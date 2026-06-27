@@ -78,6 +78,10 @@ class TestScanResultEndpoints:
                     se_setup_score=81.5,
                     se_explain={"summary": "heavy payload"},
                     se_candidates=[{"pattern": "vcp"}],
+                    rs_line_new_high=True,
+                    rs_line_new_high_before_price=True,
+                    rs_line_blue_dot_recent=True,
+                    rs_line_new_high_date="2026-01-06",
                 )
             ]
         )
@@ -93,6 +97,10 @@ class TestScanResultEndpoints:
             assert row["se_setup_score"] == 81.5
             assert row["se_explain"] is None
             assert row["se_candidates"] is None
+            assert row["rs_line_new_high"] is True
+            assert row["rs_line_new_high_before_price"] is True
+            assert row["rs_line_blue_dot_recent"] is True
+            assert row["rs_line_new_high_date"] == "2026-01-06"
         finally:
             app.dependency_overrides.pop(get_uow, None)
 

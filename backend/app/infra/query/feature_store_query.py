@@ -32,6 +32,10 @@ _COLUMN_MAP: dict[str, Any] = {
     "overall_rating": StockFeatureDaily.overall_rating,
     "passes_count": StockFeatureDaily.passes_count,
     "as_of_date": StockFeatureDaily.as_of_date,
+    "rs_line_new_high": StockFeatureDaily.rs_line_new_high,
+    "rs_line_new_high_before_price": StockFeatureDaily.rs_line_new_high_before_price,
+    "rs_line_blue_dot_recent": StockFeatureDaily.rs_line_blue_dot_recent,
+    "rs_line_new_high_date": StockFeatureDaily.rs_line_new_high_date,
     # Joined columns: feature_store_repo applies the matching StockUniverse +
     # StockFundamental outer joins on every read path, so these resolve at
     # SQL time even though they don't live on StockFeatureDaily itself.

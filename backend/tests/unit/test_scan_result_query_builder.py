@@ -35,7 +35,8 @@ class TestColumnMapCoverage:
         "eps_growth_qq", "sales_growth_qq", "eps_growth_yy", "sales_growth_yy",
         "peg_ratio", "peg", "adr_percent", "eps_rating",
         "ibd_industry_group", "ibd_group_rank", "gics_sector",
-        "rs_trend", "price_change_1d",
+        "rs_trend", "rs_line_new_high", "rs_line_new_high_before_price",
+        "rs_line_blue_dot_recent", "rs_line_new_high_date", "price_change_1d",
         "perf_week", "perf_month", "perf_3m", "perf_6m",
         "gap_percent", "volume_surge",
         "ema_10_distance", "ema_20_distance", "ema_50_distance",
@@ -107,7 +108,7 @@ class TestSetupEngineFieldCoverage:
 
     def test_se_field_count(self):
         se_fields = [k for k in _JSON_FIELD_MAP if k.startswith("se_")]
-        assert len(se_fields) == 27
+        assert len(se_fields) == 28
 
     @pytest.mark.parametrize("field", SE_NUMERIC_FIELDS)
     def test_numeric_se_field_in_sort_numeric(self, field):

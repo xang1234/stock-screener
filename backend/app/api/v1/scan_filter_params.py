@@ -119,6 +119,9 @@ def parse_scan_filters(
     se_extended_from_pivot: Optional[bool] = Query(None, description="SE extended from pivot filter"),
     se_bb_squeeze: Optional[bool] = Query(None, description="SE BB squeeze filter"),
     se_pattern_primary: Optional[str] = Query(None, description="SE primary pattern filter (comma-separated)"),
+    rs_line_new_high: Optional[bool] = Query(None, description="RS line at new trailing high"),
+    rs_line_new_high_before_price: Optional[bool] = Query(None, description="RS line new high while price is not"),
+    rs_line_blue_dot_recent: Optional[bool] = Query(None, description="RS blue dot in the last 5 trading days"),
     # RS ratings
     min_rs: Optional[float] = Query(None, ge=0, le=100, description="Minimum RS Rating"),
     max_rs: Optional[float] = Query(None, ge=0, le=100, description="Maximum RS Rating"),
@@ -313,6 +316,12 @@ def parse_scan_filters(
         f.add_boolean("se_rs_line_new_high", se_rs_line_new_high)
     if se_rs_line_blue_dot is not None:
         f.add_boolean("se_rs_line_blue_dot", se_rs_line_blue_dot)
+    if rs_line_new_high is not None:
+        f.add_boolean("rs_line_new_high", rs_line_new_high)
+    if rs_line_new_high_before_price is not None:
+        f.add_boolean("rs_line_new_high_before_price", rs_line_new_high_before_price)
+    if rs_line_blue_dot_recent is not None:
+        f.add_boolean("rs_line_blue_dot_recent", rs_line_blue_dot_recent)
     if se_in_early_zone is not None:
         f.add_boolean("se_in_early_zone", se_in_early_zone)
     if se_extended_from_pivot is not None:

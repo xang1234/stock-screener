@@ -54,7 +54,7 @@ class TestSetupEngineFieldCoverage:
 
     def test_se_field_count(self):
         se_fields = [k for k in _JSON_FIELD_MAP if k.startswith("se_")]
-        assert len(se_fields) == 27
+        assert len(se_fields) == 28
 
     @pytest.mark.parametrize("field", SE_NUMERIC_FIELDS)
     def test_numeric_se_field_in_sort_numeric(self, field):
@@ -112,7 +112,9 @@ class TestColumnMapBasics:
 
     @pytest.mark.parametrize("field", [
         "symbol", "composite_score", "overall_rating",
-        "passes_count", "as_of_date",
+        "passes_count", "as_of_date", "rs_line_new_high",
+        "rs_line_new_high_before_price", "rs_line_blue_dot_recent",
+        "rs_line_new_high_date",
     ])
     def test_indexed_column_is_mapped(self, field):
         assert field in _COLUMN_MAP, f"{field} should be in _COLUMN_MAP"
