@@ -1267,23 +1267,11 @@ def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_ru
                 )
             return None
 
-    class _FakeMarketGroupRankingService:
-        @staticmethod
-        def compute_group_rankings_from_serialized_rows(rows, *, ranking_date):  # noqa: ARG004
-            assert rows[0]["ibd_industry_group"] == "Internet Services"
-            return [
-                {
-                    "industry_group": "Internet Services",
-                    "rank": 2,
-                }
-            ]
-
     stats = _enrich_feature_run_with_ibd_metadata(
         feature_run_id=22,
         ranking_date=date(2026, 4, 2),
         session_factory=session_factory,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_FakeMarketGroupRankingService(),
     )
 
     with session_factory() as db:
@@ -1293,7 +1281,7 @@ def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_ru
     assert stats["missing_industry_rows"] == 0
     assert stats["missing_rank_rows"] == 0
     assert row.details_json["ibd_industry_group"] == "Internet Services"
-    assert row.details_json["ibd_group_rank"] == 2
+    assert row.details_json["ibd_group_rank"] == 1
     assert row.details_json["market_themes"] == ["AI Infrastructure", "Cloud"]
 
     engine.dispose()
@@ -1343,23 +1331,11 @@ def test_enrich_feature_run_with_ibd_metadata_overrides_non_us_sector():
                 )
             return None
 
-    class _FakeMarketGroupRankingService:
-        @staticmethod
-        def compute_group_rankings_from_serialized_rows(rows, *, ranking_date):  # noqa: ARG004
-            assert rows[0]["ibd_industry_group"] == "Transportation Equipment"
-            return [
-                {
-                    "industry_group": "Transportation Equipment",
-                    "rank": 1,
-                }
-            ]
-
     _enrich_feature_run_with_ibd_metadata(
         feature_run_id=23,
         ranking_date=date(2026, 4, 2),
         session_factory=session_factory,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_FakeMarketGroupRankingService(),
     )
 
     with session_factory() as db:

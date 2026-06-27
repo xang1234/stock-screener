@@ -6,13 +6,13 @@ import {
   Button,
   Card,
   CircularProgress,
-  Grid,
   Typography,
   useTheme,
 } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 
 import CandlestickChart from './CandlestickChart';
+import GroupChartsLayout, { GroupChartCell } from './GroupChartsLayout';
 import {
   fetchPriceHistoryBatch,
   priceHistoryKeys,
@@ -111,14 +111,14 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
           Showing first {truncatedSymbols.length} of {normalizedSymbols.length} stocks.
         </Typography>
       )}
-      <Grid container spacing={1}>
+      <GroupChartsLayout data-testid="group-charts-grid" gap={1}>
         {truncatedSymbols.map((sym) => {
           const priceData = dataMap[sym];
           const isMissing = missingSet.has(sym) || !priceData || priceData.length === 0;
           const lastClose = priceData && priceData.length > 0 ? priceData[priceData.length - 1].close : null;
 
           return (
-            <Grid item xs={12} sm={6} md={4} lg={3} key={sym}>
+            <GroupChartCell key={sym}>
               <Card
                 variant="outlined"
                 sx={{
@@ -172,10 +172,10 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
                   />
                 )}
               </Card>
-            </Grid>
+            </GroupChartCell>
           );
         })}
-      </Grid>
+      </GroupChartsLayout>
     </Box>
   );
 }

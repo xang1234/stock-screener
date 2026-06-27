@@ -242,22 +242,19 @@ def _enrich_feature_run_with_ibd_metadata(
     ranking_date: date,
     session_factory=None,
     taxonomy_service=None,
-    market_group_ranking_service=None,
 ) -> dict[str, int | str]:
     """Backfill IBD industry/rank metadata into persisted feature-row details."""
     from app.database import SessionLocal
     from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
     from app.models.industry import IBDGroupRank, IBDIndustryGroup
-    from app.services.market_group_ranking_service import MarketGroupRankingService
+    from app.domain.feature_store.run_metadata import feature_run_market
+    from app.services.group_ranking_payloads import compute_group_rankings_from_serialized_rows
     from app.services.market_taxonomy_service import get_market_taxonomy_service
     from sqlalchemy import func
 
     session_factory = session_factory or SessionLocal
     db = session_factory()
     taxonomy_service = taxonomy_service or get_market_taxonomy_service()
-    market_group_ranking_service = (
-        market_group_ranking_service or MarketGroupRankingService()
-    )
     try:
         feature_run = (
             db.query(FeatureRun)
@@ -357,7 +354,7 @@ def _enrich_feature_run_with_ibd_metadata(
                 db.expunge_all()
             ranks_by_group = {
                 str(row["industry_group"]): int(row["rank"])
-                for row in market_group_ranking_service.compute_group_rankings_from_serialized_rows(
+                for row in compute_group_rankings_from_serialized_rows(
                     serialized_rows,
                     ranking_date=ranking_date,
                 )
@@ -431,20 +428,8 @@ def _enrich_feature_run_with_ibd_metadata(
     finally:
         db.close()
 
-
-def _feature_run_market(run) -> str | None:
-    config = getattr(run, "config_json", None) or {}
-    if not isinstance(config, dict):
-        return None
-    universe = config.get("universe")
-    if isinstance(universe, dict):
-        market = universe.get("market")
-        if market:
-            return str(market).upper()
-    return None
-
-
 def _resolve_latest_published_run_for_market(*, db, market: str) -> int | None:
+    from app.domain.feature_store.run_metadata import feature_run_market
     from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 
     normalized_market = market.upper()
@@ -457,7 +442,7 @@ def _resolve_latest_published_run_for_market(*, db, market: str) -> int | None:
     )
     if pointer is not None:
         run = db.query(FeatureRun).filter(FeatureRun.id == pointer.run_id).first()
-        if run is not None and run.status == "published" and _feature_run_market(run) == normalized_market:
+        if run is not None and run.status == "published" and feature_run_market(run) == normalized_market:
             return run.id
 
     fallback_pointer = (
@@ -467,7 +452,7 @@ def _resolve_latest_published_run_for_market(*, db, market: str) -> int | None:
     )
     if fallback_pointer is not None:
         run = db.query(FeatureRun).filter(FeatureRun.id == fallback_pointer.run_id).first()
-        if run is not None and run.status == "published" and _feature_run_market(run) == normalized_market:
+        if run is not None and run.status == "published" and feature_run_market(run) == normalized_market:
             return run.id
 
     published_runs = (
@@ -477,7 +462,7 @@ def _resolve_latest_published_run_for_market(*, db, market: str) -> int | None:
         .all()
     )
     for run in published_runs:
-        if _feature_run_market(run) == normalized_market:
+        if feature_run_market(run) == normalized_market:
             return run.id
     return None
 

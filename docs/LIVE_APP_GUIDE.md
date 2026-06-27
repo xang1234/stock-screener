@@ -282,10 +282,14 @@ The **Stockbee MM** tab on the Daily page surfaces these same daily counts in a 
 *Group Rankings — ranked table with top movers*
 
 - **Movers** — rank change over 1W / 1M / 3M / 6M.
-- **Group detail** — rank-history chart plus the constituent table.
+- **Group detail** — click a group row to open the detail modal. The **Overview** tab combines the one-year rank-history chart, 1W/1M/3M/6M rank-change cards, and the constituent-stock table with 30-day price and RS sparklines.
+- **Constituent charts** — the **Charts** tab renders compact 6-month candlestick charts for the group's constituents, two charts per row on desktop and one per row on small screens.
 
 ![Group detail modal](screenshots/group-detail.png)
-*Group detail — rank history and constituents*
+*Group detail — rank history, rank-change cards, and constituent stocks with price/RS sparklines*
+
+![Group detail Charts tab with constituent stock charts](screenshots/group-detail-charts.png)
+*Group detail Charts tab — constituent stock charts in a two-column grid*
 
 ### Relative Rotation Graph (RRG)
 

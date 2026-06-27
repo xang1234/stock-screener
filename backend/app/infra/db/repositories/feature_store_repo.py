@@ -481,6 +481,8 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         self,
         run_id: int,
         ibd_industry_group: str,
+        *,
+        include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
         """Return all stocks in the same IBD industry group for a feature run.
 
@@ -505,7 +507,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         return tuple(
             _map_feature_to_scan_result(
                 *_unpack_feature_joined_row(row),
-                include_sparklines=False,
+                include_sparklines=include_sparklines,
             )
             for row in rows
         )

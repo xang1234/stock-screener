@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from inspect import Parameter, signature
 import json
 from types import SimpleNamespace
 
@@ -15,9 +16,11 @@ from sqlalchemy.orm import sessionmaker
 import app.services.static_site_export_service as export_module
 import app.services.static_groups_rrg_export as rrg_export_module
 from app.database import Base
+from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
+from app.services.group_ranking_history import select_market_run_series
 from app.services.static_groups_rrg_export import StaticGroupsRRGPayloadBuilder
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
@@ -1588,8 +1591,8 @@ def test_serialize_history_bars_clamps_to_end_date_and_skips_nan_rows(service_an
     ]
 
 
-def test_get_market_run_series_normalizes_market_to_uppercase(service_and_session_factory):
-    service, session_factory = service_and_session_factory
+def test_select_market_run_series_normalizes_market_to_uppercase(service_and_session_factory):
+    _, session_factory = service_and_session_factory
     run_us_latest = FeatureRun(
         id=31,
         as_of_date=date(2026, 4, 3),
@@ -1617,17 +1620,18 @@ def test_get_market_run_series_normalizes_market_to_uppercase(service_and_sessio
     _insert_runs(session_factory, run_us_latest, run_us_previous, run_hk)
 
     with session_factory() as db:
-        market_runs = service._get_market_run_series(  # noqa: SLF001 - intentional unit test coverage
-            db=db,
+        market_runs = select_market_run_series(
+            db,
             market="us",
             latest_run=run_us_latest,
+            min_runs=2,
         )
 
     assert [run.id for run in market_runs] == [31, 30]
 
 
-def test_get_market_run_series_deduplicates_same_day_reruns(service_and_session_factory):
-    service, session_factory = service_and_session_factory
+def test_select_market_run_series_deduplicates_same_day_reruns(service_and_session_factory):
+    _, session_factory = service_and_session_factory
     latest_us_run = FeatureRun(
         id=41,
         as_of_date=date(2026, 4, 3),
@@ -1655,10 +1659,11 @@ def test_get_market_run_series_deduplicates_same_day_reruns(service_and_session_
     _insert_runs(session_factory, latest_us_run, rerun_same_day, previous_day)
 
     with session_factory() as db:
-        market_runs = service._get_market_run_series(  # noqa: SLF001 - intentional unit test coverage
-            db=db,
+        market_runs = select_market_run_series(
+            db,
             market="US",
             latest_run=latest_us_run,
+            min_runs=2,
         )
 
     assert [run.id for run in market_runs] == [41, 39]
@@ -1683,26 +1688,15 @@ def test_compute_breadth_metrics_uses_full_history_for_shifted_ranges(service_an
     assert metrics[oldest_history_date]["stocks_up_25pct_month"] == 1
 
 
-def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):
-    service, session_factory = service_and_session_factory
+def test_build_groups_payload_has_explicit_feature_run_contract(service_and_session_factory):
+    service, _session_factory = service_and_session_factory
 
-    rankings_calls: list[tuple[int, date | None]] = []
-    movers_calls: list[tuple[str, int, date | None]] = []
-    fake_service = SimpleNamespace(
-        get_current_rankings=lambda db, limit=197, calculation_date=None: rankings_calls.append((limit, calculation_date)) or [],
-        get_rank_movers=lambda db, period="1w", limit=10, calculation_date=None: movers_calls.append((period, limit, calculation_date)) or {"period": period, "gainers": [], "losers": []},
-    )
-    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: fake_service)
+    params = signature(service._build_groups_payload).parameters  # noqa: SLF001 - intentional contract coverage
 
-    with session_factory() as db, pytest.raises(StaticSiteSectionUnavailableError, match="No group rankings are available"):
-        service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage
-            db=db,
-            generated_at="2026-04-02T22:00:00Z",
-            expected_as_of_date=date(2026, 4, 2),
-        )
-
-    assert rankings_calls == [(197, date(2026, 4, 2))]
-    assert movers_calls == []
+    assert "current_rows" not in params
+    assert params["market"].default is Parameter.empty
+    assert params["latest_run"].default is Parameter.empty
+    assert params["serialized_rows"].default is Parameter.empty
 
 
 def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_factory, monkeypatch):
@@ -2592,7 +2586,10 @@ def test_apply_group_rank_changes_from_table_fills_missing_periods(
     assert captured["market"] == "HK"
     assert captured["current_date"] == date(2026, 4, 28)
     assert captured["group_names"] == ["Semiconductors", "Software"]
-    assert captured["period_days"] == {"1w": 5, "1m": 21, "3m": 63}
+    assert captured["period_days"] == {
+        period: export_module.GROUP_RANK_CHANGE_OFFSETS[period]
+        for period in ("1w", "1m", "3m")
+    }
 
     semis, software = rankings
     assert semis["rank_change_1w"] == 5
@@ -2636,3 +2633,130 @@ def test_apply_group_rank_changes_from_table_swallows_lookup_errors(
         )
 
     assert all(rankings[0][f"rank_change_{period}"] is None for period in ("1w", "1m", "3m", "6m"))
+
+
+def test_build_groups_payload_loads_static_history_rows_without_sparklines(
+    service_and_session_factory,
+    monkeypatch,
+):
+    service, session_factory = service_and_session_factory
+    latest_run = FeatureRun(
+        id=3,
+        as_of_date=date(2026, 4, 4),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 4, 21, 30, 0),
+    )
+    prior_run = FeatureRun(
+        id=2,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 21, 30, 0),
+    )
+    query_calls: list[tuple[int, bool]] = []
+    filter_options_calls: list[int] = []
+    apply_rank_change_calls: list[tuple[list[str], list[int]]] = []
+    table_fallback_calls: list[tuple[list[str], str, date]] = []
+
+    monkeypatch.setattr(
+        export_module,
+        "select_market_run_series",
+        lambda db, *, market, latest_run, cutoff_date=None, min_runs=0, max_runs=None: [latest_run, prior_run],  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        export_module,
+        "select_group_history_runs",
+        lambda runs, *, history_runs, offsets: runs,  # noqa: ARG005
+    )
+
+    def fake_apply_rank_changes(rankings, market_runs, historical_rankings, *, offsets):  # noqa: ANN001
+        apply_rank_change_calls.append(
+            (
+                [row["industry_group"] for row in rankings],
+                [run.id for run in market_runs],
+            )
+        )
+
+    monkeypatch.setattr(
+        export_module,
+        "apply_group_rank_changes",
+        fake_apply_rank_changes,
+    )
+
+    def fake_table_fallback(db, rankings, *, market, calculation_date):  # noqa: ANN001, ARG001
+        table_fallback_calls.append(
+            (
+                [row["industry_group"] for row in rankings],
+                market,
+                calculation_date,
+            )
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_apply_group_rank_changes_from_table",
+        fake_table_fallback,
+    )
+
+    def _history_row(run_id: int) -> ScanResultItemDomain:
+        return ScanResultItemDomain(
+            symbol=f"HK{run_id}",
+            composite_score=90.0,
+            rating="Buy",
+            current_price=100.0,
+            screener_outputs={},
+            screeners_run=[],
+            composite_method="weighted_average",
+            screeners_passed=0,
+            screeners_total=0,
+            extended_fields={
+                "ibd_industry_group": "Internet Services",
+                "rs_rating": 88.0,
+            },
+        )
+
+    def fake_query(self, run_id, *_args, include_sparklines=True, **_kwargs):  # noqa: ANN001
+        query_calls.append((run_id, include_sparklines))
+        return [_history_row(run_id)]
+
+    def fake_filter_options(self, run_id):  # noqa: ANN001
+        filter_options_calls.append(run_id)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "query_all_as_scan_results",
+        fake_query,
+    )
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "get_filter_options_for_run",
+        fake_filter_options,
+    )
+
+    with session_factory() as db:
+        payload = service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage
+            db=db,
+            generated_at="2026-04-04T22:00:00Z",
+            expected_as_of_date=date(2026, 4, 4),
+            market="HK",
+            latest_run=latest_run,
+            serialized_rows=[
+                {
+                    "symbol": "HK3",
+                    "company_name": "HK3 Corp",
+                    "ibd_industry_group": "Internet Services",
+                    "rs_rating": 88.0,
+                    "composite_score": 90.0,
+                }
+            ],
+        )
+
+    assert payload["available"] is True
+    assert query_calls == [(2, False)]
+    assert filter_options_calls == []
+    assert apply_rank_change_calls == [(["Internet Services"], [3, 2])]
+    assert table_fallback_calls == [
+        (["Internet Services"], "HK", date(2026, 4, 4))
+    ]

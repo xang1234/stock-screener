@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StockScreenClaude — Data Pipeline (ZCode)</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f7fb;
+    --paper: #ffffff;
+    --paper-soft: #eef3f8;
+    --ink: #18262f;
+    --muted: #667789;
+    --line: #cbd7e3;
+    --line-strong: #94a8bc;
+    --source: #2d7f9f;
+    --source-soft: #e2f3f8;
+    --process: #5963b1;
+    --process-soft: #eceefe;
+    --postgres: #c17a23;
+    --postgres-soft: #fff0dc;
+    --redis: #b64756;
+    --redis-soft: #fde9ed;
+    --consumer: #33885e;
+    --consumer-soft: #e3f5ea;
+    --control: #6d7680;
+    --control-soft: #edf0f3;
+    --shadow: 0 18px 45px rgba(24, 38, 47, 0.08);
+    --radius: 8px;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background:
+      linear-gradient(90deg, rgba(203, 215, 227, 0.35) 1px, transparent 1px),
+      linear-gradient(rgba(203, 215, 227, 0.35) 1px, transparent 1px),
+      var(--bg);
+    background-size: 32px 32px;
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.5;
+  }
+
+  .shell { max-width: 1480px; margin: 0 auto; padding: 28px; }
+
+  .hero {
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 32px;
+    margin-bottom: 22px;
+  }
+
+  .eyebrow {
+    margin: 0 0 12px;
+    color: var(--source);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    max-width: 960px;
+    margin: 0 0 14px;
+    font-size: clamp(30px, 4vw, 54px);
+    line-height: 1.02;
+    letter-spacing: 0;
+  }
+
+  .lead { max-width: 960px; margin: 0; color: var(--muted); font-size: 17px; }
+
+  .nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 22px 0 18px; }
+  .nav a {
+    display: inline-flex; align-items: center; min-height: 34px;
+    padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--paper); color: var(--muted);
+    font-family: var(--mono); font-size: 12px; text-decoration: none;
+  }
+  .nav a:hover { border-color: var(--line-strong); color: var(--ink); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    min-height: 28px; padding: 4px 9px;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--paper); color: var(--muted);
+    font-family: var(--mono); font-size: 11px; white-space: nowrap;
+  }
+  .chip::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--dot, var(--line-strong)); }
+  .chip.source { --dot: var(--source); }
+  .chip.process { --dot: var(--process); }
+  .chip.postgres { --dot: var(--postgres); }
+  .chip.redis { --dot: var(--redis); }
+  .chip.consumer { --dot: var(--consumer); }
+  .chip.control { --dot: var(--control); }
+
+  .diagram-wrap {
+    overflow-x: auto; padding-bottom: 8px;
+    background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  .diagram-wrap svg { display: block; width: 100%; max-width: 1500px; height: auto; }
+
+  .section {
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-top: 22px;
+    padding: 26px;
+  }
+  .section h2 { margin: 0 0 8px; font-size: 24px; line-height: 1.15; }
+  .section-intro { max-width: 980px; margin: 0 0 18px; color: var(--muted); }
+
+  .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+  .panel {
+    min-width: 0; padding: 18px; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--paper); overflow-wrap: anywhere;
+  }
+  .panel.postgres { border-color: rgba(193, 122, 35, 0.45); }
+  .panel.redis { border-color: rgba(182, 71, 86, 0.38); }
+  .panel h3 { margin: 0 0 4px; font-size: 19px; }
+  .panel .sub { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td {
+    text-align: left; vertical-align: top;
+    padding: 8px 10px; border-bottom: 1px solid var(--line);
+  }
+  th {
+    color: var(--muted); font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  td code, th code { font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--paper-soft); }
+
+  code {
+    padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--paper-soft); color: var(--ink);
+    font-family: var(--mono); font-size: 0.9em; overflow-wrap: anywhere;
+  }
+
+  .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 999px;
+    font-family: var(--mono); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .tag.beat { background: var(--control-soft); color: var(--control); border: 1px solid var(--line); }
+  .tag.user { background: var(--consumer-soft); color: var(--consumer); border: 1px solid rgba(51,136,94,0.3); }
+  .tag.live { background: var(--process-soft); color: var(--process); border: 1px solid rgba(89,99,177,0.3); }
+
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+
+  .callout {
+    margin-top: 18px; padding: 16px 18px;
+    border: 1px solid var(--line); border-left: 4px solid var(--process);
+    border-radius: var(--radius); background: var(--paper-soft); color: var(--muted);
+  }
+  .callout strong { color: var(--ink); }
+  .callout.postgres { border-left-color: var(--postgres); }
+  .callout.redis { border-left-color: var(--redis); }
+
+  .footer { margin: 26px 0 6px; color: var(--muted); font-family: var(--mono); font-size: 12px; text-align: center; }
+
+  @media (max-width: 1100px) {
+    .pair, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .shell { padding: 14px; }
+    .hero, .section { padding: 18px; }
+  }
+  @media print {
+    body { background: white; }
+    .shell { max-width: none; padding: 0; }
+    .nav { display: none; }
+    .hero, .section { box-shadow: none; break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="hero">
+    <p class="eyebrow">Data pipeline · process map · ZCode</p>
+    <h1>How data flows into Postgres and Redis &mdash; and who reads it back out.</h1>
+    <p class="lead">
+      Two clocks drive StockScreenClaude. <strong>Scheduled and bootstrap processes</strong> fetch from external
+      providers and write durable rows to Postgres plus hot payloads to Redis. <strong>User-facing processes</strong>
+      then read from those stores: scans stay cache-only, APIs return persisted data, and MCP / static / assistant
+      surfaces reuse the same published artifacts. The diagram below traces that flow left to right.
+    </p>
+    <nav class="nav" aria-label="Sections">
+      <a href="#diagram">01 flow diagram</a>
+      <a href="#writers">02 writers</a>
+      <a href="#readers">03 readers</a>
+      <a href="#schedule">04 schedule &amp; workers</a>
+    </nav>
+    <div class="legend" aria-label="Legend">
+      <span class="chip source">external source</span>
+      <span class="chip process">update / worker process</span>
+      <span class="chip postgres">Postgres write or read</span>
+      <span class="chip redis">Redis write or read</span>
+      <span class="chip consumer">read process</span>
+      <span class="chip control">control plane / scheduler</span>
+    </div>
+  </header>
+
+  <!-- ============================================================ -->
+  <!-- 01. VISUAL FLOW DIAGRAM                                       -->
+  <!-- ============================================================ -->
+  <section class="section" id="diagram">
+    <h2>01. End-to-end flow diagram</h2>
+    <p class="section-intro">
+      External data sources (left) are pulled by Celery worker processes (center-left) which write durable truth to
+      Postgres and hot state to Redis (center). Read processes (center-right) pull from those stores and feed the
+      external surfaces (right). The dashed line marks the cache-miss fallback path.
+    </p>
+    <div class="diagram-wrap" role="img" aria-label="Data pipeline flow from external sources through Celery workers into Postgres and Redis and out to read processes and surfaces">
+      <svg viewBox="0 0 1500 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Data pipeline flow diagram">
+        <defs>
+          <marker id="aSrc" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L9,4 L0,8 Z" fill="#2d7f9f"/>
+          </marker>
+          <marker id="aPg" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L9,4 L0,8 Z" fill="#c17a23"/>
+          </marker>
+          <marker id="aRd" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L9,4 L0,8 Z" fill="#b64756"/>
+          </marker>
+          <marker id="aCons" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L9,4 L0,8 Z" fill="#33885e"/>
+          </marker>
+          <marker id="aCtl" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L9,4 L0,8 Z" fill="#6d7680"/>
+          </marker>
+        </defs>
+
+        <!-- ===== Column headers ===== -->
+        <g font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#667789" text-anchor="middle">
+          <rect x="24"  y="14" width="230" height="30" rx="6" fill="#eef3f8" stroke="#cbd7e3"/>
+          <text x="139"  y="33">EXTERNAL DATA SOURCES</text>
+          <rect x="300" y="14" width="250" height="30" rx="6" fill="#eceefe" stroke="#cbd7e3"/>
+          <text x="425"  y="33">UPDATE / INGESTION (CELERY)</text>
+          <rect x="600" y="14" width="280" height="30" rx="6" fill="#fff0dc" stroke="#cbd7e3"/>
+          <text x="740"  y="33">STORAGE</text>
+          <rect x="940" y="14" width="250" height="30" rx="6" fill="#e3f5ea" stroke="#cbd7e3"/>
+          <text x="1065" y="33">READ PROCESSES</text>
+          <rect x="1240" y="14" width="236" height="30" rx="6" fill="#ffffff" stroke="#cbd7e3"/>
+          <text x="1358" y="33">SURFACES</text>
+        </g>
+
+        <!-- ===== Col 1: External sources ===== -->
+        <g font-family="Inter, sans-serif" text-anchor="middle">
+          <rect x="24" y="64"  width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="82"  font-size="12" font-weight="600" fill="#18262f">yfinance</text>
+          <text x="139" y="98"  font-size="10" fill="#667789">OHLCV + profile / statements</text>
+
+          <rect x="24" y="114" width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="132" font-size="12" font-weight="600" fill="#18262f">Finviz</text>
+          <text x="139" y="148" font-size="10" fill="#667789">US universe + snapshot fundamentals</text>
+
+          <rect x="24" y="164" width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="182" font-size="12" font-weight="600" fill="#18262f">Alpha Vantage</text>
+          <text x="139" y="198" font-size="10" fill="#667789">fundamentals fallback (25 req/day)</text>
+
+          <rect x="24" y="214" width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="232" font-size="12" font-weight="600" fill="#18262f">SEC EDGAR</text>
+          <text x="139" y="248" font-size="10" fill="#667789">institutional ownership (10 req/s)</text>
+
+          <rect x="24" y="264" width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="282" font-size="12" font-weight="600" fill="#18262f">Official exchange listings</text>
+          <text x="139" y="298" font-size="10" fill="#667789">HKEX · NSE/BSE · KRX · SGX · ASX · TMX</text>
+
+          <rect x="24" y="314" width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="332" font-size="12" font-weight="600" fill="#18262f">GitHub release bundles</text>
+          <text x="139" y="348" font-size="10" fill="#667789">daily-price · weekly reference</text>
+
+          <rect x="24" y="364" width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="382" font-size="12" font-weight="600" fill="#18262f">Content sources</text>
+          <text x="139" y="398" font-size="10" fill="#667789">RSS · X/Twitter · Benzinga · Reddit</text>
+
+          <rect x="24" y="414" width="230" height="42" rx="7" fill="#e2f3f8" stroke="#2d7f9f" stroke-opacity="0.4"/>
+          <text x="139" y="432" font-size="12" font-weight="600" fill="#18262f">Wikipedia</text>
+          <text x="139" y="448" font-size="10" fill="#667789">S&amp;P 500 membership scrape</text>
+        </g>
+
+        <!-- ===== Col 2: Update / ingestion processes ===== -->
+        <g font-family="Inter, sans-serif" text-anchor="middle">
+          <!-- Beat scheduler (control) -->
+          <rect x="300" y="64" width="250" height="42" rx="7" fill="#edf0f3" stroke="#6d7680" stroke-opacity="0.5"/>
+          <text x="425" y="82"  font-size="12" font-weight="700" fill="#6d7680">Celery Beat</text>
+          <text x="425" y="98"  font-size="10" fill="#667789">schedules daily-market-pipeline-{market}</text>
+
+          <rect x="300" y="120" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="138" font-size="12" font-weight="600" fill="#18262f">smart_refresh_cache</text>
+          <text x="425" y="154" font-size="10" fill="#667789">BulkDataFetcher → prices · pipeline</text>
+
+          <rect x="300" y="170" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="188" font-size="12" font-weight="600" fill="#18262f">refresh_*_universe</text>
+          <text x="425" y="204" font-size="10" fill="#667789">stock_universe ingest · pipeline</text>
+
+          <rect x="300" y="220" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="238" font-size="12" font-weight="600" fill="#18262f">refresh_all_fundamentals</text>
+          <text x="425" y="254" font-size="10" fill="#667789">fundamentals hydrate · pipeline</text>
+
+          <rect x="300" y="270" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="288" font-size="12" font-weight="600" fill="#18262f">calculate_daily_breadth</text>
+          <text x="425" y="304" font-size="10" fill="#667789">+ market_exposure · pipeline</text>
+
+          <rect x="300" y="320" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="338" font-size="12" font-weight="600" fill="#18262f">calculate_group_rankings</text>
+          <text x="425" y="354" font-size="10" fill="#667789">IBD 197 groups · pipeline</text>
+
+          <rect x="300" y="370" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="388" font-size="12" font-weight="600" fill="#18262f">build_daily_snapshot</text>
+          <text x="425" y="404" font-size="10" fill="#667789">feature store + pointer swap · pipeline</text>
+
+          <rect x="300" y="420" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="438" font-size="12" font-weight="600" fill="#18262f">run_bulk_scan / finalize</text>
+          <text x="425" y="454" font-size="10" fill="#667789">user scans (cache-only) · user</text>
+
+          <rect x="300" y="470" width="250" height="42" rx="7" fill="#eceefe" stroke="#5963b1" stroke-opacity="0.4"/>
+          <text x="425" y="488" font-size="12" font-weight="600" fill="#18262f">theme pipeline</text>
+          <text x="425" y="504" font-size="10" fill="#667789">poll→extract→metrics→lifecycle · 15m</text>
+        </g>
+
+        <!-- ===== Col 3: Storage ===== -->
+        <g font-family="Inter, sans-serif">
+          <!-- Postgres -->
+          <rect x="600" y="64" width="280" height="236" rx="10" fill="#fff0dc" stroke="#c17a23" stroke-opacity="0.5"/>
+          <text x="740" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#c17a23">POSTGRES 16</text>
+          <text x="740" y="101" text-anchor="middle" font-size="10" fill="#667789">durable source of truth</text>
+          <g font-size="11" fill="#18262f">
+            <text x="614" y="124">stock_universe · stock_prices</text>
+            <text x="614" y="142">stock_fundamentals</text>
+            <text x="614" y="160">market_breadth · market_exposure</text>
+            <text x="614" y="178">ibd_group_ranks · ibd_industry_groups</text>
+            <text x="614" y="196">feature_runs · stock_feature_daily</text>
+            <text x="614" y="214">feature_run_pointers (latest_published)</text>
+            <text x="614" y="232">scans · scan_results</text>
+            <text x="614" y="250">content_items · theme_clusters · theme_metrics</text>
+            <text x="614" y="268">user_watchlists · user_themes · presets</text>
+            <text x="614" y="286">app_settings (runtime.activity.*)</text>
+          </g>
+
+          <!-- Redis -->
+          <rect x="600" y="316" width="280" height="224" rx="10" fill="#fde9ed" stroke="#b64756" stroke-opacity="0.45"/>
+          <text x="740" y="338" text-anchor="middle" font-size="13" font-weight="700" fill="#b64756">REDIS 7</text>
+          <text x="740" y="353" text-anchor="middle" font-size="10" fill="#667789">hot cache + control plane</text>
+          <g font-size="11" fill="#18262f">
+            <text x="614" y="376">DB0 · Celery broker (task queue)</text>
+            <text x="614" y="394">DB1 · Celery results (24h TTL)</text>
+            <text x="614" y="412">DB2 app cache:</text>
+            <text x="614" y="430"><tspan font-weight="600">price:{m}:{s}:recent|2y</tspan>  (7d)</text>
+            <text x="614" y="448"><tspan font-weight="600">fundamentals:{m}:{s}</tspan>  (7d)</text>
+            <text x="614" y="466"><tspan font-weight="600">benchmark:{m}:{s}:2y|1y</tspan>  (24h)</text>
+            <text x="614" y="484"><tspan font-weight="600">data_fetch_job_lock:{m}</tspan>  (~2h)</text>
+            <text x="614" y="502">cache:warmup:* · symbol_failures (30d)</text>
+            <text x="614" y="520">fx_rates (24h) · group_ranks (1h)</text>
+          </g>
+        </g>
+
+        <!-- ===== Col 4: Read processes ===== -->
+        <g font-family="Inter, sans-serif" text-anchor="middle">
+          <rect x="940" y="64"  width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="82"  font-size="12" font-weight="600" fill="#18262f">FastAPI /api/v1</text>
+          <text x="1065" y="98"  font-size="10" fill="#667789">stocks·scans·breadth·groups·themes</text>
+
+          <rect x="940" y="114" width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="132" font-size="12" font-weight="600" fill="#18262f">DataPreparationLayer</text>
+          <text x="1065" y="148" font-size="10" fill="#667789">scan hot path (Redis → PG fallback)</text>
+
+          <rect x="940" y="164" width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="182" font-size="12" font-weight="600" fill="#18262f">run_bulk_scan worker</text>
+          <text x="1065" y="198" font-size="10" fill="#667789">cache-only · freshness-gated</text>
+
+          <rect x="940" y="214" width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="232" font-size="12" font-weight="600" fill="#18262f">feature_store query</text>
+          <text x="1065" y="248" font-size="10" fill="#667789">latest_published_market:{m}</text>
+
+          <rect x="940" y="264" width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="282" font-size="12" font-weight="600" fill="#18262f">MCP market_copilot</text>
+          <text x="1065" y="298" font-size="10" fill="#667789">cited Postgres facts</text>
+
+          <rect x="940" y="314" width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="332" font-size="12" font-weight="600" fill="#18262f">StaticSiteExportService</text>
+          <text x="1065" y="348" font-size="10" fill="#667789">export_static_site_data</text>
+
+          <rect x="940" y="364" width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="382" font-size="12" font-weight="600" fill="#18262f">CacheManager / operations</text>
+          <text x="1065" y="398" font-size="10" fill="#667789">cache stats · telemetry · locks</text>
+
+          <rect x="940" y="414" width="250" height="42" rx="7" fill="#e3f5ea" stroke="#33885e" stroke-opacity="0.4"/>
+          <text x="1065" y="432" font-size="12" font-weight="600" fill="#18262f">Celery workers</text>
+          <text x="1065" y="448" font-size="10" fill="#667789">consume DB0 broker</text>
+        </g>
+
+        <!-- ===== Col 5: Surfaces ===== -->
+        <g font-family="Inter, sans-serif" text-anchor="middle">
+          <rect x="1240" y="64"  width="236" height="42" rx="7" fill="#ffffff" stroke="#94a8bc"/>
+          <text x="1358" y="82"  font-size="12" font-weight="600" fill="#18262f">React + TanStack Query</text>
+          <text x="1358" y="98"  font-size="10" fill="#667789">Scan·Stocks·Breadth·Groups·Themes</text>
+
+          <rect x="1240" y="114" width="236" height="42" rx="7" fill="#ffffff" stroke="#94a8bc"/>
+          <text x="1358" y="132" font-size="12" font-weight="600" fill="#18262f">nginx /api/*</text>
+          <text x="1358" y="148" font-size="10" fill="#667789">reverse proxy → FastAPI</text>
+
+          <rect x="1240" y="164" width="236" height="42" rx="7" fill="#ffffff" stroke="#94a8bc"/>
+          <text x="1358" y="182" font-size="12" font-weight="600" fill="#18262f">nginx /static-data/*</text>
+          <text x="1358" y="198" font-size="10" fill="#667789">served JSON bundles</text>
+
+          <rect x="1240" y="214" width="236" height="42" rx="7" fill="#ffffff" stroke="#94a8bc"/>
+          <text x="1358" y="232" font-size="12" font-weight="600" fill="#18262f">MCP /mcp tools</text>
+          <text x="1358" y="248" font-size="10" fill="#667789">assistant market copilot</text>
+
+          <rect x="1240" y="264" width="236" height="42" rx="7" fill="#ffffff" stroke="#94a8bc"/>
+          <text x="1358" y="282" font-size="12" font-weight="600" fill="#18262f">Operations UI</text>
+          <text x="1358" y="298" font-size="10" fill="#667789">tasks · cache · telemetry pages</text>
+
+          <rect x="1240" y="314" width="236" height="42" rx="7" fill="#ffffff" stroke="#94a8bc"/>
+          <text x="1358" y="332" font-size="12" font-weight="600" fill="#18262f">Assistant chatbot</text>
+          <text x="1358" y="348" font-size="10" fill="#667789">conversations + tool calls</text>
+
+          <rect x="1240" y="364" width="236" height="42" rx="7" fill="#ffffff" stroke="#94a8bc"/>
+          <text x="1358" y="382" font-size="12" font-weight="600" fill="#18262f">db-backup (pg_dump)</text>
+          <text x="1358" y="398" font-size="10" fill="#667789">daily → ./data/backups</text>
+        </g>
+
+        <!-- ===== Arrows: sources → processes ===== -->
+        <g fill="none" stroke="#2d7f9f" stroke-width="1.8">
+          <path d="M254 85  L296 85"  marker-end="url(#aSrc)"/>
+          <path d="M254 285 L296 285" marker-end="url(#aSrc)"/>
+          <path d="M254 385 L296 385" marker-end="url(#aSrc)"/>
+        </g>
+
+        <!-- ===== Arrows: processes → storage ===== -->
+        <g fill="none" stroke-width="1.8">
+          <path d="M550 170 L596 170" stroke="#c17a23" marker-end="url(#aPg)"/>
+          <path d="M550 400 L596 400" stroke="#b64756" marker-end="url(#aRd)"/>
+        </g>
+        <g font-family="Inter, sans-serif" font-size="10" font-weight="600" text-anchor="middle">
+          <text x="573" y="161" fill="#c17a23">writes</text>
+          <text x="573" y="391" fill="#b64756">warms</text>
+        </g>
+
+        <!-- ===== Arrows: storage → read processes ===== -->
+        <g fill="none" stroke-width="1.8">
+          <path d="M880 170 L936 170" stroke="#c17a23" marker-end="url(#aPg)"/>
+          <path d="M880 400 L936 400" stroke="#b64756" marker-end="url(#aRd)"/>
+        </g>
+        <g font-family="Inter, sans-serif" font-size="10" font-weight="600" text-anchor="middle">
+          <text x="908" y="161" fill="#c17a23">reads</text>
+          <text x="908" y="391" fill="#b64756">reads</text>
+        </g>
+
+        <!-- ===== Dashed: cache-miss fallback (reader → Postgres) ===== -->
+        <g fill="none" stroke="#6d7680" stroke-width="1.6" stroke-dasharray="5 4">
+          <path d="M940 135 C 916 135, 906 200, 884 200" marker-end="url(#aCtl)"/>
+        </g>
+        <text x="912" y="128" font-family="Inter, sans-serif" font-size="9.5" font-weight="600" fill="#6d7680" text-anchor="middle">cache miss → PG</text>
+
+        <!-- ===== Arrows: read processes → surfaces ===== -->
+        <g fill="none" stroke="#33885e" stroke-width="1.8">
+          <path d="M1190 135 L1236 135" marker-end="url(#aCons)"/>
+          <path d="M1190 285 L1236 285" marker-end="url(#aCons)"/>
+        </g>
+        <g font-family="Inter, sans-serif" font-size="10" font-weight="600" text-anchor="middle">
+          <text x="1213" y="126" fill="#33885e">serves</text>
+        </g>
+
+        <!-- ===== Dashed: Beat dispatch guide (control plane) ===== -->
+        <g fill="none" stroke="#6d7680" stroke-width="1.4" stroke-dasharray="4 4">
+          <path d="M296 110 L296 506" marker-end="url(#aCtl)"/>
+        </g>
+        <text transform="rotate(-90 288 308)" x="288" y="308"
+              font-family="Inter, sans-serif" font-size="9.5" font-weight="600"
+              fill="#6d7680" text-anchor="middle">crontab dispatch</text>
+
+        <!-- ===== Footnote band ===== -->
+        <g font-family="Inter, sans-serif" font-size="11" fill="#667789">
+          <rect x="24" y="560" width="1452" height="92" rx="8" fill="#ffffff" stroke="#cbd7e3"/>
+          <text x="40" y="584" font-weight="700" fill="#18262f">Concurrency &amp; freshness</text>
+          <text x="40" y="606"><tspan font-weight="600" fill="#b64756">@serialized_data_fetch</tspan> takes Redis lock <tspan font-family="SFMono-Regular, monospace" fill="#18262f">data_fetch_job_lock:{market}</tspan> (~2h) so external calls are serialized per market; different markets run in parallel on separate queues.</text>
+          <text x="40" y="624"><tspan font-weight="600" fill="#33885e">Manual scans are cache-only.</tspan> <tspan font-family="SFMono-Regular, monospace" fill="#18262f">run_bulk_scan</tspan> rejects with <tspan font-family="SFMono-Regular, monospace" fill="#18262f">409 market_data_stale</tspan> when cached prices have not caught up to the last completed trading day — it never hits providers mid-request.</text>
+          <text x="40" y="642">Feature Store publish is an atomic pointer swap: <tspan font-family="SFMono-Regular, monospace" fill="#18262f">feature_run_pointers.key = latest_published_market:{MARKET}</tspan> → run_id (RUNNING → COMPLETED → PUBLISHED).</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- 02. WRITERS                                                   -->
+  <!-- ============================================================ -->
+  <section class="section" id="writers">
+    <h2>02. Processes that put data in</h2>
+    <p class="section-intro">
+      These Celery tasks and services are the producers. Each row names the process, what it writes, the exact
+      tables or Redis keys it touches, and what triggers it.
+    </p>
+
+    <div class="pair">
+      <article class="panel postgres">
+        <h3>Writers &rarr; Postgres</h3>
+        <p class="sub">Durable source of truth. Survives restarts and powers the UI.</p>
+        <table>
+          <thead>
+            <tr><th>Process / task</th><th>Writes</th><th>Tables</th><th>Trigger</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>smart_refresh_cache</code> / <code>BulkDataFetcher</code></td>
+              <td>OHLCV prices</td>
+              <td><code>stock_prices</code></td>
+              <td><span class="tag beat">beat</span> daily close</td>
+            </tr>
+            <tr>
+              <td><code>refresh_stock_universe</code> / <code>refresh_official_market_universe</code></td>
+              <td>universe + memberships + status events</td>
+              <td><code>stock_universe</code>, <code>stock_universe_index_membership</code>, <code>stock_universe_status_events</code>, <code>stock_universe_reconciliation_runs</code></td>
+              <td><span class="tag beat">beat</span> weekly / bootstrap</td>
+            </tr>
+            <tr>
+              <td><code>refresh_all_fundamentals</code> / <code>_hybrid</code> / <code>refresh_symbol_fundamentals</code></td>
+              <td>fundamentals</td>
+              <td><code>stock_fundamentals</code></td>
+              <td><span class="tag beat">beat</span> weekly</td>
+            </tr>
+            <tr>
+              <td><code>calculate_daily_breadth_with_gapfill</code></td>
+              <td>market breadth</td>
+              <td><code>market_breadth</code></td>
+              <td><span class="tag beat">beat</span> daily</td>
+            </tr>
+            <tr>
+              <td><code>calculate_market_exposure</code></td>
+              <td>market exposure</td>
+              <td><code>market_exposure</code></td>
+              <td><span class="tag beat">beat</span> daily</td>
+            </tr>
+            <tr>
+              <td><code>calculate_daily_group_rankings_with_gapfill</code></td>
+              <td>IBD group ranks</td>
+              <td><code>ibd_group_ranks</code> (+ <code>ibd_industry_groups</code>)</td>
+              <td><span class="tag beat">beat</span> daily</td>
+            </tr>
+            <tr>
+              <td><code>sync_ibd_classification</code> / <code>load_tracked_ibd_industry_groups</code></td>
+              <td>industry taxonomy</td>
+              <td><code>ibd_industry_groups</code>, <code>stock_industry</code></td>
+              <td><span class="tag beat">beat</span> weekly</td>
+            </tr>
+            <tr>
+              <td><code>build_daily_snapshot</code></td>
+              <td>feature store + pointer</td>
+              <td><code>feature_runs</code>, <code>stock_feature_daily</code>, <code>feature_run_pointers</code></td>
+              <td><span class="tag beat">beat</span> daily / bootstrap</td>
+            </tr>
+            <tr>
+              <td><code>run_bulk_scan</code> / <code>finalize_scan_artifacts</code></td>
+              <td>scan results</td>
+              <td><code>scans</code>, <code>scan_results</code>, <code>ibd_group_peer_cache</code></td>
+              <td><span class="tag user">user</span> scan request</td>
+            </tr>
+            <tr>
+              <td>theme pipeline (<code>poll_due_sources</code>→<code>extract_themes</code>→<code>calculate_theme_metrics</code>→<code>promote_candidate_themes</code>→<code>apply_lifecycle_policies</code>)</td>
+              <td>content + themes</td>
+              <td><code>content_items</code>, <code>content_sources</code>, <code>theme_clusters</code>, <code>theme_metrics</code>, <code>theme_mentions</code>, <code>theme_embeddings</code>, <code>theme_relationships</code>, <code>theme_alerts</code></td>
+              <td><span class="tag beat">beat</span> 15m / hourly</td>
+            </tr>
+            <tr>
+              <td><code>MarketActivityService</code></td>
+              <td>runtime activity</td>
+              <td><code>app_settings</code> rows <code>runtime.activity.market.{M}</code></td>
+              <td><span class="tag live">live</span> workers</td>
+            </tr>
+            <tr>
+              <td>API user endpoints</td>
+              <td>user data</td>
+              <td><code>user_watchlists</code>, <code>watchlist_items</code>, <code>user_themes</code>, <code>filter_presets</code>, <code>chatbot_conversations</code>, <code>chatbot_messages</code>, <code>ticker_validation_log</code>, <code>fx_rates</code></td>
+              <td><span class="tag user">user</span> actions</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="callout postgres">
+          <strong>Publish is atomic.</strong> <code>build_daily_snapshot</code> swaps
+          <code>feature_run_pointers.key = latest_published_market:{MARKET}</code> → <code>run_id</code>, so readers
+          never see a half-written snapshot.
+        </div>
+      </article>
+
+      <article class="panel redis">
+        <h3>Writers &rarr; Redis</h3>
+        <p class="sub">Hot cache, Celery transport, and the coordination plane. DB2 unless noted.</p>
+        <table>
+          <thead>
+            <tr><th>Writer</th><th>Key pattern</th><th>TTL</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>PriceCacheService</code></td><td><code>price:{M}:{S}:recent|2y</code> (legacy <code>price:{S}</code>)</td><td>7d</td></tr>
+            <tr><td><code>PriceCacheService</code> failure tracker</td><td><code>cache:symbol_failures:{S}</code></td><td>30d</td></tr>
+            <tr><td><code>FundamentalsCacheService</code></td><td><code>fundamentals:{M}:{S}</code></td><td>7d</td></tr>
+            <tr><td><code>BenchmarkCacheService</code></td><td><code>benchmark:{M}:{S}:2y|1y</code></td><td>24h</td></tr>
+            <tr><td><code>DataFetchLock</code> (<code>@serialized_data_fetch</code>)</td><td><code>data_fetch_job_lock:{market}</code></td><td>~2h (Lua extend)</td></tr>
+            <tr><td><code>MarketActivityService</code></td><td><code>runtime.activity.market.{M}</code></td><td>persistent</td></tr>
+            <tr><td><code>BootstrapRunManifest</code></td><td><code>runtime.activity.bootstrap_run</code></td><td>persistent</td></tr>
+            <tr><td><code>MarketRefreshStateService</code></td><td><code>market.refresh_state.{market}</code></td><td>—</td></tr>
+            <tr><td><code>PriceCacheWarmup</code></td><td><code>cache:warmup:metadata</code> / <code>cache:warmup:heartbeat:{market}</code></td><td>7d / 1h</td></tr>
+            <tr><td><code>FXService</code></td><td>fx rate keys</td><td>24h</td></tr>
+            <tr><td><code>group_rankings_cache</code></td><td>group-rankings keys</td><td>1h (epoch-bumped)</td></tr>
+            <tr><td><code>MarketGroupRankingService</code></td><td>RRG history</td><td>7d</td></tr>
+            <tr><td><code>DailySnapshotService</code></td><td>daily snapshot</td><td>10min</td></tr>
+            <tr><td><code>provider_circuit_breaker</code></td><td>circuit-breaker state</td><td>ttl</td></tr>
+            <tr><td>Celery broker</td><td>DB0 task messages</td><td>—</td></tr>
+            <tr><td>Celery results</td><td>DB1 task results</td><td>24h</td></tr>
+          </tbody>
+        </table>
+        <div class="callout redis">
+          <strong>One container, three databases.</strong> DB0 = Celery broker, DB1 = Celery results (24h),
+          DB2 = application cache + control plane. Keys are built centrally in
+          <code>market_cache_policy.key(...)</code> as <code>{namespace}:{MARKET}:{SYMBOL}:{parts}</code>.
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- 03. READERS                                                   -->
+  <!-- ============================================================ -->
+  <section class="section" id="readers">
+    <h2>03. Processes that get data out</h2>
+    <p class="section-intro">
+      These are the consumers. Most depend on the stores being populated first; several also write their own derived
+      rows, but their inputs come from Postgres and Redis.
+    </p>
+
+    <div class="pair">
+      <article class="panel postgres">
+        <h3>Readers &larr; Postgres</h3>
+        <p class="sub">Returns persisted truth to APIs, scans, agents, and exports.</p>
+        <table>
+          <thead><tr><th>Reader</th><th>Reads</th></tr></thead>
+          <tbody>
+            <tr><td>FastAPI <code>/api/v1</code> routes</td><td><code>scans</code>, <code>scan_results</code>, stock info/fundamentals/technicals/chart-data/peers/history, <code>market_breadth</code>, <code>ibd_group_ranks</code>, themes, user-themes, watchlists, universe, features, filter presets, ticker validation</td></tr>
+            <tr><td><code>feature_store</code> query (scan shortcut)</td><td><code>feature_run_pointers</code> (<code>latest_published_market:{M}</code>) → <code>stock_feature_daily</code> for that <code>run_id</code></td></tr>
+            <tr><td><code>run_bulk_scan</code> / <code>CreateScanUseCase</code></td><td><code>feature_runs</code>, <code>stock_feature_daily</code> (compiled criteria path); then writes <code>scans</code>/<code>scan_results</code></td></tr>
+            <tr><td><code>PriceCacheService._get_from_database</code></td><td><code>StockPrice</code> — cache-miss fallback, then repopulates Redis</td></tr>
+            <tr><td><code>BenchmarkCacheService</code> / <code>FundamentalsCacheService</code></td><td>DB fallback on Redis miss</td></tr>
+            <tr><td><code>operations_job_service</code></td><td><code>app_settings</code> rows matching <code>runtime.activity.market.%</code> for the operations UI</td></tr>
+            <tr><td>MCP <code>market_copilot</code></td><td>cited feature, breadth, group, theme, and watchlist facts</td></tr>
+            <tr><td><code>StaticSiteExportService</code></td><td>published runs + market artifacts → JSON bundles</td></tr>
+            <tr><td><code>db-backup</code> container</td><td><code>pg_dump</code> of all tables, daily into <code>./data/backups</code></td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="panel redis">
+        <h3>Readers &larr; Redis</h3>
+        <p class="sub">Hot payloads, coordination, and live operational gauges.</p>
+        <table>
+          <thead><tr><th>Reader</th><th>Reads</th></tr></thead>
+          <tbody>
+            <tr><td><code>DataPreparationLayer.prepare_data</code> (scan hot path)</td><td>price / fundamentals / benchmark cache (Redis → Postgres fallback on miss; provider fetch only on total miss)</td></tr>
+            <tr><td><code>run_bulk_scan</code> worker</td><td>cache-only price / fundamentals / benchmark; market workload locks</td></tr>
+            <tr><td><code>DataFetchLock</code> / <code>@serialized_data_fetch</code> / <code>@serialized_market_workload</code></td><td><code>data_fetch_job_lock:{market}</code> before running</td></tr>
+            <tr><td><code>MarketActivityService</code> / <code>MarketRefreshStateService</code></td><td>runtime activity + refresh-state keys</td></tr>
+            <tr><td><code>CacheManager.get_cache_stats</code> / <code>cache</code> API</td><td>keyspace scans of <code>price:*</code>, <code>fundamentals:*</code>, <code>benchmark:*</code></td></tr>
+            <tr><td>Celery workers</td><td>DB0 broker (consume tasks), DB1 results (read/write status)</td></tr>
+            <tr><td>Rate limiter (<code>bootstrap.get_rate_limiter</code>)</td><td>Redis-backed distributed limiter (<code>yfinance:batch</code> etc.)</td></tr>
+            <tr><td>Operations / telemetry APIs</td><td>hot gauges, task/result status, queue inspection</td></tr>
+            <tr><td><code>provider_circuit_breaker</code></td><td>circuit-breaker state to trip/skip providers</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </div>
+
+    <div class="grid-3">
+      <article class="panel">
+        <h3>Live app pages</h3>
+        <p class="sub">FastAPI + React via TanStack Query.</p>
+        <ul style="margin:0;padding-left:18px;color:var(--muted);font-size:13px">
+          <li><strong>Scan:</strong> reads <code>scans</code>/<code>scan_results</code> or feature-store-backed pages.</li>
+          <li><strong>Stocks:</strong> cached price history + fundamentals, Postgres fallback.</li>
+          <li><strong>Breadth / Groups / Themes:</strong> read durable tables + UI snapshots.</li>
+        </ul>
+      </article>
+      <article class="panel">
+        <h3>On-demand computation</h3>
+        <p class="sub">Celery user-scan workers.</p>
+        <ul style="margin:0;padding-left:18px;color:var(--muted);font-size:13px">
+          <li><strong>Exact match:</strong> reads a published <code>feature_run</code>.</li>
+          <li><strong>Compile path:</strong> queries <code>stock_feature_daily</code> with compiled filters.</li>
+          <li><strong>Async path:</strong> cache-only price/fundamentals, writes <code>scan_results</code>.</li>
+        </ul>
+      </article>
+      <article class="panel">
+        <h3>Static &amp; agent surfaces</h3>
+        <p class="sub">Publish and inspect, no source-of-truth writes.</p>
+        <ul style="margin:0;padding-left:18px;color:var(--muted);font-size:13px">
+          <li><strong>Static export:</strong> published artifacts + cached chart data → JSON.</li>
+          <li><strong>MCP copilot:</strong> reads Postgres facts with citations.</li>
+          <li><strong>Assistant:</strong> persists conversations, calls market tools.</li>
+        </ul>
+      </article>
+    </div>
+
+    <div class="callout">
+      <strong>Mental model:</strong> scheduled / background processes pay the cost of slow provider calls and durable
+      writes. User-facing reads then stay fast &mdash; Postgres for truth, Redis for hot payloads and coordination,
+      static bundles for read-mostly pages.
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- 04. SCHEDULE & WORKERS                                        -->
+  <!-- ============================================================ -->
+  <section class="section" id="schedule">
+    <h2>04. Schedule &amp; worker topology</h2>
+    <p class="section-intro">
+      Celery Beat builds a dynamic per-market crontab when <code>cache_warmup_enabled</code>. Queue routing sends
+      external fetches to <code>data_fetch_*</code>, compute to <code>market_jobs_*</code>, and manual scans to
+      <code>user_scans_*</code>. Each market runs on its own worker, in parallel.
+    </p>
+
+    <div class="pair">
+      <article class="panel">
+        <h3>Beat schedule highlights</h3>
+        <p class="sub">All times in <code>CELERY_TIMEZONE</code>, per enabled market.</p>
+        <table>
+          <thead><tr><th>Entry</th><th>When</th><th>Queue</th></tr></thead>
+          <tbody>
+            <tr><td><code>daily-market-pipeline-{market}</code></td><td>Mon–Fri, market-local close</td><td><code>market_jobs_{m}</code></td></tr>
+            <tr><td><code>weekly-full-refresh-{market}</code></td><td>Sunday</td><td><code>data_fetch_{m}</code></td></tr>
+            <tr><td><code>weekly-fundamental-refresh-{market}</code></td><td>Saturday</td><td><code>data_fetch_{m}</code></td></tr>
+            <tr><td><code>weekly-universe-refresh-{market}</code></td><td>Sun 03:00</td><td><code>data_fetch_{m}</code></td></tr>
+            <tr><td><code>weekly-ibd-classification-sync-{market}</code></td><td>Sun 06:00</td><td><code>market_jobs_{m}</code></td></tr>
+            <tr><td><code>poll-content-sources</code></td><td>every 15 min</td><td><code>data_fetch_shared</code></td></tr>
+            <tr><td><code>periodic-theme-extraction</code></td><td>:10, :40</td><td><code>celery</code></td></tr>
+            <tr><td><code>periodic-theme-metrics</code></td><td>:20, :50</td><td><code>celery</code></td></tr>
+            <tr><td><code>daily-theme-candidate-promotion</code></td><td>04:30</td><td><code>celery</code></td></tr>
+            <tr><td><code>monthly-price-data-cleanup</code></td><td>1st, 01:00 (keep 5y)</td><td><code>celery</code></td></tr>
+            <tr><td><code>weekly-orphaned-scan-cleanup</code></td><td>Sun 01:45</td><td><code>celery</code></td></tr>
+            <tr><td><code>static-site-data-export</code></td><td>when <code>STATIC_EXPORT_ENABLED</code></td><td><code>celery</code></td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="panel">
+        <h3>Worker containers</h3>
+        <p class="sub">From <code>docker-compose.yml</code>; market workers are profile-gated.</p>
+        <table>
+          <thead><tr><th>Container</th><th>Queue</th><th>Concurrency</th></tr></thead>
+          <tbody>
+            <tr><td><code>celery-beat</code></td><td>scheduler</td><td>—</td></tr>
+            <tr><td><code>celery-general</code></td><td><code>celery</code></td><td>2</td></tr>
+            <tr><td><code>celery-datafetch</code></td><td><code>data_fetch_*</code></td><td>1 (global)</td></tr>
+            <tr><td><code>celery-marketjobs-{market}</code></td><td><code>market_jobs_{market}</code></td><td>1</td></tr>
+            <tr><td><code>celery-userscans[-{market}]</code></td><td><code>user_scans_*</code></td><td>—</td></tr>
+            <tr><td><code>db-backup</code> (profile <code>backup</code>)</td><td><code>pg_dump</code> daily</td><td>—</td></tr>
+          </tbody>
+        </table>
+        <div class="callout">
+          <strong>Queue families:</strong> <code>data_fetch_{shared,us,hk,in,jp,kr,tw,cn,de,ca,sg,my,au}</code> (external
+          API calls, serialized), <code>market_jobs_{…}</code> (compute), <code>user_scans_{…}</code> (manual scans),
+          <code>celery</code> (general). <code>celery_app.conf.task_routes</code> sets the defaults; Beat entries and
+          <code>apply_async</code> callers override with explicit market queues.
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <p class="footer">
+    Generated diagram: <code>docs/data-pipeline-zcode.html</code> &middot; companion to
+    <code>docs/data-pipeline.html</code> &middot; sources: <code>backend/app/celery_app.py</code>,
+    <code>tasks/</code>, <code>services/</code>, <code>docker-compose.yml</code>
+  </p>
+</div>
+</body>
+</html>

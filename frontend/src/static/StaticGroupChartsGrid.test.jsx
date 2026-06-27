@@ -46,6 +46,44 @@ describe('StaticGroupChartsGrid', () => {
     vi.restoreAllMocks();
   });
 
+  it('lays out static chart cards as two columns on desktop widths', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (path) => {
+      const sym = String(path).match(/([A-Z]+)\.json$/)?.[1] || 'NVDA';
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          symbol: sym,
+          stock_data: { symbol: sym, company_name: `${sym} Corp` },
+          bars: [{ date: '2026-01-02', open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 }],
+          generated_at: '2026-01-02T00:00:00Z',
+        }),
+      };
+    });
+
+    renderGrid({
+      symbols: ['NVDA', 'AAPL', 'MSFT', 'META'],
+      chartIndex: {
+        symbols: ['NVDA', 'AAPL', 'MSFT', 'META'].map((symbol) => ({
+          symbol,
+          path: `charts/${symbol}.json`,
+        })),
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('static-candlestick-chart')).toHaveLength(4);
+    });
+
+    const chartGrid = screen.getByTestId('static-group-charts-grid');
+    expect(chartGrid).toHaveStyle({
+      display: 'grid',
+    });
+    const generatedCss = document.head.textContent.replace(/\s/g, '');
+    expect(generatedCss).toContain('grid-template-columns:1fr');
+    expect(generatedCss).toContain('grid-template-columns:repeat(2,minmax(0,1fr))');
+  });
+
   it('shows a no-data message when a loaded chart payload has no bars array', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -113,9 +151,7 @@ describe('StaticGroupChartsGrid', () => {
     expect(findChart('AAPL').dataset.interactive).toBe('true');
 
     // Click the wrapper Box that holds the click-away handler → deselects.
-    const gridContainer = document.querySelector('.MuiGrid-container');
-    expect(gridContainer).toBeTruthy();
-    await user.click(gridContainer.parentElement);
+    await user.click(screen.getByTestId('static-group-charts-root'));
     screen.getAllByTestId('static-candlestick-chart').forEach((chart) => {
       expect(chart.dataset.interactive).toBe('false');
     });

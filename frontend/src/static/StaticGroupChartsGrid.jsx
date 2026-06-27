@@ -4,12 +4,12 @@ import {
   Box,
   Card,
   CircularProgress,
-  Grid,
   Typography,
 } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 
 import CandlestickChart from '../components/Charts/CandlestickChart';
+import GroupChartsLayout, { GroupChartCell } from '../components/Charts/GroupChartsLayout';
 import { getGroupRankColor } from '../utils/colorUtils';
 import { fetchStaticChartPayload, staticChartKeys } from './chartClient';
 
@@ -241,18 +241,18 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
   const truncated = normalizedSymbols.length > truncatedSymbols.length;
 
   return (
-    <Box onClick={() => setSelectedSymbol(null)}>
+    <Box data-testid="static-group-charts-root" onClick={() => setSelectedSymbol(null)}>
       {truncated && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
           Showing first {truncatedSymbols.length} of {normalizedSymbols.length} stocks.
         </Typography>
       )}
-      <Grid container spacing={2}>
+      <GroupChartsLayout data-testid="static-group-charts-grid" gap={2}>
         {truncatedSymbols.map((sym) => {
           const entry = entryBySymbol.get(sym);
           if (!entry) {
             return (
-              <Grid item xs={12} md={6} key={sym}>
+              <GroupChartCell key={sym}>
                 <Card variant="outlined">
                   <Box
                     sx={{
@@ -273,21 +273,21 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
                     </Typography>
                   </Box>
                 </Card>
-              </Grid>
+              </GroupChartCell>
             );
           }
           return (
-            <Grid item xs={12} md={6} key={sym}>
+            <GroupChartCell key={sym}>
               <StaticGroupChartCard
                 symbol={sym}
                 entry={entry}
                 isSelected={selectedSymbol === sym}
                 onSelect={setSelectedSymbol}
               />
-            </Grid>
+            </GroupChartCell>
           );
         })}
-      </Grid>
+      </GroupChartsLayout>
     </Box>
   );
 }

@@ -173,6 +173,126 @@ def test_get_group_history_uses_universe_lookup_for_top_symbol_name(monkeypatch)
         db_session.close()
 
 
+def test_get_group_history_uses_calendar_rank_change_offsets(monkeypatch):
+    service = _make_group_rank_service()
+    db_session = _make_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+    current_date = date.today()
+    captured_period_days: list[dict[str, int]] = []
+
+    try:
+        db_session.add(
+            IBDGroupRank(
+                market="US",
+                industry_group=group,
+                date=current_date,
+                rank=4,
+                avg_rs_rating=88.0,
+                median_rs_rating=87.0,
+                weighted_avg_rs_rating=89.0,
+                rs_std_dev=2.0,
+                num_stocks=5,
+                num_stocks_rs_above_80=3,
+                top_symbol="AAPL",
+                top_rs_rating=96.0,
+            )
+        )
+        db_session.commit()
+
+        expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
+
+        def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
+            captured_period_days.append(dict(period_days))
+            return {(group, "1w"): 6}
+
+        monkeypatch.setattr(service, "_get_historical_ranks_batch", fake_historical_batch)
+        monkeypatch.setattr(service, "_get_constituent_stocks", lambda *_args, **_kwargs: [])
+
+        result = service.get_group_history(db_session, group, days=30, market="US")
+
+        assert captured_period_days == [expected_period_days]
+        assert result["rank_change_1w"] == 2
+        assert result["rank_change_1m"] is None
+    finally:
+        db_session.rollback()
+        db_session.close()
+
+
+def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
+    service = _make_group_rank_service()
+    db_session = _make_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+    current_date = date(2026, 4, 18)
+    captured_period_days: list[dict[str, int]] = []
+
+    try:
+        _add_rank(db_session, group, current_date, 4)
+        db_session.commit()
+
+        expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
+
+        def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
+            captured_period_days.append(dict(period_days))
+            return {(group, "1w"): 6}
+
+        monkeypatch.setattr(service, "_get_historical_ranks_batch", fake_historical_batch)
+
+        rankings = service.get_current_rankings(
+            db_session,
+            limit=10,
+            calculation_date=current_date,
+            market="US",
+        )
+
+        assert captured_period_days == [expected_period_days]
+        assert rankings[0]["rank_change_1w"] == 2
+        assert rankings[0]["rank_change_1m"] is None
+    finally:
+        db_session.rollback()
+        db_session.close()
+
+
+def test_get_group_history_propagates_constituent_source_failures(monkeypatch):
+    service = IBDGroupRankService(
+        price_cache=Mock(),
+        benchmark_cache=Mock(),
+        group_constituent_source=Mock(),
+    )
+    service.group_constituent_source.get_constituent_items.side_effect = RuntimeError(
+        "source failed"
+    )
+    db_session = _make_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+    current_date = date.today()
+
+    try:
+        db_session.add(
+            IBDGroupRank(
+                market="US",
+                industry_group=group,
+                date=current_date,
+                rank=1,
+                avg_rs_rating=91.0,
+                num_stocks=1,
+                num_stocks_rs_above_80=1,
+                top_symbol="AAPL",
+                top_rs_rating=96.0,
+            )
+        )
+        db_session.commit()
+        monkeypatch.setattr(
+            service,
+            "_get_historical_ranks_batch",
+            lambda *_args, **_kwargs: {},
+        )
+
+        with pytest.raises(RuntimeError, match="source failed"):
+            service.get_group_history(db_session, group, days=30, market="US")
+    finally:
+        db_session.rollback()
+        db_session.close()
+
+
 def _price_frame() -> pd.DataFrame:
     dates = pd.date_range(end="2026-03-20", periods=260, freq="B")
     return pd.DataFrame(
