@@ -219,6 +219,14 @@ def _rrg_scope_has_data(payload: dict | None) -> bool:
     return bool((payload or {}).get("groups"))
 
 
+def _group_detail_response(detail: dict, *, market: str) -> GroupDetailResponse:
+    payload = dict(detail)
+    for key, value in market_scope_tag(market).items():
+        if payload.get(key) is None:
+            payload[key] = value
+    return GroupDetailResponse(**payload)
+
+
 @router.get("/rrg/scopes", response_model=RRGBundleResponse)
 async def get_rrg_scopes(
     tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
@@ -427,7 +435,7 @@ async def get_group_detail(
             detail=f"No data found for industry group '{group}'"
         )
 
-    return GroupDetailResponse(**detail, **market_scope_tag(normalized_market))
+    return _group_detail_response(detail, market=normalized_market)
 
 
 @router.post("/rankings/calculate", response_model=TaskResponse)

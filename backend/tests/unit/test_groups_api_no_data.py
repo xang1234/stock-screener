@@ -245,6 +245,58 @@ async def test_get_group_detail_supports_non_us_market_scope(monkeypatch, client
 
 
 @pytest.mark.asyncio
+async def test_get_group_detail_accepts_pre_scoped_us_payload(monkeypatch, client):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
+    class _FakeGroupRankService:
+        def get_group_history(self, db, group, days=180):  # noqa: ARG002
+            assert group == "Computer-Data Storage"
+            return {
+                "market_scope": "US",
+                "industry_group": "Computer-Data Storage",
+                "current_rank": 1,
+                "current_avg_rs": 96.9,
+                "current_median_rs": 100.0,
+                "current_weighted_avg_rs": 98.0,
+                "current_rs_std_dev": 7.6,
+                "num_stocks": 7,
+                "pct_rs_above_80": 85.7,
+                "top_symbol": "BLZE",
+                "top_rs_rating": 100.0,
+                "rank_change_1w": 0,
+                "rank_change_1m": 0,
+                "rank_change_3m": 19,
+                "rank_change_6m": 15,
+                "history": [
+                    {
+                        "date": "2026-06-26",
+                        "rank": 1,
+                        "avg_rs_rating": 96.9,
+                        "num_stocks": 7,
+                    }
+                ],
+                "stocks": [],
+            }
+
+    monkeypatch.setattr(
+        "app.api.v1.groups._get_group_rank_service",
+        lambda: _FakeGroupRankService(),
+    )
+
+    response = await client.get(
+        "/api/v1/groups/rankings/detail",
+        params={"market": "US", "group": "Computer-Data Storage"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["market_scope"] == "US"
+    assert payload["industry_group"] == "Computer-Data Storage"
+
+
+@pytest.mark.asyncio
 async def test_get_groups_bootstrap_supports_non_us_market_scope(monkeypatch, client):
     from app.services import server_auth
 
