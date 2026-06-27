@@ -72,6 +72,117 @@ def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: M
     )
 
 
+def _add_group_detail_rank(
+    session,
+    *,
+    group: str,
+    rank_date: date,
+    top_symbol: str,
+):
+    session.add(
+        IBDGroupRank(
+            market="US",
+            industry_group=group,
+            date=rank_date,
+            rank=1,
+            avg_rs_rating=91.0,
+            median_rs_rating=90.0,
+            weighted_avg_rs_rating=92.0,
+            rs_std_dev=2.0,
+            num_stocks=1,
+            num_stocks_rs_above_80=1,
+            top_symbol=top_symbol,
+            top_rs_rating=96.0,
+        )
+    )
+
+
+def _add_scan(
+    session,
+    *,
+    scan_id: str,
+    market: str = "US",
+    completed_at: datetime,
+    feature_run_id: int | None = None,
+):
+    session.add(
+        Scan(
+            scan_id=scan_id,
+            status="completed",
+            universe_market=market,
+            completed_at=completed_at,
+            feature_run_id=feature_run_id,
+        )
+    )
+
+
+def _add_feature_run(session, *, run_id: int, as_of_date: date):
+    session.add(
+        FeatureRun(
+            id=run_id,
+            as_of_date=as_of_date,
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime.combine(as_of_date, datetime.min.time()),
+            config_json={"universe": {"market": "US"}},
+        )
+    )
+
+
+def _add_feature_row(
+    session,
+    *,
+    run_id: int,
+    symbol: str,
+    as_of_date: date,
+    industry_group: str,
+    details: dict | None = None,
+):
+    row_details = {
+        "current_price": 123.45,
+        "rs_rating": 96.0,
+        "ibd_industry_group": industry_group,
+        **(details or {}),
+    }
+    session.add(
+        StockFeatureDaily(
+            run_id=run_id,
+            symbol=symbol,
+            as_of_date=as_of_date,
+            composite_score=88.0,
+            details_json=row_details,
+        )
+    )
+
+
+def _add_legacy_scan_result(
+    session,
+    *,
+    scan_id: str,
+    symbol: str,
+    industry_group: str,
+):
+    session.add(
+        ScanResult(
+            scan_id=scan_id,
+            symbol=symbol,
+            price=42.0,
+            rs_rating=96.0,
+            ibd_industry_group=industry_group,
+            price_sparkline_data=[1.0, 1.1],
+            rs_sparkline_data=[1.0, 1.2],
+        )
+    )
+
+
+def _stub_historical_ranks(monkeypatch, service):
+    monkeypatch.setattr(
+        service,
+        "_get_historical_ranks_batch",
+        lambda *_args, **_kwargs: {},
+    )
+
+
 def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
     service = _make_group_rank_service()
 
@@ -200,47 +311,28 @@ def test_get_group_history_uses_constituents_from_requested_market_scan(monkeypa
     current_date = date.today()
 
     try:
-        db_session.add(
-            IBDGroupRank(
-                market="US",
-                industry_group=group,
-                date=current_date,
-                rank=1,
-                avg_rs_rating=91.0,
-                median_rs_rating=90.0,
-                weighted_avg_rs_rating=92.0,
-                rs_std_dev=2.0,
-                num_stocks=1,
-                num_stocks_rs_above_80=1,
-                top_symbol="USWIN",
-                top_rs_rating=96.0,
-            )
+        _add_group_detail_rank(
+            db_session,
+            group=group,
+            rank_date=current_date,
+            top_symbol="USWIN",
+        )
+        _add_scan(
+            db_session,
+            scan_id="us-scan",
+            market="US",
+            completed_at=datetime(2026, 6, 24, 22, 0, 0),
+        )
+        _add_scan(
+            db_session,
+            scan_id="hk-scan",
+            market="HK",
+            completed_at=datetime(2026, 6, 26, 22, 0, 0),
         )
         db_session.add_all(
             [
-                Scan(
-                    scan_id="us-scan",
-                    status="completed",
-                    universe_market="US",
-                    completed_at=datetime(2026, 6, 24, 22, 0, 0),
-                ),
-                Scan(
-                    scan_id="hk-scan",
-                    status="completed",
-                    universe_market="HK",
-                    completed_at=datetime(2026, 6, 26, 22, 0, 0),
-                ),
                 StockUniverse(symbol="USWIN", name="US Winner", market="US"),
                 StockUniverse(symbol="HKNEW", name="HK Newer", market="HK"),
-                ScanResult(
-                    scan_id="us-scan",
-                    symbol="USWIN",
-                    price=42.0,
-                    rs_rating=96.0,
-                    ibd_industry_group=group,
-                    price_sparkline_data=[1.0, 1.1],
-                    rs_sparkline_data=[1.0, 1.2],
-                ),
                 ScanResult(
                     scan_id="hk-scan",
                     symbol="HKNEW",
@@ -252,13 +344,15 @@ def test_get_group_history_uses_constituents_from_requested_market_scan(monkeypa
                 ),
             ]
         )
+        _add_legacy_scan_result(
+            db_session,
+            scan_id="us-scan",
+            symbol="USWIN",
+            industry_group=group,
+        )
         db_session.commit()
 
-        monkeypatch.setattr(
-            service,
-            "_get_historical_ranks_batch",
-            lambda *_args, **_kwargs: {},
-        )
+        _stub_historical_ranks(monkeypatch, service)
 
         result = service.get_group_history(db_session, group, days=30, market="US")
 
@@ -278,68 +372,43 @@ def test_get_group_history_hydrates_constituents_from_feature_run_scan(monkeypat
     current_date = date(2026, 6, 24)
 
     try:
-        db_session.add(
-            IBDGroupRank(
-                market="US",
-                industry_group=group,
-                date=current_date,
-                rank=1,
-                avg_rs_rating=91.0,
-                median_rs_rating=90.0,
-                weighted_avg_rs_rating=92.0,
-                rs_std_dev=2.0,
-                num_stocks=1,
-                num_stocks_rs_above_80=1,
-                top_symbol="FSTORE",
-                top_rs_rating=96.0,
-            )
+        _add_group_detail_rank(
+            db_session,
+            group=group,
+            rank_date=current_date,
+            top_symbol="FSTORE",
         )
-        db_session.add(
-            FeatureRun(
-                id=77,
-                as_of_date=current_date,
-                run_type="daily_snapshot",
-                status="published",
-                published_at=datetime(2026, 6, 24, 21, 0, 0),
-                config_json={"universe": {"market": "US"}},
-            )
+        _add_feature_run(db_session, run_id=77, as_of_date=current_date)
+        _add_scan(
+            db_session,
+            scan_id="feature-us-scan",
+            market="US",
+            completed_at=datetime(2026, 6, 24, 22, 0, 0),
+            feature_run_id=77,
         )
         db_session.add_all(
             [
-                Scan(
-                    scan_id="feature-us-scan",
-                    status="completed",
-                    universe_market="US",
-                    completed_at=datetime(2026, 6, 24, 22, 0, 0),
-                    feature_run_id=77,
-                ),
                 StockUniverse(symbol="FSTORE", name="Feature Store Inc.", market="US"),
-                StockFeatureDaily(
-                    run_id=77,
-                    symbol="FSTORE",
-                    as_of_date=current_date,
-                    composite_score=88.0,
-                    details_json={
-                        "company_name": "Ignored in favor of universe name",
-                        "current_price": 123.45,
-                        "rs_rating": 96.0,
-                        "rs_rating_1m": 93.0,
-                        "rs_rating_3m": 91.0,
-                        "ibd_industry_group": group,
-                        "price_sparkline_data": [1.0, 1.2],
-                        "rs_sparkline_data": [1.0, 1.3],
-                        "stage": 2,
-                    },
-                ),
             ]
+        )
+        _add_feature_row(
+            db_session,
+            run_id=77,
+            symbol="FSTORE",
+            as_of_date=current_date,
+            industry_group=group,
+            details={
+                "company_name": "Ignored in favor of universe name",
+                "rs_rating_1m": 93.0,
+                "rs_rating_3m": 91.0,
+                "price_sparkline_data": [1.0, 1.2],
+                "rs_sparkline_data": [1.0, 1.3],
+                "stage": 2,
+            },
         )
         db_session.commit()
 
-        monkeypatch.setattr(
-            service,
-            "_get_historical_ranks_batch",
-            lambda *_args, **_kwargs: {},
-        )
+        _stub_historical_ranks(monkeypatch, service)
 
         result = service.get_group_history(db_session, group, days=30, market="US")
 
@@ -349,6 +418,58 @@ def test_get_group_history_hydrates_constituents_from_feature_run_scan(monkeypat
         assert result["stocks"][0]["stage"] == 2
         assert result["stocks"][0]["price_sparkline_data"] == [1.0, 1.2]
         assert result["stocks"][0]["rs_sparkline_data"] == [1.0, 1.3]
+    finally:
+        db_session.rollback()
+        db_session.close()
+
+
+def test_get_group_history_does_not_fallback_to_legacy_when_feature_group_is_empty(monkeypatch):
+    service = _make_group_rank_service()
+    db_session = _make_group_detail_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+    current_date = date(2026, 6, 24)
+
+    try:
+        _add_group_detail_rank(
+            db_session,
+            group=group,
+            rank_date=current_date,
+            top_symbol="FSTORE",
+        )
+        _add_feature_run(db_session, run_id=88, as_of_date=current_date)
+        _add_scan(
+            db_session,
+            scan_id="feature-us-scan-empty-group",
+            market="US",
+            completed_at=datetime(2026, 6, 24, 22, 0, 0),
+            feature_run_id=88,
+        )
+        _add_feature_row(
+            db_session,
+            run_id=88,
+            symbol="OTHER",
+            as_of_date=current_date,
+            industry_group=f"{group}_OTHER",
+        )
+        _add_scan(
+            db_session,
+            scan_id="legacy-us-scan",
+            market="US",
+            completed_at=datetime(2026, 6, 23, 22, 0, 0),
+        )
+        _add_legacy_scan_result(
+            db_session,
+            scan_id="legacy-us-scan",
+            symbol="LEGACY",
+            industry_group=group,
+        )
+        db_session.commit()
+
+        _stub_historical_ranks(monkeypatch, service)
+
+        result = service.get_group_history(db_session, group, days=30, market="US")
+
+        assert result["stocks"] == []
     finally:
         db_session.rollback()
         db_session.close()

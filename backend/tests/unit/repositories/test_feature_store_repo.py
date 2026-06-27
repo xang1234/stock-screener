@@ -628,6 +628,38 @@ class TestPeerOrdering:
 
         assert [peer.symbol for peer in peers] == ["HIGH", "MID", "NULLIPO"]
 
+    def test_industry_peers_can_include_sparklines(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(
+            run_id,
+            [
+                FeatureRowWrite(
+                    symbol="HIGH",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=90.0,
+                    overall_rating=4,
+                    passes_count=2,
+                    details={
+                        "ibd_industry_group": "Software",
+                        "gics_sector": "Technology",
+                        "price_sparkline_data": [1.0, 1.1],
+                        "rs_sparkline_data": [1.0, 1.2],
+                    },
+                ),
+            ],
+        )
+
+        peers = repo.get_peers_by_industry_for_run(
+            run_id,
+            "Software",
+            include_sparklines=True,
+        )
+
+        assert peers[0].extended_fields["price_sparkline_data"] == [1.0, 1.1]
+        assert peers[0].extended_fields["rs_sparkline_data"] == [1.0, 1.2]
+
     def test_sector_peers_place_null_scores_last(
         self, repo: SqlFeatureStoreRepository, session: Session
     ):

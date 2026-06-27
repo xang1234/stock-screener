@@ -866,7 +866,13 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
                 return _make_scan_result_from_feature_row(r)
         return None
 
-    def get_peers_by_industry_for_run(self, run_id, ibd_industry_group):
+    def get_peers_by_industry_for_run(
+        self,
+        run_id,
+        ibd_industry_group,
+        *,
+        include_sparklines=False,
+    ):
         """Bridge method: return peers in the same IBD industry group."""
         if run_id not in self._rows:
             raise EntityNotFoundError("FeatureRun", run_id)

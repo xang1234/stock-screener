@@ -306,6 +306,8 @@ class FeatureStoreRepository(abc.ABC):
         self,
         run_id: int,
         ibd_industry_group: str,
+        *,
+        include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
         """Return peers sharing the same IBD industry group.
 

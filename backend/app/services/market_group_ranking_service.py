@@ -20,6 +20,10 @@ from sqlalchemy.orm import Session
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
+from app.services.group_constituents import (
+    group_row_to_constituent_stock,
+    scan_result_item_to_group_row,
+)
 from app.services.redis_pool import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -349,26 +353,7 @@ class MarketGroupRankingService:
             reverse=True,
         )
         stocks = [
-            {
-                "symbol": row["symbol"],
-                "company_name": row.get("company_name"),
-                "price": row.get("current_price"),
-                "rs_rating": row.get("rs_rating"),
-                "rs_rating_1m": row.get("rs_rating_1m"),
-                "rs_rating_3m": row.get("rs_rating_3m"),
-                "rs_rating_12m": row.get("rs_rating_12m"),
-                "eps_growth_qq": row.get("eps_growth_qq"),
-                "eps_growth_yy": row.get("eps_growth_yy"),
-                "sales_growth_qq": row.get("sales_growth_qq"),
-                "sales_growth_yy": row.get("sales_growth_yy"),
-                "composite_score": row.get("composite_score"),
-                "stage": row.get("stage"),
-                "price_sparkline_data": row.get("price_sparkline_data"),
-                "price_trend": row.get("price_trend"),
-                "price_change_1d": row.get("price_change_1d"),
-                "rs_sparkline_data": row.get("rs_sparkline_data"),
-                "rs_trend": row.get("rs_trend"),
-            }
+            group_row_to_constituent_stock(row)
             for row in current_rows
         ]
 
@@ -443,30 +428,7 @@ class MarketGroupRankingService:
 
     @staticmethod
     def extract_group_row_payload(row: Any) -> dict[str, Any]:
-        extended = getattr(row, "extended_fields", {}) or {}
-        return {
-            "symbol": getattr(row, "symbol", None),
-            "company_name": extended.get("company_name"),
-            "composite_score": getattr(row, "composite_score", None),
-            "current_price": getattr(row, "current_price", None),
-            "rs_rating": extended.get("rs_rating"),
-            "rs_rating_1m": extended.get("rs_rating_1m"),
-            "rs_rating_3m": extended.get("rs_rating_3m"),
-            "rs_rating_12m": extended.get("rs_rating_12m"),
-            "eps_growth_qq": extended.get("eps_growth_qq"),
-            "eps_growth_yy": extended.get("eps_growth_yy"),
-            "sales_growth_qq": extended.get("sales_growth_qq"),
-            "sales_growth_yy": extended.get("sales_growth_yy"),
-            "stage": extended.get("stage"),
-            "market_cap": extended.get("market_cap"),
-            "market_cap_usd": extended.get("market_cap_usd"),
-            "ibd_industry_group": extended.get("ibd_industry_group"),
-            "price_sparkline_data": extended.get("price_sparkline_data"),
-            "price_trend": extended.get("price_trend"),
-            "price_change_1d": extended.get("price_change_1d"),
-            "rs_sparkline_data": extended.get("rs_sparkline_data"),
-            "rs_trend": extended.get("rs_trend"),
-        }
+        return scan_result_item_to_group_row(row)
 
     def compute_group_rankings_from_rows(
         self,

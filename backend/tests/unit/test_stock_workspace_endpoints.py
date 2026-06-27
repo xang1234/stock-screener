@@ -92,7 +92,13 @@ class _FakeFeatureStore:
     def get_row_by_symbol(self, run_id, symbol):
         return self._row if symbol == self._row.symbol else None
 
-    def get_peers_by_industry_for_run(self, run_id, industry_group):
+    def get_peers_by_industry_for_run(
+        self,
+        run_id,
+        industry_group,
+        *,
+        include_sparklines=False,
+    ):
         return tuple(self._peers)
 
 
