@@ -58,11 +58,10 @@ describe('GroupChartsGrid', () => {
       expect(screen.getAllByTestId('group-candlestick-chart')).toHaveLength(4);
     });
 
-    screen.getAllByTestId('group-candlestick-chart').forEach((chart) => {
-      const gridItem = chart.closest('.MuiGrid-item');
-      expect(gridItem).toBeTruthy();
-      expect(gridItem.className).toContain('MuiGrid-grid-md-6');
-      expect(gridItem.className).not.toContain('MuiGrid-grid-lg-3');
+    const chartGrid = screen.getByTestId('group-charts-grid');
+    expect(chartGrid).toHaveStyle({
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
     });
   });
 });

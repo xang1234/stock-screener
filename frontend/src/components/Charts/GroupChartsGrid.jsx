@@ -6,7 +6,6 @@ import {
   Button,
   Card,
   CircularProgress,
-  Grid,
   Typography,
   useTheme,
 } from '@mui/material';
@@ -111,14 +110,24 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
           Showing first {truncatedSymbols.length} of {normalizedSymbols.length} stocks.
         </Typography>
       )}
-      <Grid container spacing={1}>
+      <Box
+        data-testid="group-charts-grid"
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 1,
+          '@media (max-width:899.95px)': {
+            gridTemplateColumns: '1fr',
+          },
+        }}
+      >
         {truncatedSymbols.map((sym) => {
           const priceData = dataMap[sym];
           const isMissing = missingSet.has(sym) || !priceData || priceData.length === 0;
           const lastClose = priceData && priceData.length > 0 ? priceData[priceData.length - 1].close : null;
 
           return (
-            <Grid item xs={12} md={6} key={sym}>
+            <Box key={sym} sx={{ minWidth: 0 }}>
               <Card
                 variant="outlined"
                 sx={{
@@ -172,10 +181,10 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
                   />
                 )}
               </Card>
-            </Grid>
+            </Box>
           );
         })}
-      </Grid>
+      </Box>
     </Box>
   );
 }

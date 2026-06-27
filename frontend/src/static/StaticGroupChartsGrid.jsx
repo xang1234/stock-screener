@@ -4,7 +4,6 @@ import {
   Box,
   Card,
   CircularProgress,
-  Grid,
   Typography,
 } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
@@ -241,18 +240,28 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
   const truncated = normalizedSymbols.length > truncatedSymbols.length;
 
   return (
-    <Box onClick={() => setSelectedSymbol(null)}>
+    <Box data-testid="static-group-charts-root" onClick={() => setSelectedSymbol(null)}>
       {truncated && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
           Showing first {truncatedSymbols.length} of {normalizedSymbols.length} stocks.
         </Typography>
       )}
-      <Grid container spacing={2}>
+      <Box
+        data-testid="static-group-charts-grid"
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 2,
+          '@media (max-width:899.95px)': {
+            gridTemplateColumns: '1fr',
+          },
+        }}
+      >
         {truncatedSymbols.map((sym) => {
           const entry = entryBySymbol.get(sym);
           if (!entry) {
             return (
-              <Grid item xs={12} md={6} key={sym}>
+              <Box key={sym} sx={{ minWidth: 0 }}>
                 <Card variant="outlined">
                   <Box
                     sx={{
@@ -273,21 +282,21 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
                     </Typography>
                   </Box>
                 </Card>
-              </Grid>
+              </Box>
             );
           }
           return (
-            <Grid item xs={12} md={6} key={sym}>
+            <Box key={sym} sx={{ minWidth: 0 }}>
               <StaticGroupChartCard
                 symbol={sym}
                 entry={entry}
                 isSelected={selectedSymbol === sym}
                 onSelect={setSelectedSymbol}
               />
-            </Grid>
+            </Box>
           );
         })}
-      </Grid>
+      </Box>
     </Box>
   );
 }
