@@ -9,7 +9,6 @@ import json
 import logging
 from typing import Any, TypeAlias
 
-import pandas as pd
 try:
     from redis.exceptions import RedisError
 except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
@@ -23,6 +22,9 @@ from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreReposito
 from app.services.group_detail_payloads import (
     constituent_stock_payloads_from_group_rows,
     scan_result_item_to_group_row,
+)
+from app.services.group_ranking_payloads import (
+    compute_group_rankings_from_serialized_rows as _compute_group_rankings_from_serialized_rows,
 )
 from app.services.redis_pool import get_redis_client
 
@@ -317,7 +319,7 @@ class MarketGroupRankingService:
         )
         historical_rankings = {
             run.id: self.compute_group_rankings_from_rows(
-                self._load_run_rows(db, run.id),
+                self._load_run_rows(db, run.id, include_sparklines=False),
                 ranking_date=run.as_of_date,
             )
             for run in market_runs
@@ -438,77 +440,10 @@ class MarketGroupRankingService:
         *,
         ranking_date: date,
     ) -> list[dict[str, Any]]:
-        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            group_name = row.get("ibd_industry_group")
-            rs_rating = row.get("rs_rating")
-            if not group_name or rs_rating is None:
-                continue
-            grouped[str(group_name)].append(row)
-
-        rankings: list[dict[str, Any]] = []
-        for group_name, group_rows in grouped.items():
-            rs_values = [float(row["rs_rating"]) for row in group_rows if row.get("rs_rating") is not None]
-            if not rs_values:
-                continue
-            avg_rs = round(sum(rs_values) / len(rs_values), 2)
-            median_rs = round(float(pd.Series(rs_values).median()), 2)
-            std_dev = round(float(pd.Series(rs_values).std(ddof=0)), 2) if len(rs_values) > 1 else 0.0
-            weight_pairs = [
-                (
-                    float(row.get("market_cap_usd") or row.get("market_cap") or 0),
-                    float(row["rs_rating"]),
-                )
-                for row in group_rows
-                if row.get("rs_rating") is not None
-            ]
-            total_weight = sum(weight for weight, _ in weight_pairs if weight > 0)
-            weighted_avg = (
-                round(sum(weight * value for weight, value in weight_pairs if weight > 0) / total_weight, 2)
-                if total_weight > 0
-                else None
-            )
-            top_row = max(
-                group_rows,
-                key=lambda row: (
-                    row.get("rs_rating") if row.get("rs_rating") is not None else float("-inf"),
-                    row.get("composite_score") if row.get("composite_score") is not None else float("-inf"),
-                ),
-            )
-            above_80 = sum(1 for value in rs_values if value >= 80)
-            rankings.append(
-                {
-                    "industry_group": group_name,
-                    "date": ranking_date.isoformat(),
-                    "rank": 0,
-                    "avg_rs_rating": avg_rs,
-                    "median_rs_rating": median_rs,
-                    "weighted_avg_rs_rating": weighted_avg,
-                    "rs_std_dev": std_dev,
-                    "num_stocks": len(rs_values),
-                    "num_stocks_rs_above_80": above_80,
-                    "pct_rs_above_80": round((above_80 / len(rs_values)) * 100, 2) if rs_values else None,
-                    "top_symbol": top_row.get("symbol"),
-                    "top_symbol_name": top_row.get("company_name"),
-                    "top_rs_rating": top_row.get("rs_rating"),
-                    "rank_change_1w": None,
-                    "rank_change_1m": None,
-                    "rank_change_3m": None,
-                    "rank_change_6m": None,
-                }
-            )
-
-        rankings.sort(
-            key=lambda row: (
-                -(row.get("avg_rs_rating") or 0),
-                -(row.get("weighted_avg_rs_rating") or 0),
-                -(row.get("num_stocks") or 0),
-                row["industry_group"],
-            )
+        return _compute_group_rankings_from_serialized_rows(
+            rows,
+            ranking_date=ranking_date,
         )
-        for index, row in enumerate(rankings, start=1):
-            row["rank"] = index
-        return rankings
 
     def apply_group_rank_changes(
         self,

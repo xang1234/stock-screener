@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import Base
+from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun
 from app.services.market_group_ranking_service import MarketGroupRankingService
 from app.services.rrg_history_provider import (
@@ -174,6 +175,68 @@ def test_get_current_rank_snapshot_returns_rank_date_and_map(monkeypatch):
 
     assert snapshot.date == "2026-04-04"
     assert snapshot.ranks_by_group == {"Internet Services": 4, "Software": 7}
+
+
+def test_get_group_history_loads_historical_rows_without_sparklines(monkeypatch):
+    service = MarketGroupRankingService()
+    latest_run = SimpleNamespace(id=3, as_of_date=date(2026, 4, 4))
+    prior_run = SimpleNamespace(id=2, as_of_date=date(2026, 4, 3))
+    load_calls: list[tuple[int, bool]] = []
+
+    monkeypatch.setattr(
+        service,
+        "_get_latest_published_run",
+        lambda db, *, market: latest_run,  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_market_run_series",
+        lambda db, *, market, latest_run, cutoff_date, min_runs=0: [latest_run, prior_run],  # noqa: ARG005
+    )
+
+    def _load_rows(db, run_id, *, include_sparklines=True):  # noqa: ANN001, ARG001
+        load_calls.append((run_id, include_sparklines))
+        return [
+            ScanResultItemDomain(
+                symbol=f"HK{run_id}",
+                composite_score=90.0,
+                rating="Buy",
+                current_price=100.0,
+                screener_outputs={},
+                screeners_run=[],
+                composite_method="weighted_average",
+                screeners_passed=0,
+                screeners_total=0,
+                extended_fields={
+                    "ibd_industry_group": "Internet Services",
+                    "rs_rating": 88.0,
+                },
+            )
+        ]
+
+    def _rankings(rows, *, ranking_date):  # noqa: ANN001
+        return [
+            {
+                "industry_group": "Internet Services",
+                "date": ranking_date.isoformat(),
+                "rank": 1,
+                "avg_rs_rating": 88.0,
+                "num_stocks": 2,
+                "num_stocks_rs_above_80": 1,
+            }
+        ]
+
+    monkeypatch.setattr(service, "_load_run_rows", _load_rows)
+    monkeypatch.setattr(service, "compute_group_rankings_from_rows", _rankings)
+
+    detail = service.get_group_history(
+        Session(),
+        market="HK",
+        industry_group="Internet Services",
+    )
+
+    assert detail["current_rank"] == 1
+    assert load_calls == [(3, True), (3, False), (2, False)]
 
 
 def test_market_group_ranking_service_loads_rrg_runs_once_and_returns_ascending_series(monkeypatch):
