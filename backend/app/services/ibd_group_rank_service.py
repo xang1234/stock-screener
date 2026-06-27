@@ -20,6 +20,7 @@ from ..models.industry import IBDGroupRank
 from ..models.stock_universe import StockUniverse
 from ..domain.providers.price_symbol_support import is_unsupported_yahoo_price_symbol
 from .group_constituent_source import GroupConstituentSource
+from .group_detail_payloads import constituent_stock_payloads_from_scan_items
 from .group_rank_cache_policy import GroupRankCacheRequirement
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
@@ -766,16 +767,13 @@ class IBDGroupRankService:
         Returns:
             List of stocks with RS, earnings, and sales metrics
         """
-        try:
-            return self.group_constituent_source.get_constituents(
-                db,
-                industry_group,
-                market=market,
-                as_of_date=as_of_date,
-            )
-        except Exception as e:
-            logger.error("Error fetching constituent stocks: %s", e, exc_info=True)
-            return []
+        items = self.group_constituent_source.get_constituent_items(
+            db,
+            industry_group,
+            market=market,
+            as_of_date=as_of_date,
+        )
+        return constituent_stock_payloads_from_scan_items(items)
 
     def get_rank_movers(
         self,

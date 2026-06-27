@@ -173,6 +173,47 @@ def test_get_group_history_uses_universe_lookup_for_top_symbol_name(monkeypatch)
         db_session.close()
 
 
+def test_get_group_history_propagates_constituent_source_failures(monkeypatch):
+    service = IBDGroupRankService(
+        price_cache=Mock(),
+        benchmark_cache=Mock(),
+        group_constituent_source=Mock(),
+    )
+    service.group_constituent_source.get_constituent_items.side_effect = RuntimeError(
+        "source failed"
+    )
+    db_session = _make_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+    current_date = date.today()
+
+    try:
+        db_session.add(
+            IBDGroupRank(
+                market="US",
+                industry_group=group,
+                date=current_date,
+                rank=1,
+                avg_rs_rating=91.0,
+                num_stocks=1,
+                num_stocks_rs_above_80=1,
+                top_symbol="AAPL",
+                top_rs_rating=96.0,
+            )
+        )
+        db_session.commit()
+        monkeypatch.setattr(
+            service,
+            "_get_historical_ranks_batch",
+            lambda *_args, **_kwargs: {},
+        )
+
+        with pytest.raises(RuntimeError, match="source failed"):
+            service.get_group_history(db_session, group, days=30, market="US")
+    finally:
+        db_session.rollback()
+        db_session.close()
+
+
 def _price_frame() -> pd.DataFrame:
     dates = pd.date_range(end="2026-03-20", periods=260, freq="B")
     return pd.DataFrame(

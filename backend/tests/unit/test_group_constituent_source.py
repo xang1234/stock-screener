@@ -138,14 +138,14 @@ def test_feature_scan_with_empty_group_does_not_fallback_to_legacy():
         )
         db.commit()
 
-        stocks = GroupConstituentSource().get_constituents(
+        items = GroupConstituentSource().get_constituent_items(
             db,
             group,
             market="US",
             as_of_date=as_of_date,
         )
 
-        assert stocks == []
+        assert items == ()
     finally:
         db.rollback()
         db.close()
@@ -187,17 +187,66 @@ def test_legacy_scan_constituents_are_market_scoped_and_include_sparklines():
         )
         db.commit()
 
-        stocks = GroupConstituentSource().get_constituents(
+        items = GroupConstituentSource().get_constituent_items(
             db,
             group,
             market="US",
             as_of_date=date(2026, 6, 24),
         )
 
-        assert [stock["symbol"] for stock in stocks] == ["USWIN"]
-        assert stocks[0]["company_name"] == "US Winner"
-        assert stocks[0]["price_sparkline_data"] == [1.0, 1.1]
-        assert stocks[0]["rs_sparkline_data"] == [1.0, 1.2]
+        assert [item.symbol for item in items] == ["USWIN"]
+        assert items[0].extended_fields["company_name"] == "US Winner"
+        assert items[0].extended_fields["price_sparkline_data"] == [1.0, 1.1]
+        assert items[0].extended_fields["rs_sparkline_data"] == [1.0, 1.2]
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_legacy_scan_selection_honors_as_of_date():
+    db = _make_session()
+    group = "Software"
+    try:
+        _add_scan(
+            db,
+            scan_id="past-us-scan",
+            market="US",
+            completed_at=datetime(2026, 6, 24, 22, 0, 0),
+        )
+        _add_scan(
+            db,
+            scan_id="future-us-scan",
+            market="US",
+            completed_at=datetime(2026, 6, 25, 1, 0, 0),
+        )
+        db.add_all(
+            [
+                StockUniverse(symbol="PAST", name="Past Corp", market="US"),
+                StockUniverse(symbol="FUTURE", name="Future Corp", market="US"),
+            ]
+        )
+        _add_legacy_scan_result(
+            db,
+            scan_id="past-us-scan",
+            symbol="PAST",
+            industry_group=group,
+        )
+        _add_legacy_scan_result(
+            db,
+            scan_id="future-us-scan",
+            symbol="FUTURE",
+            industry_group=group,
+        )
+        db.commit()
+
+        items = GroupConstituentSource().get_constituent_items(
+            db,
+            group,
+            market="US",
+            as_of_date=date(2026, 6, 24),
+        )
+
+        assert [item.symbol for item in items] == ["PAST"]
     finally:
         db.rollback()
         db.close()
