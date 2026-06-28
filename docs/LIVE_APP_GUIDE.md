@@ -177,6 +177,17 @@ The core screener. Combines multiple methodologies over the selected market/univ
 
 **Relative Strength (RS) Rating** underpins most screeners: excess return vs the market benchmark, weighted across periods (3mo 40%, then 6/9/12mo 20% each), scaled 0–100 (or universe percentile). Group RS is the average RS of a group's constituents.
 
+**RS-line Blue Dot / RSBD** is the O'Neil/Minervini-style early-leadership signal. The app computes the stock's RS line as `stock close / market benchmark close` (SPY for US, the market benchmark elsewhere). A blue dot fires when the RS line reaches a new trailing 252-session high while price has **not** made its own new 252-session high on that same date. In practice this highlights names where relative strength is already breaking out before price has confirmed the breakout.
+
+Where it appears in Scan:
+
+- **Filter panel:** `RS Blue Dot` filters for rows with a blue dot in the last 5 stock trading sessions.
+- **Results table:** `RSBD` shows a blue dot for the scan-row signal; `SEBD` shows the Setup Engine's current setup-specific RS blue-dot flag.
+- **Chart modal:** blue-dot markers appear on valid RS-line leadership dates.
+- **Blue Dot Leaders preset:** combines the RSBD signal with Stage 2 and high RS to surface leadership candidates before price breakouts.
+
+Benchmark freshness matters. Missing benchmark sessions count as `false` in the 5-session recent window, and if the benchmark has not caught up to the latest stock bar the scan-row `RSBD` stays false rather than displaying an older stale dot as current. Old saved scans may not show this field until they are rerun or their daily snapshot rows are rebuilt.
+
 **Composite scoring** aggregates the selected screeners — `weighted_average` (default), `maximum`, or `minimum` — to a single 0–100 score and rating: **Strong Buy** ≥ 80, **Buy** ≥ 70, **Watch** ≥ 60, **Pass** < 60. The rating is downgraded when fewer than half the screeners pass, and downgraded or forced to Pass when a stock's fundamental data is too sparse to trust.
 
 ### Filters
@@ -191,7 +202,7 @@ The core screener. Combines multiple methodologies over the selected market/univ
 - **Profitability** — profit/operating/gross margin, ROE, ROA, ROIC.
 - **Financial health** — current/quick ratio, debt/equity.
 - **Ownership & sentiment** — insider/institutional ownership and transactions, short float/ratio.
-- **Technical** — beta, RSI(14), ATR(14), SMA 20/50/200, weekly/monthly volatility, stage.
+- **Technical** — beta, RSI(14), ATR(14), SMA 20/50/200, weekly/monthly volatility, stage, RS Blue Dot.
 - **Performance & range** — perf week/month/quarter/half/year/YTD, 52-week high/low distance.
 - **Rating & classification** — RS rating, EPS rating, sector (GICS), IBD industry, theme membership, market.
 
