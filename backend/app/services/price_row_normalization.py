@@ -9,14 +9,18 @@ import pandas as pd
 
 from app.infra.serialization import finite_float_or_none
 
+OHLC_COLUMNS = ("Open", "High", "Low", "Close")
+
 
 def drop_non_finite_close_rows(data: pd.DataFrame | None) -> pd.DataFrame | None:
-    """Remove rows whose close cannot be safely treated as a market price."""
+    """Remove rows whose OHLC values cannot be safely treated as market prices."""
     if data is None or data.empty:
         return data
-    if "Close" not in data.columns:
+    if any(column not in data.columns for column in OHLC_COLUMNS):
         return data.iloc[0:0].copy()
-    keep_mask = data["Close"].map(finite_float_or_none).notna()
+    keep_mask = pd.Series(True, index=data.index)
+    for column in OHLC_COLUMNS:
+        keep_mask &= data[column].map(finite_float_or_none).notna()
     if bool(keep_mask.all()):
         return data
     return data.loc[keep_mask].copy()
@@ -63,17 +67,20 @@ def stock_price_row_from_ohlcv(
     row_date: date,
     row: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """Build a StockPrice mapping, skipping rows with no finite close."""
+    """Build a StockPrice mapping, skipping rows without complete finite OHLC."""
+    open_ = finite_float_or_none(row.get("Open"))
+    high = finite_float_or_none(row.get("High"))
+    low = finite_float_or_none(row.get("Low"))
     close = finite_float_or_none(row.get("Close"))
-    if close is None:
+    if open_ is None or high is None or low is None or close is None:
         return None
     adj_close = finite_float_or_none(row.get("Adj Close"))
     return {
         "symbol": symbol,
         "date": row_date,
-        "open": finite_float_or_none(row.get("Open")),
-        "high": finite_float_or_none(row.get("High")),
-        "low": finite_float_or_none(row.get("Low")),
+        "open": open_,
+        "high": high,
+        "low": low,
         "close": close,
         "volume": _volume_or_zero(row.get("Volume")),
         "adj_close": adj_close if adj_close is not None else close,
