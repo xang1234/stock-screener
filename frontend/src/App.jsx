@@ -41,6 +41,7 @@ const ValidationPage = lazy(() => import('./pages/ValidationPage'));
 const ThemesPage = lazy(() => import('./pages/ThemesPage'));
 const ChatbotPage = lazy(() => import('./pages/ChatbotPage'));
 const OperationsPage = lazy(() => import('./pages/OperationsPage'));
+const SignalsPage = lazy(() => import('./pages/SignalsPage'));
 const StaticAppShell = lazy(() => import('./static/StaticAppShell'));
 
 // In-app fallback for lazy page transitions (Layout chrome is already mounted,
@@ -398,6 +399,7 @@ function AppShell() {
               {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
               <Route path="/stocks/:ticker" element={<StockDetails />} />
               <Route path="/operations" element={<OperationsPage />} />
+              <Route path="/signals" element={<SignalsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
