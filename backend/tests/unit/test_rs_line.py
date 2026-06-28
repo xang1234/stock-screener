@@ -133,6 +133,19 @@ def test_rs_line_leadership_snapshot_empty_when_benchmark_missing():
     }
 
 
+def test_rs_line_leadership_snapshot_empty_when_latest_benchmark_bar_is_missing():
+    dates = pd.date_range("2026-01-01", periods=6, freq="D")
+    stock = pd.Series([10, 11, 12, 13, 12.5, 12.8], index=dates)
+    benchmark = pd.Series([10, 10, 10, 10, 8], index=dates[:-1])
+
+    leadership = rs_line_leadership_series(stock, benchmark, lookback=6)
+    snapshot = leadership.to_snapshot(recent_days=5)
+
+    assert leadership.latest_is_aligned is False
+    assert bool(leadership.blue_dot.iloc[-1]) is True
+    assert snapshot == RsLineLeadershipSnapshot.empty()
+
+
 def test_rs_line_leadership_snapshot_omits_non_date_index_label():
     stock = pd.Series([10, 11, 12, 11], index=pd.RangeIndex(4))
     benchmark = pd.Series([10, 10, 9, 7], index=pd.RangeIndex(4))

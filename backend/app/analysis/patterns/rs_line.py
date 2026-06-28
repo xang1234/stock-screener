@@ -57,6 +57,7 @@ class RsLineLeadershipSeries:
     rs_new_high: pd.Series
     price_new_high: pd.Series
     blue_dot: pd.Series
+    latest_is_aligned: bool = True
 
     @classmethod
     def empty(cls) -> "RsLineLeadershipSeries":
@@ -68,6 +69,7 @@ class RsLineLeadershipSeries:
             rs_new_high=empty_bool,
             price_new_high=empty_bool,
             blue_dot=empty_bool,
+            latest_is_aligned=False,
         )
 
     def to_snapshot(
@@ -78,7 +80,7 @@ class RsLineLeadershipSeries:
         """Collapse the per-date predicates into latest scan-row fields."""
         if recent_days < 1:
             raise ValueError("recent_days must be >= 1")
-        if self.rs.empty:
+        if self.rs.empty or not self.latest_is_aligned:
             return RsLineLeadershipSnapshot.empty()
 
         new_high_dates = self.rs_new_high.index[self.rs_new_high]
@@ -164,6 +166,7 @@ def rs_line_leadership_series(
     frame = pd.DataFrame({"rs": rs}).dropna()
     if frame.empty:
         return RsLineLeadershipSeries.empty()
+    latest_is_aligned = bool(len(price.index) > 0 and frame.index[-1] == price.index[-1])
     rs_new_high = rolling_at_new_high(frame["rs"], window=lookback)
     price_new_high = (
         rolling_at_new_high(price, window=lookback)
@@ -177,6 +180,7 @@ def rs_line_leadership_series(
         rs_new_high=rs_new_high,
         price_new_high=price_new_high,
         blue_dot=rs_new_high & (~price_new_high),
+        latest_is_aligned=latest_is_aligned,
     )
 
 
