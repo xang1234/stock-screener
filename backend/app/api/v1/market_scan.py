@@ -3,7 +3,6 @@ API endpoints for Market Scan feature.
 Handles CRUD operations for market scan watchlists and the aggregated
 Daily Snapshot payload.
 """
-import json
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -28,6 +27,7 @@ from ...services.daily_snapshot_service import (
     daily_snapshot_etag,
     get_or_build_daily_snapshot_payload,
     latest_completed_scan,
+    serialize_daily_snapshot_payload,
 )
 from ...wiring.bootstrap import get_get_scan_results_use_case, get_uow
 
@@ -96,7 +96,7 @@ async def get_daily_snapshot(
             scan_results_use_case=use_case,
         )
         DailySnapshotResponse.model_validate(payload)
-        return json.dumps(payload, separators=(",", ":"))
+        return serialize_daily_snapshot_payload(payload)
 
     payload_json = get_or_build_daily_snapshot_payload(cache_key, build_payload_json)
 

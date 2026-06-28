@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.domain.markets.key_markets import key_market_instruments
+from app.infra.serialization import finite_float_or_none
 from app.models.stock import StockPrice
 
 KEY_MARKET_HISTORY_POINTS = 30
@@ -44,7 +45,7 @@ def build_key_market_entries(
     history_by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for symbol, row_date, close in rows:
         history_by_symbol[str(symbol).upper()].append(
-            {"date": row_date.isoformat(), "close": close}
+            {"date": row_date.isoformat(), "close": finite_float_or_none(close)}
         )
 
     entries: list[dict[str, Any]] = []

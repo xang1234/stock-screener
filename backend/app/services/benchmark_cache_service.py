@@ -25,6 +25,7 @@ from .redis_pool import get_redis_client, is_redis_enabled
 from .market_calendar_service import MarketCalendarService
 from .benchmark_registry_service import benchmark_registry
 from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
+from .price_row_normalization import normalize_price_frame, stock_price_row_from_ohlcv
 from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open, is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -319,6 +320,9 @@ class BenchmarkCacheService:
 
             if cached_bytes:
                 df = pickle.loads(cached_bytes)
+                df = normalize_price_frame(df)
+                if df is None:
+                    return None
                 logger.debug("Retrieved benchmark %s %s from Redis (%s rows)", benchmark_symbol, period, len(df))
                 return df
 
@@ -373,6 +377,10 @@ class BenchmarkCacheService:
             df = pd.DataFrame(data)
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
+            df = normalize_price_frame(df, min_rows=100)
+            if df is None:
+                logger.debug("No finite database rows for benchmark %s %s", benchmark_symbol, period)
+                return None
 
             logger.debug("Retrieved benchmark %s %s from database (%s rows)", benchmark_symbol, period, len(df))
             return df
@@ -392,6 +400,12 @@ class BenchmarkCacheService:
         yfinance_service = YFinanceService()
         return yfinance_service.get_historical_data(benchmark_symbol, period=period)
 
+    def _fetch_normalized_from_yfinance(self, benchmark_symbol: str, period: str) -> Optional[pd.DataFrame]:
+        data = normalize_price_frame(self._fetch_from_yfinance(benchmark_symbol, period))
+        if data is None:
+            logger.error("Failed to fetch finite benchmark %s data from yfinance", benchmark_symbol)
+        return data
+
     def _fetch_and_cache_benchmark(self, benchmark_symbol: str, market: str, period: str) -> Optional[pd.DataFrame]:
         """
         Fetch benchmark from yfinance and cache it.
@@ -401,9 +415,8 @@ class BenchmarkCacheService:
         # No Redis means no distributed coordination is possible; fetch directly
         # and persist to DB so subsequent calls can still hit local cache.
         if not self._redis_client:
-            benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
-            if benchmark_data is None or benchmark_data.empty:
-                logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
+            benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+            if benchmark_data is None:
                 return None
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
             return benchmark_data
@@ -435,10 +448,8 @@ class BenchmarkCacheService:
             # We have the lock - fetch from yfinance
             logger.info("Fetching benchmark %s for market %s (%s) from yfinance", benchmark_symbol, market, period)
 
-            benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
-
-            if benchmark_data is None or benchmark_data.empty:
-                logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
+            benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+            if benchmark_data is None:
                 return None
 
             logger.info("Fetched benchmark %s %s: %s rows", benchmark_symbol, period, len(benchmark_data))
@@ -496,8 +507,8 @@ class BenchmarkCacheService:
 
         # Timeout - fetch directly as fallback
         logger.warning("Timeout waiting for benchmark %s %s cache - fetching directly", benchmark_symbol, period)
-        benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
-        if benchmark_data is not None and not benchmark_data.empty:
+        benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+        if benchmark_data is not None:
             # Persist fallback fetch so future calls can use DB cache even when
             # lock-holder failed to populate Redis.
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
@@ -515,6 +526,10 @@ class BenchmarkCacheService:
             return
 
         try:
+            data = normalize_price_frame(data)
+            if data is None:
+                return
+
             redis_key = self._redis_data_key(benchmark_symbol, period, market=market)
             pickled_data = pickle.dumps(data)
 
@@ -544,6 +559,10 @@ class BenchmarkCacheService:
 
         try:
             # Reset index to get Date as a column
+            data = normalize_price_frame(data)
+            if data is None:
+                logger.warning("No finite benchmark %s close rows to persist", benchmark_symbol)
+                return
             df = data.reset_index()
 
             # Fetch all existing dates for benchmark upfront (avoid N+1 queries)
@@ -570,16 +589,13 @@ class BenchmarkCacheService:
 
                 # Prepare row for bulk insert
                 try:
-                    price_dict = {
-                        'symbol': benchmark_symbol,
-                        'date': row_date,
-                        'open': float(row.get('Open', 0)),
-                        'high': float(row.get('High', 0)),
-                        'low': float(row.get('Low', 0)),
-                        'close': float(row.get('Close', 0)),
-                        'volume': int(row.get('Volume', 0)) if pd.notna(row.get('Volume')) else 0,
-                        'adj_close': float(row.get('Close', 0))  # Use close as adj_close
-                    }
+                    price_dict = stock_price_row_from_ohlcv(
+                        symbol=benchmark_symbol,
+                        row_date=row_date,
+                        row=row,
+                    )
+                    if price_dict is None:
+                        continue
                     rows_to_insert.append(price_dict)
 
                 except Exception as e:

@@ -1,5 +1,6 @@
 """Unit tests for the aggregated Daily Snapshot service helpers."""
 
+import json
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
@@ -8,6 +9,8 @@ from pydantic import ValidationError
 
 from app.api.v1.market_scan import _if_none_match_matches
 from app.schemas.market_scan import DailySnapshotResponse
+import app.services.daily_snapshot_service as daily_snapshot_service
+import app.services.key_market_history as key_market_history
 from app.services.daily_snapshot_service import (
     DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
     DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES,
@@ -70,6 +73,45 @@ class TestKeyMarketRefreshSymbols:
 
     def test_unknown_market_is_empty(self):
         assert _key_market_refresh_symbols("XX", _norm) == {}
+
+
+class TestKeyMarketEntries:
+    def test_non_finite_closes_are_reported_as_null(self, monkeypatch):
+        class FakeQuery:
+            def filter(self, *_args):
+                return self
+
+            def order_by(self, *_args):
+                return self
+
+            def all(self):
+                return [
+                    ("SPY", date(2026, 6, 25), 734.3),
+                    ("SPY", date(2026, 6, 26), float("nan")),
+                ]
+
+        class FakeDb:
+            def query(self, *_args):
+                return FakeQuery()
+
+        monkeypatch.setattr(
+            key_market_history,
+            "key_market_instruments",
+            lambda _market: [
+                SimpleNamespace(
+                    data_symbol="SPY",
+                    display_symbol="SPY",
+                    display_name="S&P 500 ETF",
+                    currency="USD",
+                )
+            ],
+        )
+
+        entries = key_market_history.build_key_market_entries(FakeDb(), "US")
+
+        assert entries[0]["latest_close"] is None
+        assert entries[0]["change_1d"] is None
+        assert entries[0]["history"][-1]["close"] is None
 
 
 class TestSnapshotCacheHelpers:
@@ -358,3 +400,23 @@ class TestDailySnapshotResponseSchema:
         payload["freshness"]["surprise_field"] = True
         with pytest.raises(ValidationError):
             DailySnapshotResponse.model_validate(payload)
+
+    def test_serialization_replaces_non_finite_numbers_with_null(self):
+        payload = self._payload()
+        payload["key_markets"][0]["latest_close"] = float("nan")
+        payload["key_markets"][0]["change_1d"] = float("nan")
+        payload["key_markets"][0]["history"][-1]["close"] = float("nan")
+
+        payload_json = daily_snapshot_service.serialize_daily_snapshot_payload(payload)
+
+        assert "NaN" not in payload_json
+        parsed = json.loads(
+            payload_json,
+            parse_constant=lambda constant: (_ for _ in ()).throw(
+                AssertionError(f"Invalid JSON constant emitted: {constant}")
+            ),
+        )
+        key_market = parsed["key_markets"][0]
+        assert key_market["latest_close"] is None
+        assert key_market["change_1d"] is None
+        assert key_market["history"][-1]["close"] is None

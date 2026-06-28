@@ -5,6 +5,19 @@ from app.services.benchmark_cache_service import BenchmarkCacheService
 import app.services.benchmark_cache_service as benchmark_cache_module
 
 
+def _ohlcv_frame(closes: list[float], days: list[str]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes,
+            "Low": closes,
+            "Close": closes,
+            "Volume": [1_000_000] * len(closes),
+        },
+        index=pd.to_datetime(days),
+    )
+
+
 def test_get_benchmark_symbol_supports_all_markets():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
 
@@ -55,7 +68,7 @@ def test_fetch_and_cache_benchmark_without_redis_fetches_directly_and_persists()
     service._redis_client = None
 
     calls = {"wait": 0, "store_db": 0}
-    data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))
+    data = _ohlcv_frame([100.0], ["2026-04-10"])
 
     def fail_if_wait(*args, **kwargs):
         calls["wait"] += 1
@@ -77,12 +90,39 @@ def test_fetch_and_cache_benchmark_without_redis_fetches_directly_and_persists()
     assert calls["store_db"] == 1
 
 
+def test_fetch_and_cache_benchmark_cleans_non_finite_rows_before_cache_db_and_return():
+    class FakeRedis:
+        def __init__(self):
+            self.deleted = []
+
+        def set(self, *_args, **_kwargs):
+            return True
+
+        def delete(self, key):
+            self.deleted.append(key)
+
+    service = BenchmarkCacheService(redis_client=FakeRedis(), session_factory=lambda: None)
+    raw = _ohlcv_frame([100.0, float("nan")], ["2026-04-10", "2026-04-11"])
+    captured = {}
+
+    service._fetch_from_yfinance = lambda benchmark_symbol, period: raw  # type: ignore[assignment]
+    service._store_in_redis = lambda **kwargs: captured.setdefault("redis", kwargs["data"])  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: captured.setdefault("db", kwargs["data"])  # type: ignore[assignment]
+
+    result = service._fetch_and_cache_benchmark("SPY", "US", "2y")
+
+    assert result is not None
+    assert result["Close"].tolist() == [100.0]
+    assert captured["redis"]["Close"].tolist() == [100.0]
+    assert captured["db"]["Close"].tolist() == [100.0]
+
+
 def test_get_benchmark_data_uses_fallback_when_primary_fails():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
     service._redis_client = None
 
     calls = []
-    fallback_df = pd.DataFrame({"Close": [1.0]}, index=pd.to_datetime(["2026-04-10"]))
+    fallback_df = _ohlcv_frame([1.0], ["2026-04-10"])
 
     def fake_fetch(symbol, period):
         calls.append(symbol)

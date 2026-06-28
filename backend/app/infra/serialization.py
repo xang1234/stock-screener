@@ -8,7 +8,67 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
+from numbers import Integral, Real
 from typing import Any, Optional
+
+
+def finite_float_or_none(value: Any) -> float | None:
+    """Return a finite float, or ``None`` for missing/non-finite values."""
+    if value is None:
+        return None
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except (ImportError, TypeError, ValueError):
+        pass
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _numpy_native(value: Any) -> Any:
+    try:
+        import numpy as np
+    except ImportError:
+        return value
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def json_safe(value: Any, *, stringify_keys: bool = True) -> Any:
+    """Convert a value tree into strict JSON-compatible primitives."""
+    value = _numpy_native(value)
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, dict):
+        return {
+            str(key) if stringify_keys else key: json_safe(item, stringify_keys=stringify_keys)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(item, stringify_keys=stringify_keys) for item in value]
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except (ImportError, TypeError, ValueError):
+        pass
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
 
 
 def sanitize_sparkline(value: Any) -> Optional[list[float]]:
@@ -71,38 +131,4 @@ def convert_numpy_types(obj: object) -> object:
     datetime/date → ISO string.  Safe to call even when numpy is not
     installed — falls through to the identity return.
     """
-    try:
-        import numpy as np
-    except ImportError:
-        # numpy not installed — nothing to convert
-        if isinstance(obj, dict):
-            return {k: convert_numpy_types(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [convert_numpy_types(i) for i in obj]
-        return obj
-
-    if isinstance(obj, dict):
-        return {key: convert_numpy_types(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_numpy_types(item) for item in obj]
-    elif isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
-    elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32, np.int64)):
-        return int(obj)
-    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
-        val = float(obj)
-        if np.isnan(val) or np.isinf(val):
-            return None
-        return val
-    elif isinstance(obj, np.ndarray):
-        return convert_numpy_types(obj.tolist())
-    elif obj is None:
-        return None
-    elif isinstance(obj, float):
-        if np.isnan(obj) or np.isinf(obj):
-            return None
-        return obj
-    else:
-        return obj
+    return json_safe(obj, stringify_keys=False)
