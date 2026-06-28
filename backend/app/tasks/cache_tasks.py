@@ -9,18 +9,19 @@ Provides background tasks for:
 All data-fetching tasks use the @serialized_data_fetch decorator
 to ensure only one task fetches external data at a time.
 """
+import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
-import logging
-from typing import List, Optional
 from datetime import datetime, timezone
+from typing import Callable, List, Optional
 
 from celery.exceptions import SoftTimeLimitExceeded
 
 from ..celery_app import celery_app
+from ..config import settings
 from ..database import SessionLocal, is_corruption_error, safe_rollback
-from ..services.cache_manager import CacheManager
 from ..services.benchmark_registry_service import benchmark_registry
+from ..services.cache_manager import CacheManager
 from ..services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
@@ -30,35 +31,43 @@ from ..services.market_activity_service import (
 from ..services.price_fetch_failures import (
     classify_price_fetch_error,
     is_no_data_price_failure,
+)
+from ..services.price_fetch_failures import (
     is_rate_limit_error as is_price_rate_limit_error,
+)
+from ..services.price_fetch_failures import (
     is_retryable_price_failure,
 )
-from ..services.price_refresh_execution import classify_price_refresh_batch
-from ..services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
-from ..services.price_refresh_plan_builder import build_market_price_refresh_plan
 from ..services.price_refresh_activity import (
     PriceRefreshActivityDependencies,
     PriceRefreshActivityReporter,
 )
+from ..services.price_refresh_execution import classify_price_refresh_batch
 from ..services.price_refresh_live_runner import (
     LivePriceRefreshRunner,
     LivePriceRefreshRunnerDependencies,
     PriceRefreshRetryScheduler,
 )
+from ..services.price_refresh_plan_builder import build_market_price_refresh_plan
+from ..services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
 from ..services.price_refresh_workflow import (
     PriceRefreshMarketGateway,
     PriceRefreshWorkflow,
     PriceRefreshWorkflowDependencies,
 )
-from ..config import settings
-from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
+from ..services.security_master_service import security_master_resolver
+from ..utils.market_hours import (
+    format_market_status,
+    get_eastern_now,
+    is_market_open,
+    is_trading_day,
+)
 from ..wiring.bootstrap import (
     get_daily_price_bundle_service,
     get_market_calendar_service,
     get_rate_limiter,
     get_stock_universe_service,
 )
-from ..services.security_master_service import security_master_resolver
 from .data_fetch_lock import serialized_data_fetch
 from .runtime_activity_failure_hooks import RuntimeActivityTrackedTask
 from .transient_database import raise_if_transient_database_error
@@ -192,6 +201,7 @@ def run_orphaned_scan_cleanup(
     than only queueing work for a background worker.
     """
     from datetime import timedelta
+
     from ..models.scan_result import Scan, ScanResult
 
     if now_utc is None:
@@ -366,8 +376,8 @@ def warm_spy_cache(market: Optional[str] = None):
         # Per-market telemetry (bead asia.10.1): record successful warms only
         # so a fully failed warm doesn't reset the "age" gauge to zero.
         try:
-            from ..services.telemetry import get_telemetry
             from ..services.benchmark_registry_service import benchmark_registry
+            from ..services.telemetry import get_telemetry
             telemetry = get_telemetry()
             for warmed_market, periods in by_market.items():
                 if any(periods.values()):
@@ -516,10 +526,11 @@ def weekly_full_refresh(self, market: str | None = None):
         Dict with refresh results
     """
     import time
-    from ..wiring.bootstrap import get_price_cache
+
     from ..services.bulk_data_fetcher import BulkDataFetcher
-    from .market_queues import market_tag, log_extra, normalize_market
     from ..services.runtime_preferences_service import is_market_enabled_now
+    from ..wiring.bootstrap import get_price_cache
+    from .market_queues import log_extra, market_tag, normalize_market
 
     _log_extra = log_extra(market)
     price_cache = get_price_cache()
@@ -1049,6 +1060,7 @@ def _fetch_with_backoff(
     period: str = "2y",
     max_retries: int = 3,
     market: str | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ):
     """
     Fetch batch data with exponential backoff on rate limit errors.
@@ -1085,6 +1097,7 @@ def _fetch_with_backoff(
                     symbols,
                     period=period,
                     market=market,
+                    progress_callback=progress_callback,
                 )
             else:
                 results = bulk_fetcher.fetch_prices_in_batches(
@@ -1094,6 +1107,7 @@ def _fetch_with_backoff(
                         len(symbols),
                         getattr(bulk_fetcher, "DEFAULT_PRICE_BATCH_SIZE", 100),
                     ),
+                    progress_callback=progress_callback,
                 )
 
             return results
@@ -1243,7 +1257,9 @@ def _record_market_refresh_success_safely(
     if market is None:
         return
     try:
-        from ..services.market_refresh_state_service import record_market_refresh_success
+        from ..services.market_refresh_state_service import (
+            record_market_refresh_success,
+        )
 
         record_market_refresh_success(
             db,
@@ -1443,8 +1459,9 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
         Dict with refresh statistics
     """
     import time
-    from ..wiring.bootstrap import get_price_cache
+
     from ..services.bulk_data_fetcher import BulkDataFetcher
+    from ..wiring.bootstrap import get_price_cache
 
     logger.info("=" * 80)
     logger.info("TASK: Force Refresh Stale Intraday Data (Batch Mode)")
@@ -1651,7 +1668,7 @@ def run_smart_price_refresh(
     from ..services.bulk_data_fetcher import BulkDataFetcher
     from ..services.runtime_preferences_service import is_market_enabled_now
     from ..wiring.bootstrap import get_data_fetch_lock, get_price_cache
-    from .market_queues import market_tag, log_extra, normalize_market
+    from .market_queues import log_extra, market_tag, normalize_market
 
     def build_refresh_plan(db, *, mode, market, effective_market, recently_refreshed_filter):
         return build_market_price_refresh_plan(
@@ -1760,9 +1777,11 @@ def cleanup_old_price_data(self, keep_years: int = 5):
         Dict with cleanup statistics
     """
     from datetime import date, timedelta
-    from ..models.stock import StockPrice
-    from ..models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
+
     from sqlalchemy import func
+
+    from ..models.stock import StockPrice
+    from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 
     logger.info("=" * 80)
     logger.info(f"TASK: Cleanup Old Price Data (keeping {keep_years} years)")

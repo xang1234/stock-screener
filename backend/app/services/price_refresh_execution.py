@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-import logging
 from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -15,7 +15,6 @@ from .price_fetch_failures import (
     normalize_price_fetch_failure_kind,
 )
 from .price_refresh_planning import PriceRefreshJob
-
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +272,7 @@ def iter_price_refresh_batches(
     fetch_batch: Callable[..., MappingResult],
     market_for_symbol: Callable[[str], str],
     raise_if_transient_database_error: Callable[[Exception], None],
+    progress_callback: Callable[[int], None] | None = None,
 ) -> Iterator[PriceRefreshBatchOutcome]:
     total_batches = _total_batches(jobs, batch_size)
     batch_number = 0
@@ -294,6 +294,7 @@ def iter_price_refresh_batches(
                     batch_symbols,
                     period=job.period,
                     market=market,
+                    progress_callback=progress_callback,
                 )
                 yield classify_price_refresh_batch(
                     batch_number=batch_number,

@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from .price_fetch_failures import is_retryable_price_failure_kind
-from .price_refresh_activity import CeleryTaskLike, PriceRefreshActivityReporter, task_id
+from .price_refresh_activity import (
+    CeleryTaskLike,
+    PriceRefreshActivityReporter,
+    task_id,
+)
 from .price_refresh_execution import (
     PriceRefreshExecutionAccumulator,
     PriceRefreshExecutionSummary,
@@ -63,12 +67,43 @@ class LivePriceRefreshRunner:
         def market_for_symbol(symbol: str) -> str:
             return symbol_markets.get(str(symbol).upper(), effective_market)
 
-        def fetch_batch(symbols: Sequence[str], *, period: str, market: str | None):
+        processed = 0
+
+        def progress_callback(batch_processed: int) -> None:
+            nonlocal processed
+
+            processed += batch_processed
+
+            percent = (processed / total) * 100 if total else 100.0
+
+            activity_reporter.publish_progress(
+                db,
+                price_cache,
+                task=task,
+                market=market,
+                effective_market=effective_market,
+                lifecycle=activity_lifecycle,
+                current=processed,
+                total=total,
+                percent=percent,
+                message="Refreshing market prices",
+                refreshed=processed,  # adjust if you want true refreshed count
+                failed=0,
+            )
+
+        def fetch_batch(
+            symbols: Sequence[str],
+            *,
+            period: str,
+            market: str | None,
+            progress_callback: Callable[[int], None] | None = None,
+        ):
             return self._deps.fetch_with_backoff(
                 bulk_fetcher,
                 list(symbols),
                 period=period,
                 market=market,
+                progress_callback=progress_callback,
             )
 
         try:
@@ -79,6 +114,7 @@ class LivePriceRefreshRunner:
                 fetch_batch=fetch_batch,
                 market_for_symbol=market_for_symbol,
                 raise_if_transient_database_error=self._deps.raise_if_transient_database_error,
+                progress_callback=progress_callback,
             ):
                 if batch.price_data_by_symbol:
                     price_cache.store_batch_in_cache(

@@ -34,8 +34,8 @@ class PriceFetcher(Protocol):
         period: str,
         start_batch_size: int | None = None,
         market: str | None = None,
-    ) -> dict[str, dict[str, Any]]:
-        ...
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> dict[str, dict[str, Any]]: ...
 
     def _fetch_cn_price_batch(
         self,
@@ -80,6 +80,7 @@ class PriceProviderPlanExecutor:
         period: str = "2y",
         start_batch_size: int | None = None,
         market: str | None = None,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> dict[str, dict[str, Any]]:
         if not symbols:
             return {}
@@ -122,6 +123,7 @@ class PriceProviderPlanExecutor:
                     market=market,
                     plan=plan,
                     step=step,
+                    progress_callback=progress_callback,
                 )
 
             logger.warning(
@@ -152,12 +154,14 @@ class PriceProviderPlanExecutor:
         market: str | None,
         plan: ProviderDataPlan,
         step: ProviderPlanStep,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> dict[str, dict[str, Any]]:
         results = self._fetcher._fetch_yfinance_prices_in_batches(
             symbols,
             period=period,
             start_batch_size=start_batch_size if start_batch_size is not None else step.batch_size,
             market=market,
+            progress_callback=progress_callback,
         )
         return self._with_plan_metadata(results, plan)
 
@@ -169,6 +173,7 @@ class PriceProviderPlanExecutor:
         start_batch_size: int | None,
         market: str | None,
         plan: ProviderDataPlan,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> dict[str, dict[str, Any]]:
         native_results = self._fetcher._fetch_cn_price_batch(symbols, period=period)
         fallback_symbols = [
@@ -185,6 +190,7 @@ class PriceProviderPlanExecutor:
             period=period,
             start_batch_size=start_batch_size if start_batch_size is not None else plan.step_for(PROVIDER_YFINANCE).batch_size,
             market=market,
+            progress_callback=progress_callback,
         )
         merged = dict(native_results)
         for symbol, fallback_payload in fallback_results.items():
@@ -207,6 +213,7 @@ class PriceProviderPlanExecutor:
         start_batch_size: int | None,
         market: str | None,
         plan: ProviderDataPlan,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> dict[str, dict[str, Any]]:
         krx_results = self._fetcher._fetch_kr_price_batch(symbols, period=period)
         fallback_symbols = [
@@ -222,6 +229,7 @@ class PriceProviderPlanExecutor:
             period=period,
             start_batch_size=start_batch_size if start_batch_size is not None else plan.step_for(PROVIDER_YFINANCE).batch_size,
             market=market,
+            progress_callback=progress_callback,
         )
         merged = dict(krx_results)
         for symbol, fallback_payload in fallback_results.items():

@@ -10,13 +10,14 @@ docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import logging
 import math
-from collections.abc import Callable
-from typing import TYPE_CHECKING, List, Dict, Optional, Any, NamedTuple
-from threading import RLock
-import yfinance as yf
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from threading import RLock
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional
+
+import yfinance as yf
 
 from ..config import settings
 from ..domain.providers.price_symbol_support import yahoo_price_no_data_error_for_symbol
@@ -646,9 +647,10 @@ class BulkDataFetcher:
     def fetch_prices_in_batches(
         self,
         symbols: List[str],
-        period: str = '2y',
+        period: str = "2y",
         start_batch_size: Optional[int] = None,
         market: Optional[str] = None,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> Dict[str, Dict]:
         """Fetch prices for many symbols using market-aware batch routing.
 
@@ -670,6 +672,7 @@ class BulkDataFetcher:
             period=period,
             start_batch_size=start_batch_size,
             market=market,
+            progress_callback=progress_callback,
         )
 
     def _get_cn_price_service(self):
@@ -715,6 +718,7 @@ class BulkDataFetcher:
         period: str,
         start_batch_size: Optional[int] = None,
         market: Optional[str] = None,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> Dict[str, Dict]:
         fetch_symbols, combined_results = self._split_fetchable_price_symbols(
             symbols
@@ -801,6 +805,17 @@ class BulkDataFetcher:
                         min_interval_s=settings.yfinance_batch_rate_limit_interval,
                     )
             batch_start += len(batch_symbols)
+
+            if progress_callback is not None:
+                try:
+                    progress_callback(len(batch_symbols))
+                except Exception as exc:
+                    logger.warning(
+                        "Ignoring price progress callback failure at %d/%d symbols: %s",
+                        batch_start,
+                        len(fetch_symbols),
+                        exc,
+                    )
 
         return combined_results
 
