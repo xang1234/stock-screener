@@ -128,6 +128,26 @@ class TestUpsertSnapshotRows:
         assert item.extended_fields["rs_line_blue_dot_recent"] is True
         assert item.extended_fields["rs_line_new_high_date"] == "2026-01-06"
 
+    def test_missing_rs_line_leadership_fields_default_false(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+
+        repo.upsert_snapshot_rows(run_id, [_make_row("MSFT")])
+
+        stored = session.query(StockFeatureDaily).filter_by(run_id=run_id, symbol="MSFT").one()
+        assert stored.rs_line_new_high is False
+        assert stored.rs_line_new_high_before_price is False
+        assert stored.rs_line_blue_dot_recent is False
+        assert stored.rs_line_new_high_date is None
+
+        result = repo.query_run_as_scan_results(run_id, QuerySpec())
+        item = result.items[0]
+        assert item.extended_fields["rs_line_new_high"] is False
+        assert item.extended_fields["rs_line_new_high_before_price"] is False
+        assert item.extended_fields["rs_line_blue_dot_recent"] is False
+        assert item.extended_fields["rs_line_new_high_date"] is None
+
     def test_large_batch_succeeds(self, repo: SqlFeatureStoreRepository, session: Session):
         """More than 500 rows should work (verifies internal batching)."""
         run_id = _create_run(session)

@@ -256,9 +256,9 @@ export const nullSeRow = {
   se_volume_vs_50d: null,
   se_rs_line_new_high: null,
   se_rs_line_blue_dot: null,
-  rs_line_new_high: null,
-  rs_line_new_high_before_price: null,
-  rs_line_blue_dot_recent: null,
+  rs_line_new_high: false,
+  rs_line_new_high_before_price: false,
+  rs_line_blue_dot_recent: false,
   rs_line_new_high_date: null,
   se_pivot_price: null,
 };

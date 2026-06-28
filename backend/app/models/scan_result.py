@@ -1,6 +1,19 @@
 """Scan and scan result models"""
 import logging
-from sqlalchemy import Boolean, Column, Integer, String, Float, BigInteger, DateTime, JSON, Index, ForeignKey, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    false,
+    text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..database import Base
@@ -155,9 +168,15 @@ class ScanResult(Base):
     rs_trend = Column(Integer, index=True)  # -1=declining, 0=flat, 1=improving
 
     # RS-line leadership signals
-    rs_line_new_high = Column(Boolean, nullable=True, index=True)
-    rs_line_new_high_before_price = Column(Boolean, nullable=True, index=True)
-    rs_line_blue_dot_recent = Column(Boolean, nullable=True, index=True)
+    rs_line_new_high = Column(
+        Boolean, nullable=False, default=False, server_default=false(), index=True
+    )
+    rs_line_new_high_before_price = Column(
+        Boolean, nullable=False, default=False, server_default=false(), index=True
+    )
+    rs_line_blue_dot_recent = Column(
+        Boolean, nullable=False, default=False, server_default=false(), index=True
+    )
     rs_line_new_high_date = Column(String(10), nullable=True, index=True)
 
     # Price Sparkline data (30-day normalized price trend)

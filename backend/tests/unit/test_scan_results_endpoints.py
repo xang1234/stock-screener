@@ -125,6 +125,9 @@ class TestScanResultEndpoints:
             row = resp.json()["results"][0]
             assert row["se_explain"] == {"summary": "heavy payload"}
             assert row["se_candidates"] == [{"pattern": "vcp"}]
+            assert row["rs_line_new_high"] is False
+            assert row["rs_line_new_high_before_price"] is False
+            assert row["rs_line_blue_dot_recent"] is False
         finally:
             app.dependency_overrides.pop(get_uow, None)
 

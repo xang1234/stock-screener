@@ -10,7 +10,11 @@ from typing import Any, Dict, List, Optional, Self
 from pydantic import BaseModel, Field, field_validator
 
 from ..domain.scanning.models import ScanResultItemDomain, StockExplanation
-from ..infra.serialization import normalize_string_list, sanitize_sparkline
+from ..infra.serialization import (
+    coerce_bool_or_false,
+    normalize_string_list,
+    sanitize_sparkline,
+)
 from .universe import UniverseDefinition
 
 
@@ -175,9 +179,9 @@ class ScanResultItem(BaseModel):
     # RS Sparkline data (30-day stock/SPY ratio trend)
     rs_sparkline_data: Optional[List[float]] = None
     rs_trend: Optional[int] = None  # -1=declining, 0=flat, 1=improving
-    rs_line_new_high: Optional[bool] = None
-    rs_line_new_high_before_price: Optional[bool] = None
-    rs_line_blue_dot_recent: Optional[bool] = None
+    rs_line_new_high: bool = False
+    rs_line_new_high_before_price: bool = False
+    rs_line_blue_dot_recent: bool = False
     rs_line_new_high_date: Optional[str] = None
 
     # Price Sparkline data (30-day normalized price trend)
@@ -323,9 +327,11 @@ class ScanResultItem(BaseModel):
             # Sparklines
             rs_sparkline_data=ef.get("rs_sparkline_data"),
             rs_trend=ef.get("rs_trend"),
-            rs_line_new_high=ef.get("rs_line_new_high"),
-            rs_line_new_high_before_price=ef.get("rs_line_new_high_before_price"),
-            rs_line_blue_dot_recent=ef.get("rs_line_blue_dot_recent"),
+            rs_line_new_high=coerce_bool_or_false(ef.get("rs_line_new_high")),
+            rs_line_new_high_before_price=coerce_bool_or_false(
+                ef.get("rs_line_new_high_before_price")
+            ),
+            rs_line_blue_dot_recent=coerce_bool_or_false(ef.get("rs_line_blue_dot_recent")),
             rs_line_new_high_date=ef.get("rs_line_new_high_date"),
             price_sparkline_data=ef.get("price_sparkline_data"),
             price_change_1d=ef.get("price_change_1d"),

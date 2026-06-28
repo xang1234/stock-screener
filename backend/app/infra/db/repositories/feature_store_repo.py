@@ -27,7 +27,11 @@ from app.infra.db.models.feature_store import (
     StockFeatureDaily,
 )
 from app.infra.db.portability import json_text
-from app.infra.serialization import convert_numpy_types, normalize_string_list
+from app.infra.serialization import (
+    coerce_bool_or_false,
+    convert_numpy_types,
+    normalize_string_list,
+)
 from app.infra.query.feature_store_query import (
     apply_filters,
     apply_sort_all,
@@ -151,9 +155,11 @@ def _snapshot_row_values(run_id: int, row: FeatureRowWrite) -> dict[str, Any]:
         "composite_score": convert_numpy_types(row.composite_score),
         "overall_rating": convert_numpy_types(row.overall_rating),
         "passes_count": convert_numpy_types(row.passes_count),
-        "rs_line_new_high": details.get("rs_line_new_high"),
-        "rs_line_new_high_before_price": details.get("rs_line_new_high_before_price"),
-        "rs_line_blue_dot_recent": details.get("rs_line_blue_dot_recent"),
+        "rs_line_new_high": coerce_bool_or_false(details.get("rs_line_new_high")),
+        "rs_line_new_high_before_price": coerce_bool_or_false(
+            details.get("rs_line_new_high_before_price")
+        ),
+        "rs_line_blue_dot_recent": coerce_bool_or_false(details.get("rs_line_blue_dot_recent")),
         "rs_line_new_high_date": details.get("rs_line_new_high_date"),
         "details_json": details,
     }
@@ -800,17 +806,17 @@ def _map_feature_to_scan_result(
         "gics_industry": d.get("gics_industry"),
         "rs_sparkline_data": d.get("rs_sparkline_data") if include_sparklines else None,
         "rs_trend": d.get("rs_trend"),
-        "rs_line_new_high": (
+        "rs_line_new_high": coerce_bool_or_false(
             row.rs_line_new_high
             if row.rs_line_new_high is not None
             else d.get("rs_line_new_high")
         ),
-        "rs_line_new_high_before_price": (
+        "rs_line_new_high_before_price": coerce_bool_or_false(
             row.rs_line_new_high_before_price
             if row.rs_line_new_high_before_price is not None
             else d.get("rs_line_new_high_before_price")
         ),
-        "rs_line_blue_dot_recent": (
+        "rs_line_blue_dot_recent": coerce_bool_or_false(
             row.rs_line_blue_dot_recent
             if row.rs_line_blue_dot_recent is not None
             else d.get("rs_line_blue_dot_recent")

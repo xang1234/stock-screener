@@ -179,7 +179,8 @@ export const filterStaticScanRows = (rows, filters) => {
     }
 
     for (const [filterKey, fieldName] of Object.entries(BOOLEAN_FILTER_TO_FIELD)) {
-      if (filters[filterKey] != null && Boolean(row[fieldName]) !== filters[filterKey]) {
+      const rowValue = row[fieldName] === true;
+      if (filters[filterKey] != null && rowValue !== filters[filterKey]) {
         return false;
       }
     }

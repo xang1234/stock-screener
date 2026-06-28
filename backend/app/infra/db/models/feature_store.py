@@ -14,7 +14,7 @@ Tables:
 """
 from sqlalchemy import (
     Boolean, Column, Integer, Float, Text, Date, DateTime, JSON,
-    ForeignKey, Index,
+    ForeignKey, Index, false,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -100,9 +100,15 @@ class StockFeatureDaily(Base):
     composite_score = Column(Float, nullable=True, index=True)
     overall_rating = Column(Integer, nullable=True, index=True)
     passes_count = Column(Integer, nullable=True)
-    rs_line_new_high = Column(Boolean, nullable=True, index=True)
-    rs_line_new_high_before_price = Column(Boolean, nullable=True, index=True)
-    rs_line_blue_dot_recent = Column(Boolean, nullable=True, index=True)
+    rs_line_new_high = Column(
+        Boolean, nullable=False, default=False, server_default=false(), index=True
+    )
+    rs_line_new_high_before_price = Column(
+        Boolean, nullable=False, default=False, server_default=false(), index=True
+    )
+    rs_line_blue_dot_recent = Column(
+        Boolean, nullable=False, default=False, server_default=false(), index=True
+    )
     rs_line_new_high_date = Column(Text, nullable=True, index=True)
     details_json = Column(JSON, nullable=True)
 

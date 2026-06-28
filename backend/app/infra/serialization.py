@@ -57,6 +57,13 @@ def normalize_string_list(value: object) -> list[str]:
     return [text] if text else []
 
 
+def coerce_bool_or_false(value: object) -> bool:
+    """Normalize optional persisted/filter booleans to a strict bool."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)
+
+
 def convert_numpy_types(obj: object) -> object:
     """Recursively convert numpy/pandas types to native Python types.
 

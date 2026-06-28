@@ -12,24 +12,80 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("scan_results", sa.Column("rs_line_new_high", sa.Boolean(), nullable=True))
-    op.add_column("scan_results", sa.Column("rs_line_new_high_before_price", sa.Boolean(), nullable=True))
-    op.add_column("scan_results", sa.Column("rs_line_blue_dot_recent", sa.Boolean(), nullable=True))
-    op.add_column("scan_results", sa.Column("rs_line_new_high_date", sa.String(length=10), nullable=True))
+    op.add_column(
+        "scan_results",
+        sa.Column("rs_line_new_high", sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    op.add_column(
+        "scan_results",
+        sa.Column(
+            "rs_line_new_high_before_price",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.false(),
+        ),
+    )
+    op.add_column(
+        "scan_results",
+        sa.Column(
+            "rs_line_blue_dot_recent",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.false(),
+        ),
+    )
+    op.add_column(
+        "scan_results",
+        sa.Column("rs_line_new_high_date", sa.String(length=10), nullable=True),
+    )
     op.create_index("idx_scan_rs_line_new_high", "scan_results", ["scan_id", "rs_line_new_high"])
     op.create_index(
         "idx_scan_rs_line_new_high_before_price",
         "scan_results",
         ["scan_id", "rs_line_new_high_before_price"],
     )
-    op.create_index("idx_scan_rs_line_blue_dot_recent", "scan_results", ["scan_id", "rs_line_blue_dot_recent"])
-    op.create_index("idx_scan_rs_line_new_high_date", "scan_results", ["scan_id", "rs_line_new_high_date"])
+    op.create_index(
+        "idx_scan_rs_line_blue_dot_recent",
+        "scan_results",
+        ["scan_id", "rs_line_blue_dot_recent"],
+    )
+    op.create_index(
+        "idx_scan_rs_line_new_high_date",
+        "scan_results",
+        ["scan_id", "rs_line_new_high_date"],
+    )
 
-    op.add_column("stock_feature_daily", sa.Column("rs_line_new_high", sa.Boolean(), nullable=True))
-    op.add_column("stock_feature_daily", sa.Column("rs_line_new_high_before_price", sa.Boolean(), nullable=True))
-    op.add_column("stock_feature_daily", sa.Column("rs_line_blue_dot_recent", sa.Boolean(), nullable=True))
-    op.add_column("stock_feature_daily", sa.Column("rs_line_new_high_date", sa.Text(), nullable=True))
-    op.create_index("ix_sfd_run_rs_line_new_high", "stock_feature_daily", ["run_id", "rs_line_new_high"])
+    op.add_column(
+        "stock_feature_daily",
+        sa.Column("rs_line_new_high", sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    op.add_column(
+        "stock_feature_daily",
+        sa.Column(
+            "rs_line_new_high_before_price",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.false(),
+        ),
+    )
+    op.add_column(
+        "stock_feature_daily",
+        sa.Column(
+            "rs_line_blue_dot_recent",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.false(),
+        ),
+    )
+    op.add_column(
+        "stock_feature_daily",
+        sa.Column("rs_line_new_high_date", sa.Text(), nullable=True),
+    )
+    op.create_index(
+        "ix_sfd_run_rs_line_new_high",
+        "stock_feature_daily",
+        ["run_id", "rs_line_new_high"],
+    )
     op.create_index(
         "ix_sfd_run_rs_line_new_high_before_price",
         "stock_feature_daily",
@@ -40,7 +96,11 @@ def upgrade() -> None:
         "stock_feature_daily",
         ["run_id", "rs_line_blue_dot_recent"],
     )
-    op.create_index("ix_sfd_run_rs_line_new_high_date", "stock_feature_daily", ["run_id", "rs_line_new_high_date"])
+    op.create_index(
+        "ix_sfd_run_rs_line_new_high_date",
+        "stock_feature_daily",
+        ["run_id", "rs_line_new_high_date"],
+    )
 
 
 def downgrade() -> None:

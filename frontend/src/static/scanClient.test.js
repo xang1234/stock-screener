@@ -123,7 +123,7 @@ describe('static scan client', () => {
     const testRows = [
       { symbol: 'BDOT', rs_line_blue_dot_recent: true },
       { symbol: 'NOPE', rs_line_blue_dot_recent: false },
-      { symbol: 'UNKNOWN', rs_line_blue_dot_recent: null },
+      { symbol: 'MISS', rs_line_blue_dot_recent: false },
     ];
     const filters = buildDefaultScanFilters();
     filters.rsLineBlueDotRecent = true;
@@ -131,6 +131,20 @@ describe('static scan client', () => {
     const filtered = filterStaticScanRows(testRows, filters);
 
     expect(filtered.map((row) => row.symbol)).toEqual(['BDOT']);
+  });
+
+  it('treats missing static RS blue-dot values as false', () => {
+    const testRows = [
+      { symbol: 'BDOT', rs_line_blue_dot_recent: true },
+      { symbol: 'NOPE', rs_line_blue_dot_recent: false },
+      { symbol: 'LEGACY' },
+    ];
+    const filters = buildDefaultScanFilters();
+    filters.rsLineBlueDotRecent = false;
+
+    const filtered = filterStaticScanRows(testRows, filters);
+
+    expect(filtered.map((row) => row.symbol)).toEqual(['NOPE', 'LEGACY']);
   });
 
   it('keeps the legacy setup-engine blue-dot filter wired in static mode', () => {
