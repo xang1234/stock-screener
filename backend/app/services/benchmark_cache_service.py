@@ -320,6 +320,9 @@ class BenchmarkCacheService:
 
             if cached_bytes:
                 df = pickle.loads(cached_bytes)
+                df = drop_non_finite_close_rows(df)
+                if df is None or df.empty:
+                    return None
                 logger.debug("Retrieved benchmark %s %s from Redis (%s rows)", benchmark_symbol, period, len(df))
                 return df
 
@@ -374,6 +377,10 @@ class BenchmarkCacheService:
             df = pd.DataFrame(data)
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
+            df = drop_non_finite_close_rows(df)
+            if df is None or df.empty:
+                logger.debug("No finite database rows for benchmark %s %s", benchmark_symbol, period)
+                return None
 
             logger.debug("Retrieved benchmark %s %s from database (%s rows)", benchmark_symbol, period, len(df))
             return df
@@ -405,6 +412,10 @@ class BenchmarkCacheService:
             benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
             if benchmark_data is None or benchmark_data.empty:
                 logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
+                return None
+            benchmark_data = drop_non_finite_close_rows(benchmark_data)
+            if benchmark_data is None or benchmark_data.empty:
+                logger.error("Fetched benchmark %s but no finite close rows were available", benchmark_symbol)
                 return None
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
             return benchmark_data
@@ -440,6 +451,10 @@ class BenchmarkCacheService:
 
             if benchmark_data is None or benchmark_data.empty:
                 logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
+                return None
+            benchmark_data = drop_non_finite_close_rows(benchmark_data)
+            if benchmark_data is None or benchmark_data.empty:
+                logger.error("Fetched benchmark %s but no finite close rows were available", benchmark_symbol)
                 return None
 
             logger.info("Fetched benchmark %s %s: %s rows", benchmark_symbol, period, len(benchmark_data))
@@ -499,6 +514,8 @@ class BenchmarkCacheService:
         logger.warning("Timeout waiting for benchmark %s %s cache - fetching directly", benchmark_symbol, period)
         benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
         if benchmark_data is not None and not benchmark_data.empty:
+            benchmark_data = drop_non_finite_close_rows(benchmark_data)
+        if benchmark_data is not None and not benchmark_data.empty:
             # Persist fallback fetch so future calls can use DB cache even when
             # lock-holder failed to populate Redis.
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
@@ -516,6 +533,10 @@ class BenchmarkCacheService:
             return
 
         try:
+            data = drop_non_finite_close_rows(data)
+            if data is None or data.empty:
+                return
+
             redis_key = self._redis_data_key(benchmark_symbol, period, market=market)
             pickled_data = pickle.dumps(data)
 

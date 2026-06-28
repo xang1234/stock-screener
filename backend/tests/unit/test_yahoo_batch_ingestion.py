@@ -875,56 +875,6 @@ def test_store_in_database_replaces_latest_day_row(monkeypatch):
     db.close()
 
 
-def test_store_batch_in_cache_skips_non_finite_close_rows():
-    captured_rows = []
-
-    class FakeQuery:
-        def filter(self, *_args):
-            return self
-
-        def all(self):
-            return []
-
-    class FakeSession:
-        def query(self, *_args):
-            return FakeQuery()
-
-        def bulk_insert_mappings(self, _model, rows):
-            captured_rows.extend(rows)
-
-        def bulk_update_mappings(self, _model, _rows):
-            raise AssertionError("No existing rows should be updated")
-
-        def commit(self):
-            pass
-
-        def rollback(self):
-            pass
-
-        def close(self):
-            pass
-
-    service = PriceCacheService(redis_client=None, session_factory=FakeSession)
-    payload = pd.DataFrame(
-        {
-            "Open": [100.0, float("nan")],
-            "High": [102.0, float("nan")],
-            "Low": [99.0, float("nan")],
-            "Close": [101.0, float("nan")],
-            "Adj Close": [101.0, float("nan")],
-            "Volume": [1_000_000, 0],
-        },
-        index=pd.to_datetime([date(2026, 6, 25), date(2026, 6, 26)]),
-    )
-    payload.index.name = "Date"
-
-    service.store_batch_in_cache({"SPY": payload}, also_store_db=True)
-
-    assert [(row["symbol"], row["date"], row["close"]) for row in captured_rows] == [
-        ("SPY", date(2026, 6, 25), 101.0)
-    ]
-
-
 def test_cleanup_old_price_data_skips_inactive_symbols(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

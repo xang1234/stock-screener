@@ -8,7 +8,51 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
+from numbers import Integral, Real
 from typing import Any, Optional
+
+
+def finite_float_or_none(value: Any) -> float | None:
+    """Return a finite float, or ``None`` for missing/non-finite values."""
+    if value is None:
+        return None
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except (ImportError, TypeError, ValueError):
+        pass
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def json_safe(value: Any) -> Any:
+    """Convert a value tree into strict JSON-compatible primitives."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except (ImportError, TypeError, ValueError):
+        pass
+    return value
 
 
 def sanitize_sparkline(value: Any) -> Optional[list[float]]:

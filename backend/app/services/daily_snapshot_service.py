@@ -10,10 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from numbers import Integral, Real
+from datetime import datetime, timezone
 from time import monotonic
 from typing import Any, Callable
 
@@ -22,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortOrder, SortSpec
 from app.domain.markets.catalog import get_market_catalog
 from app.domain.scanning.default_filters import resolve_default_scan_filters
+from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
 from app.schemas.scanning import ScanResultItem
@@ -62,28 +61,10 @@ def daily_snapshot_etag(payload_json: str) -> str:
     return 'W/"{}"'.format(hashlib.sha1(payload_json.encode("utf-8")).hexdigest())
 
 
-def _json_safe(value: Any) -> Any:
-    """Convert payload values into strict JSON-compatible primitives."""
-    if value is None or isinstance(value, (str, bool)):
-        return value
-    if isinstance(value, Integral):
-        return int(value)
-    if isinstance(value, Real):
-        number = float(value)
-        return number if math.isfinite(number) else None
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    return value
-
-
 def serialize_daily_snapshot_payload(payload: dict[str, Any]) -> str:
     """Serialize Daily Snapshot payloads as browser-parseable strict JSON."""
     return json.dumps(
-        _json_safe(payload),
+        json_safe(payload),
         allow_nan=False,
         separators=(",", ":"),
     )

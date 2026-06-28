@@ -335,9 +335,13 @@ class PriceCacheService:
             # Convert Date to pd.Timestamp for consistency with yfinance data
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
+            df = drop_non_finite_close_rows(df)
+            if df is None or df.empty or len(df) < 50:
+                logger.debug(f"Insufficient finite cached data for {symbol}")
+                return None, None
 
             # Get last date
-            last_date = prices[-1].date
+            last_date = df.index[-1].date()
 
             logger.debug(f"Retrieved {symbol} from database ({len(df)} rows, last: {last_date})")
             return df, last_date
@@ -439,8 +443,12 @@ class PriceCacheService:
                     df = pd.DataFrame(data)
                     df['Date'] = pd.to_datetime(df['Date'])
                     df.set_index('Date', inplace=True)
+                    df = drop_non_finite_close_rows(df)
+                    if df is None or df.empty or len(df) < 50:
+                        results[symbol] = (None, None)
+                        continue
 
-                    last_date = prices[-1].date
+                    last_date = df.index[-1].date()
                     results[symbol] = (df, last_date)
 
                 logger.debug(
@@ -477,6 +485,10 @@ class PriceCacheService:
 
             if data is None or data.empty:
                 logger.warning(f"Failed to fetch data for {symbol}")
+                return None
+            data = drop_non_finite_close_rows(data)
+            if data is None or data.empty:
+                logger.warning("Fetched %s but no finite close rows were available", symbol)
                 return None
 
             logger.info(f"Fetched {symbol}: {len(data)} rows")
@@ -581,6 +593,10 @@ class PriceCacheService:
         we only fetch the missing days!
         """
         try:
+            cached_data = drop_non_finite_close_rows(cached_data)
+            if cached_data is None or cached_data.empty:
+                return self._fetch_full_and_cache(symbol, period, market=market)
+
             # Calculate how many days we're missing
             today = datetime.now().date()
             days_missing = (today - last_cached_date).days
@@ -617,6 +633,10 @@ class PriceCacheService:
             if new_data_filtered.empty:
                 logger.info(f"No new data available for {symbol}")
                 return cached_data
+            new_data_filtered = drop_non_finite_close_rows(new_data_filtered)
+            if new_data_filtered is None or new_data_filtered.empty:
+                logger.warning("Fetched incremental %s rows but none had finite closes", symbol)
+                return cached_data
 
             logger.info(f"Fetched {len(new_data_filtered)} new rows for {symbol}")
 
@@ -645,6 +665,10 @@ class PriceCacheService:
             cutoff_date = today - timedelta(days=days)
 
             merged_data = merged_data[merged_data.index >= pd.Timestamp(cutoff_date)]
+            merged_data = drop_non_finite_close_rows(merged_data)
+            if merged_data is None or merged_data.empty:
+                logger.warning("Merged %s data produced no finite close rows", symbol)
+                return None
 
             logger.info(f"Merged data for {symbol}: {len(merged_data)} total rows")
 
@@ -692,6 +716,10 @@ class PriceCacheService:
             return
 
         try:
+            data = drop_non_finite_close_rows(data)
+            if data is None or data.empty:
+                return
+
             # Keep last 5 years (1825 days) for volume analysis
             cutoff_datetime = datetime.now() - timedelta(days=self.RECENT_DAYS)
             # Convert to pd.Timestamp to ensure compatibility with pandas index
@@ -1854,6 +1882,10 @@ class PriceCacheService:
                     if raw_data:
                         try:
                             df = pickle.loads(raw_data)
+                            df = drop_non_finite_close_rows(df)
+                            if df is None or df.empty:
+                                cached_data[symbol] = None
+                                continue
 
                             # Check if Redis data is sufficient for requested period
                             # Redis stores last 5 years (1825 days), but verify we have at least 200 days minimum

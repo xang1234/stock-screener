@@ -2,33 +2,20 @@
 
 from __future__ import annotations
 
-import math
 from datetime import date
 from typing import Any, Mapping
 
 import pandas as pd
 
-
-def finite_float_or_none(value: Any) -> float | None:
-    """Return a finite float, or ``None`` for missing/non-finite values."""
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except (TypeError, ValueError):
-        pass
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+from app.infra.serialization import finite_float_or_none
 
 
 def drop_non_finite_close_rows(data: pd.DataFrame | None) -> pd.DataFrame | None:
     """Remove rows whose close cannot be safely treated as a market price."""
-    if data is None or data.empty or "Close" not in data.columns:
+    if data is None or data.empty:
         return data
+    if "Close" not in data.columns:
+        return data.iloc[0:0].copy()
     keep_mask = data["Close"].map(finite_float_or_none).notna()
     if bool(keep_mask.all()):
         return data
