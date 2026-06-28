@@ -22,6 +22,34 @@ def drop_non_finite_close_rows(data: pd.DataFrame | None) -> pd.DataFrame | None
     return data.loc[keep_mask].copy()
 
 
+def normalize_price_frame(
+    data: pd.DataFrame | None,
+    *,
+    min_rows: int = 1,
+) -> pd.DataFrame | None:
+    """Return a finite-close OHLCV frame that satisfies the row-count contract."""
+    cleaned = drop_non_finite_close_rows(data)
+    if cleaned is None or cleaned.empty:
+        return None
+    if len(cleaned) < min_rows:
+        return None
+    return cleaned
+
+
+def normalize_price_batch(
+    batch_data: Mapping[str, pd.DataFrame | None],
+    *,
+    min_rows: int = 1,
+) -> dict[str, pd.DataFrame]:
+    """Normalize a symbol->price-frame batch and drop unusable symbols."""
+    normalized: dict[str, pd.DataFrame] = {}
+    for symbol, data in batch_data.items():
+        cleaned = normalize_price_frame(data, min_rows=min_rows)
+        if cleaned is not None:
+            normalized[symbol] = cleaned
+    return normalized
+
+
 def _volume_or_zero(value: Any) -> int:
     number = finite_float_or_none(value)
     if number is None:

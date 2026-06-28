@@ -37,7 +37,8 @@ from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_poli
 from .cache.price_cache_warmup import PriceCacheWarmupStore
 from .errors import CacheRefreshError
 from .price_row_normalization import (
-    drop_non_finite_close_rows,
+    normalize_price_batch,
+    normalize_price_frame,
     stock_price_row_from_ohlcv,
 )
 from .redis_pool import get_redis_client, get_bulk_redis_client, is_redis_enabled
@@ -335,8 +336,8 @@ class PriceCacheService:
             # Convert Date to pd.Timestamp for consistency with yfinance data
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
-            df = drop_non_finite_close_rows(df)
-            if df is None or df.empty or len(df) < 50:
+            df = normalize_price_frame(df, min_rows=50)
+            if df is None:
                 logger.debug(f"Insufficient finite cached data for {symbol}")
                 return None, None
 
@@ -443,8 +444,8 @@ class PriceCacheService:
                     df = pd.DataFrame(data)
                     df['Date'] = pd.to_datetime(df['Date'])
                     df.set_index('Date', inplace=True)
-                    df = drop_non_finite_close_rows(df)
-                    if df is None or df.empty or len(df) < 50:
+                    df = normalize_price_frame(df, min_rows=50)
+                    if df is None:
                         results[symbol] = (None, None)
                         continue
 
@@ -483,12 +484,9 @@ class PriceCacheService:
         try:
             data = self._fetch_direct_historical_data(symbol, period=period)
 
-            if data is None or data.empty:
-                logger.warning(f"Failed to fetch data for {symbol}")
-                return None
-            data = drop_non_finite_close_rows(data)
-            if data is None or data.empty:
-                logger.warning("Fetched %s but no finite close rows were available", symbol)
+            data = normalize_price_frame(data)
+            if data is None:
+                logger.warning("Failed to fetch finite price data for %s", symbol)
                 return None
 
             logger.info(f"Fetched {symbol}: {len(data)} rows")
@@ -593,8 +591,8 @@ class PriceCacheService:
         we only fetch the missing days!
         """
         try:
-            cached_data = drop_non_finite_close_rows(cached_data)
-            if cached_data is None or cached_data.empty:
+            cached_data = normalize_price_frame(cached_data)
+            if cached_data is None:
                 return self._fetch_full_and_cache(symbol, period, market=market)
 
             # Calculate how many days we're missing
@@ -616,8 +614,9 @@ class PriceCacheService:
             # Fetch only recent data (last 7 days to ensure overlap)
             new_data = self._fetch_direct_historical_data(symbol, period="7d")
 
-            if new_data is None or new_data.empty:
-                logger.warning(f"Failed to fetch incremental data for {symbol}")
+            new_data = normalize_price_frame(new_data)
+            if new_data is None:
+                logger.warning(f"Failed to fetch finite incremental data for {symbol}")
                 return cached_data  # Return stale cache as fallback
 
             # Filter new_data to only dates after last_cached_date
@@ -630,12 +629,9 @@ class PriceCacheService:
             else:
                 new_data_filtered = new_data[new_data.index > last_cached_ts]
 
-            if new_data_filtered.empty:
-                logger.info(f"No new data available for {symbol}")
-                return cached_data
-            new_data_filtered = drop_non_finite_close_rows(new_data_filtered)
-            if new_data_filtered is None or new_data_filtered.empty:
-                logger.warning("Fetched incremental %s rows but none had finite closes", symbol)
+            new_data_filtered = normalize_price_frame(new_data_filtered)
+            if new_data_filtered is None:
+                logger.info(f"No finite new data available for {symbol}")
                 return cached_data
 
             logger.info(f"Fetched {len(new_data_filtered)} new rows for {symbol}")
@@ -665,8 +661,8 @@ class PriceCacheService:
             cutoff_date = today - timedelta(days=days)
 
             merged_data = merged_data[merged_data.index >= pd.Timestamp(cutoff_date)]
-            merged_data = drop_non_finite_close_rows(merged_data)
-            if merged_data is None or merged_data.empty:
+            merged_data = normalize_price_frame(merged_data)
+            if merged_data is None:
                 logger.warning("Merged %s data produced no finite close rows", symbol)
                 return None
 
@@ -716,8 +712,8 @@ class PriceCacheService:
             return
 
         try:
-            data = drop_non_finite_close_rows(data)
-            if data is None or data.empty:
+            data = normalize_price_frame(data)
+            if data is None:
                 return
 
             # Keep last 5 years (1825 days) for volume analysis
@@ -1390,6 +1386,9 @@ class PriceCacheService:
         db = self._session_factory()
 
         try:
+            data = normalize_price_frame(data)
+            if data is None:
+                return
             # Reset index to get Date as a column
             df = data.reset_index()
             if 'Date' not in df.columns and len(df.columns) > 0:
@@ -1502,8 +1501,8 @@ class PriceCacheService:
         if data is None or data.empty:
             logger.warning(f"Cannot cache {symbol}: data is empty")
             return
-        data = drop_non_finite_close_rows(data)
-        if data is None or data.empty:
+        data = normalize_price_frame(data)
+        if data is None:
             logger.warning(f"Cannot cache {symbol}: no finite close rows")
             return
 
@@ -1541,15 +1540,7 @@ class PriceCacheService:
         """
         if not batch_data:
             return 0
-        cleaned_batch_data: Dict[str, pd.DataFrame] = {}
-        for symbol, data in batch_data.items():
-            if data is None or data.empty:
-                continue
-            cleaned = drop_non_finite_close_rows(data)
-            if cleaned is None or cleaned.empty:
-                continue
-            cleaned_batch_data[symbol] = cleaned
-        batch_data = cleaned_batch_data
+        batch_data = normalize_price_batch(batch_data)
         if not batch_data:
             return 0
 
@@ -1638,6 +1629,9 @@ class PriceCacheService:
         Args:
             batch_data: Dict mapping symbol to price DataFrame
         """
+        if not batch_data:
+            return
+        batch_data = normalize_price_batch(batch_data)
         if not batch_data:
             return
 
@@ -1882,8 +1876,8 @@ class PriceCacheService:
                     if raw_data:
                         try:
                             df = pickle.loads(raw_data)
-                            df = drop_non_finite_close_rows(df)
-                            if df is None or df.empty:
+                            df = normalize_price_frame(df)
+                            if df is None:
                                 cached_data[symbol] = None
                                 continue
 

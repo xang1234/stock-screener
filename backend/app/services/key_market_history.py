@@ -14,8 +14,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.domain.markets.key_markets import key_market_instruments
+from app.infra.serialization import finite_float_or_none
 from app.models.stock import StockPrice
-from app.services.price_row_normalization import finite_float_or_none
 
 KEY_MARKET_HISTORY_POINTS = 30
 # Calendar window wide enough to cover 30 trading days across holidays.
