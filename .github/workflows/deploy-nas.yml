@@ -24,7 +24,8 @@ jobs:
         run: |
           cd ~/stock-screener
           docker-compose -f docker-compose.yml -f docker-compose.ds220.yml --env-file .env.docker \
-            up -d --build backend frontend
+            up -d --build backend frontend \
+            celery-general celery-datafetch celery-userscans celery-marketjobs-us
 
       - name: Wait for backend health
         run: |
@@ -43,7 +44,7 @@ jobs:
         run: |
           cd ~/stock-screener
           docker-compose -f docker-compose.yml -f docker-compose.ds220.yml --env-file .env.docker \
-            restart celery-datafetch celery-userscans
+            restart celery-general celery-datafetch celery-userscans celery-marketjobs-us
 
       - name: Deployment summary
         run: |
