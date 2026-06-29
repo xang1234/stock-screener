@@ -1,0 +1,51 @@
+name: Deploy to NAS
+
+on:
+  push:
+    branches:
+      - claude/stock-screener-synology-mvp-n3qbck
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Synology DS220+
+    runs-on: [self-hosted, nas]
+    timeout-minutes: 10
+
+    steps:
+      - name: Pull latest code
+        run: |
+          cd ~/stock-screener
+          git fetch origin
+          git checkout ${{ github.ref_name }}
+          git pull origin ${{ github.ref_name }}
+
+      - name: Restart services
+        run: |
+          cd ~/stock-screener
+          docker-compose -f docker-compose.yml -f docker-compose.ds220.yml --env-file .env.docker \
+            up -d --build backend frontend
+
+      - name: Wait for backend health
+        run: |
+          echo "Waiting for backend..."
+          for i in $(seq 1 24); do
+            if curl -sf http://localhost:8000/api/v1/app-capabilities > /dev/null 2>&1; then
+              echo "Backend is healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Backend did not become healthy in time"
+          exit 1
+
+      - name: Restart Celery workers
+        run: |
+          cd ~/stock-screener
+          docker-compose -f docker-compose.yml -f docker-compose.ds220.yml --env-file .env.docker \
+            restart celery-datafetch celery-userscans
+
+      - name: Deployment summary
+        run: |
+          echo "✅ Deployed commit ${{ github.sha }} to NAS"
+          echo "🌐 App: http://192.168.1.20:7777"
