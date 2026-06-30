@@ -1663,7 +1663,7 @@ class PriceCacheService:
                         if price_dict is None:
                             continue
                         price_rows_by_symbol.setdefault(symbol, []).append(price_dict)
-                    except Exception as e:
+                    except (KeyError, TypeError, ValueError, OverflowError) as e:
                         logger.warning(f"Error preparing row for {symbol}: {e}")
 
             result = persist_stock_price_mappings(db, price_rows_by_symbol, chunk_size=100)

@@ -354,7 +354,10 @@ class DailyPriceBundleService:
                     row=self._bundle_price_mapping(price),
                 )
                 if price_row is None:
-                    continue
+                    raise ValueError(
+                        f"Daily price bundle prices for {symbol} contain invalid OHLCV "
+                        f"(row {price_index})"
+                    )
                 normalized_rows.append(price_row)
             if normalized_rows:
                 price_rows_by_symbol[symbol] = normalized_rows
@@ -562,6 +565,7 @@ class DailyPriceBundleService:
         _ = warm_redis_symbols
         payload: dict[str, Any] = {}
         batch_rows: dict[str, list[dict[str, Any]]] = {}
+        seen_symbols: set[str] = set()
         imported_symbols = 0
         imported_rows = 0
 
@@ -574,13 +578,18 @@ class DailyPriceBundleService:
         try:
             for row in self._iter_bundle_rows(input_path, metadata_out=payload):
                 symbol = str(row.get("symbol") or "").strip().upper()
-                prices = row.get("prices") or []
-                if prices and not isinstance(prices, list):
+                prices = row.get("prices")
+                if not symbol:
+                    raise ValueError("Daily price bundle row is missing symbol")
+                if not isinstance(prices, list):
                     raise ValueError(
                         f"Daily price bundle prices for {symbol or '<unknown>'} must be a list"
                     )
-                if not symbol or not prices:
-                    continue
+                if not prices:
+                    raise ValueError(f"Daily price bundle prices for {symbol} must not be empty")
+                if symbol in seen_symbols:
+                    raise ValueError(f"Daily price bundle contains duplicate symbol {symbol}")
+                seen_symbols.add(symbol)
                 batch_rows[symbol] = prices
                 imported_symbols += 1
                 imported_rows += len(prices)
@@ -589,6 +598,12 @@ class DailyPriceBundleService:
             flush_batch()
             bundle_metadata = self.bundle_metadata_from_payload(payload)
             bundle_metadata.assert_matches_manifest(expected_metadata)
+            if imported_symbols != bundle_metadata.symbol_count:
+                raise ValueError(
+                    "Daily price bundle imported symbol count "
+                    f"{imported_symbols} does not match manifest symbol_count "
+                    f"{bundle_metadata.symbol_count}"
+                )
 
             sync_state = self._upsert_import_state(
                 db,

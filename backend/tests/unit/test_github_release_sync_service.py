@@ -57,12 +57,13 @@ class _FakeSession:
     def __init__(self, responses: dict[str, _FakeResponse]):
         self._responses = responses
         self.calls: list[str] = []
+        self.stream_by_url: dict[str, bool] = {}
 
     def get(self, url, headers=None, timeout=None, stream=False):  # noqa: ANN001 - requests-compatible stub
         _ = headers
         _ = timeout
-        _ = stream
         self.calls.append(url)
+        self.stream_by_url[url] = bool(stream)
         response = self._responses.get(url)
         if response is None:
             raise AssertionError(f"Unexpected URL requested: {url}")
@@ -352,6 +353,7 @@ def test_fetch_latest_bundle_streams_bundle_download(tmp_path):
 
     assert result["status"] == "success"
     assert bundle_response.iter_content_called is True
+    assert session.stream_by_url["https://example.com/bundle.json.gz"] is True
     assert (tmp_path / "daily-price-us-20260418.json.gz").read_bytes() == bundle_bytes
 
 
@@ -410,6 +412,7 @@ def test_fetch_latest_bundle_preserves_existing_file_on_stream_failure(tmp_path)
     )
 
     assert result["status"] == "network_error"
+    assert session.stream_by_url["https://example.com/bundle.json.gz"] is True
     assert existing_bundle.read_bytes() == b"existing-good-bundle"
     assert not list(tmp_path.glob(f".{existing_bundle.name}.*.tmp"))
 
