@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -49,6 +50,41 @@ class GitHubReleaseSyncService:
                 f"GitHub download failed for {url}: HTTP {status_code}",
             )
         return bytes(getattr(response, "content", b""))
+
+    def _download_to_path(
+        self,
+        url: str,
+        output_path: Path,
+        *,
+        github_token: str | None = None,
+        request_timeout_seconds: int,
+    ) -> str:
+        response = self._session.get(
+            url,
+            headers=self._headers(github_token=github_token),
+            timeout=request_timeout_seconds,
+            stream=True,
+        )
+        status_code = getattr(response, "status_code", 200)
+        if status_code and status_code >= 400:
+            raise requests.HTTPError(
+                f"GitHub download failed for {url}: HTTP {status_code}",
+            )
+
+        digest = hashlib.sha256()
+        iter_content = getattr(response, "iter_content", None)
+        chunks = (
+            iter_content(chunk_size=1024 * 1024)
+            if callable(iter_content)
+            else (bytes(getattr(response, "content", b"")),)
+        )
+        with output_path.open("wb") as handle:
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                digest.update(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def _resolve_stale_validation(
@@ -284,13 +320,18 @@ class GitHubReleaseSyncService:
                 stale_reason=stale_reason,
             )
 
+        output_root = Path(output_dir) if output_dir is not None else Path.cwd()
+        output_root.mkdir(parents=True, exist_ok=True)
+        bundle_path = output_root / str(bundle_asset_name)
         try:
-            bundle_bytes = self._download_bytes(
+            digest = self._download_to_path(
                 bundle_url,
+                bundle_path,
                 github_token=github_token,
                 request_timeout_seconds=request_timeout_seconds,
             )
         except requests.RequestException as exc:
+            bundle_path.unlink(missing_ok=True)
             return self._result(
                 "network_error",
                 manifest=manifest,
@@ -300,15 +341,7 @@ class GitHubReleaseSyncService:
                 error=str(exc),
             )
 
-        output_root = Path(output_dir) if output_dir is not None else Path.cwd()
-        output_root.mkdir(parents=True, exist_ok=True)
-        bundle_path = output_root / str(bundle_asset_name)
-        bundle_path.write_bytes(bundle_bytes)
-
-        import hashlib
-
         expected_sha = str(manifest.get("sha256") or "").strip()
-        digest = hashlib.sha256(bundle_bytes).hexdigest()
         if expected_sha and digest != expected_sha:
             bundle_path.unlink(missing_ok=True)
             return self._result(

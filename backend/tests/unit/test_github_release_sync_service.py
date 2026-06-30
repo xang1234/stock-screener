@@ -16,15 +16,36 @@ class _FakeResponse:
     def json(self):
         return self._json_data
 
+    def iter_content(self, chunk_size: int = 1024 * 1024):
+        for offset in range(0, len(self.content), chunk_size):
+            yield self.content[offset:offset + chunk_size]
+
+
+class _StreamingOnlyResponse:
+    def __init__(self, *, content: bytes, status_code: int = 200):
+        self.status_code = status_code
+        self._content = content
+        self.iter_content_called = False
+
+    @property
+    def content(self):
+        raise AssertionError("bundle response content should not be materialized")
+
+    def iter_content(self, chunk_size: int = 1024 * 1024):
+        self.iter_content_called = True
+        for offset in range(0, len(self._content), chunk_size):
+            yield self._content[offset:offset + chunk_size]
+
 
 class _FakeSession:
     def __init__(self, responses: dict[str, _FakeResponse]):
         self._responses = responses
         self.calls: list[str] = []
 
-    def get(self, url, headers=None, timeout=None):  # noqa: ANN001 - requests-compatible stub
+    def get(self, url, headers=None, timeout=None, stream=False):  # noqa: ANN001 - requests-compatible stub
         _ = headers
         _ = timeout
+        _ = stream
         self.calls.append(url)
         response = self._responses.get(url)
         if response is None:
@@ -255,6 +276,65 @@ def test_fetch_latest_bundle_can_bootstrap_from_stale_manifest(tmp_path):
     assert result["stale_reason"] == "bundle is behind the expected session"
     assert result["bundle_asset_name"] == "daily-price-us-20260417.json.gz"
     assert (tmp_path / "daily-price-us-20260417.json.gz").read_bytes() == bundle_bytes
+
+
+def test_fetch_latest_bundle_streams_bundle_download(tmp_path):
+    bundle_bytes = b"daily-price-bundle"
+    manifest = {
+        "schema_version": "daily-price-manifest-v1",
+        "market": "US",
+        "as_of_date": "2026-04-18",
+        "source_revision": "daily_prices_us:20260418120000",
+        "bundle_asset_name": "daily-price-us-20260418.json.gz",
+        "sha256": hashlib.sha256(bundle_bytes).hexdigest(),
+        "bar_period": "2y",
+        "symbol_count": 10,
+    }
+    bundle_response = _StreamingOnlyResponse(content=bundle_bytes)
+    session = _FakeSession(
+        {
+            "https://api.github.com/repos/xang1234/stock-screener/releases/tags/daily-price-data": _FakeResponse(
+                json_data={
+                    "assets": [
+                        {
+                            "name": "daily-price-latest-us.json",
+                            "browser_download_url": "https://example.com/manifest.json",
+                        },
+                        {
+                            "name": "daily-price-us-20260418.json.gz",
+                            "browser_download_url": "https://example.com/bundle.json.gz",
+                        },
+                    ]
+                }
+            ),
+            "https://example.com/manifest.json": _FakeResponse(
+                content=json.dumps(manifest).encode("utf-8")
+            ),
+            "https://example.com/bundle.json.gz": bundle_response,
+        }
+    )
+    service = GitHubReleaseSyncService(session=session)
+
+    result = service.fetch_latest_bundle(
+        repository_full_name="xang1234/stock-screener",
+        release_tag="daily-price-data",
+        manifest_asset_name="daily-price-latest-us.json",
+        expected_manifest_schema="daily-price-manifest-v1",
+        required_manifest_keys=(
+            "market",
+            "as_of_date",
+            "source_revision",
+            "bundle_asset_name",
+            "sha256",
+            "bar_period",
+            "symbol_count",
+        ),
+        output_dir=tmp_path,
+    )
+
+    assert result["status"] == "success"
+    assert bundle_response.iter_content_called is True
+    assert (tmp_path / "daily-price-us-20260418.json.gz").read_bytes() == bundle_bytes
 
 
 def test_fetch_latest_bundle_checks_staleness_before_up_to_date(tmp_path):

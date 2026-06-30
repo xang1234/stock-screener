@@ -8,12 +8,10 @@ import json
 import math
 import shutil
 import tempfile
-from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
-import pandas as pd
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -21,130 +19,13 @@ from ..domain.markets import market_registry
 from ..models.app_settings import AppSetting
 from ..models.stock import StockPrice
 from ..models.stock_universe import StockUniverse
+from .daily_price_bundle_reader import (
+    iter_daily_price_bundle_rows,
+    read_daily_price_bundle_metadata,
+)
 from .github_release_sync_service import GitHubReleaseSyncService
 from .market_calendar_service import MarketCalendarService
-
-
-class _StreamingJsonReader:
-    """Incremental JSON decoder for bundle files with a very large rows array."""
-
-    _CHUNK_SIZE = 1024 * 1024
-
-    def __init__(self, handle: TextIO) -> None:
-        self._handle = handle
-        self._decoder = json.JSONDecoder()
-        self._buffer = ""
-        self._pos = 0
-        self._eof = False
-
-    def _compact(self) -> None:
-        if self._pos > self._CHUNK_SIZE or self._pos > len(self._buffer) // 2:
-            self._buffer = self._buffer[self._pos:]
-            self._pos = 0
-
-    def _read_more(self) -> None:
-        self._compact()
-        chunk = self._handle.read(self._CHUNK_SIZE)
-        if chunk == "":
-            self._eof = True
-            return
-        self._buffer += chunk
-
-    def _ensure_char(self) -> str:
-        while self._pos >= len(self._buffer):
-            if self._eof:
-                raise json.JSONDecodeError(
-                    "Unexpected end of daily price bundle",
-                    self._buffer,
-                    self._pos,
-                )
-            self._read_more()
-        return self._buffer[self._pos]
-
-    def skip_whitespace(self) -> None:
-        while True:
-            char = self._ensure_char()
-            if char not in " \t\r\n":
-                return
-            self._pos += 1
-
-    def expect(self, expected: str) -> None:
-        self.skip_whitespace()
-        actual = self._ensure_char()
-        if actual != expected:
-            raise json.JSONDecodeError(
-                f"Expected {expected!r}, got {actual!r}",
-                self._buffer,
-                self._pos,
-            )
-        self._pos += 1
-        self._compact()
-
-    def consume_if(self, expected: str) -> bool:
-        self.skip_whitespace()
-        if self._ensure_char() != expected:
-            return False
-        self._pos += 1
-        self._compact()
-        return True
-
-    def decode_value(self) -> Any:
-        self.skip_whitespace()
-        while True:
-            try:
-                value, end = self._decoder.raw_decode(self._buffer, self._pos)
-            except json.JSONDecodeError:
-                if self._eof:
-                    raise
-                self._read_more()
-                continue
-            self._pos = end
-            self._compact()
-            return value
-
-    def skip_value(self) -> None:
-        self.skip_whitespace()
-        char = self._ensure_char()
-        if char in "[{":
-            self._skip_compound_value()
-            return
-        self.decode_value()
-
-    def _skip_compound_value(self) -> None:
-        depth = 0
-        in_string = False
-        escaped = False
-        while True:
-            char = self._ensure_char()
-            self._pos += 1
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-            else:
-                if char == '"':
-                    in_string = True
-                elif char in "[{":
-                    depth += 1
-                elif char in "]}":
-                    depth -= 1
-                    if depth == 0:
-                        self._compact()
-                        return
-
-    def iter_array(self) -> Iterator[Any]:
-        self.expect("[")
-        if self.consume_if("]"):
-            return
-        while True:
-            yield self.decode_value()
-            if self.consume_if(","):
-                continue
-            self.expect("]")
-            return
+from .price_row_normalization import stock_price_row_from_ohlcv
 
 
 class DailyPriceBundleService:
@@ -161,19 +42,8 @@ class DailyPriceBundleService:
     def __init__(
         self,
         *,
-        price_cache=None,
         market_calendar: MarketCalendarService | None = None,
     ) -> None:
-        if price_cache is None:
-            from app.database import SessionLocal
-            from app.services.redis_pool import get_redis_client
-            from app.services.price_cache_service import PriceCacheService
-
-            price_cache = PriceCacheService(
-                redis_client=get_redis_client(),
-                session_factory=SessionLocal,
-            )
-        self.price_cache = price_cache
         self.market_calendar = market_calendar or MarketCalendarService()
 
     @classmethod
@@ -214,56 +84,12 @@ class DailyPriceBundleService:
         return json.loads(path.read_text(encoding="utf-8"))
 
     @staticmethod
-    def _open_bundle_text(path: Path) -> TextIO:
-        if path.suffix == ".gz":
-            return gzip.open(path, "rt", encoding="utf-8")
-        return path.open("rt", encoding="utf-8")
+    def _read_bundle_metadata(path: Path) -> dict[str, Any]:
+        return read_daily_price_bundle_metadata(path)
 
-    def _read_bundle_metadata(self, path: Path) -> dict[str, Any]:
-        metadata: dict[str, Any] = {}
-        with self._open_bundle_text(path) as handle:
-            reader = _StreamingJsonReader(handle)
-            reader.expect("{")
-            if reader.consume_if("}"):
-                return metadata
-            while True:
-                key = reader.decode_value()
-                if not isinstance(key, str):
-                    raise ValueError("Daily price bundle keys must be strings")
-                reader.expect(":")
-                if key == "rows":
-                    reader.skip_value()
-                else:
-                    metadata[key] = reader.decode_value()
-                if reader.consume_if(","):
-                    continue
-                reader.expect("}")
-                return metadata
-
-    def _iter_bundle_rows(self, path: Path) -> Iterator[dict[str, Any]]:
-        with self._open_bundle_text(path) as handle:
-            reader = _StreamingJsonReader(handle)
-            reader.expect("{")
-            if reader.consume_if("}"):
-                return
-            while True:
-                key = reader.decode_value()
-                if not isinstance(key, str):
-                    raise ValueError("Daily price bundle keys must be strings")
-                reader.expect(":")
-                if key == "rows":
-                    for row in reader.iter_array():
-                        if isinstance(row, dict):
-                            yield row
-                    if reader.consume_if(","):
-                        continue
-                    reader.expect("}")
-                    return
-                reader.skip_value()
-                if reader.consume_if(","):
-                    continue
-                reader.expect("}")
-                return
+    @staticmethod
+    def _iter_bundle_rows(path: Path):
+        return iter_daily_price_bundle_rows(path)
 
     @staticmethod
     def _parse_as_of_date(value: str | None) -> date:
@@ -293,20 +119,16 @@ class DailyPriceBundleService:
             )
         return False, None
 
-    def _build_batch_dataframe(self, prices: list[dict[str, Any]]) -> pd.DataFrame:
-        frame = pd.DataFrame(
-            {
-                "Date": pd.to_datetime([row["date"] for row in prices]),
-                "Open": [row.get("open") for row in prices],
-                "High": [row.get("high") for row in prices],
-                "Low": [row.get("low") for row in prices],
-                "Close": [row.get("close") for row in prices],
-                "Adj Close": [row.get("adj_close") for row in prices],
-                "Volume": [row.get("volume") for row in prices],
-            }
-        )
-        frame.set_index("Date", inplace=True)
-        return frame
+    @staticmethod
+    def _bundle_price_mapping(price: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "Open": price.get("open"),
+            "High": price.get("high"),
+            "Low": price.get("low"),
+            "Close": price.get("close"),
+            "Adj Close": price.get("adj_close"),
+            "Volume": price.get("volume"),
+        }
 
     def get_import_state(self, db: Session, market: str) -> dict[str, Any] | None:
         setting = (
@@ -330,6 +152,7 @@ class DailyPriceBundleService:
         as_of_date: str,
         symbol_count: int,
         bar_period: str,
+        commit: bool = True,
     ) -> dict[str, Any]:
         payload = {
             "market": self.normalize_market(market),
@@ -356,8 +179,95 @@ class DailyPriceBundleService:
             setting.value = json.dumps(payload, sort_keys=True)
             setting.category = self.SYNC_STATE_CATEGORY
             setting.description = "Latest imported GitHub daily price bundle metadata"
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return payload
+
+    def _persist_bundle_price_batch(
+        self,
+        db: Session,
+        batch_rows: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, int]:
+        if not batch_rows:
+            return {"inserted": 0, "updated": 0}
+
+        normalized_by_symbol: dict[str, list[dict[str, Any]]] = {}
+        symbol_dates: dict[str, set[date]] = {}
+        latest_dates: dict[str, date] = {}
+
+        for symbol, prices in batch_rows.items():
+            normalized_rows: list[dict[str, Any]] = []
+            for price_index, price in enumerate(prices, start=1):
+                if not isinstance(price, dict):
+                    raise ValueError(
+                        f"Daily price bundle prices for {symbol} must contain objects "
+                        f"(row {price_index})"
+                    )
+                row_date = date.fromisoformat(str(price.get("date") or ""))
+                price_row = stock_price_row_from_ohlcv(
+                    symbol=symbol,
+                    row_date=row_date,
+                    row=self._bundle_price_mapping(price),
+                )
+                if price_row is None:
+                    continue
+                normalized_rows.append(price_row)
+                symbol_dates.setdefault(symbol, set()).add(row_date)
+                latest = latest_dates.get(symbol)
+                latest_dates[symbol] = row_date if latest is None or row_date > latest else latest
+            if normalized_rows:
+                normalized_by_symbol[symbol] = normalized_rows
+
+        if not normalized_by_symbol:
+            return {"inserted": 0, "updated": 0}
+
+        symbols = list(normalized_by_symbol)
+        all_dates = [row_date for dates in symbol_dates.values() for row_date in dates]
+        min_date = min(all_dates)
+        max_date = max(all_dates)
+        existing_pairs: dict[tuple[str, date], int] = {}
+        for chunk_start in range(0, len(symbols), self.DAILY_PRICE_IMPORT_CHUNK_SIZE):
+            chunk_symbols = symbols[chunk_start:chunk_start + self.DAILY_PRICE_IMPORT_CHUNK_SIZE]
+            rows = (
+                db.query(StockPrice.id, StockPrice.symbol, StockPrice.date)
+                .filter(
+                    StockPrice.symbol.in_(chunk_symbols),
+                    StockPrice.date >= min_date,
+                    StockPrice.date <= max_date,
+                )
+                .all()
+            )
+            for record_id, record_symbol, record_date in rows:
+                target_dates = symbol_dates.get(record_symbol)
+                if target_dates and record_date in target_dates:
+                    existing_pairs[(record_symbol, record_date)] = record_id
+
+        rows_to_insert: list[dict[str, Any]] = []
+        rows_to_update: list[dict[str, Any]] = []
+        for symbol, price_rows in normalized_by_symbol.items():
+            for price_row in price_rows:
+                row_date = price_row["date"]
+                existing_id = existing_pairs.get((symbol, row_date))
+                if existing_id is None:
+                    rows_to_insert.append(price_row)
+                elif row_date == latest_dates.get(symbol):
+                    price_row["id"] = existing_id
+                    rows_to_update.append(price_row)
+
+        for chunk_start in range(0, len(rows_to_insert), self.DAILY_PRICE_IMPORT_CHUNK_SIZE):
+            db.bulk_insert_mappings(
+                StockPrice,
+                rows_to_insert[chunk_start:chunk_start + self.DAILY_PRICE_IMPORT_CHUNK_SIZE],
+            )
+        for chunk_start in range(0, len(rows_to_update), self.DAILY_PRICE_IMPORT_CHUNK_SIZE):
+            db.bulk_update_mappings(
+                StockPrice,
+                rows_to_update[chunk_start:chunk_start + self.DAILY_PRICE_IMPORT_CHUNK_SIZE],
+            )
+        db.flush()
+        return {"inserted": len(rows_to_insert), "updated": len(rows_to_update)}
 
     def export_daily_price_bundle(
         self,
@@ -548,8 +458,10 @@ class DailyPriceBundleService:
         *,
         input_path: Path,
         warm_redis_symbols: int | None = None,
+        bundle_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload = self._read_bundle_metadata(input_path)
+        _ = warm_redis_symbols
+        payload = bundle_metadata or self._read_bundle_metadata(input_path)
         if payload.get("schema_version") != self.DAILY_PRICE_BUNDLE_SCHEMA_VERSION:
             raise ValueError(
                 "Unsupported daily price bundle schema version: "
@@ -565,70 +477,50 @@ class DailyPriceBundleService:
                 f"expected {self.DAILY_PRICE_BAR_PERIOD!r}"
             )
 
-        batch_data: dict[str, pd.DataFrame] = {}
-        redis_batch_data: dict[str, pd.DataFrame] = {}
+        batch_rows: dict[str, list[dict[str, Any]]] = {}
         imported_symbols = 0
         imported_rows = 0
 
         def flush_batch() -> None:
-            if not batch_data:
+            if not batch_rows:
                 return
-            # Reuse the cache service's established DB batch writer without
-            # keeping the whole bundle resident in memory.
-            self.price_cache._store_batch_in_database(dict(batch_data))  # noqa: SLF001
-            batch_data.clear()
+            self._persist_bundle_price_batch(db, dict(batch_rows))
+            batch_rows.clear()
 
-        for row in self._iter_bundle_rows(input_path):
-            symbol = str(row.get("symbol") or "").strip().upper()
-            prices = row.get("prices") or []
-            if not symbol or not prices:
-                continue
-            frame = self._build_batch_dataframe(prices)
-            batch_data[symbol] = frame
-            if bar_period == "5y":
-                redis_batch_data[symbol] = frame
-            imported_symbols += 1
-            imported_rows += len(prices)
-            if len(batch_data) >= self.DAILY_PRICE_IMPORT_CHUNK_SIZE:
-                flush_batch()
-        flush_batch()
-
-        redis_target = (
-            settings.github_daily_price_redis_warm_symbols
-            if warm_redis_symbols is None
-            else warm_redis_symbols
-        )
-        redis_warmed_symbols = 0
-        # Bundles currently ship 2y bars. Avoid overwriting the standard 5y
-        # Redis cache entries with truncated history during import.
-        if redis_target and redis_batch_data and bar_period == "5y":
-            warm_symbols = [
-                row.symbol
-                for row in (
-                    db.query(StockUniverse)
-                    .filter(
-                        StockUniverse.market == market,
-                        StockUniverse.symbol.in_(list(redis_batch_data)),
+        try:
+            for row in self._iter_bundle_rows(input_path):
+                symbol = str(row.get("symbol") or "").strip().upper()
+                prices = row.get("prices") or []
+                if prices and not isinstance(prices, list):
+                    raise ValueError(
+                        f"Daily price bundle prices for {symbol or '<unknown>'} must be a list"
                     )
-                    .order_by(StockUniverse.market_cap.desc().nullslast())
-                    .limit(int(redis_target))
-                    .all()
-                )
-            ]
-            if warm_symbols:
-                redis_warmed_symbols = self.price_cache.store_batch_in_cache(
-                    {symbol: redis_batch_data[symbol] for symbol in warm_symbols},
-                    also_store_db=False,
-                )
+                if not symbol or not prices:
+                    continue
+                batch_rows[symbol] = prices
+                imported_symbols += 1
+                imported_rows += len(prices)
+                if len(batch_rows) >= self.DAILY_PRICE_IMPORT_CHUNK_SIZE:
+                    flush_batch()
+            flush_batch()
 
-        sync_state = self._upsert_import_state(
-            db,
-            market=market,
-            source_revision=str(payload.get("source_revision") or ""),
-            as_of_date=as_of_date.isoformat(),
-            symbol_count=int(payload.get("symbol_count") or imported_symbols),
-            bar_period=bar_period,
-        )
+            sync_state = self._upsert_import_state(
+                db,
+                market=market,
+                source_revision=str(payload.get("source_revision") or ""),
+                as_of_date=as_of_date.isoformat(),
+                symbol_count=int(payload.get("symbol_count") or imported_symbols),
+                bar_period=bar_period,
+                commit=False,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        # Bundles currently ship 2y bars. Avoid overwriting the standard 5y Redis
+        # cache entries with truncated history during import.
+        redis_warmed_symbols = 0
 
         return {
             "market": market,
@@ -639,6 +531,16 @@ class DailyPriceBundleService:
             "imported_symbols": imported_symbols,
             "imported_rows": imported_rows,
             "redis_warmed_symbols": redis_warmed_symbols,
+        }
+
+    def _bundle_metadata_from_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": self.DAILY_PRICE_BUNDLE_SCHEMA_VERSION,
+            "market": manifest.get("market"),
+            "as_of_date": manifest.get("as_of_date"),
+            "source_revision": manifest.get("source_revision"),
+            "bar_period": manifest.get("bar_period"),
+            "symbol_count": manifest.get("symbol_count"),
         }
 
     def sync_from_github(
@@ -727,6 +629,11 @@ class DailyPriceBundleService:
                 db,
                 input_path=Path(str(bundle_path)),
                 warm_redis_symbols=warm_redis_symbols,
+                bundle_metadata=(
+                    self._bundle_metadata_from_manifest(manifest)
+                    if isinstance(manifest, dict)
+                    else None
+                ),
             )
         finally:
             if bundle_path:
