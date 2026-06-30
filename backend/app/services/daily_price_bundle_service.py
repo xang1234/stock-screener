@@ -8,9 +8,10 @@ import json
 import math
 import shutil
 import tempfile
+from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -24,6 +25,128 @@ from .github_release_sync_service import GitHubReleaseSyncService
 from .market_calendar_service import MarketCalendarService
 
 
+class _StreamingJsonReader:
+    """Incremental JSON decoder for bundle files with a very large rows array."""
+
+    _CHUNK_SIZE = 1024 * 1024
+
+    def __init__(self, handle: TextIO) -> None:
+        self._handle = handle
+        self._decoder = json.JSONDecoder()
+        self._buffer = ""
+        self._pos = 0
+        self._eof = False
+
+    def _compact(self) -> None:
+        if self._pos > self._CHUNK_SIZE or self._pos > len(self._buffer) // 2:
+            self._buffer = self._buffer[self._pos:]
+            self._pos = 0
+
+    def _read_more(self) -> None:
+        self._compact()
+        chunk = self._handle.read(self._CHUNK_SIZE)
+        if chunk == "":
+            self._eof = True
+            return
+        self._buffer += chunk
+
+    def _ensure_char(self) -> str:
+        while self._pos >= len(self._buffer):
+            if self._eof:
+                raise json.JSONDecodeError(
+                    "Unexpected end of daily price bundle",
+                    self._buffer,
+                    self._pos,
+                )
+            self._read_more()
+        return self._buffer[self._pos]
+
+    def skip_whitespace(self) -> None:
+        while True:
+            char = self._ensure_char()
+            if char not in " \t\r\n":
+                return
+            self._pos += 1
+
+    def expect(self, expected: str) -> None:
+        self.skip_whitespace()
+        actual = self._ensure_char()
+        if actual != expected:
+            raise json.JSONDecodeError(
+                f"Expected {expected!r}, got {actual!r}",
+                self._buffer,
+                self._pos,
+            )
+        self._pos += 1
+        self._compact()
+
+    def consume_if(self, expected: str) -> bool:
+        self.skip_whitespace()
+        if self._ensure_char() != expected:
+            return False
+        self._pos += 1
+        self._compact()
+        return True
+
+    def decode_value(self) -> Any:
+        self.skip_whitespace()
+        while True:
+            try:
+                value, end = self._decoder.raw_decode(self._buffer, self._pos)
+            except json.JSONDecodeError:
+                if self._eof:
+                    raise
+                self._read_more()
+                continue
+            self._pos = end
+            self._compact()
+            return value
+
+    def skip_value(self) -> None:
+        self.skip_whitespace()
+        char = self._ensure_char()
+        if char in "[{":
+            self._skip_compound_value()
+            return
+        self.decode_value()
+
+    def _skip_compound_value(self) -> None:
+        depth = 0
+        in_string = False
+        escaped = False
+        while True:
+            char = self._ensure_char()
+            self._pos += 1
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            else:
+                if char == '"':
+                    in_string = True
+                elif char in "[{":
+                    depth += 1
+                elif char in "]}":
+                    depth -= 1
+                    if depth == 0:
+                        self._compact()
+                        return
+
+    def iter_array(self) -> Iterator[Any]:
+        self.expect("[")
+        if self.consume_if("]"):
+            return
+        while True:
+            yield self.decode_value()
+            if self.consume_if(","):
+                continue
+            self.expect("]")
+            return
+
+
 class DailyPriceBundleService:
     """Export, import, and sync durable market-scoped daily price bundles."""
 
@@ -32,6 +155,7 @@ class DailyPriceBundleService:
     DAILY_PRICE_RELEASE_TAG = "daily-price-data"
     DAILY_PRICE_BAR_PERIOD = "2y"
     DAILY_PRICE_SUPPORTED_MARKETS: tuple[str, ...] = market_registry.supported_market_codes()
+    DAILY_PRICE_IMPORT_CHUNK_SIZE = 100
     SYNC_STATE_CATEGORY = "github_sync"
 
     def __init__(
@@ -88,6 +212,58 @@ class DailyPriceBundleService:
             with gzip.open(path, "rt", encoding="utf-8") as handle:
                 return json.load(handle)
         return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _open_bundle_text(path: Path) -> TextIO:
+        if path.suffix == ".gz":
+            return gzip.open(path, "rt", encoding="utf-8")
+        return path.open("rt", encoding="utf-8")
+
+    def _read_bundle_metadata(self, path: Path) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        with self._open_bundle_text(path) as handle:
+            reader = _StreamingJsonReader(handle)
+            reader.expect("{")
+            if reader.consume_if("}"):
+                return metadata
+            while True:
+                key = reader.decode_value()
+                if not isinstance(key, str):
+                    raise ValueError("Daily price bundle keys must be strings")
+                reader.expect(":")
+                if key == "rows":
+                    reader.skip_value()
+                else:
+                    metadata[key] = reader.decode_value()
+                if reader.consume_if(","):
+                    continue
+                reader.expect("}")
+                return metadata
+
+    def _iter_bundle_rows(self, path: Path) -> Iterator[dict[str, Any]]:
+        with self._open_bundle_text(path) as handle:
+            reader = _StreamingJsonReader(handle)
+            reader.expect("{")
+            if reader.consume_if("}"):
+                return
+            while True:
+                key = reader.decode_value()
+                if not isinstance(key, str):
+                    raise ValueError("Daily price bundle keys must be strings")
+                reader.expect(":")
+                if key == "rows":
+                    for row in reader.iter_array():
+                        if isinstance(row, dict):
+                            yield row
+                    if reader.consume_if(","):
+                        continue
+                    reader.expect("}")
+                    return
+                reader.skip_value()
+                if reader.consume_if(","):
+                    continue
+                reader.expect("}")
+                return
 
     @staticmethod
     def _parse_as_of_date(value: str | None) -> date:
@@ -373,7 +549,7 @@ class DailyPriceBundleService:
         input_path: Path,
         warm_redis_symbols: int | None = None,
     ) -> dict[str, Any]:
-        payload = self._read_bundle_payload(input_path)
+        payload = self._read_bundle_metadata(input_path)
         if payload.get("schema_version") != self.DAILY_PRICE_BUNDLE_SCHEMA_VERSION:
             raise ValueError(
                 "Unsupported daily price bundle schema version: "
@@ -389,23 +565,33 @@ class DailyPriceBundleService:
                 f"expected {self.DAILY_PRICE_BAR_PERIOD!r}"
             )
 
-        bundle_rows = payload.get("rows") or []
         batch_data: dict[str, pd.DataFrame] = {}
+        redis_batch_data: dict[str, pd.DataFrame] = {}
+        imported_symbols = 0
         imported_rows = 0
-        for row in bundle_rows:
+
+        def flush_batch() -> None:
+            if not batch_data:
+                return
+            # Reuse the cache service's established DB batch writer without
+            # keeping the whole bundle resident in memory.
+            self.price_cache._store_batch_in_database(dict(batch_data))  # noqa: SLF001
+            batch_data.clear()
+
+        for row in self._iter_bundle_rows(input_path):
             symbol = str(row.get("symbol") or "").strip().upper()
             prices = row.get("prices") or []
             if not symbol or not prices:
                 continue
-            batch_data[symbol] = self._build_batch_dataframe(prices)
+            frame = self._build_batch_dataframe(prices)
+            batch_data[symbol] = frame
+            if bar_period == "5y":
+                redis_batch_data[symbol] = frame
+            imported_symbols += 1
             imported_rows += len(prices)
-
-        if batch_data:
-            for chunk_start in range(0, len(batch_data), 100):
-                chunk_symbols = list(batch_data.keys())[chunk_start:chunk_start + 100]
-                self.price_cache._store_batch_in_database(  # noqa: SLF001 - intentional import path reuse
-                    {symbol: batch_data[symbol] for symbol in chunk_symbols}
-                )
+            if len(batch_data) >= self.DAILY_PRICE_IMPORT_CHUNK_SIZE:
+                flush_batch()
+        flush_batch()
 
         redis_target = (
             settings.github_daily_price_redis_warm_symbols
@@ -415,14 +601,14 @@ class DailyPriceBundleService:
         redis_warmed_symbols = 0
         # Bundles currently ship 2y bars. Avoid overwriting the standard 5y
         # Redis cache entries with truncated history during import.
-        if redis_target and batch_data and bar_period == "5y":
+        if redis_target and redis_batch_data and bar_period == "5y":
             warm_symbols = [
                 row.symbol
                 for row in (
                     db.query(StockUniverse)
                     .filter(
                         StockUniverse.market == market,
-                        StockUniverse.symbol.in_(list(batch_data)),
+                        StockUniverse.symbol.in_(list(redis_batch_data)),
                     )
                     .order_by(StockUniverse.market_cap.desc().nullslast())
                     .limit(int(redis_target))
@@ -431,7 +617,7 @@ class DailyPriceBundleService:
             ]
             if warm_symbols:
                 redis_warmed_symbols = self.price_cache.store_batch_in_cache(
-                    {symbol: batch_data[symbol] for symbol in warm_symbols},
+                    {symbol: redis_batch_data[symbol] for symbol in warm_symbols},
                     also_store_db=False,
                 )
 
@@ -440,7 +626,7 @@ class DailyPriceBundleService:
             market=market,
             source_revision=str(payload.get("source_revision") or ""),
             as_of_date=as_of_date.isoformat(),
-            symbol_count=int(payload.get("symbol_count") or len(batch_data)),
+            symbol_count=int(payload.get("symbol_count") or imported_symbols),
             bar_period=bar_period,
         )
 
@@ -449,8 +635,8 @@ class DailyPriceBundleService:
             "as_of_date": as_of_date.isoformat(),
             "source_revision": sync_state["source_revision"],
             "bar_period": bar_period,
-            "symbol_count": int(payload.get("symbol_count") or len(batch_data)),
-            "imported_symbols": len(batch_data),
+            "symbol_count": int(payload.get("symbol_count") or imported_symbols),
+            "imported_symbols": imported_symbols,
             "imported_rows": imported_rows,
             "redis_warmed_symbols": redis_warmed_symbols,
         }

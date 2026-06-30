@@ -487,3 +487,133 @@ def test_import_daily_price_bundle_skips_redis_warm_for_two_year_bundle(tmp_path
     price_cache._store_batch_in_database.assert_called_once()
     price_cache.store_batch_in_cache.assert_not_called()
     db.close()
+
+
+def test_import_daily_price_bundle_streams_rows_without_full_payload_read(
+    monkeypatch,
+    tmp_path,
+):
+    session_factory = _make_session()
+    db = session_factory()
+    db.add(_stock_row("AAPL", "US", "NASDAQ", 1000.0))
+    db.commit()
+
+    price_cache = SimpleNamespace(
+        _store_batch_in_database=MagicMock(),
+        store_batch_in_cache=MagicMock(return_value=0),
+    )
+    service = DailyPriceBundleService(price_cache=price_cache)
+    bundle_path = tmp_path / "daily-price-us.json"
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "symbol": "AAPL",
+                        "prices": [
+                            {
+                                "date": "2026-04-18",
+                                "open": 100.0,
+                                "high": 101.0,
+                                "low": 99.0,
+                                "close": 100.5,
+                                "adj_close": 100.0,
+                                "volume": 1_000_000,
+                            }
+                        ],
+                    }
+                ],
+                "schema_version": service.DAILY_PRICE_BUNDLE_SCHEMA_VERSION,
+                "market": "US",
+                "as_of_date": "2026-04-18",
+                "bar_period": service.DAILY_PRICE_BAR_PERIOD,
+                "source_revision": "daily_prices_us:20260418120000",
+                "symbol_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_read_bundle_payload",
+        MagicMock(side_effect=AssertionError("full payload read")),
+    )
+
+    result = service.import_daily_price_bundle(
+        db,
+        input_path=bundle_path,
+        warm_redis_symbols=0,
+    )
+
+    assert result["imported_symbols"] == 1
+    assert result["imported_rows"] == 1
+    price_cache._store_batch_in_database.assert_called_once()
+    service._read_bundle_payload.assert_not_called()
+    db.close()
+
+
+def test_import_daily_price_bundle_flushes_streamed_rows_in_bounded_chunks(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    symbol_count = 205
+    db.add_all(
+        [
+            _stock_row(f"T{index:04d}", "US", "NYSE", 1000.0 - index)
+            for index in range(symbol_count)
+        ]
+    )
+    db.commit()
+
+    price_cache = SimpleNamespace(
+        _store_batch_in_database=MagicMock(),
+        store_batch_in_cache=MagicMock(return_value=0),
+    )
+    service = DailyPriceBundleService(price_cache=price_cache)
+    bundle_path = tmp_path / "daily-price-us.json"
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "schema_version": service.DAILY_PRICE_BUNDLE_SCHEMA_VERSION,
+                "market": "US",
+                "as_of_date": "2026-04-18",
+                "bar_period": service.DAILY_PRICE_BAR_PERIOD,
+                "source_revision": "daily_prices_us:20260418120000",
+                "symbol_count": symbol_count,
+                "rows": [
+                    {
+                        "symbol": f"T{index:04d}",
+                        "prices": [
+                            {
+                                "date": "2026-04-18",
+                                "open": float(index),
+                                "high": float(index + 1),
+                                "low": float(index - 1),
+                                "close": float(index) + 0.5,
+                                "adj_close": float(index),
+                                "volume": 1_000_000 + index,
+                            }
+                        ],
+                    }
+                    for index in range(symbol_count)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = service.import_daily_price_bundle(
+        db,
+        input_path=bundle_path,
+        warm_redis_symbols=0,
+    )
+
+    assert result["imported_symbols"] == symbol_count
+    assert result["imported_rows"] == symbol_count
+    assert price_cache._store_batch_in_database.call_count == 3
+    chunk_sizes = [
+        len(call.args[0])
+        for call in price_cache._store_batch_in_database.call_args_list
+    ]
+    assert chunk_sizes == [100, 100, 5]
+    db.close()
