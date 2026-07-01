@@ -40,6 +40,7 @@ from app.schemas.scanning import (
     ScanResultItem,
     ScanResultsResponse,
     ScanStatusResponse,
+    normalize_scan_warnings_for_response,
 )
 from app.schemas.theme import (
     AlertsResponse,
@@ -475,6 +476,9 @@ class UISnapshotService:
                     started_at=scan.started_at,
                     completed_at=scan.completed_at,
                     source="feature_store" if scan.feature_run_id else "scan_results",
+                    warnings=normalize_scan_warnings_for_response(
+                        getattr(scan, "warnings", None)
+                    ),
                 )
                 for scan in scans
             ]
@@ -520,6 +524,9 @@ class UISnapshotService:
                     started_at=selected_scan.started_at,
                     completed_at=selected_scan.completed_at,
                     source="feature_store" if selected_scan.feature_run_id else "scan_results",
+                    warnings=normalize_scan_warnings_for_response(
+                        getattr(selected_scan, "warnings", None)
+                    ),
                 ).model_dump(mode="json"),
             )
             completed_stocks = selected_scan.total_stocks or 0
@@ -548,6 +555,9 @@ class UISnapshotService:
                 started_at=selected_scan.started_at,
                 eta_seconds=None,
                 universe_def=selected_universe_def,
+                warnings=normalize_scan_warnings_for_response(
+                    getattr(selected_scan, "warnings", None)
+                ),
             ).model_dump(mode="json")
 
             if selected_scan.status not in {"completed", "cancelled"}:

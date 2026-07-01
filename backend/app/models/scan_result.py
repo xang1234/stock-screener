@@ -47,6 +47,7 @@ class Scan(Base):
     # Multi-screener configuration
     screener_types = Column(JSON, default=lambda: ["minervini"])  # List of screener names
     composite_method = Column(String(50), default="weighted_average")  # How to combine scores
+    warnings = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
 
     # Results summary
     total_stocks = Column(Integer)

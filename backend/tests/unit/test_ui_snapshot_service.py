@@ -183,6 +183,23 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
+    warning = {
+        "code": "market_data_stale_tail_omitted",
+        "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "markets": ["US"],
+        "omitted_symbols": ["LHSW"],
+        "omitted_count": 1,
+        "total_symbols": 100,
+        "fresh_count": 99,
+        "freshness_rate": 0.99,
+        "expected_dates": {"US": "2026-06-18"},
+        "oldest_last_cached_dates": {"US": "2026-05-13"},
+    }
+    unknown_warning = {
+        "code": "future_warning",
+        "message": "This warning type is not known by this server version.",
+    }
+
     with Session() as db:
         db.add(
             Scan(
@@ -194,6 +211,7 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
                 universe_key="all",
                 total_stocks=100,
                 passed_stocks=42,
+                warnings=[warning, unknown_warning],
                 started_at=datetime(2026, 3, 29, 21, 45, 0),
                 completed_at=datetime(2026, 3, 29, 21, 45, 0),
             )
@@ -204,6 +222,9 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
 
     assert snapshot.payload["recent_scans"]["scans"][0]["trigger_source"] == "auto"
     assert snapshot.payload["selected_scan"]["trigger_source"] == "auto"
+    assert snapshot.payload["recent_scans"]["scans"][0]["warnings"] == [warning]
+    assert snapshot.payload["selected_scan"]["warnings"] == [warning]
+    assert snapshot.payload["selected_scan_status"]["warnings"] == [warning]
 
 
 def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():

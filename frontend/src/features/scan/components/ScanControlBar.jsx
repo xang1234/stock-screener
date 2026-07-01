@@ -97,6 +97,7 @@ export default function ScanControlBar({
   onRefreshStaleData,
   refreshStaleDataPending = false,
   refreshStaleDataError = null,
+  scanWarnings = [],
 }) {
   const controlsDisabled = createScanPending || scanStatus === 'running';
   const universeMarkets = universeSelections?.markets ?? [];
@@ -127,6 +128,9 @@ export default function ScanControlBar({
         : refreshStaleDataErrorDetail?.message)
       || refreshStaleDataError?.message;
   const staleMarket = staleRefreshMarket(createScanError, universeMarket);
+  const staleTailWarnings = scanWarnings.filter(
+    (warning) => warning?.code === 'market_data_stale_tail_omitted' && warning?.message
+  );
 
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
@@ -406,6 +410,15 @@ export default function ScanControlBar({
           Error: {refreshStaleDataErrorMessage}
         </Alert>
       )}
+      {staleTailWarnings.map((warning, index) => (
+        <Alert
+          key={`${warning.code}-${warning.omitted_count ?? index}`}
+          severity="warning"
+          sx={{ mt: 1 }}
+        >
+          {warning.message}
+        </Alert>
+      ))}
       {cancelScanErrorMessage && (
         <Alert severity="error" sx={{ mt: 1 }}>
           Error: {cancelScanErrorMessage}
