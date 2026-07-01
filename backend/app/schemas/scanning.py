@@ -7,7 +7,7 @@ paginated results, filter options, and score explanations.
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Self
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..domain.scanning.models import ScanResultItemDomain, StockExplanation
 from ..infra.serialization import (
@@ -78,7 +78,43 @@ class StaleTailOmissionWarningResponse(BaseModel):
     oldest_last_cached_dates: Dict[str, Optional[str]] = Field(default_factory=dict)
 
 
-ScanWarningResponse = StaleTailOmissionWarningResponse
+def normalize_scan_warnings_for_response(warnings: Any) -> list[dict[str, Any]]:
+    """Return response-safe scan warnings, dropping unknown stored payloads."""
+    if warnings is None or isinstance(warnings, (str, bytes)):
+        return []
+    if isinstance(warnings, StaleTailOmissionWarningResponse):
+        warning_items = (warnings,)
+    elif isinstance(warnings, dict):
+        warning_items = (warnings,)
+    else:
+        try:
+            warning_items = iter(warnings)
+        except TypeError:
+            return []
+
+    normalized: list[dict[str, Any]] = []
+    for warning in warning_items:
+        if isinstance(warning, StaleTailOmissionWarningResponse):
+            normalized.append(warning.model_dump(mode="json"))
+            continue
+
+        if not isinstance(warning, dict):
+            to_dict = getattr(warning, "to_dict", None)
+            if not callable(to_dict):
+                continue
+            warning = to_dict()
+
+        if warning.get("code") != "market_data_stale_tail_omitted":
+            continue
+        try:
+            normalized.append(
+                StaleTailOmissionWarningResponse.model_validate(warning).model_dump(
+                    mode="json"
+                )
+            )
+        except ValidationError:
+            continue
+    return normalized
 
 
 class ScanCreateResponse(BaseModel):
@@ -89,7 +125,7 @@ class ScanCreateResponse(BaseModel):
     total_stocks: int
     message: str
     feature_run_id: Optional[int] = None
-    warnings: List[ScanWarningResponse] = Field(default_factory=list)
+    warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
 
 
@@ -104,7 +140,7 @@ class ScanStatusResponse(BaseModel):
     passed_stocks: int
     started_at: datetime
     eta_seconds: Optional[int] = None
-    warnings: List[ScanWarningResponse] = Field(default_factory=list)
+    warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
 
 
@@ -430,7 +466,7 @@ class ScanListItem(BaseModel):
     started_at: datetime
     completed_at: Optional[datetime] = None
     source: Optional[str] = None
-    warnings: List[ScanWarningResponse] = Field(default_factory=list)
+    warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
 
 
 class ScanListResponse(BaseModel):

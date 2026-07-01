@@ -81,6 +81,13 @@ def _warning_payload():
     }
 
 
+def _unknown_warning_payload():
+    return {
+        "code": "future_warning",
+        "message": "This warning type is not known by this server version.",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -211,6 +218,26 @@ class TestListScans:
             "scan-warn",
             started_at=datetime(2024, 1, 2),
             warnings=[_warning_payload()],
+        )
+        scan_repo.scans = {"scan-warn": s1}
+        scan_repo.rows = [s1]
+
+        uow = _FakeUoW(scans=scan_repo)
+        app.dependency_overrides[get_uow] = lambda: uow
+        try:
+            resp = await client.get("/api/v1/scans")
+            assert resp.status_code == 200
+            item = resp.json()["scans"][0]
+            assert item["warnings"] == [_warning_payload()]
+        finally:
+            app.dependency_overrides.pop(get_uow, None)
+
+    async def test_drops_unknown_persisted_warnings(self, client):
+        scan_repo = FakeScanRepository()
+        s1 = _make_scan(
+            "scan-warn",
+            started_at=datetime(2024, 1, 2),
+            warnings=[_warning_payload(), _unknown_warning_payload()],
         )
         scan_repo.scans = {"scan-warn": s1}
         scan_repo.rows = [s1]

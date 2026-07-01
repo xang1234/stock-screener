@@ -478,6 +478,10 @@ class TestFreshnessChecker:
                 universe_key="market:US",
             ),
         )
+        uow.scans.rows[0].warnings.append({
+            "code": "future_warning",
+            "message": "This warning type is not known by this server version.",
+        })
         result2 = uc.execute(
             uow,
             _make_command(

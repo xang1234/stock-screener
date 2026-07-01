@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import inspect
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,6 +17,12 @@ class _Row:
     symbol: str
     market: str
     last_date: date | None
+
+
+def _stale_tail_policy():
+    from app.services.market_data_freshness import ScanFreshnessPolicy
+
+    return ScanFreshnessPolicy.allowing_stale_tail()
 
 
 class _FakeSession:
@@ -234,7 +241,7 @@ def test_degraded_broad_scan_omits_small_tail_at_99_percent():
         _patch_calendar({"US": date(2026, 6, 18)}),
         _patch_refresh_state({"US": date(2026, 6, 18)}),
     ):
-        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+        decision = evaluate_symbol_freshness(symbols, policy=_stale_tail_policy())
 
     assert decision.blocking_detail is None
     assert decision.symbols_to_scan == tuple(fresh_symbols)
@@ -273,6 +280,15 @@ def test_degraded_policy_is_explicit_value_object():
     assert decision.warnings[0].omitted_symbols == ("STALE001",)
 
 
+def test_evaluate_symbol_freshness_exposes_policy_not_boolean_mode():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    signature = inspect.signature(evaluate_symbol_freshness)
+
+    assert "policy" in signature.parameters
+    assert "allow_stale_tail" not in signature.parameters
+
+
 def test_degraded_broad_scan_caps_omissions_at_100():
     from app.services.market_data_freshness import evaluate_symbol_freshness
 
@@ -288,7 +304,7 @@ def test_degraded_broad_scan_caps_omissions_at_100():
         _patch_calendar({"US": date(2026, 6, 18)}),
         _patch_refresh_state({"US": date(2026, 6, 18)}),
     ):
-        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+        decision = evaluate_symbol_freshness(symbols, policy=_stale_tail_policy())
 
     assert decision.blocking_detail is not None
     assert decision.blocking_detail["code"] == "market_data_stale"
@@ -315,7 +331,7 @@ def test_degraded_broad_scan_requires_99_percent_freshness():
         _patch_calendar({"US": date(2026, 6, 18)}),
         _patch_refresh_state({"US": date(2026, 6, 18)}),
     ):
-        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+        decision = evaluate_symbol_freshness(symbols, policy=_stale_tail_policy())
 
     assert decision.blocking_detail is not None
     assert decision.blocking_detail["code"] == "market_data_stale"
@@ -336,7 +352,7 @@ def test_degraded_decision_preserves_resolver_order_after_omission():
         _patch_calendar({"US": date(2026, 6, 18)}),
         _patch_refresh_state({"US": date(2026, 6, 18)}),
     ):
-        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+        decision = evaluate_symbol_freshness(symbols, policy=_stale_tail_policy())
 
     assert decision.blocking_detail is None
     assert decision.symbols_to_scan[:3] == ("MSFT", "AAPL", "FRESH000")
@@ -382,7 +398,7 @@ def test_degraded_policy_requires_completed_refresh_state():
             }
         }),
     ):
-        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+        decision = evaluate_symbol_freshness(symbols, policy=_stale_tail_policy())
 
     assert decision.blocking_detail is not None
     assert decision.blocking_detail["code"] == "market_data_stale"

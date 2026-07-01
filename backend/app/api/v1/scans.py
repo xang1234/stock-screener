@@ -24,6 +24,7 @@ from ...schemas.scanning import (
     ScanSymbolsResponse,
     ScanStatusResponse,
     SetupDetailsResponse,
+    normalize_scan_warnings_for_response,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...database import SessionLocal
@@ -144,7 +145,9 @@ async def list_scans(
                     started_at=scan.started_at,
                     completed_at=scan.completed_at,
                     source="feature_store" if scan.feature_run_id else "scan_results",
-                    warnings=getattr(scan, "warnings", None) or [],
+                    warnings=normalize_scan_warnings_for_response(
+                        getattr(scan, "warnings", None)
+                    ),
                 ))
 
         return ScanListResponse(scans=scan_items)
@@ -221,7 +224,7 @@ async def create_scan(
             else f"Scan queued for {result.total_stocks} stocks"
         ),
         feature_run_id=result.feature_run_id,
-        warnings=[warning.to_dict() for warning in result.warnings],
+        warnings=normalize_scan_warnings_for_response(result.warnings),
         universe_def=universe_def,
     )
 
@@ -341,7 +344,9 @@ async def get_scan_status(
                 passed_stocks=scan.passed_stocks or 0,
                 started_at=scan.started_at,
                 eta_seconds=eta_seconds,
-                warnings=getattr(scan, "warnings", None) or [],
+                warnings=normalize_scan_warnings_for_response(
+                    getattr(scan, "warnings", None)
+                ),
                 universe_def=scan.get_universe_definition(),
             )
 

@@ -34,6 +34,7 @@ from app.domain.scanning.models import (
     FreshnessDecision,
     FreshnessOmissionWarning,
     ScanFreshnessPolicy,
+    ScanWarningCode,
 )
 from app.schemas.universe import UniverseType
 from app.domain.scanning.ports import TaskDispatcher
@@ -70,8 +71,14 @@ def _scan_warnings_from_payloads(
     for payload in payloads or ():
         if isinstance(payload, FreshnessOmissionWarning):
             warnings.append(payload)
-        elif isinstance(payload, dict):
-            warnings.append(FreshnessOmissionWarning.from_dict(payload))
+        elif (
+            isinstance(payload, dict)
+            and payload.get("code") == ScanWarningCode.STALE_TAIL_OMITTED.value
+        ):
+            try:
+                warnings.append(FreshnessOmissionWarning.from_dict(payload))
+            except (KeyError, TypeError, ValueError):
+                continue
     return tuple(warnings)
 
 

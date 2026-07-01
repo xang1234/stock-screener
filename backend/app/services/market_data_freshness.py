@@ -28,11 +28,6 @@ from ..wiring.bootstrap import get_market_calendar_service
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DEGRADED_POLICY = ScanFreshnessPolicy.allowing_stale_tail()
-SCAN_DEGRADED_MIN_FRESH_RATE = _DEFAULT_DEGRADED_POLICY.min_freshness_rate
-SCAN_DEGRADED_MAX_OMITTED_SYMBOLS = _DEFAULT_DEGRADED_POLICY.max_omitted_symbols
-STALE_SYMBOL_SAMPLE_LIMIT = _DEFAULT_DEGRADED_POLICY.stale_symbol_sample_limit
-
 
 @dataclass(frozen=True)
 class _MarketFreshnessAssessment:
@@ -49,40 +44,6 @@ class _MarketFreshnessAssessment:
     @property
     def has_stale_signal(self) -> bool:
         return bool(self.stale_symbols) or self.reason is not None
-
-    def to_stale_entry(
-        self,
-        *,
-        policy: ScanFreshnessPolicy,
-        freshness_rate: float | None = None,
-    ) -> dict[str, Any]:
-        entry = {
-            "market": self.market,
-            "total_symbols": len(self.rows),
-            "covered_symbols": len(self.covered_dates),
-            "uncovered_symbols": self.uncovered_symbols,
-            "oldest_last_cached_date": (
-                str(self.oldest_last_cached_date)
-                if self.oldest_last_cached_date is not None
-                else None
-            ),
-            "expected_date": (
-                str(self.expected_date) if self.expected_date is not None else None
-            ),
-            "stale_symbol_count": len(self.stale_symbols),
-            "sample_stale_symbols": list(
-                self.stale_symbols[:policy.stale_symbol_sample_limit]
-            ),
-            "omission_thresholds": {
-                "min_freshness_rate": policy.min_freshness_rate,
-                "max_omitted_symbols": policy.max_omitted_symbols,
-            },
-        }
-        if self.reason is not None:
-            entry["reason"] = self.reason
-        if freshness_rate is not None:
-            entry["freshness_rate"] = freshness_rate
-        return entry
 
 
 def _parse_state_date(value: object) -> date | None:
@@ -110,6 +71,41 @@ def _row_coverage(market_rows: tuple[Any, ...]) -> tuple[tuple[date, ...], int]:
     covered_dates = tuple(row.last_date for row in market_rows if row.last_date is not None)
     uncovered = sum(1 for row in market_rows if row.last_date is None)
     return covered_dates, uncovered
+
+
+def _market_stale_detail(
+    assessment: _MarketFreshnessAssessment,
+    *,
+    policy: ScanFreshnessPolicy,
+    freshness_rate: float | None = None,
+) -> dict[str, Any]:
+    entry = {
+        "market": assessment.market,
+        "total_symbols": len(assessment.rows),
+        "covered_symbols": len(assessment.covered_dates),
+        "uncovered_symbols": assessment.uncovered_symbols,
+        "oldest_last_cached_date": (
+            str(assessment.oldest_last_cached_date)
+            if assessment.oldest_last_cached_date is not None
+            else None
+        ),
+        "expected_date": (
+            str(assessment.expected_date) if assessment.expected_date is not None else None
+        ),
+        "stale_symbol_count": len(assessment.stale_symbols),
+        "sample_stale_symbols": list(
+            assessment.stale_symbols[:policy.stale_symbol_sample_limit]
+        ),
+        "omission_thresholds": {
+            "min_freshness_rate": policy.min_freshness_rate,
+            "max_omitted_symbols": policy.max_omitted_symbols,
+        },
+    }
+    if assessment.reason is not None:
+        entry["reason"] = assessment.reason
+    if freshness_rate is not None:
+        entry["freshness_rate"] = freshness_rate
+    return entry
 
 
 def _build_blocking_detail(
@@ -143,17 +139,6 @@ def _build_blocking_detail(
         "stale_markets": stale_markets,
         "unresolved_symbols": unresolved_symbols,
     }
-
-
-def _resolve_policy(
-    policy: ScanFreshnessPolicy | None,
-    allow_stale_tail: bool | None,
-) -> ScanFreshnessPolicy:
-    if policy is not None:
-        return policy
-    if allow_stale_tail:
-        return ScanFreshnessPolicy.allowing_stale_tail()
-    return ScanFreshnessPolicy.strict()
 
 
 def _assess_market_freshness(
@@ -344,7 +329,8 @@ def _decide_scan_freshness(
         )
 
     stale_markets = [
-        assessment.to_stale_entry(
+        _market_stale_detail(
+            assessment,
             policy=policy,
             freshness_rate=freshness_rate,
         )
@@ -363,7 +349,6 @@ def evaluate_symbol_freshness(
     symbols: Iterable[str],
     *,
     policy: ScanFreshnessPolicy | None = None,
-    allow_stale_tail: bool | None = None,
 ) -> FreshnessDecision:
     """Return scan symbols, omission warnings, or a blocking freshness detail.
 
@@ -371,7 +356,7 @@ def evaluate_symbol_freshness(
     to that market's last completed trading day, then applies the supplied
     freshness policy.
     """
-    policy = _resolve_policy(policy, allow_stale_tail)
+    policy = policy or ScanFreshnessPolicy.strict()
     ordered_symbols = _ordered_unique_symbols(symbols)
     if not ordered_symbols:
         return FreshnessDecision(symbols_to_scan=())
@@ -421,5 +406,5 @@ def evaluate_symbol_freshness(
 
 def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
     """Return a 409 detail dict when any symbol lacks fresh cached prices."""
-    decision = evaluate_symbol_freshness(symbols, allow_stale_tail=False)
+    decision = evaluate_symbol_freshness(symbols, policy=ScanFreshnessPolicy.strict())
     return decision.blocking_detail
