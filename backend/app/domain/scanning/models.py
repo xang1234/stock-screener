@@ -91,6 +91,45 @@ class UniverseSpec:
 
 
 @dataclass(frozen=True)
+class FreshnessOmissionWarning:
+    """Durable warning describing symbols omitted from a degraded broad scan."""
+
+    code: str
+    message: str
+    markets: tuple[str, ...]
+    omitted_symbols: tuple[str, ...]
+    omitted_count: int
+    total_symbols: int
+    fresh_count: int
+    freshness_rate: float
+    expected_dates: dict[str, str | None]
+    oldest_last_cached_dates: dict[str, str | None]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "markets": list(self.markets),
+            "omitted_symbols": list(self.omitted_symbols),
+            "omitted_count": self.omitted_count,
+            "total_symbols": self.total_symbols,
+            "fresh_count": self.fresh_count,
+            "freshness_rate": self.freshness_rate,
+            "expected_dates": self.expected_dates,
+            "oldest_last_cached_dates": self.oldest_last_cached_dates,
+        }
+
+
+@dataclass(frozen=True)
+class FreshnessDecision:
+    """Decision returned by scan freshness evaluation."""
+
+    symbols_to_scan: tuple[str, ...]
+    warnings: tuple[FreshnessOmissionWarning, ...] = ()
+    blocking_detail: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class ScreenerOutputDomain:
     """Single screener's result for one stock.
 

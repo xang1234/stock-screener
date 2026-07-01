@@ -48,6 +48,10 @@ def _patch_session(rows):
     )
 
 
+def _rows(symbols, *, market="US", last_date=date(2026, 6, 18)):
+    return [_Row(symbol=s, market=market, last_date=last_date) for s in symbols]
+
+
 def _patch_calendar(last_completed_by_market):
     def _last_completed(market, now=None):
         return last_completed_by_market[market]
@@ -69,6 +73,16 @@ def _patch_refresh_state(last_refreshed_by_market):
             "status": "completed",
             "last_refreshed_trading_day": value.isoformat(),
         }
+
+    return patch(
+        "app.services.market_data_freshness.get_market_refresh_state",
+        side_effect=_state,
+    )
+
+
+def _patch_refresh_state_payload(state_by_market):
+    def _state(_session, market):
+        return state_by_market.get(market)
 
     return patch(
         "app.services.market_data_freshness.get_market_refresh_state",
@@ -204,3 +218,146 @@ def test_calendar_failure_fails_closed():
     assert detail["stale_markets"][0]["reason"] == "calendar_unavailable"
     assert detail["stale_markets"][0]["expected_date"] is None
     assert "calendar unavailable" in detail["message"]
+
+
+def test_degraded_broad_scan_omits_small_tail_at_99_percent():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    fresh_symbols = [f"FRESH{i:03d}" for i in range(99)]
+    symbols = [*fresh_symbols, "STALE001"]
+    rows = [
+        *_rows(fresh_symbols),
+        *_rows(["STALE001"], last_date=date(2026, 5, 13)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+
+    assert decision.blocking_detail is None
+    assert decision.symbols_to_scan == tuple(fresh_symbols)
+    warning = decision.warnings[0].to_dict()
+    assert warning["code"] == "market_data_stale_tail_omitted"
+    assert warning["omitted_count"] == 1
+    assert warning["total_symbols"] == 100
+    assert warning["freshness_rate"] == 0.99
+    assert warning["omitted_symbols"] == ["STALE001"]
+
+
+def test_degraded_broad_scan_caps_omissions_at_100():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    fresh_symbols = [f"FRESH{i:05d}" for i in range(10_000)]
+    stale_symbols = [f"STALE{i:03d}" for i in range(1, 102)]
+    symbols = [*fresh_symbols, *stale_symbols]
+    rows = [
+        *_rows(fresh_symbols),
+        *_rows(stale_symbols, last_date=date(2026, 5, 13)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+
+    assert decision.blocking_detail is not None
+    assert decision.blocking_detail["code"] == "market_data_stale"
+    us = decision.blocking_detail["stale_markets"][0]
+    assert us["stale_symbol_count"] == 101
+    assert us["sample_stale_symbols"][:3] == [
+        "STALE001",
+        "STALE002",
+        "STALE003",
+    ]
+
+
+def test_degraded_broad_scan_requires_99_percent_freshness():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    fresh_symbols = [f"FRESH{i:03d}" for i in range(98)]
+    symbols = [*fresh_symbols, "STALE001"]
+    rows = [
+        *_rows(fresh_symbols),
+        *_rows(["STALE001"], last_date=date(2026, 5, 13)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+
+    assert decision.blocking_detail is not None
+    assert decision.blocking_detail["code"] == "market_data_stale"
+    assert decision.warnings == ()
+
+
+def test_degraded_decision_preserves_resolver_order_after_omission():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    tail = [f"FRESH{i:03d}" for i in range(97)]
+    symbols = ["MSFT", "STALE001", "AAPL", *tail]
+    rows = [
+        *_rows(["MSFT", "AAPL", *tail]),
+        *_rows(["STALE001"], last_date=date(2026, 5, 13)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+
+    assert decision.blocking_detail is None
+    assert decision.symbols_to_scan[:3] == ("MSFT", "AAPL", "FRESH000")
+
+
+def test_strict_checker_still_blocks_stale_tail():
+    from app.services.market_data_freshness import check_symbol_freshness
+
+    fresh_symbols = [f"FRESH{i:03d}" for i in range(99)]
+    symbols = [*fresh_symbols, "STALE001"]
+    rows = [
+        *_rows(fresh_symbols),
+        *_rows(["STALE001"], last_date=date(2026, 5, 13)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        detail = check_symbol_freshness(symbols)
+
+    assert detail is not None
+    assert detail["code"] == "market_data_stale"
+
+
+def test_degraded_policy_requires_completed_refresh_state():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    fresh_symbols = [f"FRESH{i:03d}" for i in range(99)]
+    symbols = [*fresh_symbols, "STALE001"]
+    rows = [
+        *_rows(fresh_symbols),
+        *_rows(["STALE001"], last_date=date(2026, 5, 13)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state_payload({
+            "US": {
+                "market": "US",
+                "status": "running",
+                "last_refreshed_trading_day": "2026-06-18",
+            }
+        }),
+    ):
+        decision = evaluate_symbol_freshness(symbols, allow_stale_tail=True)
+
+    assert decision.blocking_detail is not None
+    assert decision.blocking_detail["code"] == "market_data_stale"
+    assert decision.blocking_detail["stale_markets"][0]["reason"] == "refresh_state_missing"
+    assert decision.warnings == ()

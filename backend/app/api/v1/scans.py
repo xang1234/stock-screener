@@ -144,6 +144,7 @@ async def list_scans(
                     started_at=scan.started_at,
                     completed_at=scan.completed_at,
                     source="feature_store" if scan.feature_run_id else "scan_results",
+                    warnings=getattr(scan, "warnings", None) or [],
                 ))
 
         return ScanListResponse(scans=scan_items)
@@ -220,6 +221,7 @@ async def create_scan(
             else f"Scan queued for {result.total_stocks} stocks"
         ),
         feature_run_id=result.feature_run_id,
+        warnings=list(result.warnings),
         universe_def=universe_def,
     )
 
@@ -339,6 +341,7 @@ async def get_scan_status(
                 passed_stocks=scan.passed_stocks or 0,
                 started_at=scan.started_at,
                 eta_seconds=eta_seconds,
+                warnings=getattr(scan, "warnings", None) or [],
                 universe_def=scan.get_universe_definition(),
             )
 

@@ -63,6 +63,15 @@ class _ConflictCreateScanUseCase(_FakeCreateScanUseCase):
         )
 
 
+def _warning_payload():
+    return {
+        "code": "market_data_stale_tail_omitted",
+        "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "omitted_symbols": ["LHSW"],
+        "omitted_count": 1,
+    }
+
+
 def test_scan_guard_requires_market_context_for_ambiguous_bse_alias():
     cn_universe = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BJSE)
     legacy_bse = SimpleNamespace(market=None, exchange=SimpleNamespace(value="BSE"), index=None)
@@ -169,6 +178,7 @@ async def test_create_scan_returns_queued_without_bootstrap_publish(client):
             total_stocks=99,
             is_duplicate=False,
             feature_run_id=None,
+            warnings=(_warning_payload(),),
         )
     )
 
@@ -191,6 +201,7 @@ async def test_create_scan_returns_queued_without_bootstrap_publish(client):
     assert payload["total_stocks"] == 99
     assert payload["message"] == "Scan queued for 99 stocks"
     assert payload["feature_run_id"] is None
+    assert payload["warnings"] == [_warning_payload()]
     assert payload["universe_def"]["type"] == "all"
     assert response.headers["deprecation"] == "true"
     assert response.headers["x-universe-legacy-value"] == "all"

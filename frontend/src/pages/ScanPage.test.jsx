@@ -16,6 +16,12 @@ const runtimeState = {
   universeOptions: null,
 };
 const useRuntimeActivityMock = vi.hoisted(() => vi.fn());
+const STALE_TAIL_WARNING = {
+  code: 'market_data_stale_tail_omitted',
+  message: 'Omitted 1 stale symbol from this broad scan (99.00% fresh).',
+  omitted_symbols: ['LHSW'],
+  omitted_count: 1,
+};
 
 vi.mock('../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
@@ -185,6 +191,82 @@ describe('ScanPage', () => {
       expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
     });
     expect(screen.getByText('Filters')).toBeInTheDocument();
+  });
+
+  it('renders stale-tail warning returned by scan creation', async () => {
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:us',
+    };
+    scanApi.createScan.mockResolvedValueOnce({
+      scan_id: 'scan-warning',
+      status: 'queued',
+      total_stocks: 99,
+      warnings: [STALE_TAIL_WARNING],
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan' }));
+
+    expect(await screen.findByText(STALE_TAIL_WARNING.message)).toBeInTheDocument();
+  });
+
+  it('renders bootstrap stale-tail warning and clears it for a new scan', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    runtimeState.uiSnapshots = { scan: true };
+    scanApi.getScanBootstrap.mockResolvedValue({
+      is_stale: false,
+      payload: {
+        universe_stats: {
+          active: 321,
+          sp500: 500,
+          by_exchange: { NYSE: 100, NASDAQ: 200, AMEX: 21 },
+        },
+        recent_scans: {
+          scans: [
+            {
+              scan_id: 'scan-warning',
+              status: 'completed',
+              created_at: '2026-04-09T00:00:00Z',
+              warnings: [STALE_TAIL_WARNING],
+            },
+          ],
+        },
+        selected_scan: {
+          scan_id: 'scan-warning',
+          status: 'completed',
+          warnings: [STALE_TAIL_WARNING],
+        },
+        selected_scan_status: {
+          status: 'completed',
+          warnings: [STALE_TAIL_WARNING],
+        },
+        filter_options: {
+          ibd_industries: [],
+          gics_sectors: [],
+          ratings: [],
+        },
+        results_page: {
+          scan_id: 'scan-warning',
+          total: 0,
+          results: [],
+        },
+      },
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    expect(await screen.findByText(STALE_TAIL_WARNING.message)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('combobox', { name: 'Previous Scans' }));
+    await user.click(await screen.findByRole('option', { name: 'New Scan' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(STALE_TAIL_WARNING.message)).not.toBeInTheDocument();
+    });
   });
 
   it('auto-loads the latest completed scan after scan history refreshes from running-only state', async () => {

@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 
 from app.main import app
+from app.services import server_auth
 from app.wiring.bootstrap import get_uow
 from tests.unit.use_cases.conftest import (
     FakeScan,
@@ -65,12 +66,22 @@ def _make_scan(scan_id="scan-001", status="completed", **kwargs) -> FakeScan:
     return FakeScan(scan_id=scan_id, status=status, **defaults)
 
 
+def _warning_payload():
+    return {
+        "code": "market_data_stale_tail_omitted",
+        "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "omitted_symbols": ["LHSW"],
+        "omitted_count": 1,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture
-async def client():
+async def client(monkeypatch):
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -101,8 +112,10 @@ class TestListScans:
             assert data["scans"][0]["universe_def"] == {
                 "type": "all",
                 "market": None,
+                "mic": None,
                 "exchange": None,
                 "index": None,
+                "listing_tier": None,
                 "symbols": None,
                 "allow_inactive_symbols": False,
             }
@@ -186,6 +199,26 @@ class TestListScans:
         finally:
             app.dependency_overrides.pop(get_uow, None)
 
+    async def test_includes_warnings_field(self, client):
+        scan_repo = FakeScanRepository()
+        s1 = _make_scan(
+            "scan-warn",
+            started_at=datetime(2024, 1, 2),
+            warnings=[_warning_payload()],
+        )
+        scan_repo.scans = {"scan-warn": s1}
+        scan_repo.rows = [s1]
+
+        uow = _FakeUoW(scans=scan_repo)
+        app.dependency_overrides[get_uow] = lambda: uow
+        try:
+            resp = await client.get("/api/v1/scans")
+            assert resp.status_code == 200
+            item = resp.json()["scans"][0]
+            assert item["warnings"] == [_warning_payload()]
+        finally:
+            app.dependency_overrides.pop(get_uow, None)
+
     async def test_empty_list(self, client):
         uow = _FakeUoW()
         app.dependency_overrides[get_uow] = lambda: uow
@@ -210,6 +243,7 @@ class TestGetScanStatus:
             "scan-001", status="completed",
             total_stocks=100, passed_stocks=42,
             started_at=datetime(2024, 1, 1),
+            warnings=[_warning_payload()],
         )
 
         uow = _FakeUoW(scans=scan_repo)
@@ -222,6 +256,7 @@ class TestGetScanStatus:
             assert data["progress"] == 100.0
             assert data["completed_stocks"] == 100
             assert data["universe_def"]["type"] == "all"
+            assert data["warnings"] == [_warning_payload()]
         finally:
             app.dependency_overrides.pop(get_uow, None)
 

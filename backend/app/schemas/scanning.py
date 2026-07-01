@@ -71,6 +71,7 @@ class ScanCreateResponse(BaseModel):
     total_stocks: int
     message: str
     feature_run_id: Optional[int] = None
+    warnings: List[dict[str, Any]] = Field(default_factory=list)
     universe_def: UniverseDefinition
 
 
@@ -85,6 +86,7 @@ class ScanStatusResponse(BaseModel):
     passed_stocks: int
     started_at: datetime
     eta_seconds: Optional[int] = None
+    warnings: List[dict[str, Any]] = Field(default_factory=list)
     universe_def: UniverseDefinition
 
 
@@ -410,6 +412,7 @@ class ScanListItem(BaseModel):
     started_at: datetime
     completed_at: Optional[datetime] = None
     source: Optional[str] = None
+    warnings: List[dict[str, Any]] = Field(default_factory=list)
 
 
 class ScanListResponse(BaseModel):

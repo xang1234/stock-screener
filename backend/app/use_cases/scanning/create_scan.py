@@ -16,7 +16,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Iterable, Optional
+from typing import Iterable, Optional, Protocol
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
@@ -30,10 +30,9 @@ from app.domain.scanning.signature import (
     hash_scan_signature,
     hash_universe_symbols,
 )
+from app.domain.scanning.models import FreshnessDecision
 from app.schemas.universe import UniverseType
 from app.domain.scanning.ports import TaskDispatcher
-
-FreshnessChecker = Callable[[Iterable[str]], Optional[dict]]
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +48,23 @@ _COMPILE_PATH_DROP_KEYS: tuple[str, ...] = (
     "volume_breakthrough_score",
     "composite_reason",
 )
+
+BROAD_STALE_TAIL_UNIVERSE_TYPES: frozenset[str] = frozenset({
+    UniverseType.ALL.value,
+    UniverseType.MARKET.value,
+    UniverseType.EXCHANGE.value,
+    UniverseType.INDEX.value,
+})
+
+
+class FreshnessEvaluator(Protocol):
+    def __call__(
+        self,
+        symbols: Iterable[str],
+        *,
+        allow_stale_tail: bool,
+    ) -> FreshnessDecision:
+        ...
 
 
 def _normalize_compile_details(
@@ -143,6 +159,7 @@ class CreateScanResult:
     total_stocks: int
     is_duplicate: bool
     feature_run_id: int | None = None
+    warnings: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -210,10 +227,10 @@ class CreateScanUseCase:
         self,
         dispatcher: TaskDispatcher,
         *,
-        freshness_checker: FreshnessChecker | None = None,
+        freshness_evaluator: FreshnessEvaluator | None = None,
     ) -> None:
         self._dispatcher = dispatcher
-        self._freshness_checker = freshness_checker
+        self._freshness_evaluator = freshness_evaluator
 
     def _attempt_compile_path(
         self,
@@ -341,6 +358,7 @@ class CreateScanUseCase:
                         total_stocks=existing.total_stocks or 0,
                         is_duplicate=True,
                         feature_run_id=getattr(existing, "feature_run_id", None),
+                        warnings=tuple(getattr(existing, "warnings", None) or ()),
                     )
 
             active_scan = uow.scans.get_active_scan()
@@ -360,10 +378,23 @@ class CreateScanUseCase:
             #   - duplicate idempotent retries return the existing scan above
             #   - 'all'-universe scans get checked across every resolved market
             #   - unrelated market-wide symbol issues don't block narrow scans
-            if self._freshness_checker is not None:
-                staleness_detail = self._freshness_checker(symbols)
-                if staleness_detail is not None:
-                    raise StaleMarketDataError(staleness_detail)
+            freshness_warnings: tuple[dict[str, object], ...] = ()
+            if self._freshness_evaluator is not None:
+                decision = self._freshness_evaluator(
+                    symbols,
+                    allow_stale_tail=cmd.universe_type in BROAD_STALE_TAIL_UNIVERSE_TYPES,
+                )
+                if decision.blocking_detail is not None:
+                    raise StaleMarketDataError(decision.blocking_detail)
+                symbols = list(decision.symbols_to_scan)
+                freshness_warnings = tuple(
+                    warning.to_dict() for warning in decision.warnings
+                )
+                if not symbols:
+                    raise ValidationError(
+                        f"No fresh symbols remain for universe '{cmd.universe_label}'. "
+                        "Refresh market data before starting a scan."
+                    )
 
             feature_run_id = None
             instant_match = None
@@ -440,6 +471,7 @@ class CreateScanUseCase:
                     task_id=None,
                     idempotency_key=cmd.idempotency_key,
                     feature_run_id=feature_run_id,
+                    warnings=list(freshness_warnings),
                 )
             except SingleActiveScanViolation:
                 uow.rollback()
@@ -464,6 +496,7 @@ class CreateScanUseCase:
                     total_stocks=len(symbols),
                     is_duplicate=False,
                     feature_run_id=feature_run_id,
+                    warnings=freshness_warnings,
                 )
 
             if compile_outcome is not None:
@@ -507,6 +540,7 @@ class CreateScanUseCase:
                     total_stocks=len(symbols),
                     is_duplicate=False,
                     feature_run_id=None,
+                    warnings=freshness_warnings,
                 )
 
             # Commit so the scan row is visible to the Celery worker.
@@ -534,4 +568,5 @@ class CreateScanUseCase:
             total_stocks=len(symbols),
             is_duplicate=False,
             feature_run_id=feature_run_id,
+            warnings=freshness_warnings,
         )

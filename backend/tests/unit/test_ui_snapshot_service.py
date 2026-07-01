@@ -183,6 +183,13 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
+    warning = {
+        "code": "market_data_stale_tail_omitted",
+        "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "omitted_symbols": ["LHSW"],
+        "omitted_count": 1,
+    }
+
     with Session() as db:
         db.add(
             Scan(
@@ -194,6 +201,7 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
                 universe_key="all",
                 total_stocks=100,
                 passed_stocks=42,
+                warnings=[warning],
                 started_at=datetime(2026, 3, 29, 21, 45, 0),
                 completed_at=datetime(2026, 3, 29, 21, 45, 0),
             )
@@ -204,6 +212,9 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
 
     assert snapshot.payload["recent_scans"]["scans"][0]["trigger_source"] == "auto"
     assert snapshot.payload["selected_scan"]["trigger_source"] == "auto"
+    assert snapshot.payload["recent_scans"]["scans"][0]["warnings"] == [warning]
+    assert snapshot.payload["selected_scan"]["warnings"] == [warning]
+    assert snapshot.payload["selected_scan_status"]["warnings"] == [warning]
 
 
 def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():

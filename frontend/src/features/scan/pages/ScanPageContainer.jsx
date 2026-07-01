@@ -64,6 +64,10 @@ function getMutationErrorDetail(error) {
   return detail && typeof detail === 'object' ? detail : null;
 }
 
+function normalizeScanWarnings(warnings) {
+  return Array.isArray(warnings) ? warnings : [];
+}
+
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults, universeOptions } = useRuntime();
   const { selectedMarket: globalMarket } = useMarket();
@@ -80,6 +84,7 @@ function ScanPage() {
 
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
+  const [scanWarnings, setScanWarnings] = useState([]);
   const [initialBootstrapSettled, setInitialBootstrapSettled] = useState(false);
   const [bootstrappedScanId, setBootstrappedScanId] = useState(null);
   const [universeMarket, setUniverseMarket] = useState(INITIAL_UNIVERSE_SELECTION.market);
@@ -149,6 +154,7 @@ function ScanPage() {
         null;
 
       if (!selectedScanId) {
+        setScanWarnings([]);
         return;
       }
 
@@ -163,6 +169,9 @@ function ScanPage() {
       setCurrentScanId(selectedScanId);
       setBootstrappedScanId(selectedScanId);
       setScanStatus(payload.selected_scan_status?.status ?? payload.selected_scan?.status ?? null);
+      setScanWarnings(normalizeScanWarnings(
+        payload.selected_scan_status?.warnings ?? payload.selected_scan?.warnings
+      ));
     },
     [queryClient]
   );
@@ -237,15 +246,18 @@ function ScanPage() {
         setCurrentScanId(null);
         setBootstrappedScanId(null);
         setScanStatus(null);
+        setScanWarnings([]);
         setPage(1);
         autoLoadedMarketRef.current = globalMarketRef.current;
         return;
       }
 
-      const knownStatus = scanHistoryRef.current.find((scan) => scan.scan_id === scanId)?.status ?? null;
+      const knownScan = scanHistoryRef.current.find((scan) => scan.scan_id === scanId);
+      const knownStatus = knownScan?.status ?? null;
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
       setScanStatus(knownStatus);
+      setScanWarnings(normalizeScanWarnings(knownScan?.warnings));
       setPage(1);
 
       if (snapshotEnabled) {
@@ -263,6 +275,7 @@ function ScanPage() {
       try {
         const status = await getScanStatus(scanId);
         setScanStatus(status.status);
+        setScanWarnings(normalizeScanWarnings(status.warnings));
       } catch (error) {
         console.error('Error loading scan:', error);
         setScanStatus(knownStatus);
@@ -327,6 +340,7 @@ function ScanPage() {
       setCurrentScanId(data.scan_id);
       setBootstrappedScanId(null);
       setScanStatus(data.status);
+      setScanWarnings(normalizeScanWarnings(data.warnings));
       setPage(1);
       refetchScans();
     },
@@ -394,6 +408,9 @@ function ScanPage() {
     }
     const previousStatus = scanStatus;
     setScanStatus(statusData.status);
+    if (Array.isArray(statusData.warnings)) {
+      setScanWarnings(statusData.warnings);
+    }
 
     if (previousStatus !== 'completed' && statusData.status === 'completed') {
       setTimeout(() => refetchResults(), 500);
@@ -625,6 +642,7 @@ function ScanPage() {
         onRefreshStaleData={handleRefreshStaleData}
         refreshStaleDataPending={refreshScanCacheMutation.isPending}
         refreshStaleDataError={refreshScanCacheMutation.error}
+        scanWarnings={scanWarnings}
       />
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (
