@@ -246,6 +246,33 @@ def test_degraded_broad_scan_omits_small_tail_at_99_percent():
     assert warning["omitted_symbols"] == ["STALE001"]
 
 
+def test_degraded_policy_is_explicit_value_object():
+    from app.services.market_data_freshness import (
+        ScanFreshnessPolicy,
+        evaluate_symbol_freshness,
+    )
+
+    fresh_symbols = [f"FRESH{i:03d}" for i in range(99)]
+    symbols = [*fresh_symbols, "STALE001"]
+    rows = [
+        *_rows(fresh_symbols),
+        *_rows(["STALE001"], last_date=date(2026, 5, 13)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        decision = evaluate_symbol_freshness(
+            symbols,
+            policy=ScanFreshnessPolicy.allowing_stale_tail(),
+        )
+
+    assert decision.blocking_detail is None
+    assert decision.symbols_to_scan == tuple(fresh_symbols)
+    assert decision.warnings[0].omitted_symbols == ("STALE001",)
+
+
 def test_degraded_broad_scan_caps_omissions_at_100():
     from app.services.market_data_freshness import evaluate_symbol_freshness
 

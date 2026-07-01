@@ -30,7 +30,11 @@ from app.domain.scanning.signature import (
     hash_scan_signature,
     hash_universe_symbols,
 )
-from app.domain.scanning.models import FreshnessDecision
+from app.domain.scanning.models import (
+    FreshnessDecision,
+    FreshnessOmissionWarning,
+    ScanFreshnessPolicy,
+)
 from app.schemas.universe import UniverseType
 from app.domain.scanning.ports import TaskDispatcher
 
@@ -49,22 +53,26 @@ _COMPILE_PATH_DROP_KEYS: tuple[str, ...] = (
     "composite_reason",
 )
 
-BROAD_STALE_TAIL_UNIVERSE_TYPES: frozenset[str] = frozenset({
-    UniverseType.ALL.value,
-    UniverseType.MARKET.value,
-    UniverseType.EXCHANGE.value,
-    UniverseType.INDEX.value,
-})
-
-
 class FreshnessEvaluator(Protocol):
     def __call__(
         self,
         symbols: Iterable[str],
         *,
-        allow_stale_tail: bool,
+        policy: ScanFreshnessPolicy,
     ) -> FreshnessDecision:
         ...
+
+
+def _scan_warnings_from_payloads(
+    payloads: Iterable[object] | None,
+) -> tuple[FreshnessOmissionWarning, ...]:
+    warnings: list[FreshnessOmissionWarning] = []
+    for payload in payloads or ():
+        if isinstance(payload, FreshnessOmissionWarning):
+            warnings.append(payload)
+        elif isinstance(payload, dict):
+            warnings.append(FreshnessOmissionWarning.from_dict(payload))
+    return tuple(warnings)
 
 
 def _normalize_compile_details(
@@ -159,7 +167,7 @@ class CreateScanResult:
     total_stocks: int
     is_duplicate: bool
     feature_run_id: int | None = None
-    warnings: tuple[dict[str, object], ...] = ()
+    warnings: tuple[FreshnessOmissionWarning, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -358,7 +366,9 @@ class CreateScanUseCase:
                         total_stocks=existing.total_stocks or 0,
                         is_duplicate=True,
                         feature_run_id=getattr(existing, "feature_run_id", None),
-                        warnings=tuple(getattr(existing, "warnings", None) or ()),
+                        warnings=_scan_warnings_from_payloads(
+                            getattr(existing, "warnings", None)
+                        ),
                     )
 
             active_scan = uow.scans.get_active_scan()
@@ -378,18 +388,16 @@ class CreateScanUseCase:
             #   - duplicate idempotent retries return the existing scan above
             #   - 'all'-universe scans get checked across every resolved market
             #   - unrelated market-wide symbol issues don't block narrow scans
-            freshness_warnings: tuple[dict[str, object], ...] = ()
+            freshness_warnings: tuple[FreshnessOmissionWarning, ...] = ()
             if self._freshness_evaluator is not None:
                 decision = self._freshness_evaluator(
                     symbols,
-                    allow_stale_tail=cmd.universe_type in BROAD_STALE_TAIL_UNIVERSE_TYPES,
+                    policy=ScanFreshnessPolicy.for_universe_type(cmd.universe_type),
                 )
                 if decision.blocking_detail is not None:
                     raise StaleMarketDataError(decision.blocking_detail)
                 symbols = list(decision.symbols_to_scan)
-                freshness_warnings = tuple(
-                    warning.to_dict() for warning in decision.warnings
-                )
+                freshness_warnings = tuple(decision.warnings)
                 if not symbols:
                     raise ValidationError(
                         f"No fresh symbols remain for universe '{cmd.universe_label}'. "
@@ -471,7 +479,7 @@ class CreateScanUseCase:
                     task_id=None,
                     idempotency_key=cmd.idempotency_key,
                     feature_run_id=feature_run_id,
-                    warnings=list(freshness_warnings),
+                    warnings=[warning.to_dict() for warning in freshness_warnings],
                 )
             except SingleActiveScanViolation:
                 uow.rollback()

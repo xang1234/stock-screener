@@ -70,8 +70,14 @@ def _warning_payload():
     return {
         "code": "market_data_stale_tail_omitted",
         "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "markets": ["US"],
         "omitted_symbols": ["LHSW"],
         "omitted_count": 1,
+        "total_symbols": 100,
+        "fresh_count": 99,
+        "freshness_rate": 0.99,
+        "expected_dates": {"US": "2026-06-18"},
+        "oldest_last_cached_dates": {"US": "2026-05-13"},
     }
 
 

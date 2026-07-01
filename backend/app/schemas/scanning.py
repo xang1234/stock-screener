@@ -5,7 +5,7 @@ paginated results, filter options, and score explanations.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Self
+from typing import Any, Dict, List, Literal, Optional, Self
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -63,6 +63,24 @@ class ScanCreateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class StaleTailOmissionWarningResponse(BaseModel):
+    """Warning emitted when a broad scan omits a small stale symbol tail."""
+
+    code: Literal["market_data_stale_tail_omitted"]
+    message: str
+    markets: List[str] = Field(default_factory=list)
+    omitted_symbols: List[str] = Field(default_factory=list)
+    omitted_count: int
+    total_symbols: int
+    fresh_count: int
+    freshness_rate: float
+    expected_dates: Dict[str, Optional[str]] = Field(default_factory=dict)
+    oldest_last_cached_dates: Dict[str, Optional[str]] = Field(default_factory=dict)
+
+
+ScanWarningResponse = StaleTailOmissionWarningResponse
+
+
 class ScanCreateResponse(BaseModel):
     """Response model for scan creation."""
 
@@ -71,7 +89,7 @@ class ScanCreateResponse(BaseModel):
     total_stocks: int
     message: str
     feature_run_id: Optional[int] = None
-    warnings: List[dict[str, Any]] = Field(default_factory=list)
+    warnings: List[ScanWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
 
 
@@ -86,7 +104,7 @@ class ScanStatusResponse(BaseModel):
     passed_stocks: int
     started_at: datetime
     eta_seconds: Optional[int] = None
-    warnings: List[dict[str, Any]] = Field(default_factory=list)
+    warnings: List[ScanWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
 
 
@@ -412,7 +430,7 @@ class ScanListItem(BaseModel):
     started_at: datetime
     completed_at: Optional[datetime] = None
     source: Optional[str] = None
-    warnings: List[dict[str, Any]] = Field(default_factory=list)
+    warnings: List[ScanWarningResponse] = Field(default_factory=list)
 
 
 class ScanListResponse(BaseModel):

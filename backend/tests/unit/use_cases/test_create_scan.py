@@ -3,7 +3,10 @@
 import pytest
 
 from app.domain.common.errors import ValidationError
-from app.domain.scanning.models import FreshnessDecision, FreshnessOmissionWarning
+from app.domain.scanning.models import (
+    FreshnessDecision,
+    FreshnessOmissionWarning,
+)
 from app.use_cases.scanning.create_scan import (
     ActiveScanConflictError,
     CreateScanCommand,
@@ -43,12 +46,12 @@ def _make_uow(symbols: list[str] | None = None) -> FakeUnitOfWork:
     return FakeUnitOfWork(universe=FakeUniverseRepository(symbols or []))
 
 
-def _fresh_decision(symbols, *, allow_stale_tail=False):
+def _fresh_decision(symbols, *, policy=None):
     return FreshnessDecision(symbols_to_scan=tuple(symbols))
 
 
 def _stale_detail_decision(detail):
-    def _evaluator(symbols, *, allow_stale_tail=False):
+    def _evaluator(symbols, *, policy=None):
         return FreshnessDecision(
             symbols_to_scan=tuple(symbols),
             blocking_detail=detail,
@@ -308,7 +311,7 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         calls: list[list[str]] = []
 
-        def checker(symbols):
+        def checker(symbols, *, policy=None):
             calls.append(list(symbols))
             return FreshnessDecision(
                 symbols_to_scan=tuple(symbols),
@@ -341,7 +344,7 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         captured: list[list[str]] = []
 
-        def checker(symbols, *, allow_stale_tail=False):
+        def checker(symbols, *, policy=None):
             captured.append(list(symbols))
             return FreshnessDecision(symbols_to_scan=tuple(symbols))
 
@@ -358,7 +361,7 @@ class TestFreshnessChecker:
         uow = _make_uow(["AAPL"])
         dispatcher = FakeTaskDispatcher()
 
-        def checker(_symbols, *, allow_stale_tail=False):
+        def checker(_symbols, *, policy=None):
             raise RuntimeError("transient DB error")
 
         uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=checker)
@@ -386,9 +389,9 @@ class TestFreshnessChecker:
         uow = _make_uow(["AAPL", "LHSW", "MSFT"])
         dispatcher = FakeTaskDispatcher()
 
-        def evaluator(symbols, *, allow_stale_tail=False):
+        def evaluator(symbols, *, policy=None):
             assert list(symbols) == ["AAPL", "LHSW", "MSFT"]
-            assert allow_stale_tail is True
+            assert policy.allow_stale_tail is True
             return FreshnessDecision(
                 symbols_to_scan=("AAPL", "MSFT"),
                 warnings=(_omission_warning(),),
@@ -408,15 +411,15 @@ class TestFreshnessChecker:
         assert dispatcher.dispatched[0][1] == ["AAPL", "MSFT"]
         assert uow.scans.rows[0].total_stocks == 2
         assert uow.scans.rows[0].warnings[0]["omitted_symbols"] == ["LHSW"]
-        assert result.warnings[0]["omitted_count"] == 1
+        assert result.warnings[0].omitted_count == 1
 
     def test_custom_universe_does_not_allow_stale_tail(self):
         uow = _make_uow(["AAPL", "LHSW"])
         dispatcher = FakeTaskDispatcher()
         captured: list[bool] = []
 
-        def evaluator(symbols, *, allow_stale_tail=False):
-            captured.append(allow_stale_tail)
+        def evaluator(symbols, *, policy=None):
+            captured.append(policy.allow_stale_tail)
             return FreshnessDecision(symbols_to_scan=tuple(symbols))
 
         uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=evaluator)
@@ -436,8 +439,8 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         captured: list[bool] = []
 
-        def evaluator(symbols, *, allow_stale_tail=False):
-            captured.append(allow_stale_tail)
+        def evaluator(symbols, *, policy=None):
+            captured.append(policy.allow_stale_tail)
             return FreshnessDecision(symbols_to_scan=tuple(symbols))
 
         uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=evaluator)
@@ -457,7 +460,7 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         calls = 0
 
-        def evaluator(symbols, *, allow_stale_tail=False):
+        def evaluator(symbols, *, policy=None):
             nonlocal calls
             calls += 1
             return FreshnessDecision(
@@ -487,7 +490,7 @@ class TestFreshnessChecker:
 
         assert result1.is_duplicate is False
         assert result2.is_duplicate is True
-        assert result2.warnings[0]["omitted_symbols"] == ["LHSW"]
+        assert result2.warnings[0].omitted_symbols == ("LHSW",)
         assert calls == 1
 
     def test_feature_run_hash_uses_filtered_symbols(self):
@@ -524,7 +527,7 @@ class TestFreshnessChecker:
         )
         dispatcher = FakeTaskDispatcher()
 
-        def evaluator(symbols, *, allow_stale_tail=False):
+        def evaluator(symbols, *, policy=None):
             return FreshnessDecision(
                 symbols_to_scan=tuple(filtered_symbols),
                 warnings=(_omission_warning(),),

@@ -84,7 +84,6 @@ function ScanPage() {
 
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
-  const [scanWarnings, setScanWarnings] = useState([]);
   const [initialBootstrapSettled, setInitialBootstrapSettled] = useState(false);
   const [bootstrappedScanId, setBootstrappedScanId] = useState(null);
   const [universeMarket, setUniverseMarket] = useState(INITIAL_UNIVERSE_SELECTION.market);
@@ -154,7 +153,6 @@ function ScanPage() {
         null;
 
       if (!selectedScanId) {
-        setScanWarnings([]);
         return;
       }
 
@@ -165,13 +163,12 @@ function ScanPage() {
       );
       if (payload.selected_scan_status) {
         queryClient.setQueryData(['scanStatus', selectedScanId], payload.selected_scan_status);
+      } else if (payload.selected_scan) {
+        queryClient.setQueryData(['scanStatus', selectedScanId], payload.selected_scan);
       }
       setCurrentScanId(selectedScanId);
       setBootstrappedScanId(selectedScanId);
       setScanStatus(payload.selected_scan_status?.status ?? payload.selected_scan?.status ?? null);
-      setScanWarnings(normalizeScanWarnings(
-        payload.selected_scan_status?.warnings ?? payload.selected_scan?.warnings
-      ));
     },
     [queryClient]
   );
@@ -246,7 +243,6 @@ function ScanPage() {
         setCurrentScanId(null);
         setBootstrappedScanId(null);
         setScanStatus(null);
-        setScanWarnings([]);
         setPage(1);
         autoLoadedMarketRef.current = globalMarketRef.current;
         return;
@@ -257,7 +253,6 @@ function ScanPage() {
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
       setScanStatus(knownStatus);
-      setScanWarnings(normalizeScanWarnings(knownScan?.warnings));
       setPage(1);
 
       if (snapshotEnabled) {
@@ -274,14 +269,14 @@ function ScanPage() {
 
       try {
         const status = await getScanStatus(scanId);
+        queryClient.setQueryData(['scanStatus', scanId], status);
         setScanStatus(status.status);
-        setScanWarnings(normalizeScanWarnings(status.warnings));
       } catch (error) {
         console.error('Error loading scan:', error);
         setScanStatus(knownStatus);
       }
     },
-    [applyScanBootstrapSnapshot, snapshotEnabled]
+    [applyScanBootstrapSnapshot, queryClient, snapshotEnabled]
   );
 
   const { data: universeStats, isLoading: statsLoading } = useQuery({
@@ -340,7 +335,6 @@ function ScanPage() {
       setCurrentScanId(data.scan_id);
       setBootstrappedScanId(null);
       setScanStatus(data.status);
-      setScanWarnings(normalizeScanWarnings(data.warnings));
       setPage(1);
       refetchScans();
     },
@@ -408,14 +402,33 @@ function ScanPage() {
     }
     const previousStatus = scanStatus;
     setScanStatus(statusData.status);
-    if (Array.isArray(statusData.warnings)) {
-      setScanWarnings(statusData.warnings);
-    }
 
     if (previousStatus !== 'completed' && statusData.status === 'completed') {
       setTimeout(() => refetchResults(), 500);
     }
   }, [refetchResults, scanStatus, statusData]);
+
+  const currentHistoryScan = useMemo(
+    () => scanHistory?.scans?.find((scan) => scan.scan_id === currentScanId),
+    [currentScanId, scanHistory?.scans]
+  );
+  const scanWarnings = useMemo(() => {
+    if (!currentScanId) {
+      return [];
+    }
+    if (Array.isArray(statusData?.warnings)) {
+      return statusData.warnings;
+    }
+    if (createScanMutation.data?.scan_id === currentScanId) {
+      return normalizeScanWarnings(createScanMutation.data.warnings);
+    }
+    return normalizeScanWarnings(currentHistoryScan?.warnings);
+  }, [
+    createScanMutation.data,
+    currentHistoryScan?.warnings,
+    currentScanId,
+    statusData?.warnings,
+  ]);
 
   const { data: filterOptionsData } = useQuery({
     queryKey: ['filterOptions', currentScanId],

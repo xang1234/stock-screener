@@ -221,7 +221,7 @@ async def create_scan(
             else f"Scan queued for {result.total_stocks} stocks"
         ),
         feature_run_id=result.feature_run_id,
-        warnings=list(result.warnings),
+        warnings=[warning.to_dict() for warning in result.warnings],
         universe_def=universe_def,
     )
 
