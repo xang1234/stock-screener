@@ -284,12 +284,18 @@ const getDesignTokens = (mode) => ({
 });
 
 function App() {
-  const [mode, setMode] = useState('light');
+  const [mode, setMode] = useState(
+    () => localStorage.getItem('colorMode') || 'dark'
+  );
 
   const colorMode = useMemo(
     () => ({
       toggleColorMode: () => {
-        setMode((prevMode) => (prevMode === 'light' ? 'dark' : 'light'));
+        setMode((prevMode) => {
+          const next = prevMode === 'light' ? 'dark' : 'light';
+          localStorage.setItem('colorMode', next);
+          return next;
+        });
       },
       mode,
     }),
