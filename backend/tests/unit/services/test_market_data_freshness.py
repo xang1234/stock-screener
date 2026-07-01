@@ -253,6 +253,29 @@ def test_degraded_broad_scan_omits_small_tail_at_99_percent():
     assert warning["omitted_symbols"] == ["STALE001"]
 
 
+def test_degraded_multi_market_warning_names_only_markets_with_omitted_symbols():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    fresh_us_symbols = [f"FRESH{i:03d}" for i in range(99)]
+    symbols = [*fresh_us_symbols, "STALE001", "0700.HK"]
+    rows = [
+        *_rows(fresh_us_symbols),
+        *_rows(["STALE001"], last_date=date(2026, 5, 13)),
+        *_rows(["0700.HK"], market="HK", last_date=date(2026, 6, 17)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18), "HK": date(2026, 6, 17)}),
+        _patch_refresh_state({"US": date(2026, 6, 18), "HK": date(2026, 6, 17)}),
+    ):
+        decision = evaluate_symbol_freshness(symbols, policy=_stale_tail_policy())
+
+    warning = decision.warnings[0].to_dict()
+    assert warning["markets"] == ["US"]
+    assert warning["expected_dates"] == {"US": "2026-06-18"}
+    assert warning["oldest_last_cached_dates"] == {"US": "2026-05-13"}
+
+
 def test_degraded_policy_is_explicit_value_object():
     from app.services.market_data_freshness import (
         ScanFreshnessPolicy,

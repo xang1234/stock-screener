@@ -9,7 +9,11 @@ from typing import Any, Dict, List, Literal, Optional, Self
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from ..domain.scanning.models import ScanResultItemDomain, StockExplanation
+from ..domain.scanning.models import (
+    ScanResultItemDomain,
+    ScanWarningCode,
+    StockExplanation,
+)
 from ..infra.serialization import (
     coerce_bool_or_false,
     normalize_string_list,
@@ -66,7 +70,7 @@ class ScanCreateRequest(BaseModel):
 class StaleTailOmissionWarningResponse(BaseModel):
     """Warning emitted when a broad scan omits a small stale symbol tail."""
 
-    code: Literal["market_data_stale_tail_omitted"]
+    code: Literal[ScanWarningCode.STALE_TAIL_OMITTED.value]
     message: str
     markets: List[str] = Field(default_factory=list)
     omitted_symbols: List[str] = Field(default_factory=list)
@@ -104,7 +108,7 @@ def normalize_scan_warnings_for_response(warnings: Any) -> list[dict[str, Any]]:
                 continue
             warning = to_dict()
 
-        if warning.get("code") != "market_data_stale_tail_omitted":
+        if warning.get("code") != ScanWarningCode.STALE_TAIL_OMITTED.value:
             continue
         try:
             normalized.append(

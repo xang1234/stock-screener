@@ -318,7 +318,7 @@ def _decide_scan_freshness(
             symbols_to_scan=symbols_to_scan,
             warnings=(
                 _build_omission_warning(
-                    assessments=assessments,
+                    assessments=stale_assessments,
                     omitted_symbols=omitted_symbols,
                     omitted_count=omitted_count,
                     total_symbols=total_symbols,
