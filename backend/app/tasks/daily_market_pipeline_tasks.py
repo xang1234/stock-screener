@@ -124,6 +124,60 @@ def guard_exposure_result(result: dict | None = None, *, market: str) -> dict:
 
 
 @celery_app.task(
+    name="app.tasks.daily_market_pipeline_tasks.deactivate_stale_price_symbols",
+    queue="celery",
+)
+def deactivate_stale_price_symbols(result: dict | None = None, *, market: str) -> dict:
+    """Deactivate universe symbols whose last price is more than 10 trading days old.
+
+    Runs after the price refresh so thinly-traded/delisted symbols don't block
+    downstream freshness gates (group rankings, scans).  Non-fatal: failures
+    are logged and the pipeline continues.
+    """
+    from app.database import SessionLocal
+    from app.wiring.bootstrap import get_market_calendar_service
+
+    market_code = market.upper()
+    try:
+        calendar = get_market_calendar_service()
+        last_trading_day = calendar.last_completed_trading_day(market_code)
+        # 10 trading days ≈ 2 calendar weeks of grace
+        grace_days = 14
+        from datetime import timedelta
+        cutoff = last_trading_day - timedelta(days=grace_days)
+
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            result_proxy = db.execute(
+                text(
+                    "UPDATE stock_universe SET is_active = false "
+                    "WHERE is_active = true AND market = :market "
+                    "AND symbol NOT IN ("
+                    "  SELECT symbol FROM stock_prices WHERE date >= :cutoff"
+                    ")"
+                ),
+                {"market": market_code, "cutoff": cutoff},
+            )
+            count = result_proxy.rowcount
+            db.commit()
+            if count:
+                logger.info(
+                    "Deactivated %d stale-price symbols for market=%s (no data since %s)",
+                    count, market_code, cutoff,
+                )
+            return {"status": "ok", "market": market_code, "deactivated": count}
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(
+            "deactivate_stale_price_symbols failed for market=%s (non-fatal): %s",
+            market_code, exc, exc_info=True,
+        )
+        return {"status": "skipped", "market": market_code, "error": str(exc)}
+
+
+@celery_app.task(
     name="app.tasks.daily_market_pipeline_tasks.guard_group_result",
     queue="celery",
 )
@@ -164,6 +218,9 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
             queue=data_fetch_queue_for_market(market_code)
         ),
         guard_price_refresh.s(market=market_code).set(
+            queue=market_jobs_queue_for_market(market_code)
+        ),
+        deactivate_stale_price_symbols.s(market=market_code).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
         calculate_daily_breadth_with_gapfill.si(market=market_code).set(
