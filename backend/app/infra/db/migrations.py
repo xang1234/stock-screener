@@ -69,7 +69,7 @@ def _migration_lock(conn: Connection):
         )
 
 
-def migrate_database_to_head(engine: Engine, revision: str = "head") -> str:
+def migrate_database_to_head(engine: Engine, revision: str = "heads") -> str:
     """Upgrade new databases and reconcile pre-Alembic schemas before upgrade.
 
     One AUTOCOMMIT connection serves the lock and the schema inspection.
@@ -78,6 +78,10 @@ def migrate_database_to_head(engine: Engine, revision: str = "head") -> str:
     servers with idle_in_transaction_session_timeout would kill the session
     and release the lock mid-migration. Alembic itself connects separately
     (env.py builds its own engine from the config URL).
+
+    Uses "heads" (plural) so a temporary branch split (two migrations sharing
+    the same down_revision before a merge migration lands) never crashes
+    startup. A proper merge migration should still be created promptly.
     """
     config = _alembic_config(_engine_database_url(engine))
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn, _migration_lock(conn):
