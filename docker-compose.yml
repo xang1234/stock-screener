@@ -52,6 +52,9 @@ x-app-env: &app-env
   # /app/data/static-site (via the ./data:/app/data mount) must stay aligned
   # with the frontend's ./data/static-site:/usr/share/nginx/static-data bind.
   STATIC_EXPORT_OUTPUT_DIR: /app/data/static-site
+  SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+  SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+  SLACK_CHANNEL: ${SLACK_CHANNEL:-#stock-signals}
 
 x-celery-env: &celery-env
   <<: *app-env

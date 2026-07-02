@@ -1,0 +1,24 @@
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stockscanner}
+      POSTGRES_USER: ${POSTGRES_USER:-stockscanner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockscanner}
+      POSTGRES_SHARED_BUFFERS: 1GB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 2GB
+      POSTGRES_WORK_MEM: 64MB
+      POSTGRES_MAX_CONNECTIONS: "100"
+
+  # DS220+ has spinning HDDs; schema migrations (especially CREATE INDEX on large
+  # tables) can take several minutes. Run with a single uvicorn worker so there is
+  # no advisory-lock contention between workers during startup, and give the health
+  # check 8 minutes before it starts counting retries.
+  backend:
+    environment:
+      WEB_CONCURRENCY: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 480s

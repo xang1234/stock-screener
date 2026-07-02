@@ -16,7 +16,7 @@ from ...tasks.market_queues import market_suffix
 from ...theme_platform.contracts import WarmupHeartbeatState, WarmupStateSnapshot
 
 
-WARMUP_METADATA_MAX_AGE = timedelta(hours=12)
+WARMUP_METADATA_MAX_AGE = timedelta(hours=36)
 
 
 @dataclass(frozen=True)

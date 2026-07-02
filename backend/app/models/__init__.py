@@ -1,5 +1,6 @@
 """Database models for Stock Scanner"""
 from .stock import StockPrice, StockFundamental, StockTechnical, StockIndustry
+from .signal_archive import SignalArchive
 from .scan_result import Scan, ScanResult
 from .watchlist import Watchlist
 from .market import MarketStatus

@@ -31,6 +31,7 @@ import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/c
 import { useMarket } from '../../contexts/MarketContext';
 import { marketFlag } from '../../utils/marketFlags';
 import { formatLocalCurrency } from '../../utils/formatUtils';
+import MarketRegimeBanner from './MarketRegimeBanner';
 
 const EMPTY_ROWS = [];
 const DEFAULT_TOP_RESULTS = 20;
@@ -126,6 +127,7 @@ function DailyMarketSnapshotTab() {
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', pr: 1 }}>
+      <MarketRegimeBanner />
       <Box
         sx={{
           display: 'flex',

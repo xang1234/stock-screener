@@ -172,6 +172,7 @@ function Layout({ children }) {
     { path: '/scan', label: 'Scan' },
     { path: '/breadth', label: 'Breadth' },
     { path: '/groups', label: 'Groups' },
+    { path: '/signals', label: 'Signals' },
     { path: '/validation', label: 'Backtest' },
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Assistant' }] : []),

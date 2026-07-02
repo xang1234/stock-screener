@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "drillr": {
+      "type": "http",
+      "url": "https://gateway.drillr.ai/mcp/data"
+    }
+  }
+}

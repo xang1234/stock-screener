@@ -47,6 +47,8 @@ _include("ticker_validation", prefix="/ticker-validation", tags=["ticker-validat
 _include("filter_presets", prefix="/filter-presets", tags=["filter-presets"])
 _include("features", prefix="/features", tags=["features"])
 
+_include("market_regime", tags=["market"])
+_include("signals", tags=["signals"])
 _include("cache", tags=["cache"])
 _include("fundamentals", tags=["fundamentals"])
 _include("data_fetch_status", tags=["data-fetch"])

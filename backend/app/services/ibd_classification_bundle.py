@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -201,7 +202,7 @@ def sync_ibd_classification_from_github(
         allow_stale=allow_stale,
         github_token=settings.github_data_token,
         request_timeout_seconds=settings.github_data_timeout_seconds,
-        output_dir=output_dir or str(Path(".tmp") / "ibd-classification"),
+        output_dir=output_dir or tempfile.mkdtemp(prefix=f"ibd-classification-{normalized_market.lower()}-"),
     )
 
     status = result.get("status")

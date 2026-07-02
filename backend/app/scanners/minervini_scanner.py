@@ -25,8 +25,37 @@ from .criteria.adr_calculator import ADRCalculator
 from .criteria.rs_sparkline import RSSparklineCalculator
 from .criteria.price_sparkline import PriceSparklineCalculator
 from .criteria.beta_calculator import BetaCalculator
+from ..services.signal_engine import score_buy_signal, calculate_stop_loss
 
 logger = logging.getLogger(__name__)
+
+
+def _calc_rr(entry_price: float, signal_result: dict) -> float | None:
+    """Risk:reward ratio — (price_target - entry) / (entry - stop_loss)."""
+    try:
+        stop = signal_result.get("stop_loss")
+        if not stop or stop >= entry_price or entry_price <= 0:
+            return None
+        risk = entry_price - stop
+        # Use 2:1 minimum target; actual target from signal if available
+        target = signal_result.get("details", {}).get("target_price") or (entry_price + risk * 2)
+        reward = target - entry_price
+        return round(reward / risk, 2) if risk > 0 else None
+    except Exception:
+        return None
+
+
+def _calc_severity(score: float | None) -> str | None:
+    """Map signal score to severity label."""
+    if score is None:
+        return None
+    if score >= 90:
+        return "critical"
+    if score >= 75:
+        return "high"
+    if score >= 60:
+        return "medium"
+    return "watch"
 
 
 @register_screener
@@ -387,6 +416,33 @@ class MinerviniScanner(BaseStockScreener):
                 except Exception as e:
                     logger.warning(f"VCP detection failed for {symbol}: {e}")
 
+            # Signal engine scoring (0-125 buy signal score)
+            signal_result = None
+            try:
+                current_price_val = float(prices.iloc[-1]) if len(prices) > 0 else 0.0
+                phase_info = {
+                    "phase": stage_result.get("stage", 0),
+                    "sma_50": float(ma_50),
+                    "sma_200": float(ma_200),
+                    "slope_50": float((ma_50 - prices.iloc[-20:].mean()) / prices.iloc[-20:].mean()) if len(prices) >= 20 else 0.0,
+                    "slope_200": float((ma_200 - prices.iloc[-60:].mean()) / prices.iloc[-60:].mean()) if len(prices) >= 60 else 0.0,
+                    "distance_from_50sma": float((current_price_val - ma_50) / ma_50 * 100) if ma_50 > 0 else 0.0,
+                    "distance_from_200sma": float((current_price_val - ma_200) / ma_200 * 100) if ma_200 > 0 else 0.0,
+                }
+                price_df = stock_data.price_data if stock_data.price_data is not None and not stock_data.price_data.empty else pd.DataFrame({"Close": prices[::-1], "High": prices[::-1], "Low": prices[::-1], "Volume": volumes[::-1]})
+                bmark = stock_data.benchmark_data
+                rs_series = (price_df["Close"] / bmark["Close"]) if (bmark is not None and not bmark.empty and "Close" in bmark.columns) else pd.Series([], dtype=float)
+                signal_result = score_buy_signal(
+                    ticker=symbol,
+                    price_data=price_df,
+                    current_price=current_price_val,
+                    phase_info=phase_info,
+                    rs_series=rs_series,
+                    vcp_data=vcp_result,
+                )
+            except Exception as e:
+                logger.debug(f"Signal engine skipped for {symbol}: {e}")
+
             # Calculate Minervini score
             score_result = self._calculate_minervini_score(
                 rs_result,
@@ -450,6 +506,13 @@ class MinerviniScanner(BaseStockScreener):
                 # Pocket Pivot / Power Trend
                 "pocket_pivot": pocket_pivot,
                 "power_trend": power_trend,
+                # Signal engine output
+                "signal_score": signal_result["score"] if signal_result else None,
+                "stop_loss": signal_result["stop_loss"] if signal_result else None,
+                "buy_signal": signal_result["is_buy"] if signal_result else None,
+                "breakout_type": signal_result["details"].get("breakout", {}).get("breakout_type") if signal_result and signal_result.get("details") else None,
+                "risk_reward_ratio": _calc_rr(current_price_val, signal_result) if signal_result else None,
+                "signal_severity": _calc_severity(signal_result["score"] if signal_result else None),
                 # Beta and Beta-Adjusted RS metrics
                 "beta": beta_metrics.get("beta"),
                 "beta_adj_rs": beta_metrics.get("beta_adj_rs"),
