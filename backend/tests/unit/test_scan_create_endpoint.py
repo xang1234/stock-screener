@@ -10,8 +10,10 @@ from unittest.mock import MagicMock, patch
 
 from app.main import app
 from app.api.v1.scans import _resolve_scan_guard_market
+from app.domain.scanning.models import FreshnessOmissionWarning
 from app.domain.markets import market_registry, mic_alias_registry
 from app.schemas.universe import Exchange, Market, UniverseDefinition, UniverseType
+from app.schemas.scanning import ScanCreateResponse
 from app.services import server_auth
 from app.wiring.bootstrap import get_create_scan_use_case, get_uow
 from app.use_cases.scanning.create_scan import (
@@ -63,6 +65,21 @@ class _ConflictCreateScanUseCase(_FakeCreateScanUseCase):
         )
 
 
+def _warning_payload():
+    return {
+        "code": "market_data_stale_tail_omitted",
+        "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "markets": ["US"],
+        "omitted_symbols": ["LHSW"],
+        "omitted_count": 1,
+        "total_symbols": 100,
+        "fresh_count": 99,
+        "freshness_rate": 0.99,
+        "expected_dates": {"US": "2026-06-18"},
+        "oldest_last_cached_dates": {"US": "2026-05-13"},
+    }
+
+
 def test_scan_guard_requires_market_context_for_ambiguous_bse_alias():
     cn_universe = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BJSE)
     legacy_bse = SimpleNamespace(market=None, exchange=SimpleNamespace(value="BSE"), index=None)
@@ -88,6 +105,30 @@ def test_scan_guard_resolves_registry_exchanges_and_indexes():
         for index in profile.indexes:
             universe = SimpleNamespace(market=None, exchange=None, index=SimpleNamespace(value=index))
             assert _resolve_scan_guard_market(universe) == profile.market.code
+
+
+def test_scan_create_response_warnings_are_typed():
+    universe_def = UniverseDefinition(type=UniverseType.ALL)
+    payload = ScanCreateResponse(
+        scan_id="scan-warning",
+        status="queued",
+        total_stocks=99,
+        message="Scan queued for 99 stocks",
+        warnings=[_warning_payload()],
+        universe_def=universe_def,
+    )
+
+    assert payload.warnings[0].code == "market_data_stale_tail_omitted"
+
+    with pytest.raises(ValueError):
+        ScanCreateResponse(
+            scan_id="scan-warning",
+            status="queued",
+            total_stocks=99,
+            message="Scan queued for 99 stocks",
+            warnings=[{"code": "unknown_warning", "message": "too loose"}],
+            universe_def=universe_def,
+        )
 
 
 @pytest_asyncio.fixture
@@ -169,6 +210,7 @@ async def test_create_scan_returns_queued_without_bootstrap_publish(client):
             total_stocks=99,
             is_duplicate=False,
             feature_run_id=None,
+            warnings=(FreshnessOmissionWarning.from_dict(_warning_payload()),),
         )
     )
 
@@ -191,6 +233,7 @@ async def test_create_scan_returns_queued_without_bootstrap_publish(client):
     assert payload["total_stocks"] == 99
     assert payload["message"] == "Scan queued for 99 stocks"
     assert payload["feature_run_id"] is None
+    assert payload["warnings"] == [_warning_payload()]
     assert payload["universe_def"]["type"] == "all"
     assert response.headers["deprecation"] == "true"
     assert response.headers["x-universe-legacy-value"] == "all"

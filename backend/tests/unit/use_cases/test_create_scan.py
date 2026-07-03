@@ -3,6 +3,10 @@
 import pytest
 
 from app.domain.common.errors import ValidationError
+from app.domain.scanning.models import (
+    FreshnessDecision,
+    FreshnessOmissionWarning,
+)
 from app.use_cases.scanning.create_scan import (
     ActiveScanConflictError,
     CreateScanCommand,
@@ -40,6 +44,35 @@ def _make_command(**overrides) -> CreateScanCommand:
 def _make_uow(symbols: list[str] | None = None) -> FakeUnitOfWork:
     """Build a UoW with a configurable universe."""
     return FakeUnitOfWork(universe=FakeUniverseRepository(symbols or []))
+
+
+def _fresh_decision(symbols, *, policy=None):
+    return FreshnessDecision(symbols_to_scan=tuple(symbols))
+
+
+def _stale_detail_decision(detail):
+    def _evaluator(symbols, *, policy=None):
+        return FreshnessDecision(
+            symbols_to_scan=tuple(symbols),
+            blocking_detail=detail,
+        )
+
+    return _evaluator
+
+
+def _omission_warning():
+    return FreshnessOmissionWarning(
+        code="market_data_stale_tail_omitted",
+        message="Omitted 1 stale symbol from this broad scan (66.67% fresh).",
+        markets=("US",),
+        omitted_symbols=("LHSW",),
+        omitted_count=1,
+        total_symbols=3,
+        fresh_count=2,
+        freshness_rate=0.666667,
+        expected_dates={"US": "2026-06-18"},
+        oldest_last_cached_dates={"US": "2026-05-13"},
+    )
 
 
 # ── Tests ────────────────────────────────────────────────────────────────
@@ -247,7 +280,7 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         uc = CreateScanUseCase(
             dispatcher=dispatcher,
-            freshness_checker=lambda _symbols: self._STALE_DETAIL,
+            freshness_evaluator=_stale_detail_decision(self._STALE_DETAIL),
         )
 
         with pytest.raises(StaleMarketDataError) as exc_info:
@@ -262,7 +295,7 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         uc = CreateScanUseCase(
             dispatcher=dispatcher,
-            freshness_checker=lambda _symbols: None,
+            freshness_evaluator=_fresh_decision,
         )
 
         result = uc.execute(uow, _make_command())
@@ -278,21 +311,24 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         calls: list[list[str]] = []
 
-        def checker(symbols):
+        def checker(symbols, *, policy=None):
             calls.append(list(symbols))
-            return self._STALE_DETAIL
+            return FreshnessDecision(
+                symbols_to_scan=tuple(symbols),
+                blocking_detail=self._STALE_DETAIL,
+            )
 
-        # First call: freshness_checker returns None so the scan is created.
+        # First call: freshness_evaluator allows the scan to be created.
         fresh_uc = CreateScanUseCase(
             dispatcher=dispatcher,
-            freshness_checker=lambda _s: None,
+            freshness_evaluator=_fresh_decision,
         )
         result1 = fresh_uc.execute(uow, _make_command(idempotency_key="retry-key"))
 
         # Second call: checker would return stale, but idempotency short-circuits first.
         stale_uc = CreateScanUseCase(
             dispatcher=dispatcher,
-            freshness_checker=checker,
+            freshness_evaluator=checker,
         )
         result2 = stale_uc.execute(uow, _make_command(idempotency_key="retry-key"))
 
@@ -308,16 +344,16 @@ class TestFreshnessChecker:
         dispatcher = FakeTaskDispatcher()
         captured: list[list[str]] = []
 
-        def checker(symbols):
+        def checker(symbols, *, policy=None):
             captured.append(list(symbols))
-            return None
+            return FreshnessDecision(symbols_to_scan=tuple(symbols))
 
-        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_checker=checker)
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=checker)
         uc.execute(uow, _make_command())
 
         assert captured == [["AAPL", "MSFT", "GOOGL"]]
 
-    def test_freshness_checker_exception_fails_closed(self):
+    def test_freshness_evaluator_exception_fails_closed(self):
         """Round 6 CodeRabbit: if the checker itself raises (transient DB
         error, etc.) the exception must propagate — we do not silently skip
         the gate. Fail-closed is intentional for a safety check.
@@ -325,10 +361,10 @@ class TestFreshnessChecker:
         uow = _make_uow(["AAPL"])
         dispatcher = FakeTaskDispatcher()
 
-        def checker(_symbols):
+        def checker(_symbols, *, policy=None):
             raise RuntimeError("transient DB error")
 
-        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_checker=checker)
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=checker)
 
         with pytest.raises(RuntimeError, match="transient DB error"):
             uc.execute(uow, _make_command())
@@ -342,12 +378,180 @@ class TestFreshnessChecker:
         """
         uow = _make_uow(["AAPL"])
         dispatcher = FakeTaskDispatcher()
-        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_checker=None)
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=None)
 
         result = uc.execute(uow, _make_command())
 
         assert result.status == "queued"
         assert len(dispatcher.dispatched) == 1
+
+    def test_broad_universe_omits_stale_tail_before_dispatch(self):
+        uow = _make_uow(["AAPL", "LHSW", "MSFT"])
+        dispatcher = FakeTaskDispatcher()
+
+        def evaluator(symbols, *, policy=None):
+            assert list(symbols) == ["AAPL", "LHSW", "MSFT"]
+            assert policy.allow_stale_tail is True
+            return FreshnessDecision(
+                symbols_to_scan=("AAPL", "MSFT"),
+                warnings=(_omission_warning(),),
+            )
+
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=evaluator)
+
+        result = uc.execute(
+            uow,
+            _make_command(
+                universe_type="market",
+                universe_market="US",
+                universe_key="market:US",
+            ),
+        )
+
+        assert dispatcher.dispatched[0][1] == ["AAPL", "MSFT"]
+        assert uow.scans.rows[0].total_stocks == 2
+        assert uow.scans.rows[0].warnings[0]["omitted_symbols"] == ["LHSW"]
+        assert result.warnings[0].omitted_count == 1
+
+    def test_custom_universe_does_not_allow_stale_tail(self):
+        uow = _make_uow(["AAPL", "LHSW"])
+        dispatcher = FakeTaskDispatcher()
+        captured: list[bool] = []
+
+        def evaluator(symbols, *, policy=None):
+            captured.append(policy.allow_stale_tail)
+            return FreshnessDecision(symbols_to_scan=tuple(symbols))
+
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=evaluator)
+        uc.execute(
+            uow,
+            _make_command(
+                universe_type="custom",
+                universe_key="custom:AAPL,LHSW",
+                universe_symbols=["AAPL", "LHSW"],
+            ),
+        )
+
+        assert captured == [False]
+
+    def test_market_universe_allows_stale_tail(self):
+        uow = _make_uow(["AAPL"])
+        dispatcher = FakeTaskDispatcher()
+        captured: list[bool] = []
+
+        def evaluator(symbols, *, policy=None):
+            captured.append(policy.allow_stale_tail)
+            return FreshnessDecision(symbols_to_scan=tuple(symbols))
+
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=evaluator)
+        uc.execute(
+            uow,
+            _make_command(
+                universe_type="market",
+                universe_market="US",
+                universe_key="market:US",
+            ),
+        )
+
+        assert captured == [True]
+
+    def test_idempotent_duplicate_returns_existing_warnings(self):
+        uow = _make_uow(["AAPL", "LHSW", "MSFT"])
+        dispatcher = FakeTaskDispatcher()
+        calls = 0
+
+        def evaluator(symbols, *, policy=None):
+            nonlocal calls
+            calls += 1
+            return FreshnessDecision(
+                symbols_to_scan=("AAPL", "MSFT"),
+                warnings=(_omission_warning(),),
+            )
+
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=evaluator)
+        result1 = uc.execute(
+            uow,
+            _make_command(
+                idempotency_key="retry-key",
+                universe_type="market",
+                universe_market="US",
+                universe_key="market:US",
+            ),
+        )
+        uow.scans.rows[0].warnings.append({
+            "code": "future_warning",
+            "message": "This warning type is not known by this server version.",
+        })
+        result2 = uc.execute(
+            uow,
+            _make_command(
+                idempotency_key="retry-key",
+                universe_type="market",
+                universe_market="US",
+                universe_key="market:US",
+            ),
+        )
+
+        assert result1.is_duplicate is False
+        assert result2.is_duplicate is True
+        assert result2.warnings[0].omitted_symbols == ("LHSW",)
+        assert calls == 1
+
+    def test_feature_run_hash_uses_filtered_symbols(self):
+        from datetime import date
+        from app.domain.feature_store.models import RunStats, RunType
+        from app.domain.scanning.signature import (
+            build_scan_signature_payload,
+            hash_scan_signature,
+            hash_universe_symbols,
+        )
+
+        feature_runs = FakeFeatureRunRepository()
+        filtered_symbols = ["AAPL", "MSFT"]
+        signature = build_scan_signature_payload(
+            universe_type="market",
+            screeners=["minervini"],
+            composite_method="weighted_average",
+            criteria=None,
+        )
+        run = feature_runs.start_run(
+            as_of_date=date(2026, 2, 18),
+            run_type=RunType.DAILY_SNAPSHOT,
+            universe_hash=hash_universe_symbols(filtered_symbols),
+            input_hash=hash_scan_signature(signature),
+        )
+        feature_runs.mark_completed(run.id, stats=RunStats(
+            total_symbols=2, processed_symbols=2,
+            failed_symbols=0, duration_seconds=1.0, passed_symbols=2,
+        ))
+        feature_runs.publish_atomically(run.id)
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["AAPL", "LHSW", "MSFT"]),
+            feature_runs=feature_runs,
+        )
+        dispatcher = FakeTaskDispatcher()
+
+        def evaluator(symbols, *, policy=None):
+            return FreshnessDecision(
+                symbols_to_scan=tuple(filtered_symbols),
+                warnings=(_omission_warning(),),
+            )
+
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_evaluator=evaluator)
+
+        result = uc.execute(
+            uow,
+            _make_command(
+                universe_type="market",
+                universe_market="US",
+                universe_key="market:US",
+            ),
+        )
+
+        assert result.status == "completed"
+        assert result.feature_run_id == run.id
+        assert result.total_stocks == 2
+        assert len(dispatcher.dispatched) == 0
 
 
 class TestFeatureRunBinding:

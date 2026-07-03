@@ -90,6 +90,99 @@ class UniverseSpec:
     symbols: tuple[str, ...] | None = None
 
 
+class ScanWarningCode(str, Enum):
+    """Durable scan warning codes exposed through the scan API."""
+
+    STALE_TAIL_OMITTED = "market_data_stale_tail_omitted"
+
+
+@dataclass(frozen=True)
+class ScanFreshnessPolicy:
+    """Policy controlling whether scan freshness can degrade gracefully."""
+
+    allow_stale_tail: bool = False
+    min_freshness_rate: float = 0.99
+    max_omitted_symbols: int = 100
+    stale_symbol_sample_limit: int = 20
+
+    @classmethod
+    def strict(cls) -> "ScanFreshnessPolicy":
+        return cls(allow_stale_tail=False)
+
+    @classmethod
+    def allowing_stale_tail(cls) -> "ScanFreshnessPolicy":
+        return cls(allow_stale_tail=True)
+
+    @classmethod
+    def for_universe_type(cls, universe_type: str) -> "ScanFreshnessPolicy":
+        return cls(
+            allow_stale_tail=universe_type in {
+                "all",
+                "market",
+                "exchange",
+                "index",
+            }
+        )
+
+
+@dataclass(frozen=True)
+class FreshnessOmissionWarning:
+    """Durable warning describing symbols omitted from a degraded broad scan."""
+
+    code: str
+    message: str
+    markets: tuple[str, ...]
+    omitted_symbols: tuple[str, ...]
+    omitted_count: int
+    total_symbols: int
+    fresh_count: int
+    freshness_rate: float
+    expected_dates: dict[str, str | None]
+    oldest_last_cached_dates: dict[str, str | None]
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "FreshnessOmissionWarning":
+        return cls(
+            code=str(payload["code"]),
+            message=str(payload["message"]),
+            markets=tuple(str(value) for value in payload.get("markets", ())),
+            omitted_symbols=tuple(
+                str(value) for value in payload.get("omitted_symbols", ())
+            ),
+            omitted_count=int(payload["omitted_count"]),
+            total_symbols=int(payload["total_symbols"]),
+            fresh_count=int(payload["fresh_count"]),
+            freshness_rate=float(payload["freshness_rate"]),
+            expected_dates=dict(payload.get("expected_dates", {})),
+            oldest_last_cached_dates=dict(
+                payload.get("oldest_last_cached_dates", {})
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "markets": list(self.markets),
+            "omitted_symbols": list(self.omitted_symbols),
+            "omitted_count": self.omitted_count,
+            "total_symbols": self.total_symbols,
+            "fresh_count": self.fresh_count,
+            "freshness_rate": self.freshness_rate,
+            "expected_dates": self.expected_dates,
+            "oldest_last_cached_dates": self.oldest_last_cached_dates,
+        }
+
+
+@dataclass(frozen=True)
+class FreshnessDecision:
+    """Decision returned by scan freshness evaluation."""
+
+    symbols_to_scan: tuple[str, ...]
+    warnings: tuple[FreshnessOmissionWarning, ...] = ()
+    blocking_detail: dict[str, Any] | None = None
+
+
 @dataclass(frozen=True)
 class ScreenerOutputDomain:
     """Single screener's result for one stock.
@@ -271,6 +364,10 @@ __all__ = [
     "ScanStatus",
     "ExportFormat",
     "UniverseSpec",
+    "ScanWarningCode",
+    "ScanFreshnessPolicy",
+    "FreshnessOmissionWarning",
+    "FreshnessDecision",
     "ScreenerOutputDomain",
     "CriterionResult",
     "ScreenerExplanation",

@@ -44,6 +44,11 @@ class TestCreate:
         sid = _make_scan_id()
         criteria = {"min_score": 70, "screeners": ["minervini"]}
         screener_types = ["minervini", "canslim"]
+        warnings = [{
+            "code": "market_data_stale_tail_omitted",
+            "omitted_symbols": ["LHSW"],
+            "omitted_count": 1,
+        }]
 
         scan = repo.create(
             scan_id=sid,
@@ -52,6 +57,7 @@ class TestCreate:
             screener_types=screener_types,
             idempotency_key="idem-001",
             universe="all",
+            warnings=warnings,
         )
 
         row = session.get(Scan, scan.id)
@@ -60,6 +66,7 @@ class TestCreate:
         assert row.screener_types == screener_types
         assert row.idempotency_key == "idem-001"
         assert row.universe == "all"
+        assert row.warnings == warnings
 
     def test_unique_scan_id_constraint(self, repo: SqlScanRepository, session: Session):
         sid = _make_scan_id()

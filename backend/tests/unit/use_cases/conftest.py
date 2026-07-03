@@ -84,6 +84,7 @@ class FakeScan:
     universe_index: str | None = None
     universe_symbols: list[str] | None = None
     criteria: dict | None = None
+    warnings: list[dict[str, object]] | None = None
     started_at: Any = None
 
     def get_universe_definition(self):
@@ -158,9 +159,15 @@ class FakeScanRepository(ScanRepository):
             scan.completed_at = datetime.now()
         self.status_history.append((scan_id, status))
 
-    def list_recent(self, limit: int = 20) -> list[FakeScan]:
+    def list_recent(self, limit: int = 20, market: str | None = None) -> list[FakeScan]:
+        rows = self.rows
+        if market:
+            rows = [
+                scan for scan in rows
+                if (getattr(scan, "universe_market", None) or "").upper() == market.upper()
+            ]
         return sorted(
-            self.rows,
+            rows,
             key=lambda s: s.started_at or datetime.min,
             reverse=True,
         )[:limit]
