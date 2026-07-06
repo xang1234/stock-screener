@@ -80,6 +80,7 @@ FTD_FLOOR = 45.0                # recent FTD after a correction raises the floor
 # --- History seeding (one-time, so the timeline renders on launch) ----------
 EXPOSURE_HISTORY_MIN_ROWS = 60   # below this many stored rows -> seed history
 EXPOSURE_BACKFILL_DAYS = 220     # trailing calendar days to seed (~150 sessions)
+STRICT_BENCHMARK_HISTORY_INCOMPLETE = "strict_benchmark_history_incomplete"
 
 # Stance bands, highest lower-bound first.
 STANCE_BANDS = [
@@ -407,7 +408,16 @@ def refresh_market_exposure_for_date(
             benchmark_fallback_policy=benchmark_fallback_policy,
         )
     except Exception as exc:
-        return {**result, "history_seed": {"error": str(exc)}}
+        history_seed = {"error": str(exc)}
+        if benchmark_fallback_policy == BenchmarkFallbackPolicy.PRIMARY_ONLY:
+            return {**result, "error": history_seed["error"], "history_seed": history_seed}
+        return {**result, "history_seed": history_seed}
+    if (
+        benchmark_fallback_policy == BenchmarkFallbackPolicy.PRIMARY_ONLY
+        and isinstance(history_seed, dict)
+        and history_seed.get("error")
+    ):
+        return {**result, "error": history_seed["error"], "history_seed": history_seed}
     return {**result, "history_seed": history_seed}
 
 
@@ -511,6 +521,31 @@ def backfill_exposure(
     return {"seeded": seeded, "failed": failed}
 
 
+def _non_primary_benchmark_row_count(
+    db: Session,
+    *,
+    market: str,
+    primary_symbol: str,
+    start: date,
+    end: date,
+) -> int:
+    return (
+        db.query(MarketExposure)
+        .filter(
+            MarketExposure.market == market,
+            MarketExposure.date >= start,
+            MarketExposure.date <= end,
+        )
+        .filter(
+            or_(
+                MarketExposure.benchmark_symbol.is_(None),
+                MarketExposure.benchmark_symbol != primary_symbol,
+            )
+        )
+        .count()
+    )
+
+
 def ensure_exposure_history(
     db: Session,
     market: str,
@@ -535,30 +570,55 @@ def ensure_exposure_history(
 
     existing_query = db.query(MarketExposure).filter(MarketExposure.market == market)
     existing = existing_query.count()
+    primary_symbol = (
+        get_primary_benchmark_symbol(market)
+        if benchmark_fallback_policy == BenchmarkFallbackPolicy.PRIMARY_ONLY
+        else None
+    )
     if existing >= min_rows:
         if benchmark_fallback_policy != BenchmarkFallbackPolicy.PRIMARY_ONLY:
             return {"seeded": 0, "skipped": True}
 
-        primary_symbol = get_primary_benchmark_symbol(market)
-        primary_rows = existing_query.filter(MarketExposure.benchmark_symbol == primary_symbol).count()
-        non_primary_rows_in_seed_window = (
+        primary_rows = (
             existing_query
-            .filter(MarketExposure.date >= start, MarketExposure.date <= end)
-            .filter(
-                or_(
-                    MarketExposure.benchmark_symbol.is_(None),
-                    MarketExposure.benchmark_symbol != primary_symbol,
-                )
-            )
+            .filter(MarketExposure.benchmark_symbol == primary_symbol)
             .count()
+        )
+        non_primary_rows_in_seed_window = _non_primary_benchmark_row_count(
+            db,
+            market=market,
+            primary_symbol=primary_symbol,
+            start=start,
+            end=end,
         )
         if primary_rows >= min_rows and non_primary_rows_in_seed_window == 0:
             return {"seeded": 0, "skipped": True}
 
-    return backfill_exposure(
+    result = backfill_exposure(
         db,
         market,
         start,
         end,
         benchmark_fallback_policy=benchmark_fallback_policy,
     )
+    if benchmark_fallback_policy != BenchmarkFallbackPolicy.PRIMARY_ONLY:
+        return result
+
+    non_primary_rows_in_seed_window = _non_primary_benchmark_row_count(
+        db,
+        market=market,
+        primary_symbol=primary_symbol,
+        start=start,
+        end=end,
+    )
+    if non_primary_rows_in_seed_window:
+        return {
+            **result,
+            "error": STRICT_BENCHMARK_HISTORY_INCOMPLETE,
+            "market": market,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "primary_benchmark_symbol": primary_symbol,
+            "non_primary_benchmark_rows": non_primary_rows_in_seed_window,
+        }
+    return result

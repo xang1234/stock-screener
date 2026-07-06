@@ -320,6 +320,9 @@ def test_ensure_exposure_history_rebuilds_non_primary_history_for_primary_only_p
         benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
     ):
         calls.append((db_arg, market, start, end_arg, benchmark_fallback_policy))
+        for row in db_arg.query(MarketExposure).filter(MarketExposure.market == market).all():
+            row.benchmark_symbol = "SPY"
+        db_arg.commit()
         return {"seeded": 2, "failed": 0}
 
     monkeypatch.setattr(svc, "backfill_exposure", fake_backfill)
@@ -366,6 +369,105 @@ def test_ensure_exposure_history_rebuilds_non_primary_history_for_primary_only_p
             BenchmarkFallbackPolicy.PRIMARY_ONLY,
         )
     ]
+
+
+def test_ensure_exposure_history_reports_error_when_strict_rebuild_leaves_non_primary_rows(monkeypatch):
+    from app.database import SessionLocal
+    from app.models.market_exposure import MarketExposure
+    from app.services.market_calendar_service import MarketCalendarService
+
+    end = date(2026, 6, 25)
+
+    monkeypatch.setattr(
+        MarketCalendarService,
+        "last_completed_trading_day",
+        lambda self, market: end,
+    )
+
+    def fake_backfill(
+        db_arg,
+        market,
+        start,
+        end_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        return {"seeded": 0, "failed": 1}
+
+    monkeypatch.setattr(svc, "backfill_exposure", fake_backfill)
+
+    db = SessionLocal()
+    try:
+        db.add(
+            MarketExposure(
+                market="US",
+                date=date(2026, 6, 24),
+                exposure_score=71.0,
+                stance="Confirmed Uptrend",
+                benchmark_symbol="IVV",
+            )
+        )
+        db.commit()
+
+        result = svc.ensure_exposure_history(
+            db,
+            "US",
+            min_rows=1,
+            days=12,
+            benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    finally:
+        db.close()
+
+    assert result["error"] == "strict_benchmark_history_incomplete"
+    assert result["failed"] == 1
+    assert result["non_primary_benchmark_rows"] == 1
+    assert result["primary_benchmark_symbol"] == "SPY"
+
+
+def test_refresh_market_exposure_for_date_promotes_strict_history_seed_error(monkeypatch):
+    db = object()
+    as_of = date(2026, 6, 25)
+    history_seed = {
+        "error": "strict_benchmark_history_incomplete",
+        "failed": 1,
+        "non_primary_benchmark_rows": 1,
+    }
+
+    def fake_compute(
+        market,
+        as_of_date,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        return {
+            "market": market,
+            "date": as_of_date,
+            "exposure_score": 78.0,
+            "stance": "Confirmed Uptrend",
+        }
+
+    def fake_seed(
+        db_arg,
+        market,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        return history_seed
+
+    monkeypatch.setattr(svc, "compute_and_store", fake_compute)
+    monkeypatch.setattr(svc, "ensure_exposure_history", fake_seed)
+
+    result = refresh_market_exposure_for_date(
+        db,
+        "us",
+        as_of,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+    )
+
+    assert result["error"] == "strict_benchmark_history_incomplete"
+    assert result["history_seed"] == history_seed
 
 
 def test_compute_and_store_round_trip_validates_against_schema(monkeypatch):
