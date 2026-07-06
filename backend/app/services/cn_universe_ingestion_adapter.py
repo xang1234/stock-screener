@@ -8,6 +8,12 @@ import json
 import re
 from typing import Any, Iterable, Mapping
 
+from app.domain.markets.cn_symbols import (
+    CN_SYMBOL_SUFFIX_EXCHANGE,
+    cn_exchange_from_symbol_suffix,
+    infer_cn_a_share_exchange_from_local_code,
+)
+
 from .security_master_service import security_master_resolver
 
 _CN_EXCHANGE_ALIASES: dict[str, str] = {
@@ -149,12 +155,15 @@ class CNUniverseIngestionAdapter:
     @staticmethod
     def _infer_exchange_from_symbol(source_symbol: str) -> str | None:
         token = str(source_symbol or "").strip().upper()
-        if token.startswith(("SSE:", "SHSE:", "XSHG:", "SH:")) or token.endswith(".SS"):
+        if token.startswith(("SSE:", "SHSE:", "XSHG:", "SH:")):
             return "SSE"
-        if token.startswith(("SZSE:", "XSHE:", "SZ:")) or token.endswith(".SZ"):
+        if token.startswith(("SZSE:", "XSHE:", "SZ:")):
             return "SZSE"
-        if token.startswith(("BSE:", "BJSE:", "XBSE:", "XBEI:", "BJ:")) or token.endswith(".BJ"):
+        if token.startswith(("BSE:", "BJSE:", "XBSE:", "XBEI:", "BJ:")):
             return "BJSE"
+        suffix_exchange = cn_exchange_from_symbol_suffix(token)
+        if suffix_exchange is not None:
+            return suffix_exchange
         code = CNUniverseIngestionAdapter._strip_symbol_decoration(token)
         if _CN_LOCAL_CODE_RE.fullmatch(code):
             return CNUniverseIngestionAdapter._infer_exchange_from_code(code)
@@ -185,7 +194,7 @@ class CNUniverseIngestionAdapter:
             if token.startswith(prefix):
                 token = token[len(prefix):]
                 break
-        for suffix in (".SS", ".SZ", ".BJ"):
+        for suffix in CN_SYMBOL_SUFFIX_EXCHANGE:
             if token.endswith(suffix):
                 token = token[: -len(suffix)]
                 break
@@ -203,13 +212,7 @@ class CNUniverseIngestionAdapter:
 
     @staticmethod
     def _infer_exchange_from_code(local_code: str) -> str | None:
-        if local_code.startswith(("600", "601", "603", "605", "688")):
-            return "SSE"
-        if local_code.startswith(("000", "001", "002", "003", "300", "301")):
-            return "SZSE"
-        if local_code.startswith(("4", "8", "9")):
-            return "BJSE"
-        return None
+        return infer_cn_a_share_exchange_from_local_code(local_code)
 
     @staticmethod
     def _infer_board(local_code: str, exchange: str) -> str:
