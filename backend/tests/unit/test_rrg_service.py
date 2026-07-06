@@ -110,6 +110,42 @@ def test_get_rrg_groups_scope_returns_quadrants_and_tails():
     assert [g["industry_group"] for g in payload["groups"]] == ["AlphaTech", "BetaMetals"]
 
 
+def test_get_rrg_passes_as_of_date_to_history_provider():
+    session = _session()
+    expected_date = date(2026, 6, 11)
+
+    class _FakeHistoryProvider:
+        def get_all_groups_history(self, db, *, market, days, as_of_date=None):
+            assert market == "US"
+            assert as_of_date == expected_date
+            return (
+                expected_date.isoformat(),
+                {
+                    "Software": {
+                        "industry_group": "Software",
+                        "date": expected_date.isoformat(),
+                        "rank": 1,
+                        "num_stocks": 10,
+                        "avg_rs_rating": 80.0,
+                    }
+                },
+                {
+                    "Software": [
+                        (expected_date - timedelta(weeks=i), 80.0 - i, 10)
+                        for i in range(40)
+                    ]
+                },
+            )
+
+    payload = RRGService(history_provider=_FakeHistoryProvider()).get_rrg(
+        session,
+        market="US",
+        as_of_date=expected_date,
+    )
+
+    assert payload["date"] == "2026-06-11"
+
+
 def test_get_rrg_omits_groups_with_too_little_history():
     session = _session()
     dates = _weekly_fridays(40)
