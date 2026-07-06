@@ -29,6 +29,21 @@ def cn_exchange_from_symbol_suffix(symbol_or_local_code: str | None) -> str | No
     return None
 
 
+def cn_price_symbol_for_native_provider(
+    requested_symbol: str | None,
+    *,
+    local_code: str | None,
+    canonical_symbol: str | None,
+) -> str | None:
+    local = normalize_cn_local_code(local_code)
+    if not local.isdigit():
+        return None
+    if cn_exchange_from_symbol_suffix(requested_symbol) is not None:
+        canonical = str(canonical_symbol or "").strip().upper()
+        return canonical or None
+    return local
+
+
 def infer_cn_a_share_exchange_from_local_code(local_code: str | None) -> str | None:
     token = normalize_cn_local_code(local_code)
     if token.startswith(("600", "601", "603", "605", "688")):

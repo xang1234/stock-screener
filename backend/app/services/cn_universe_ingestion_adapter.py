@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping
 
 from app.domain.markets.cn_symbols import (
     CN_SYMBOL_SUFFIX_EXCHANGE,
+    cn_exchange_from_symbol_suffix,
     infer_cn_a_share_exchange_from_local_code,
 )
 
@@ -160,9 +161,9 @@ class CNUniverseIngestionAdapter:
             return "SZSE"
         if token.startswith(("BSE:", "BJSE:", "XBSE:", "XBEI:", "BJ:")):
             return "BJSE"
-        for suffix, exchange in CN_SYMBOL_SUFFIX_EXCHANGE.items():
-            if token.endswith(suffix):
-                return exchange
+        suffix_exchange = cn_exchange_from_symbol_suffix(token)
+        if suffix_exchange is not None:
+            return suffix_exchange
         code = CNUniverseIngestionAdapter._strip_symbol_decoration(token)
         if _CN_LOCAL_CODE_RE.fullmatch(code):
             return CNUniverseIngestionAdapter._infer_exchange_from_code(code)

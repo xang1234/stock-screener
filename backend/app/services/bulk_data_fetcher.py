@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional
 import yfinance as yf
 
 from ..config import settings
+from ..domain.markets.cn_symbols import cn_price_symbol_for_native_provider
 from ..domain.providers.price_symbol_support import yahoo_price_no_data_error_for_symbol
 from .growth_cadence_service import compute_cadence_aware_growth
 from .price_fetch_failures import (
@@ -690,12 +691,16 @@ class BulkDataFetcher:
         for symbol in symbols:
             try:
                 identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
-                local_code = str(identity.local_code or "").strip()
-                if not local_code.isdigit():
+                provider_symbol = cn_price_symbol_for_native_provider(
+                    symbol,
+                    local_code=identity.local_code,
+                    canonical_symbol=identity.canonical_symbol,
+                )
+                if provider_symbol is None:
                     results[symbol] = self._build_error_result(symbol, "Invalid CN local code")
                     continue
                 price_data = service.daily_ohlcv_dataframe(
-                    identity.canonical_symbol,
+                    provider_symbol,
                     period=period,
                 )
                 if price_data is None or price_data.empty:

@@ -4,6 +4,7 @@ import pytest
 
 from app.domain.markets.cn_symbols import (
     cn_a_share_exchange_for_symbol,
+    cn_price_symbol_for_native_provider,
     is_cn_a_share_symbol,
     normalize_cn_local_code,
 )
@@ -46,3 +47,36 @@ def test_cn_a_share_exchange_rejects_suffix_conflicting_index_symbols(symbol):
 def test_cn_a_share_exchange_rejects_suffix_only_symbols_without_a_share_code(symbol):
     assert cn_a_share_exchange_for_symbol(symbol) is None
     assert not is_cn_a_share_symbol(symbol)
+
+
+def test_cn_price_symbol_for_native_provider_preserves_explicit_suffix():
+    assert (
+        cn_price_symbol_for_native_provider(
+            "000001.SS",
+            local_code="000001",
+            canonical_symbol="000001.SS",
+        )
+        == "000001.SS"
+    )
+
+
+def test_cn_price_symbol_for_native_provider_keeps_bare_code_unsuffixed():
+    assert (
+        cn_price_symbol_for_native_provider(
+            "000001",
+            local_code="1",
+            canonical_symbol="000001.SS",
+        )
+        == "000001"
+    )
+
+
+def test_cn_price_symbol_for_native_provider_rejects_invalid_local_code():
+    assert (
+        cn_price_symbol_for_native_provider(
+            "ABC.SS",
+            local_code="ABC",
+            canonical_symbol="ABC.SS",
+        )
+        is None
+    )

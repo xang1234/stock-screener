@@ -43,6 +43,25 @@ def test_bulk_cn_price_fetch_preserves_explicit_suffix(monkeypatch):
     assert results["000001.SS"]["price_data"].iloc[-1]["Close"] == 3333.0
 
 
+def test_bulk_cn_price_fetch_preserves_bare_local_code(monkeypatch):
+    fetcher = BulkDataFetcher()
+    calls = []
+
+    class FakeCnPriceService:
+        @staticmethod
+        def daily_ohlcv_dataframe(symbol, *, period):
+            calls.append({"symbol": symbol, "period": period})
+            return _price_df(date(2026, 4, 29), 12.0)
+
+    monkeypatch.setattr(fetcher, "_get_cn_price_service", lambda: FakeCnPriceService())
+
+    results = fetcher._fetch_cn_price_batch(["000001"], period="7d")
+
+    assert calls == [{"symbol": "000001", "period": "7d"}]
+    assert results["000001"]["has_error"] is False
+    assert results["000001"]["price_data"].iloc[-1]["Close"] == 12.0
+
+
 def test_price_cache_cn_direct_fetch_preserves_explicit_suffix(monkeypatch):
     service = PriceCacheService(redis_client=None, session_factory=MagicMock())
     calls = []
@@ -64,3 +83,26 @@ def test_price_cache_cn_direct_fetch_preserves_explicit_suffix(monkeypatch):
     assert calls == [{"symbol": "000001.SS", "period": "7d"}]
     assert result is not None
     assert result.iloc[-1]["Close"] == 3333.0
+
+
+def test_price_cache_cn_direct_fetch_preserves_bare_local_code(monkeypatch):
+    service = PriceCacheService(redis_client=None, session_factory=MagicMock())
+    calls = []
+
+    class FakeCnMarketDataService:
+        @staticmethod
+        def daily_ohlcv_dataframe(symbol, *, period):
+            calls.append({"symbol": symbol, "period": period})
+            return _price_df(date(2026, 4, 29), 12.0)
+
+    monkeypatch.setattr(
+        cn_market_data_service,
+        "CnMarketDataService",
+        lambda: FakeCnMarketDataService(),
+    )
+
+    result = service._fetch_cn_historical_data("000001", period="7d")
+
+    assert calls == [{"symbol": "000001", "period": "7d"}]
+    assert result is not None
+    assert result.iloc[-1]["Close"] == 12.0
