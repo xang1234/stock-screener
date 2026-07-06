@@ -2,8 +2,16 @@ const SECTION_DATE_LABELS = [
   ['Breadth', 'breadth_latest_date'],
   ['Groups', 'groups_latest_date'],
   ['Exposure', 'exposure_latest_date'],
-  ['Key markets', 'key_markets_latest_date'],
 ];
+
+function keyMarketsDateLabel(freshness, snapshotDate) {
+  const range = freshness?.key_markets_date_range;
+  if (range?.min && range?.max && (range.min !== range.max || range.min !== snapshotDate)) {
+    return `Key markets ${range.min}..${range.max}`;
+  }
+  const latestDate = freshness?.key_markets_latest_date;
+  return latestDate && latestDate !== snapshotDate ? `Key markets ${latestDate}` : null;
+}
 
 export function formatSnapshotFreshnessLabel(freshness = {}) {
   const snapshotDate = freshness?.snapshot_as_of_date || null;
@@ -28,5 +36,6 @@ export function formatSnapshotFreshnessLabel(freshness = {}) {
   return [
     ...parts,
     ...sectionDates.map(([label, value]) => `${label} ${value}`),
+    keyMarketsDateLabel(freshness, snapshotDate),
   ].filter(Boolean).join(' · ');
 }

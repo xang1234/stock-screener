@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -300,7 +300,7 @@ def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatc
 
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", False)
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
     monkeypatch.setattr(
         "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
@@ -328,6 +328,12 @@ def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatc
 
     assert result["today"]["date"] == "2026-03-16"
     assert captured == [("2026-03-16", "HK", "daily_refresh")]
+    fake_service.find_missing_dates.assert_called_once_with(
+        fake_db,
+        lookback_days=365,
+        market="HK",
+        end_date=date(2026, 3, 16),
+    )
 
 
 def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
@@ -801,7 +807,10 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
     assert result["today"]["date"] == "2026-03-20"
     assert daily_calls == [{"market": "US", "activity_lifecycle": "daily_refresh"}]
     fake_service.find_missing_dates.assert_called_once_with(
-        fake_db, lookback_days=365, market="US",
+        fake_db,
+        lookback_days=365,
+        market="US",
+        end_date=date(2026, 3, 20),
     )
     fake_service.fill_gaps_optimized.assert_called_once_with(
         fake_db, [date_cls(2026, 3, 19)], market="US",
@@ -1083,7 +1092,10 @@ def test_orchestrator_runs_for_non_us_market(monkeypatch):
     assert result["today"]["market"] == "HK"
     assert result["today"]["date"] == "2026-03-20"
     fake_service.find_missing_dates.assert_called_once_with(
-        fake_db, lookback_days=365, market="HK",
+        fake_db,
+        lookback_days=365,
+        market="HK",
+        end_date=date(2026, 3, 20),
     )
 
 

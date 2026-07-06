@@ -24,6 +24,7 @@ from app.services.daily_snapshot_service import (
     set_daily_snapshot_memory_cache,
 )
 from app.services.price_refresh_plan_builder import _key_market_refresh_symbols
+from app.services.snapshot_date_coherence import coherence_status
 
 
 def _norm(market):
@@ -357,12 +358,14 @@ class TestScanFreshness:
 
 class TestDailySnapshotDateCoherence:
     def test_coherence_status_flags_future_key_markets(self):
-        status = daily_snapshot_service._coherence_status(
+        status = coherence_status(
             anchor=date(2026, 6, 11),
-            breadth_date="2026-06-11",
-            groups_date="2026-06-11",
-            exposure_date="2026-06-11",
-            key_markets_date="2026-06-12",
+            section_dates={
+                "breadth": "2026-06-11",
+                "groups": "2026-06-11",
+                "exposure": "2026-06-11",
+                "key_markets": "2026-06-12",
+            },
         )
 
         assert status == "future_section_data"
@@ -454,6 +457,89 @@ class TestDailySnapshotDateCoherence:
         assert payload["freshness"]["key_markets_latest_date"] == "2026-06-11"
         assert payload["freshness"]["date_coherence_status"] == "coherent"
         assert exposure_calls == [date(2026, 6, 11)]
+
+    def test_payload_marks_mixed_key_market_dates_partial(self, monkeypatch):
+        class FakeBreadthQuery:
+            def filter(self, *_args):
+                return self
+
+            def order_by(self, *_args):
+                return self
+
+            def first(self):
+                return (date(2026, 6, 11),)
+
+        class FakeDb:
+            def query(self, *_args):
+                return FakeBreadthQuery()
+
+        class FakeGroupService:
+            def get_current_rankings(self, db, limit=10, calculation_date=None, market="US"):
+                return [
+                    {
+                        "industry_group": "Software",
+                        "rank": 1,
+                        "rank_change_1w": 2,
+                        "rank_change_1m": 3,
+                        "top_symbol": "APP",
+                        "top_symbol_name": "AppLovin",
+                        "top_rs_rating": 98,
+                        "date": "2026-06-11",
+                    }
+                ]
+
+        scan = SimpleNamespace(
+            scan_id="scan-abc",
+            feature_run=SimpleNamespace(
+                as_of_date=date(2026, 6, 11),
+                published_at=datetime(2026, 6, 11, 23, 0, tzinfo=timezone.utc),
+            ),
+            completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
+        )
+
+        monkeypatch.setattr(
+            daily_snapshot_service,
+            "build_exposure_payload",
+            lambda db, market, as_of_date=None: {"date": "2026-06-11", "history": []},
+        )
+        monkeypatch.setattr(
+            daily_snapshot_service,
+            "build_key_market_entries",
+            lambda db, market, as_of_date=None: [
+                {"symbol": "SPY", "latest_date": "2026-06-11", "history": []},
+                {"symbol": "QQQ", "latest_date": "2026-06-10", "history": []},
+                {"symbol": "IWM", "latest_date": None, "history": []},
+            ],
+        )
+        monkeypatch.setattr(
+            "app.wiring.bootstrap.get_group_rank_service",
+            lambda: FakeGroupService(),
+        )
+
+        class FakeUseCase:
+            def execute(self, *_args, **_kwargs):
+                return SimpleNamespace(page=SimpleNamespace(items=[]))
+
+        payload = daily_snapshot_service.build_daily_snapshot_payload(
+            FakeDb(),
+            market="US",
+            market_display_name="United States",
+            scan=scan,
+            uow=object(),
+            scan_results_use_case=FakeUseCase(),
+        )
+
+        freshness = payload["freshness"]
+        assert freshness["key_markets_latest_date"] == "2026-06-11"
+        assert freshness["key_markets_date_range"] == {
+            "min": "2026-06-10",
+            "max": "2026-06-11",
+        }
+        assert freshness["key_markets_mismatched_symbols"] == [
+            {"symbol": "QQQ", "latest_date": "2026-06-10", "status": "stale"},
+            {"symbol": "IWM", "latest_date": None, "status": "missing"},
+        ]
+        assert freshness["date_coherence_status"] == "partial"
 
     def test_payload_does_not_pin_to_scan_completed_at_without_feature_run(self, monkeypatch):
         class FakeBreadthQuery:
@@ -573,6 +659,8 @@ class TestDailySnapshotResponseSchema:
                 "groups_latest_date": "2026-06-11",
                 "exposure_latest_date": "2026-06-11",
                 "key_markets_latest_date": "2026-06-11",
+                "key_markets_date_range": {"min": "2026-06-11", "max": "2026-06-11"},
+                "key_markets_mismatched_symbols": [],
                 "date_coherence_status": "coherent",
             },
             "key_markets": [

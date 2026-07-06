@@ -665,13 +665,23 @@ def calculate_daily_breadth_with_gapfill(
             message="Calculating market breadth",
         )
         calculator = BreadthCalculatorService(db, get_price_cache(), market=effective_market)
+        calendar_service = get_market_calendar_service()
+        resolved_date = resolve_task_target_date(
+            calculation_date,
+            market=effective_market,
+            calendar_service=calendar_service,
+        )
+        target_date = resolved_date.target_date
 
         # Step 1: Check if gap-fill is enabled
         if settings.breadth_gapfill_enabled:
             logger.info(f"Checking for gaps in last {max_gap_days} days...")
 
             # Find missing dates
-            missing_dates = calculator.find_missing_dates(lookback_days=max_gap_days)
+            missing_dates = calculator.find_missing_dates(
+                lookback_days=max_gap_days,
+                end_date=target_date,
+            )
 
             if missing_dates:
                 logger.info(f"Found {len(missing_dates)} missing breadth dates")
@@ -698,14 +708,6 @@ def calculate_daily_breadth_with_gapfill(
             result['gap_fill'] = {'message': 'Gap-fill disabled'}
 
         # Step 2: Calculate today's breadth (only if it's a trading day for this market)
-        calendar_service = get_market_calendar_service()
-        resolved_date = resolve_task_target_date(
-            calculation_date,
-            market=effective_market,
-            calendar_service=calendar_service,
-        )
-        target_date = resolved_date.target_date
-
         if calendar_service.is_trading_day(effective_market, target_date):
             logger.info(
                 "Calculating breadth for %s (%s)...",

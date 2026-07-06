@@ -630,7 +630,12 @@ class BreadthCalculatorService:
             logger.error(f"Error calculating ratios: {e}", exc_info=True)
             return {'ratio_5day': None, 'ratio_10day': None}
 
-    def find_missing_dates(self, lookback_days: int = 30) -> List[date]:
+    def find_missing_dates(
+        self,
+        lookback_days: int = 30,
+        *,
+        end_date: date | None = None,
+    ) -> List[date]:
         """
         Find missing trading dates in the market_breadth table.
 
@@ -647,8 +652,8 @@ class BreadthCalculatorService:
         from ..wiring.bootstrap import get_market_calendar_service
 
         calendar_service = get_market_calendar_service()
-        today = calendar_service.market_now(self.market).date()
-        start_date = today - timedelta(days=lookback_days)
+        window_end = end_date or calendar_service.market_now(self.market).date()
+        start_date = window_end - timedelta(days=lookback_days)
 
         # Get all dates that have breadth data for this market
         existing_dates = self.db.query(
@@ -664,7 +669,7 @@ class BreadthCalculatorService:
         missing_dates = []
         current_date = start_date
 
-        while current_date < today:  # Exclude today (will be calculated separately)
+        while current_date < window_end:  # Exclude the target day; it is calculated separately.
             if calendar_service.is_trading_day(self.market, current_date):
                 if current_date not in existing_date_set:
                     missing_dates.append(current_date)

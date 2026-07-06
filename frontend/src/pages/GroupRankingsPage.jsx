@@ -63,6 +63,7 @@ import GroupChartsGrid from '../components/Charts/GroupChartsGrid';
 import { rrgScopesForMarket } from '../utils/rrgScopes';
 
 const GROUP_RANKING_MARKET_FALLBACKS = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA'];
+const EMPTY_AS_OF_ARGS = [];
 
 const REASON_HINTS = {
   warmup_incomplete: 'Wait for the post-close cache warmup to finish, then retry.',
@@ -547,6 +548,7 @@ function GroupRankingsPage() {
       : null
   );
   const groupsAsOfDate = groupsBootstrapPayload?.rankings?.date ?? null;
+  const groupAsOfArgs = groupsAsOfDate ? [groupsAsOfDate] : EMPTY_AS_OF_ARGS;
   // Live queries wait for the bootstrap to resolve either way: on success
   // their caches are freshly seeded (no fetch); on error or a stale
   // snapshot they fetch live data.
@@ -572,11 +574,7 @@ function GroupRankingsPage() {
     refetch: refetchRankings,
   } = useQuery({
     queryKey: ['groupRankings', selectedMarket, groupsAsOfDate],
-    queryFn: () => (
-      groupsAsOfDate
-        ? getCurrentRankings(197, selectedMarket, groupsAsOfDate)
-        : getCurrentRankings(197, selectedMarket)
-    ),
+    queryFn: () => getCurrentRankings(197, selectedMarket, ...groupAsOfArgs),
     enabled: liveQueriesEnabled && !isRrgView,
     refetchInterval: 60000,
     staleTime: 60_000,
@@ -588,11 +586,7 @@ function GroupRankingsPage() {
     isLoading: isLoadingMovers,
   } = useQuery({
     queryKey: ['groupMovers', selectedPeriod, selectedMarket, groupsAsOfDate],
-    queryFn: () => (
-      groupsAsOfDate
-        ? getRankMovers(selectedPeriod, 10, selectedMarket, groupsAsOfDate)
-        : getRankMovers(selectedPeriod, 10, selectedMarket)
-    ),
+    queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket, ...groupAsOfArgs),
     enabled: liveQueriesEnabled && !isRrgView,
     staleTime: 60_000,
   });
@@ -604,11 +598,7 @@ function GroupRankingsPage() {
     error: errorRRG,
   } = useQuery({
     queryKey: ['groupRRGBundle', selectedMarket, groupsAsOfDate],
-    queryFn: () => (
-      groupsAsOfDate
-        ? getRRGBundle(8, 197, selectedMarket, groupsAsOfDate)
-        : getRRGBundle(8, 197, selectedMarket)
-    ),
+    queryFn: () => getRRGBundle(8, 197, selectedMarket, ...groupAsOfArgs),
     enabled: liveQueriesEnabled && isRrgView && rrgAvailable,
     staleTime: 60_000,
   });

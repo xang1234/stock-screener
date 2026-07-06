@@ -629,6 +629,7 @@ def test_home_payload_builds_key_markets_with_canonical_as_of_date(
     calls = []
     expected_key_markets = [
         {"symbol": "SPY", "latest_date": "2026-04-18", "history": []},
+        {"symbol": "QQQ", "latest_date": "2026-04-17", "history": []},
     ]
 
     def fake_build_key_market_entries(db, market, *, as_of_date=None):
@@ -665,6 +666,15 @@ def test_home_payload_builds_key_markets_with_canonical_as_of_date(
     assert payload["key_markets"] == expected_key_markets
     assert len(calls) == 1
     assert calls[0][1:] == ("US", date(2026, 4, 18))
+    assert payload["freshness"]["key_markets_latest_date"] == "2026-04-18"
+    assert payload["freshness"]["key_markets_date_range"] == {
+        "min": "2026-04-17",
+        "max": "2026-04-18",
+    }
+    assert payload["freshness"]["key_markets_mismatched_symbols"] == [
+        {"symbol": "QQQ", "latest_date": "2026-04-17", "status": "stale"},
+    ]
+    assert payload["freshness"]["date_coherence_status"] == "partial"
 
 
 def test_static_default_min_volume_filters_notional_turnover_not_share_count():

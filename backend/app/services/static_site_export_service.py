@@ -55,10 +55,7 @@ from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
 )
-from app.services.snapshot_date_coherence import (
-    coherence_status,
-    latest_key_market_date,
-)
+from app.services.snapshot_date_coherence import build_snapshot_freshness
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
@@ -1212,7 +1209,21 @@ class StaticSiteExportService:
         snapshot_date = latest_run.as_of_date.isoformat()
         breadth_date = breadth_current.get("date")
         groups_date = (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date"))
-        key_markets_date = latest_key_market_date(key_markets)
+        freshness = build_snapshot_freshness(
+            base_freshness={
+                "scan_run_id": latest_run.id,
+                "scan_as_of_date": snapshot_date,
+                "scan_published_at": _coerce_datetime(latest_run.published_at),
+            },
+            anchor=latest_run.as_of_date,
+            market_timezone=get_market_catalog().get(market).display_timezone,
+            section_dates={
+                "breadth": breadth_date,
+                "groups": groups_date,
+                "exposure": exposure_date,
+            },
+            key_markets=key_markets,
+        )
 
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
@@ -1220,26 +1231,7 @@ class StaticSiteExportService:
             "as_of_date": snapshot_date,
             "market": market,
             "market_display_name": STATIC_MARKET_DISPLAY.get(market, market),
-            "freshness": {
-                "scan_run_id": latest_run.id,
-                "scan_as_of_date": snapshot_date,
-                "scan_published_at": _coerce_datetime(latest_run.published_at),
-                "snapshot_as_of_date": snapshot_date,
-                "market_timezone": get_market_catalog().get(market).display_timezone,
-                "breadth_latest_date": breadth_date,
-                "groups_latest_date": groups_date,
-                "exposure_latest_date": exposure_date,
-                "key_markets_latest_date": key_markets_date,
-                "date_coherence_status": coherence_status(
-                    anchor=latest_run.as_of_date,
-                    section_dates={
-                        "breadth": breadth_date,
-                        "groups": groups_date,
-                        "exposure": exposure_date,
-                        "key_markets": key_markets_date,
-                    },
-                ),
-            },
+            "freshness": freshness,
             "key_markets": key_markets,
             "market_health_exposure": exposure_payload,
             "scan_summary": {

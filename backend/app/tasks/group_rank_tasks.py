@@ -582,6 +582,13 @@ def calculate_daily_group_rankings_with_gapfill(
             return result
 
         service = get_group_rank_service()
+        calendar_service = get_market_calendar_service()
+        resolved_date = resolve_task_target_date(
+            calculation_date,
+            market=effective_market,
+            calendar_service=calendar_service,
+        )
+        target_date = resolved_date.target_date
 
         if settings.group_rank_gapfill_enabled:
             logger.info(
@@ -592,6 +599,7 @@ def calculate_daily_group_rankings_with_gapfill(
                 db,
                 lookback_days=max_gap_days,
                 market=effective_market,
+                end_date=target_date,
             )
             if missing_dates:
                 logger.info(
@@ -620,14 +628,6 @@ def calculate_daily_group_rankings_with_gapfill(
         else:
             logger.info("Group ranking gap-fill disabled in settings, skipping detection")
             result['gap_fill'] = {'message': 'Gap-fill disabled'}
-
-        calendar_service = get_market_calendar_service()
-        resolved_date = resolve_task_target_date(
-            calculation_date,
-            market=effective_market,
-            calendar_service=calendar_service,
-        )
-        target_date = resolved_date.target_date
 
         if calendar_service.is_trading_day(effective_market, target_date):
             logger.info(

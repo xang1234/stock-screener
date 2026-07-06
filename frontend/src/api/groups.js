@@ -3,6 +3,11 @@
  */
 import apiClient from './client';
 
+export const groupRequestParams = (params, asOfDate = null) => ({
+  ...params,
+  ...(asOfDate ? { as_of_date: asOfDate } : {}),
+});
+
 /**
  * Get current IBD group rankings.
  *
@@ -11,11 +16,10 @@ import apiClient from './client';
  */
 export const getCurrentRankings = async (limit = 50, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rankings/current', {
-    params: {
+    params: groupRequestParams({
       limit,
       market,
-      ...(asOfDate ? { as_of_date: asOfDate } : {}),
-    }
+    }, asOfDate)
   });
   return response.data;
 };
@@ -39,12 +43,11 @@ export const getGroupsBootstrap = async (market = 'US') => {
  */
 export const getRankMovers = async (period = '1w', limit = 20, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rankings/movers', {
-    params: {
+    params: groupRequestParams({
       period,
       limit,
       market,
-      ...(asOfDate ? { as_of_date: asOfDate } : {}),
-    }
+    }, asOfDate)
   });
   return response.data;
 };
@@ -80,13 +83,12 @@ export const getRRG = async (
   asOfDate = null,
 ) => {
   const response = await apiClient.get('/v1/groups/rrg', {
-    params: {
+    params: groupRequestParams({
       scope,
       tail_weeks: tailWeeks,
       limit,
       market,
-      ...(asOfDate ? { as_of_date: asOfDate } : {}),
-    }
+    }, asOfDate)
   });
   return response.data;
 };
@@ -101,12 +103,11 @@ export const getRRG = async (
  */
 export const getRRGBundle = async (tailWeeks = 8, limit = 197, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rrg/scopes', {
-    params: {
+    params: groupRequestParams({
       tail_weeks: tailWeeks,
       limit,
       market,
-      ...(asOfDate ? { as_of_date: asOfDate } : {}),
-    }
+    }, asOfDate)
   });
   return response.data;
 };

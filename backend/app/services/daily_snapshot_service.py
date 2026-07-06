@@ -27,11 +27,7 @@ from app.schemas.scanning import ScanResultItem
 from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.redis_pool import get_redis_client
-from app.services.snapshot_date_coherence import (
-    coherence_status,
-    iso_or_none,
-    latest_key_market_date,
-)
+from app.services.snapshot_date_coherence import build_snapshot_freshness
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
@@ -243,33 +239,6 @@ def _snapshot_anchor_date(scan: Scan | None) -> date | None:
     return run.as_of_date
 
 
-def _iso_or_none(value: date | None) -> str | None:
-    return iso_or_none(value)
-
-
-def _latest_key_market_date(entries: list[dict[str, Any]]) -> str | None:
-    return latest_key_market_date(entries)
-
-
-def _coherence_status(
-    *,
-    anchor: date | None,
-    breadth_date: str | None,
-    groups_date: str | None,
-    exposure_date: str | None,
-    key_markets_date: str | None,
-) -> str:
-    return coherence_status(
-        anchor=anchor,
-        section_dates={
-            "breadth": breadth_date,
-            "groups": groups_date,
-            "exposure": exposure_date,
-            "key_markets": key_markets_date,
-        },
-    )
-
-
 def _query_scan_rows(
     *,
     uow: Any,
@@ -382,7 +351,6 @@ def build_daily_snapshot_payload(
         )
 
     anchor_date = _snapshot_anchor_date(scan)
-    anchor_iso = _iso_or_none(anchor_date)
     top_groups, groups_date = _build_top_groups(db, normalized, as_of_date=anchor_date)
     breadth_date = _latest_breadth_date(db, normalized, as_of_date=anchor_date)
     key_markets = build_key_market_entries(db, normalized, as_of_date=anchor_date)
@@ -392,20 +360,16 @@ def build_daily_snapshot_payload(
         if isinstance(market_health_exposure, dict)
         else None
     )
-    key_markets_date = _latest_key_market_date(key_markets)
-    freshness = _scan_freshness(scan)
-    freshness["snapshot_as_of_date"] = anchor_iso
-    freshness["market_timezone"] = get_market_catalog().get(normalized).display_timezone
-    freshness["breadth_latest_date"] = breadth_date
-    freshness["groups_latest_date"] = groups_date
-    freshness["exposure_latest_date"] = exposure_date
-    freshness["key_markets_latest_date"] = key_markets_date
-    freshness["date_coherence_status"] = _coherence_status(
+    freshness = build_snapshot_freshness(
+        base_freshness=_scan_freshness(scan),
         anchor=anchor_date,
-        breadth_date=breadth_date,
-        groups_date=groups_date,
-        exposure_date=exposure_date,
-        key_markets_date=key_markets_date,
+        market_timezone=get_market_catalog().get(normalized).display_timezone,
+        section_dates={
+            "breadth": breadth_date,
+            "groups": groups_date,
+            "exposure": exposure_date,
+        },
+        key_markets=key_markets,
     )
 
     return {

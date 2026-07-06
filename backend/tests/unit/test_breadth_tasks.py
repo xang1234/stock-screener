@@ -255,7 +255,7 @@ def test_breadth_gapfill_retries_transient_outer_failures(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
+    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=ConnectionError("network down")))
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:MagicMock())
@@ -285,7 +285,7 @@ def test_breadth_gapfill_retry_survives_activity_publish_failure(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
+    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=ConnectionError("network down")))
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:MagicMock())
@@ -317,7 +317,7 @@ def test_breadth_gapfill_reraises_soft_time_limit(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
+    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=SoftTimeLimitExceeded()))
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:MagicMock())
@@ -364,7 +364,7 @@ def test_breadth_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypa
 
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
+    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw: fake_calculator)
     monkeypatch.setattr(
         "app.services.runtime_preferences_service.is_market_enabled_now",
@@ -387,6 +387,10 @@ def test_breadth_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypa
 
     assert result["today"]["date"] == "2026-03-16"
     assert captured == [("2026-03-16", "HK")]
+    fake_calculator.find_missing_dates.assert_called_once_with(
+        lookback_days=30,
+        end_date=date(2026, 3, 16),
+    )
 
 
 def test_breadth_gapfill_runs_for_non_us_market(monkeypatch):

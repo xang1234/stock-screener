@@ -36,4 +36,22 @@ describe('formatSnapshotFreshnessLabel', () => {
       'As of 2026-06-11 · America/New_York · future_section_data · Key markets 2026-06-12',
     );
   });
+
+  it('surfaces mixed key-market date ranges even when the latest date matches the snapshot', () => {
+    expect(formatSnapshotFreshnessLabel({
+      snapshot_as_of_date: '2026-06-11',
+      market_timezone: 'America/New_York',
+      breadth_latest_date: '2026-06-11',
+      groups_latest_date: '2026-06-11',
+      exposure_latest_date: '2026-06-11',
+      key_markets_latest_date: '2026-06-11',
+      key_markets_date_range: { min: '2026-06-10', max: '2026-06-11' },
+      key_markets_mismatched_symbols: [
+        { symbol: 'QQQ', latest_date: '2026-06-10', status: 'stale' },
+      ],
+      date_coherence_status: 'partial',
+    })).toBe(
+      'As of 2026-06-11 · America/New_York · partial · Key markets 2026-06-10..2026-06-11',
+    );
+  });
 });
