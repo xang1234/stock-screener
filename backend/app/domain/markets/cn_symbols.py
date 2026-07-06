@@ -45,16 +45,17 @@ def has_cn_a_share_exchange_conflict(symbol_or_local_code: str | None) -> bool:
     if explicit_exchange is None:
         return False
     inferred_exchange = infer_cn_a_share_exchange_from_local_code(symbol_or_local_code)
-    return inferred_exchange is not None and inferred_exchange != explicit_exchange
+    return inferred_exchange != explicit_exchange
 
 
 def cn_a_share_exchange_for_symbol(symbol_or_local_code: str | None) -> str | None:
-    if has_cn_a_share_exchange_conflict(symbol_or_local_code):
-        return None
+    inferred_exchange = infer_cn_a_share_exchange_from_local_code(symbol_or_local_code)
     explicit_exchange = cn_exchange_from_symbol_suffix(symbol_or_local_code)
-    if explicit_exchange is not None:
+    if explicit_exchange is None:
+        return inferred_exchange
+    if inferred_exchange == explicit_exchange:
         return explicit_exchange
-    return infer_cn_a_share_exchange_from_local_code(symbol_or_local_code)
+    return None
 
 
 def is_cn_a_share_symbol(symbol_or_local_code: str | None) -> bool:

@@ -40,3 +40,9 @@ def test_cn_a_share_exchange_accepts_matching_suffix_or_bare_code(symbol, expect
 def test_cn_a_share_exchange_rejects_suffix_conflicting_index_symbols(symbol):
     assert cn_a_share_exchange_for_symbol(symbol) is None
     assert not is_cn_a_share_symbol(symbol)
+
+
+@pytest.mark.parametrize("symbol", ["ABC.SS", "123456.SS", "777777.SZ"])
+def test_cn_a_share_exchange_rejects_suffix_only_symbols_without_a_share_code(symbol):
+    assert cn_a_share_exchange_for_symbol(symbol) is None
+    assert not is_cn_a_share_symbol(symbol)
