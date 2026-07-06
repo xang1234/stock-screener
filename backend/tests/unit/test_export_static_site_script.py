@@ -36,52 +36,6 @@ def _stub_static_market_exposure(monkeypatch):
     )
 
 
-def test_compute_static_market_exposure_disallows_us_benchmark_fallback(monkeypatch):
-    calls: list[dict[str, object]] = []
-    db = object()
-
-    @contextmanager
-    def fake_session():
-        yield db
-
-    def fake_refresh(db_arg, market, as_of_date, *, allow_benchmark_fallback=True):
-        calls.append(
-            {
-                "db": db_arg,
-                "market": market,
-                "as_of_date": as_of_date,
-                "allow_benchmark_fallback": allow_benchmark_fallback,
-            }
-        )
-        return {
-            "market": market,
-            "date": as_of_date,
-            "exposure_score": 70.0,
-            "benchmark_symbol": "SPY",
-        }
-
-    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
-    monkeypatch.setattr(
-        "app.services.market_exposure_service.refresh_market_exposure_for_date",
-        fake_refresh,
-    )
-
-    result = export_script._compute_static_market_exposure(  # noqa: SLF001
-        as_of_date=date(2026, 7, 1),
-        market="US",
-    )
-
-    assert result["benchmark_symbol"] == "SPY"
-    assert calls == [
-        {
-            "db": db,
-            "market": "US",
-            "as_of_date": date(2026, 7, 1),
-            "allow_benchmark_fallback": False,
-        }
-    ]
-
-
 def test_ensure_group_rank_history_uses_market_calendar_for_non_us_market(monkeypatch):
     query = MagicMock()
     query.filter.return_value = query

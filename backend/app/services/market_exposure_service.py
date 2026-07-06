@@ -17,7 +17,7 @@ daily; the Daily Snapshot payloads (live + static) call ``build_exposure_payload
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from ..models.market_breadth import MarketBreadth
 from ..models.market_exposure import MarketExposure
 from ..models.stock import StockPrice
+from .benchmark_cache_service import BenchmarkFallbackPolicy
 
 # --- Distribution day detection -------------------------------------------
 DISTRIBUTION_LOOKBACK = 25       # rolling sessions
@@ -284,7 +285,7 @@ def compute_exposure(
     as_of_date: date,
     db: Session,
     *,
-    allow_benchmark_fallback: bool = True,
+    benchmark_fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
 ) -> dict:
     """Compute the exposure dict for one market as of ``as_of_date``.
 
@@ -297,10 +298,11 @@ def compute_exposure(
     # db (it closes the session in a finally block).
     from .benchmark_cache_service import BenchmarkCacheService
 
-    benchmark_kwargs: dict[str, Any] = {"market": market, "period": "2y"}
-    if not allow_benchmark_fallback:
-        benchmark_kwargs["allow_fallback"] = False
-    bundle = BenchmarkCacheService().get_benchmark_bundle(**benchmark_kwargs)
+    bundle = BenchmarkCacheService().get_benchmark_bundle(
+        market=market,
+        period="2y",
+        fallback_policy=benchmark_fallback_policy,
+    )
     if bundle is None or bundle.data is None or bundle.data.empty:
         return {"error": "no_benchmark_data", "market": market, "date": as_of_date.isoformat()}
 
@@ -346,7 +348,7 @@ def compute_and_store(
     as_of_date: date,
     db: Session,
     *,
-    allow_benchmark_fallback: bool = True,
+    benchmark_fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
 ) -> dict:
     """Compute and upsert one MarketExposure row by (date, market).
 
@@ -354,10 +356,12 @@ def compute_and_store(
     columns (including market/date), so it is applied directly — there is no
     separate field mapping to keep in sync as the model grows.
     """
-    compute_kwargs: dict[str, Any] = {}
-    if not allow_benchmark_fallback:
-        compute_kwargs["allow_benchmark_fallback"] = False
-    result = compute_exposure(market, as_of_date, db, **compute_kwargs)
+    result = compute_exposure(
+        market,
+        as_of_date,
+        db,
+        benchmark_fallback_policy=benchmark_fallback_policy,
+    )
     if result.get("error"):
         return result
 
@@ -381,14 +385,16 @@ def refresh_market_exposure_for_date(
     as_of_date: date,
     *,
     seed_history: bool = True,
-    allow_benchmark_fallback: bool = True,
+    benchmark_fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
 ) -> dict:
     """Compute/store exposure and run the canonical launch-history self-heal."""
     normalized_market = (market or "US").upper()
-    compute_kwargs: dict[str, Any] = {}
-    if not allow_benchmark_fallback:
-        compute_kwargs["allow_benchmark_fallback"] = False
-    result = compute_and_store(normalized_market, as_of_date, db, **compute_kwargs)
+    result = compute_and_store(
+        normalized_market,
+        as_of_date,
+        db,
+        benchmark_fallback_policy=benchmark_fallback_policy,
+    )
     if result.get("error") or not seed_history:
         return result
 

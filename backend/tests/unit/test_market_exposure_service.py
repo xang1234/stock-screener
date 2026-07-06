@@ -4,6 +4,7 @@ from datetime import date
 import pandas as pd
 
 import app.services.market_exposure_service as svc
+from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.market_exposure_service import (
     CAP_BELOW_200DMA,
     CAP_HEAVY_DISTRIBUTION,
@@ -99,13 +100,19 @@ def _fake_benchmark_factory(df, symbol="SPY"):
         def __init__(self, *a, **k):
             pass
 
-        def get_benchmark_bundle(self, market="US", period="2y", force_refresh=False):
+        def get_benchmark_bundle(
+            self,
+            market="US",
+            period="2y",
+            force_refresh=False,
+            fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+        ):
             return _FakeBundle(df, symbol)
 
     return _FakeBenchmarkCacheService
 
 
-def test_refresh_market_exposure_for_date_can_disable_benchmark_fallback(monkeypatch):
+def test_refresh_market_exposure_for_date_can_use_primary_only_benchmark_policy(monkeypatch):
     from app.database import SessionLocal
 
     calls = []
@@ -115,8 +122,14 @@ def test_refresh_market_exposure_for_date_can_disable_benchmark_fallback(monkeyp
         def __init__(self, *a, **k):
             pass
 
-        def get_benchmark_bundle(self, **kwargs):
-            calls.append(kwargs)
+        def get_benchmark_bundle(self, *, market, period, fallback_policy):
+            calls.append(
+                {
+                    "market": market,
+                    "period": period,
+                    "fallback_policy": fallback_policy,
+                }
+            )
             return _FakeBundle(df, "SPY")
 
     monkeypatch.setattr(
@@ -132,11 +145,17 @@ def test_refresh_market_exposure_for_date_can_disable_benchmark_fallback(monkeyp
             "us",
             as_of,
             seed_history=False,
-            allow_benchmark_fallback=False,
+            benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
         )
         assert "error" not in result
         assert result["benchmark_symbol"] == "SPY"
-        assert calls == [{"market": "US", "period": "2y", "allow_fallback": False}]
+        assert calls == [
+            {
+                "market": "US",
+                "period": "2y",
+                "fallback_policy": BenchmarkFallbackPolicy.PRIMARY_ONLY,
+            }
+        ]
     finally:
         db.close()
 
@@ -210,7 +229,13 @@ def test_refresh_market_exposure_for_date_computes_and_seeds_history(monkeypatch
     as_of = date(2026, 6, 25)
     calls: list[tuple] = []
 
-    def fake_compute(market, as_of_date, db_arg):
+    def fake_compute(
+        market,
+        as_of_date,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
         calls.append(("compute", market, as_of_date, db_arg))
         return {
             "market": market,
@@ -246,7 +271,13 @@ def test_refresh_market_exposure_for_date_does_not_seed_after_compute_error(monk
     as_of = date(2026, 6, 25)
     calls: list[tuple] = []
 
-    def fake_compute(market, as_of_date, db_arg):
+    def fake_compute(
+        market,
+        as_of_date,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
         calls.append(("compute", market, as_of_date, db_arg))
         return {"market": market, "date": as_of_date.isoformat(), "error": "no_benchmark_data"}
 

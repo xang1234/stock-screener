@@ -1,7 +1,7 @@
 import pandas as pd
 from datetime import datetime
 
-from app.services.benchmark_cache_service import BenchmarkCacheService
+from app.services.benchmark_cache_service import BenchmarkCacheService, BenchmarkFallbackPolicy
 import app.services.benchmark_cache_service as benchmark_cache_module
 
 
@@ -167,7 +167,7 @@ def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch
     assert calls == []
 
 
-def test_get_benchmark_bundle_fetches_primary_when_fallback_disallowed():
+def test_get_benchmark_bundle_primary_only_policy_fetches_primary():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
     service._redis_client = None
 
@@ -193,12 +193,13 @@ def test_get_benchmark_bundle_fetches_primary_when_fallback_disallowed():
     bundle = service.get_benchmark_bundle(
         market="US",
         period="2y",
-        allow_fallback=False,
+        fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
     )
 
     assert bundle is not None
     assert bundle.benchmark_symbol == "SPY"
     assert bundle.benchmark_role == "primary"
+    assert bundle.candidate_symbols == ("SPY",)
     assert bundle.data is fetched_primary_df
     assert fetch_calls == ["SPY"]
 
