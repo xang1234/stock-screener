@@ -230,10 +230,12 @@ def _scan_freshness(scan: Scan | None) -> dict[str, Any]:
 
 
 def _snapshot_anchor_date(scan: Scan | None) -> date | None:
-    value = _scan_freshness(scan).get("scan_as_of_date")
-    if not value:
+    if scan is None:
         return None
-    return date.fromisoformat(value)
+    run = scan.feature_run
+    if run is None or run.as_of_date is None:
+        return None
+    return run.as_of_date
 
 
 def _iso_or_none(value: date | None) -> str | None:

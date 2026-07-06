@@ -29,6 +29,7 @@ from ..services.market_activity_service import (
 from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
 from ..models.market_breadth import MarketBreadth
 from ..config import settings
+from .date_resolution import resolve_task_target_date
 from .workload_coordination import serialized_market_workload
 from ..wiring.bootstrap import get_market_calendar_service, get_price_cache
 
@@ -697,12 +698,13 @@ def calculate_daily_breadth_with_gapfill(
             result['gap_fill'] = {'message': 'Gap-fill disabled'}
 
         # Step 2: Calculate today's breadth (only if it's a trading day for this market)
-        from ..wiring.bootstrap import get_market_calendar_service
         calendar_service = get_market_calendar_service()
-        if calculation_date:
-            target_date = datetime.strptime(calculation_date, "%Y-%m-%d").date()
-        else:
-            target_date = calendar_service.market_now(effective_market).date()
+        resolved_date = resolve_task_target_date(
+            calculation_date,
+            market=effective_market,
+            calendar_service=calendar_service,
+        )
+        target_date = resolved_date.target_date
 
         if calendar_service.is_trading_day(effective_market, target_date):
             logger.info(
@@ -710,9 +712,7 @@ def calculate_daily_breadth_with_gapfill(
                 effective_market,
                 target_date,
             )
-            inner_kwargs = {"market": market}
-            if calculation_date:
-                inner_kwargs["calculation_date"] = target_date.isoformat()
+            inner_kwargs = {"market": market, **resolved_date.nested_daily_kwargs()}
             today_result = _calculate_daily_breadth_in_process(**inner_kwargs)
             result['today'] = today_result
         else:

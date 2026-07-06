@@ -444,6 +444,82 @@ class TestDailySnapshotDateCoherence:
         assert payload["freshness"]["date_coherence_status"] == "coherent"
         assert exposure_calls == [date(2026, 6, 11)]
 
+    def test_payload_does_not_pin_to_scan_completed_at_without_feature_run(self, monkeypatch):
+        class FakeBreadthQuery:
+            def filter(self, *_args):
+                return self
+
+            def order_by(self, *_args):
+                return self
+
+            def first(self):
+                return (date(2026, 6, 12),)
+
+        class FakeDb:
+            def query(self, *_args):
+                return FakeBreadthQuery()
+
+        class FakeGroupService:
+            def get_current_rankings(self, db, limit=10, calculation_date=None, market="US"):
+                assert calculation_date is None
+                assert market == "US"
+                return [
+                    {
+                        "industry_group": "Software",
+                        "rank": 1,
+                        "rank_change_1w": 2,
+                        "rank_change_1m": 3,
+                        "top_symbol": "APP",
+                        "top_symbol_name": "AppLovin",
+                        "top_rs_rating": 98,
+                        "date": "2026-06-12",
+                    }
+                ]
+
+        scan = SimpleNamespace(
+            scan_id="scan-no-run",
+            feature_run=None,
+            completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
+        )
+
+        exposure_calls = []
+        key_market_calls = []
+        monkeypatch.setattr(
+            daily_snapshot_service,
+            "build_exposure_payload",
+            lambda db, market, as_of_date=None: exposure_calls.append(as_of_date)
+            or {"date": "2026-06-12", "history": []},
+        )
+        monkeypatch.setattr(
+            daily_snapshot_service,
+            "build_key_market_entries",
+            lambda db, market, as_of_date=None: key_market_calls.append(as_of_date)
+            or [{"symbol": "SPY", "latest_date": "2026-06-12", "history": []}],
+        )
+        monkeypatch.setattr(
+            "app.wiring.bootstrap.get_group_rank_service",
+            lambda: FakeGroupService(),
+        )
+
+        class FakeUseCase:
+            def execute(self, *_args, **_kwargs):
+                return SimpleNamespace(page=SimpleNamespace(items=[]))
+
+        payload = daily_snapshot_service.build_daily_snapshot_payload(
+            FakeDb(),
+            market="US",
+            market_display_name="United States",
+            scan=scan,
+            uow=object(),
+            scan_results_use_case=FakeUseCase(),
+        )
+
+        assert payload["freshness"]["scan_as_of_date"] == "2026-06-12"
+        assert payload["freshness"]["snapshot_as_of_date"] is None
+        assert payload["freshness"]["date_coherence_status"] == "unanchored"
+        assert exposure_calls == [None]
+        assert key_market_calls == [None]
+
 
 class TestIfNoneMatchMatching:
     ETAG = 'W/"abc123"'

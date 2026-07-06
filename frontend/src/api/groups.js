@@ -9,9 +9,13 @@ import apiClient from './client';
  * @param {number} limit - Maximum number of groups to return (default: 50)
  * @returns {Promise<Object>} Rankings response with date, total_groups, and rankings array
  */
-export const getCurrentRankings = async (limit = 50, market = 'US') => {
+export const getCurrentRankings = async (limit = 50, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rankings/current', {
-    params: { limit, market }
+    params: {
+      limit,
+      market,
+      ...(asOfDate ? { as_of_date: asOfDate } : {}),
+    }
   });
   return response.data;
 };
@@ -63,9 +67,21 @@ export const getGroupDetail = async (industryGroup, days = 180, market = 'US') =
  * @param {string} market - Market code (default: 'US')
  * @returns {Promise<Object>} RRG response: { date, market, scope, groups: [...] }
  */
-export const getRRG = async (scope = 'groups', tailWeeks = 8, limit = 197, market = 'US') => {
+export const getRRG = async (
+  scope = 'groups',
+  tailWeeks = 8,
+  limit = 197,
+  market = 'US',
+  asOfDate = null,
+) => {
   const response = await apiClient.get('/v1/groups/rrg', {
-    params: { scope, tail_weeks: tailWeeks, limit, market }
+    params: {
+      scope,
+      tail_weeks: tailWeeks,
+      limit,
+      market,
+      ...(asOfDate ? { as_of_date: asOfDate } : {}),
+    }
   });
   return response.data;
 };
@@ -78,9 +94,14 @@ export const getRRG = async (scope = 'groups', tailWeeks = 8, limit = 197, marke
  * @param {string} market - Market code (default: 'US')
  * @returns {Promise<Object>} RRG bundle: { date, market, available_scopes, payload }
  */
-export const getRRGBundle = async (tailWeeks = 8, limit = 197, market = 'US') => {
+export const getRRGBundle = async (tailWeeks = 8, limit = 197, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rrg/scopes', {
-    params: { tail_weeks: tailWeeks, limit, market }
+    params: {
+      tail_weeks: tailWeeks,
+      limit,
+      market,
+      ...(asOfDate ? { as_of_date: asOfDate } : {}),
+    }
   });
   return response.data;
 };

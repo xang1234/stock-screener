@@ -263,6 +263,43 @@ describe('GroupRankingsPage', () => {
     expect(screen.queryByRole('button', { name: 'Sectors' })).not.toBeInTheDocument();
   });
 
+  it('pins live RRG fallback to the fresh bootstrap ranking date', async () => {
+    runtimeState.uiSnapshots = { groups: true };
+    const snapshotRow = {
+      ...rankingRowFor('HK'),
+      date: '2026-03-16',
+    };
+    getGroupsBootstrap.mockResolvedValue({
+      available: true,
+      is_stale: false,
+      payload: {
+        rankings: {
+          date: '2026-03-16',
+          total_groups: 1,
+          market_scope: 'HK',
+          rankings: [snapshotRow],
+        },
+        movers: {
+          period: '1w',
+          market_scope: 'HK',
+          gainers: [snapshotRow],
+          losers: [],
+        },
+      },
+    });
+
+    renderGroupRankingsPage();
+
+    expect(await screen.findByText('HK Internet Services')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'RRG' }));
+
+    await waitFor(() => {
+      expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'HK', '2026-03-16');
+    });
+  });
+
   it('hides RRG for group-ranking markets without RRG capability', async () => {
     runtimeState.primaryMarket = 'KR';
     runtimeState.enabledMarkets = ['KR'];

@@ -525,8 +525,15 @@ function GroupRankingsPage() {
       const snapshot = await getGroupsBootstrap(selectedMarket);
       if (snapshot && !snapshot.is_stale) {
         const payload = snapshot.payload ?? {};
-        queryClient.setQueryData(['groupRankings', selectedMarket], payload.rankings ?? null);
-        queryClient.setQueryData(['groupMovers', '1w', selectedMarket], payload.movers ?? null);
+        const rankingDate = payload.rankings?.date ?? null;
+        queryClient.setQueryData(
+          ['groupRankings', selectedMarket, rankingDate],
+          payload.rankings ?? null,
+        );
+        queryClient.setQueryData(
+          ['groupMovers', '1w', selectedMarket, rankingDate],
+          payload.movers ?? null,
+        );
       }
       return snapshot;
     },
@@ -534,6 +541,12 @@ function GroupRankingsPage() {
     retry: false,
     staleTime: 60_000,
   });
+  const groupsBootstrapPayload = (
+    groupsBootstrapQuery.data && !groupsBootstrapQuery.data.is_stale
+      ? (groupsBootstrapQuery.data.payload ?? {})
+      : null
+  );
+  const groupsAsOfDate = groupsBootstrapPayload?.rankings?.date ?? null;
   // Live queries wait for the bootstrap to resolve either way: on success
   // their caches are freshly seeded (no fetch); on error or a stale
   // snapshot they fetch live data.
@@ -558,8 +571,12 @@ function GroupRankingsPage() {
     error: errorRankings,
     refetch: refetchRankings,
   } = useQuery({
-    queryKey: ['groupRankings', selectedMarket],
-    queryFn: () => getCurrentRankings(197, selectedMarket),
+    queryKey: ['groupRankings', selectedMarket, groupsAsOfDate],
+    queryFn: () => (
+      groupsAsOfDate
+        ? getCurrentRankings(197, selectedMarket, groupsAsOfDate)
+        : getCurrentRankings(197, selectedMarket)
+    ),
     enabled: liveQueriesEnabled && !isRrgView,
     refetchInterval: 60000,
     staleTime: 60_000,
@@ -570,7 +587,7 @@ function GroupRankingsPage() {
     data: movers,
     isLoading: isLoadingMovers,
   } = useQuery({
-    queryKey: ['groupMovers', selectedPeriod, selectedMarket],
+    queryKey: ['groupMovers', selectedPeriod, selectedMarket, groupsAsOfDate],
     queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket),
     enabled: liveQueriesEnabled && !isRrgView,
     staleTime: 60_000,
@@ -582,8 +599,12 @@ function GroupRankingsPage() {
     isLoading: isLoadingRRG,
     error: errorRRG,
   } = useQuery({
-    queryKey: ['groupRRGBundle', selectedMarket],
-    queryFn: () => getRRGBundle(8, 197, selectedMarket),
+    queryKey: ['groupRRGBundle', selectedMarket, groupsAsOfDate],
+    queryFn: () => (
+      groupsAsOfDate
+        ? getRRGBundle(8, 197, selectedMarket, groupsAsOfDate)
+        : getRRGBundle(8, 197, selectedMarket)
+    ),
     enabled: liveQueriesEnabled && isRrgView && rrgAvailable,
     staleTime: 60_000,
   });
