@@ -18,6 +18,7 @@ from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
+from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
     static_daily_price_refresh_batch_size as _static_daily_price_refresh_batch_size,
@@ -43,6 +44,7 @@ STATIC_BUILD_MODE_PRICE_DELTA = "price_delta"
 STATIC_BUILD_MODE_FULL = "full"
 STATIC_EXPORT_MARKETS = market_registry.supported_market_codes()
 STATIC_DEFAULT_MARKET = "US"
+STATIC_EXPOSURE_PRIMARY_ONLY_BENCHMARK_MARKETS = frozenset({"US"})
 STATIC_EXPORT_SKIPPED_EXIT_CODE = 78
 STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE = 79
 
@@ -86,11 +88,24 @@ def _upsert_feature_run_pointer(*, pointer_key: str, run_id: int) -> None:
         db.commit()
 
 
+def _static_exposure_benchmark_fallback_policy(market: str) -> BenchmarkFallbackPolicy:
+    normalized_market = market.upper()
+    if normalized_market in STATIC_EXPOSURE_PRIMARY_ONLY_BENCHMARK_MARKETS:
+        return BenchmarkFallbackPolicy.PRIMARY_ONLY
+    return BenchmarkFallbackPolicy.ALLOW
+
+
 def _compute_static_market_exposure(*, as_of_date: date, market: str) -> dict[str, Any]:
     from app.services.market_exposure_service import refresh_market_exposure_for_date
 
+    normalized_market = market.upper()
     with SessionLocal() as db:
-        return refresh_market_exposure_for_date(db, market, as_of_date)
+        return refresh_market_exposure_for_date(
+            db,
+            normalized_market,
+            as_of_date,
+            benchmark_fallback_policy=_static_exposure_benchmark_fallback_policy(normalized_market),
+        )
 
 
 def _snapshot_publishable(snapshot: dict[str, Any]) -> bool:

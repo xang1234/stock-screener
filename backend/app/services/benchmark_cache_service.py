@@ -8,6 +8,7 @@ import logging
 import pickle
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Optional, Callable
 from datetime import datetime, timedelta
 import pandas as pd
@@ -42,6 +43,13 @@ class BenchmarkDataBundle:
     benchmark_kind: str | None
     candidate_symbols: tuple[str, ...]
     data: pd.DataFrame
+
+
+class BenchmarkFallbackPolicy(str, Enum):
+    """Controls whether benchmark fallback symbols are eligible for a lookup."""
+
+    ALLOW = "allow"
+    PRIMARY_ONLY = "primary_only"
 
 
 class BenchmarkCacheService:
@@ -162,10 +170,17 @@ class BenchmarkCacheService:
         market: str = "US",
         period: str = "2y",
         force_refresh: bool = False,
+        fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
     ) -> Optional[BenchmarkDataBundle]:
         """Resolve benchmark data plus the selected candidate metadata."""
         normalized_market = self._normalize_market(market)
-        candidates = self.get_benchmark_candidates(normalized_market)
+        all_candidates = self.get_benchmark_candidates(normalized_market)
+        normalized_policy = BenchmarkFallbackPolicy(fallback_policy)
+        candidates = (
+            all_candidates
+            if normalized_policy == BenchmarkFallbackPolicy.ALLOW
+            else all_candidates[:1]
+        )
         candidate_tuple = tuple(candidates)
         registry_entry = self._benchmark_registry.get_entry(normalized_market)
 

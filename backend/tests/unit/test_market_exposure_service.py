@@ -4,9 +4,11 @@ from datetime import date
 import pandas as pd
 
 import app.services.market_exposure_service as svc
+from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.market_exposure_service import (
     CAP_BELOW_200DMA,
     CAP_HEAVY_DISTRIBUTION,
+    backfill_exposure,
     build_exposure_payload,
     compute_and_store,
     count_distribution_days,
@@ -99,10 +101,373 @@ def _fake_benchmark_factory(df, symbol="SPY"):
         def __init__(self, *a, **k):
             pass
 
-        def get_benchmark_bundle(self, market="US", period="2y", force_refresh=False):
+        def get_benchmark_bundle(
+            self,
+            market="US",
+            period="2y",
+            force_refresh=False,
+            fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+        ):
             return _FakeBundle(df, symbol)
 
     return _FakeBenchmarkCacheService
+
+
+def test_refresh_market_exposure_for_date_can_use_primary_only_benchmark_policy(monkeypatch):
+    from app.database import SessionLocal
+
+    calls = []
+    df = _df(list(range(100, 350)), [1000] * 250)
+
+    class _FakeBenchmarkCacheService:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_benchmark_bundle(self, *, market, period, fallback_policy):
+            calls.append(
+                {
+                    "market": market,
+                    "period": period,
+                    "fallback_policy": fallback_policy,
+                }
+            )
+            return _FakeBundle(df, "SPY")
+
+    monkeypatch.setattr(
+        "app.services.benchmark_cache_service.BenchmarkCacheService",
+        _FakeBenchmarkCacheService,
+    )
+
+    as_of = df.index[-1].date()
+    db = SessionLocal()
+    try:
+        result = refresh_market_exposure_for_date(
+            db,
+            "us",
+            as_of,
+            seed_history=False,
+            benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+        assert "error" not in result
+        assert result["benchmark_symbol"] == "SPY"
+        assert calls == [
+            {
+                "market": "US",
+                "period": "2y",
+                "fallback_policy": BenchmarkFallbackPolicy.PRIMARY_ONLY,
+            }
+        ]
+    finally:
+        db.close()
+
+
+def test_refresh_market_exposure_for_date_seeds_history_with_same_benchmark_policy(monkeypatch):
+    db = object()
+    as_of = date(2026, 6, 25)
+    calls: list[tuple] = []
+
+    def fake_compute(
+        market,
+        as_of_date,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        calls.append(("compute", market, as_of_date, db_arg, benchmark_fallback_policy))
+        return {
+            "market": market,
+            "date": as_of_date,
+            "exposure_score": 78.0,
+            "stance": "Confirmed Uptrend",
+        }
+
+    def fake_seed(
+        db_arg,
+        market,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        calls.append(("seed", db_arg, market, benchmark_fallback_policy))
+        return {"seeded": 4, "failed": 0}
+
+    monkeypatch.setattr(svc, "compute_and_store", fake_compute)
+    monkeypatch.setattr(svc, "ensure_exposure_history", fake_seed)
+
+    result = refresh_market_exposure_for_date(
+        db,
+        "us",
+        as_of,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+    )
+
+    assert calls == [
+        ("compute", "US", as_of, db, BenchmarkFallbackPolicy.PRIMARY_ONLY),
+        ("seed", db, "US", BenchmarkFallbackPolicy.PRIMARY_ONLY),
+    ]
+    assert result["history_seed"] == {"seeded": 4, "failed": 0}
+
+
+def test_backfill_exposure_uses_requested_benchmark_policy_for_each_day(monkeypatch):
+    from app.services.market_calendar_service import MarketCalendarService
+
+    days = [date(2026, 6, 24), date(2026, 6, 25)]
+    calls: list[tuple] = []
+    db = object()
+
+    monkeypatch.setattr(
+        MarketCalendarService,
+        "trading_days",
+        lambda self, market, start, end: days,
+    )
+
+    def fake_compute(
+        market,
+        day,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        calls.append((market, day, db_arg, benchmark_fallback_policy))
+        return {"market": market, "date": day, "exposure_score": 70.0}
+
+    monkeypatch.setattr(svc, "compute_and_store", fake_compute)
+
+    result = backfill_exposure(
+        db,
+        "us",
+        days[0],
+        days[-1],
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+    )
+
+    assert result == {"seeded": 2, "failed": 0}
+    assert calls == [
+        ("US", days[0], db, BenchmarkFallbackPolicy.PRIMARY_ONLY),
+        ("US", days[1], db, BenchmarkFallbackPolicy.PRIMARY_ONLY),
+    ]
+
+
+def test_ensure_exposure_history_passes_benchmark_policy_to_backfill(monkeypatch):
+    from app.database import SessionLocal
+    from app.services.market_calendar_service import MarketCalendarService
+
+    end = date(2026, 6, 25)
+    calls: list[tuple] = []
+
+    monkeypatch.setattr(
+        MarketCalendarService,
+        "last_completed_trading_day",
+        lambda self, market: end,
+    )
+
+    def fake_backfill(
+        db_arg,
+        market,
+        start,
+        end_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        calls.append((db_arg, market, start, end_arg, benchmark_fallback_policy))
+        return {"seeded": 2, "failed": 0}
+
+    monkeypatch.setattr(svc, "backfill_exposure", fake_backfill)
+
+    db = SessionLocal()
+    try:
+        result = svc.ensure_exposure_history(
+            db,
+            "us",
+            min_rows=2,
+            days=12,
+            benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    finally:
+        db.close()
+
+    assert result == {"seeded": 2, "failed": 0}
+    assert calls == [
+        (
+            db,
+            "US",
+            date(2026, 6, 13),
+            end,
+            BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    ]
+
+
+def test_ensure_exposure_history_rebuilds_non_primary_history_for_primary_only_policy(monkeypatch):
+    from app.database import SessionLocal
+    from app.models.market_exposure import MarketExposure
+    from app.services.market_calendar_service import MarketCalendarService
+
+    end = date(2026, 6, 25)
+    calls: list[tuple] = []
+
+    monkeypatch.setattr(
+        MarketCalendarService,
+        "last_completed_trading_day",
+        lambda self, market: end,
+    )
+
+    def fake_backfill(
+        db_arg,
+        market,
+        start,
+        end_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        calls.append((db_arg, market, start, end_arg, benchmark_fallback_policy))
+        for row in db_arg.query(MarketExposure).filter(MarketExposure.market == market).all():
+            row.benchmark_symbol = "SPY"
+        db_arg.commit()
+        return {"seeded": 2, "failed": 0}
+
+    monkeypatch.setattr(svc, "backfill_exposure", fake_backfill)
+
+    db = SessionLocal()
+    try:
+        db.add_all(
+            [
+                MarketExposure(
+                    market="US",
+                    date=date(2026, 6, 23),
+                    exposure_score=70.0,
+                    stance="Confirmed Uptrend",
+                    benchmark_symbol="IVV",
+                ),
+                MarketExposure(
+                    market="US",
+                    date=date(2026, 6, 24),
+                    exposure_score=71.0,
+                    stance="Confirmed Uptrend",
+                    benchmark_symbol="IVV",
+                ),
+            ]
+        )
+        db.commit()
+
+        result = svc.ensure_exposure_history(
+            db,
+            "US",
+            min_rows=2,
+            days=12,
+            benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    finally:
+        db.close()
+
+    assert result == {"seeded": 2, "failed": 0}
+    assert calls == [
+        (
+            db,
+            "US",
+            date(2026, 6, 13),
+            end,
+            BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    ]
+
+
+def test_ensure_exposure_history_reports_error_when_strict_rebuild_leaves_non_primary_rows(monkeypatch):
+    from app.database import SessionLocal
+    from app.models.market_exposure import MarketExposure
+    from app.services.market_calendar_service import MarketCalendarService
+
+    end = date(2026, 6, 25)
+
+    monkeypatch.setattr(
+        MarketCalendarService,
+        "last_completed_trading_day",
+        lambda self, market: end,
+    )
+
+    def fake_backfill(
+        db_arg,
+        market,
+        start,
+        end_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        return {"seeded": 0, "failed": 1}
+
+    monkeypatch.setattr(svc, "backfill_exposure", fake_backfill)
+
+    db = SessionLocal()
+    try:
+        db.add(
+            MarketExposure(
+                market="US",
+                date=date(2026, 6, 24),
+                exposure_score=71.0,
+                stance="Confirmed Uptrend",
+                benchmark_symbol="IVV",
+            )
+        )
+        db.commit()
+
+        result = svc.ensure_exposure_history(
+            db,
+            "US",
+            min_rows=1,
+            days=12,
+            benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    finally:
+        db.close()
+
+    assert result["error"] == "strict_benchmark_history_incomplete"
+    assert result["failed"] == 1
+    assert result["non_primary_benchmark_rows"] == 1
+    assert result["primary_benchmark_symbol"] == "SPY"
+
+
+def test_refresh_market_exposure_for_date_promotes_strict_history_seed_error(monkeypatch):
+    db = object()
+    as_of = date(2026, 6, 25)
+    history_seed = {
+        "error": "strict_benchmark_history_incomplete",
+        "failed": 1,
+        "non_primary_benchmark_rows": 1,
+    }
+
+    def fake_compute(
+        market,
+        as_of_date,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        return {
+            "market": market,
+            "date": as_of_date,
+            "exposure_score": 78.0,
+            "stance": "Confirmed Uptrend",
+        }
+
+    def fake_seed(
+        db_arg,
+        market,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        return history_seed
+
+    monkeypatch.setattr(svc, "compute_and_store", fake_compute)
+    monkeypatch.setattr(svc, "ensure_exposure_history", fake_seed)
+
+    result = refresh_market_exposure_for_date(
+        db,
+        "us",
+        as_of,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+    )
+
+    assert result["error"] == "strict_benchmark_history_incomplete"
+    assert result["history_seed"] == history_seed
 
 
 def test_compute_and_store_round_trip_validates_against_schema(monkeypatch):
@@ -174,7 +539,13 @@ def test_refresh_market_exposure_for_date_computes_and_seeds_history(monkeypatch
     as_of = date(2026, 6, 25)
     calls: list[tuple] = []
 
-    def fake_compute(market, as_of_date, db_arg):
+    def fake_compute(
+        market,
+        as_of_date,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
         calls.append(("compute", market, as_of_date, db_arg))
         return {
             "market": market,
@@ -183,7 +554,12 @@ def test_refresh_market_exposure_for_date_computes_and_seeds_history(monkeypatch
             "stance": "Confirmed Uptrend",
         }
 
-    def fake_seed(db_arg, market):
+    def fake_seed(
+        db_arg,
+        market,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
         calls.append(("seed", db_arg, market))
         return {"seeded": 4, "failed": 0}
 
@@ -210,7 +586,13 @@ def test_refresh_market_exposure_for_date_does_not_seed_after_compute_error(monk
     as_of = date(2026, 6, 25)
     calls: list[tuple] = []
 
-    def fake_compute(market, as_of_date, db_arg):
+    def fake_compute(
+        market,
+        as_of_date,
+        db_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
         calls.append(("compute", market, as_of_date, db_arg))
         return {"market": market, "date": as_of_date.isoformat(), "error": "no_benchmark_data"}
 

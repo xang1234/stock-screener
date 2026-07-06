@@ -1,7 +1,7 @@
 import pandas as pd
 from datetime import datetime
 
-from app.services.benchmark_cache_service import BenchmarkCacheService
+from app.services.benchmark_cache_service import BenchmarkCacheService, BenchmarkFallbackPolicy
 import app.services.benchmark_cache_service as benchmark_cache_module
 
 
@@ -165,6 +165,43 @@ def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch
 
     assert result is fallback_df
     assert calls == []
+
+
+def test_get_benchmark_bundle_primary_only_policy_fetches_primary():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    cached_fallback_df = pd.DataFrame({"Close": [1.0]}, index=pd.to_datetime(["2026-04-10"]))
+    fetched_primary_df = pd.DataFrame({"Close": [2.0]}, index=pd.to_datetime(["2026-04-10"]))
+    fetch_calls = []
+
+    def fake_get_from_db(*, benchmark_symbol, period, market):
+        if benchmark_symbol == "IVV":
+            return cached_fallback_df
+        return None
+
+    def fake_fetch(*, benchmark_symbol, market, period):
+        fetch_calls.append(benchmark_symbol)
+        if benchmark_symbol == "SPY":
+            return fetched_primary_df
+        return pd.DataFrame()
+
+    service._get_from_database = fake_get_from_db  # type: ignore[assignment]
+    service._is_data_fresh = lambda data, market="US", max_age_hours=24: True  # type: ignore[assignment]
+    service._fetch_and_cache_benchmark = fake_fetch  # type: ignore[assignment]
+
+    bundle = service.get_benchmark_bundle(
+        market="US",
+        period="2y",
+        fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+    )
+
+    assert bundle is not None
+    assert bundle.benchmark_symbol == "SPY"
+    assert bundle.benchmark_role == "primary"
+    assert bundle.candidate_symbols == ("SPY",)
+    assert bundle.data is fetched_primary_df
+    assert fetch_calls == ["SPY"]
 
 
 def test_get_benchmark_data_skips_stale_redis_hit():
