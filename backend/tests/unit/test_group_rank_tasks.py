@@ -291,6 +291,45 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
     )
 
 
+def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", False)
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        lambda db, market: ["Tech"],
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 17, 12, 0, 0))
+
+    captured = []
+
+    def fake_inner(calculation_date=None, market=None, activity_lifecycle=None):
+        captured.append((calculation_date, market, activity_lifecycle))
+        return {"date": calculation_date, "market": market}
+
+    monkeypatch.setattr(module, "_calculate_daily_group_rankings_in_process", fake_inner)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(
+        market="HK",
+        calculation_date="2026-03-16",
+        activity_lifecycle="daily_refresh",
+    )
+
+    assert result["today"]["date"] == "2026-03-16"
+    assert captured == [("2026-03-16", "HK", "daily_refresh")]
+
+
 def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
     import app.tasks.group_rank_tasks as module
 

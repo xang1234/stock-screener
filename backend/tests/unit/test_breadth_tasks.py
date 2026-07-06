@@ -355,6 +355,40 @@ def test_breadth_gapfill_publishes_market_activity(monkeypatch):
     assert completed[0]["stage_key"] == "breadth"
 
 
+def test_breadth_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    fake_calculator = MagicMock()
+    fake_calculator.find_missing_dates.return_value = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw: fake_calculator)
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 17, 12, 0, 0))
+
+    captured = []
+
+    def fake_inner(calculation_date=None, market=None):
+        captured.append((calculation_date, market))
+        return {"date": calculation_date, "market": market}
+
+    monkeypatch.setattr(module, "_calculate_daily_breadth_in_process", fake_inner)
+
+    result = module.calculate_daily_breadth_with_gapfill.run(
+        market="HK",
+        calculation_date="2026-03-16",
+    )
+
+    assert result["today"]["date"] == "2026-03-16"
+    assert captured == [("2026-03-16", "HK")]
+
+
 def test_breadth_gapfill_runs_for_non_us_market(monkeypatch):
     """Breadth is now computed per market; HK/JP/TW/IN proceed instead of
     returning breadth_calculation_is_us_only. The market constructor arg

@@ -457,17 +457,24 @@ def backfill_market_exposure(self, start_date: str, end_date: str, market: str =
         db.close()
 
 
-def _calculate_daily_breadth_in_process(*, market: str | None = None):
+def _calculate_daily_breadth_in_process(
+    *,
+    calculation_date: str | None = None,
+    market: str | None = None,
+):
     """Run breadth logic without reacquiring the market workload lease."""
     from .workload_coordination import disable_serialized_market_workload
 
     task = calculate_daily_breadth
+    kwargs = {"market": market}
+    if calculation_date is not None:
+        kwargs["calculation_date"] = calculation_date
     if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-        return task(market=market)
+        return task(**kwargs)
     with disable_serialized_market_workload():
         if hasattr(task, "request") and callable(getattr(task, "run", None)):
-            return task.run(market=market)
-        return task(market=market)
+            return task.run(**kwargs)
+        return task(**kwargs)
 
 
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.backfill_breadth_data')
@@ -593,6 +600,7 @@ def calculate_daily_breadth_with_gapfill(
     max_gap_days: int | None = None,
     market: str | None = None,
     activity_lifecycle: str | None = None,
+    calculation_date: str | None = None,
 ):
     """
     Calculate daily breadth with automatic gap detection and filling.
@@ -691,23 +699,33 @@ def calculate_daily_breadth_with_gapfill(
         # Step 2: Calculate today's breadth (only if it's a trading day for this market)
         from ..wiring.bootstrap import get_market_calendar_service
         calendar_service = get_market_calendar_service()
-        today = calendar_service.market_now(effective_market).date()
+        if calculation_date:
+            target_date = datetime.strptime(calculation_date, "%Y-%m-%d").date()
+        else:
+            target_date = calendar_service.market_now(effective_market).date()
 
-        if calendar_service.is_trading_day(effective_market, today):
-            logger.info(f"Calculating breadth for today ({effective_market}, {today})...")
-            today_result = _calculate_daily_breadth_in_process(market=market)
+        if calendar_service.is_trading_day(effective_market, target_date):
+            logger.info(
+                "Calculating breadth for %s (%s)...",
+                effective_market,
+                target_date,
+            )
+            inner_kwargs = {"market": market}
+            if calculation_date:
+                inner_kwargs["calculation_date"] = target_date.isoformat()
+            today_result = _calculate_daily_breadth_in_process(**inner_kwargs)
             result['today'] = today_result
         else:
             last_trading = calendar_service.last_completed_trading_day(effective_market)
             logger.info(
                 "Today (%s) is not a trading day for %s. Skipping.",
-                today, effective_market,
+                target_date, effective_market,
             )
             result['today'] = {
                 'skipped': True,
-                'reason': f'{today} is not a trading day for {effective_market}',
+                'reason': f'{target_date} is not a trading day for {effective_market}',
                 'last_trading_day': last_trading.strftime('%Y-%m-%d'),
-                'date': today.strftime('%Y-%m-%d'),
+                'date': target_date.strftime('%Y-%m-%d'),
                 'timestamp': datetime.now().isoformat()
             }
 

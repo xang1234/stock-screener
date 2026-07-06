@@ -425,6 +425,7 @@ def calculate_daily_group_rankings(
 
 def _calculate_daily_group_rankings_in_process(
     *,
+    calculation_date: str | None = None,
     market: str | None = None,
     activity_lifecycle: str | None = None,
 ):
@@ -447,14 +448,20 @@ def _calculate_daily_group_rankings_in_process(
     from .workload_coordination import disable_serialized_market_workload
 
     task = calculate_daily_group_rankings
+    kwargs = {
+        "market": market,
+        "activity_lifecycle": activity_lifecycle,
+    }
+    if calculation_date is not None:
+        kwargs["calculation_date"] = calculation_date
     transient_token = _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.set(True)
     try:
         if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-            return task(market=market, activity_lifecycle=activity_lifecycle)
+            return task(**kwargs)
         with disable_serialized_market_workload():
             if hasattr(task, "request") and callable(getattr(task, "run", None)):
-                return task.run(market=market, activity_lifecycle=activity_lifecycle)
-            return task(market=market, activity_lifecycle=activity_lifecycle)
+                return task.run(**kwargs)
+            return task(**kwargs)
     finally:
         _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.reset(transient_token)
 
@@ -471,6 +478,7 @@ def calculate_daily_group_rankings_with_gapfill(
     max_gap_days: int | None = None,
     market: str | None = None,
     activity_lifecycle: str | None = None,
+    calculation_date: str | None = None,
 ):
     """
     Calculate daily group rankings with automatic gap detection and filling.
@@ -613,17 +621,23 @@ def calculate_daily_group_rankings_with_gapfill(
             result['gap_fill'] = {'message': 'Gap-fill disabled'}
 
         calendar_service = get_market_calendar_service()
-        today_local = calendar_service.market_now(effective_market).date()
+        if calculation_date:
+            target_date = datetime.strptime(calculation_date, "%Y-%m-%d").date()
+        else:
+            target_date = calendar_service.market_now(effective_market).date()
 
-        if calendar_service.is_trading_day(effective_market, today_local):
+        if calendar_service.is_trading_day(effective_market, target_date):
             logger.info(
-                "Calculating group rankings for today (%s, %s)...",
-                effective_market, today_local,
+                "Calculating group rankings for %s (%s)...",
+                effective_market, target_date,
             )
-            today_result = _calculate_daily_group_rankings_in_process(
-                market=market,
-                activity_lifecycle=activity_lifecycle,
-            )
+            inner_kwargs = {
+                "market": market,
+                "activity_lifecycle": activity_lifecycle,
+            }
+            if calculation_date:
+                inner_kwargs["calculation_date"] = target_date.isoformat()
+            today_result = _calculate_daily_group_rankings_in_process(**inner_kwargs)
             result['today'] = today_result
             today_error = None
             if isinstance(today_result, dict) and today_result.get("error"):
@@ -634,13 +648,13 @@ def calculate_daily_group_rankings_with_gapfill(
             last_trading = calendar_service.last_completed_trading_day(effective_market)
             logger.info(
                 "Today (%s) is not a trading day for %s. Skipping same-day calc.",
-                today_local, effective_market,
+                target_date, effective_market,
             )
             result['today'] = {
                 'skipped': True,
-                'reason': f'{today_local} is not a trading day for {effective_market}',
+                'reason': f'{target_date} is not a trading day for {effective_market}',
                 'last_trading_day': last_trading.strftime('%Y-%m-%d'),
-                'date': today_local.strftime('%Y-%m-%d'),
+                'date': target_date.strftime('%Y-%m-%d'),
                 'timestamp': datetime.now().isoformat(),
             }
 
