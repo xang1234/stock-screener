@@ -399,7 +399,11 @@ def refresh_market_exposure_for_date(
         return result
 
     try:
-        history_seed = ensure_exposure_history(db, normalized_market)
+        history_seed = ensure_exposure_history(
+            db,
+            normalized_market,
+            benchmark_fallback_policy=benchmark_fallback_policy,
+        )
     except Exception as exc:
         return {**result, "history_seed": {"error": str(exc)}}
     return {**result, "history_seed": history_seed}
@@ -470,7 +474,14 @@ def build_exposure_payload(
     }
 
 
-def backfill_exposure(db: Session, market: str, start: date, end: date) -> dict:
+def backfill_exposure(
+    db: Session,
+    market: str,
+    start: date,
+    end: date,
+    *,
+    benchmark_fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
+) -> dict:
     """Compute + store exposure for every trading day in [start, end].
 
     The single source of truth for range backfills (used by the Celery backfill
@@ -483,7 +494,12 @@ def backfill_exposure(db: Session, market: str, start: date, end: date) -> dict:
     seeded = failed = 0
     for day in MarketCalendarService().trading_days(market, start, end):
         try:
-            if compute_and_store(market, day, db).get("error"):
+            if compute_and_store(
+                market,
+                day,
+                db,
+                benchmark_fallback_policy=benchmark_fallback_policy,
+            ).get("error"):
                 failed += 1
             else:
                 seeded += 1
@@ -499,6 +515,7 @@ def ensure_exposure_history(
     *,
     min_rows: int = EXPOSURE_HISTORY_MIN_ROWS,
     days: int = EXPOSURE_BACKFILL_DAYS,
+    benchmark_fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
 ) -> dict:
     """Seed history once so the timeline isn't empty on launch.
 
@@ -516,4 +533,10 @@ def ensure_exposure_history(
         return {"seeded": 0, "skipped": True}
 
     end = MarketCalendarService().last_completed_trading_day(market)
-    return backfill_exposure(db, market, end - timedelta(days=days), end)
+    return backfill_exposure(
+        db,
+        market,
+        end - timedelta(days=days),
+        end,
+        benchmark_fallback_policy=benchmark_fallback_policy,
+    )
