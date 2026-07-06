@@ -805,7 +805,13 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
 
     assert result["gap_fill"]["processed"] == 1
     assert result["today"]["date"] == "2026-03-20"
-    assert daily_calls == [{"market": "US", "activity_lifecycle": "daily_refresh"}]
+    assert daily_calls == [
+        {
+            "market": "US",
+            "activity_lifecycle": "daily_refresh",
+            "calculation_date": "2026-03-20",
+        }
+    ]
     fake_service.find_missing_dates.assert_called_once_with(
         fake_db,
         lookback_days=365,

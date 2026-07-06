@@ -24,6 +24,7 @@ from app.services.daily_snapshot_service import (
     set_daily_snapshot_memory_cache,
 )
 from app.services.price_refresh_plan_builder import _key_market_refresh_symbols
+import app.services.snapshot_date_coherence as snapshot_date_coherence
 from app.services.snapshot_date_coherence import coherence_status
 
 
@@ -357,15 +358,38 @@ class TestScanFreshness:
 
 
 class TestDailySnapshotDateCoherence:
+    def test_key_market_date_summary_is_typed_date_boundary(self):
+        summary = snapshot_date_coherence.key_market_date_summary(
+            [
+                {"symbol": "SPY", "latest_date": "2026-06-11"},
+                {"symbol": "QQQ", "latest_date": date(2026, 6, 10)},
+                {"symbol": "IWM", "latest_date": None},
+            ],
+            anchor=date(2026, 6, 11),
+        )
+
+        assert isinstance(summary, snapshot_date_coherence.KeyMarketDateSummary)
+        assert summary.latest_date == date(2026, 6, 11)
+        assert summary.date_range is not None
+        assert summary.date_range.min == date(2026, 6, 10)
+        assert summary.date_range.max == date(2026, 6, 11)
+        assert [
+            (mismatch.symbol, mismatch.latest_date, mismatch.status)
+            for mismatch in summary.mismatched_symbols
+        ] == [
+            ("QQQ", date(2026, 6, 10), "stale"),
+            ("IWM", None, "missing"),
+        ]
+
     def test_coherence_status_flags_future_key_markets(self):
         status = coherence_status(
             anchor=date(2026, 6, 11),
-            section_dates={
-                "breadth": "2026-06-11",
-                "groups": "2026-06-11",
-                "exposure": "2026-06-11",
-                "key_markets": "2026-06-12",
-            },
+            section_dates=snapshot_date_coherence.SnapshotSectionDates.from_raw(
+                breadth="2026-06-11",
+                groups="2026-06-11",
+                exposure="2026-06-11",
+                key_markets="2026-06-12",
+            ),
         )
 
         assert status == "future_section_data"

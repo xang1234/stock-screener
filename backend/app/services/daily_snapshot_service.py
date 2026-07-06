@@ -27,7 +27,10 @@ from app.schemas.scanning import ScanResultItem
 from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.redis_pool import get_redis_client
-from app.services.snapshot_date_coherence import build_snapshot_freshness
+from app.services.snapshot_date_coherence import (
+    SnapshotSectionDates,
+    build_snapshot_freshness,
+)
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
@@ -364,11 +367,11 @@ def build_daily_snapshot_payload(
         base_freshness=_scan_freshness(scan),
         anchor=anchor_date,
         market_timezone=get_market_catalog().get(normalized).display_timezone,
-        section_dates={
-            "breadth": breadth_date,
-            "groups": groups_date,
-            "exposure": exposure_date,
-        },
+        section_dates=SnapshotSectionDates.from_raw(
+            breadth=breadth_date,
+            groups=groups_date,
+            exposure=exposure_date,
+        ),
         key_markets=key_markets,
     )
 

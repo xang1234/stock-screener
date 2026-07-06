@@ -55,7 +55,10 @@ from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
 )
-from app.services.snapshot_date_coherence import build_snapshot_freshness
+from app.services.snapshot_date_coherence import (
+    SnapshotSectionDates,
+    build_snapshot_freshness,
+)
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
@@ -1217,11 +1220,11 @@ class StaticSiteExportService:
             },
             anchor=latest_run.as_of_date,
             market_timezone=get_market_catalog().get(market).display_timezone,
-            section_dates={
-                "breadth": breadth_date,
-                "groups": groups_date,
-                "exposure": exposure_date,
-            },
+            section_dates=SnapshotSectionDates.from_raw(
+                breadth=breadth_date,
+                groups=groups_date,
+                exposure=exposure_date,
+            ),
             key_markets=key_markets,
         )
 

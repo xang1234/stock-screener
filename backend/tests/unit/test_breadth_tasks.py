@@ -339,7 +339,12 @@ def test_breadth_gapfill_publishes_market_activity(monkeypatch):
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:fake_calculator)
-    monkeypatch.setattr(module, "calculate_daily_breadth", lambda market=None: {"date": "2026-03-20"})
+    daily_calls = []
+    monkeypatch.setattr(
+        module,
+        "calculate_daily_breadth",
+        lambda **kwargs: daily_calls.append(kwargs) or {"date": "2026-03-20"},
+    )
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     started = []
@@ -350,6 +355,7 @@ def test_breadth_gapfill_publishes_market_activity(monkeypatch):
     result = module.calculate_daily_breadth_with_gapfill.run(market="US")
 
     assert result["today"]["date"] == "2026-03-20"
+    assert daily_calls == [{"market": "US", "calculation_date": "2026-03-20"}]
     assert started[0]["stage_key"] == "breadth"
     assert started[0]["lifecycle"] == "daily_refresh"
     assert completed[0]["stage_key"] == "breadth"

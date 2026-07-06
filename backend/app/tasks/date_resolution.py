@@ -18,8 +18,6 @@ class ResolvedTaskDate:
     was_explicit: bool
 
     def nested_daily_kwargs(self) -> dict[str, str]:
-        if not self.was_explicit:
-            return {}
         return {"calculation_date": self.target_date.isoformat()}
 
 

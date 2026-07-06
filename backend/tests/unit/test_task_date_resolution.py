@@ -41,5 +41,5 @@ def test_resolve_task_target_date_uses_market_local_today_for_scheduled_runs():
 
     assert resolved.target_date.isoformat() == "2026-03-17"
     assert resolved.was_explicit is False
-    assert resolved.nested_daily_kwargs() == {}
+    assert resolved.nested_daily_kwargs() == {"calculation_date": "2026-03-17"}
     assert calendar.market_calls == ["JP"]
