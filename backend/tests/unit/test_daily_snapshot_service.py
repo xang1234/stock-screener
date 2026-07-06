@@ -355,6 +355,96 @@ class TestScanFreshness:
         assert freshness["scan_published_at"].startswith("2026-06-11T01:00")
 
 
+class TestDailySnapshotDateCoherence:
+    def test_payload_pins_latest_sections_to_scan_as_of_date(self, monkeypatch):
+        class FakeBreadthQuery:
+            def __init__(self):
+                self.filters = []
+
+            def filter(self, *args):
+                self.filters.extend(args)
+                return self
+
+            def order_by(self, *_args):
+                return self
+
+            def first(self):
+                return (date(2026, 6, 11),)
+
+        breadth_query = FakeBreadthQuery()
+
+        class FakeDb:
+            def query(self, *_args):
+                return breadth_query
+
+        class FakeGroupService:
+            def get_current_rankings(self, db, limit=10, calculation_date=None, market="US"):
+                assert calculation_date == date(2026, 6, 11)
+                assert market == "US"
+                return [
+                    {
+                        "industry_group": "Software",
+                        "rank": 1,
+                        "rank_change_1w": 2,
+                        "rank_change_1m": 3,
+                        "top_symbol": "APP",
+                        "top_symbol_name": "AppLovin",
+                        "top_rs_rating": 98,
+                        "date": "2026-06-11",
+                    }
+                ]
+
+        scan = SimpleNamespace(
+            scan_id="scan-abc",
+            feature_run=SimpleNamespace(
+                as_of_date=date(2026, 6, 11),
+                published_at=datetime(2026, 6, 11, 23, 0, tzinfo=timezone.utc),
+            ),
+            completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
+        )
+
+        exposure_calls = []
+        monkeypatch.setattr(
+            daily_snapshot_service,
+            "build_exposure_payload",
+            lambda db, market, as_of_date=None: exposure_calls.append(as_of_date)
+            or {"date": "2026-06-11", "history": []},
+        )
+        monkeypatch.setattr(
+            daily_snapshot_service,
+            "build_key_market_entries",
+            lambda db, market, as_of_date=None: [
+                {"symbol": "SPY", "latest_date": as_of_date.isoformat(), "history": []}
+            ],
+        )
+        monkeypatch.setattr(
+            "app.wiring.bootstrap.get_group_rank_service",
+            lambda: FakeGroupService(),
+        )
+
+        class FakeUseCase:
+            def execute(self, *_args, **_kwargs):
+                return SimpleNamespace(page=SimpleNamespace(items=[]))
+
+        payload = daily_snapshot_service.build_daily_snapshot_payload(
+            FakeDb(),
+            market="US",
+            market_display_name="United States",
+            scan=scan,
+            uow=object(),
+            scan_results_use_case=FakeUseCase(),
+        )
+
+        assert payload["freshness"]["snapshot_as_of_date"] == "2026-06-11"
+        assert payload["freshness"]["market_timezone"] == "America/New_York"
+        assert payload["freshness"]["breadth_latest_date"] == "2026-06-11"
+        assert payload["freshness"]["groups_latest_date"] == "2026-06-11"
+        assert payload["freshness"]["exposure_latest_date"] == "2026-06-11"
+        assert payload["freshness"]["key_markets_latest_date"] == "2026-06-11"
+        assert payload["freshness"]["date_coherence_status"] == "coherent"
+        assert exposure_calls == [date(2026, 6, 11)]
+
+
 class TestIfNoneMatchMatching:
     ETAG = 'W/"abc123"'
 
@@ -390,8 +480,13 @@ class TestDailySnapshotResponseSchema:
                 "scan_id": "scan-abc",
                 "scan_as_of_date": "2026-06-11",
                 "scan_published_at": "2026-06-11T23:00:00+00:00",
+                "snapshot_as_of_date": "2026-06-11",
+                "market_timezone": "America/New_York",
                 "breadth_latest_date": "2026-06-11",
                 "groups_latest_date": "2026-06-11",
+                "exposure_latest_date": "2026-06-11",
+                "key_markets_latest_date": "2026-06-11",
+                "date_coherence_status": "coherent",
             },
             "key_markets": [
                 {

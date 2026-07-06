@@ -74,8 +74,13 @@ class DailySnapshotFreshness(BaseModel):
     scan_id: Optional[str] = None
     scan_as_of_date: Optional[str] = None
     scan_published_at: Optional[str] = None
+    snapshot_as_of_date: Optional[str] = None
+    market_timezone: Optional[str] = None
     breadth_latest_date: Optional[str] = None
     groups_latest_date: Optional[str] = None
+    exposure_latest_date: Optional[str] = None
+    key_markets_latest_date: Optional[str] = None
+    date_coherence_status: str = "unknown"
 
 
 class DailySnapshotTopCandidates(BaseModel):
