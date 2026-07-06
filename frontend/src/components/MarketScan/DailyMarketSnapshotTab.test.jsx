@@ -56,8 +56,13 @@ function snapshotPayload(overrides = {}) {
     freshness: {
       scan_id: 'scan-1',
       scan_as_of_date: '2026-04-24',
+      snapshot_as_of_date: '2026-04-24',
+      market_timezone: 'America/New_York',
       breadth_latest_date: '2026-04-24',
       groups_latest_date: '2026-04-24',
+      exposure_latest_date: '2026-04-24',
+      key_markets_latest_date: '2026-04-24',
+      date_coherence_status: 'coherent',
     },
     key_markets: [
       {
@@ -125,8 +130,10 @@ describe('DailyMarketSnapshotTab', () => {
     // No per-section fan-out: scan results are only fetched for filters.
     expect(getScanResults).not.toHaveBeenCalled();
 
-    // Freshness header with all three dates
-    expect(screen.getByText('Snapshot 2026-04-24 · Breadth 2026-04-24 · Groups 2026-04-24')).toBeInTheDocument();
+    // Freshness header collapses coherent section dates into one snapshot date.
+    expect(screen.getByText(/As of 2026-04-24/)).toBeInTheDocument();
+    expect(screen.getByText(/America\/New_York/)).toBeInTheDocument();
+    expect(screen.queryByText(/Breadth 2026-04-24/)).not.toBeInTheDocument();
 
     // Key market card renders the aliased instrument with data...
     expect(screen.getByText('BITSTAMP:BTCUSD')).toBeInTheDocument();

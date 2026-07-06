@@ -123,6 +123,23 @@ function DailyMarketSnapshotTab() {
 
   const flag = marketFlag(snapshot?.market);
   const marketDisplay = snapshot?.market_display_name || snapshot?.market || '';
+  const snapshotDate = freshness?.snapshot_as_of_date || freshness?.scan_as_of_date;
+  const sectionDates = [
+    ['Breadth', freshness?.breadth_latest_date],
+    ['Groups', freshness?.groups_latest_date],
+    ['Exposure', freshness?.exposure_latest_date],
+    ['Key markets', freshness?.key_markets_latest_date],
+  ].filter(([, value]) => value && value !== snapshotDate);
+  const freshnessLabel = snapshotDate
+    ? [
+      `As of ${snapshotDate}`,
+      freshness?.market_timezone,
+      freshness?.date_coherence_status && freshness.date_coherence_status !== 'coherent'
+        ? freshness.date_coherence_status
+        : null,
+      ...sectionDates.map(([label, value]) => `${label} ${value}`),
+    ].filter(Boolean).join(' · ')
+    : 'Snapshot date unavailable';
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', pr: 1 }}>
@@ -145,7 +162,7 @@ function DailyMarketSnapshotTab() {
           color="text.secondary"
           sx={{ fontFamily: 'monospace', fontSize: '11px' }}
         >
-          {`Snapshot ${freshness.scan_as_of_date || '-'} · Breadth ${freshness.breadth_latest_date || '-'} · Groups ${freshness.groups_latest_date || '-'}`}
+          {freshnessLabel}
         </Typography>
       </Box>
 
