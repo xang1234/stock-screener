@@ -113,6 +113,52 @@ class TestKeyMarketEntries:
         assert entries[0]["change_1d"] is None
         assert entries[0]["history"][-1]["close"] is None
 
+    def test_key_market_entries_do_not_include_rows_after_as_of_date(self, monkeypatch):
+        captured_filters = []
+
+        class FakeQuery:
+            def filter(self, *args):
+                captured_filters.extend(args)
+                return self
+
+            def order_by(self, *_args):
+                return self
+
+            def all(self):
+                return [
+                    ("SPY", date(2026, 6, 10), 500.0),
+                    ("SPY", date(2026, 6, 11), 505.0),
+                ]
+
+        class FakeDb:
+            def query(self, *_args):
+                return FakeQuery()
+
+        monkeypatch.setattr(
+            key_market_history,
+            "key_market_instruments",
+            lambda _market: [
+                SimpleNamespace(
+                    data_symbol="SPY",
+                    display_symbol="SPY",
+                    display_name="S&P 500 ETF",
+                    currency="USD",
+                )
+            ],
+        )
+
+        entries = key_market_history.build_key_market_entries(
+            FakeDb(),
+            "US",
+            as_of_date=date(2026, 6, 11),
+        )
+
+        assert entries[0]["latest_date"] == "2026-06-11"
+        assert any(
+            getattr(expr.right, "value", None) == date(2026, 6, 11)
+            for expr in captured_filters
+        )
+
 
 class TestSnapshotCacheHelpers:
     def setup_method(self):

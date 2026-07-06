@@ -27,17 +27,20 @@ def build_key_market_entries(
     market: str,
     *,
     points: int = KEY_MARKET_HISTORY_POINTS,
+    as_of_date: date | None = None,
 ) -> list[dict[str, Any]]:
     instruments = key_market_instruments(market)
     if not instruments:
         return []
     data_symbols = [instrument.data_symbol for instrument in instruments]
-    cutoff = date.today() - timedelta(days=KEY_MARKET_HISTORY_CALENDAR_DAYS)
+    end_date = as_of_date or date.today()
+    cutoff = end_date - timedelta(days=KEY_MARKET_HISTORY_CALENDAR_DAYS)
     rows = (
         db.query(StockPrice.symbol, StockPrice.date, StockPrice.close)
         .filter(
             StockPrice.symbol.in_(data_symbols),
             StockPrice.date >= cutoff,
+            StockPrice.date <= end_date,
         )
         .order_by(StockPrice.symbol.asc(), StockPrice.date.asc())
         .all()
