@@ -66,6 +66,7 @@ class StaticGroupsRRGPayloadBuilder:
             db,
             market=normalized_market,
             scopes=requested_scopes,
+            as_of_date=expected_as_of_date,
         )
 
         groups_rrg = scopes["groups"]
@@ -83,12 +84,23 @@ class StaticGroupsRRGPayloadBuilder:
                 ),
             )
 
+        expected_date = expected_as_of_date.isoformat()
+        rrg_date = groups_rrg.get("date")
+        if rrg_date != expected_date:
+            raise StaticGroupsRRGUnavailableError(
+                section=f"{normalized_market} rrg",
+                reason=(
+                    f"RRG data date {rrg_date or 'none'} does not match static "
+                    f"export date {expected_date}."
+                ),
+            )
+
         return {
             "schema_version": self.schema_version,
             "generated_at": generated_at,
             "available": True,
             "market": normalized_market,
-            "as_of_date": groups_rrg.get("date") or expected_as_of_date.isoformat(),
+            "as_of_date": expected_date,
             "available_scopes": available_scopes,
             "payload": {scope: scopes[scope] for scope in requested_scopes},
         }

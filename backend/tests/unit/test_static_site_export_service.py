@@ -1703,9 +1703,10 @@ def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_fac
     _service, session_factory = service_and_session_factory
 
     class _FakeRRGService:
-        def get_rrg_scopes(self, db, *, market, scopes):  # noqa: ARG002
+        def get_rrg_scopes(self, db, *, market, scopes, as_of_date=None):  # noqa: ARG002
             assert market == "HK"
             assert scopes == ("groups", "sectors")
+            assert as_of_date == date(2026, 4, 18)
             return {
                 "groups": {
                     "date": "2026-04-18",
@@ -1754,6 +1755,63 @@ def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_fac
     assert payload["payload"]["groups"]["groups"][0]["industry_group"] == "Internet Services"
 
 
+def test_build_groups_rrg_payload_rejects_date_mismatch(
+    service_and_session_factory,
+    monkeypatch,
+):
+    _service, session_factory = service_and_session_factory
+
+    class _FakeRRGService:
+        def get_rrg_scopes(self, db, *, market, scopes, as_of_date=None):  # noqa: ARG002
+            assert as_of_date == date(2026, 4, 18)
+            return {
+                "groups": {
+                    "date": "2026-04-19",
+                    "market": "HK",
+                    "scope": "groups",
+                    "groups": [
+                        {
+                            "industry_group": "Internet Services",
+                            "rank": 1,
+                            "num_stocks": 9,
+                            "avg_rs_rating": 82.0,
+                            "quadrant": "Leading",
+                            "is_provisional": False,
+                            "current": {"date": "2026-04-19", "x": 104.0, "y": 103.0},
+                            "tail": [{"date": "2026-04-19", "x": 104.0, "y": 103.0}],
+                        }
+                    ],
+                },
+                "sectors": {
+                    "date": "2026-04-19",
+                    "market": "HK",
+                    "scope": "sectors",
+                    "groups": [],
+                },
+            }
+
+    monkeypatch.setattr(
+        StaticGroupsRRGPayloadBuilder,
+        "_preflight_tables",
+        lambda self, db, market: None,  # noqa: ARG005
+    )
+    builder = StaticGroupsRRGPayloadBuilder(
+        schema_version=STATIC_SITE_SCHEMA_VERSION,
+        rrg_service=_FakeRRGService(),
+    )
+
+    with session_factory() as db, pytest.raises(
+        rrg_export_module.StaticGroupsRRGUnavailableError,
+        match="2026-04-18",
+    ):
+        builder.build(
+            db=db,
+            generated_at="2026-04-18T22:00:00Z",
+            expected_as_of_date=date(2026, 4, 18),
+            market="HK",
+        )
+
+
 def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     service_and_session_factory,
     monkeypatch,
@@ -1761,9 +1819,10 @@ def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     _service, session_factory = service_and_session_factory
 
     class _FakeRRGService:
-        def get_rrg_scopes(self, db, *, market, scopes):  # noqa: ARG002
+        def get_rrg_scopes(self, db, *, market, scopes, as_of_date=None):  # noqa: ARG002
             assert market == "TW"
             assert scopes == ("groups",)
+            assert as_of_date == date(2026, 4, 18)
             return {
                 "groups": {
                     "date": "2026-04-18",

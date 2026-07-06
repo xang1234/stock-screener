@@ -56,8 +56,12 @@ class _StubRankService:
     def __init__(self, rows):
         self._rows = rows
 
-    def get_current_rankings(self, db, limit=197, market="US"):
-        return [r for r in self._rows if r["market"] == market][:limit]
+    def get_current_rankings(self, db, limit=197, calculation_date=None, market="US"):
+        rows = [r for r in self._rows if r["market"] == market]
+        if calculation_date is not None:
+            expected = calculation_date.isoformat()
+            rows = [r for r in rows if r["date"] == expected]
+        return rows[:limit]
 
 
 class _ExplodingRankService:
@@ -188,8 +192,9 @@ def test_get_rrg_non_us_uses_feature_run_history_provider():
     dates = _weekly_fridays(40)
 
     class _FakeHistoryProvider:
-        def get_all_groups_history(self, db, *, market, days):  # noqa: ARG002
+        def get_all_groups_history(self, db, *, market, days, as_of_date=None):  # noqa: ARG002
             assert market == "HK"
+            assert as_of_date is None
             latest = dates[-1].isoformat()
             return (
                 latest,
@@ -224,7 +229,8 @@ def test_get_rrg_uses_injected_history_provider_for_all_markets():
     calls: list[tuple[str, int]] = []
 
     class _FakeHistoryProvider:
-        def get_all_groups_history(self, db, *, market, days):  # noqa: ARG002
+        def get_all_groups_history(self, db, *, market, days, as_of_date=None):  # noqa: ARG002
+            assert as_of_date is None
             calls.append((market, days))
             latest = dates[-1].isoformat()
             return (
@@ -252,6 +258,45 @@ def test_get_rrg_uses_injected_history_provider_for_all_markets():
 
     assert calls == [("HK", 123)]
     assert [group["industry_group"] for group in payload["groups"]] == ["Internet Services"]
+
+
+def test_get_rrg_as_of_date_caps_us_history_series():
+    session = _session()
+    dates = _weekly_fridays(41)
+    expected_dates = dates[:-1]
+    future_date = dates[-1]
+    _seed_group(
+        session,
+        market="US",
+        group="AlphaTech",
+        dates=expected_dates,
+        rs_fn=lambda i: 40 + 0.6 * i,
+    )
+    _seed_group(
+        session,
+        market="US",
+        group="AlphaTech",
+        dates=[future_date],
+        rs_fn=lambda _i: 5.0,
+    )
+
+    expected_latest = expected_dates[-1]
+    future_week = (future_date - timedelta(days=(future_date.weekday() + 1) % 7)).isoformat()
+    stub = _StubRankService([
+        {"market": "US", "industry_group": "AlphaTech", "date": expected_latest.isoformat(),
+         "rank": 1, "num_stocks": 10, "avg_rs_rating": 64.0},
+        {"market": "US", "industry_group": "AlphaTech", "date": future_date.isoformat(),
+         "rank": 1, "num_stocks": 10, "avg_rs_rating": 5.0},
+    ])
+
+    payload = RRGService(
+        history_provider=USGroupRankHistoryProvider(stub),
+    ).get_rrg(session, market="US", as_of_date=expected_latest)
+
+    alpha = payload["groups"][0]
+    assert payload["date"] == expected_latest.isoformat()
+    assert alpha["current"]["date"] != future_week
+    assert all(point["date"] != future_week for point in alpha["tail"])
 
 
 def test_get_rrg_rejects_unknown_scope_at_service_boundary():

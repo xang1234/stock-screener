@@ -413,15 +413,15 @@ def test_market_group_ranking_service_recomputes_malformed_rrg_cache(monkeypatch
 
 
 def test_rrg_history_dispatcher_uses_market_group_service_directly_for_non_us():
-    calls: list[tuple[str, int]] = []
+    calls: list[tuple[str, int, date | None]] = []
 
     class _GroupRankService:
         def get_current_rankings(self, *args, **kwargs):  # noqa: ANN002, ANN003
             raise AssertionError("US history source should not handle HK")
 
     class _MarketGroupRankingService:
-        def get_all_groups_history(self, db, *, market, days):  # noqa: ANN001
-            calls.append((market, days))
+        def get_all_groups_history(self, db, *, market, days, as_of_date=None):  # noqa: ANN001
+            calls.append((market, days, as_of_date))
             return "2026-04-03", {}, {}
 
     provider = build_rrg_history_provider(
@@ -429,12 +429,18 @@ def test_rrg_history_dispatcher_uses_market_group_service_directly_for_non_us():
         market_group_ranking_service=_MarketGroupRankingService(),
     )
 
-    assert provider.get_all_groups_history(Session(), market="HK", days=400) == (
+    as_of = date(2026, 4, 3)
+    assert provider.get_all_groups_history(
+        Session(),
+        market="HK",
+        days=400,
+        as_of_date=as_of,
+    ) == (
         "2026-04-03",
         {},
         {},
     )
-    assert calls == [("HK", 400)]
+    assert calls == [("HK", 400, as_of)]
 
 
 def test_rrg_history_dispatcher_normalizes_configured_us_market():
@@ -444,7 +450,8 @@ def test_rrg_history_dispatcher_normalizes_configured_us_market():
         def __init__(self, name: str) -> None:
             self.name = name
 
-        def get_all_groups_history(self, db, *, market, days):  # noqa: ANN001, ARG002
+        def get_all_groups_history(self, db, *, market, days, as_of_date=None):  # noqa: ANN001, ARG002
+            assert as_of_date is None
             calls.append(self.name)
             return "2026-04-03", {}, {}
 

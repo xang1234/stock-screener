@@ -311,6 +311,7 @@ class RRGService:
         scope: str = "groups",
         tail_weeks: int = DEFAULT_TAIL_WEEKS,
         lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+        as_of_date: date | None = None,
     ) -> Dict[str, Any]:
         """Assemble the RRG payload for one market + scope (``groups``/``sectors``)."""
         normalized_scope = self._normalize_requested_scopes((scope,))[0]
@@ -320,6 +321,7 @@ class RRGService:
             scopes=(normalized_scope,),
             tail_weeks=tail_weeks,
             lookback_days=lookback_days,
+            as_of_date=as_of_date,
         )[normalized_scope]
 
     def get_rrg_scopes(
@@ -330,6 +332,7 @@ class RRGService:
         scopes: Sequence[str] = ("groups",),
         tail_weeks: int = DEFAULT_TAIL_WEEKS,
         lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+        as_of_date: date | None = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Compute several scopes from a SINGLE input fetch.
 
@@ -344,7 +347,12 @@ class RRGService:
             return self._empty_scopes(market, requested_scopes)
 
         params = RRGParams(tail_weeks=tail_weeks)
-        latest_date, meta, group_series = self._fetch_inputs(db, market, lookback_days)
+        latest_date, meta, group_series = self._fetch_inputs(
+            db,
+            market,
+            lookback_days,
+            as_of_date=as_of_date,
+        )
         if latest_date is None:
             return self._empty_scopes(market, requested_scopes)
         return {
@@ -380,7 +388,12 @@ class RRGService:
         return {"date": latest_date, "market": market, "scope": scope, "groups": []}
 
     def _fetch_inputs(
-        self, db: Any, market: str, lookback_days: int
+        self,
+        db: Any,
+        market: str,
+        lookback_days: int,
+        *,
+        as_of_date: date | None = None,
     ) -> Tuple[
         Optional[str],
         Dict[str, Dict[str, Any]],
@@ -391,6 +404,7 @@ class RRGService:
             db,
             market=market,
             days=lookback_days,
+            as_of_date=as_of_date,
         )
 
     def _build_scope_payload(
