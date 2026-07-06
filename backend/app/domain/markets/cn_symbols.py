@@ -1,0 +1,61 @@
+"""Mainland China symbol and exchange inference rules."""
+
+from __future__ import annotations
+
+from typing import Final
+
+
+CN_SYMBOL_SUFFIX_EXCHANGE: Final[dict[str, str]] = {
+    ".SS": "SSE",
+    ".SZ": "SZSE",
+    ".BJ": "BJSE",
+}
+
+
+def normalize_cn_local_code(symbol_or_local_code: str | None) -> str:
+    token = str(symbol_or_local_code or "").strip().upper()
+    for suffix in CN_SYMBOL_SUFFIX_EXCHANGE:
+        if token.endswith(suffix):
+            token = token[: -len(suffix)]
+            break
+    return token.zfill(6) if token.isdigit() else token
+
+
+def cn_exchange_from_symbol_suffix(symbol_or_local_code: str | None) -> str | None:
+    token = str(symbol_or_local_code or "").strip().upper()
+    for suffix, exchange in CN_SYMBOL_SUFFIX_EXCHANGE.items():
+        if token.endswith(suffix):
+            return exchange
+    return None
+
+
+def infer_cn_a_share_exchange_from_local_code(local_code: str | None) -> str | None:
+    token = normalize_cn_local_code(local_code)
+    if token.startswith(("600", "601", "603", "605", "688")):
+        return "SSE"
+    if token.startswith(("000", "001", "002", "003", "300", "301")):
+        return "SZSE"
+    if token.startswith(("4", "8", "9")):
+        return "BJSE"
+    return None
+
+
+def has_cn_a_share_exchange_conflict(symbol_or_local_code: str | None) -> bool:
+    explicit_exchange = cn_exchange_from_symbol_suffix(symbol_or_local_code)
+    if explicit_exchange is None:
+        return False
+    inferred_exchange = infer_cn_a_share_exchange_from_local_code(symbol_or_local_code)
+    return inferred_exchange is not None and inferred_exchange != explicit_exchange
+
+
+def cn_a_share_exchange_for_symbol(symbol_or_local_code: str | None) -> str | None:
+    if has_cn_a_share_exchange_conflict(symbol_or_local_code):
+        return None
+    explicit_exchange = cn_exchange_from_symbol_suffix(symbol_or_local_code)
+    if explicit_exchange is not None:
+        return explicit_exchange
+    return infer_cn_a_share_exchange_from_local_code(symbol_or_local_code)
+
+
+def is_cn_a_share_symbol(symbol_or_local_code: str | None) -> bool:
+    return cn_a_share_exchange_for_symbol(symbol_or_local_code) is not None
