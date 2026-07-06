@@ -20,8 +20,10 @@ from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from ..domain.common.benchmarks import get_primary_benchmark_symbol
 from ..models.market_breadth import MarketBreadth
 from ..models.market_exposure import MarketExposure
 from ..models.stock import StockPrice
@@ -528,15 +530,35 @@ def ensure_exposure_history(
     from .market_calendar_service import MarketCalendarService
 
     market = (market or "US").upper()
-    existing = db.query(MarketExposure).filter(MarketExposure.market == market).count()
-    if existing >= min_rows:
-        return {"seeded": 0, "skipped": True}
-
     end = MarketCalendarService().last_completed_trading_day(market)
+    start = end - timedelta(days=days)
+
+    existing_query = db.query(MarketExposure).filter(MarketExposure.market == market)
+    existing = existing_query.count()
+    if existing >= min_rows:
+        if benchmark_fallback_policy != BenchmarkFallbackPolicy.PRIMARY_ONLY:
+            return {"seeded": 0, "skipped": True}
+
+        primary_symbol = get_primary_benchmark_symbol(market)
+        primary_rows = existing_query.filter(MarketExposure.benchmark_symbol == primary_symbol).count()
+        non_primary_rows_in_seed_window = (
+            existing_query
+            .filter(MarketExposure.date >= start, MarketExposure.date <= end)
+            .filter(
+                or_(
+                    MarketExposure.benchmark_symbol.is_(None),
+                    MarketExposure.benchmark_symbol != primary_symbol,
+                )
+            )
+            .count()
+        )
+        if primary_rows >= min_rows and non_primary_rows_in_seed_window == 0:
+            return {"seeded": 0, "skipped": True}
+
     return backfill_exposure(
         db,
         market,
-        end - timedelta(days=days),
+        start,
         end,
         benchmark_fallback_policy=benchmark_fallback_policy,
     )

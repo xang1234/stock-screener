@@ -297,6 +297,77 @@ def test_ensure_exposure_history_passes_benchmark_policy_to_backfill(monkeypatch
     ]
 
 
+def test_ensure_exposure_history_rebuilds_non_primary_history_for_primary_only_policy(monkeypatch):
+    from app.database import SessionLocal
+    from app.models.market_exposure import MarketExposure
+    from app.services.market_calendar_service import MarketCalendarService
+
+    end = date(2026, 6, 25)
+    calls: list[tuple] = []
+
+    monkeypatch.setattr(
+        MarketCalendarService,
+        "last_completed_trading_day",
+        lambda self, market: end,
+    )
+
+    def fake_backfill(
+        db_arg,
+        market,
+        start,
+        end_arg,
+        *,
+        benchmark_fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+    ):
+        calls.append((db_arg, market, start, end_arg, benchmark_fallback_policy))
+        return {"seeded": 2, "failed": 0}
+
+    monkeypatch.setattr(svc, "backfill_exposure", fake_backfill)
+
+    db = SessionLocal()
+    try:
+        db.add_all(
+            [
+                MarketExposure(
+                    market="US",
+                    date=date(2026, 6, 23),
+                    exposure_score=70.0,
+                    stance="Confirmed Uptrend",
+                    benchmark_symbol="IVV",
+                ),
+                MarketExposure(
+                    market="US",
+                    date=date(2026, 6, 24),
+                    exposure_score=71.0,
+                    stance="Confirmed Uptrend",
+                    benchmark_symbol="IVV",
+                ),
+            ]
+        )
+        db.commit()
+
+        result = svc.ensure_exposure_history(
+            db,
+            "US",
+            min_rows=2,
+            days=12,
+            benchmark_fallback_policy=BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    finally:
+        db.close()
+
+    assert result == {"seeded": 2, "failed": 0}
+    assert calls == [
+        (
+            db,
+            "US",
+            date(2026, 6, 13),
+            end,
+            BenchmarkFallbackPolicy.PRIMARY_ONLY,
+        )
+    ]
+
+
 def test_compute_and_store_round_trip_validates_against_schema(monkeypatch):
     from app.database import SessionLocal
     from app.models.market_exposure import MarketExposure
