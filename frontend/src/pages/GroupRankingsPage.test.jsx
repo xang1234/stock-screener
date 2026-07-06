@@ -293,6 +293,12 @@ describe('GroupRankingsPage', () => {
     expect(await screen.findByText('HK Internet Services')).toBeInTheDocument();
 
     const user = userEvent.setup();
+    await user.click(screen.getByRole('tab', { name: '1 Month' }));
+
+    await waitFor(() => {
+      expect(getRankMovers).toHaveBeenCalledWith('1m', 10, 'HK', '2026-03-16');
+    });
+
     await user.click(screen.getByRole('button', { name: 'RRG' }));
 
     await waitFor(() => {

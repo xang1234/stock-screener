@@ -19,7 +19,6 @@ from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.markets.catalog import get_market_catalog
-from app.domain.markets.key_markets import key_market_instruments
 from app.domain.scanning.default_filters import (
     DEFAULT_SCAN_FILTERS_BY_MARKET,
     DEFAULT_SCAN_FILTERS_FALLBACK,
@@ -41,6 +40,7 @@ from app.services.group_ranking_history import (
 from app.services.group_ranking_payloads import (
     compute_group_rankings_from_serialized_rows,
 )
+from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.preset_screens import (
     PRESET_SCREENS,
@@ -54,6 +54,10 @@ from app.services.static_groups_rrg_export import (
 from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
+)
+from app.services.snapshot_date_coherence import (
+    coherence_status,
+    latest_key_market_date,
 )
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
@@ -1189,30 +1193,55 @@ class StaticSiteExportService:
         breadth_payload: dict[str, Any],
         groups_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        key_markets = self._build_key_markets(market)
+        key_markets = build_key_market_entries(
+            db,
+            market,
+            as_of_date=latest_run.as_of_date,
+        )
         top_groups = (
             ((groups_payload.get("payload") or {}).get("rankings") or {}).get("rankings") or []
         )[:10]
 
         breadth_current = ((breadth_payload.get("payload") or {}).get("current")) or {}
+        exposure_payload = build_exposure_payload(db, market, as_of_date=latest_run.as_of_date)
+        exposure_date = (
+            exposure_payload.get("date")
+            if isinstance(exposure_payload, dict)
+            else None
+        )
+        snapshot_date = latest_run.as_of_date.isoformat()
+        breadth_date = breadth_current.get("date")
+        groups_date = (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date"))
+        key_markets_date = latest_key_market_date(key_markets)
 
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
-            "as_of_date": latest_run.as_of_date.isoformat(),
+            "as_of_date": snapshot_date,
             "market": market,
             "market_display_name": STATIC_MARKET_DISPLAY.get(market, market),
             "freshness": {
                 "scan_run_id": latest_run.id,
-                "scan_as_of_date": latest_run.as_of_date.isoformat(),
+                "scan_as_of_date": snapshot_date,
                 "scan_published_at": _coerce_datetime(latest_run.published_at),
-                "breadth_latest_date": breadth_current.get("date"),
-                "groups_latest_date": (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date")),
+                "snapshot_as_of_date": snapshot_date,
+                "market_timezone": get_market_catalog().get(market).display_timezone,
+                "breadth_latest_date": breadth_date,
+                "groups_latest_date": groups_date,
+                "exposure_latest_date": exposure_date,
+                "key_markets_latest_date": key_markets_date,
+                "date_coherence_status": coherence_status(
+                    anchor=latest_run.as_of_date,
+                    section_dates={
+                        "breadth": breadth_date,
+                        "groups": groups_date,
+                        "exposure": exposure_date,
+                        "key_markets": key_markets_date,
+                    },
+                ),
             },
             "key_markets": key_markets,
-            # Pin exposure to the published run's date so the section stays
-            # coherent with the rest of home.json (breadth/groups/scan).
-            "market_health_exposure": build_exposure_payload(db, market, as_of_date=latest_run.as_of_date),
+            "market_health_exposure": exposure_payload,
             "scan_summary": {
                 "run_id": latest_run.id,
                 "rows_total": scan_manifest.get("rows_total", 0),
@@ -1221,31 +1250,6 @@ class StaticSiteExportService:
             },
             "top_groups": top_groups,
         }
-
-    def _build_key_markets(self, market: str = STATIC_DEFAULT_MARKET) -> list[dict[str, Any]]:
-        # Reads the warmed price cache; the DB-backed equivalent used by the
-        # live Daily Snapshot endpoint is key_market_history.build_key_market_entries.
-        entries: list[dict[str, Any]] = []
-        for instrument in key_market_instruments(market):
-            history = self._get_symbol_price_history(instrument.data_symbol, period="6mo")
-            ordered = self._serialize_close_history(history, days=30)
-            latest = ordered[-1] if ordered else None
-            previous = ordered[-2] if len(ordered) > 1 else None
-            change_1d = None
-            if latest is not None and previous is not None and previous.get("close") not in (None, 0):
-                change_1d = round(((latest["close"] - previous["close"]) / previous["close"]) * 100, 2)
-            entries.append(
-                {
-                    "symbol": instrument.display_symbol,
-                    "display_name": instrument.display_name,
-                    "currency": instrument.currency,
-                    "latest_close": latest["close"] if latest is not None else None,
-                    "latest_date": latest["date"] if latest is not None else None,
-                    "change_1d": change_1d,
-                    "history": ordered,
-                }
-            )
-        return entries
 
     def _compute_group_rankings_from_rows(
         self,

@@ -588,7 +588,11 @@ function GroupRankingsPage() {
     isLoading: isLoadingMovers,
   } = useQuery({
     queryKey: ['groupMovers', selectedPeriod, selectedMarket, groupsAsOfDate],
-    queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket),
+    queryFn: () => (
+      groupsAsOfDate
+        ? getRankMovers(selectedPeriod, 10, selectedMarket, groupsAsOfDate)
+        : getRankMovers(selectedPeriod, 10, selectedMarket)
+    ),
     enabled: liveQueriesEnabled && !isRrgView,
     staleTime: 60_000,
   });

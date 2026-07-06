@@ -33,6 +33,7 @@ import { filterStaticScanRows, sortStaticScanRows } from '../scanClient';
 import DailyScanRowsTable from '../../components/shared/DailyScanRowsTable';
 import MarketHealthExposure from '../../components/MarketScan/MarketHealthExposure';
 import { buildFiltersFromPreset } from '../hooks/usePresetScreens';
+import { formatSnapshotFreshnessLabel } from '../../utils/snapshotFreshness';
 
 const EMPTY_RESULTS = [];
 const DEFAULT_TOP_RESULTS = 20;
@@ -190,7 +191,7 @@ function StaticHomePage() {
           color="text.secondary"
           sx={{ fontFamily: 'monospace', fontSize: '11px' }}
         >
-          {`Snapshot ${freshness.scan_as_of_date || '-'} · Breadth ${freshness.breadth_latest_date || '-'} · Groups ${freshness.groups_latest_date || '-'}`}
+          {formatSnapshotFreshnessLabel(freshness)}
         </Typography>
       </Box>
 

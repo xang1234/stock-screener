@@ -251,6 +251,21 @@ describe('StaticHomePage', () => {
     }));
   });
 
+  it('uses the shared snapshot freshness label', async () => {
+    homePayload.freshness = {
+      scan_as_of_date: '2026-06-12',
+      snapshot_as_of_date: null,
+      date_coherence_status: 'unanchored',
+    };
+
+    renderWithProviders(<StaticHomePage />);
+
+    expect(await screen.findByText(/Snapshot date unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/Scan 2026-06-12/)).toBeInTheDocument();
+    expect(screen.getByText(/unanchored/)).toBeInTheDocument();
+    expect(screen.queryByText(/As of 2026-06-12/)).not.toBeInTheDocument();
+  });
+
   it('keeps top candidate price sparklines within the compact table width', async () => {
     scanChunkPayload.rows[0].price_sparkline_data = [20, 22, 24];
     scanChunkPayload.rows[0].price_trend = 1;

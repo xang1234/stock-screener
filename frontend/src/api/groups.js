@@ -37,9 +37,14 @@ export const getGroupsBootstrap = async (market = 'US') => {
  * @param {number} limit - Number of movers per direction (default: 20)
  * @returns {Promise<Object>} Object with period, gainers, and losers arrays
  */
-export const getRankMovers = async (period = '1w', limit = 20, market = 'US') => {
+export const getRankMovers = async (period = '1w', limit = 20, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rankings/movers', {
-    params: { period, limit, market }
+    params: {
+      period,
+      limit,
+      market,
+      ...(asOfDate ? { as_of_date: asOfDate } : {}),
+    }
   });
   return response.data;
 };

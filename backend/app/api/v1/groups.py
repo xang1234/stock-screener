@@ -110,13 +110,25 @@ def _fetch_rankings_cached(
     )
 
 
-def _fetch_movers_cached(db: Session, *, market: str, period: str, limit: int) -> dict:
+def _fetch_movers_cached(
+    db: Session,
+    *,
+    market: str,
+    period: str,
+    limit: int,
+    as_of_date: date | None = None,
+) -> dict:
+    date_param = as_of_date.isoformat() if as_of_date else "latest"
     return cached_group_payload(
         market=market,
         name="movers",
-        params=f"period={period}:limit={limit}",
+        params=f"period={period}:limit={limit}:as_of={date_param}",
         compute=lambda: _get_group_rank_service().get_rank_movers(
-            db, period=period, limit=limit, market=market
+            db,
+            period=period,
+            limit=limit,
+            calculation_date=as_of_date,
+            market=market,
         ),
         should_cache=lambda v: bool(v.get("gainers") or v.get("losers")),
     )
@@ -403,6 +415,7 @@ async def get_rank_movers(
     period: str = Query("1w", pattern="^(1w|1m|3m|6m)$", description="Time period"),
     limit: int = Query(20, ge=1, le=50, description="Number of movers per direction"),
     market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
+    as_of_date: date | None = Query(None, description="Optional YYYY-MM-DD snapshot date"),
     db: Session = Depends(get_db)
 ):
     """
@@ -417,7 +430,11 @@ async def get_rank_movers(
     """
     normalized_market = _normalize_market_param(market)
     movers = _fetch_movers_cached(
-        db, market=normalized_market, period=period, limit=limit
+        db,
+        market=normalized_market,
+        period=period,
+        limit=limit,
+        as_of_date=as_of_date,
     )
 
     if not movers.get('gainers') and not movers.get('losers'):

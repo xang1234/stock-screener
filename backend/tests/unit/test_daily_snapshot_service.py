@@ -356,6 +356,17 @@ class TestScanFreshness:
 
 
 class TestDailySnapshotDateCoherence:
+    def test_coherence_status_flags_future_key_markets(self):
+        status = daily_snapshot_service._coherence_status(
+            anchor=date(2026, 6, 11),
+            breadth_date="2026-06-11",
+            groups_date="2026-06-11",
+            exposure_date="2026-06-11",
+            key_markets_date="2026-06-12",
+        )
+
+        assert status == "future_section_data"
+
     def test_payload_pins_latest_sections_to_scan_as_of_date(self, monkeypatch):
         class FakeBreadthQuery:
             def __init__(self):

@@ -27,6 +27,11 @@ from app.schemas.scanning import ScanResultItem
 from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.redis_pool import get_redis_client
+from app.services.snapshot_date_coherence import (
+    coherence_status,
+    iso_or_none,
+    latest_key_market_date,
+)
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
@@ -239,12 +244,11 @@ def _snapshot_anchor_date(scan: Scan | None) -> date | None:
 
 
 def _iso_or_none(value: date | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    return iso_or_none(value)
 
 
 def _latest_key_market_date(entries: list[dict[str, Any]]) -> str | None:
-    dates = [entry.get("latest_date") for entry in entries if entry.get("latest_date")]
-    return max(dates) if dates else None
+    return latest_key_market_date(entries)
 
 
 def _coherence_status(
@@ -253,20 +257,17 @@ def _coherence_status(
     breadth_date: str | None,
     groups_date: str | None,
     exposure_date: str | None,
+    key_markets_date: str | None,
 ) -> str:
-    if anchor is None:
-        return "unanchored"
-    expected = anchor.isoformat()
-    section_dates = {
-        "breadth": breadth_date,
-        "groups": groups_date,
-        "exposure": exposure_date,
-    }
-    if all(value == expected for value in section_dates.values()):
-        return "coherent"
-    if any(value and value > expected for value in section_dates.values()):
-        return "future_section_data"
-    return "partial"
+    return coherence_status(
+        anchor=anchor,
+        section_dates={
+            "breadth": breadth_date,
+            "groups": groups_date,
+            "exposure": exposure_date,
+            "key_markets": key_markets_date,
+        },
+    )
 
 
 def _query_scan_rows(
@@ -391,18 +392,20 @@ def build_daily_snapshot_payload(
         if isinstance(market_health_exposure, dict)
         else None
     )
+    key_markets_date = _latest_key_market_date(key_markets)
     freshness = _scan_freshness(scan)
     freshness["snapshot_as_of_date"] = anchor_iso
     freshness["market_timezone"] = get_market_catalog().get(normalized).display_timezone
     freshness["breadth_latest_date"] = breadth_date
     freshness["groups_latest_date"] = groups_date
     freshness["exposure_latest_date"] = exposure_date
-    freshness["key_markets_latest_date"] = _latest_key_market_date(key_markets)
+    freshness["key_markets_latest_date"] = key_markets_date
     freshness["date_coherence_status"] = _coherence_status(
         anchor=anchor_date,
         breadth_date=breadth_date,
         groups_date=groups_date,
         exposure_date=exposure_date,
+        key_markets_date=key_markets_date,
     )
 
     return {

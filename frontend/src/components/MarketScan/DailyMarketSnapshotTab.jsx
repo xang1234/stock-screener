@@ -31,6 +31,7 @@ import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/c
 import { useMarket } from '../../contexts/MarketContext';
 import { marketFlag } from '../../utils/marketFlags';
 import { formatLocalCurrency } from '../../utils/formatUtils';
+import { formatSnapshotFreshnessLabel } from '../../utils/snapshotFreshness';
 
 const EMPTY_ROWS = [];
 const DEFAULT_TOP_RESULTS = 20;
@@ -123,23 +124,7 @@ function DailyMarketSnapshotTab() {
 
   const flag = marketFlag(snapshot?.market);
   const marketDisplay = snapshot?.market_display_name || snapshot?.market || '';
-  const snapshotDate = freshness?.snapshot_as_of_date || freshness?.scan_as_of_date;
-  const sectionDates = [
-    ['Breadth', freshness?.breadth_latest_date],
-    ['Groups', freshness?.groups_latest_date],
-    ['Exposure', freshness?.exposure_latest_date],
-    ['Key markets', freshness?.key_markets_latest_date],
-  ].filter(([, value]) => value && value !== snapshotDate);
-  const freshnessLabel = snapshotDate
-    ? [
-      `As of ${snapshotDate}`,
-      freshness?.market_timezone,
-      freshness?.date_coherence_status && freshness.date_coherence_status !== 'coherent'
-        ? freshness.date_coherence_status
-        : null,
-      ...sectionDates.map(([label, value]) => `${label} ${value}`),
-    ].filter(Boolean).join(' · ')
-    : 'Snapshot date unavailable';
+  const freshnessLabel = formatSnapshotFreshnessLabel(freshness);
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', pr: 1 }}>
