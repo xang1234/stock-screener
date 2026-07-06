@@ -105,6 +105,42 @@ def _fake_benchmark_factory(df, symbol="SPY"):
     return _FakeBenchmarkCacheService
 
 
+def test_refresh_market_exposure_for_date_can_disable_benchmark_fallback(monkeypatch):
+    from app.database import SessionLocal
+
+    calls = []
+    df = _df(list(range(100, 350)), [1000] * 250)
+
+    class _FakeBenchmarkCacheService:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_benchmark_bundle(self, **kwargs):
+            calls.append(kwargs)
+            return _FakeBundle(df, "SPY")
+
+    monkeypatch.setattr(
+        "app.services.benchmark_cache_service.BenchmarkCacheService",
+        _FakeBenchmarkCacheService,
+    )
+
+    as_of = df.index[-1].date()
+    db = SessionLocal()
+    try:
+        result = refresh_market_exposure_for_date(
+            db,
+            "us",
+            as_of,
+            seed_history=False,
+            allow_benchmark_fallback=False,
+        )
+        assert "error" not in result
+        assert result["benchmark_symbol"] == "SPY"
+        assert calls == [{"market": "US", "period": "2y", "allow_fallback": False}]
+    finally:
+        db.close()
+
+
 def test_compute_and_store_round_trip_validates_against_schema(monkeypatch):
     from app.database import SessionLocal
     from app.models.market_exposure import MarketExposure

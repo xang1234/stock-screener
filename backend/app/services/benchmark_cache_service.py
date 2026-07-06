@@ -162,11 +162,13 @@ class BenchmarkCacheService:
         market: str = "US",
         period: str = "2y",
         force_refresh: bool = False,
+        allow_fallback: bool = True,
     ) -> Optional[BenchmarkDataBundle]:
         """Resolve benchmark data plus the selected candidate metadata."""
         normalized_market = self._normalize_market(market)
-        candidates = self.get_benchmark_candidates(normalized_market)
-        candidate_tuple = tuple(candidates)
+        all_candidates = self.get_benchmark_candidates(normalized_market)
+        candidates = all_candidates if allow_fallback else all_candidates[:1]
+        candidate_tuple = tuple(all_candidates)
         registry_entry = self._benchmark_registry.get_entry(normalized_market)
 
         # Pass 1: Prefer any cached candidate before triggering network fetches.

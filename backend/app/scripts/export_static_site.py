@@ -89,8 +89,14 @@ def _upsert_feature_run_pointer(*, pointer_key: str, run_id: int) -> None:
 def _compute_static_market_exposure(*, as_of_date: date, market: str) -> dict[str, Any]:
     from app.services.market_exposure_service import refresh_market_exposure_for_date
 
+    normalized_market = market.upper()
     with SessionLocal() as db:
-        return refresh_market_exposure_for_date(db, market, as_of_date)
+        return refresh_market_exposure_for_date(
+            db,
+            normalized_market,
+            as_of_date,
+            allow_benchmark_fallback=normalized_market != STATIC_DEFAULT_MARKET,
+        )
 
 
 def _snapshot_publishable(snapshot: dict[str, Any]) -> bool:
