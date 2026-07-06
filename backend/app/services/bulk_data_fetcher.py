@@ -690,7 +690,14 @@ class BulkDataFetcher:
         for symbol in symbols:
             try:
                 identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
-                price_data = service.daily_ohlcv_dataframe(identity.local_code, period=period)
+                local_code = str(identity.local_code or "").strip()
+                if not local_code.isdigit():
+                    results[symbol] = self._build_error_result(symbol, "Invalid CN local code")
+                    continue
+                price_data = service.daily_ohlcv_dataframe(
+                    identity.canonical_symbol,
+                    period=period,
+                )
                 if price_data is None or price_data.empty:
                     results[symbol] = self._build_error_result(symbol, "CN providers returned empty price data")
                     continue

@@ -548,6 +548,23 @@ def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():
     assert result.iloc[-1]["Close"] == 105.0
 
 
+def test_cn_market_data_service_skips_a_share_fetch_for_conflicting_sse_index_suffix():
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_a_hist(**kwargs):  # pragma: no cover - should not be called
+            raise AssertionError(f"CN index symbols must not hit A-share OHLCV: {kwargs}")
+
+    class FakeBaoStock:
+        def login(self):  # pragma: no cover - should not be called
+            raise AssertionError("BaoStock should not be queried for suffix-conflicting CN index symbols")
+
+    service = CnMarketDataService(akshare_module=FakeAkshare(), baostock_module=FakeBaoStock())
+
+    result = service.daily_ohlcv_dataframe("000001.SS", period="1mo", end=date(2026, 4, 30))
+
+    assert result is None
+
+
 def test_cn_market_data_service_wraps_akshare_ohlcv_fetch_in_timeout_helper(monkeypatch):
     frame = pd.DataFrame(
         [

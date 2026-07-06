@@ -106,6 +106,25 @@ def _exchange_for_code(local_code: str) -> str | None:
     return None
 
 
+def _explicit_exchange_for_symbol(value: Any) -> str | None:
+    token = str(value or "").strip().upper()
+    if token.endswith(".SS"):
+        return "SSE"
+    if token.endswith(".SZ"):
+        return "SZSE"
+    if token.endswith(".BJ"):
+        return "BJSE"
+    return None
+
+
+def _has_conflicting_cn_exchange_suffix(value: Any) -> bool:
+    explicit_exchange = _explicit_exchange_for_symbol(value)
+    if explicit_exchange is None:
+        return False
+    inferred_exchange = _exchange_for_code(_normalize_code(value))
+    return inferred_exchange is not None and inferred_exchange != explicit_exchange
+
+
 def _board_for_code(local_code: str, exchange: str) -> str:
     if exchange == "SSE" and local_code.startswith("688"):
         return "SSE_STAR"
@@ -518,8 +537,14 @@ class CnMarketDataService:
         end: date | str | None = None,
     ) -> list[CnDailyPriceRow]:
         """Return daily OHLCV rows from AKShare, with BaoStock fallback."""
+        if _has_conflicting_cn_exchange_suffix(local_code):
+            logger.info(
+                "Skipping CN A-share OHLCV for suffix-conflicting symbol %s",
+                local_code,
+            )
+            return []
         code = _normalize_code(local_code)
-        exchange = _exchange_for_code(code)
+        exchange = _explicit_exchange_for_symbol(local_code) or _exchange_for_code(code)
         has_baostock_fallback = exchange not in (None, "BJSE")
         start_token = _as_yyyymmdd(start)
         end_token = _as_yyyymmdd(end or date.today())

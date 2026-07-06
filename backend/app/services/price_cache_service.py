@@ -553,7 +553,10 @@ class PriceCacheService:
             local_code = str(identity.local_code or "").strip()
             if not local_code.isdigit():
                 return None
-            return CnMarketDataService().daily_ohlcv_dataframe(local_code, period=period)
+            return CnMarketDataService().daily_ohlcv_dataframe(
+                identity.canonical_symbol,
+                period=period,
+            )
         except Exception as exc:  # pragma: no cover - provider/network variability
             logger.warning("CN historical fetch failed for %s: %s", symbol, exc)
             return None
