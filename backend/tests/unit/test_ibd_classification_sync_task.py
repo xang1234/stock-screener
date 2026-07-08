@@ -16,8 +16,10 @@ class _FakeSyncService:
 
     def __init__(self, result: dict):
         self._result = result
+        self.calls = []
 
     def fetch_latest_bundle(self, **kwargs):
+        self.calls.append(kwargs)
         return self._result
 
 
@@ -83,6 +85,54 @@ def test_sync_unlinks_bundle_after_import(tmp_path, monkeypatch):
     )
 
     assert out["status"] == "success"
+    assert not bundle_file.exists()
+
+
+def test_sync_uses_and_cleans_auto_temp_download_dir(tmp_path, monkeypatch):
+    """The default runtime path is an OS temp dir, not .tmp under the app root."""
+    download_dir = tmp_path / "ibd-download"
+    bundle_file = download_dir / "ibd-classification-us.json.gz"
+
+    def _mkdtemp(prefix):
+        assert prefix == "ibd-classification-us-"
+        download_dir.mkdir()
+        bundle_file.write_bytes(b"gz")
+        return str(download_dir)
+
+    fake = _FakeSyncService({"status": "success", "bundle_path": str(bundle_file)})
+    monkeypatch.setattr(bundle.tempfile, "mkdtemp", _mkdtemp)
+    monkeypatch.setattr(bundle, "read_bundle", lambda _path: {"classifications": []})
+    monkeypatch.setattr(bundle, "import_classifications", lambda _db, _payload: {"inserted": 0})
+
+    out = bundle.sync_ibd_classification_from_github(
+        db=object(), market="US", github_sync_service=fake
+    )
+
+    assert out["status"] == "success"
+    assert fake.calls[0]["output_dir"] == download_dir
+    assert not download_dir.exists()
+
+
+def test_sync_preserves_caller_output_dir(tmp_path, monkeypatch):
+    """Explicit output_dir remains caller-owned and is not removed."""
+    output_dir = tmp_path / "caller-owned"
+    output_dir.mkdir()
+    bundle_file = output_dir / "ibd-classification-us.json.gz"
+    bundle_file.write_bytes(b"gz")
+    fake = _FakeSyncService({"status": "success", "bundle_path": str(bundle_file)})
+    monkeypatch.setattr(bundle, "read_bundle", lambda _path: {"classifications": []})
+    monkeypatch.setattr(bundle, "import_classifications", lambda _db, _payload: {"inserted": 0})
+
+    out = bundle.sync_ibd_classification_from_github(
+        db=object(),
+        market="US",
+        output_dir=str(output_dir),
+        github_sync_service=fake,
+    )
+
+    assert out["status"] == "success"
+    assert fake.calls[0]["output_dir"] == str(output_dir)
+    assert output_dir.exists()
     assert not bundle_file.exists()
 
 
