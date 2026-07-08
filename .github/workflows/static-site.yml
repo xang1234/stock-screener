@@ -19,6 +19,7 @@ on:
         options:
           - all
           - asia
+          - china
           - us
 
 concurrency:
@@ -50,6 +51,7 @@ jobs:
           MARKET_GROUP: ${{ github.event.inputs.market_group }}
         run: |
           ASIA='["HK","IN","JP","KR","TW","CN","SG","MY","AU"]'
+          CN_ONLY='["CN"]'
           US='["US","CA","DE"]'
           ALL='["US","HK","IN","JP","KR","TW","CN","CA","DE","SG","AU","MY"]'
 
@@ -61,6 +63,7 @@ jobs:
           else
             case "$MARKET_GROUP" in
               asia) markets="$ASIA" ;;
+              china) markets="$CN_ONLY" ;;
               us)   markets="$US" ;;
               *)    markets="$ALL" ;;
             esac
