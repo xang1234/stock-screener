@@ -58,6 +58,18 @@ def test_static_site_schedule_groups_partition_supported_markets():
     assert set(all_markets) == set(market_registry.supported_market_codes())
 
 
+def test_static_site_manual_dispatch_can_run_china_only():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(encoding="utf-8")
+    select_markets_job = content.split("  select-markets:\n", 1)[1].split(
+        "\n  ensure_daily_price_release:",
+        1,
+    )[0]
+
+    assert "          - china" in content
+    assert _static_site_market_group("CN_ONLY") == ["CN"]
+    assert 'china) markets="$CN_ONLY" ;;' in select_markets_job
+
+
 def test_static_workflow_legacy_weekly_reference_manifest_is_us_only():
     content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(encoding="utf-8")
 
