@@ -33,6 +33,43 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class BenchmarkCandidateStatus:
+    """Structured diagnostic for one benchmark candidate lookup attempt."""
+
+    symbol: str
+    role: str
+    source: "BenchmarkCandidateSource"
+    outcome: "BenchmarkCandidateOutcome"
+    latest_date: date | None
+
+    def as_diagnostic(self) -> dict[str, str | None]:
+        return {
+            "symbol": self.symbol,
+            "role": self.role,
+            "source": self.source.value,
+            "status": self.outcome.value,
+            "latest_date": self.latest_date.isoformat() if self.latest_date else None,
+        }
+
+
+class BenchmarkCandidateSource(str, Enum):
+    """Where a benchmark candidate came from."""
+
+    REDIS = "redis"
+    DATABASE = "database"
+    FETCH = "fetch"
+
+
+class BenchmarkCandidateOutcome(str, Enum):
+    """Outcome of inspecting a benchmark candidate."""
+
+    SELECTED = "selected"
+    EMPTY = "empty"
+    STALE_CACHE = "stale_cache"
+    STALE_REQUIRED_DATE = "stale_required_date"
+
+
+@dataclass(frozen=True)
 class BenchmarkDataBundle:
     """Resolved benchmark payload with selection metadata and OHLCV data."""
 
@@ -43,7 +80,39 @@ class BenchmarkDataBundle:
     benchmark_kind: str | None
     candidate_symbols: tuple[str, ...]
     data: pd.DataFrame
-    candidate_statuses: tuple[dict[str, str | None], ...] = ()
+    candidate_statuses: tuple[BenchmarkCandidateStatus, ...] = ()
+
+
+@dataclass(frozen=True)
+class BenchmarkResolution:
+    """Explicit result object for benchmark resolution attempts."""
+
+    bundle: BenchmarkDataBundle | None
+    candidate_statuses: tuple[BenchmarkCandidateStatus, ...] = ()
+    error: str | None = None
+
+    def candidate_diagnostics(self) -> list[dict[str, str | None]]:
+        return [status.as_diagnostic() for status in self.candidate_statuses]
+
+    def error_payload(self, *, market: str, as_of_date: date) -> dict:
+        payload = {
+            "error": self.error or "no_benchmark_data",
+            "market": market,
+            "date": as_of_date.isoformat(),
+        }
+        diagnostics = self.candidate_diagnostics()
+        if diagnostics:
+            payload["benchmark_candidates"] = diagnostics
+        return payload
+
+
+@dataclass(frozen=True)
+class _BenchmarkResolutionContext:
+    normalized_market: str
+    period: str
+    registry_entry: Any
+    candidate_symbols: tuple[str, ...]
+    required_as_of_date: date | None
 
 
 class BenchmarkFallbackPolicy(str, Enum):
@@ -95,7 +164,6 @@ class BenchmarkCacheService:
                 logger.info("Redis disabled for this runtime. Using database fallback.")
         self._market_calendar = MarketCalendarService()
         self._benchmark_registry = benchmark_registry
-        self.last_candidate_statuses: tuple[dict[str, str | None], ...] = ()
 
     def _normalize_market(self, market: str | None) -> str:
         return self._benchmark_registry.normalize_market(market)
@@ -178,251 +246,355 @@ class BenchmarkCacheService:
         required_as_of_date: date | None = None,
     ) -> Optional[BenchmarkDataBundle]:
         """Resolve benchmark data plus the selected candidate metadata."""
+        return self.resolve_benchmark_bundle(
+            market=market,
+            period=period,
+            force_refresh=force_refresh,
+            fallback_policy=fallback_policy,
+            required_as_of_date=required_as_of_date,
+        ).bundle
+
+    def resolve_benchmark_bundle(
+        self,
+        market: str = "US",
+        period: str = "2y",
+        force_refresh: bool = False,
+        fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
+        required_as_of_date: date | None = None,
+    ) -> BenchmarkResolution:
+        """Resolve benchmark data and return selection diagnostics explicitly."""
         normalized_market = self._normalize_market(market)
-        all_candidates = self.get_benchmark_candidates(normalized_market)
-        normalized_policy = BenchmarkFallbackPolicy(fallback_policy)
-        candidates = (
-            all_candidates
-            if normalized_policy == BenchmarkFallbackPolicy.ALLOW
-            else all_candidates[:1]
+        candidates = self._candidate_symbols_for_policy(normalized_market, fallback_policy)
+        context = _BenchmarkResolutionContext(
+            normalized_market=normalized_market,
+            period=period,
+            registry_entry=self._benchmark_registry.get_entry(normalized_market),
+            candidate_symbols=tuple(candidates),
+            required_as_of_date=required_as_of_date,
         )
-        candidate_tuple = tuple(candidates)
-        registry_entry = self._benchmark_registry.get_entry(normalized_market)
-        candidate_statuses: list[dict[str, str | None]] = []
-        self.last_candidate_statuses = ()
+        candidate_statuses: list[BenchmarkCandidateStatus] = []
 
-        def status_for(
-            *,
-            benchmark_symbol: str,
-            role: str,
-            source: str,
-            status: str,
-            data: pd.DataFrame | None,
-        ) -> dict[str, str | None]:
-            latest_date = self._latest_data_date(data, as_of_date=required_as_of_date)
-            return {
-                "symbol": benchmark_symbol,
-                "role": role,
-                "source": source,
-                "status": status,
-                "latest_date": latest_date.isoformat() if latest_date else None,
-            }
-
-        def data_meets_required_date(data: pd.DataFrame | None) -> bool:
-            if required_as_of_date is None:
-                return True
-            return self._latest_data_date(data, as_of_date=required_as_of_date) == required_as_of_date
-
-        def bundle_for(
-            *,
-            benchmark_symbol: str,
-            role: str,
-            data: pd.DataFrame,
-        ) -> BenchmarkDataBundle:
-            statuses = tuple(candidate_statuses)
-            self.last_candidate_statuses = statuses
-            return BenchmarkDataBundle(
-                market=normalized_market,
-                period=period,
-                benchmark_symbol=benchmark_symbol,
-                benchmark_role=role,
-                benchmark_kind=(
-                    registry_entry.primary_kind
-                    if role == "primary"
-                    else registry_entry.fallback_kind
-                ),
-                candidate_symbols=candidate_tuple,
-                data=data,
-                candidate_statuses=statuses,
+        if not force_refresh:
+            bundle = self._resolve_cached_candidates(
+                context=context,
+                candidate_statuses=candidate_statuses,
             )
+            if bundle is not None:
+                return self._resolution_for_bundle(bundle)
 
-        def candidate_bundle_if_usable(
-            *,
-            benchmark_symbol: str,
-            role: str,
-            source: str,
-            data: pd.DataFrame | None,
-        ) -> BenchmarkDataBundle | None:
-            if data is None or data.empty:
-                candidate_statuses.append(
-                    status_for(
-                        benchmark_symbol=benchmark_symbol,
-                        role=role,
-                        source=source,
-                        status="empty",
-                        data=data,
-                    )
-                )
-                return None
-            if not data_meets_required_date(data):
-                candidate_statuses.append(
-                    status_for(
-                        benchmark_symbol=benchmark_symbol,
-                        role=role,
-                        source=source,
-                        status="stale_required_date",
-                        data=data,
-                    )
-                )
-                logger.info(
-                    "%s %s benchmark %s (%s, %s) but latest eligible date is not %s",
-                    "Fetched" if source == "fetch" else "Cache HIT for",
-                    normalized_market,
-                    benchmark_symbol,
-                    period,
-                    role,
-                    required_as_of_date,
-                )
-                return None
-            candidate_statuses.append(
-                status_for(
+        bundle = self._resolve_fetched_candidates(
+            context=context,
+            candidate_statuses=candidate_statuses,
+            force_refresh=force_refresh,
+        )
+        if bundle is not None:
+            return self._resolution_for_bundle(bundle)
+
+        return self._missing_benchmark_resolution(context, candidate_statuses)
+
+    @staticmethod
+    def _resolution_for_bundle(bundle: BenchmarkDataBundle) -> BenchmarkResolution:
+        return BenchmarkResolution(
+            bundle=bundle,
+            candidate_statuses=bundle.candidate_statuses,
+        )
+
+    def _missing_benchmark_resolution(
+        self,
+        context: _BenchmarkResolutionContext,
+        candidate_statuses: list[BenchmarkCandidateStatus],
+    ) -> BenchmarkResolution:
+        logger.warning(
+            "No benchmark candidate produced data for market=%s period=%s",
+            context.normalized_market,
+            context.period,
+        )
+        statuses = tuple(candidate_statuses)
+        error = (
+            "benchmark_not_current"
+            if any(status.outcome == BenchmarkCandidateOutcome.STALE_REQUIRED_DATE for status in statuses)
+            else "no_benchmark_data"
+        )
+        return BenchmarkResolution(bundle=None, candidate_statuses=statuses, error=error)
+
+    def _resolve_cached_candidates(
+        self,
+        *,
+        context: _BenchmarkResolutionContext,
+        candidate_statuses: list[BenchmarkCandidateStatus],
+    ) -> BenchmarkDataBundle | None:
+        for idx, benchmark_symbol in enumerate(context.candidate_symbols):
+            role = self._candidate_role(idx)
+            for source in (BenchmarkCandidateSource.REDIS, BenchmarkCandidateSource.DATABASE):
+                bundle = self._resolve_cached_candidate(
+                    context=context,
                     benchmark_symbol=benchmark_symbol,
                     role=role,
                     source=source,
-                    status="selected",
-                    data=data,
-                )
-            )
-            return bundle_for(
-                benchmark_symbol=benchmark_symbol,
-                role=role,
-                data=data,
-            )
-
-        # Pass 1: Prefer any cached candidate before triggering network fetches.
-        if not force_refresh:
-            for idx, benchmark_symbol in enumerate(candidates):
-                role = "primary" if idx == 0 else "fallback"
-                cached_data = self._get_from_redis(
-                    benchmark_symbol=benchmark_symbol,
-                    period=period,
-                    market=normalized_market,
-                )
-                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
-                    bundle = candidate_bundle_if_usable(
-                        benchmark_symbol=benchmark_symbol,
-                        role=role,
-                        source="redis",
-                        data=cached_data,
-                    )
-                    if bundle is None:
-                        continue
-                    logger.info(
-                        "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
-                        normalized_market,
-                        benchmark_symbol,
-                        period,
-                        role,
-                    )
-                    return bundle
-                if cached_data is not None:
-                    candidate_statuses.append(
-                        status_for(
-                            benchmark_symbol=benchmark_symbol,
-                            role=role,
-                            source="redis",
-                            status="stale_cache",
-                            data=cached_data,
-                        )
-                    )
-                    logger.info(
-                        "Cache STALE for %s benchmark %s (%s, %s) (Redis)",
-                        normalized_market,
-                        benchmark_symbol,
-                        period,
-                        role,
-                    )
-
-                cached_data = self._get_from_database(
-                    benchmark_symbol=benchmark_symbol,
-                    period=period,
-                    market=normalized_market,
-                )
-                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
-                    bundle = candidate_bundle_if_usable(
-                        benchmark_symbol=benchmark_symbol,
-                        role=role,
-                        source="database",
-                        data=cached_data,
-                    )
-                    if bundle is None:
-                        continue
-                    logger.info(
-                        "Cache HIT for %s benchmark %s (%s, %s) (Database)",
-                        normalized_market,
-                        benchmark_symbol,
-                        period,
-                        role,
-                    )
-                    self._store_in_redis(
-                        benchmark_symbol=benchmark_symbol,
-                        period=period,
-                        data=cached_data,
-                        market=normalized_market,
-                    )
-                    return bundle
-                if cached_data is not None:
-                    candidate_statuses.append(
-                        status_for(
-                            benchmark_symbol=benchmark_symbol,
-                            role=role,
-                            source="database",
-                            status="stale_cache",
-                            data=cached_data,
-                        )
-                    )
-
-        # Pass 2: Fetch candidates in deterministic order.
-        for idx, benchmark_symbol in enumerate(candidates):
-            role = "primary" if idx == 0 else "fallback"
-            if force_refresh:
-                logger.info(
-                    "Force refresh requested for %s benchmark %s (%s, %s)",
-                    normalized_market,
-                    benchmark_symbol,
-                    period,
-                    role,
-                )
-                fetched = self._fetch_and_cache_benchmark(
-                    benchmark_symbol=benchmark_symbol,
-                        market=normalized_market,
-                        period=period,
-                    )
-                bundle = candidate_bundle_if_usable(
-                    benchmark_symbol=benchmark_symbol,
-                    role=role,
-                    source="fetch",
-                    data=fetched,
+                    candidate_statuses=candidate_statuses,
                 )
                 if bundle is not None:
                     return bundle
-                continue
+                if self._should_skip_remaining_cache_sources(
+                    candidate_statuses,
+                    benchmark_symbol=benchmark_symbol,
+                    source=source,
+                ):
+                    break
+        return None
 
-            # Cache MISS - attempt fetch for this candidate
+    def _resolve_cached_candidate(
+        self,
+        *,
+        context: _BenchmarkResolutionContext,
+        benchmark_symbol: str,
+        role: str,
+        source: BenchmarkCandidateSource,
+        candidate_statuses: list[BenchmarkCandidateStatus],
+    ) -> BenchmarkDataBundle | None:
+        cached_data = self._get_cached_candidate(
+            source=source,
+            benchmark_symbol=benchmark_symbol,
+            context=context,
+        )
+        if cached_data is None:
+            return None
+        if not self._is_data_fresh(cached_data, market=context.normalized_market):
+            candidate_statuses.append(
+                self._candidate_status(
+                    benchmark_symbol=benchmark_symbol,
+                    role=role,
+                    source=source,
+                    outcome=BenchmarkCandidateOutcome.STALE_CACHE,
+                    data=cached_data,
+                    required_as_of_date=context.required_as_of_date,
+                )
+            )
             logger.info(
-                "Cache MISS for %s benchmark %s (%s, %s) - fetching from yfinance",
-                normalized_market,
+                "Cache STALE for %s benchmark %s (%s, %s) (%s)",
+                context.normalized_market,
                 benchmark_symbol,
-                period,
+                context.period,
+                role,
+                source.value.capitalize(),
+            )
+            return None
+
+        bundle = self._candidate_bundle_if_usable(
+            benchmark_symbol=benchmark_symbol,
+            role=role,
+            source=source,
+            data=cached_data,
+            context=context,
+            candidate_statuses=candidate_statuses,
+        )
+        if bundle is None:
+            return None
+        logger.info(
+            "Cache HIT for %s benchmark %s (%s, %s) (%s)",
+            context.normalized_market,
+            benchmark_symbol,
+            context.period,
+            role,
+            source.value.capitalize(),
+        )
+        if source == BenchmarkCandidateSource.DATABASE:
+            self._store_in_redis(
+                benchmark_symbol=benchmark_symbol,
+                period=context.period,
+                data=cached_data,
+                market=context.normalized_market,
+            )
+        return bundle
+
+    def _resolve_fetched_candidates(
+        self,
+        *,
+        context: _BenchmarkResolutionContext,
+        candidate_statuses: list[BenchmarkCandidateStatus],
+        force_refresh: bool,
+    ) -> BenchmarkDataBundle | None:
+        for idx, benchmark_symbol in enumerate(context.candidate_symbols):
+            role = self._candidate_role(idx)
+            logger.info(
+                self._fetch_log_message(force_refresh),
+                context.normalized_market,
+                benchmark_symbol,
+                context.period,
                 role,
             )
             fetched = self._fetch_and_cache_benchmark(
                 benchmark_symbol=benchmark_symbol,
-                market=normalized_market,
-                period=period,
+                market=context.normalized_market,
+                period=context.period,
             )
-            bundle = candidate_bundle_if_usable(
+            bundle = self._candidate_bundle_if_usable(
                 benchmark_symbol=benchmark_symbol,
                 role=role,
-                source="fetch",
+                source=BenchmarkCandidateSource.FETCH,
                 data=fetched,
+                context=context,
+                candidate_statuses=candidate_statuses,
             )
             if bundle is not None:
                 return bundle
-
-        logger.warning("No benchmark candidate produced data for market=%s period=%s", normalized_market, period)
-        self.last_candidate_statuses = tuple(candidate_statuses)
         return None
+
+    @staticmethod
+    def _fetch_log_message(force_refresh: bool) -> str:
+        if force_refresh:
+            return "Force refresh requested for %s benchmark %s (%s, %s)"
+        return "Cache MISS for %s benchmark %s (%s, %s) - fetching from yfinance"
+
+    def _get_cached_candidate(
+        self,
+        *,
+        source: BenchmarkCandidateSource,
+        benchmark_symbol: str,
+        context: _BenchmarkResolutionContext,
+    ) -> pd.DataFrame | None:
+        if source == BenchmarkCandidateSource.REDIS:
+            return self._get_from_redis(
+                benchmark_symbol=benchmark_symbol,
+                period=context.period,
+                market=context.normalized_market,
+            )
+        return self._get_from_database(
+            benchmark_symbol=benchmark_symbol,
+            period=context.period,
+            market=context.normalized_market,
+        )
+
+    @staticmethod
+    def _should_skip_remaining_cache_sources(
+        candidate_statuses: list[BenchmarkCandidateStatus],
+        *,
+        benchmark_symbol: str,
+        source: BenchmarkCandidateSource,
+    ) -> bool:
+        if source != BenchmarkCandidateSource.REDIS or not candidate_statuses:
+            return False
+        latest_status = candidate_statuses[-1]
+        return (
+            latest_status.symbol == benchmark_symbol
+            and latest_status.source == source
+            and latest_status.outcome == BenchmarkCandidateOutcome.STALE_REQUIRED_DATE
+        )
+
+    def _candidate_symbols_for_policy(
+        self,
+        market: str,
+        fallback_policy: BenchmarkFallbackPolicy,
+    ) -> tuple[str, ...]:
+        all_candidates = self.get_benchmark_candidates(market)
+        normalized_policy = BenchmarkFallbackPolicy(fallback_policy)
+        if normalized_policy == BenchmarkFallbackPolicy.ALLOW:
+            return tuple(all_candidates)
+        return tuple(all_candidates[:1])
+
+    @staticmethod
+    def _candidate_role(index: int) -> str:
+        return "primary" if index == 0 else "fallback"
+
+    def _candidate_status(
+        self,
+        *,
+        benchmark_symbol: str,
+        role: str,
+        source: BenchmarkCandidateSource,
+        outcome: BenchmarkCandidateOutcome,
+        data: pd.DataFrame | None,
+        required_as_of_date: date | None,
+    ) -> BenchmarkCandidateStatus:
+        return BenchmarkCandidateStatus(
+            symbol=benchmark_symbol,
+            role=role,
+            source=source,
+            outcome=outcome,
+            latest_date=self._latest_data_date(data, as_of_date=required_as_of_date),
+        )
+
+    def _candidate_bundle_if_usable(
+        self,
+        *,
+        benchmark_symbol: str,
+        role: str,
+        source: BenchmarkCandidateSource,
+        data: pd.DataFrame | None,
+        context: _BenchmarkResolutionContext,
+        candidate_statuses: list[BenchmarkCandidateStatus],
+    ) -> BenchmarkDataBundle | None:
+        if data is None or data.empty:
+            candidate_statuses.append(
+                self._candidate_status(
+                    benchmark_symbol=benchmark_symbol,
+                    role=role,
+                    source=source,
+                    outcome=BenchmarkCandidateOutcome.EMPTY,
+                    data=data,
+                    required_as_of_date=context.required_as_of_date,
+                )
+            )
+            return None
+        if not self._data_meets_required_date(
+            data,
+            required_as_of_date=context.required_as_of_date,
+        ):
+            candidate_statuses.append(
+                self._candidate_status(
+                    benchmark_symbol=benchmark_symbol,
+                    role=role,
+                    source=source,
+                    outcome=BenchmarkCandidateOutcome.STALE_REQUIRED_DATE,
+                    data=data,
+                    required_as_of_date=context.required_as_of_date,
+                )
+            )
+            logger.info(
+                "%s %s benchmark %s (%s, %s) but latest eligible date is not %s",
+                "Fetched" if source == BenchmarkCandidateSource.FETCH else "Cache HIT for",
+                context.normalized_market,
+                benchmark_symbol,
+                context.period,
+                role,
+                context.required_as_of_date,
+            )
+            return None
+
+        candidate_statuses.append(
+            self._candidate_status(
+                benchmark_symbol=benchmark_symbol,
+                role=role,
+                source=source,
+                outcome=BenchmarkCandidateOutcome.SELECTED,
+                data=data,
+                required_as_of_date=context.required_as_of_date,
+            )
+        )
+        return BenchmarkDataBundle(
+            market=context.normalized_market,
+            period=context.period,
+            benchmark_symbol=benchmark_symbol,
+            benchmark_role=role,
+            benchmark_kind=(
+                context.registry_entry.primary_kind
+                if role == "primary"
+                else context.registry_entry.fallback_kind
+            ),
+            candidate_symbols=context.candidate_symbols,
+            data=data,
+            candidate_statuses=tuple(candidate_statuses),
+        )
+
+    def _data_meets_required_date(
+        self,
+        data: pd.DataFrame | None,
+        *,
+        required_as_of_date: date | None,
+    ) -> bool:
+        if required_as_of_date is None:
+            return True
+        return self._latest_data_date(data, as_of_date=required_as_of_date) == required_as_of_date
 
     @staticmethod
     def _latest_data_date(data: pd.DataFrame | None, *, as_of_date: date | None = None) -> date | None:

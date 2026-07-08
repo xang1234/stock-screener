@@ -302,22 +302,15 @@ def compute_exposure(
     from .benchmark_cache_service import BenchmarkCacheService
 
     benchmark_service = BenchmarkCacheService()
-    bundle = benchmark_service.get_benchmark_bundle(
+    resolution = benchmark_service.resolve_benchmark_bundle(
         market=market,
         period="2y",
         fallback_policy=benchmark_fallback_policy,
         required_as_of_date=as_of_date,
     )
+    bundle = resolution.bundle
     if bundle is None or bundle.data is None or bundle.data.empty:
-        candidate_statuses = list(getattr(benchmark_service, "last_candidate_statuses", ()))
-        if any(status.get("status") == "stale_required_date" for status in candidate_statuses):
-            return {
-                "error": "benchmark_not_current",
-                "market": market,
-                "date": as_of_date.isoformat(),
-                "benchmark_candidates": candidate_statuses,
-            }
-        return {"error": "no_benchmark_data", "market": market, "date": as_of_date.isoformat()}
+        return resolution.error_payload(market=market, as_of_date=as_of_date)
 
     # Slice "as of" — tz-agnostic date mask (handles naive + tz-aware indexes).
     df = bundle.data[bundle.data.index.date <= as_of_date]
@@ -333,7 +326,9 @@ def compute_exposure(
             "date": as_of_date.isoformat(),
             "benchmark_symbol": bundle.benchmark_symbol,
             "benchmark_latest_date": df.index[-1].date().isoformat(),
-            "benchmark_candidates": list(bundle.candidate_statuses),
+            "benchmark_candidates": [
+                status.as_diagnostic() for status in bundle.candidate_statuses
+            ],
         }
 
     trend = compute_trend(df)

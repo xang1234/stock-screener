@@ -281,6 +281,23 @@ jobs:
         id: export-market
         run: |
           cd backend
+          json_reason() {
+            if [ "$1" = "null" ]; then
+              printf 'null'
+            else
+              printf '"%s"' "$1"
+            fi
+          }
+          write_market_status() {
+            has_current_artifact="$1"
+            status_value="$2"
+            reason_value="$3"
+            reason_json="$(json_reason "$reason_value")"
+            mkdir -p "/tmp/static-data/status/${{ env.MARKET_LOWER }}"
+            cat > "/tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json" <<JSON
+          {"market":"${{ matrix.market }}","has_current_artifact":${has_current_artifact},"status":"${status_value}","reason":${reason_json}}
+          JSON
+          }
           set +e
           python -m app.scripts.export_static_site \
             --output-dir /tmp/static-data \
@@ -293,18 +310,30 @@ jobs:
           set -e
           if [ "$status" -eq 78 ]; then
             echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
+            write_market_status false skipped 'not_trading_day'
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -eq 79 ]; then
             echo "Market ${{ matrix.market }} produced diagnostics but no current market artifact will be uploaded; combine will use fallback artifacts if available."
+            write_market_status false failed 'no_current_artifact'
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -ne 0 ]; then
+            write_market_status false failed 'export_failed'
             exit "$status"
           fi
+          write_market_status true published null
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload market status
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-market-status-${{ matrix.market }}
+          path: /tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json
+          if-no-files-found: error
 
       - name: Upload market diagnostics
         if: ${{ always() }}
@@ -441,7 +470,10 @@ jobs:
               prefix = "static-market-"
               if not artifact_name.startswith(prefix):
                   return ""
-              return artifact_name[len(prefix):].upper()
+              market = artifact_name[len(prefix):].upper()
+              if "-" in market:
+                  return ""
+              return market
 
           def extract_runs(payload):
               if isinstance(payload, dict):
@@ -649,104 +681,10 @@ jobs:
         run: |
           mkdir -p /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback
           cd backend
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          from app.domain.markets import market_registry
-
-          # Every scheduled run builds only one market group; the rest must be
-          # back-filled from a previous run's artifacts. Publishing is all-or-
-          # nothing: refuse to deploy unless every supported market is present
-          # across current + fallback artifacts, so a partial group run (or a
-          # failed fallback download) can never ship an incomplete static site.
-          expected = {code.upper() for code in market_registry.supported_market_codes()}
-          current_dir = Path("/tmp/static-market-artifacts-current")
-          fallback_dir = Path("/tmp/static-market-artifacts-fallback")
-
-          def parse_selected_markets():
-              raw = os.environ.get("SELECTED_MARKETS", "[]")
-              try:
-                  payload = json.loads(raw)
-              except json.JSONDecodeError as exc:
-                  print(f"::warning::Could not parse SELECTED_MARKETS={raw!r}: {exc}", flush=True)
-                  return set()
-              if not isinstance(payload, list):
-                  print(f"::warning::SELECTED_MARKETS is not a JSON array: {raw!r}", flush=True)
-                  return set()
-              return {str(market).upper() for market in payload if str(market).strip()}
-
-          def collect_markets(base):
-              markets = set()
-              for manifest in Path(base).rglob("manifest.market.json"):
-                  try:
-                      market = str(
-                          json.loads(manifest.read_text(encoding="utf-8")).get("market", "")
-                      ).upper()
-                  except (OSError, json.JSONDecodeError, TypeError) as exc:
-                      print(f"::warning::Could not read {manifest}: {exc}", flush=True)
-                      continue
-                  if market:
-                      markets.add(market)
-              return markets
-
-          def collect_failed_current_diagnostics():
-              failed = {}
-              for diagnostic in current_dir.rglob("snapshot-failure.json"):
-                  try:
-                      payload = json.loads(diagnostic.read_text(encoding="utf-8"))
-                  except (OSError, json.JSONDecodeError, TypeError) as exc:
-                      print(f"::warning::Could not read {diagnostic}: {exc}", flush=True)
-                      continue
-                  if not isinstance(payload, dict):
-                      continue
-                  market = str(payload.get("market", "")).upper()
-                  if not market:
-                      continue
-                  reason = str(payload.get("reason", "")).lower()
-                  status = str(payload.get("status", "")).lower()
-                  if reason == "not_trading_day":
-                      continue
-                  if status in {"errored", "error", "failed"} or reason:
-                      failed[market] = payload
-              return failed
-
-          selected = parse_selected_markets()
-          current_markets = collect_markets(current_dir)
-          fallback_markets = collect_markets(fallback_dir)
-          present = current_markets | fallback_markets
-          failed_current_markets = collect_failed_current_diagnostics()
-
-          print(f"Expected markets: {', '.join(sorted(expected))}")
-          print(f"Present markets:  {', '.join(sorted(present)) or '(none)'}")
-          if selected:
-              print(f"Selected markets: {', '.join(sorted(selected))}")
-
-          missing = sorted(expected - present)
-          if missing:
-              print(
-                  "::error::Refusing to publish an incomplete static site. No current "
-                  f"build and no fallback artifact for: {', '.join(missing)}.",
-                  flush=True,
-              )
-              sys.exit(1)
-          selected_failed_without_current = sorted(
-              market
-              for market in selected
-              if market not in current_markets and market in failed_current_markets
-          )
-          if selected_failed_without_current:
-              print(
-                  "::error::Refusing to publish stale fallback data for a market "
-                  "that failed in this run. Selected markets missing current artifacts: "
-                  f"{', '.join(selected_failed_without_current)}.",
-                  flush=True,
-              )
-              sys.exit(1)
-          print("All supported markets present; static site is complete.")
-          PY
+          python -m app.scripts.validate_static_market_artifacts \
+            --current-dir /tmp/static-market-artifacts-current \
+            --fallback-dir /tmp/static-market-artifacts-fallback \
+            --selected-markets "${SELECTED_MARKETS}"
 
       - name: Combine static data bundle
         run: |
