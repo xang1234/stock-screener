@@ -111,11 +111,10 @@ def test_static_site_uploads_canonical_market_status_after_export() -> None:
         1,
     )[0]
 
-    assert "/tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json" in export_step
-    assert "write_market_status false skipped 'not_trading_day'" in export_step
-    assert "write_market_status false failed 'no_current_artifact'" in export_step
-    assert "write_market_status false failed 'export_failed'" in export_step
-    assert "write_market_status true published null" in export_step
+    assert "python -m app.scripts.export_static_market_artifact" in export_step
+    assert "write_market_status" not in export_step
+    assert "json_reason" not in export_step
+    assert "cat >" not in export_step
     assert "if: ${{ always() }}" in status_step
     assert "uses: actions/upload-artifact@v4" in status_step
     assert "name: static-market-status-${{ matrix.market }}" in status_step

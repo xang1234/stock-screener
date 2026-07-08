@@ -281,25 +281,8 @@ jobs:
         id: export-market
         run: |
           cd backend
-          json_reason() {
-            if [ "$1" = "null" ]; then
-              printf 'null'
-            else
-              printf '"%s"' "$1"
-            fi
-          }
-          write_market_status() {
-            has_current_artifact="$1"
-            status_value="$2"
-            reason_value="$3"
-            reason_json="$(json_reason "$reason_value")"
-            mkdir -p "/tmp/static-data/status/${{ env.MARKET_LOWER }}"
-            cat > "/tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json" <<JSON
-          {"market":"${{ matrix.market }}","has_current_artifact":${has_current_artifact},"status":"${status_value}","reason":${reason_json}}
-          JSON
-          }
           set +e
-          python -m app.scripts.export_static_site \
+          python -m app.scripts.export_static_market_artifact \
             --output-dir /tmp/static-data \
             --refresh-daily \
             --build-mode price_delta \
@@ -310,21 +293,17 @@ jobs:
           set -e
           if [ "$status" -eq 78 ]; then
             echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
-            write_market_status false skipped 'not_trading_day'
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -eq 79 ]; then
             echo "Market ${{ matrix.market }} produced diagnostics but no current market artifact will be uploaded; combine will use fallback artifacts if available."
-            write_market_status false failed 'no_current_artifact'
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -ne 0 ]; then
-            write_market_status false failed 'export_failed'
             exit "$status"
           fi
-          write_market_status true published null
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload market status

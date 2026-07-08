@@ -43,6 +43,15 @@ def _write_market_status(
     )
 
 
+def _write_raw_market_status(base: Path, market: str, payload: object) -> None:
+    status_dir = base / f"static-market-status-{market}"
+    status_dir.mkdir(parents=True)
+    (status_dir / "status.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+
 def test_static_market_validator_rejects_failed_selected_market_fallback(tmp_path: Path) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
@@ -108,3 +117,58 @@ def test_static_market_validator_rejects_selected_market_fallback_without_status
 
     assert "Selected markets missing current artifacts: CN" in str(exc_info.value)
     assert "missing status artifact" in str(exc_info.value)
+
+
+def test_static_market_validator_rejects_string_boolean_status_contract(tmp_path: Path) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+    _write_market_manifest(fallback_dir, "static-market-CN", "CN")
+    _write_raw_market_status(
+        current_dir,
+        "CN",
+        {
+            "market": "CN",
+            "has_current_artifact": "false",
+            "status": "skipped",
+            "reason": "not_trading_day",
+        },
+    )
+
+    with pytest.raises(StaticMarketArtifactValidationError) as exc_info:
+        validate_market_artifacts(
+            current_dir=current_dir,
+            fallback_dir=fallback_dir,
+            selected_markets={"CN"},
+            expected_markets={"US", "CN"},
+        )
+
+    assert "static-market-status-CN/status.json" in str(exc_info.value)
+    assert "has_current_artifact must be a boolean" in str(exc_info.value)
+
+
+def test_static_market_validator_rejects_unknown_status_values(tmp_path: Path) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+    _write_market_manifest(fallback_dir, "static-market-CN", "CN")
+    _write_raw_market_status(
+        current_dir,
+        "CN",
+        {
+            "market": "CN",
+            "has_current_artifact": False,
+            "status": "maybe",
+            "reason": "not_trading_day",
+        },
+    )
+
+    with pytest.raises(StaticMarketArtifactValidationError) as exc_info:
+        validate_market_artifacts(
+            current_dir=current_dir,
+            fallback_dir=fallback_dir,
+            selected_markets={"CN"},
+            expected_markets={"US", "CN"},
+        )
+
+    assert "status must be one of" in str(exc_info.value)

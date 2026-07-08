@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import date, datetime
+from pathlib import Path
 
 from app.services.benchmark_cache_service import (
     BenchmarkCacheService,
@@ -8,6 +9,12 @@ from app.services.benchmark_cache_service import (
     BenchmarkFallbackPolicy,
 )
 import app.services.benchmark_cache_service as benchmark_cache_module
+
+
+def test_benchmark_cache_service_stays_below_giant_file_threshold():
+    service_path = Path(benchmark_cache_module.__file__)
+
+    assert len(service_path.read_text(encoding="utf-8").splitlines()) < 1_000
 
 
 def _ohlcv_frame(closes: list[float], days: list[str]) -> pd.DataFrame:

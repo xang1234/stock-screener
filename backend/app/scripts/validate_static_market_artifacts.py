@@ -14,6 +14,16 @@ class StaticMarketArtifactValidationError(RuntimeError):
     """Raised when static market artifacts are not safe to publish."""
 
 
+_VALID_STATUS_VALUES = frozenset({"published", "skipped", "failed"})
+_VALID_REASON_VALUES = frozenset(
+    {
+        "not_trading_day",
+        "no_current_artifact",
+        "export_failed",
+    }
+)
+
+
 @dataclass(frozen=True)
 class MarketArtifactStatus:
     """Canonical per-market outcome from the current build-market job."""
@@ -24,18 +34,51 @@ class MarketArtifactStatus:
     reason: str | None
 
     @classmethod
-    def from_payload(cls, payload: object) -> "MarketArtifactStatus | None":
+    def from_payload(
+        cls,
+        payload: object,
+        *,
+        source: Path | None = None,
+    ) -> "MarketArtifactStatus":
+        label = str(source) if source is not None else "status payload"
         if not isinstance(payload, dict):
-            return None
+            raise StaticMarketArtifactValidationError(f"{label}: status payload must be an object.")
+
         market = str(payload.get("market", "")).strip().upper()
         if not market:
-            return None
+            raise StaticMarketArtifactValidationError(f"{label}: market is required.")
+
+        has_current_artifact = payload.get("has_current_artifact")
+        if not isinstance(has_current_artifact, bool):
+            raise StaticMarketArtifactValidationError(
+                f"{label}: has_current_artifact must be a boolean."
+            )
+
+        status = payload.get("status")
+        if not isinstance(status, str):
+            raise StaticMarketArtifactValidationError(f"{label}: status must be a string.")
+        normalized_status = status.strip().lower()
+        if normalized_status not in _VALID_STATUS_VALUES:
+            valid = ", ".join(sorted(_VALID_STATUS_VALUES))
+            raise StaticMarketArtifactValidationError(
+                f"{label}: status must be one of: {valid}."
+            )
+
         reason = payload.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            raise StaticMarketArtifactValidationError(f"{label}: reason must be a string or null.")
+        normalized_reason = reason.strip().lower() if isinstance(reason, str) else None
+        if normalized_reason is not None and normalized_reason not in _VALID_REASON_VALUES:
+            valid = ", ".join(sorted(_VALID_REASON_VALUES))
+            raise StaticMarketArtifactValidationError(
+                f"{label}: reason must be one of: {valid}; or null."
+            )
+
         return cls(
             market=market,
-            has_current_artifact=bool(payload.get("has_current_artifact", False)),
-            status=str(payload.get("status", "")).strip().lower(),
-            reason=str(reason).strip().lower() if reason is not None else None,
+            has_current_artifact=has_current_artifact,
+            status=normalized_status,
+            reason=normalized_reason,
         )
 
     def allows_selected_fallback(self) -> bool:
@@ -97,12 +140,14 @@ def collect_statuses(base: Path) -> dict[str, MarketArtifactStatus]:
     for status_path in base.rglob("status.json"):
         try:
             status = MarketArtifactStatus.from_payload(
-                json.loads(status_path.read_text(encoding="utf-8"))
+                json.loads(status_path.read_text(encoding="utf-8")),
+                source=status_path,
             )
-        except (OSError, json.JSONDecodeError, TypeError):
-            continue
-        if status is not None:
-            statuses[status.market] = status
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            raise StaticMarketArtifactValidationError(
+                f"{status_path}: could not read status artifact ({exc})."
+            ) from exc
+        statuses[status.market] = status
     return statuses
 
 
