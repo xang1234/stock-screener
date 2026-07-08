@@ -224,6 +224,34 @@ def test_resolve_benchmark_bundle_reports_typed_stale_candidates_without_side_ch
     }
 
 
+def test_resolve_benchmark_bundle_uses_latest_eligible_date_for_unsorted_data():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+    unsorted_primary_df = _ohlcv_frame(
+        [1.0, 2.0, 3.0],
+        ["2026-07-07", "2026-07-03", "2026-07-06"],
+    )
+
+    def fake_fetch(symbol, period):
+        if symbol == "000300.SS":
+            return unsorted_primary_df
+        return pd.DataFrame()
+
+    service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
+
+    resolution = service.resolve_benchmark_bundle(
+        market="CN",
+        period="2y",
+        force_refresh=True,
+        required_as_of_date=date(2026, 7, 7),
+    )
+
+    assert resolution.bundle is not None
+    assert resolution.bundle.benchmark_symbol == "000300.SS"
+    assert resolution.candidate_statuses[0].latest_date == date(2026, 7, 7)
+
+
 def test_benchmark_resolver_uses_public_adapter_contract():
     fallback_df = _ohlcv_frame([1.0], ["2026-04-10"])
 

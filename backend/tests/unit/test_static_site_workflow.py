@@ -139,6 +139,8 @@ def test_static_site_uploads_market_diagnostics_after_export() -> None:
 def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:
     combine_job = _combine_and_build_job()
 
+    assert "needs: [select-markets, build-market]" in combine_job
+    assert "needs.select-markets.outputs.markets" in combine_job
     assert "Download per-market fallback artifacts" in combine_job
     assert "Download current market artifacts" in combine_job
     assert "/tmp/static-market-artifacts-current" in combine_job

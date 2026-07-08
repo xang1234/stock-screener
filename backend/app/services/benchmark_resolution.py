@@ -501,10 +501,9 @@ class BenchmarkResolver:
     ) -> date | None:
         if data is None or data.empty:
             return None
-        latest: date | None = None
-        for value in data.index:
-            row_date = pd.Timestamp(value).date()
-            if as_of_date is not None and row_date > as_of_date:
-                continue
-            latest = row_date
-        return latest
+        eligible_dates = [
+            row_date
+            for row_date in (pd.Timestamp(value).date() for value in data.index)
+            if as_of_date is None or row_date <= as_of_date
+        ]
+        return max(eligible_dates) if eligible_dates else None
