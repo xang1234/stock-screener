@@ -131,6 +131,32 @@ def test_fetch_and_cache_benchmark_cleans_non_finite_rows_before_cache_db_and_re
     assert captured["db"]["Close"].tolist() == [100.0]
 
 
+def test_fetch_and_cache_benchmark_uses_cn_index_provider_before_yfinance():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    data = _ohlcv_frame([100.0], ["2026-07-08"])
+    captured = {}
+    provider_calls = []
+
+    def fake_cn_provider(benchmark_symbol, period):
+        provider_calls.append((benchmark_symbol, period))
+        return data
+
+    def fail_yfinance(benchmark_symbol, period):  # pragma: no cover - should not be called
+        raise AssertionError(f"CN benchmark should not use yfinance first: {benchmark_symbol} {period}")
+
+    service._fetch_from_cn_index_provider = fake_cn_provider  # type: ignore[assignment]
+    service._fetch_from_yfinance = fail_yfinance  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: captured.setdefault("db", kwargs["data"])  # type: ignore[assignment]
+
+    result = service._fetch_and_cache_benchmark("000001.SS", "CN", "2y")
+
+    assert result is data
+    assert captured["db"] is data
+    assert provider_calls == [("000001.SS", "2y")]
+
+
 def test_get_benchmark_data_uses_fallback_when_primary_fails():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
     service._redis_client = None
@@ -172,6 +198,7 @@ def test_get_benchmark_bundle_uses_current_fallback_when_primary_fetch_is_stale(
         return pd.DataFrame()
 
     service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._fetch_from_cn_index_provider = lambda benchmark_symbol, period: None  # type: ignore[assignment]
     service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
 
     bundle = service.get_benchmark_bundle(
@@ -200,6 +227,7 @@ def test_resolve_benchmark_bundle_reports_typed_stale_candidates_without_side_ch
         return pd.DataFrame()
 
     service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._fetch_from_cn_index_provider = lambda benchmark_symbol, period: None  # type: ignore[assignment]
     service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
 
     resolution = service.resolve_benchmark_bundle(

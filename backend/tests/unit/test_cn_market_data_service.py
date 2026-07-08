@@ -565,6 +565,35 @@ def test_cn_market_data_service_skips_a_share_fetch_for_conflicting_sse_index_su
     assert result is None
 
 
+def test_cn_market_data_service_fetches_suffix_conflicting_index_from_index_feed():
+    frame = pd.DataFrame(
+        [
+            {"date": "2026-03-01", "open": 90.0, "high": 91.0, "low": 89.0, "close": 90.5, "volume": 100},
+            {"date": "2026-04-29", "open": 104.0, "high": 106.0, "low": 103.0, "close": 105.0, "volume": 234567},
+        ]
+    )
+    calls = []
+
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_index_daily(**kwargs):
+            calls.append(kwargs)
+            return frame
+
+        @staticmethod
+        def stock_zh_a_hist(**kwargs):  # pragma: no cover - should not be called
+            raise AssertionError(f"CN index benchmark must use index feed, not A-share OHLCV: {kwargs}")
+
+    service = CnMarketDataService(akshare_module=FakeAkshare())
+
+    result = service.index_ohlcv_dataframe("000001.SS", period="1mo", end=date(2026, 4, 30))
+
+    assert calls == [{"symbol": "sh000001"}]
+    assert result is not None
+    assert result.index.date.tolist() == [date(2026, 4, 29)]
+    assert result.iloc[-1]["Close"] == 105.0
+
+
 def test_cn_market_data_service_wraps_akshare_ohlcv_fetch_in_timeout_helper(monkeypatch):
     frame = pd.DataFrame(
         [
