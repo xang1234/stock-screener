@@ -99,28 +99,28 @@ class BenchmarkFallbackPolicy(str, Enum):
 
 
 class BenchmarkResolutionAdapter(Protocol):
-    def _get_from_redis(
+    def load_benchmark_from_redis(
         self,
         benchmark_symbol: str,
         period: str,
         market: str,
     ) -> pd.DataFrame | None: ...
 
-    def _get_from_database(
+    def load_benchmark_from_database(
         self,
         benchmark_symbol: str,
         period: str,
         market: str = "US",
     ) -> pd.DataFrame | None: ...
 
-    def _is_data_fresh(
+    def benchmark_data_is_fresh(
         self,
         data: pd.DataFrame,
         market: str = "US",
         max_age_hours: int = 24,
     ) -> bool: ...
 
-    def _store_in_redis(
+    def store_benchmark_in_redis(
         self,
         benchmark_symbol: str,
         period: str,
@@ -128,7 +128,7 @@ class BenchmarkResolutionAdapter(Protocol):
         market: str = "US",
     ) -> None: ...
 
-    def _fetch_and_cache_benchmark(
+    def fetch_and_cache_benchmark(
         self,
         benchmark_symbol: str,
         market: str,
@@ -268,7 +268,7 @@ class BenchmarkResolver:
         )
         if cached_data is None:
             return _CandidateProbe()
-        if not self._adapter._is_data_fresh(cached_data, market=context.normalized_market):
+        if not self._adapter.benchmark_data_is_fresh(cached_data, market=context.normalized_market):
             logger.info(
                 "Cache STALE for %s benchmark %s (%s, %s) (%s)",
                 context.normalized_market,
@@ -307,7 +307,7 @@ class BenchmarkResolver:
             source.value.capitalize(),
         )
         if source == BenchmarkCandidateSource.DATABASE:
-            self._adapter._store_in_redis(
+            self._adapter.store_benchmark_in_redis(
                 benchmark_symbol=benchmark_symbol,
                 period=context.period,
                 data=cached_data,
@@ -331,7 +331,7 @@ class BenchmarkResolver:
                 context.period,
                 role,
             )
-            fetched = self._adapter._fetch_and_cache_benchmark(
+            fetched = self._adapter.fetch_and_cache_benchmark(
                 benchmark_symbol=benchmark_symbol,
                 market=context.normalized_market,
                 period=context.period,
@@ -466,12 +466,12 @@ class BenchmarkResolver:
         context: _BenchmarkResolutionContext,
     ) -> pd.DataFrame | None:
         if source == BenchmarkCandidateSource.REDIS:
-            return self._adapter._get_from_redis(
+            return self._adapter.load_benchmark_from_redis(
                 benchmark_symbol=benchmark_symbol,
                 period=context.period,
                 market=context.normalized_market,
             )
-        return self._adapter._get_from_database(
+        return self._adapter.load_benchmark_from_database(
             benchmark_symbol=benchmark_symbol,
             period=context.period,
             market=context.normalized_market,

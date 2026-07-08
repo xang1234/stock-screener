@@ -191,6 +191,73 @@ class BenchmarkCacheService:
             required_as_of_date=required_as_of_date,
         )
 
+    def load_benchmark_from_redis(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str,
+    ) -> Optional[pd.DataFrame]:
+        """Resolver-facing Redis cache lookup."""
+        return self._get_from_redis(
+            benchmark_symbol=benchmark_symbol,
+            period=period,
+            market=market,
+        )
+
+    def load_benchmark_from_database(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str = "US",
+    ) -> Optional[pd.DataFrame]:
+        """Resolver-facing database cache lookup."""
+        return self._get_from_database(
+            benchmark_symbol=benchmark_symbol,
+            period=period,
+            market=market,
+        )
+
+    def benchmark_data_is_fresh(
+        self,
+        data: pd.DataFrame,
+        market: str = "US",
+        max_age_hours: int = 24,
+    ) -> bool:
+        """Resolver-facing freshness check."""
+        return self._is_data_fresh(
+            data=data,
+            market=market,
+            max_age_hours=max_age_hours,
+        )
+
+    def store_benchmark_in_redis(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        data: pd.DataFrame,
+        market: str = "US",
+    ) -> None:
+        """Resolver-facing Redis cache write."""
+        self._store_in_redis(
+            benchmark_symbol=benchmark_symbol,
+            period=period,
+            data=data,
+            market=market,
+        )
+
+    def fetch_and_cache_benchmark(
+        self,
+        benchmark_symbol: str,
+        market: str,
+        period: str,
+    ) -> Optional[pd.DataFrame]:
+        """Resolver-facing benchmark fetch path."""
+        return self._fetch_and_cache_benchmark(
+            benchmark_symbol=benchmark_symbol,
+            market=market,
+            period=period,
+        )
+
     def _get_from_redis(
         self,
         benchmark_symbol: str,

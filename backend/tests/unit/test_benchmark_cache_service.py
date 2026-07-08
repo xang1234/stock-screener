@@ -9,6 +9,8 @@ from app.services.benchmark_cache_service import (
     BenchmarkFallbackPolicy,
 )
 import app.services.benchmark_cache_service as benchmark_cache_module
+from app.services.benchmark_registry_service import benchmark_registry
+from app.services.benchmark_resolution import BenchmarkResolver
 
 
 def test_benchmark_cache_service_stays_below_giant_file_threshold():
@@ -220,6 +222,47 @@ def test_resolve_benchmark_bundle_reports_typed_stale_candidates_without_side_ch
         "status": "stale_required_date",
         "latest_date": "2026-07-03",
     }
+
+
+def test_benchmark_resolver_uses_public_adapter_contract():
+    fallback_df = _ohlcv_frame([1.0], ["2026-04-10"])
+
+    class PublicOnlyAdapter:
+        def __init__(self):
+            self.fetch_calls = []
+            self.redis_writes = []
+
+        def load_benchmark_from_redis(self, *, benchmark_symbol, period, market):
+            return None
+
+        def load_benchmark_from_database(self, *, benchmark_symbol, period, market):
+            if benchmark_symbol == "2800.HK":
+                return fallback_df
+            return None
+
+        def benchmark_data_is_fresh(self, data, market="US", max_age_hours=24):
+            return True
+
+        def store_benchmark_in_redis(self, *, benchmark_symbol, period, data, market):
+            self.redis_writes.append((benchmark_symbol, period, data, market))
+
+        def fetch_and_cache_benchmark(self, *, benchmark_symbol, market, period):
+            self.fetch_calls.append(benchmark_symbol)
+            return pd.DataFrame()
+
+    adapter = PublicOnlyAdapter()
+
+    resolution = BenchmarkResolver(adapter=adapter, registry=benchmark_registry).resolve(
+        market="HK",
+        period="2y",
+        force_refresh=False,
+    )
+
+    assert resolution.bundle is not None
+    assert resolution.bundle.benchmark_symbol == "2800.HK"
+    assert resolution.bundle.data is fallback_df
+    assert adapter.redis_writes == [("2800.HK", "2y", fallback_df, "HK")]
+    assert adapter.fetch_calls == []
 
 
 def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch():
