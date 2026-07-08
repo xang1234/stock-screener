@@ -1,8 +1,22 @@
 import pandas as pd
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 
-from app.services.benchmark_cache_service import BenchmarkCacheService, BenchmarkFallbackPolicy
+from app.services.benchmark_cache_service import (
+    BenchmarkCacheService,
+    BenchmarkCandidateOutcome,
+    BenchmarkCandidateSource,
+    BenchmarkFallbackPolicy,
+)
 import app.services.benchmark_cache_service as benchmark_cache_module
+from app.services.benchmark_registry_service import benchmark_registry
+from app.services.benchmark_resolution import BenchmarkResolver
+
+
+def test_benchmark_cache_service_stays_below_giant_file_threshold():
+    service_path = Path(benchmark_cache_module.__file__)
+
+    assert len(service_path.read_text(encoding="utf-8").splitlines()) < 1_000
 
 
 def _ohlcv_frame(closes: list[float], days: list[str]) -> pd.DataFrame:
@@ -139,6 +153,144 @@ def test_get_benchmark_data_uses_fallback_when_primary_fails():
 
     assert calls[:2] == ["^HSI", "2800.HK"]
     assert result is fallback_df
+
+
+def test_get_benchmark_bundle_uses_current_fallback_when_primary_fetch_is_stale():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    calls = []
+    stale_primary_df = _ohlcv_frame([1.0], ["2026-07-03"])
+    current_fallback_df = _ohlcv_frame([2.0], ["2026-07-07"])
+
+    def fake_fetch(symbol, period):
+        calls.append(symbol)
+        if symbol == "000300.SS":
+            return stale_primary_df
+        if symbol == "000001.SS":
+            return current_fallback_df
+        return pd.DataFrame()
+
+    service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
+
+    bundle = service.get_benchmark_bundle(
+        market="CN",
+        period="2y",
+        force_refresh=True,
+        required_as_of_date=date(2026, 7, 7),
+    )
+
+    assert calls == ["000300.SS", "000001.SS"]
+    assert bundle is not None
+    assert bundle.benchmark_symbol == "000001.SS"
+    assert bundle.benchmark_role == "fallback"
+    assert bundle.data is current_fallback_df
+
+
+def test_resolve_benchmark_bundle_reports_typed_stale_candidates_without_side_channel():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    stale_primary_df = _ohlcv_frame([1.0], ["2026-07-03"])
+
+    def fake_fetch(symbol, period):
+        if symbol == "000300.SS":
+            return stale_primary_df
+        return pd.DataFrame()
+
+    service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
+
+    resolution = service.resolve_benchmark_bundle(
+        market="CN",
+        period="2y",
+        force_refresh=True,
+        required_as_of_date=date(2026, 7, 7),
+    )
+
+    assert resolution.bundle is None
+    assert resolution.error == "benchmark_not_current"
+    assert not hasattr(service, "last_candidate_statuses")
+    assert resolution.candidate_statuses[0].symbol == "000300.SS"
+    assert resolution.candidate_statuses[0].source is BenchmarkCandidateSource.FETCH
+    assert resolution.candidate_statuses[0].outcome is BenchmarkCandidateOutcome.STALE_REQUIRED_DATE
+    assert resolution.candidate_statuses[0].as_diagnostic() == {
+        "symbol": "000300.SS",
+        "role": "primary",
+        "source": "fetch",
+        "status": "stale_required_date",
+        "latest_date": "2026-07-03",
+    }
+
+
+def test_resolve_benchmark_bundle_uses_latest_eligible_date_for_unsorted_data():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+    unsorted_primary_df = _ohlcv_frame(
+        [1.0, 2.0, 3.0],
+        ["2026-07-07", "2026-07-03", "2026-07-06"],
+    )
+
+    def fake_fetch(symbol, period):
+        if symbol == "000300.SS":
+            return unsorted_primary_df
+        return pd.DataFrame()
+
+    service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
+
+    resolution = service.resolve_benchmark_bundle(
+        market="CN",
+        period="2y",
+        force_refresh=True,
+        required_as_of_date=date(2026, 7, 7),
+    )
+
+    assert resolution.bundle is not None
+    assert resolution.bundle.benchmark_symbol == "000300.SS"
+    assert resolution.candidate_statuses[0].latest_date == date(2026, 7, 7)
+
+
+def test_benchmark_resolver_uses_public_adapter_contract():
+    fallback_df = _ohlcv_frame([1.0], ["2026-04-10"])
+
+    class PublicOnlyAdapter:
+        def __init__(self):
+            self.fetch_calls = []
+            self.redis_writes = []
+
+        def load_benchmark_from_redis(self, *, benchmark_symbol, period, market):
+            return None
+
+        def load_benchmark_from_database(self, *, benchmark_symbol, period, market):
+            if benchmark_symbol == "2800.HK":
+                return fallback_df
+            return None
+
+        def benchmark_data_is_fresh(self, data, market="US", max_age_hours=24):
+            return True
+
+        def store_benchmark_in_redis(self, *, benchmark_symbol, period, data, market):
+            self.redis_writes.append((benchmark_symbol, period, data, market))
+
+        def fetch_and_cache_benchmark(self, *, benchmark_symbol, market, period):
+            self.fetch_calls.append(benchmark_symbol)
+            return pd.DataFrame()
+
+    adapter = PublicOnlyAdapter()
+
+    resolution = BenchmarkResolver(adapter=adapter, registry=benchmark_registry).resolve(
+        market="HK",
+        period="2y",
+        force_refresh=False,
+    )
+
+    assert resolution.bundle is not None
+    assert resolution.bundle.benchmark_symbol == "2800.HK"
+    assert resolution.bundle.data is fallback_df
+    assert adapter.redis_writes == [("2800.HK", "2y", fallback_df, "HK")]
+    assert adapter.fetch_calls == []
 
 
 def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch():

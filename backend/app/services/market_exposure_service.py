@@ -301,13 +301,16 @@ def compute_exposure(
     # db (it closes the session in a finally block).
     from .benchmark_cache_service import BenchmarkCacheService
 
-    bundle = BenchmarkCacheService().get_benchmark_bundle(
+    benchmark_service = BenchmarkCacheService()
+    resolution = benchmark_service.resolve_benchmark_bundle(
         market=market,
         period="2y",
         fallback_policy=benchmark_fallback_policy,
+        required_as_of_date=as_of_date,
     )
+    bundle = resolution.bundle
     if bundle is None or bundle.data is None or bundle.data.empty:
-        return {"error": "no_benchmark_data", "market": market, "date": as_of_date.isoformat()}
+        return resolution.error_payload(market=market, as_of_date=as_of_date)
 
     # Slice "as of" — tz-agnostic date mask (handles naive + tz-aware indexes).
     df = bundle.data[bundle.data.index.date <= as_of_date]
@@ -317,7 +320,16 @@ def compute_exposure(
     # as_of_date scored from a prior session's close/volume — a fresh date backed
     # by stale index inputs (happens when the benchmark refresh lags the date).
     if df.index[-1].date() != as_of_date:
-        return {"error": "benchmark_not_current", "market": market, "date": as_of_date.isoformat()}
+        return {
+            "error": "benchmark_not_current",
+            "market": market,
+            "date": as_of_date.isoformat(),
+            "benchmark_symbol": bundle.benchmark_symbol,
+            "benchmark_latest_date": df.index[-1].date().isoformat(),
+            "benchmark_candidates": [
+                status.as_diagnostic() for status in bundle.candidate_statuses
+            ],
+        }
 
     trend = compute_trend(df)
     dist = count_distribution_days(df)

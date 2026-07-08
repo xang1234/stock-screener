@@ -4,7 +4,7 @@ from datetime import date
 import pandas as pd
 
 import app.services.market_exposure_service as svc
-from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
+from app.services.benchmark_cache_service import BenchmarkFallbackPolicy, BenchmarkResolution
 from app.services.market_exposure_service import (
     CAP_BELOW_200DMA,
     CAP_HEAVY_DISTRIBUTION,
@@ -94,6 +94,7 @@ class _FakeBundle:
     def __init__(self, df, symbol):
         self.data = df
         self.benchmark_symbol = symbol
+        self.candidate_statuses = ()
 
 
 def _fake_benchmark_factory(df, symbol="SPY"):
@@ -101,14 +102,20 @@ def _fake_benchmark_factory(df, symbol="SPY"):
         def __init__(self, *a, **k):
             pass
 
-        def get_benchmark_bundle(
+        def resolve_benchmark_bundle(
             self,
             market="US",
             period="2y",
             force_refresh=False,
             fallback_policy=BenchmarkFallbackPolicy.ALLOW,
+            required_as_of_date=None,
         ):
-            return _FakeBundle(df, symbol)
+            if df is None:
+                return BenchmarkResolution(bundle=None, error="no_benchmark_data")
+            return BenchmarkResolution(bundle=_FakeBundle(df, symbol))
+
+        def get_benchmark_bundle(self, **kwargs):
+            return self.resolve_benchmark_bundle(**kwargs).bundle
 
     return _FakeBenchmarkCacheService
 
@@ -123,15 +130,16 @@ def test_refresh_market_exposure_for_date_can_use_primary_only_benchmark_policy(
         def __init__(self, *a, **k):
             pass
 
-        def get_benchmark_bundle(self, *, market, period, fallback_policy):
+        def resolve_benchmark_bundle(self, *, market, period, fallback_policy, required_as_of_date):
             calls.append(
                 {
                     "market": market,
                     "period": period,
                     "fallback_policy": fallback_policy,
+                    "required_as_of_date": required_as_of_date,
                 }
             )
-            return _FakeBundle(df, "SPY")
+            return BenchmarkResolution(bundle=_FakeBundle(df, "SPY"))
 
     monkeypatch.setattr(
         "app.services.benchmark_cache_service.BenchmarkCacheService",
@@ -155,6 +163,7 @@ def test_refresh_market_exposure_for_date_can_use_primary_only_benchmark_policy(
                 "market": "US",
                 "period": "2y",
                 "fallback_policy": BenchmarkFallbackPolicy.PRIMARY_ONLY,
+                "required_as_of_date": as_of,
             }
         ]
     finally:
