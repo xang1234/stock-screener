@@ -1,5 +1,5 @@
 import pandas as pd
-from datetime import datetime
+from datetime import date, datetime
 
 from app.services.benchmark_cache_service import BenchmarkCacheService, BenchmarkFallbackPolicy
 import app.services.benchmark_cache_service as benchmark_cache_module
@@ -139,6 +139,39 @@ def test_get_benchmark_data_uses_fallback_when_primary_fails():
 
     assert calls[:2] == ["^HSI", "2800.HK"]
     assert result is fallback_df
+
+
+def test_get_benchmark_bundle_uses_current_fallback_when_primary_fetch_is_stale():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    calls = []
+    stale_primary_df = _ohlcv_frame([1.0], ["2026-07-03"])
+    current_fallback_df = _ohlcv_frame([2.0], ["2026-07-07"])
+
+    def fake_fetch(symbol, period):
+        calls.append(symbol)
+        if symbol == "000300.SS":
+            return stale_primary_df
+        if symbol == "000001.SS":
+            return current_fallback_df
+        return pd.DataFrame()
+
+    service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
+
+    bundle = service.get_benchmark_bundle(
+        market="CN",
+        period="2y",
+        force_refresh=True,
+        required_as_of_date=date(2026, 7, 7),
+    )
+
+    assert calls == ["000300.SS", "000001.SS"]
+    assert bundle is not None
+    assert bundle.benchmark_symbol == "000001.SS"
+    assert bundle.benchmark_role == "fallback"
+    assert bundle.data is current_fallback_df
 
 
 def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch():

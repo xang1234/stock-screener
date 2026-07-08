@@ -644,11 +644,14 @@ jobs:
           PY
 
       - name: Validate market artifacts
+        env:
+          SELECTED_MARKETS: ${{ needs.select-markets.outputs.markets }}
         run: |
           mkdir -p /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback
           cd backend
           python - <<'PY'
           import json
+          import os
           import sys
           from pathlib import Path
 
@@ -660,11 +663,23 @@ jobs:
           # across current + fallback artifacts, so a partial group run (or a
           # failed fallback download) can never ship an incomplete static site.
           expected = {code.upper() for code in market_registry.supported_market_codes()}
-          present = set()
-          for base in (
-              "/tmp/static-market-artifacts-current",
-              "/tmp/static-market-artifacts-fallback",
-          ):
+          current_dir = Path("/tmp/static-market-artifacts-current")
+          fallback_dir = Path("/tmp/static-market-artifacts-fallback")
+
+          def parse_selected_markets():
+              raw = os.environ.get("SELECTED_MARKETS", "[]")
+              try:
+                  payload = json.loads(raw)
+              except json.JSONDecodeError as exc:
+                  print(f"::warning::Could not parse SELECTED_MARKETS={raw!r}: {exc}", flush=True)
+                  return set()
+              if not isinstance(payload, list):
+                  print(f"::warning::SELECTED_MARKETS is not a JSON array: {raw!r}", flush=True)
+                  return set()
+              return {str(market).upper() for market in payload if str(market).strip()}
+
+          def collect_markets(base):
+              markets = set()
               for manifest in Path(base).rglob("manifest.market.json"):
                   try:
                       market = str(
@@ -674,16 +689,59 @@ jobs:
                       print(f"::warning::Could not read {manifest}: {exc}", flush=True)
                       continue
                   if market:
-                      present.add(market)
+                      markets.add(market)
+              return markets
+
+          def collect_failed_current_diagnostics():
+              failed = {}
+              for diagnostic in current_dir.rglob("snapshot-failure.json"):
+                  try:
+                      payload = json.loads(diagnostic.read_text(encoding="utf-8"))
+                  except (OSError, json.JSONDecodeError, TypeError) as exc:
+                      print(f"::warning::Could not read {diagnostic}: {exc}", flush=True)
+                      continue
+                  if not isinstance(payload, dict):
+                      continue
+                  market = str(payload.get("market", "")).upper()
+                  if not market:
+                      continue
+                  reason = str(payload.get("reason", "")).lower()
+                  status = str(payload.get("status", "")).lower()
+                  if reason == "not_trading_day":
+                      continue
+                  if status in {"errored", "error", "failed"} or reason:
+                      failed[market] = payload
+              return failed
+
+          selected = parse_selected_markets()
+          current_markets = collect_markets(current_dir)
+          fallback_markets = collect_markets(fallback_dir)
+          present = current_markets | fallback_markets
+          failed_current_markets = collect_failed_current_diagnostics()
 
           print(f"Expected markets: {', '.join(sorted(expected))}")
           print(f"Present markets:  {', '.join(sorted(present)) or '(none)'}")
+          if selected:
+              print(f"Selected markets: {', '.join(sorted(selected))}")
 
           missing = sorted(expected - present)
           if missing:
               print(
                   "::error::Refusing to publish an incomplete static site. No current "
                   f"build and no fallback artifact for: {', '.join(missing)}.",
+                  flush=True,
+              )
+              sys.exit(1)
+          selected_failed_without_current = sorted(
+              market
+              for market in selected
+              if market not in current_markets and market in failed_current_markets
+          )
+          if selected_failed_without_current:
+              print(
+                  "::error::Refusing to publish stale fallback data for a market "
+                  "that failed in this run. Selected markets missing current artifacts: "
+                  f"{', '.join(selected_failed_without_current)}.",
                   flush=True,
               )
               sys.exit(1)

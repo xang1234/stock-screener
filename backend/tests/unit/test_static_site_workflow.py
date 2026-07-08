@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import textwrap
 
 
@@ -31,6 +32,15 @@ def _combine_and_build_job() -> str:
 def _fallback_download_script() -> str:
     step = _combine_and_build_job().split("      - name: Download per-market fallback artifacts\n", 1)[1].split(
         "\n      - name: Validate market artifacts",
+        1,
+    )[0]
+    run = step.split("          python - <<'PY'\n", 1)[1].rsplit("\n          PY", 1)[0]
+    return textwrap.dedent(run)
+
+
+def _artifact_validation_script() -> str:
+    step = _combine_and_build_job().split("      - name: Validate market artifacts\n", 1)[1].split(
+        "\n      - name: Combine static data bundle",
         1,
     )[0]
     run = step.split("          python - <<'PY'\n", 1)[1].rsplit("\n          PY", 1)[0]
@@ -210,7 +220,7 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
 
     try:
         result = subprocess.run(
-            ["python", "-c", _fallback_download_script()],
+            [sys.executable, "-c", _fallback_download_script()],
             check=True,
             capture_output=True,
             text=True,
@@ -226,6 +236,62 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
         assert not (fallback_dir / "static-market-HK").exists()
         assert (fallback_dir / "static-market-TW" / "manifest.market.json").exists()
         assert "exit 7. Details: stderr: download denied for HK" in result.stdout
+    finally:
+        shutil.rmtree(current_dir, ignore_errors=True)
+        shutil.rmtree(fallback_dir, ignore_errors=True)
+
+
+def test_static_site_validation_rejects_fallback_for_selected_market() -> None:
+    from app.domain.markets import market_registry
+
+    current_dir = Path("/tmp/static-market-artifacts-current")
+    fallback_dir = Path("/tmp/static-market-artifacts-fallback")
+    shutil.rmtree(current_dir, ignore_errors=True)
+    shutil.rmtree(fallback_dir, ignore_errors=True)
+
+    try:
+        for market in market_registry.supported_market_codes():
+            base_dir = (
+                fallback_dir / f"static-market-{market}" / "markets" / market.lower()
+                if market == "CN"
+                else current_dir / f"static-market-{market}" / "markets" / market.lower()
+            )
+            base_dir.mkdir(parents=True)
+            (base_dir / "manifest.market.json").write_text(
+                json.dumps({"market": market}),
+                encoding="utf-8",
+            )
+        diagnostics_dir = current_dir / "static-market-diagnostics-CN"
+        diagnostics_dir.mkdir(parents=True)
+        (diagnostics_dir / "snapshot-failure.json").write_text(
+            json.dumps(
+                {
+                    "market": "CN",
+                    "status": "errored",
+                    "reason": "market_exposure_not_ready",
+                    "failure_diagnostics": {
+                        "error": "benchmark_not_current",
+                        "date": "2026-07-07",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        env = os.environ.copy()
+        env["SELECTED_MARKETS"] = '["CN"]'
+
+        result = subprocess.run(
+            [sys.executable, "-c", _artifact_validation_script()],
+            check=False,
+            capture_output=True,
+            cwd=ROOT / "backend",
+            text=True,
+            env=env,
+        )
+
+        assert result.returncode == 1
+        assert "Selected markets missing current artifacts: CN" in result.stdout
     finally:
         shutil.rmtree(current_dir, ignore_errors=True)
         shutil.rmtree(fallback_dir, ignore_errors=True)
