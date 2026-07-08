@@ -133,6 +133,7 @@ class BenchmarkResolutionAdapter(Protocol):
         benchmark_symbol: str,
         market: str,
         period: str,
+        required_as_of_date: date | None = None,
     ) -> pd.DataFrame | None: ...
 
 
@@ -335,6 +336,7 @@ class BenchmarkResolver:
                 benchmark_symbol=benchmark_symbol,
                 market=context.normalized_market,
                 period=context.period,
+                required_as_of_date=context.required_as_of_date,
             )
             probe = self._probe_usable_candidate(
                 benchmark_symbol=benchmark_symbol,

@@ -730,6 +730,7 @@ class CnMarketDataService:
         *,
         period: str = "2y",
         end: date | str | None = None,
+        required_as_of_date: date | str | None = None,
     ) -> pd.DataFrame | None:
         """Return CN index OHLCV for benchmark symbols such as 000300.SS."""
         akshare_symbol = _CN_INDEX_AKSHARE_SYMBOLS.get(str(symbol).strip().upper())
@@ -738,6 +739,7 @@ class CnMarketDataService:
 
         end_date = _as_date(end)
         start_date = _period_start_date(period, today=end_date)
+        required_date = _as_date(required_as_of_date) if required_as_of_date is not None else None
         for fetcher_name in _CN_INDEX_AKSHARE_FETCHERS:
             fetcher = getattr(self._akshare, fetcher_name, None)
             if not callable(fetcher):
@@ -763,6 +765,20 @@ class CnMarketDataService:
             date_index = pd.Series(result.index.date, index=result.index)
             result = result[(date_index >= start_date) & (date_index <= end_date)]
             if not result.empty:
+                if required_date is not None:
+                    eligible_dates = [
+                        row_date
+                        for row_date in result.index.date
+                        if row_date <= required_date
+                    ]
+                    if not eligible_dates or max(eligible_dates) != required_date:
+                        logger.warning(
+                            "AKShare CN index OHLCV fetch for %s via %s is stale for %s",
+                            akshare_symbol,
+                            fetcher_name,
+                            required_date.isoformat(),
+                        )
+                        continue
                 return result
         return None
 
