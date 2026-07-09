@@ -7,7 +7,6 @@ boundary injected) and the Celery task that delegates to it.
 from __future__ import annotations
 
 import pytest
-
 from app.services import ibd_classification_bundle as bundle
 
 
@@ -131,7 +130,7 @@ def test_sync_preserves_caller_output_dir(tmp_path, monkeypatch):
     )
 
     assert out["status"] == "success"
-    assert fake.calls[0]["output_dir"] == str(output_dir)
+    assert fake.calls[0]["output_dir"] == output_dir
     assert output_dir.exists()
     assert not bundle_file.exists()
 
