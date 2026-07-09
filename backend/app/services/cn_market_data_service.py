@@ -23,6 +23,7 @@ from app.domain.markets.cn_symbols import (
 
 from ..config import settings
 from .cn_universe_ingestion_adapter import infer_cn_sector
+from .price_row_normalization import drop_non_finite_close_rows
 
 logger = logging.getLogger(__name__)
 
@@ -770,6 +771,7 @@ class CnMarketDataService:
                 continue
             date_index = pd.Series(result.index.date, index=result.index)
             result = result[(date_index >= start_date) & (date_index <= end_date)]
+            result = drop_non_finite_close_rows(result)
             if not result.empty:
                 if required_date is not None:
                     eligible_dates = [
