@@ -17,6 +17,31 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def latest_benchmark_data_date(
+    data: pd.DataFrame | None,
+    *,
+    as_of_date: date | None = None,
+) -> date | None:
+    if data is None or data.empty:
+        return None
+    eligible_dates = [
+        row_date
+        for row_date in (pd.Timestamp(value).date() for value in data.index)
+        if as_of_date is None or row_date <= as_of_date
+    ]
+    return max(eligible_dates) if eligible_dates else None
+
+
+def benchmark_data_meets_required_date(
+    data: pd.DataFrame | None,
+    *,
+    required_as_of_date: date | None,
+) -> bool:
+    if required_as_of_date is None:
+        return True
+    return latest_benchmark_data_date(data, as_of_date=required_as_of_date) == required_as_of_date
+
+
 @dataclass(frozen=True)
 class BenchmarkCandidateStatus:
     """Structured diagnostic for one benchmark candidate lookup attempt."""
@@ -133,6 +158,7 @@ class BenchmarkResolutionAdapter(Protocol):
         benchmark_symbol: str,
         market: str,
         period: str,
+        required_as_of_date: date | None = None,
     ) -> pd.DataFrame | None: ...
 
 
@@ -335,6 +361,7 @@ class BenchmarkResolver:
                 benchmark_symbol=benchmark_symbol,
                 market=context.normalized_market,
                 period=context.period,
+                required_as_of_date=context.required_as_of_date,
             )
             probe = self._probe_usable_candidate(
                 benchmark_symbol=benchmark_symbol,
@@ -371,7 +398,7 @@ class BenchmarkResolver:
                     context=context,
                 )
             )
-        if not self._data_meets_required_date(
+        if not benchmark_data_meets_required_date(
             data,
             required_as_of_date=context.required_as_of_date,
         ):
@@ -452,7 +479,7 @@ class BenchmarkResolver:
             role=role,
             source=source,
             outcome=outcome,
-            latest_date=self._latest_data_date(
+            latest_date=latest_benchmark_data_date(
                 data,
                 as_of_date=context.required_as_of_date,
             ),
@@ -482,28 +509,3 @@ class BenchmarkResolver:
         if force_refresh:
             return "Force refresh requested for %s benchmark %s (%s, %s)"
         return "Cache MISS for %s benchmark %s (%s, %s) - fetching from yfinance"
-
-    def _data_meets_required_date(
-        self,
-        data: pd.DataFrame | None,
-        *,
-        required_as_of_date: date | None,
-    ) -> bool:
-        if required_as_of_date is None:
-            return True
-        return self._latest_data_date(data, as_of_date=required_as_of_date) == required_as_of_date
-
-    @staticmethod
-    def _latest_data_date(
-        data: pd.DataFrame | None,
-        *,
-        as_of_date: date | None = None,
-    ) -> date | None:
-        if data is None or data.empty:
-            return None
-        eligible_dates = [
-            row_date
-            for row_date in (pd.Timestamp(value).date() for value in data.index)
-            if as_of_date is None or row_date <= as_of_date
-        ]
-        return max(eligible_dates) if eligible_dates else None

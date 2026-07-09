@@ -31,6 +31,7 @@ from .benchmark_resolution import (
     BenchmarkFallbackPolicy,
     BenchmarkResolution,
     BenchmarkResolver,
+    benchmark_data_meets_required_date,
 )
 from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 from .price_row_normalization import normalize_price_frame, stock_price_row_from_ohlcv
@@ -250,12 +251,14 @@ class BenchmarkCacheService:
         benchmark_symbol: str,
         market: str,
         period: str,
+        required_as_of_date: date | None = None,
     ) -> Optional[pd.DataFrame]:
         """Resolver-facing benchmark fetch path."""
         return self._fetch_and_cache_benchmark(
             benchmark_symbol=benchmark_symbol,
             market=market,
             period=period,
+            required_as_of_date=required_as_of_date,
         )
 
     def _get_from_redis(
@@ -360,7 +363,77 @@ class BenchmarkCacheService:
             logger.error("Failed to fetch finite benchmark %s data from yfinance", benchmark_symbol)
         return data
 
-    def _fetch_and_cache_benchmark(self, benchmark_symbol: str, market: str, period: str) -> Optional[pd.DataFrame]:
+    def _fetch_from_cn_index_provider(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        required_as_of_date: date | None = None,
+    ) -> Optional[pd.DataFrame]:
+        from .cn_market_data_service import CnMarketDataService
+
+        return CnMarketDataService().index_ohlcv_dataframe(
+            benchmark_symbol,
+            period=period,
+            end=required_as_of_date,
+            required_as_of_date=required_as_of_date,
+        )
+
+    def _fetch_normalized_benchmark(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str,
+        required_as_of_date: date | None = None,
+    ) -> Optional[pd.DataFrame]:
+        normalized_market = self._normalize_market(market)
+        if normalized_market == "CN":
+            try:
+                data = normalize_price_frame(
+                    self._fetch_from_cn_index_provider(
+                        benchmark_symbol,
+                        period,
+                        required_as_of_date=required_as_of_date,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - provider/network variability
+                logger.warning(
+                    "CN index provider fetch failed for benchmark %s (%s): %s",
+                    benchmark_symbol,
+                    period,
+                    exc,
+                )
+            else:
+                if data is not None:
+                    if not benchmark_data_meets_required_date(
+                        data,
+                        required_as_of_date=required_as_of_date,
+                    ):
+                        logger.warning(
+                            "CN index provider benchmark %s is stale for %s; falling back to yfinance",
+                            benchmark_symbol,
+                            required_as_of_date.isoformat() if required_as_of_date else None,
+                        )
+                    else:
+                        logger.info(
+                            "Fetched CN benchmark %s %s from CN index provider",
+                            benchmark_symbol,
+                            period,
+                        )
+                        return data
+                else:
+                    logger.info(
+                        "CN index provider returned no finite benchmark %s data; falling back to yfinance",
+                        benchmark_symbol,
+                    )
+        return self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+
+    def _fetch_and_cache_benchmark(
+        self,
+        benchmark_symbol: str,
+        market: str,
+        period: str,
+        required_as_of_date: date | None = None,
+    ) -> Optional[pd.DataFrame]:
         """
         Fetch benchmark from yfinance and cache it.
 
@@ -369,7 +442,12 @@ class BenchmarkCacheService:
         # No Redis means no distributed coordination is possible; fetch directly
         # and persist to DB so subsequent calls can still hit local cache.
         if not self._redis_client:
-            benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+            benchmark_data = self._fetch_normalized_benchmark(
+                benchmark_symbol,
+                period,
+                market,
+                required_as_of_date=required_as_of_date,
+            )
             if benchmark_data is None:
                 return None
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
@@ -396,13 +474,19 @@ class BenchmarkCacheService:
                 benchmark_symbol=benchmark_symbol,
                 period=period,
                 market=market,
+                required_as_of_date=required_as_of_date,
             )
 
         try:
-            # We have the lock - fetch from yfinance
-            logger.info("Fetching benchmark %s for market %s (%s) from yfinance", benchmark_symbol, market, period)
+            # We have the lock - fetch from the market-specific benchmark provider.
+            logger.info("Fetching benchmark %s for market %s (%s)", benchmark_symbol, market, period)
 
-            benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+            benchmark_data = self._fetch_normalized_benchmark(
+                benchmark_symbol,
+                period,
+                market,
+                required_as_of_date=required_as_of_date,
+            )
             if benchmark_data is None:
                 return None
 
@@ -435,6 +519,7 @@ class BenchmarkCacheService:
         period: str,
         market: str,
         max_wait_seconds: int = None,
+        required_as_of_date: date | None = None,
     ) -> Optional[pd.DataFrame]:
         """
         Wait for another worker to cache benchmark data.
@@ -461,7 +546,12 @@ class BenchmarkCacheService:
 
         # Timeout - fetch directly as fallback
         logger.warning("Timeout waiting for benchmark %s %s cache - fetching directly", benchmark_symbol, period)
-        benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+        benchmark_data = self._fetch_normalized_benchmark(
+            benchmark_symbol,
+            period,
+            market,
+            required_as_of_date=required_as_of_date,
+        )
         if benchmark_data is not None:
             # Persist fallback fetch so future calls can use DB cache even when
             # lock-holder failed to populate Redis.

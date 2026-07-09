@@ -131,6 +131,68 @@ def test_fetch_and_cache_benchmark_cleans_non_finite_rows_before_cache_db_and_re
     assert captured["db"]["Close"].tolist() == [100.0]
 
 
+def test_fetch_and_cache_benchmark_uses_cn_index_provider_before_yfinance():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    data = _ohlcv_frame([100.0], ["2026-07-08"])
+    captured = {}
+    provider_calls = []
+
+    def fake_cn_provider(benchmark_symbol, period, *, required_as_of_date=None):
+        assert required_as_of_date is None
+        provider_calls.append((benchmark_symbol, period))
+        return data
+
+    def fail_yfinance(benchmark_symbol, period):  # pragma: no cover - should not be called
+        raise AssertionError(f"CN benchmark should not use yfinance first: {benchmark_symbol} {period}")
+
+    service._fetch_from_cn_index_provider = fake_cn_provider  # type: ignore[assignment]
+    service._fetch_from_yfinance = fail_yfinance  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: captured.setdefault("db", kwargs["data"])  # type: ignore[assignment]
+
+    result = service._fetch_and_cache_benchmark("000001.SS", "CN", "2y")
+
+    assert result is data
+    assert captured["db"] is data
+    assert provider_calls == [("000001.SS", "2y")]
+
+
+def test_fetch_and_cache_benchmark_falls_back_to_yfinance_when_cn_provider_is_stale_for_required_date():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    stale_provider = _ohlcv_frame([100.0], ["2026-07-07"])
+    current_yfinance = _ohlcv_frame([101.0], ["2026-07-08"])
+    provider_calls = []
+    yfinance_calls = []
+    captured = {}
+
+    def fake_cn_provider(benchmark_symbol, period, *, required_as_of_date=None):
+        provider_calls.append((benchmark_symbol, period, required_as_of_date))
+        return stale_provider
+
+    def fake_yfinance(benchmark_symbol, period):
+        yfinance_calls.append((benchmark_symbol, period))
+        return current_yfinance
+
+    service._fetch_from_cn_index_provider = fake_cn_provider  # type: ignore[assignment]
+    service._fetch_from_yfinance = fake_yfinance  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: captured.setdefault("db", kwargs["data"])  # type: ignore[assignment]
+
+    result = service._fetch_and_cache_benchmark(
+        "000300.SS",
+        "CN",
+        "2y",
+        required_as_of_date=date(2026, 7, 8),
+    )
+
+    assert result is current_yfinance
+    assert captured["db"] is current_yfinance
+    assert provider_calls == [("000300.SS", "2y", date(2026, 7, 8))]
+    assert yfinance_calls == [("000300.SS", "2y")]
+
+
 def test_get_benchmark_data_uses_fallback_when_primary_fails():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
     service._redis_client = None
@@ -172,6 +234,9 @@ def test_get_benchmark_bundle_uses_current_fallback_when_primary_fetch_is_stale(
         return pd.DataFrame()
 
     service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._fetch_from_cn_index_provider = (  # type: ignore[assignment]
+        lambda benchmark_symbol, period, *, required_as_of_date=None: None
+    )
     service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
 
     bundle = service.get_benchmark_bundle(
@@ -200,6 +265,9 @@ def test_resolve_benchmark_bundle_reports_typed_stale_candidates_without_side_ch
         return pd.DataFrame()
 
     service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._fetch_from_cn_index_provider = (  # type: ignore[assignment]
+        lambda benchmark_symbol, period, *, required_as_of_date=None: None
+    )
     service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
 
     resolution = service.resolve_benchmark_bundle(
@@ -274,7 +342,8 @@ def test_benchmark_resolver_uses_public_adapter_contract():
         def store_benchmark_in_redis(self, *, benchmark_symbol, period, data, market):
             self.redis_writes.append((benchmark_symbol, period, data, market))
 
-        def fetch_and_cache_benchmark(self, *, benchmark_symbol, market, period):
+        def fetch_and_cache_benchmark(self, *, benchmark_symbol, market, period, required_as_of_date=None):
+            assert required_as_of_date is None
             self.fetch_calls.append(benchmark_symbol)
             return pd.DataFrame()
 
@@ -305,7 +374,8 @@ def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch
             return fallback_df
         return None
 
-    def fake_fetch(*, benchmark_symbol, market, period):
+    def fake_fetch(*, benchmark_symbol, market, period, required_as_of_date=None):
+        assert required_as_of_date is None
         calls.append(benchmark_symbol)
         return pd.DataFrame()
 
@@ -332,7 +402,8 @@ def test_get_benchmark_bundle_primary_only_policy_fetches_primary():
             return cached_fallback_df
         return None
 
-    def fake_fetch(*, benchmark_symbol, market, period):
+    def fake_fetch(*, benchmark_symbol, market, period, required_as_of_date=None):
+        assert required_as_of_date is None
         fetch_calls.append(benchmark_symbol)
         if benchmark_symbol == "SPY":
             return fetched_primary_df

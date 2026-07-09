@@ -23,6 +23,7 @@ from app.domain.markets.cn_symbols import (
 
 from ..config import settings
 from .cn_universe_ingestion_adapter import infer_cn_sector
+from .price_row_normalization import drop_non_finite_close_rows
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,17 @@ _AKSHARE_OHLCV_FAILURE_THRESHOLD = 2
 _AKSHARE_OHLCV_COOLDOWN_SECONDS = 300.0
 _CN_LISTING_FETCH_ATTEMPTS = 3
 _CN_LISTING_RETRY_BASE_DELAY_SECONDS = 5.0
+_CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER = {
+    "stock_zh_index_daily": {
+        "000001.SS": "sh000001",  # Shanghai Composite
+        "000300.SS": "sh000300",  # CSI 300
+    },
+    "stock_zh_index_daily_em": {
+        "000001.SS": "sh000001",  # Shanghai Composite
+        "000300.SS": "csi000300",  # CSI 300
+    },
+}
+_CN_INDEX_AKSHARE_FETCHERS = tuple(_CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER)
 
 
 class CnDependencyError(RuntimeError):
@@ -714,6 +726,74 @@ class CnMarketDataService:
         if not rows:
             return None
 
+        return self._daily_frame_from_rows(rows)
+
+    def index_ohlcv_dataframe(
+        self,
+        symbol: str,
+        *,
+        period: str = "2y",
+        end: date | str | None = None,
+        required_as_of_date: date | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Return CN index OHLCV for benchmark symbols such as 000300.SS."""
+        normalized_symbol = str(symbol).strip().upper()
+        if not any(normalized_symbol in symbols for symbols in _CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER.values()):
+            return None
+
+        end_date = _as_date(end)
+        start_date = _period_start_date(period, today=end_date)
+        required_date = _as_date(required_as_of_date) if required_as_of_date is not None else None
+        for fetcher_name in _CN_INDEX_AKSHARE_FETCHERS:
+            akshare_symbol = _CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER[fetcher_name].get(normalized_symbol)
+            if akshare_symbol is None:
+                continue
+            fetcher = getattr(self._akshare, fetcher_name, None)
+            if not callable(fetcher):
+                continue
+            try:
+                frame = _call_with_timeout(
+                    lambda fetcher=fetcher: fetcher(symbol=akshare_symbol),
+                    timeout_seconds=self._timeout_seconds,
+                    operation_name=f"CN index OHLCV fetch for {akshare_symbol}",
+                )
+            except Exception as exc:  # pragma: no cover - network variability
+                logger.warning(
+                    "AKShare CN index OHLCV fetch failed for %s via %s: %s",
+                    akshare_symbol,
+                    fetcher_name,
+                    exc,
+                )
+                continue
+
+            result = self._daily_frame_from_rows(self._daily_rows_from_akshare_frame(frame))
+            if result is None:
+                continue
+            date_index = pd.Series(result.index.date, index=result.index)
+            result = result[(date_index >= start_date) & (date_index <= end_date)]
+            result = drop_non_finite_close_rows(result)
+            if not result.empty:
+                if required_date is not None:
+                    eligible_dates = [
+                        row_date
+                        for row_date in result.index.date
+                        if row_date <= required_date
+                    ]
+                    if not eligible_dates or max(eligible_dates) != required_date:
+                        logger.warning(
+                            "AKShare CN index OHLCV fetch for %s via %s is stale for %s",
+                            akshare_symbol,
+                            fetcher_name,
+                            required_date.isoformat(),
+                        )
+                        continue
+                return result
+        return None
+
+    @staticmethod
+    def _daily_frame_from_rows(rows: list[CnDailyPriceRow]) -> pd.DataFrame | None:
+        if not rows:
+            return None
         frame = pd.DataFrame(
             [
                 {
