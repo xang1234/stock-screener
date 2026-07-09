@@ -221,9 +221,9 @@ def sync_ibd_classification_from_github(
             return {"market": normalized_market, "status": status, "imported": None, "reason": reason}
 
         # The downloaded bundle is transient: read it, import, then delete it so
-        # long-lived live workers don't accumulate one gzip per market per run.
-        # (DailyPriceBundleService uses a temp dir + rmtree; here output_dir is
-        # shared/default, so we unlink just this run's file.)
+        # long-lived workers don't accumulate one gzip per market per run.
+        # Auto-created temporary output directories are cleaned up in the outer
+        # finally block, matching the DailyPriceBundleService pattern.
         bundle_path = Path(result["bundle_path"])
         try:
             payload = read_bundle(bundle_path)
