@@ -30,14 +30,17 @@ _AKSHARE_OHLCV_FAILURE_THRESHOLD = 2
 _AKSHARE_OHLCV_COOLDOWN_SECONDS = 300.0
 _CN_LISTING_FETCH_ATTEMPTS = 3
 _CN_LISTING_RETRY_BASE_DELAY_SECONDS = 5.0
-_CN_INDEX_AKSHARE_SYMBOLS = {
-    "000001.SS": "sh000001",  # Shanghai Composite
-    "000300.SS": "sh000300",  # CSI 300
+_CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER = {
+    "stock_zh_index_daily": {
+        "000001.SS": "sh000001",  # Shanghai Composite
+        "000300.SS": "sh000300",  # CSI 300
+    },
+    "stock_zh_index_daily_em": {
+        "000001.SS": "sh000001",  # Shanghai Composite
+        "000300.SS": "csi000300",  # CSI 300
+    },
 }
-_CN_INDEX_AKSHARE_FETCHERS = (
-    "stock_zh_index_daily",
-    "stock_zh_index_daily_em",
-)
+_CN_INDEX_AKSHARE_FETCHERS = tuple(_CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER)
 
 
 class CnDependencyError(RuntimeError):
@@ -733,14 +736,17 @@ class CnMarketDataService:
         required_as_of_date: date | str | None = None,
     ) -> pd.DataFrame | None:
         """Return CN index OHLCV for benchmark symbols such as 000300.SS."""
-        akshare_symbol = _CN_INDEX_AKSHARE_SYMBOLS.get(str(symbol).strip().upper())
-        if akshare_symbol is None:
+        normalized_symbol = str(symbol).strip().upper()
+        if not any(normalized_symbol in symbols for symbols in _CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER.values()):
             return None
 
         end_date = _as_date(end)
         start_date = _period_start_date(period, today=end_date)
         required_date = _as_date(required_as_of_date) if required_as_of_date is not None else None
         for fetcher_name in _CN_INDEX_AKSHARE_FETCHERS:
+            akshare_symbol = _CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER[fetcher_name].get(normalized_symbol)
+            if akshare_symbol is None:
+                continue
             fetcher = getattr(self._akshare, fetcher_name, None)
             if not callable(fetcher):
                 continue

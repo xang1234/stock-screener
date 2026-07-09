@@ -31,6 +31,7 @@ from .benchmark_resolution import (
     BenchmarkFallbackPolicy,
     BenchmarkResolution,
     BenchmarkResolver,
+    benchmark_data_meets_required_date,
 )
 from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 from .price_row_normalization import normalize_price_frame, stock_price_row_from_ohlcv
@@ -377,30 +378,6 @@ class BenchmarkCacheService:
             required_as_of_date=required_as_of_date,
         )
 
-    @staticmethod
-    def _latest_data_date(
-        data: pd.DataFrame | None,
-        *,
-        as_of_date: date | None = None,
-    ) -> date | None:
-        if data is None or data.empty:
-            return None
-        eligible_dates = [
-            row_date
-            for row_date in (pd.Timestamp(value).date() for value in data.index)
-            if as_of_date is None or row_date <= as_of_date
-        ]
-        return max(eligible_dates) if eligible_dates else None
-
-    def _data_meets_required_as_of_date(
-        self,
-        data: pd.DataFrame | None,
-        required_as_of_date: date | None,
-    ) -> bool:
-        if required_as_of_date is None:
-            return True
-        return self._latest_data_date(data, as_of_date=required_as_of_date) == required_as_of_date
-
     def _fetch_normalized_benchmark(
         self,
         benchmark_symbol: str,
@@ -427,7 +404,10 @@ class BenchmarkCacheService:
                 )
             else:
                 if data is not None:
-                    if not self._data_meets_required_as_of_date(data, required_as_of_date):
+                    if not benchmark_data_meets_required_date(
+                        data,
+                        required_as_of_date=required_as_of_date,
+                    ):
                         logger.warning(
                             "CN index provider benchmark %s is stale for %s; falling back to yfinance",
                             benchmark_symbol,
