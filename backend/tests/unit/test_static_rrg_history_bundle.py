@@ -8,9 +8,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-import app.scripts.export_static_site as export_script
 from app.database import Base
 from app.models.industry import IBDGroupRank
+from app.services.group_rank_history_backfill_service import (
+    GroupRankHistoryBackfillService,
+)
 from app.services.rrg_service import MIN_TAIL_WEEKS, RRGService
 from app.services.static_rrg_history_bundle import (
     STATIC_RRG_HISTORY_SCHEMA_VERSION,
@@ -66,7 +68,6 @@ def _seed_weeks(db, *, latest: date, weeks: int, market: str = "HK") -> None:
 
 
 def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
-    monkeypatch,
     tmp_path,
 ):
     engine, factory = _session_factory()
@@ -74,8 +75,14 @@ def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
 
     class _Calendar:
         @staticmethod
-        def is_trading_day(_market, candidate):
-            return candidate.weekday() == 4
+        def trading_days(_market, start, end):
+            dates = []
+            candidate = start
+            while candidate <= end:
+                if candidate.weekday() == 4:
+                    dates.append(candidate)
+                candidate += timedelta(days=1)
+            return dates
 
     class _GroupRankService:
         @staticmethod
@@ -107,12 +114,12 @@ def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
         def sector_map_for_market(_market):
             return {"Semiconductors": "Technology", "Banks": "Financials"}
 
-    monkeypatch.setattr(export_script, "SessionLocal", factory)
-    monkeypatch.setattr(export_script, "get_market_calendar_service", lambda: _Calendar())
-    monkeypatch.setattr(export_script, "get_group_rank_service", lambda: _GroupRankService())
-
     try:
-        backfill = export_script._ensure_group_rank_history(
+        backfill = GroupRankHistoryBackfillService(
+            session_factory=factory,
+            calendar_service=_Calendar(),
+            group_rank_service=_GroupRankService(),
+        ).backfill(
             as_of_date=latest,
             market="HK",
         )

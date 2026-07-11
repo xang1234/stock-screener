@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Protocol
@@ -143,20 +142,10 @@ class StaticGroupsRRGHistoryPayloadSource:
     """Resolve rolling-history inputs, then build the static RRG payload."""
 
     schema_version: str
-    history_states: Mapping[str, StaticRRGHistoryState] = field(default_factory=dict)
+    history_state: StaticRRGHistoryState | None = None
     history_service: StaticRRGHistoryBundleService = field(
         default_factory=StaticRRGHistoryBundleService
     )
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "history_states",
-            {
-                str(market).strip().upper(): state
-                for market, state in self.history_states.items()
-            },
-        )
 
     def build(
         self,
@@ -168,8 +157,8 @@ class StaticGroupsRRGHistoryPayloadSource:
     ) -> dict[str, Any]:
         normalized_market = str(market or "US").strip().upper()
         try:
-            state = self.history_states.get(normalized_market)
-            if state is None:
+            state = self.history_state
+            if state is None or state.market != normalized_market:
                 state = self.history_service.build(
                     db,
                     market=normalized_market,

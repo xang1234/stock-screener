@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from datetime import date
 import json
+import os
+from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import sys
 
 import pytest
 
 from app.domain.markets import market_registry
+from app.domain.markets.catalog import get_market_catalog
 from app.scripts import describe_static_rrg_history
 from app.scripts import export_static_site as export_script
-from app.services.static_rrg_history_bundle import StaticRRGHistoryBundleService
+from app.services.static_rrg_history_contract import (
+    build_static_rrg_history_plan,
+    static_rrg_asset_name,
+)
 
 
 class _SessionFactory:
@@ -38,11 +45,15 @@ def _export_result(output_dir):
 
 @pytest.mark.parametrize("market", market_registry.supported_market_codes())
 def test_rrg_automation_plan_matches_live_market_catalog(market, tmp_path):
-    service = StaticRRGHistoryBundleService()
-    plan = service.plan(market=market, directory=tmp_path)
+    catalog = get_market_catalog()
+    plan = build_static_rrg_history_plan(
+        market=market,
+        directory=tmp_path,
+        market_catalog=catalog,
+    )
 
-    assert plan.enabled is bool(service.market_catalog.rrg_scopes_for_market(market))
-    assert plan.asset_name == service.asset_name(market)
+    assert plan.enabled is bool(catalog.rrg_scopes_for_market(market))
+    assert plan.asset_name == static_rrg_asset_name(market)
     assert plan.source_path == tmp_path / plan.asset_name
     assert plan.output_path == tmp_path / "current" / plan.asset_name
 
@@ -62,10 +73,31 @@ def test_describe_rrg_history_emits_machine_readable_plan(monkeypatch, tmp_path,
 
     assert describe_static_rrg_history.main() == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload == StaticRRGHistoryBundleService().plan(
+    assert payload == build_static_rrg_history_plan(
         market="HK",
         directory=tmp_path,
     ).as_dict()
+
+
+def test_describe_rrg_history_does_not_require_database_runtime(tmp_path):
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.scripts.describe_static_rrg_history",
+            "--market",
+            "HK",
+            "--directory",
+            str(tmp_path),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env={**os.environ, "DATABASE_URL": "sqlite:///tmp/rrg-describe.db"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout)["enabled"] is True
 
 
 def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path):
@@ -89,7 +121,7 @@ def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path
 
     class _ExportService:
         def __init__(self, _session_factory, *, rrg_payload_source):
-            calls.append(("service", rrg_payload_source.history_states))
+            calls.append(("service", rrg_payload_source.history_state))
 
         def export(self, output_dir, **_kwargs):
             calls.append(("export", output_dir))
@@ -121,7 +153,7 @@ def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path
     assert export_script.main() == 0
     assert [call[0] for call in calls] == ["prepare", "service", "export", "persist"]
     assert calls[0][2:] == ("HK", date(2026, 7, 10), history_path.parent)
-    assert calls[1][1] == {"HK": state}
+    assert calls[1][1] is state
 
 
 def test_main_does_not_fail_when_rrg_state_cannot_be_persisted(

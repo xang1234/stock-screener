@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from app.services.static_rrg_history_bundle import StaticRRGHistoryBundleService
+from app.services.static_rrg_history_contract import build_static_rrg_history_plan
 
 
 def main() -> int:
@@ -15,7 +15,7 @@ def main() -> int:
     parser.add_argument("--directory", required=True)
     args = parser.parse_args()
 
-    plan = StaticRRGHistoryBundleService().plan(
+    plan = build_static_rrg_history_plan(
         market=args.market,
         directory=Path(args.directory),
     )

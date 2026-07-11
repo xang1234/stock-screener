@@ -11,13 +11,15 @@ from typing import Any, Literal
 from app.config import settings
 from app.database import SessionLocal
 from app.infra.db.models.feature_store import FeatureRunPointer
-from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.domain.markets import market_registry
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
+from app.services.group_rank_history_backfill_service import (
+    GroupRankHistoryBackfillService,
+)
 from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
@@ -44,7 +46,6 @@ from app.wiring.bootstrap import (
 )
 
 
-STATIC_GROUP_HISTORY_LOOKBACK_DAYS = 100
 STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS = 20
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_BUILD_MODE_PRICE_DELTA = "price_delta"
@@ -226,100 +227,20 @@ def _generate_trading_dates(
     market: str = STATIC_DEFAULT_MARKET,
 ) -> list[date]:
     normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
-    calendar_service = get_market_calendar_service()
-    trading_dates: list[date] = []
-    current = start_date
-    while current <= end_date:
-        if calendar_service.is_trading_day(normalized_market, current):
-            trading_dates.append(current)
-        current += timedelta(days=1)
-    return trading_dates
+    return get_market_calendar_service().trading_days(
+        normalized_market,
+        start_date,
+        end_date,
+    )
 
 
 def _ensure_group_rank_history(*, as_of_date: date, market: str = "US") -> dict[str, Any]:
     """Backfill recent group-rank history so 1W/1M/3M deltas can be rendered."""
-    normalized_market = (market or "US").upper()
-    start_date = as_of_date - timedelta(days=STATIC_GROUP_HISTORY_LOOKBACK_DAYS)
-    desired_dates = _generate_trading_dates(
-        start_date,
-        as_of_date,
-        market=normalized_market,
-    )
-
-    with SessionLocal() as db:
-        if not hasattr(db, "query"):
-            return {
-                "status": "skipped",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": 0,
-                "processed": 0,
-                "errors": 0,
-                "reason": "session_factory_stub",
-            }
-        existing_dates = {
-            record_date
-            for record_date, in db.query(IBDGroupRank.date)
-            .filter(
-                IBDGroupRank.date >= start_date,
-                IBDGroupRank.date <= as_of_date,
-                IBDGroupRank.market == normalized_market,
-            )
-            .distinct()
-            .all()
-        }
-        missing_dates = [calc_date for calc_date in desired_dates if calc_date not in existing_dates]
-        if not missing_dates:
-            print(
-                f"[static-groups:{normalized_market}] Existing rankings already cover "
-                f"{len(desired_dates):,} trading dates through {as_of_date}.",
-                flush=True,
-            )
-            return {
-                "status": "skipped",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": 0,
-                "processed": 0,
-                "errors": 0,
-            }
-
-        print(
-            f"[static-groups:{normalized_market}] Backfilling {len(missing_dates):,} missing trading dates "
-            f"from {missing_dates[0]} to {missing_dates[-1]} before publishing {as_of_date}.",
-            flush=True,
-        )
-        try:
-            stats = get_group_rank_service().fill_gaps_optimized(
-                db, missing_dates, market=normalized_market,
-            )
-        except Exception as exc:
-            print(
-                f"[static-groups:{normalized_market}] Group-rank backfill failed: {exc}",
-                flush=True,
-            )
-            return {
-                "status": "errored",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": len(missing_dates),
-                "processed": 0,
-                "errors": len(missing_dates),
-                "error": str(exc),
-            }
-        stats.update(
-            {
-                "status": "completed",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": len(missing_dates),
-            }
-        )
-        return stats
+    return GroupRankHistoryBackfillService(
+        session_factory=SessionLocal,
+        calendar_service=get_market_calendar_service(),
+        group_rank_service=get_group_rank_service(),
+    ).backfill(as_of_date=as_of_date, market=market)
 
 
 def _ensure_breadth_history(
@@ -776,10 +697,10 @@ def main() -> int:
             SessionLocal,
             rrg_payload_source=StaticGroupsRRGHistoryPayloadSource(
                 schema_version=STATIC_SITE_SCHEMA_VERSION,
-                history_states=(
-                    {args.market: rrg_history.state}
-                    if args.market and rrg_history and rrg_history.state is not None
-                    else {}
+                history_state=(
+                    rrg_history.state
+                    if rrg_history and rrg_history.state is not None
+                    else None
                 ),
             ),
         )
