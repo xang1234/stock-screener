@@ -28,8 +28,8 @@ class RRGHistoryProvider(Protocol):
         """Return latest date, current ranking metadata, and daily RS series."""
 
 
-class USGroupRankHistoryProvider:
-    """Read US RRG history from persisted IBD group-rank rows."""
+class PersistedGroupRankHistoryProvider:
+    """Read RRG history from persisted market-scoped group-rank rows."""
 
     def __init__(self, group_rank_service: Any) -> None:
         self._group_rank_service = group_rank_service
@@ -118,9 +118,13 @@ def build_rrg_history_provider(
     market_group_ranking_service: Any,
 ) -> RRGHistoryProvider:
     return MarketDispatchRRGHistoryProvider(
-        us_provider=USGroupRankHistoryProvider(group_rank_service),
+        us_provider=PersistedGroupRankHistoryProvider(group_rank_service),
         non_us_provider=market_group_ranking_service,
     )
+
+
+# Compatibility name for callers/tests that still describe the live US path.
+USGroupRankHistoryProvider = PersistedGroupRankHistoryProvider
 
 
 def _collect_group_series(
@@ -134,6 +138,7 @@ def _collect_group_series(
 
 __all__ = [
     "MarketDispatchRRGHistoryProvider",
+    "PersistedGroupRankHistoryProvider",
     "RRGHistoryProvider",
     "RRGHistoryResult",
     "USGroupRankHistoryProvider",

@@ -72,6 +72,18 @@ def test_static_workflow_fails_fast_when_weekly_reference_assets_cannot_be_liste
     assert "Failed to list weekly-reference release assets" in content
 
 
+def test_static_workflow_rolls_forward_only_catalog_enabled_rrg_markets():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "get_market_catalog().rrg_scopes_for_market(market)" in content
+    assert "rrg-history-${MARKET_LOWER}.json.gz" in content
+    assert 'gh release upload daily-price-data "$RRG_HISTORY_OUTPUT" --clobber' in content
+    assert "--rrg-history-input" in content
+    assert "--rrg-history-output" in content
+
+
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():
     content = (_PROJECT_ROOT / ".github/workflows/weekly-reference-data.yml").read_text(
         encoding="utf-8"

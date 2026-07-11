@@ -18,6 +18,7 @@ import app.services.static_groups_rrg_export as rrg_export_module
 from app.database import Base
 from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
+from app.models.industry import IBDGroupRank
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
 from app.services.group_ranking_history import select_market_run_series
@@ -1901,21 +1902,48 @@ def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     assert set(payload["payload"]) == {"groups"}
 
 
-def test_static_groups_rrg_builder_uses_runtime_rrg_service(monkeypatch):
-    fake_service = object()
+def test_static_groups_rrg_builder_uses_persisted_group_rank_history(monkeypatch):
+    fake_group_rank_service = object()
+    fake_taxonomy_service = object()
+    captured = {}
+
+    class _FakeRRGService:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
 
     monkeypatch.setattr(
         rrg_export_module,
-        "get_rrg_service",
-        lambda: fake_service,
-        raising=False,
+        "get_group_rank_service",
+        lambda: fake_group_rank_service,
     )
+    monkeypatch.setattr(
+        rrg_export_module,
+        "get_market_taxonomy_service",
+        lambda: fake_taxonomy_service,
+    )
+    monkeypatch.setattr(rrg_export_module, "RRGService", _FakeRRGService)
 
     builder = StaticGroupsRRGPayloadBuilder.from_runtime_services(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
     )
 
-    assert builder.rrg_service is fake_service
+    assert isinstance(
+        captured["history_provider"],
+        rrg_export_module.PersistedGroupRankHistoryProvider,
+    )
+    assert captured["history_provider"]._group_rank_service is fake_group_rank_service
+    assert captured["taxonomy_service"] is fake_taxonomy_service
+    assert isinstance(builder.rrg_service, _FakeRRGService)
+
+
+@pytest.mark.parametrize("market", ["HK", "IN", "JP", "TW"])
+def test_static_rrg_preflight_uses_compact_group_rank_table_for_live_rrg_markets(market):
+    builder = StaticGroupsRRGPayloadBuilder(
+        schema_version=STATIC_SITE_SCHEMA_VERSION,
+        rrg_service=object(),
+    )
+
+    assert builder._required_table_names(market) == (IBDGroupRank.__tablename__,)  # noqa: SLF001
 
 
 def test_static_groups_rrg_builder_propagates_sql_errors_after_preflight(

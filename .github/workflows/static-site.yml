@@ -277,10 +277,45 @@ jobs:
             --market "${{ matrix.market }}" \
             --allow-stale
 
+      - name: Restore rolling RRG history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! (cd backend && python - <<'PY'
+          from app.domain.markets.catalog import get_market_catalog
+
+          market = "${{ matrix.market }}"
+          raise SystemExit(0 if get_market_catalog().rrg_scopes_for_market(market) else 1)
+          PY
+          ); then
+            echo "Market ${{ matrix.market }} has no live RRG capability; skipping rolling history."
+            exit 0
+          fi
+
+          mkdir -p /tmp/rrg-history
+          HISTORY_PATH="/tmp/rrg-history/rrg-history-${MARKET_LOWER}.json.gz"
+          rm -f "$HISTORY_PATH"
+          if gh release download daily-price-data \
+            --pattern "$(basename "$HISTORY_PATH")" \
+            --dir /tmp/rrg-history >/dev/null 2>&1; then
+            echo "Restored rolling RRG history for ${{ matrix.market }}."
+            echo "RRG_HISTORY_INPUT=$HISTORY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "No rolling RRG history found for ${{ matrix.market }}; the static exporter will bootstrap it."
+          fi
+          echo "RRG_HISTORY_OUTPUT=$HISTORY_PATH" >> "$GITHUB_ENV"
+
       - name: Export market static data bundle
         id: export-market
         run: |
           cd backend
+          rrg_args=()
+          if [ -n "${RRG_HISTORY_OUTPUT:-}" ]; then
+            rrg_args+=(--rrg-history-output "$RRG_HISTORY_OUTPUT")
+          fi
+          if [ -n "${RRG_HISTORY_INPUT:-}" ] && [ -f "$RRG_HISTORY_INPUT" ]; then
+            rrg_args+=(--rrg-history-input "$RRG_HISTORY_INPUT")
+          fi
           set +e
           python -m app.scripts.export_static_site \
             --output-dir /tmp/static-data \
@@ -288,7 +323,8 @@ jobs:
             --build-mode price_delta \
             --skip-universe-refresh \
             --skip-fundamentals-refresh \
-            --market "${{ matrix.market }}"
+            --market "${{ matrix.market }}" \
+            "${rrg_args[@]}"
           status=$?
           set -e
           if [ "$status" -eq 78 ]; then
@@ -305,6 +341,29 @@ jobs:
             exit "$status"
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish rolling RRG history
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "${RRG_HISTORY_OUTPUT:-}" ]; then
+            exit 0
+          fi
+          if [ ! -s "$RRG_HISTORY_OUTPUT" ]; then
+            echo "Rolling RRG history output is missing or empty." >&2
+            exit 1
+          fi
+          for attempt in 1 2 3; do
+            if gh release upload daily-price-data "$RRG_HISTORY_OUTPUT" --clobber; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "Failed to publish rolling RRG history after 3 attempts." >&2
+          exit 1
 
       - name: Upload market diagnostics
         if: ${{ always() }}

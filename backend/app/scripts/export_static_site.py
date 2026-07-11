@@ -27,6 +27,10 @@ from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
     StaticSiteExportService,
 )
+from app.services.static_rrg_history_bundle import (
+    StaticRRGHistoryBundleError,
+    StaticRRGHistoryBundleService,
+)
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
 from app.wiring.bootstrap import (
@@ -675,6 +679,14 @@ def main() -> int:
         action="store_true",
         help="Do not delete the output directory before exporting.",
     )
+    parser.add_argument(
+        "--rrg-history-input",
+        help="Optional compact rolling RRG history bundle to restore before refresh.",
+    )
+    parser.add_argument(
+        "--rrg-history-output",
+        help="Optional path for the updated compact rolling RRG history bundle.",
+    )
     args = parser.parse_args()
 
     if args.combine_artifacts_dir and args.refresh_daily:
@@ -683,6 +695,10 @@ def main() -> int:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
     if args.fallback_artifacts_dir and not args.combine_artifacts_dir:
         raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
+    if (args.rrg_history_input or args.rrg_history_output) and not args.market:
+        raise SystemExit("RRG history input/output requires --market")
+    if args.combine_artifacts_dir and (args.rrg_history_input or args.rrg_history_output):
+        raise SystemExit("RRG history input/output cannot be used while combining artifacts")
 
     refresh_warnings: list[str] = []
     selected_market_non_publishable_snapshot: dict[str, Any] | None = None
@@ -700,14 +716,30 @@ def main() -> int:
     else:
         prepare_runtime()
 
+        rrg_history_service = StaticRRGHistoryBundleService()
+        if args.rrg_history_input:
+            try:
+                with SessionLocal() as db:
+                    import_stats = rrg_history_service.import_bundle(
+                        db,
+                        market=args.market,
+                        input_path=Path(args.rrg_history_input),
+                    )
+                print(f"Restored rolling RRG history: {import_stats}")
+            except StaticRRGHistoryBundleError as exc:
+                refresh_warnings.append(
+                    f"Rolling RRG history was invalid and will be bootstrapped: {exc}"
+                )
+
         if args.refresh_daily:
-            refresh_results, refresh_warnings = _run_daily_refresh(
+            refresh_results, daily_refresh_warnings = _run_daily_refresh(
                 market=args.market,
                 skip_universe_refresh=args.skip_universe_refresh,
                 skip_fundamentals_refresh=args.skip_fundamentals_refresh,
                 build_mode=args.build_mode,
                 hydrate_published_snapshot=args.hydrate_published_snapshot,
             )
+            refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")
             for name, result_item in refresh_results.items():
                 print(f"  - {name}: {result_item}")
@@ -770,6 +802,16 @@ def main() -> int:
                 )
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
             raise
+
+        if args.rrg_history_output:
+            with SessionLocal() as db:
+                history_stats = rrg_history_service.export_bundle(
+                    db,
+                    market=args.market,
+                    output_path=Path(args.rrg_history_output),
+                    through_date=date.fromisoformat(result.as_of_date),
+                )
+            print(f"Updated rolling RRG history: {history_stats}")
 
     print("Static site export complete:")
     print(f"  - output_dir: {result.output_dir}")

@@ -9,12 +9,12 @@ from typing import Any
 from sqlalchemy import inspect
 
 from app.domain.markets.catalog import get_market_catalog
-from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
-from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
+from app.services.market_taxonomy_service import get_market_taxonomy_service
+from app.services.rrg_history_provider import PersistedGroupRankHistoryProvider
 from app.services.rrg_service import RRGService
-from app.wiring.bootstrap import get_rrg_service
+from app.wiring.bootstrap import get_group_rank_service
 
 
 class StaticGroupsRRGUnavailableError(RuntimeError):
@@ -42,7 +42,12 @@ class StaticGroupsRRGPayloadBuilder:
     ) -> "StaticGroupsRRGPayloadBuilder":
         return cls(
             schema_version=schema_version,
-            rrg_service=get_rrg_service(),
+            rrg_service=RRGService(
+                history_provider=PersistedGroupRankHistoryProvider(
+                    get_group_rank_service()
+                ),
+                taxonomy_service=get_market_taxonomy_service(),
+            ),
         )
 
     def build(
@@ -120,26 +125,15 @@ class StaticGroupsRRGPayloadBuilder:
             )
 
     def _required_table_names(self, market: str) -> tuple[str, ...]:
-        if market == "US":
-            table_names = {IBDGroupRank.__tablename__}
-            if "sectors" in self.market_catalog.rrg_scopes_for_market(market):
-                table_names.update(
-                    {
-                        IBDIndustryGroup.__tablename__,
-                        StockUniverse.__tablename__,
-                    }
-                )
-            return tuple(sorted(table_names))
-        return tuple(
-            sorted(
+        table_names = {IBDGroupRank.__tablename__}
+        if market == "US" and "sectors" in self.market_catalog.rrg_scopes_for_market(market):
+            table_names.update(
                 {
-                    FeatureRun.__tablename__,
-                    StockFeatureDaily.__tablename__,
-                    StockFundamental.__tablename__,
+                    IBDIndustryGroup.__tablename__,
                     StockUniverse.__tablename__,
                 }
             )
-        )
+        return tuple(sorted(table_names))
 
 
 def _missing_required_tables(db: Any, table_names: tuple[str, ...]) -> list[str]:
