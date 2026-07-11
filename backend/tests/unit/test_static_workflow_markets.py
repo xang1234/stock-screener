@@ -77,11 +77,12 @@ def test_static_workflow_rolls_forward_only_catalog_enabled_rrg_markets():
         encoding="utf-8"
     )
 
-    assert "get_market_catalog().rrg_scopes_for_market(market)" in content
+    assert "rrg-history-data" in content
     assert "rrg-history-${MARKET_LOWER}.json.gz" in content
-    assert 'gh release upload daily-price-data "$RRG_HISTORY_OUTPUT" --clobber' in content
-    assert "--rrg-history-input" in content
-    assert "--rrg-history-output" in content
+    assert 'gh release upload rrg-history-data "$HISTORY_PATH" --clobber' in content
+    assert "--rrg-history-dir" in content
+    assert "continue-on-error: true" in content
+    assert content.index("Upload market artifact") < content.index("Publish rolling RRG history")
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

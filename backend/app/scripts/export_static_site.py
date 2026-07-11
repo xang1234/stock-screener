@@ -30,6 +30,7 @@ from app.services.static_site_export_service import (
 from app.services.static_rrg_history_bundle import (
     StaticRRGHistoryBundleError,
     StaticRRGHistoryBundleService,
+    StaticRRGHistoryPreparation,
 )
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
@@ -680,12 +681,8 @@ def main() -> int:
         help="Do not delete the output directory before exporting.",
     )
     parser.add_argument(
-        "--rrg-history-input",
-        help="Optional compact rolling RRG history bundle to restore before refresh.",
-    )
-    parser.add_argument(
-        "--rrg-history-output",
-        help="Optional path for the updated compact rolling RRG history bundle.",
+        "--rrg-history-dir",
+        help="Optional directory holding the market's rolling RRG history state.",
     )
     args = parser.parse_args()
 
@@ -695,10 +692,10 @@ def main() -> int:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
     if args.fallback_artifacts_dir and not args.combine_artifacts_dir:
         raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
-    if (args.rrg_history_input or args.rrg_history_output) and not args.market:
-        raise SystemExit("RRG history input/output requires --market")
-    if args.combine_artifacts_dir and (args.rrg_history_input or args.rrg_history_output):
-        raise SystemExit("RRG history input/output cannot be used while combining artifacts")
+    if args.rrg_history_dir and not args.market:
+        raise SystemExit("--rrg-history-dir requires --market")
+    if args.combine_artifacts_dir and args.rrg_history_dir:
+        raise SystemExit("--rrg-history-dir cannot be used while combining artifacts")
 
     refresh_warnings: list[str] = []
     selected_market_non_publishable_snapshot: dict[str, Any] | None = None
@@ -715,21 +712,6 @@ def main() -> int:
         )
     else:
         prepare_runtime()
-
-        rrg_history_service = StaticRRGHistoryBundleService()
-        if args.rrg_history_input:
-            try:
-                with SessionLocal() as db:
-                    import_stats = rrg_history_service.import_bundle(
-                        db,
-                        market=args.market,
-                        input_path=Path(args.rrg_history_input),
-                    )
-                print(f"Restored rolling RRG history: {import_stats}")
-            except StaticRRGHistoryBundleError as exc:
-                refresh_warnings.append(
-                    f"Rolling RRG history was invalid and will be bootstrapped: {exc}"
-                )
 
         if args.refresh_daily:
             refresh_results, daily_refresh_warnings = _run_daily_refresh(
@@ -776,7 +758,26 @@ def main() -> int:
                 )
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
 
-        service = StaticSiteExportService(SessionLocal)
+        rrg_history_service = StaticRRGHistoryBundleService()
+        rrg_history: StaticRRGHistoryPreparation | None = None
+        if args.rrg_history_dir and rrg_history_service.enabled_for_market(args.market):
+            with SessionLocal() as db:
+                rrg_history = rrg_history_service.prepare(
+                    db,
+                    market=args.market,
+                    through_date=_resolve_latest_completed_trading_date(args.market),
+                    directory=Path(args.rrg_history_dir),
+                )
+            refresh_warnings.extend(rrg_history.warnings)
+
+        service = StaticSiteExportService(
+            SessionLocal,
+            rrg_history_states=(
+                {args.market: rrg_history.state}
+                if args.market and rrg_history and rrg_history.state is not None
+                else None
+            ),
+        )
         try:
             result = service.export(
                 Path(args.output_dir),
@@ -803,15 +804,16 @@ def main() -> int:
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
             raise
 
-        if args.rrg_history_output:
-            with SessionLocal() as db:
-                history_stats = rrg_history_service.export_bundle(
-                    db,
-                    market=args.market,
-                    output_path=Path(args.rrg_history_output),
-                    through_date=date.fromisoformat(result.as_of_date),
+        if rrg_history is not None:
+            try:
+                history_stats = rrg_history_service.persist(
+                    rrg_history,
+                    exported_as_of_date=date.fromisoformat(result.as_of_date),
                 )
-            print(f"Updated rolling RRG history: {history_stats}")
+                if history_stats is not None:
+                    print(f"Updated rolling RRG history: {history_stats}")
+            except StaticRRGHistoryBundleError as exc:
+                refresh_warnings.append(f"Rolling RRG history was not persisted: {exc}")
 
     print("Static site export complete:")
     print(f"  - output_dir: {result.output_dir}")

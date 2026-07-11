@@ -46,10 +46,10 @@ Use the live app when you need interactive backend workflows.
 - Use `frontend/scripts/capture-static-site-tour.sh` or `frontend/scripts/capture-static-site-tour.mjs` when screenshots/GIFs need refreshing.
 - Keep captions explicit that the static site is a reduced-functionality demo.
 - If a live-only feature appears in the README, do not imply it exists in static mode unless the static export has a corresponding read-only view.
-- RRG-capable markets carry compact `rrg-history-<market>.json.gz` group-rank
-  history as rolling assets on the `daily-price-data` release. Each successful
-  market build replaces its one asset; a missing or invalid asset is rebuilt
-  from the two-year price bundle and the static group-rank bootstrap.
+- RRG-capable markets carry compact `rrg-history-<market>.json.gz` weekly
+  group-strength history on the dedicated `rrg-history-data` release. Each
+  successful market build replaces its one asset; a missing or invalid asset
+  is rebuilt from the two-year price bundle and static group-rank bootstrap.
 
 ## Related Docs
 

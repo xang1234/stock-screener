@@ -1,0 +1,137 @@
+"""Focused CLI coverage for rolling static RRG state."""
+
+from __future__ import annotations
+
+from datetime import date
+from types import SimpleNamespace
+import sys
+
+from app.scripts import export_static_site as export_script
+
+
+class _SessionFactory:
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        return object()
+
+    def __exit__(self, *_args):
+        return False
+
+
+def _export_result(output_dir):
+    return SimpleNamespace(
+        output_dir=output_dir,
+        generated_at="2026-07-10T22:00:00Z",
+        as_of_date="2026-07-10",
+        warnings=(),
+        manifest={},
+    )
+
+
+def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path):
+    calls = []
+    state = SimpleNamespace(through_date=date(2026, 7, 10))
+    history_path = tmp_path / "history" / "rrg-history-hk.json.gz"
+    history_path.parent.mkdir()
+    history_path.write_bytes(b"existing")
+
+    class _HistoryService:
+        def enabled_for_market(self, market):
+            return market == "HK"
+
+        def prepare(self, db, *, market, through_date, directory):
+            calls.append(("prepare", db, market, through_date, directory))
+            return SimpleNamespace(state=state, warnings=())
+
+        def persist(self, preparation, *, exported_as_of_date):
+            calls.append(("persist", preparation.state, exported_as_of_date))
+            return {"weeks": 12}
+
+    class _ExportService:
+        def __init__(self, _session_factory, *, rrg_history_states):
+            calls.append(("service", rrg_history_states))
+
+        def export(self, output_dir, **_kwargs):
+            calls.append(("export", output_dir))
+            return _export_result(output_dir)
+
+    monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(export_script, "SessionLocal", _SessionFactory())
+    monkeypatch.setattr(export_script, "StaticRRGHistoryBundleService", _HistoryService)
+    monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 7, 10),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--market",
+            "HK",
+            "--rrg-history-dir",
+            str(history_path.parent),
+        ],
+    )
+
+    assert export_script.main() == 0
+    assert [call[0] for call in calls] == ["prepare", "service", "export", "persist"]
+    assert calls[0][2:] == ("HK", date(2026, 7, 10), history_path.parent)
+    assert calls[1][1] == {"HK": state}
+
+
+def test_main_does_not_fail_when_rrg_state_cannot_be_persisted(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    state = SimpleNamespace(through_date=date(2026, 7, 10))
+
+    class _HistoryService:
+        def enabled_for_market(self, _market):
+            return True
+
+        def prepare(self, *_args, **_kwargs):
+            return SimpleNamespace(state=state, warnings=())
+
+        def persist(self, *_args, **_kwargs):
+            raise export_script.StaticRRGHistoryBundleError("disk full")
+
+    class _ExportService:
+        def __init__(self, _session_factory, **_kwargs):
+            pass
+
+        def export(self, output_dir, **_kwargs):
+            return _export_result(output_dir)
+
+    monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(export_script, "SessionLocal", _SessionFactory())
+    monkeypatch.setattr(export_script, "StaticRRGHistoryBundleService", _HistoryService)
+    monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 7, 10),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--market",
+            "HK",
+            "--rrg-history-dir",
+            str(tmp_path / "history"),
+        ],
+    )
+
+    assert export_script.main() == 0
+    assert "Rolling RRG history was not persisted: disk full" in capsys.readouterr().out

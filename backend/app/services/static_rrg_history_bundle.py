@@ -1,57 +1,206 @@
-"""Compact rolling history bundle for static-site RRG builds."""
+"""Typed weekly history state for static-site RRG builds."""
 
 from __future__ import annotations
 
 import gzip
 import json
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+import tempfile
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from app.domain.markets.catalog import MarketCatalog, get_market_catalog
 from app.models.industry import IBDGroupRank
+from app.services.market_taxonomy_service import get_market_taxonomy_service
+from app.services.rrg_history_provider import RRGHistoryResult
+from app.services.rrg_service import RRGService
 
 
-STATIC_RRG_HISTORY_SCHEMA_VERSION = "static-rrg-history-v1"
-STATIC_RRG_HISTORY_RETENTION_DAYS = 420
-
-_ROW_FIELDS = (
-    "industry_group",
-    "date",
-    "rank",
-    "avg_rs_rating",
-    "median_rs_rating",
-    "weighted_avg_rs_rating",
-    "rs_std_dev",
-    "num_stocks",
-    "num_stocks_rs_above_80",
-    "top_symbol",
-    "top_rs_rating",
-)
+STATIC_RRG_HISTORY_SCHEMA_VERSION = "static-rrg-history-v2"
+STATIC_RRG_HISTORY_RETENTION_WEEKS = 60
 
 
 class StaticRRGHistoryBundleError(ValueError):
-    """Raised when a rolling RRG history bundle is invalid."""
+    """Raised when rolling RRG state cannot be read or validated."""
+
+
+class StaticRRGHistoryUnavailableError(RuntimeError):
+    """Raised when current weekly RRG state cannot be built."""
+
+
+class StaticRRGGroupPoint(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    industry_group: str = Field(min_length=1)
+    rank: int = Field(ge=1)
+    avg_rs_rating: float
+    num_stocks: int = Field(ge=0)
+
+    @field_validator("industry_group")
+    @classmethod
+    def normalize_group(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("industry_group is required")
+        return normalized
+
+
+class StaticRRGWeek(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    week_start: date
+    source_date: date
+    groups: tuple[StaticRRGGroupPoint, ...]
+
+    @model_validator(mode="after")
+    def validate_week(self) -> "StaticRRGWeek":
+        if self.week_start != _week_start(self.source_date):
+            raise ValueError("week_start does not match source_date")
+        names = [group.industry_group for group in self.groups]
+        if not names or len(names) != len(set(names)):
+            raise ValueError("weekly groups must be non-empty and unique")
+        return self
+
+
+class StaticRRGHistoryState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["static-rrg-history-v2"] = STATIC_RRG_HISTORY_SCHEMA_VERSION
+    market: str
+    through_date: date
+    weeks: tuple[StaticRRGWeek, ...]
+
+    @field_validator("market")
+    @classmethod
+    def normalize_market(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("market is required")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_history(self) -> "StaticRRGHistoryState":
+        week_starts = [week.week_start for week in self.weeks]
+        if not week_starts:
+            raise ValueError("weeks must not be empty")
+        if week_starts != sorted(week_starts) or len(week_starts) != len(set(week_starts)):
+            raise ValueError("weeks must be unique and ordered")
+        if self.weeks[-1].source_date != self.through_date:
+            raise ValueError("through_date must match the latest weekly source_date")
+        return self
+
+
+@dataclass(frozen=True)
+class StaticRRGHistoryPreparation:
+    """Result of loading and advancing one market's rolling state."""
+
+    path: Path
+    state: StaticRRGHistoryState | None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class StaticRRGHistoryBundleService:
-    """Import/export only the group-rank rows needed to carry static RRG forward."""
+    """Merge persisted weekly RRG state with freshly calculated group ranks."""
 
-    retention_days: int = STATIC_RRG_HISTORY_RETENTION_DAYS
+    retention_weeks: int = STATIC_RRG_HISTORY_RETENTION_WEEKS
+    market_catalog: MarketCatalog = field(default_factory=get_market_catalog)
 
-    def export_bundle(
+    @staticmethod
+    def asset_name(market: str) -> str:
+        return f"rrg-history-{_normalize_market(market).lower()}.json.gz"
+
+    def enabled_for_market(self, market: str) -> bool:
+        return bool(self.market_catalog.rrg_scopes_for_market(_normalize_market(market)))
+
+    def prepare(
         self,
         db: Session,
         *,
         market: str,
-        output_path: Path,
         through_date: date,
-    ) -> dict[str, Any]:
+        directory: Path,
+    ) -> StaticRRGHistoryPreparation:
+        """Load prior state when valid, then advance it from current DB rows."""
+        asset_name = self.asset_name(market)
+        source_path = directory / asset_name
+        output_path = directory / "current" / asset_name
+        previous = None
+        warnings: list[str] = []
+        if source_path.exists():
+            try:
+                previous = self.load(source_path, expected_market=market)
+            except StaticRRGHistoryBundleError as exc:
+                warnings.append(
+                    f"Rolling RRG history was invalid and will be bootstrapped: {exc}"
+                )
+        try:
+            state = self.build(
+                db,
+                market=market,
+                through_date=through_date,
+                previous=previous,
+            )
+        except (StaticRRGHistoryBundleError, StaticRRGHistoryUnavailableError) as exc:
+            warnings.append(f"Rolling RRG history was not advanced: {exc}")
+            state = None
+        return StaticRRGHistoryPreparation(
+            path=output_path,
+            state=state,
+            warnings=tuple(warnings),
+        )
+
+    def load(self, input_path: Path, *, expected_market: str) -> StaticRRGHistoryState:
+        try:
+            payload = _read_payload(input_path)
+            state = StaticRRGHistoryState.model_validate(payload)
+        except (OSError, json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
+            raise StaticRRGHistoryBundleError(
+                f"Unable to load RRG history bundle {input_path}: {exc}"
+            ) from exc
+        normalized_market = _normalize_market(expected_market)
+        if state.market != normalized_market:
+            raise StaticRRGHistoryBundleError(
+                f"RRG history bundle market {state.market} does not match {normalized_market}."
+            )
+        return state
+
+    def build(
+        self,
+        db: Session,
+        *,
+        market: str,
+        through_date: date,
+        previous: StaticRRGHistoryState | None = None,
+    ) -> StaticRRGHistoryState:
         normalized_market = _normalize_market(market)
-        cutoff = through_date - timedelta(days=max(1, int(self.retention_days)))
+        if not self.enabled_for_market(normalized_market):
+            raise StaticRRGHistoryUnavailableError(
+                f"RRG is not enabled for market {normalized_market}."
+            )
+        if previous is not None and previous.market != normalized_market:
+            raise StaticRRGHistoryBundleError(
+                f"RRG history bundle market {previous.market} does not match {normalized_market}."
+            )
+        if not inspect(db.get_bind()).has_table(IBDGroupRank.__tablename__):
+            raise StaticRRGHistoryUnavailableError(
+                f"RRG source table {IBDGroupRank.__tablename__} is unavailable."
+            )
+
+        cutoff = through_date - timedelta(weeks=max(1, int(self.retention_weeks)))
         rows = (
             db.query(IBDGroupRank)
             .filter(
@@ -62,64 +211,149 @@ class StaticRRGHistoryBundleService:
             .order_by(IBDGroupRank.date.asc(), IBDGroupRank.rank.asc())
             .all()
         )
-        if not rows:
-            raise StaticRRGHistoryBundleError(
-                f"No group-rank history is available for market {normalized_market}."
-            )
-
-        payload = {
-            "schema_version": STATIC_RRG_HISTORY_SCHEMA_VERSION,
-            "market": normalized_market,
-            "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            "through_date": through_date.isoformat(),
-            "retention_days": int(self.retention_days),
-            "rows": [_serialize_row(row) for row in rows],
+        weeks = {
+            week.week_start: week
+            for week in (previous.weeks if previous is not None else ())
+            if week.week_start >= _week_start(cutoff)
         }
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_payload(output_path, payload)
+        try:
+            weeks.update(_weekly_snapshots(rows))
+            ordered = tuple(weeks[key] for key in sorted(weeks))
+            if not ordered or ordered[-1].source_date != through_date:
+                raise StaticRRGHistoryUnavailableError(
+                    f"No current group-rank history is available for {normalized_market} "
+                    f"on {through_date.isoformat()}."
+                )
+            return StaticRRGHistoryState(
+                market=normalized_market,
+                through_date=through_date,
+                weeks=ordered,
+            )
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise StaticRRGHistoryBundleError(
+                f"Unable to build RRG history for {normalized_market}: {exc}"
+            ) from exc
+
+    def write(self, state: StaticRRGHistoryState, output_path: Path) -> dict[str, Any]:
+        temp_path: Path | None = None
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                dir=output_path.parent,
+                prefix=f".{output_path.name}.",
+                suffix=".tmp",
+            ) as temp:
+                temp_path = Path(temp.name)
+            _write_payload(temp_path, state.model_dump(mode="json"))
+            temp_path.replace(output_path)
+        except (OSError, TypeError, ValueError) as exc:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            raise StaticRRGHistoryBundleError(
+                f"Unable to write RRG history bundle {output_path}: {exc}"
+            ) from exc
         return {
             "path": str(output_path),
-            "market": normalized_market,
-            "through_date": through_date.isoformat(),
-            "rows": len(rows),
-            "dates": len({row.date for row in rows}),
+            "market": state.market,
+            "through_date": state.through_date.isoformat(),
+            "weeks": len(state.weeks),
+            "groups": sum(len(week.groups) for week in state.weeks),
         }
 
-    def import_bundle(
+    def persist(
         self,
-        db: Session,
+        preparation: StaticRRGHistoryPreparation,
+        *,
+        exported_as_of_date: date,
+    ) -> dict[str, Any] | None:
+        """Persist prepared state only when it matches the published artifact."""
+        state = preparation.state
+        if state is None or state.through_date != exported_as_of_date:
+            return None
+        return self.write(state, preparation.path)
+
+
+@dataclass(frozen=True)
+class StaticRRGHistoryProvider:
+    """Serve a validated weekly state through the shared RRG provider contract."""
+
+    state: StaticRRGHistoryState
+
+    def get_all_groups_history(
+        self,
+        _db: Any,
         *,
         market: str,
-        input_path: Path,
-    ) -> dict[str, Any]:
+        days: int,
+        as_of_date: date | None = None,
+    ) -> RRGHistoryResult:
         normalized_market = _normalize_market(market)
-        payload = _read_payload(input_path)
-        rows = _validate_payload(payload, expected_market=normalized_market)
-        row_dates = [row["date"] for row in rows]
-        first_date = min(row_dates)
-        last_date = max(row_dates)
-
-        try:
-            db.query(IBDGroupRank).filter(
-                IBDGroupRank.market == normalized_market,
-                IBDGroupRank.date >= first_date,
-                IBDGroupRank.date <= last_date,
-            ).delete(synchronize_session=False)
-            db.bulk_save_objects(
-                [IBDGroupRank(market=normalized_market, **row) for row in rows]
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-
-        return {
-            "path": str(input_path),
-            "market": normalized_market,
-            "through_date": last_date.isoformat(),
-            "rows": len(rows),
-            "dates": len(set(row_dates)),
+        if normalized_market != self.state.market:
+            return None, {}, {}
+        target_date = as_of_date or self.state.through_date
+        cutoff = target_date - timedelta(days=days)
+        weeks = [
+            week
+            for week in self.state.weeks
+            if cutoff <= week.source_date <= target_date
+        ]
+        if not weeks:
+            return None, {}, {}
+        latest = weeks[-1]
+        meta = {
+            group.industry_group: {
+                "industry_group": group.industry_group,
+                "rank": group.rank,
+                "avg_rs_rating": group.avg_rs_rating,
+                "num_stocks": group.num_stocks,
+            }
+            for group in latest.groups
         }
+        series: dict[str, list[tuple[date, float, int]]] = defaultdict(list)
+        for week in weeks:
+            for group in week.groups:
+                series[group.industry_group].append(
+                    (week.source_date, group.avg_rs_rating, group.num_stocks)
+                )
+        return latest.source_date.isoformat(), meta, dict(series)
+
+
+def build_static_rrg_service(state: StaticRRGHistoryState) -> RRGService:
+    """Compose the static adapter once, outside the payload builder."""
+    return RRGService(
+        history_provider=StaticRRGHistoryProvider(state),
+        taxonomy_service=get_market_taxonomy_service(),
+    )
+
+
+def _weekly_snapshots(rows: list[IBDGroupRank]) -> dict[date, StaticRRGWeek]:
+    rows_by_date: dict[date, list[IBDGroupRank]] = defaultdict(list)
+    for row in rows:
+        rows_by_date[row.date].append(row)
+    latest_date_by_week: dict[date, date] = {}
+    for row_date in rows_by_date:
+        latest_date_by_week[_week_start(row_date)] = row_date
+    return {
+        week_start: StaticRRGWeek(
+            week_start=week_start,
+            source_date=source_date,
+            groups=tuple(
+                StaticRRGGroupPoint(
+                    industry_group=row.industry_group,
+                    rank=row.rank,
+                    avg_rs_rating=row.avg_rs_rating,
+                    num_stocks=int(row.num_stocks or 0),
+                )
+                for row in sorted(rows_by_date[source_date], key=lambda item: item.rank)
+            ),
+        )
+        for week_start, source_date in latest_date_by_week.items()
+    }
+
+
+def _week_start(value: date) -> date:
+    return value - timedelta(days=(value.weekday() + 1) % 7)
 
 
 def _normalize_market(market: str) -> str:
@@ -129,95 +363,28 @@ def _normalize_market(market: str) -> str:
     return normalized
 
 
-def _serialize_row(row: IBDGroupRank) -> dict[str, Any]:
-    payload = {field: getattr(row, field) for field in _ROW_FIELDS}
-    payload["date"] = row.date.isoformat()
-    return payload
-
-
-def _validate_payload(
-    payload: Any,
-    *,
-    expected_market: str,
-) -> list[dict[str, Any]]:
-    if not isinstance(payload, dict):
-        raise StaticRRGHistoryBundleError("RRG history bundle must be a JSON object.")
-    if payload.get("schema_version") != STATIC_RRG_HISTORY_SCHEMA_VERSION:
-        raise StaticRRGHistoryBundleError("Unsupported RRG history bundle schema version.")
-    bundle_market = _normalize_market(payload.get("market"))
-    if bundle_market != expected_market:
-        raise StaticRRGHistoryBundleError(
-            f"RRG history bundle market {bundle_market} does not match {expected_market}."
-        )
-    raw_rows = payload.get("rows")
-    if not isinstance(raw_rows, list) or not raw_rows:
-        raise StaticRRGHistoryBundleError("RRG history bundle contains no rows.")
-
-    rows: list[dict[str, Any]] = []
-    seen: set[tuple[date, str]] = set()
-    for raw in raw_rows:
-        if not isinstance(raw, dict):
-            raise StaticRRGHistoryBundleError("RRG history row must be an object.")
-        try:
-            row_date = date.fromisoformat(str(raw["date"]))
-            industry_group = str(raw["industry_group"]).strip()
-            rank = int(raw["rank"])
-            avg_rs_rating = float(raw["avg_rs_rating"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise StaticRRGHistoryBundleError("Malformed RRG history row.") from exc
-        if not industry_group or rank < 1:
-            raise StaticRRGHistoryBundleError("Malformed RRG history row identity.")
-        key = (row_date, industry_group)
-        if key in seen:
-            raise StaticRRGHistoryBundleError(
-                f"Duplicate RRG history row for {industry_group} on {row_date}."
-            )
-        seen.add(key)
-        rows.append(
-            {
-                "industry_group": industry_group,
-                "date": row_date,
-                "rank": rank,
-                "avg_rs_rating": avg_rs_rating,
-                "median_rs_rating": _optional_float(raw.get("median_rs_rating")),
-                "weighted_avg_rs_rating": _optional_float(raw.get("weighted_avg_rs_rating")),
-                "rs_std_dev": _optional_float(raw.get("rs_std_dev")),
-                "num_stocks": int(raw.get("num_stocks") or 0),
-                "num_stocks_rs_above_80": int(raw.get("num_stocks_rs_above_80") or 0),
-                "top_symbol": str(raw["top_symbol"]) if raw.get("top_symbol") else None,
-                "top_rs_rating": _optional_float(raw.get("top_rs_rating")),
-            }
-        )
-    return rows
-
-
-def _optional_float(value: Any) -> float | None:
-    return None if value is None else float(value)
-
-
 def _read_payload(path: Path) -> Any:
-    try:
-        if path.suffix == ".gz":
-            with gzip.open(path, "rt", encoding="utf-8") as handle:
-                return json.load(handle)
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise StaticRRGHistoryBundleError(
-            f"Unable to read RRG history bundle {path}: {exc}"
-        ) from exc
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            return json.load(handle)
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_payload(path: Path, payload: dict[str, Any]) -> None:
-    if path.suffix == ".gz":
-        with gzip.open(path, "wt", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-        return
-    path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
 
 
 __all__ = [
-    "STATIC_RRG_HISTORY_RETENTION_DAYS",
+    "STATIC_RRG_HISTORY_RETENTION_WEEKS",
     "STATIC_RRG_HISTORY_SCHEMA_VERSION",
+    "StaticRRGGroupPoint",
     "StaticRRGHistoryBundleError",
     "StaticRRGHistoryBundleService",
+    "StaticRRGHistoryProvider",
+    "StaticRRGHistoryPreparation",
+    "StaticRRGHistoryState",
+    "StaticRRGHistoryUnavailableError",
+    "StaticRRGWeek",
+    "build_static_rrg_service",
 ]

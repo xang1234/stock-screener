@@ -9,12 +9,9 @@ from typing import Any
 from sqlalchemy import inspect
 
 from app.domain.markets.catalog import get_market_catalog
-from app.models.industry import IBDGroupRank, IBDIndustryGroup
+from app.models.industry import IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
-from app.services.market_taxonomy_service import get_market_taxonomy_service
-from app.services.rrg_history_provider import PersistedGroupRankHistoryProvider
 from app.services.rrg_service import RRGService
-from app.wiring.bootstrap import get_group_rank_service
 
 
 class StaticGroupsRRGUnavailableError(RuntimeError):
@@ -33,22 +30,6 @@ class StaticGroupsRRGPayloadBuilder:
     schema_version: str
     rrg_service: RRGService
     market_catalog: Any = field(default_factory=get_market_catalog)
-
-    @classmethod
-    def from_runtime_services(
-        cls,
-        *,
-        schema_version: str,
-    ) -> "StaticGroupsRRGPayloadBuilder":
-        return cls(
-            schema_version=schema_version,
-            rrg_service=RRGService(
-                history_provider=PersistedGroupRankHistoryProvider(
-                    get_group_rank_service()
-                ),
-                taxonomy_service=get_market_taxonomy_service(),
-            ),
-        )
 
     def build(
         self,
@@ -125,7 +106,7 @@ class StaticGroupsRRGPayloadBuilder:
             )
 
     def _required_table_names(self, market: str) -> tuple[str, ...]:
-        table_names = {IBDGroupRank.__tablename__}
+        table_names: set[str] = set()
         if market == "US" and "sectors" in self.market_catalog.rrg_scopes_for_market(market):
             table_names.update(
                 {

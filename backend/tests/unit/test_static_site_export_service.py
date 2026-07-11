@@ -14,16 +14,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 import app.services.static_site_export_service as export_module
-import app.services.static_groups_rrg_export as rrg_export_module
 from app.database import Base
 from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
-from app.models.industry import IBDGroupRank
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
-from app.services.static_groups_rrg_export import StaticGroupsRRGPayloadBuilder
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGUnavailableError,
+    StaticGroupsRRGPayloadBuilder,
+)
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
@@ -1838,7 +1839,7 @@ def test_build_groups_rrg_payload_rejects_date_mismatch(
     )
 
     with session_factory() as db, pytest.raises(
-        rrg_export_module.StaticGroupsRRGUnavailableError,
+        StaticGroupsRRGUnavailableError,
         match="2026-04-18",
     ):
         builder.build(
@@ -1902,48 +1903,14 @@ def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     assert set(payload["payload"]) == {"groups"}
 
 
-def test_static_groups_rrg_builder_uses_persisted_group_rank_history(monkeypatch):
-    fake_group_rank_service = object()
-    fake_taxonomy_service = object()
-    captured = {}
-
-    class _FakeRRGService:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(
-        rrg_export_module,
-        "get_group_rank_service",
-        lambda: fake_group_rank_service,
-    )
-    monkeypatch.setattr(
-        rrg_export_module,
-        "get_market_taxonomy_service",
-        lambda: fake_taxonomy_service,
-    )
-    monkeypatch.setattr(rrg_export_module, "RRGService", _FakeRRGService)
-
-    builder = StaticGroupsRRGPayloadBuilder.from_runtime_services(
-        schema_version=STATIC_SITE_SCHEMA_VERSION,
-    )
-
-    assert isinstance(
-        captured["history_provider"],
-        rrg_export_module.PersistedGroupRankHistoryProvider,
-    )
-    assert captured["history_provider"]._group_rank_service is fake_group_rank_service
-    assert captured["taxonomy_service"] is fake_taxonomy_service
-    assert isinstance(builder.rrg_service, _FakeRRGService)
-
-
 @pytest.mark.parametrize("market", ["HK", "IN", "JP", "TW"])
-def test_static_rrg_preflight_uses_compact_group_rank_table_for_live_rrg_markets(market):
+def test_static_rrg_preflight_needs_no_database_tables_for_group_only_markets(market):
     builder = StaticGroupsRRGPayloadBuilder(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
         rrg_service=object(),
     )
 
-    assert builder._required_table_names(market) == (IBDGroupRank.__tablename__,)  # noqa: SLF001
+    assert builder._required_table_names(market) == ()  # noqa: SLF001
 
 
 def test_static_groups_rrg_builder_propagates_sql_errors_after_preflight(
@@ -1982,14 +1949,15 @@ def test_build_groups_rrg_payload_propagates_non_missing_table_sql_errors(
     service, session_factory = service_and_session_factory
 
     class _FakeBuilder:
-        @classmethod
-        def from_runtime_services(cls, *, schema_version):  # noqa: ARG003
-            return cls()
+        def __init__(self, **_kwargs):
+            pass
 
         def build(self, **kwargs):  # noqa: ANN003
             raise SQLAlchemyError("connection failed")
 
     monkeypatch.setattr(export_module, "StaticGroupsRRGPayloadBuilder", _FakeBuilder)
+    monkeypatch.setattr(export_module, "build_static_rrg_service", lambda _state: object())
+    service._rrg_history_states["HK"] = object()  # noqa: SLF001
 
     with session_factory() as db, pytest.raises(SQLAlchemyError, match="connection failed"):
         service._build_groups_rrg_payload(  # noqa: SLF001
