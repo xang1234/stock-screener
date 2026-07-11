@@ -196,7 +196,9 @@ def sync_ibd_classification_from_github(
     cleanup_download_dir = False
 
     if output_dir is None:
-        download_dir = Path(tempfile.mkdtemp(...))
+        download_dir = Path(
+            tempfile.mkdtemp(prefix=f"ibd-classification-{normalized_market.lower()}-")
+        )
         cleanup_download_dir = True
     else:
         download_dir = Path(output_dir)
