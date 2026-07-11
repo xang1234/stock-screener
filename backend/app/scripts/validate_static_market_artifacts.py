@@ -81,13 +81,6 @@ class MarketArtifactStatus:
             reason=normalized_reason,
         )
 
-    def allows_selected_fallback(self) -> bool:
-        return (
-            not self.has_current_artifact
-            and self.status == "skipped"
-            and self.reason == "not_trading_day"
-        )
-
     def diagnostic_label(self) -> str:
         if self.reason:
             return f"status {self.status}/{self.reason}"
@@ -105,6 +98,22 @@ class StaticMarketArtifactValidationResult:
     @property
     def present_markets(self) -> set[str]:
         return self.current_markets | self.fallback_markets
+
+    @property
+    def selected_fallback_markets(self) -> set[str]:
+        return (self.selected_markets & self.fallback_markets) - self.current_markets
+
+    @property
+    def selected_fallback_diagnostics(self) -> dict[str, str]:
+        diagnostics: dict[str, str] = {}
+        for market in self.selected_fallback_markets:
+            status = self.statuses.get(market)
+            diagnostics[market] = (
+                status.diagnostic_label()
+                if status is not None
+                else "missing status artifact"
+            )
+        return diagnostics
 
 
 def parse_selected_markets(raw: str | None) -> set[str]:
@@ -155,23 +164,6 @@ def _normalize_markets(markets: Iterable[str]) -> set[str]:
     return {str(market).strip().upper() for market in markets if str(market).strip()}
 
 
-def _selected_markets_missing_current_artifacts(
-    *,
-    selected_markets: set[str],
-    current_markets: set[str],
-    statuses: dict[str, MarketArtifactStatus],
-) -> dict[str, str]:
-    missing: dict[str, str] = {}
-    for market in selected_markets:
-        if market in current_markets:
-            continue
-        status = statuses.get(market)
-        if status is not None and status.allows_selected_fallback():
-            continue
-        missing[market] = status.diagnostic_label() if status is not None else "missing status artifact"
-    return missing
-
-
 def validate_market_artifacts(
     *,
     current_dir: Path,
@@ -179,6 +171,7 @@ def validate_market_artifacts(
     selected_markets: Iterable[str],
     expected_markets: Iterable[str] | None = None,
 ) -> StaticMarketArtifactValidationResult:
+    """Require complete coverage while allowing last-known-good market fallbacks."""
     expected = (
         _normalize_markets(expected_markets)
         if expected_markets is not None
@@ -197,21 +190,6 @@ def validate_market_artifacts(
         raise StaticMarketArtifactValidationError(
             "Refusing to publish an incomplete static site. No current build "
             f"and no fallback artifact for: {', '.join(missing)}."
-        )
-
-    selected_missing = _selected_markets_missing_current_artifacts(
-        selected_markets=result.selected_markets,
-        current_markets=result.current_markets,
-        statuses=result.statuses,
-    )
-    if selected_missing:
-        details = "; ".join(
-            f"{market}: {reason}" for market, reason in sorted(selected_missing.items())
-        )
-        raise StaticMarketArtifactValidationError(
-            "Refusing to publish stale fallback data for a selected market. "
-            "Selected markets missing current artifacts: "
-            f"{', '.join(sorted(selected_missing))}. Details: {details}."
         )
 
     return result
@@ -244,6 +222,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Present markets:  {_format_market_list(result.present_markets)}")
     if result.selected_markets:
         print(f"Selected markets: {_format_market_list(result.selected_markets)}")
+    if result.selected_fallback_markets:
+        details = "; ".join(
+            f"{market}: {reason}"
+            for market, reason in sorted(result.selected_fallback_diagnostics.items())
+        )
+        print(
+            "::warning::Publishing last-known-good fallback artifacts for selected markets: "
+            f"{_format_market_list(result.selected_fallback_markets)}. Details: {details}.",
+            flush=True,
+        )
     print("All supported markets present; static site is complete.")
     return 0
 
