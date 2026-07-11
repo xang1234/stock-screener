@@ -10,6 +10,8 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -191,44 +193,58 @@ def sync_ibd_classification_from_github(
     sync_service = github_sync_service or GitHubReleaseSyncService(
         api_base=settings.github_data_api_base
     )
-    result = sync_service.fetch_latest_bundle(
-        repository_full_name=settings.github_data_repository,
-        release_tag=RELEASE_TAG,
-        manifest_asset_name=latest_manifest_name(normalized_market),
-        source_mode=settings.market_data_source_mode,
-        expected_manifest_schema=IBD_CLASSIFICATION_MANIFEST_SCHEMA_VERSION,
-        required_manifest_keys=("bundle_asset_name", "sha256"),
-        allow_stale=allow_stale,
-        github_token=settings.github_data_token,
-        request_timeout_seconds=settings.github_data_timeout_seconds,
-        output_dir=output_dir or str(Path(".tmp") / "ibd-classification"),
-    )
+    cleanup_download_dir = False
 
-    status = result.get("status")
-    if status != "success":
-        reason = result.get("reason") or result.get("stale_reason") or result.get("error")
-        return {"market": normalized_market, "status": status, "imported": None, "reason": reason}
+    if output_dir is None:
+        download_dir = Path(
+            tempfile.mkdtemp(prefix=f"ibd-classification-{normalized_market.lower()}-")
+        )
+        cleanup_download_dir = True
+    else:
+        download_dir = Path(output_dir)
 
-    # The downloaded bundle is transient: read it, import, then delete it so
-    # long-lived live workers don't accumulate one gzip per market per run.
-    # (DailyPriceBundleService uses a temp dir + rmtree; here output_dir is
-    # shared/default, so we unlink just this run's file.)
-    bundle_path = Path(result["bundle_path"])
     try:
-        payload = read_bundle(bundle_path)
-        # Guard the download/trust boundary: the manifest asset is market-specific,
-        # so a market mismatch means a mispublished bundle. Mirror
-        # DailyPriceBundleService.sync_from_github, which rejects the same case.
-        payload_market = str(payload.get("market") or "").strip().upper()
-        if payload_market and payload_market != normalized_market:
-            return {
-                "market": normalized_market,
-                "status": "market_mismatch",
-                "imported": None,
-                "reason": f"bundle market {payload_market!r} does not match requested {normalized_market!r}",
-            }
+        result = sync_service.fetch_latest_bundle(
+            repository_full_name=settings.github_data_repository,
+            release_tag=RELEASE_TAG,
+            manifest_asset_name=latest_manifest_name(normalized_market),
+            source_mode=settings.market_data_source_mode,
+            expected_manifest_schema=IBD_CLASSIFICATION_MANIFEST_SCHEMA_VERSION,
+            required_manifest_keys=("bundle_asset_name", "sha256"),
+            allow_stale=allow_stale,
+            github_token=settings.github_data_token,
+            request_timeout_seconds=settings.github_data_timeout_seconds,
+            output_dir=download_dir,
+        )
 
-        stats = import_classifications(db, payload)
-        return {"market": normalized_market, "status": status, "imported": stats, "reason": None}
+        status = result.get("status")
+        if status != "success":
+            reason = result.get("reason") or result.get("stale_reason") or result.get("error")
+            return {"market": normalized_market, "status": status, "imported": None, "reason": reason}
+
+        # The downloaded bundle is transient: read it, import, then delete it so
+        # long-lived workers don't accumulate one gzip per market per run.
+        # Auto-created temporary output directories are cleaned up in the outer
+        # finally block, matching the DailyPriceBundleService pattern.
+        bundle_path = Path(result["bundle_path"])
+        try:
+            payload = read_bundle(bundle_path)
+            # Guard the download/trust boundary: the manifest asset is market-specific,
+            # so a market mismatch means a mispublished bundle. Mirror
+            # DailyPriceBundleService.sync_from_github, which rejects the same case.
+            payload_market = str(payload.get("market") or "").strip().upper()
+            if payload_market and payload_market != normalized_market:
+                return {
+                    "market": normalized_market,
+                    "status": "market_mismatch",
+                    "imported": None,
+                    "reason": f"bundle market {payload_market!r} does not match requested {normalized_market!r}",
+                }
+
+            stats = import_classifications(db, payload)
+            return {"market": normalized_market, "status": status, "imported": stats, "reason": None}
+        finally:
+            bundle_path.unlink(missing_ok=True)
     finally:
-        bundle_path.unlink(missing_ok=True)
+        if cleanup_download_dir:
+            shutil.rmtree(download_dir, ignore_errors=True)
