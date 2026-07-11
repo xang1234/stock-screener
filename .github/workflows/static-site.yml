@@ -283,21 +283,36 @@ jobs:
             --market "${{ matrix.market }}" \
             --allow-stale
 
-      - name: Restore rolling RRG history
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Plan rolling RRG history
+        id: rrg-history
         run: |
           mkdir -p /tmp/rrg-history
-          HISTORY_PATH="/tmp/rrg-history/rrg-history-${MARKET_LOWER}.json.gz"
-          rm -f "$HISTORY_PATH"
+          cd backend
+          PLAN="$(python -m app.scripts.describe_static_rrg_history \
+            --market "${{ matrix.market }}" \
+            --directory /tmp/rrg-history)"
+          echo "enabled=$(jq -r '.enabled' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$(jq -r '.asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "source_path=$(jq -r '.source_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "output_path=$(jq -r '.output_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "RRG_HISTORY_DIR=/tmp/rrg-history" >> "$GITHUB_ENV"
+
+      - name: Restore rolling RRG history
+        if: ${{ steps.rrg-history.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_NAME: ${{ steps.rrg-history.outputs.asset_name }}
+          SOURCE_PATH: ${{ steps.rrg-history.outputs.source_path }}
+        run: |
+          mkdir -p "$(dirname "$SOURCE_PATH")"
+          rm -f "$SOURCE_PATH"
           if gh release download rrg-history-data \
-            --pattern "$(basename "$HISTORY_PATH")" \
-            --dir /tmp/rrg-history >/dev/null 2>&1; then
+            --pattern "$ASSET_NAME" \
+            --dir "$(dirname "$SOURCE_PATH")" >/dev/null 2>&1; then
             echo "Restored rolling RRG history for ${{ matrix.market }}."
           else
             echo "No rolling RRG history found for ${{ matrix.market }}; the static exporter will bootstrap it."
           fi
-          echo "RRG_HISTORY_DIR=/tmp/rrg-history" >> "$GITHUB_ENV"
 
       - name: Export market static data bundle
         id: export-market
@@ -371,12 +386,12 @@ jobs:
           if-no-files-found: error
 
       - name: Publish rolling RRG history
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.rrg-history.outputs.enabled == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          HISTORY_PATH: ${{ steps.rrg-history.outputs.output_path }}
         run: |
-          HISTORY_PATH="${RRG_HISTORY_DIR}/current/rrg-history-${MARKET_LOWER}.json.gz"
           if [ ! -s "$HISTORY_PATH" ]; then
             echo "No current rolling RRG history was produced; market publication remains valid."
             exit 0

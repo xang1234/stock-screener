@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
@@ -49,19 +48,13 @@ from app.services.preset_screens import (
     resolve_preset_screens_for_defaults,
 )
 from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGHistoryPayloadSource,
     StaticGroupsRRGUnavailableError,
-    StaticGroupsRRGPayloadBuilder,
+    StaticGroupsRRGPayloadSource,
 )
 from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
-)
-from app.services.static_rrg_history_bundle import (
-    StaticRRGHistoryBundleError,
-    StaticRRGHistoryBundleService,
-    StaticRRGHistoryState,
-    StaticRRGHistoryUnavailableError,
-    build_static_rrg_service,
 )
 from app.services.snapshot_date_coherence import (
     SnapshotSectionDates,
@@ -148,14 +141,12 @@ class StaticSiteExportService:
         self,
         session_factory: sessionmaker,
         *,
-        rrg_history_states: Mapping[str, StaticRRGHistoryState] | None = None,
+        rrg_payload_source: StaticGroupsRRGPayloadSource | None = None,
     ) -> None:
         self._session_factory = session_factory
-        self._rrg_history_states = {
-            str(market).upper(): state
-            for market, state in (rrg_history_states or {}).items()
-        }
-        self._rrg_history_service = StaticRRGHistoryBundleService()
+        self._rrg_payload_source = rrg_payload_source or StaticGroupsRRGHistoryPayloadSource(
+            schema_version=STATIC_SITE_SCHEMA_VERSION,
+        )
         self._ui_snapshot_service = UISnapshotService(session_factory)
         self._price_cache = get_price_cache()
         self._fundamentals_cache = get_fundamentals_cache()
@@ -560,17 +551,7 @@ class StaticSiteExportService:
         this optional section is reported unavailable without aborting export.
         """
         try:
-            state = self._rrg_history_states.get(market)
-            if state is None:
-                state = self._rrg_history_service.build(
-                    db,
-                    market=market,
-                    through_date=expected_as_of_date,
-                )
-            return StaticGroupsRRGPayloadBuilder(
-                schema_version=STATIC_SITE_SCHEMA_VERSION,
-                rrg_service=build_static_rrg_service(state),
-            ).build(
+            return self._rrg_payload_source.build(
                 db=db,
                 generated_at=generated_at,
                 expected_as_of_date=expected_as_of_date,
@@ -580,11 +561,6 @@ class StaticSiteExportService:
             raise StaticSiteSectionUnavailableError(
                 section=exc.section,
                 reason=exc.reason,
-            ) from exc
-        except (StaticRRGHistoryBundleError, StaticRRGHistoryUnavailableError) as exc:
-            raise StaticSiteSectionUnavailableError(
-                section=f"{market} rrg",
-                reason=str(exc),
             ) from exc
 
     def _build_optional_section_payload(

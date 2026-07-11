@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import inspect
 
@@ -12,6 +13,13 @@ from app.domain.markets.catalog import get_market_catalog
 from app.models.industry import IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
 from app.services.rrg_service import RRGService
+from app.services.static_rrg_history_bundle import (
+    StaticRRGHistoryBundleError,
+    StaticRRGHistoryBundleService,
+    StaticRRGHistoryState,
+    StaticRRGHistoryUnavailableError,
+    build_static_rrg_service,
+)
 
 
 class StaticGroupsRRGUnavailableError(RuntimeError):
@@ -117,6 +125,73 @@ class StaticGroupsRRGPayloadBuilder:
         return tuple(sorted(table_names))
 
 
+class StaticGroupsRRGPayloadSource(Protocol):
+    """Build the optional static RRG payload without exposing input storage."""
+
+    def build(
+        self,
+        *,
+        db: Any,
+        generated_at: str,
+        expected_as_of_date: date,
+        market: str,
+    ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class StaticGroupsRRGHistoryPayloadSource:
+    """Resolve rolling-history inputs, then build the static RRG payload."""
+
+    schema_version: str
+    history_states: Mapping[str, StaticRRGHistoryState] = field(default_factory=dict)
+    history_service: StaticRRGHistoryBundleService = field(
+        default_factory=StaticRRGHistoryBundleService
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "history_states",
+            {
+                str(market).strip().upper(): state
+                for market, state in self.history_states.items()
+            },
+        )
+
+    def build(
+        self,
+        *,
+        db: Any,
+        generated_at: str,
+        expected_as_of_date: date,
+        market: str,
+    ) -> dict[str, Any]:
+        normalized_market = str(market or "US").strip().upper()
+        try:
+            state = self.history_states.get(normalized_market)
+            if state is None:
+                state = self.history_service.build(
+                    db,
+                    market=normalized_market,
+                    through_date=expected_as_of_date,
+                )
+        except (StaticRRGHistoryBundleError, StaticRRGHistoryUnavailableError) as exc:
+            raise StaticGroupsRRGUnavailableError(
+                section=f"{normalized_market} rrg",
+                reason=str(exc),
+            ) from exc
+
+        return StaticGroupsRRGPayloadBuilder(
+            schema_version=self.schema_version,
+            rrg_service=build_static_rrg_service(state),
+        ).build(
+            db=db,
+            generated_at=generated_at,
+            expected_as_of_date=expected_as_of_date,
+            market=normalized_market,
+        )
+
+
 def _missing_required_tables(db: Any, table_names: tuple[str, ...]) -> list[str]:
     bind = db.get_bind() if callable(getattr(db, "get_bind", None)) else db
     inspector = inspect(bind)
@@ -128,5 +203,7 @@ def _missing_required_tables(db: Any, table_names: tuple[str, ...]) -> list[str]
 
 __all__ = [
     "StaticGroupsRRGUnavailableError",
+    "StaticGroupsRRGHistoryPayloadSource",
     "StaticGroupsRRGPayloadBuilder",
+    "StaticGroupsRRGPayloadSource",
 ]

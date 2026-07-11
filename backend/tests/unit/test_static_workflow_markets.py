@@ -72,17 +72,21 @@ def test_static_workflow_fails_fast_when_weekly_reference_assets_cannot_be_liste
     assert "Failed to list weekly-reference release assets" in content
 
 
-def test_static_workflow_rolls_forward_only_catalog_enabled_rrg_markets():
+def test_static_workflow_uses_canonical_rrg_plan_for_restore_and_publish():
     content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
         encoding="utf-8"
     )
 
     assert "rrg-history-data" in content
-    assert "rrg-history-${MARKET_LOWER}.json.gz" in content
+    assert "app.scripts.describe_static_rrg_history" in content
+    assert "steps.rrg-history.outputs.enabled == 'true'" in content
+    assert "steps.rrg-history.outputs.source_path" in content
+    assert "steps.rrg-history.outputs.output_path" in content
     assert 'gh release upload rrg-history-data "$HISTORY_PATH" --clobber' in content
     assert "--rrg-history-dir" in content
     assert "continue-on-error: true" in content
     assert content.index("Upload market artifact") < content.index("Publish rolling RRG history")
+    assert "/current/rrg-history-${MARKET_LOWER}.json.gz" not in content
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

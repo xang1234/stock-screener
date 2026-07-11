@@ -1944,20 +1944,17 @@ def test_static_groups_rrg_builder_propagates_sql_errors_after_preflight(
 
 def test_build_groups_rrg_payload_propagates_non_missing_table_sql_errors(
     service_and_session_factory,
-    monkeypatch,
 ):
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
 
-    class _FakeBuilder:
-        def __init__(self, **_kwargs):
-            pass
-
+    class _FakeSource:
         def build(self, **kwargs):  # noqa: ANN003
             raise SQLAlchemyError("connection failed")
 
-    monkeypatch.setattr(export_module, "StaticGroupsRRGPayloadBuilder", _FakeBuilder)
-    monkeypatch.setattr(export_module, "build_static_rrg_service", lambda _state: object())
-    service._rrg_history_states["HK"] = object()  # noqa: SLF001
+    service = StaticSiteExportService(
+        session_factory,
+        rrg_payload_source=_FakeSource(),
+    )
 
     with session_factory() as db, pytest.raises(SQLAlchemyError, match="connection failed"):
         service._build_groups_rrg_payload(  # noqa: SLF001

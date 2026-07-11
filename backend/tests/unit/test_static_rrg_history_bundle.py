@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import app.scripts.export_static_site as export_script
 from app.database import Base
 from app.models.industry import IBDGroupRank
-from app.scripts.export_static_site import STATIC_GROUP_HISTORY_LOOKBACK_DAYS
 from app.services.rrg_service import MIN_TAIL_WEEKS, RRGService
 from app.services.static_rrg_history_bundle import (
     STATIC_RRG_HISTORY_SCHEMA_VERSION,
@@ -65,8 +65,86 @@ def _seed_weeks(db, *, latest: date, weeks: int, market: str = "HK") -> None:
     db.commit()
 
 
-def test_first_static_build_lookback_can_bootstrap_minimum_rrg_tail():
-    assert STATIC_GROUP_HISTORY_LOOKBACK_DAYS >= MIN_TAIL_WEEKS * 7
+def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
+    monkeypatch,
+    tmp_path,
+):
+    engine, factory = _session_factory()
+    latest = date(2026, 7, 10)
+
+    class _Calendar:
+        @staticmethod
+        def is_trading_day(_market, candidate):
+            return candidate.weekday() == 4
+
+    class _GroupRankService:
+        @staticmethod
+        def fill_gaps_optimized(db, dates, *, market):
+            for index, row_date in enumerate(dates):
+                db.add_all(
+                    [
+                        _rank(
+                            market=market,
+                            group="Semiconductors",
+                            row_date=row_date,
+                            rank=1,
+                            avg_rs=60 + index * 0.2,
+                        ),
+                        _rank(
+                            market=market,
+                            group="Banks",
+                            row_date=row_date,
+                            rank=2,
+                            avg_rs=80 - index * 0.1,
+                        ),
+                    ]
+                )
+            db.commit()
+            return {"processed": len(dates), "errors": 0}
+
+    class _Taxonomy:
+        @staticmethod
+        def sector_map_for_market(_market):
+            return {"Semiconductors": "Technology", "Banks": "Financials"}
+
+    monkeypatch.setattr(export_script, "SessionLocal", factory)
+    monkeypatch.setattr(export_script, "get_market_calendar_service", lambda: _Calendar())
+    monkeypatch.setattr(export_script, "get_group_rank_service", lambda: _GroupRankService())
+
+    try:
+        backfill = export_script._ensure_group_rank_history(
+            as_of_date=latest,
+            market="HK",
+        )
+        with factory() as db:
+            preparation = StaticRRGHistoryBundleService().prepare(
+                db,
+                market="HK",
+                through_date=latest,
+                directory=tmp_path,
+            )
+            assert preparation.state is not None
+            payload = RRGService(
+                history_provider=StaticRRGHistoryProvider(preparation.state),
+                taxonomy_service=_Taxonomy(),
+            ).get_rrg_scopes(
+                db,
+                market="HK",
+                scopes=("groups", "sectors"),
+                as_of_date=latest,
+            )
+        persisted = StaticRRGHistoryBundleService().persist(
+            preparation,
+            exported_as_of_date=latest,
+        )
+
+        assert backfill["status"] == "completed"
+        assert len(preparation.state.weeks) >= MIN_TAIL_WEEKS
+        assert len(payload["groups"]["groups"]) == 2
+        assert persisted is not None
+        assert preparation.plan.output_path.exists()
+    finally:
+        engine.dispose()
 
 
 def test_weekly_state_round_trips_only_rrg_inputs(tmp_path):
@@ -89,6 +167,8 @@ def test_weekly_state_round_trips_only_rrg_inputs(tmp_path):
         with gzip.open(path, "rt", encoding="utf-8") as handle:
             payload = json.load(handle)
         assert payload["schema_version"] == STATIC_RRG_HISTORY_SCHEMA_VERSION
+        assert set(payload) == {"schema_version", "market", "weeks"}
+        assert set(payload["weeks"][0]) == {"source_date", "groups"}
         assert set(payload["weeks"][0]["groups"][0]) == {
             "industry_group",
             "rank",
@@ -137,10 +217,8 @@ def test_invalid_row_is_normalized_to_bundle_error(tmp_path):
             {
                 "schema_version": STATIC_RRG_HISTORY_SCHEMA_VERSION,
                 "market": "HK",
-                "through_date": "2026-07-10",
                 "weeks": [
                     {
-                        "week_start": "2026-07-05",
                         "source_date": "2026-07-10",
                         "groups": [
                             {
@@ -155,6 +233,43 @@ def test_invalid_row_is_normalized_to_bundle_error(tmp_path):
             },
             handle,
         )
+
+    with pytest.raises(StaticRRGHistoryBundleError, match="Unable to load"):
+        StaticRRGHistoryBundleService().load(path, expected_market="HK")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.pop("schema_version"),
+        lambda payload: payload.update({"schema_version": "static-rrg-history-v2"}),
+        lambda payload: payload.update({"unexpected": True}),
+        lambda payload: payload["weeks"][0].update({"unexpected": True}),
+        lambda payload: payload["weeks"][0]["groups"][0].update({"unexpected": True}),
+    ],
+)
+def test_history_contract_rejects_unversioned_and_unknown_fields(tmp_path, mutation):
+    path = tmp_path / "rrg-history-hk.json.gz"
+    payload = {
+        "schema_version": STATIC_RRG_HISTORY_SCHEMA_VERSION,
+        "market": "HK",
+        "weeks": [
+            {
+                "source_date": "2026-07-10",
+                "groups": [
+                    {
+                        "industry_group": "Banks",
+                        "rank": 1,
+                        "avg_rs_rating": 80,
+                        "num_stocks": 10,
+                    }
+                ],
+            }
+        ],
+    }
+    mutation(payload)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
 
     with pytest.raises(StaticRRGHistoryBundleError, match="Unable to load"):
         StaticRRGHistoryBundleService().load(path, expected_market="HK")
@@ -184,7 +299,7 @@ def test_prepare_bootstraps_invalid_prior_state_and_persists_current_state(tmp_p
         )
         assert stats is not None
         assert stats["weeks"] == 14
-        assert (tmp_path / "current" / path.name).exists()
+        assert preparation.plan.output_path.exists()
     finally:
         engine.dispose()
 

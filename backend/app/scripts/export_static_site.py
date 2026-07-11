@@ -25,8 +25,10 @@ from app.services.static_daily_price_refresh_service import (
 )
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
+    STATIC_SITE_SCHEMA_VERSION,
     StaticSiteExportService,
 )
+from app.services.static_groups_rrg_export import StaticGroupsRRGHistoryPayloadSource
 from app.services.static_rrg_history_bundle import (
     StaticRRGHistoryBundleError,
     StaticRRGHistoryBundleService,
@@ -760,7 +762,7 @@ def main() -> int:
 
         rrg_history_service = StaticRRGHistoryBundleService()
         rrg_history: StaticRRGHistoryPreparation | None = None
-        if args.rrg_history_dir and rrg_history_service.enabled_for_market(args.market):
+        if args.rrg_history_dir:
             with SessionLocal() as db:
                 rrg_history = rrg_history_service.prepare(
                     db,
@@ -772,10 +774,13 @@ def main() -> int:
 
         service = StaticSiteExportService(
             SessionLocal,
-            rrg_history_states=(
-                {args.market: rrg_history.state}
-                if args.market and rrg_history and rrg_history.state is not None
-                else None
+            rrg_payload_source=StaticGroupsRRGHistoryPayloadSource(
+                schema_version=STATIC_SITE_SCHEMA_VERSION,
+                history_states=(
+                    {args.market: rrg_history.state}
+                    if args.market and rrg_history and rrg_history.state is not None
+                    else {}
+                ),
             ),
         )
         try:

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 from types import SimpleNamespace
 import sys
 
+import pytest
+
+from app.domain.markets import market_registry
+from app.scripts import describe_static_rrg_history
 from app.scripts import export_static_site as export_script
+from app.services.static_rrg_history_bundle import StaticRRGHistoryBundleService
 
 
 class _SessionFactory:
@@ -30,6 +36,38 @@ def _export_result(output_dir):
     )
 
 
+@pytest.mark.parametrize("market", market_registry.supported_market_codes())
+def test_rrg_automation_plan_matches_live_market_catalog(market, tmp_path):
+    service = StaticRRGHistoryBundleService()
+    plan = service.plan(market=market, directory=tmp_path)
+
+    assert plan.enabled is bool(service.market_catalog.rrg_scopes_for_market(market))
+    assert plan.asset_name == service.asset_name(market)
+    assert plan.source_path == tmp_path / plan.asset_name
+    assert plan.output_path == tmp_path / "current" / plan.asset_name
+
+
+def test_describe_rrg_history_emits_machine_readable_plan(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "describe_static_rrg_history.py",
+            "--market",
+            "HK",
+            "--directory",
+            str(tmp_path),
+        ],
+    )
+
+    assert describe_static_rrg_history.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == StaticRRGHistoryBundleService().plan(
+        market="HK",
+        directory=tmp_path,
+    ).as_dict()
+
+
 def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path):
     calls = []
     state = SimpleNamespace(through_date=date(2026, 7, 10))
@@ -50,8 +88,8 @@ def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path
             return {"weeks": 12}
 
     class _ExportService:
-        def __init__(self, _session_factory, *, rrg_history_states):
-            calls.append(("service", rrg_history_states))
+        def __init__(self, _session_factory, *, rrg_payload_source):
+            calls.append(("service", rrg_payload_source.history_states))
 
         def export(self, output_dir, **_kwargs):
             calls.append(("export", output_dir))
