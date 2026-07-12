@@ -107,6 +107,25 @@ def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
     assert (
         "steps.restore-rrg-history.outputs.safe_to_publish == 'true'" in content
     )
+    assert "RRG_HISTORY_ENABLED: ${{ steps.rrg-history.outputs.enabled }}" in content
+    assert (
+        "RRG_RESTORE_STATUS: "
+        "${{ steps.restore-rrg-history.outputs.restore_status }}" in content
+    )
+    assert (
+        '[ "$RRG_HISTORY_ENABLED" = "true" ] '
+        '&& [ "$RRG_RESTORE_STATUS" = "failed" ]' in content
+    )
+    failure_guard = content.index(
+        '[ "$RRG_HISTORY_ENABLED" = "true" ] '
+        '&& [ "$RRG_RESTORE_STATUS" = "failed" ]'
+    )
+    artifact_success = content.index(
+        'echo "has_artifact=true" >> "$GITHUB_OUTPUT"',
+        failure_guard,
+    )
+    upload_artifact = content.index("- name: Upload market artifact", artifact_success)
+    assert failure_guard < artifact_success < upload_artifact
     assert "outputs.restore_status != 'failed'" not in content
 
 

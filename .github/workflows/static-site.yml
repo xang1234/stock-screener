@@ -219,6 +219,9 @@ jobs:
 
       - name: Export market static data bundle
         id: export-market
+        env:
+          RRG_HISTORY_ENABLED: ${{ steps.rrg-history.outputs.enabled }}
+          RRG_RESTORE_STATUS: ${{ steps.restore-rrg-history.outputs.restore_status }}
         run: |
           cd backend
           set +e
@@ -244,6 +247,11 @@ jobs:
           fi
           if [ "$status" -ne 0 ]; then
             exit "$status"
+          fi
+          if [ "$RRG_HISTORY_ENABLED" = "true" ] && [ "$RRG_RESTORE_STATUS" = "failed" ]; then
+            echo "Rolling RRG history restore failed for ${{ matrix.market }}; current output will not replace the last good market artifact."
+            echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
 
