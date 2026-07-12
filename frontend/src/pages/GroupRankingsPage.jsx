@@ -509,6 +509,7 @@ function GroupRankingsPage() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculationTaskId, setCalculationTaskId] = useState(null);
   const [calculationError, setCalculationError] = useState(null);
+  const [liveRankingMarket, setLiveRankingMarket] = useState(null);
   const [showHistoricalRanks, setShowHistoricalRanks] = useState(false); // Toggle between change vs actual rank
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.groups);
 
@@ -547,7 +548,9 @@ function GroupRankingsPage() {
       ? (groupsBootstrapQuery.data.payload ?? {})
       : null
   );
-  const groupsAsOfDate = groupsBootstrapPayload?.rankings?.date ?? null;
+  const groupsAsOfDate = liveRankingMarket === selectedMarket
+    ? null
+    : (groupsBootstrapPayload?.rankings?.date ?? null);
   const groupAsOfArgs = groupsAsOfDate ? [groupsAsOfDate] : EMPTY_AS_OF_ARGS;
   // Live queries wait for the bootstrap to resolve either way: on success
   // their caches are freshly seeded (no fetch); on error or a stale
@@ -571,7 +574,6 @@ function GroupRankingsPage() {
     data: rankings,
     isLoading: isLoadingRankings,
     error: errorRankings,
-    refetch: refetchRankings,
   } = useQuery({
     queryKey: ['groupRankings', selectedMarket, groupsAsOfDate],
     queryFn: () => getCurrentRankings(197, selectedMarket, ...groupAsOfArgs),
@@ -628,7 +630,11 @@ function GroupRankingsPage() {
       setIsCalculating(false);
       if (calcStatus.status === 'completed') {
         setCalculationError(null);
-        refetchRankings();
+        queryClient.invalidateQueries({
+          queryKey: ['groupRankings', selectedMarket, null],
+          exact: true,
+        });
+        setLiveRankingMarket(selectedMarket);
       } else {
         const baseMessage = calcStatus.error || 'Calculation failed. See server logs for details.';
         const hint = REASON_HINTS[calcStatus.reason_code];
@@ -637,7 +643,7 @@ function GroupRankingsPage() {
         setCalculationError(message);
       }
     }
-  }, [calcStatus, refetchRankings]);
+  }, [calcStatus, queryClient, selectedMarket]);
 
   const handlePeriodChange = (event, newValue) => {
     setSelectedPeriod(newValue);

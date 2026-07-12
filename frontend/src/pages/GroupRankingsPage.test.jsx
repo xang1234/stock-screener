@@ -306,6 +306,46 @@ describe('GroupRankingsPage', () => {
     });
   });
 
+  it('drops the bootstrap date after a successful manual ranking refresh', async () => {
+    runtimeState.features = { tasks: true };
+    runtimeState.uiSnapshots = { groups: true };
+    runtimeState.primaryMarket = 'US';
+    runtimeState.enabledMarkets = ['US'];
+    const snapshotRow = {
+      ...rankingRowFor('US'),
+      date: '2026-03-16',
+    };
+    getGroupsBootstrap.mockResolvedValue({
+      available: true,
+      is_stale: false,
+      payload: {
+        rankings: {
+          date: '2026-03-16',
+          total_groups: 1,
+          market_scope: 'US',
+          rankings: [snapshotRow],
+        },
+        movers: null,
+      },
+    });
+    triggerCalculation.mockResolvedValue({ task_id: 'group-refresh-1' });
+    getCalculationStatus.mockResolvedValue({ status: 'completed' });
+
+    renderGroupRankingsPage();
+
+    expect(await screen.findByText('US Internet Services')).toBeInTheDocument();
+    getCurrentRankings.mockClear();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => {
+      expect(getCalculationStatus).toHaveBeenCalledWith('group-refresh-1');
+      expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US');
+    });
+    expect(getCurrentRankings).not.toHaveBeenCalledWith(197, 'US', '2026-03-16');
+  });
+
   it('hides RRG for group-ranking markets without RRG capability', async () => {
     runtimeState.primaryMarket = 'KR';
     runtimeState.enabledMarkets = ['KR'];
