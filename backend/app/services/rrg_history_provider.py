@@ -57,8 +57,8 @@ class USGroupRankHistoryProvider:
 
         latest_date = current[0]["date"]
         meta = {row["industry_group"]: row for row in current}
-        cutoff = _date.fromisoformat(latest_date) - timedelta(days=days)
         latest_day = _date.fromisoformat(latest_date)
+        cutoff = latest_day - timedelta(days=days)
         rows = (
             db.query(
                 IBDGroupRank.industry_group,

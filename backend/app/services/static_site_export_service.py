@@ -1221,6 +1221,7 @@ class StaticSiteExportService:
             else None
         )
         snapshot_date = latest_run.as_of_date.isoformat()
+        market_entry = get_market_catalog().get(market)
         breadth_date = breadth_current.get("date")
         groups_date = (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date"))
         freshness = build_snapshot_freshness(
@@ -1230,13 +1231,14 @@ class StaticSiteExportService:
                 "scan_published_at": _coerce_datetime(latest_run.published_at),
             },
             anchor=latest_run.as_of_date,
-            market_timezone=get_market_catalog().get(market).display_timezone,
+            market_timezone=market_entry.display_timezone,
             section_dates=SnapshotSectionDates.from_raw(
                 breadth=breadth_date,
                 groups=groups_date,
                 exposure=exposure_date,
             ),
             key_markets=key_markets,
+            groups_applicable=market_entry.capabilities.group_rankings,
         )
 
         return {

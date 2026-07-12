@@ -354,6 +354,7 @@ def build_daily_snapshot_payload(
         )
 
     anchor_date = _snapshot_anchor_date(scan)
+    market_entry = get_market_catalog().get(normalized)
     top_groups, groups_date = _build_top_groups(db, normalized, as_of_date=anchor_date)
     breadth_date = _latest_breadth_date(db, normalized, as_of_date=anchor_date)
     key_markets = build_key_market_entries(db, normalized, as_of_date=anchor_date)
@@ -366,13 +367,14 @@ def build_daily_snapshot_payload(
     freshness = build_snapshot_freshness(
         base_freshness=_scan_freshness(scan),
         anchor=anchor_date,
-        market_timezone=get_market_catalog().get(normalized).display_timezone,
+        market_timezone=market_entry.display_timezone,
         section_dates=SnapshotSectionDates.from_raw(
             breadth=breadth_date,
             groups=groups_date,
             exposure=exposure_date,
         ),
         key_markets=key_markets,
+        groups_applicable=market_entry.capabilities.group_rankings,
     )
 
     return {
