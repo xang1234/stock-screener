@@ -100,28 +100,25 @@ def test_describe_rrg_history_does_not_require_database_runtime(tmp_path):
     assert json.loads(completed.stdout)["enabled"] is True
 
 
-def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path):
+def test_main_configures_and_persists_market_rrg_state(monkeypatch, tmp_path):
     calls = []
-    state = SimpleNamespace(through_date=date(2026, 7, 10))
     history_path = tmp_path / "history" / "rrg-history-hk.json.gz"
     history_path.parent.mkdir()
     history_path.write_bytes(b"existing")
 
-    class _HistoryService:
-        def enabled_for_market(self, market):
-            return market == "HK"
+    class _RollingHistorySource:
+        warnings = ()
 
-        def prepare(self, db, *, market, through_date, directory):
-            calls.append(("prepare", db, market, through_date, directory))
-            return SimpleNamespace(state=state, warnings=())
+        def __init__(self, *, schema_version, market, directory):
+            calls.append(("source", schema_version, market, directory))
 
-        def persist(self, preparation, *, exported_as_of_date):
-            calls.append(("persist", preparation.state, exported_as_of_date))
+        def persist(self, *, exported_as_of_date):
+            calls.append(("persist", exported_as_of_date))
             return {"weeks": 12}
 
     class _ExportService:
         def __init__(self, _session_factory, *, rrg_payload_source):
-            calls.append(("service", rrg_payload_source.history_state))
+            calls.append(("service", rrg_payload_source))
 
         def export(self, output_dir, **_kwargs):
             calls.append(("export", output_dir))
@@ -129,13 +126,12 @@ def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path
 
     monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(export_script, "SessionLocal", _SessionFactory())
-    monkeypatch.setattr(export_script, "StaticRRGHistoryBundleService", _HistoryService)
-    monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_trading_date",
-        lambda _market: date(2026, 7, 10),
+        "StaticGroupsRRGRollingHistoryPayloadSource",
+        _RollingHistorySource,
     )
+    monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -151,9 +147,9 @@ def test_main_loads_advances_and_persists_market_rrg_state(monkeypatch, tmp_path
     )
 
     assert export_script.main() == 0
-    assert [call[0] for call in calls] == ["prepare", "service", "export", "persist"]
-    assert calls[0][2:] == ("HK", date(2026, 7, 10), history_path.parent)
-    assert calls[1][1] is state
+    assert [call[0] for call in calls] == ["source", "service", "export", "persist"]
+    assert calls[0][2:] == ("HK", history_path.parent)
+    assert calls[-1] == ("persist", date(2026, 7, 10))
 
 
 def test_main_does_not_fail_when_rrg_state_cannot_be_persisted(
@@ -161,16 +157,13 @@ def test_main_does_not_fail_when_rrg_state_cannot_be_persisted(
     tmp_path,
     capsys,
 ):
-    state = SimpleNamespace(through_date=date(2026, 7, 10))
+    class _RollingHistorySource:
+        warnings = ()
 
-    class _HistoryService:
-        def enabled_for_market(self, _market):
-            return True
+        def __init__(self, **_kwargs):
+            pass
 
-        def prepare(self, *_args, **_kwargs):
-            return SimpleNamespace(state=state, warnings=())
-
-        def persist(self, *_args, **_kwargs):
+        def persist(self, **_kwargs):
             raise export_script.StaticRRGHistoryBundleError("disk full")
 
     class _ExportService:
@@ -182,13 +175,12 @@ def test_main_does_not_fail_when_rrg_state_cannot_be_persisted(
 
     monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(export_script, "SessionLocal", _SessionFactory())
-    monkeypatch.setattr(export_script, "StaticRRGHistoryBundleService", _HistoryService)
-    monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)
     monkeypatch.setattr(
         export_script,
-        "_resolve_latest_completed_trading_date",
-        lambda _market: date(2026, 7, 10),
+        "StaticGroupsRRGRollingHistoryPayloadSource",
+        _RollingHistorySource,
     )
+    monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)
     monkeypatch.setattr(
         sys,
         "argv",

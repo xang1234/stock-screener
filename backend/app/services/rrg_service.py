@@ -82,7 +82,7 @@ class RRGTaxonomyService(Protocol):
         """Return industry group -> sector mappings for one market."""
 
 
-def _week_start(d: date) -> date:
+def rrg_week_start(d: date) -> date:
     """UTC Sunday-origin start of the ISO-ish week containing ``d``.
 
     Matches the frontend ``aggregateToWeekly`` rule (JS ``getUTCDay()`` where
@@ -104,7 +104,7 @@ def _bucket_weekly(
     """
     latest: dict[date, Tuple[date, float]] = {}
     for d, value in daily:
-        wk = _week_start(d)
+        wk = rrg_week_start(d)
         prev = latest.get(wk)
         if prev is None or d >= prev[0]:
             latest[wk] = (d, value)

@@ -145,7 +145,7 @@ def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
             exported_as_of_date=latest,
         )
 
-        assert backfill["status"] == "completed"
+        assert backfill.status.value == "completed"
         assert len(preparation.state.weeks) >= MIN_TAIL_WEEKS
         assert len(payload["groups"]["groups"]) == 2
         assert persisted is not None

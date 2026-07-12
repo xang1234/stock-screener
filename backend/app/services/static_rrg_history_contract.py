@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.markets.catalog import MarketCatalog, get_market_catalog
+from app.services.rrg_service import rrg_week_start
 
 
 StaticRRGHistorySchemaVersion = Literal["static-rrg-history-v3"]
@@ -71,7 +72,7 @@ class StaticRRGHistoryState(BaseModel):
         source_dates = [week.source_date for week in self.weeks]
         if not source_dates:
             raise ValueError("weeks must not be empty")
-        week_keys = [static_rrg_week_start(source_date) for source_date in source_dates]
+        week_keys = [rrg_week_start(source_date) for source_date in source_dates]
         if source_dates != sorted(source_dates) or len(week_keys) != len(set(week_keys)):
             raise ValueError("weeks must be unique and ordered")
         return self
@@ -112,10 +113,6 @@ def static_rrg_asset_name(market: str) -> str:
     return f"rrg-history-{normalize_static_rrg_market(market).lower()}.json.gz"
 
 
-def static_rrg_week_start(value: date) -> date:
-    return value - timedelta(days=(value.weekday() + 1) % 7)
-
-
 def build_static_rrg_history_plan(
     *,
     market: str,
@@ -145,5 +142,4 @@ __all__ = [
     "build_static_rrg_history_plan",
     "normalize_static_rrg_market",
     "static_rrg_asset_name",
-    "static_rrg_week_start",
 ]

@@ -19,7 +19,7 @@ from app.domain.markets.catalog import MarketCatalog, get_market_catalog
 from app.models.industry import IBDGroupRank
 from app.services.market_taxonomy_service import get_market_taxonomy_service
 from app.services.rrg_history_provider import RRGHistoryResult
-from app.services.rrg_service import RRGService
+from app.services.rrg_service import RRGService, rrg_week_start
 from app.services.static_rrg_history_contract import (
     STATIC_RRG_HISTORY_RETENTION_WEEKS,
     STATIC_RRG_HISTORY_SCHEMA_VERSION,
@@ -31,7 +31,6 @@ from app.services.static_rrg_history_contract import (
     build_static_rrg_history_plan,
     normalize_static_rrg_market,
     static_rrg_asset_name,
-    static_rrg_week_start,
 )
 
 
@@ -156,7 +155,7 @@ class StaticRRGHistoryBundleService:
             .all()
         )
         weeks = {
-            static_rrg_week_start(week.source_date): week
+            rrg_week_start(week.source_date): week
             for week in (previous.weeks if previous is not None else ())
             if week.source_date >= cutoff
         }
@@ -277,7 +276,7 @@ def _weekly_snapshots(rows: list[IBDGroupRank]) -> dict[date, StaticRRGWeek]:
         rows_by_date[row.date].append(row)
     latest_date_by_week: dict[date, date] = {}
     for row_date in rows_by_date:
-        week_start = static_rrg_week_start(row_date)
+        week_start = rrg_week_start(row_date)
         latest_date_by_week[week_start] = max(
             row_date,
             latest_date_by_week.get(week_start, row_date),

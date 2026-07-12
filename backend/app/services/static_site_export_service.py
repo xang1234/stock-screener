@@ -48,7 +48,7 @@ from app.services.preset_screens import (
     resolve_preset_screens_for_defaults,
 )
 from app.services.static_groups_rrg_export import (
-    StaticGroupsRRGHistoryPayloadSource,
+    StaticGroupsRRGDatabasePayloadSource,
     StaticGroupsRRGUnavailableError,
     StaticGroupsRRGPayloadSource,
 )
@@ -144,8 +144,12 @@ class StaticSiteExportService:
         rrg_payload_source: StaticGroupsRRGPayloadSource | None = None,
     ) -> None:
         self._session_factory = session_factory
-        self._rrg_payload_source = rrg_payload_source or StaticGroupsRRGHistoryPayloadSource(
-            schema_version=STATIC_SITE_SCHEMA_VERSION,
+        self._rrg_payload_source = (
+            rrg_payload_source
+            if rrg_payload_source is not None
+            else StaticGroupsRRGDatabasePayloadSource(
+                schema_version=STATIC_SITE_SCHEMA_VERSION,
+            )
         )
         self._ui_snapshot_service = UISnapshotService(session_factory)
         self._price_cache = get_price_cache()
