@@ -146,7 +146,7 @@ class StaticRRGHistoryBundleService:
         weeks = {
             rrg_week_start(week.source_date): week
             for week in (previous.weeks if previous is not None else ())
-            if week.source_date >= cutoff
+            if cutoff <= week.source_date <= through_date
         }
         try:
             weeks.update(_weekly_snapshots(rows))

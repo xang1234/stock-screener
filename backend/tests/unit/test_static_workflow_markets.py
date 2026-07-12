@@ -89,6 +89,21 @@ def test_static_workflow_uses_canonical_rrg_plan_for_restore_and_publish():
     assert "/current/rrg-history-${MARKET_LOWER}.json.gz" not in content
 
 
+def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "id: restore-rrg-history" in content
+    assert "retry_list_rrg_assets" in content
+    assert "retry_download_rrg_asset" in content
+    assert 'echo "restore_status=missing" >> "$GITHUB_OUTPUT"' in content
+    assert content.count('echo "restore_status=failed" >> "$GITHUB_OUTPUT"') == 2
+    assert (
+        "steps.restore-rrg-history.outputs.restore_status != 'failed'" in content
+    )
+
+
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():
     content = (_PROJECT_ROOT / ".github/workflows/weekly-reference-data.yml").read_text(
         encoding="utf-8"

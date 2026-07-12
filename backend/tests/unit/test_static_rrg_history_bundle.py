@@ -4,6 +4,7 @@ import gzip
 import json
 from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -13,6 +14,8 @@ from app.models.industry import IBDGroupRank
 from app.services.group_rank_history_backfill_service import (
     GroupRankHistoryBackfillService,
 )
+from app.services.ibd_group_rank_service import IBDGroupRankService
+from app.services.market_calendar_service import MarketCalendarService
 from app.services.rrg_service import MIN_TAIL_WEEKS, RRGService
 from app.services.static_rrg_history_bundle import (
     StaticRRGHistoryBundleService,
@@ -69,47 +72,74 @@ def _seed_weeks(db, *, latest: date, weeks: int, market: str = "HK") -> None:
     db.commit()
 
 
-def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
-    tmp_path,
+def test_first_static_build_bootstraps_via_production_gap_fill(
+    tmp_path, monkeypatch
 ):
     engine, factory = _session_factory()
-    latest = date(2026, 7, 10)
+    latest = date(2026, 3, 20)
+    groups = {
+        "Semiconductors": ["CHIP1", "CHIP2", "CHIP3"],
+        "Banks": ["BANK1", "BANK2", "BANK3"],
+    }
+    symbols = [symbol for members in groups.values() for symbol in members]
 
-    class _Calendar:
-        @staticmethod
-        def trading_days(_market, start, end):
-            dates = []
-            candidate = start
-            while candidate <= end:
-                if candidate.weekday() == 4:
-                    dates.append(candidate)
-                candidate += timedelta(days=1)
-            return dates
+    def _prices(daily_return: float) -> pd.DataFrame:
+        dates = pd.bdate_range(end=latest, periods=420)
+        closes = [100 * ((1 + daily_return) ** index) for index in range(len(dates))]
+        return pd.DataFrame({"Close": closes}, index=dates)
 
-    class _GroupRankService:
+    benchmark_prices = _prices(0.0003)
+    prices_by_symbol = {
+        symbol: _prices(0.0008 + index * 0.0001)
+        for index, symbol in enumerate(symbols)
+    }
+
+    class _BenchmarkCache:
         @staticmethod
-        def fill_gaps_optimized(db, dates, *, market):
-            for index, row_date in enumerate(dates):
-                db.add_all(
-                    [
-                        _rank(
-                            market=market,
-                            group="Semiconductors",
-                            row_date=row_date,
-                            rank=1,
-                            avg_rs=60 + index * 0.2,
-                        ),
-                        _rank(
-                            market=market,
-                            group="Banks",
-                            row_date=row_date,
-                            rank=2,
-                            avg_rs=80 - index * 0.1,
-                        ),
-                    ]
-                )
-            db.commit()
-            return {"processed": len(dates), "errors": 0}
+        def get_benchmark_symbol(market):
+            assert market == "HK"
+            return "^HSI"
+
+        @staticmethod
+        def get_benchmark_data(*, market, period):
+            assert (market, period) == ("HK", "2y")
+            return benchmark_prices
+
+    class _PriceCache:
+        @staticmethod
+        def get_many(requested_symbols, *, period):
+            assert period == "2y"
+            return {symbol: prices_by_symbol[symbol] for symbol in requested_symbols}
+
+    class _Universe:
+        @staticmethod
+        def get_active_symbols(_db, *, market):
+            assert market == "HK"
+            return symbols
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_stock_universe_service",
+        lambda: _Universe(),
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda _db, *, market: list(groups) if market == "HK" else [],
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
+        lambda _db, group, *, market: groups[group] if market == "HK" else [],
+    )
+    group_rank_service = IBDGroupRankService(
+        price_cache=_PriceCache(),
+        benchmark_cache=_BenchmarkCache(),
+    )
+    monkeypatch.setattr(
+        group_rank_service,
+        "_get_market_caps_for_symbols",
+        lambda _db, requested_symbols: {
+            symbol: 1_000_000_000 for symbol in requested_symbols
+        },
+    )
 
     class _Taxonomy:
         @staticmethod
@@ -119,8 +149,8 @@ def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
     try:
         backfill = GroupRankHistoryBackfillService(
             session_factory=factory,
-            calendar_service=_Calendar(),
-            group_rank_service=_GroupRankService(),
+            calendar_service=MarketCalendarService(),
+            group_rank_service=group_rank_service,
         ).backfill(
             as_of_date=latest,
             market="HK",
@@ -148,6 +178,7 @@ def test_first_static_build_bootstraps_a_persisted_minimum_rrg_tail(
         )
 
         assert backfill.status.value == "completed"
+        assert backfill.processed == backfill.missing_dates
         assert len(preparation.state.weeks) >= MIN_TAIL_WEEKS
         assert len(payload["groups"]["groups"]) == 2
         assert persisted is not None
@@ -214,6 +245,44 @@ def test_merge_keeps_prior_weeks_without_mutating_database(tmp_path):
         assert len(merged.weeks) == 14
         assert database_groups == ["Semiconductors"]
         assert merged.weeks[-2] == previous.weeks[-1]
+    finally:
+        source_engine.dispose()
+        target_engine.dispose()
+
+
+def test_merge_discards_restored_weeks_after_requested_export_date():
+    source_engine, source_factory = _session_factory()
+    target_engine, target_factory = _session_factory()
+    latest = date(2026, 7, 10)
+    future = latest + timedelta(weeks=1)
+    try:
+        with source_factory() as db:
+            _seed_weeks(db, latest=future, weeks=14)
+            previous = StaticRRGHistoryBundleService().build(
+                db,
+                market="HK",
+                through_date=future,
+            )
+        with target_factory() as db:
+            db.add(
+                _rank(
+                    market="HK",
+                    group="Semiconductors",
+                    row_date=latest,
+                    rank=1,
+                    avg_rs=91,
+                )
+            )
+            db.commit()
+            merged = StaticRRGHistoryBundleService().build(
+                db,
+                market="HK",
+                through_date=latest,
+                previous=previous,
+            )
+
+        assert merged.weeks[-1].source_date == latest
+        assert all(week.source_date <= latest for week in merged.weeks)
     finally:
         source_engine.dispose()
         target_engine.dispose()

@@ -298,6 +298,7 @@ jobs:
           echo "RRG_HISTORY_DIR=/tmp/rrg-history" >> "$GITHUB_ENV"
 
       - name: Restore rolling RRG history
+        id: restore-rrg-history
         if: ${{ steps.rrg-history.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -306,12 +307,46 @@ jobs:
         run: |
           mkdir -p "$(dirname "$SOURCE_PATH")"
           rm -f "$SOURCE_PATH"
-          if gh release download rrg-history-data \
-            --pattern "$ASSET_NAME" \
-            --dir "$(dirname "$SOURCE_PATH")" >/dev/null 2>&1; then
+
+          retry_list_rrg_assets() {
+            for attempt in 1 2 3; do
+              if gh release view rrg-history-data --json assets --jq '.assets[].name'; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          retry_download_rrg_asset() {
+            for attempt in 1 2 3; do
+              rm -f "$SOURCE_PATH"
+              if gh release download rrg-history-data \
+                --pattern "$ASSET_NAME" \
+                --dir "$(dirname "$SOURCE_PATH")" >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          if ! ASSET_NAMES="$(retry_list_rrg_assets)"; then
+            echo "restore_status=failed" >> "$GITHUB_OUTPUT"
+            echo "Unable to list rolling RRG history assets for ${{ matrix.market }}; history publication will be skipped." >&2
+          elif ! printf '%s\n' "$ASSET_NAMES" | grep -Fxq "$ASSET_NAME"; then
+            echo "restore_status=missing" >> "$GITHUB_OUTPUT"
+            echo "No rolling RRG history found for ${{ matrix.market }}; the static exporter will bootstrap it."
+          elif retry_download_rrg_asset; then
+            echo "restore_status=restored" >> "$GITHUB_OUTPUT"
             echo "Restored rolling RRG history for ${{ matrix.market }}."
           else
-            echo "No rolling RRG history found for ${{ matrix.market }}; the static exporter will bootstrap it."
+            echo "restore_status=failed" >> "$GITHUB_OUTPUT"
+            echo "Unable to download existing rolling RRG history for ${{ matrix.market }}; history publication will be skipped." >&2
           fi
 
       - name: Export market static data bundle
@@ -386,7 +421,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish rolling RRG history
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.rrg-history.outputs.enabled == 'true' }}
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.restore_status != 'failed' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
