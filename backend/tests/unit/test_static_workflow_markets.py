@@ -58,18 +58,13 @@ def test_static_site_schedule_groups_partition_supported_markets():
     assert set(all_markets) == set(market_registry.supported_market_codes())
 
 
-def test_static_workflow_legacy_weekly_reference_manifest_is_us_only():
+def test_static_workflow_uses_canonical_weekly_reference_sync_boundary():
     content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(encoding="utf-8")
 
-    assert '[ "${{ matrix.market }}" = "US" ] &&' in content
-    assert "No market-scoped weekly reference manifest found" in content
-
-
-def test_static_workflow_fails_fast_when_weekly_reference_assets_cannot_be_listed():
-    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(encoding="utf-8")
-
-    assert 'if ! ASSET_NAMES="$(retry_list_assets)"; then' in content
-    assert "Failed to list weekly-reference release assets" in content
+    assert "app.scripts.sync_weekly_reference_from_github" in content
+    assert "gh release download weekly-reference-data" not in content
+    assert "retry_list_assets" not in content
+    assert "retry_download" not in content
 
 
 def test_static_workflow_uses_canonical_rrg_plan_for_restore_and_publish():
@@ -95,13 +90,12 @@ def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
     )
 
     assert "id: restore-rrg-history" in content
-    assert "retry_list_rrg_assets" in content
-    assert "retry_download_rrg_asset" in content
-    assert 'echo "restore_status=missing" >> "$GITHUB_OUTPUT"' in content
-    assert content.count('echo "restore_status=failed" >> "$GITHUB_OUTPUT"') == 2
+    assert "app.scripts.restore_github_release_asset" in content
+    assert "SAFE_TO_PUBLISH=false" in content
     assert (
-        "steps.restore-rrg-history.outputs.restore_status != 'failed'" in content
+        "steps.restore-rrg-history.outputs.safe_to_publish == 'true'" in content
     )
+    assert "outputs.restore_status != 'failed'" not in content
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

@@ -6,6 +6,7 @@ import argparse
 
 from app.database import SessionLocal
 from app.scripts._runtime import prepare_runtime
+from app.services.github_release_sync_service import retry_github_sync
 from app.services.provider_snapshot_service import ProviderSnapshotService
 from app.wiring.bootstrap import get_provider_snapshot_service
 
@@ -29,17 +30,29 @@ def main() -> int:
         default="static",
         help="How to hydrate imported fundamentals into local cache/database.",
     )
+    parser.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="Import a stale weekly bundle as a static-build baseline.",
+    )
+    parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--retry-delay-seconds", type=float, default=5)
     args = parser.parse_args()
 
     prepare_runtime()
     provider_snapshot_service = get_provider_snapshot_service()
 
     with SessionLocal() as db:
-        result = provider_snapshot_service.sync_weekly_reference_from_github(
-            db,
-            market=args.market,
-            hydrate_cache=not args.no_hydrate_cache,
-            hydrate_mode=args.hydrate_mode,
+        result = retry_github_sync(
+            lambda: provider_snapshot_service.sync_weekly_reference_from_github(
+                db,
+                market=args.market,
+                hydrate_cache=not args.no_hydrate_cache,
+                hydrate_mode=args.hydrate_mode,
+                allow_stale=args.allow_stale,
+            ),
+            attempts=args.attempts,
+            retry_delay_seconds=args.retry_delay_seconds,
         )
 
     print("Weekly GitHub sync result:")

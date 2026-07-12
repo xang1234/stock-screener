@@ -1110,6 +1110,7 @@ class ProviderSnapshotService:
         market: str,
         hydrate_cache: bool = True,
         hydrate_mode: Literal["static", "full"] = "static",
+        allow_stale: bool = False,
         github_sync_service: GitHubReleaseSyncService | None = None,
     ) -> Dict[str, Any]:
         normalized_market = str(market or "").strip().upper()
@@ -1129,25 +1130,39 @@ class ProviderSnapshotService:
         download_dir = Path(
             tempfile.mkdtemp(prefix=f"weekly-reference-{normalized_market.lower()}-")
         )
-        sync_result = sync_service.fetch_latest_bundle(
-            repository_full_name=settings.github_data_repository,
-            release_tag=settings.github_weekly_reference_release_tag or self.WEEKLY_REFERENCE_RELEASE_TAG,
-            manifest_asset_name=self.weekly_reference_latest_manifest_name_for_market(normalized_market),
-            source_mode=settings.market_data_source_mode,
-            current_revision=current_revision,
-            expected_manifest_schema=self.WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION,
-            required_manifest_keys=(
-                "market",
-                "as_of_date",
-                "source_revision",
-                "bundle_asset_name",
-                "sha256",
-            ),
-            stale_validator=self._validate_weekly_reference_manifest_freshness,
-            github_token=settings.github_data_token,
-            request_timeout_seconds=settings.github_data_timeout_seconds,
-            output_dir=download_dir,
-        )
+        manifest_asset_names = [
+            self.weekly_reference_latest_manifest_name_for_market(normalized_market)
+        ]
+        if normalized_market == "US":
+            manifest_asset_names.append(self.WEEKLY_REFERENCE_LATEST_MANIFEST_NAME)
+
+        sync_result: dict[str, Any] = {}
+        for manifest_asset_name in manifest_asset_names:
+            sync_result = sync_service.fetch_latest_bundle(
+                repository_full_name=settings.github_data_repository,
+                release_tag=(
+                    settings.github_weekly_reference_release_tag
+                    or self.WEEKLY_REFERENCE_RELEASE_TAG
+                ),
+                manifest_asset_name=manifest_asset_name,
+                source_mode=settings.market_data_source_mode,
+                current_revision=current_revision,
+                expected_manifest_schema=self.WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION,
+                required_manifest_keys=(
+                    "market",
+                    "as_of_date",
+                    "source_revision",
+                    "bundle_asset_name",
+                    "sha256",
+                ),
+                stale_validator=self._validate_weekly_reference_manifest_freshness,
+                allow_stale=allow_stale,
+                github_token=settings.github_data_token,
+                request_timeout_seconds=settings.github_data_timeout_seconds,
+                output_dir=download_dir,
+            )
+            if sync_result.get("status") != "missing_manifest":
+                break
         sync_result["source"] = "github"
         sync_result["market"] = normalized_market
 

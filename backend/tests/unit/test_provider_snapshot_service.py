@@ -1573,6 +1573,35 @@ def test_sync_weekly_reference_from_github_preserves_import_error_when_download_
     db.close()
 
 
+def test_sync_weekly_reference_from_github_uses_legacy_us_manifest_fallback():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    requested_manifests: list[str] = []
+
+    def fetch_latest_bundle(**kwargs):
+        manifest_name = kwargs["manifest_asset_name"]
+        requested_manifests.append(manifest_name)
+        if manifest_name == "weekly-reference-latest-us.json":
+            return {"status": "missing_manifest"}
+        return {"status": "up_to_date", "source_revision": "legacy"}
+
+    result = service.sync_weekly_reference_from_github(
+        db,
+        market="US",
+        github_sync_service=SimpleNamespace(
+            fetch_latest_bundle=fetch_latest_bundle,
+        ),
+    )
+
+    assert result["status"] == "up_to_date"
+    assert requested_manifests == [
+        "weekly-reference-latest-us.json",
+        "weekly-reference-latest.json",
+    ]
+    db.close()
+
+
 def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required_fields(monkeypatch):
     monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
     service = FundamentalsCacheService(
