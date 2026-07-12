@@ -19,6 +19,7 @@ on:
         options:
           - all
           - asia
+          - china
           - us
 
 concurrency:
@@ -50,6 +51,7 @@ jobs:
           MARKET_GROUP: ${{ github.event.inputs.market_group }}
         run: |
           ASIA='["HK","IN","JP","KR","TW","CN","SG","MY","AU"]'
+          CN_ONLY='["CN"]'
           US='["US","CA","DE"]'
           ALL='["US","HK","IN","JP","KR","TW","CN","CA","DE","SG","AU","MY"]'
 
@@ -61,6 +63,7 @@ jobs:
           else
             case "$MARKET_GROUP" in
               asia) markets="$ASIA" ;;
+              china) markets="$CN_ONLY" ;;
               us)   markets="$US" ;;
               *)    markets="$ALL" ;;
             esac
@@ -219,7 +222,7 @@ jobs:
         run: |
           cd backend
           set +e
-          python -m app.scripts.export_static_site \
+          python -m app.scripts.export_static_market_artifact \
             --output-dir /tmp/static-data \
             --refresh-daily \
             --build-mode price_delta \
@@ -243,6 +246,14 @@ jobs:
             exit "$status"
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload market status
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-market-status-${{ matrix.market }}
+          path: /tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json
+          if-no-files-found: error
 
       - name: Upload market diagnostics
         if: ${{ always() }}
@@ -309,7 +320,7 @@ jobs:
 
   combine-and-build:
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
-    needs: build-market
+    needs: [select-markets, build-market]
     runs-on: ubuntu-latest
     env:
       REDIS_ENABLED: "false"
@@ -401,7 +412,10 @@ jobs:
               prefix = "static-market-"
               if not artifact_name.startswith(prefix):
                   return ""
-              return artifact_name[len(prefix):].upper()
+              market = artifact_name[len(prefix):].upper()
+              if "-" in market:
+                  return ""
+              return market
 
           def extract_runs(payload):
               if isinstance(payload, dict):
@@ -604,51 +618,15 @@ jobs:
           PY
 
       - name: Validate market artifacts
+        env:
+          SELECTED_MARKETS: ${{ needs.select-markets.outputs.markets }}
         run: |
           mkdir -p /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback
           cd backend
-          python - <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          from app.domain.markets import market_registry
-
-          # Every scheduled run builds only one market group; the rest must be
-          # back-filled from a previous run's artifacts. Publishing is all-or-
-          # nothing: refuse to deploy unless every supported market is present
-          # across current + fallback artifacts, so a partial group run (or a
-          # failed fallback download) can never ship an incomplete static site.
-          expected = {code.upper() for code in market_registry.supported_market_codes()}
-          present = set()
-          for base in (
-              "/tmp/static-market-artifacts-current",
-              "/tmp/static-market-artifacts-fallback",
-          ):
-              for manifest in Path(base).rglob("manifest.market.json"):
-                  try:
-                      market = str(
-                          json.loads(manifest.read_text(encoding="utf-8")).get("market", "")
-                      ).upper()
-                  except (OSError, json.JSONDecodeError, TypeError) as exc:
-                      print(f"::warning::Could not read {manifest}: {exc}", flush=True)
-                      continue
-                  if market:
-                      present.add(market)
-
-          print(f"Expected markets: {', '.join(sorted(expected))}")
-          print(f"Present markets:  {', '.join(sorted(present)) or '(none)'}")
-
-          missing = sorted(expected - present)
-          if missing:
-              print(
-                  "::error::Refusing to publish an incomplete static site. No current "
-                  f"build and no fallback artifact for: {', '.join(missing)}.",
-                  flush=True,
-              )
-              sys.exit(1)
-          print("All supported markets present; static site is complete.")
-          PY
+          python -m app.scripts.validate_static_market_artifacts \
+            --current-dir /tmp/static-market-artifacts-current \
+            --fallback-dir /tmp/static-market-artifacts-fallback \
+            --selected-markets "${SELECTED_MARKETS}"
 
       - name: Combine static data bundle
         run: |

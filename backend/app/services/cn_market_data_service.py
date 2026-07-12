@@ -14,8 +14,16 @@ from typing import Any
 import pandas as pd
 import requests
 
+from app.domain.markets.cn_symbols import (
+    cn_a_share_exchange_for_symbol,
+    has_cn_a_share_exchange_conflict,
+    infer_cn_a_share_exchange_from_local_code,
+    normalize_cn_local_code,
+)
+
 from ..config import settings
 from .cn_universe_ingestion_adapter import infer_cn_sector
+from .price_row_normalization import drop_non_finite_close_rows
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +31,17 @@ _AKSHARE_OHLCV_FAILURE_THRESHOLD = 2
 _AKSHARE_OHLCV_COOLDOWN_SECONDS = 300.0
 _CN_LISTING_FETCH_ATTEMPTS = 3
 _CN_LISTING_RETRY_BASE_DELAY_SECONDS = 5.0
+_CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER = {
+    "stock_zh_index_daily": {
+        "000001.SS": "sh000001",  # Shanghai Composite
+        "000300.SS": "sh000300",  # CSI 300
+    },
+    "stock_zh_index_daily_em": {
+        "000001.SS": "sh000001",  # Shanghai Composite
+        "000300.SS": "csi000300",  # CSI 300
+    },
+}
+_CN_INDEX_AKSHARE_FETCHERS = tuple(_CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER)
 
 
 class CnDependencyError(RuntimeError):
@@ -87,23 +106,6 @@ def _period_start_date(period: str, *, today: date | None = None) -> date:
     if token.endswith("y") and token[:-1].isdigit():
         return current - timedelta(days=int(token[:-1]) * 365)
     return current - timedelta(days=730)
-
-
-def _normalize_code(value: Any) -> str:
-    raw = str(value or "").strip().upper()
-    if raw.endswith((".SS", ".SZ", ".BJ")):
-        raw = raw[:-3]
-    return raw.zfill(6) if raw.isdigit() else raw
-
-
-def _exchange_for_code(local_code: str) -> str | None:
-    if local_code.startswith(("600", "601", "603", "605", "688")):
-        return "SSE"
-    if local_code.startswith(("000", "001", "002", "003", "300", "301")):
-        return "SZSE"
-    if local_code.startswith(("4", "8", "9")):
-        return "BJSE"
-    return None
 
 
 def _board_for_code(local_code: str, exchange: str) -> str:
@@ -352,8 +354,8 @@ class CnMarketDataService:
     def _rows_from_listing_frame(self, frame: pd.DataFrame) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for raw in frame.to_dict("records"):
-            local_code = _normalize_code(raw.get("代码") or raw.get("code") or raw.get("symbol"))
-            exchange = _exchange_for_code(local_code)
+            local_code = normalize_cn_local_code(raw.get("代码") or raw.get("code") or raw.get("symbol"))
+            exchange = infer_cn_a_share_exchange_from_local_code(local_code)
             if exchange is None:
                 continue
             suffix = _suffix_for_exchange(exchange)
@@ -394,7 +396,7 @@ class CnMarketDataService:
         as_of: date | str | None = None,
     ) -> dict[str, Any]:
         """Return latest AKShare/Eastmoney valuation fields for one A-share."""
-        code = _normalize_code(local_code)
+        code = normalize_cn_local_code(local_code)
         fields: dict[str, Any] = {}
         for row in self.listing_rows(as_of=as_of):
             if row.get("local_code") != code:
@@ -420,7 +422,7 @@ class CnMarketDataService:
         as_of: date | str | None = None,
     ) -> dict[str, Any]:
         """Return statement-style fields from AKShare, with BaoStock fallback."""
-        code = _normalize_code(local_code)
+        code = normalize_cn_local_code(local_code)
         try:
             ak_fields = self._statement_fundamentals_from_akshare(code, as_of=as_of)
             if ak_fields:
@@ -470,7 +472,7 @@ class CnMarketDataService:
         as_of: date | str | None = None,
     ) -> dict[str, Any]:
         bs = self._baostock
-        exchange = _exchange_for_code(local_code)
+        exchange = infer_cn_a_share_exchange_from_local_code(local_code)
         if exchange is None or exchange == "BJSE":
             return {}
         bs_prefix = "sh" if exchange == "SSE" else "sz"
@@ -512,14 +514,20 @@ class CnMarketDataService:
 
     def daily_ohlcv(
         self,
-        local_code: str,
+        symbol_or_local_code: str,
         *,
         start: date | str,
         end: date | str | None = None,
     ) -> list[CnDailyPriceRow]:
-        """Return daily OHLCV rows from AKShare, with BaoStock fallback."""
-        code = _normalize_code(local_code)
-        exchange = _exchange_for_code(code)
+        """Return native CN OHLCV rows from AKShare, with BaoStock fallback."""
+        if has_cn_a_share_exchange_conflict(symbol_or_local_code):
+            logger.info(
+                "Skipping CN A-share OHLCV for suffix-conflicting symbol %s",
+                symbol_or_local_code,
+            )
+            return []
+        code = normalize_cn_local_code(symbol_or_local_code)
+        exchange = cn_a_share_exchange_for_symbol(symbol_or_local_code)
         has_baostock_fallback = exchange not in (None, "BJSE")
         start_token = _as_yyyymmdd(start)
         end_token = _as_yyyymmdd(end or date.today())
@@ -616,8 +624,8 @@ class CnMarketDataService:
                     if trade_status and trade_status != "1":
                         continue
                     raw_code = code.split(".", 1)[1] if "." in code else code
-                    local_code = _normalize_code(raw_code)
-                    exchange = _exchange_for_code(local_code)
+                    local_code = normalize_cn_local_code(raw_code)
+                    exchange = infer_cn_a_share_exchange_from_local_code(local_code)
                     if exchange is None or exchange == "BJSE":
                         continue
                     suffix = _suffix_for_exchange(exchange)
@@ -663,7 +671,7 @@ class CnMarketDataService:
         end: str,
     ) -> list[CnDailyPriceRow]:
         bs = self._baostock
-        exchange = _exchange_for_code(local_code)
+        exchange = infer_cn_a_share_exchange_from_local_code(local_code)
         if exchange is None or exchange == "BJSE":
             return []
         bs_prefix = "sh" if exchange == "SSE" else "sz"
@@ -703,7 +711,7 @@ class CnMarketDataService:
 
     def daily_ohlcv_dataframe(
         self,
-        local_code: str,
+        symbol_or_local_code: str,
         *,
         period: str = "2y",
         end: date | str | None = None,
@@ -711,13 +719,81 @@ class CnMarketDataService:
         """Return CN OHLCV as the canonical price-cache DataFrame shape."""
         end_date = _as_date(end)
         rows = self.daily_ohlcv(
-            local_code,
+            symbol_or_local_code,
             start=_period_start_date(period, today=end_date),
             end=end_date,
         )
         if not rows:
             return None
 
+        return self._daily_frame_from_rows(rows)
+
+    def index_ohlcv_dataframe(
+        self,
+        symbol: str,
+        *,
+        period: str = "2y",
+        end: date | str | None = None,
+        required_as_of_date: date | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Return CN index OHLCV for benchmark symbols such as 000300.SS."""
+        normalized_symbol = str(symbol).strip().upper()
+        if not any(normalized_symbol in symbols for symbols in _CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER.values()):
+            return None
+
+        end_date = _as_date(end)
+        start_date = _period_start_date(period, today=end_date)
+        required_date = _as_date(required_as_of_date) if required_as_of_date is not None else None
+        for fetcher_name in _CN_INDEX_AKSHARE_FETCHERS:
+            akshare_symbol = _CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER[fetcher_name].get(normalized_symbol)
+            if akshare_symbol is None:
+                continue
+            fetcher = getattr(self._akshare, fetcher_name, None)
+            if not callable(fetcher):
+                continue
+            try:
+                frame = _call_with_timeout(
+                    lambda fetcher=fetcher: fetcher(symbol=akshare_symbol),
+                    timeout_seconds=self._timeout_seconds,
+                    operation_name=f"CN index OHLCV fetch for {akshare_symbol}",
+                )
+            except Exception as exc:  # pragma: no cover - network variability
+                logger.warning(
+                    "AKShare CN index OHLCV fetch failed for %s via %s: %s",
+                    akshare_symbol,
+                    fetcher_name,
+                    exc,
+                )
+                continue
+
+            result = self._daily_frame_from_rows(self._daily_rows_from_akshare_frame(frame))
+            if result is None:
+                continue
+            date_index = pd.Series(result.index.date, index=result.index)
+            result = result[(date_index >= start_date) & (date_index <= end_date)]
+            result = drop_non_finite_close_rows(result)
+            if not result.empty:
+                if required_date is not None:
+                    eligible_dates = [
+                        row_date
+                        for row_date in result.index.date
+                        if row_date <= required_date
+                    ]
+                    if not eligible_dates or max(eligible_dates) != required_date:
+                        logger.warning(
+                            "AKShare CN index OHLCV fetch for %s via %s is stale for %s",
+                            akshare_symbol,
+                            fetcher_name,
+                            required_date.isoformat(),
+                        )
+                        continue
+                return result
+        return None
+
+    @staticmethod
+    def _daily_frame_from_rows(rows: list[CnDailyPriceRow]) -> pd.DataFrame | None:
+        if not rows:
+            return None
         frame = pd.DataFrame(
             [
                 {

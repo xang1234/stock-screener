@@ -24,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
     redis = Any  # type: ignore
 
 from ..database import SessionLocal
+from ..domain.markets.cn_symbols import cn_price_symbol_for_native_provider
 from ..models.stock import StockPrice
 from ..models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 from ..config import settings
@@ -550,10 +551,17 @@ class PriceCacheService:
             from .security_master_service import security_master_resolver
 
             identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
-            local_code = str(identity.local_code or "").strip()
-            if not local_code.isdigit():
+            provider_symbol = cn_price_symbol_for_native_provider(
+                symbol,
+                local_code=identity.local_code,
+                canonical_symbol=identity.canonical_symbol,
+            )
+            if provider_symbol is None:
                 return None
-            return CnMarketDataService().daily_ohlcv_dataframe(local_code, period=period)
+            return CnMarketDataService().daily_ohlcv_dataframe(
+                provider_symbol,
+                period=period,
+            )
         except Exception as exc:  # pragma: no cover - provider/network variability
             logger.warning("CN historical fetch failed for %s: %s", symbol, exc)
             return None

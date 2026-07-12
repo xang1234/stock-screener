@@ -6,7 +6,7 @@ import argparse
 import json
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from app.config import settings
 from app.database import SessionLocal
@@ -558,7 +558,7 @@ def _run_daily_refresh(
     return results, warnings
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output-dir",
@@ -613,7 +613,7 @@ def main() -> int:
         "--rrg-history-dir",
         help="Optional directory holding the market's rolling RRG history state.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.combine_artifacts_dir and args.refresh_daily:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --refresh-daily")
