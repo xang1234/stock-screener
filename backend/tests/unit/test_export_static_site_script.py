@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import shutil
@@ -18,6 +18,7 @@ import app.tasks.universe_tasks as universe_tasks
 from app.domain.markets import market_registry
 from app.interfaces.tasks import feature_store_tasks
 from app.services.group_rank_history_backfill_service import (
+    DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS,
     GroupRankHistoryBackfillResult,
     GroupRankHistoryBackfillStatus,
 )
@@ -34,7 +35,9 @@ def _backfill_result(
         status=status,
         market=market,
         as_of_date=as_of_date,
-        lookback_start_date=as_of_date,
+        lookback_start_date=(
+            as_of_date - timedelta(days=DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS)
+        ),
         errors=1 if status is GroupRankHistoryBackfillStatus.ERRORED else 0,
         error=error,
     )

@@ -20,7 +20,6 @@ from app.services.ibd_industry_service import IBDIndustryService
 from app.services.group_rank_history_backfill_service import (
     GroupRankHistoryBackfillResult,
     GroupRankHistoryBackfillService,
-    GroupRankHistoryBackfillStatus,
 )
 from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.static_daily_price_refresh_service import (
@@ -33,9 +32,9 @@ from app.services.static_site_export_service import (
     StaticSiteExportService,
 )
 from app.services.static_groups_rrg_export import (
-    StaticGroupsRRGRollingHistoryPayloadSource,
+    StaticGroupsRRGRollingHistoryExportSession,
 )
-from app.services.static_rrg_history_bundle import StaticRRGHistoryBundleError
+from app.services.static_rrg_history_contract import StaticRRGHistoryBundleError
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
 from app.wiring.bootstrap import (
@@ -447,25 +446,23 @@ def _run_daily_refresh(
         results["feature_snapshots"] = feature_snapshots
 
         group_rank_history: dict[str, GroupRankHistoryBackfillResult] = {}
+        group_rank_history_report: dict[str, dict[str, Any]] = {}
         for selected_market in selected_markets:
             snapshot = feature_snapshots.get(selected_market, {})
             if not _snapshot_publishable(snapshot):
-                group_rank_history[selected_market] = GroupRankHistoryBackfillResult(
-                    status=GroupRankHistoryBackfillStatus.NOT_ATTEMPTED,
-                    market=selected_market,
-                    as_of_date=as_of_by_market[selected_market],
-                    lookback_start_date=as_of_by_market[selected_market],
-                    reason="snapshot_not_ready",
-                )
+                group_rank_history_report[selected_market] = {
+                    "status": "skipped",
+                    "market": selected_market,
+                    "reason": "snapshot_not_ready",
+                }
                 continue
-            group_rank_history[selected_market] = _ensure_group_rank_history(
+            backfill = _ensure_group_rank_history(
                 as_of_date=as_of_by_market[selected_market],
                 market=selected_market,
             )
-        results["group_rank_history_backfill"] = {
-            result_market: backfill.as_dict()
-            for result_market, backfill in group_rank_history.items()
-        }
+            group_rank_history[selected_market] = backfill
+            group_rank_history_report[selected_market] = backfill.as_dict()
+        results["group_rank_history_backfill"] = group_rank_history_report
 
         # Re-enrich feature runs after the IBDGroupRank backfill above.
         # build_daily_snapshot's inner enrichment runs *before* group ranks
@@ -690,8 +687,8 @@ def main() -> int:
                 )
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
 
-        rrg_history_source = (
-            StaticGroupsRRGRollingHistoryPayloadSource(
+        rrg_history_session = (
+            StaticGroupsRRGRollingHistoryExportSession(
                 schema_version=STATIC_SITE_SCHEMA_VERSION,
                 market=args.market,
                 directory=Path(args.rrg_history_dir),
@@ -702,7 +699,7 @@ def main() -> int:
 
         service = StaticSiteExportService(
             SessionLocal,
-            rrg_payload_source=rrg_history_source,
+            rrg_payload_source=rrg_history_session,
         )
         try:
             result = service.export(
@@ -730,10 +727,10 @@ def main() -> int:
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
             raise
 
-        if rrg_history_source is not None:
-            refresh_warnings.extend(rrg_history_source.warnings)
+        if rrg_history_session is not None:
+            refresh_warnings.extend(rrg_history_session.warnings)
             try:
-                history_stats = rrg_history_source.persist(
+                history_stats = rrg_history_session.persist(
                     exported_as_of_date=date.fromisoformat(result.as_of_date),
                 )
                 if history_stats is not None:

@@ -46,7 +46,6 @@ class GroupRankHistoryBackfillStatus(StrEnum):
     COMPLETED = "completed"
     SKIPPED = "skipped"
     ERRORED = "errored"
-    NOT_ATTEMPTED = "not_attempted"
 
 
 @dataclass(frozen=True)

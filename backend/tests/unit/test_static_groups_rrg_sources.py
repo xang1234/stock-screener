@@ -11,7 +11,7 @@ import pytest
 from app.services import static_groups_rrg_export as rrg_export
 from app.services.static_groups_rrg_export import (
     StaticGroupsRRGDatabasePayloadSource,
-    StaticGroupsRRGRollingHistoryPayloadSource,
+    StaticGroupsRRGRollingHistoryExportSession,
     StaticGroupsRRGUnavailableError,
 )
 from app.services.static_rrg_history_bundle import StaticRRGHistoryPreparation
@@ -78,7 +78,7 @@ def test_rolling_source_uses_export_date_for_prepare_and_persist(monkeypatch, tm
         "_build_payload_from_state",
         lambda **kwargs: {"as_of_date": kwargs["expected_as_of_date"].isoformat()},
     )
-    source = StaticGroupsRRGRollingHistoryPayloadSource(
+    source = StaticGroupsRRGRollingHistoryExportSession(
         schema_version="static-site-v2",
         market="HK",
         directory=tmp_path,
@@ -100,6 +100,15 @@ def test_rolling_source_uses_export_date_for_prepare_and_persist(monkeypatch, tm
         ("prepare", db, "HK", export_date, tmp_path),
         ("persist", preparation, export_date),
     ]
+    with pytest.raises(RuntimeError, match="already been built"):
+        source.build(
+            db=db,
+            generated_at="2026-04-18T22:00:00Z",
+            expected_as_of_date=export_date,
+            market="HK",
+        )
+    with pytest.raises(RuntimeError, match="already been persisted"):
+        source.persist(exported_as_of_date=export_date)
 
 
 def test_rolling_source_does_not_retry_failed_preparation(tmp_path):
@@ -117,7 +126,7 @@ def test_rolling_source_does_not_retry_failed_preparation(tmp_path):
         def build(self, *_args, **_kwargs):
             raise AssertionError("failed preparation must not fall back to a DB rebuild")
 
-    source = StaticGroupsRRGRollingHistoryPayloadSource(
+    source = StaticGroupsRRGRollingHistoryExportSession(
         schema_version="static-site-v2",
         market="HK",
         directory=tmp_path,
@@ -142,7 +151,7 @@ def test_rolling_source_rejects_wrong_market_before_preparation(tmp_path):
             AssertionError("wrong-market source must fail before preparation")
         )
     )
-    source = StaticGroupsRRGRollingHistoryPayloadSource(
+    source = StaticGroupsRRGRollingHistoryExportSession(
         schema_version="static-site-v2",
         market="HK",
         directory=tmp_path,
@@ -156,6 +165,18 @@ def test_rolling_source_rejects_wrong_market_before_preparation(tmp_path):
             expected_as_of_date=date(2026, 4, 18),
             market="US",
         )
+
+
+def test_rolling_export_session_rejects_persist_before_build(tmp_path):
+    source = StaticGroupsRRGRollingHistoryExportSession(
+        schema_version="static-site-v2",
+        market="HK",
+        directory=tmp_path,
+        history_service=SimpleNamespace(),
+    )
+
+    with pytest.raises(RuntimeError, match="must be built"):
+        source.persist(exported_as_of_date=date(2026, 4, 18))
 
 
 def test_database_source_has_one_explicit_build_path(monkeypatch):

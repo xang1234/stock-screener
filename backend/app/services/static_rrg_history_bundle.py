@@ -15,11 +15,12 @@ from pydantic import ValidationError
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from app.analysis.rrg_weekly import rrg_week_start
 from app.domain.markets.catalog import MarketCatalog, get_market_catalog
 from app.models.industry import IBDGroupRank
 from app.services.market_taxonomy_service import get_market_taxonomy_service
 from app.services.rrg_history_provider import RRGHistoryResult
-from app.services.rrg_service import RRGService, rrg_week_start
+from app.services.rrg_service import RRGService
 from app.services.static_rrg_history_contract import (
     STATIC_RRG_HISTORY_RETENTION_WEEKS,
     STATIC_RRG_HISTORY_SCHEMA_VERSION,
@@ -30,7 +31,6 @@ from app.services.static_rrg_history_contract import (
     StaticRRGWeek,
     build_static_rrg_history_plan,
     normalize_static_rrg_market,
-    static_rrg_asset_name,
 )
 
 
@@ -54,21 +54,6 @@ class StaticRRGHistoryBundleService:
     retention_weeks: int = STATIC_RRG_HISTORY_RETENTION_WEEKS
     market_catalog: MarketCatalog = field(default_factory=get_market_catalog)
 
-    @staticmethod
-    def asset_name(market: str) -> str:
-        return static_rrg_asset_name(market)
-
-    def enabled_for_market(self, market: str) -> bool:
-        normalized_market = normalize_static_rrg_market(market)
-        return bool(self.market_catalog.rrg_scopes_for_market(normalized_market))
-
-    def plan(self, *, market: str, directory: Path) -> StaticRRGHistoryPlan:
-        return build_static_rrg_history_plan(
-            market=market,
-            directory=directory,
-            market_catalog=self.market_catalog,
-        )
-
     def prepare(
         self,
         db: Session,
@@ -78,7 +63,11 @@ class StaticRRGHistoryBundleService:
         directory: Path,
     ) -> StaticRRGHistoryPreparation:
         """Load prior state when valid, then advance it from current DB rows."""
-        plan = self.plan(market=market, directory=directory)
+        plan = build_static_rrg_history_plan(
+            market=market,
+            directory=directory,
+            market_catalog=self.market_catalog,
+        )
         if not plan.enabled:
             return StaticRRGHistoryPreparation(plan=plan, state=None)
         previous = None
@@ -130,7 +119,7 @@ class StaticRRGHistoryBundleService:
         previous: StaticRRGHistoryState | None = None,
     ) -> StaticRRGHistoryState:
         normalized_market = normalize_static_rrg_market(market)
-        if not self.enabled_for_market(normalized_market):
+        if not self.market_catalog.rrg_scopes_for_market(normalized_market):
             raise StaticRRGHistoryUnavailableError(
                 f"RRG is not enabled for market {normalized_market}."
             )
@@ -311,16 +300,9 @@ def _write_payload(path: Path, payload: dict[str, Any]) -> None:
 
 
 __all__ = [
-    "STATIC_RRG_HISTORY_RETENTION_WEEKS",
-    "STATIC_RRG_HISTORY_SCHEMA_VERSION",
-    "StaticRRGGroupPoint",
-    "StaticRRGHistoryBundleError",
     "StaticRRGHistoryBundleService",
-    "StaticRRGHistoryPlan",
     "StaticRRGHistoryProvider",
     "StaticRRGHistoryPreparation",
-    "StaticRRGHistoryState",
     "StaticRRGHistoryUnavailableError",
-    "StaticRRGWeek",
     "build_static_rrg_service",
 ]

@@ -14,14 +14,16 @@ from app.models.industry import IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
 from app.services.rrg_service import RRGService
 from app.services.static_rrg_history_bundle import (
-    StaticRRGHistoryBundleError,
     StaticRRGHistoryBundleService,
     StaticRRGHistoryPreparation,
-    StaticRRGHistoryState,
     StaticRRGHistoryUnavailableError,
     build_static_rrg_service,
 )
-from app.services.static_rrg_history_contract import normalize_static_rrg_market
+from app.services.static_rrg_history_contract import (
+    StaticRRGHistoryBundleError,
+    StaticRRGHistoryState,
+    normalize_static_rrg_market,
+)
 
 
 class StaticGroupsRRGUnavailableError(RuntimeError):
@@ -180,9 +182,31 @@ class StaticGroupsRRGDatabasePayloadSource:
         )
 
 
+@dataclass(frozen=True)
+class _NewRollingRRGExport:
+    pass
+
+
+@dataclass(frozen=True)
+class _PreparedRollingRRGExport:
+    preparation: StaticRRGHistoryPreparation
+
+
+@dataclass(frozen=True)
+class _PersistedRollingRRGExport:
+    preparation: StaticRRGHistoryPreparation
+
+
+_RollingRRGExportState = (
+    _NewRollingRRGExport
+    | _PreparedRollingRRGExport
+    | _PersistedRollingRRGExport
+)
+
+
 @dataclass
-class StaticGroupsRRGRollingHistoryPayloadSource:
-    """Prepare, serve, and persist one market's rolling RRG artifact."""
+class StaticGroupsRRGRollingHistoryExportSession:
+    """Single-use prepare, serve, and persist session for one RRG artifact."""
 
     schema_version: str
     market: str
@@ -190,15 +214,17 @@ class StaticGroupsRRGRollingHistoryPayloadSource:
     history_service: StaticRRGHistoryBundleService = field(
         default_factory=StaticRRGHistoryBundleService
     )
-    _preparation: StaticRRGHistoryPreparation | None = field(
-        default=None,
+    _state: _RollingRRGExportState = field(
+        default_factory=_NewRollingRRGExport,
         init=False,
         repr=False,
     )
 
     @property
     def warnings(self) -> tuple[str, ...]:
-        return self._preparation.warnings if self._preparation is not None else ()
+        if isinstance(self._state, _NewRollingRRGExport):
+            return ()
+        return self._state.preparation.warnings
 
     def build(
         self,
@@ -208,6 +234,8 @@ class StaticGroupsRRGRollingHistoryPayloadSource:
         expected_as_of_date: date,
         market: str,
     ) -> dict[str, Any]:
+        if not isinstance(self._state, _NewRollingRRGExport):
+            raise RuntimeError("Rolling RRG export session has already been built.")
         expected_market = normalize_static_rrg_market(self.market)
         requested_market = normalize_static_rrg_market(market)
         if requested_market != expected_market:
@@ -221,7 +249,7 @@ class StaticGroupsRRGRollingHistoryPayloadSource:
             through_date=expected_as_of_date,
             directory=self.directory,
         )
-        self._preparation = preparation
+        self._state = _PreparedRollingRRGExport(preparation)
         if preparation.state is None:
             reason = (
                 preparation.warnings[-1]
@@ -243,12 +271,17 @@ class StaticGroupsRRGRollingHistoryPayloadSource:
         )
 
     def persist(self, *, exported_as_of_date: date) -> dict[str, Any] | None:
-        if self._preparation is None:
-            return None
-        return self.history_service.persist(
-            self._preparation,
+        if isinstance(self._state, _NewRollingRRGExport):
+            raise RuntimeError("Rolling RRG export session must be built before persistence.")
+        if isinstance(self._state, _PersistedRollingRRGExport):
+            raise RuntimeError("Rolling RRG export session has already been persisted.")
+        preparation = self._state.preparation
+        result = self.history_service.persist(
+            preparation,
             exported_as_of_date=exported_as_of_date,
         )
+        self._state = _PersistedRollingRRGExport(preparation)
+        return result
 
 
 def _build_payload_from_state(
@@ -285,5 +318,5 @@ __all__ = [
     "StaticGroupsRRGUnavailableError",
     "StaticGroupsRRGPayloadBuilder",
     "StaticGroupsRRGPayloadSource",
-    "StaticGroupsRRGRollingHistoryPayloadSource",
+    "StaticGroupsRRGRollingHistoryExportSession",
 ]

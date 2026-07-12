@@ -15,10 +15,12 @@ from app.services.group_rank_history_backfill_service import (
 )
 from app.services.rrg_service import MIN_TAIL_WEEKS, RRGService
 from app.services.static_rrg_history_bundle import (
-    STATIC_RRG_HISTORY_SCHEMA_VERSION,
-    StaticRRGHistoryBundleError,
     StaticRRGHistoryBundleService,
     StaticRRGHistoryProvider,
+)
+from app.services.static_rrg_history_contract import (
+    STATIC_RRG_HISTORY_SCHEMA_VERSION,
+    StaticRRGHistoryBundleError,
 )
 
 
@@ -253,6 +255,16 @@ def test_invalid_row_is_normalized_to_bundle_error(tmp_path):
         lambda payload: payload.update({"unexpected": True}),
         lambda payload: payload["weeks"][0].update({"unexpected": True}),
         lambda payload: payload["weeks"][0]["groups"][0].update({"unexpected": True}),
+        lambda payload: payload["weeks"][0]["groups"][0].update({"rank": "1"}),
+        lambda payload: payload["weeks"][0]["groups"][0].update(
+            {"avg_rs_rating": "80.0"}
+        ),
+        lambda payload: payload["weeks"][0]["groups"][0].update(
+            {"num_stocks": "10"}
+        ),
+        lambda payload: payload["weeks"][0]["groups"][0].update(
+            {"avg_rs_rating": float("nan")}
+        ),
     ],
 )
 def test_history_contract_rejects_unversioned_and_unknown_fields(tmp_path, mutation):

@@ -128,7 +128,7 @@ def test_main_configures_and_persists_market_rrg_state(monkeypatch, tmp_path):
     monkeypatch.setattr(export_script, "SessionLocal", _SessionFactory())
     monkeypatch.setattr(
         export_script,
-        "StaticGroupsRRGRollingHistoryPayloadSource",
+        "StaticGroupsRRGRollingHistoryExportSession",
         _RollingHistorySource,
     )
     monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)
@@ -177,7 +177,7 @@ def test_main_does_not_fail_when_rrg_state_cannot_be_persisted(
     monkeypatch.setattr(export_script, "SessionLocal", _SessionFactory())
     monkeypatch.setattr(
         export_script,
-        "StaticGroupsRRGRollingHistoryPayloadSource",
+        "StaticGroupsRRGRollingHistoryExportSession",
         _RollingHistorySource,
     )
     monkeypatch.setattr(export_script, "StaticSiteExportService", _ExportService)

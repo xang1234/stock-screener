@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
+from app.analysis.rrg_weekly import bucket_rrg_weekly
 from app.domain.markets.catalog import (
     MarketCatalog,
     RRG_SCOPE_ORDER,
@@ -80,35 +81,6 @@ class RRGTaxonomyService(Protocol):
 
     def sector_map_for_market(self, market: str) -> dict[str, str]:
         """Return industry group -> sector mappings for one market."""
-
-
-def rrg_week_start(d: date) -> date:
-    """UTC Sunday-origin start of the ISO-ish week containing ``d``.
-
-    Matches the frontend ``aggregateToWeekly`` rule (JS ``getUTCDay()`` where
-    Sunday==0): ``dow = (weekday()+1) % 7`` maps Mon..Sun -> 1..0, so we step
-    back to the preceding Sunday.
-    """
-    dow = (d.weekday() + 1) % 7
-    return d - timedelta(days=dow)
-
-
-def _bucket_weekly(
-    daily: Sequence[Tuple[date, float]],
-) -> List[Tuple[date, float]]:
-    """Collapse a daily ``(date, value)`` series to one close-of-week point.
-
-    Each week is keyed by its UTC Sunday start; the value kept is the latest
-    trading day's value within that week. Output is ascending by week start.
-    Tolerant of unsorted input.
-    """
-    latest: dict[date, Tuple[date, float]] = {}
-    for d, value in daily:
-        wk = rrg_week_start(d)
-        prev = latest.get(wk)
-        if prev is None or d >= prev[0]:
-            latest[wk] = (d, value)
-    return [(wk, latest[wk][1]) for wk in sorted(latest)]
 
 
 def _ema(values: Sequence[float], span: int) -> List[float]:
@@ -206,7 +178,7 @@ def compute_group_rrg(
       so the most recent point used a shortened (sub-``z_window``) window.
     """
     params = params or RRGParams()
-    weekly = _bucket_weekly(daily_series)
+    weekly = bucket_rrg_weekly(daily_series)
     if len(weekly) < MIN_TAIL_WEEKS:
         return None
 

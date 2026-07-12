@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.analysis.rrg_weekly import rrg_week_start
 from app.domain.markets.catalog import MarketCatalog, get_market_catalog
-from app.services.rrg_service import rrg_week_start
 
 
 StaticRRGHistorySchemaVersion = Literal["static-rrg-history-v3"]
@@ -28,9 +28,9 @@ class StaticRRGGroupPoint(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     industry_group: str = Field(min_length=1)
-    rank: int = Field(ge=1)
-    avg_rs_rating: float
-    num_stocks: int = Field(ge=0)
+    rank: Annotated[int, Field(ge=1, strict=True)]
+    avg_rs_rating: Annotated[float, Field(strict=True, allow_inf_nan=False)]
+    num_stocks: Annotated[int, Field(ge=0, strict=True)]
 
     @field_validator("industry_group")
     @classmethod
