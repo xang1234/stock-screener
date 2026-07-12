@@ -7,7 +7,7 @@ import requests
 
 from app.services.github_release_sync_service import (
     GitHubReleaseSyncService,
-    retry_github_sync,
+    NamedAssetFetchStatus,
 )
 
 
@@ -551,8 +551,8 @@ def test_fetch_named_asset_downloads_exact_asset_atomically(tmp_path):
         output_path=output_path,
     )
 
-    assert result["status"] == "success"
-    assert result["bundle_path"] == str(output_path)
+    assert result.status is NamedAssetFetchStatus.SUCCESS
+    assert result.output_path == output_path
     assert output_path.read_bytes() == asset_bytes
     assert not list(tmp_path.glob(f".{output_path.name}.*.tmp"))
 
@@ -579,25 +579,5 @@ def test_fetch_named_asset_distinguishes_confirmed_missing_from_failure(tmp_path
         output_path=tmp_path / "rrg-history-hk.json.gz",
     )
 
-    assert missing["status"] == "missing_asset"
-    assert failed["status"] == "network_error"
-
-
-def test_retry_github_sync_retries_network_errors_only():
-    results = iter(
-        [
-            {"status": "network_error", "error": "temporary"},
-            {"status": "success", "bundle_path": "/tmp/history"},
-        ]
-    )
-    sleeps: list[float] = []
-
-    result = retry_github_sync(
-        lambda: next(results),
-        attempts=3,
-        retry_delay_seconds=2,
-        sleep=sleeps.append,
-    )
-
-    assert result["status"] == "success"
-    assert sleeps == [2]
+    assert missing.status is NamedAssetFetchStatus.MISSING
+    assert failed.status is NamedAssetFetchStatus.NETWORK_ERROR

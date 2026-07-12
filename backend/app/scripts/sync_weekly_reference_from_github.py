@@ -6,8 +6,8 @@ import argparse
 
 from app.database import SessionLocal
 from app.scripts._runtime import prepare_runtime
-from app.services.github_release_sync_service import retry_github_sync
 from app.services.provider_snapshot_service import ProviderSnapshotService
+from app.services.weekly_reference_github_sync import retry_weekly_reference_sync
 from app.wiring.bootstrap import get_provider_snapshot_service
 
 
@@ -43,7 +43,7 @@ def main() -> int:
     provider_snapshot_service = get_provider_snapshot_service()
 
     with SessionLocal() as db:
-        result = retry_github_sync(
+        result = retry_weekly_reference_sync(
             lambda: provider_snapshot_service.sync_weekly_reference_from_github(
                 db,
                 market=args.market,

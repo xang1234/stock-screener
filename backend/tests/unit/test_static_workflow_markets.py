@@ -90,7 +90,7 @@ def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
     )
 
     assert "id: restore-rrg-history" in content
-    assert "app.scripts.restore_github_release_asset" in content
+    assert "app.scripts.restore_static_rrg_history" in content
     assert "SAFE_TO_PUBLISH=false" in content
     assert (
         "steps.restore-rrg-history.outputs.safe_to_publish == 'true'" in content

@@ -6,10 +6,15 @@ import hashlib
 import json
 import tempfile
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, TypeVar
 
 import requests
+
+
+_ResultT = TypeVar("_ResultT")
 
 
 class _ChecksumMismatchError(Exception):
@@ -23,21 +28,42 @@ class _ReleaseNotFoundError(requests.HTTPError):
     pass
 
 
-def retry_github_sync(
-    operation: Callable[[], dict[str, Any]],
+class NamedAssetFetchStatus(StrEnum):
+    SUCCESS = "success"
+    MISSING = "missing_asset"
+    NETWORK_ERROR = "network_error"
+    INVALID = "invalid_asset"
+
+
+@dataclass(frozen=True)
+class NamedAssetFetchResult:
+    status: NamedAssetFetchStatus
+    asset_name: str | None = None
+    output_path: Path | None = None
+    reason: str | None = None
+    error: str | None = None
+
+    @property
+    def retryable(self) -> bool:
+        return self.status is NamedAssetFetchStatus.NETWORK_ERROR
+
+
+def retry_github_operation(
+    operation: Callable[[], _ResultT],
     *,
+    should_retry: Callable[[_ResultT], bool],
     attempts: int = 3,
     retry_delay_seconds: float = 5,
     sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, Any]:
-    """Retry only transient GitHub failures; terminal data states return directly."""
+) -> _ResultT:
+    """Retry a typed GitHub operation under a caller-owned status policy."""
     total_attempts = max(1, int(attempts))
-    result: dict[str, Any] = {"status": "network_error", "error": "not attempted"}
-    for attempt in range(1, total_attempts + 1):
+    result = operation()
+    for retry_number in range(1, total_attempts):
+        if not should_retry(result):
+            break
+        sleep(max(0, retry_delay_seconds) * retry_number)
         result = operation()
-        if result.get("status") != "network_error" or attempt == total_attempts:
-            return result
-        sleep(max(0, retry_delay_seconds) * attempt)
     return result
 
 
@@ -237,13 +263,13 @@ class GitHubReleaseSyncService:
         output_path: str | Path,
         github_token: str | None = None,
         request_timeout_seconds: int = 60,
-    ) -> dict[str, Any]:
+    ) -> NamedAssetFetchResult:
         """Atomically download one exact release asset to a caller-owned path."""
         normalized_asset_name = str(asset_name or "").strip()
         if not self._valid_asset_name(normalized_asset_name):
-            return self._result(
-                "invalid_asset",
-                bundle_asset_name=normalized_asset_name or None,
+            return NamedAssetFetchResult(
+                status=NamedAssetFetchStatus.INVALID,
+                asset_name=normalized_asset_name or None,
                 error=f"Invalid release asset name: {asset_name!r}",
             )
 
@@ -255,23 +281,23 @@ class GitHubReleaseSyncService:
                 request_timeout_seconds=request_timeout_seconds,
             )
         except _ReleaseNotFoundError as exc:
-            return self._result(
-                "missing_asset",
-                bundle_asset_name=normalized_asset_name,
+            return NamedAssetFetchResult(
+                status=NamedAssetFetchStatus.MISSING,
+                asset_name=normalized_asset_name,
                 reason=str(exc),
             )
         except requests.RequestException as exc:
-            return self._result(
-                "network_error",
-                bundle_asset_name=normalized_asset_name,
+            return NamedAssetFetchResult(
+                status=NamedAssetFetchStatus.NETWORK_ERROR,
+                asset_name=normalized_asset_name,
                 error=str(exc),
             )
 
         asset = self._asset_by_name(assets, normalized_asset_name)
         if asset is None:
-            return self._result(
-                "missing_asset",
-                bundle_asset_name=normalized_asset_name,
+            return NamedAssetFetchResult(
+                status=NamedAssetFetchStatus.MISSING,
+                asset_name=normalized_asset_name,
                 reason=(
                     f"Asset {normalized_asset_name!r} is not present on "
                     f"release {release_tag!r}"
@@ -280,9 +306,9 @@ class GitHubReleaseSyncService:
 
         asset_url = self._asset_url(asset)
         if not asset_url:
-            return self._result(
-                "missing_asset",
-                bundle_asset_name=normalized_asset_name,
+            return NamedAssetFetchResult(
+                status=NamedAssetFetchStatus.MISSING,
+                asset_name=normalized_asset_name,
                 reason=f"Asset {normalized_asset_name!r} has no download URL",
             )
 
@@ -296,16 +322,16 @@ class GitHubReleaseSyncService:
                 request_timeout_seconds=request_timeout_seconds,
             )
         except requests.RequestException as exc:
-            return self._result(
-                "network_error",
-                bundle_asset_name=normalized_asset_name,
+            return NamedAssetFetchResult(
+                status=NamedAssetFetchStatus.NETWORK_ERROR,
+                asset_name=normalized_asset_name,
                 error=str(exc),
             )
 
-        return self._result(
-            "success",
-            bundle_path=str(resolved_output_path),
-            bundle_asset_name=normalized_asset_name,
+        return NamedAssetFetchResult(
+            status=NamedAssetFetchStatus.SUCCESS,
+            asset_name=normalized_asset_name,
+            output_path=resolved_output_path,
         )
 
     def fetch_latest_bundle(

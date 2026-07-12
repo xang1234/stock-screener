@@ -197,20 +197,18 @@ jobs:
         run: |
           rm -f "$SOURCE_PATH"
           cd backend
-          RESTORE_RESULT="$(python -m app.scripts.restore_github_release_asset \
+          RESTORE_RESULT="$(python -m app.scripts.restore_static_rrg_history \
             --repository "${{ github.repository }}" \
-            --release-tag rrg-history-data \
             --asset-name "$ASSET_NAME" \
-            --output-path "$SOURCE_PATH" \
-            --allow-missing || true)"
+            --output-path "$SOURCE_PATH" || true)"
           SAFE_TO_PUBLISH="$(jq -r '.safe_to_publish // false' <<<"$RESTORE_RESULT" 2>/dev/null || echo false)"
           RESTORE_STATUS="$(jq -r '.status // "failed"' <<<"$RESTORE_RESULT" 2>/dev/null || echo failed)"
           [ "$SAFE_TO_PUBLISH" = "true" ] || SAFE_TO_PUBLISH=false
           echo "safe_to_publish=$SAFE_TO_PUBLISH" >> "$GITHUB_OUTPUT"
           echo "restore_status=$RESTORE_STATUS" >> "$GITHUB_OUTPUT"
-          if [ "$RESTORE_STATUS" = "success" ]; then
+          if [ "$RESTORE_STATUS" = "restored" ]; then
             echo "Restored rolling RRG history for ${{ matrix.market }}."
-          elif [ "$RESTORE_STATUS" = "missing_asset" ]; then
+          elif [ "$RESTORE_STATUS" = "missing" ]; then
             echo "No rolling RRG history found for ${{ matrix.market }}; the static exporter will bootstrap it."
           else
             echo "Unable to restore rolling RRG history for ${{ matrix.market }}; history publication will be skipped." >&2
