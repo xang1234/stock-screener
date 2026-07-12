@@ -328,7 +328,9 @@ describe('GroupRankingsPage', () => {
         movers: null,
       },
     });
-    triggerCalculation.mockResolvedValue({ task_id: 'group-refresh-1' });
+    triggerCalculation
+      .mockResolvedValueOnce({ task_id: 'group-refresh-1' })
+      .mockResolvedValueOnce({ task_id: 'group-refresh-2' });
     getCalculationStatus.mockResolvedValue({ status: 'completed' });
 
     renderGroupRankingsPage();
@@ -342,8 +344,66 @@ describe('GroupRankingsPage', () => {
     await waitFor(() => {
       expect(getCalculationStatus).toHaveBeenCalledWith('group-refresh-1');
       expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US');
+      expect(getRankMovers).toHaveBeenCalledWith('1w', 10, 'US');
     });
     expect(getCurrentRankings).not.toHaveBeenCalledWith(197, 'US', '2026-03-16');
+
+    getCurrentRankings.mockClear();
+    getRankMovers.mockClear();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => {
+      expect(getCalculationStatus).toHaveBeenCalledWith('group-refresh-2');
+      expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US');
+      expect(getRankMovers).toHaveBeenCalledWith('1w', 10, 'US');
+    });
+  });
+
+  it('invalidates live RRG data after each successful manual refresh', async () => {
+    runtimeState.features = { tasks: true };
+    runtimeState.uiSnapshots = { groups: true };
+    runtimeState.primaryMarket = 'US';
+    runtimeState.enabledMarkets = ['US'];
+    getGroupsBootstrap.mockResolvedValue({
+      available: true,
+      is_stale: false,
+      payload: {
+        rankings: {
+          date: '2026-03-16',
+          total_groups: 1,
+          market_scope: 'US',
+          rankings: [{ ...rankingRowFor('US'), date: '2026-03-16' }],
+        },
+        movers: null,
+      },
+    });
+    triggerCalculation
+      .mockResolvedValueOnce({ task_id: 'rrg-refresh-1' })
+      .mockResolvedValueOnce({ task_id: 'rrg-refresh-2' });
+    getCalculationStatus.mockResolvedValue({ status: 'completed' });
+
+    renderGroupRankingsPage();
+    expect(await screen.findByText('US Internet Services')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'RRG' }));
+    await waitFor(() => {
+      expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'US', '2026-03-16');
+    });
+    getRRGBundle.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(getCalculationStatus).toHaveBeenCalledWith('rrg-refresh-1');
+      expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'US');
+    });
+    getRRGBundle.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(getCalculationStatus).toHaveBeenCalledWith('rrg-refresh-2');
+      expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'US');
+    });
   });
 
   it('hides RRG for group-ranking markets without RRG capability', async () => {

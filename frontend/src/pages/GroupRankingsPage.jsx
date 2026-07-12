@@ -634,6 +634,18 @@ function GroupRankingsPage() {
           queryKey: ['groupRankings', selectedMarket, null],
           exact: true,
         });
+        queryClient.invalidateQueries({
+          predicate: ({ queryKey }) => (
+            queryKey[0] === 'groupMovers'
+            && queryKey[2] === selectedMarket
+            && queryKey[3] === null
+          ),
+          refetchType: 'active',
+        });
+        queryClient.invalidateQueries({
+          queryKey: ['groupRRGBundle', selectedMarket, null],
+          exact: true,
+        });
         setLiveRankingMarket(selectedMarket);
       } else {
         const baseMessage = calcStatus.error || 'Calculation failed. See server logs for details.';
