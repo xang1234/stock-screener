@@ -501,8 +501,11 @@ class FilterFieldCapabilityResponse(BaseModel):
     field: str
     label: str
     type: Literal["range", "categorical", "boolean", "text"]
+    value_type: Literal["number", "date", "string", "boolean"]
     category: str
     sortable: bool = False
+    option_source: Optional[str] = None
+    options: List[str] = Field(default_factory=list)
 
 
 class FilterOptionsResponse(BaseModel):

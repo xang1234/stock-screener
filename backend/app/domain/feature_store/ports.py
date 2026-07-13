@@ -11,8 +11,9 @@ import abc
 from collections.abc import Sequence
 from datetime import date
 
-from app.domain.common.query import FilterExpression, FilterSpec, PageSpec, QuerySpec, SortSpec
+from app.domain.common.query import FilterSpec, PageSpec, SortSpec
 from app.domain.feature_store.quality import DQInputs, DQResult
+from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 
 from .models import (

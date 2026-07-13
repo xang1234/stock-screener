@@ -1,56 +1,25 @@
-const LEGACY_FILTER_FIELDS = Object.freeze([
-  ['compositeScore', 'composite_score', 'range'],
-  ['minerviniScore', 'minervini_score', 'range'],
-  ['canslimScore', 'canslim_score', 'range'],
-  ['ipoScore', 'ipo_score', 'range'],
-  ['customScore', 'custom_score', 'range'],
-  ['volBreakthroughScore', 'volume_breakthrough_score', 'range'],
-  ['seSetupScore', 'se_setup_score', 'range'],
-  ['seDistanceToPivot', 'se_distance_to_pivot_pct', 'range'],
-  ['seBbSqueeze', 'se_bb_width_pctile_252', 'range'],
-  ['seVolumeVs50d', 'se_volume_vs_50d', 'range'],
-  ['seUpDownVolume', 'se_up_down_volume_ratio_10d', 'range'],
-  ['rsRating', 'rs_rating', 'range'],
-  ['rs1m', 'rs_rating_1m', 'range'],
-  ['rs3m', 'rs_rating_3m', 'range'],
-  ['rs12m', 'rs_rating_12m', 'range'],
-  ['epsRating', 'eps_rating', 'range'],
-  ['ibdGroupRank', 'ibd_group_rank', 'range'],
-  ['price', 'price', 'range'],
-  ['adrPercent', 'adr_percent', 'range'],
-  ['epsGrowth', 'eps_growth_qq', 'range'],
-  ['salesGrowth', 'sales_growth_qq', 'range'],
-  ['vcpScore', 'vcp_score', 'range'],
-  ['vcpPivot', 'vcp_pivot', 'range'],
-  ['perfDay', 'price_change_1d', 'range'],
-  ['perfWeek', 'perf_week', 'range'],
-  ['perfMonth', 'perf_month', 'range'],
-  ['perf3m', 'perf_3m', 'range'],
-  ['perf6m', 'perf_6m', 'range'],
-  ['gapPercent', 'gap_percent', 'range'],
-  ['volumeSurge', 'volume_surge', 'range'],
-  ['ema10Distance', 'ema_10_distance', 'range'],
-  ['ema20Distance', 'ema_20_distance', 'range'],
-  ['ema50Distance', 'ema_50_distance', 'range'],
-  ['week52HighDistance', 'week_52_high_distance', 'range'],
-  ['week52LowDistance', 'week_52_low_distance', 'range'],
-  ['beta', 'beta', 'range'],
-  ['betaAdjRs', 'beta_adj_rs', 'range'],
-  ['marketCapUsd', 'market_cap_usd', 'range'],
-  ['advUsd', 'adv_usd', 'range'],
-  ['pctDay', 'pct_day', 'range'],
-  ['pctWeek', 'pct_week', 'range'],
-  ['pctMonth', 'pct_month', 'range'],
-  ['seSetupReady', 'se_setup_ready', 'boolean'],
-  ['seRsLineNewHigh', 'se_rs_line_new_high', 'boolean'],
-  ['seRsLineBlueDot', 'se_rs_line_blue_dot', 'boolean'],
-  ['rsLineBlueDotRecent', 'rs_line_blue_dot_recent', 'boolean'],
-  ['vcpDetected', 'vcp_detected', 'boolean'],
-  ['vcpReady', 'vcp_ready_for_breakout', 'boolean'],
-  ['maAlignment', 'ma_alignment', 'boolean'],
-  ['pocketPivot', 'pocket_pivot', 'boolean'],
-  ['powerTrend', 'power_trend', 'boolean'],
-]);
+import scanFilterContract from '../../../../contracts/scan_filter_fields.json';
+
+const LEGACY_FILTER_FIELDS = Object.freeze(
+  scanFilterContract.fields
+    .filter((item) => item.legacy_key && ['range', 'boolean'].includes(item.kind))
+    .map((item) => [item.legacy_key, item.field, item.kind]),
+);
+
+const SHARED_FIELD_CATALOG = Object.freeze(
+  scanFilterContract.fields
+    .filter((item) => item.kind)
+    .map((item) => ({
+      field: item.field,
+      label: item.builder?.label ?? item.field.replaceAll('_', ' '),
+      type: item.kind,
+      value_type: item.value_type ?? (item.kind === 'range' ? 'number' : item.kind),
+      category: item.builder?.category ?? 'Other',
+      sortable: item.sortable === true,
+      option_source: item.builder?.option_source ?? null,
+      options: item.builder?.options ?? [],
+    })),
+);
 
 const mapLegacyFields = (kind) => Object.fromEntries(
   LEGACY_FILTER_FIELDS
@@ -117,7 +86,10 @@ export function legacyFiltersToConditions(filters = {}, now = new Date()) {
   });
   Object.entries(BOOLEAN_FILTER_TO_FIELD).forEach(([key, field]) => {
     if (filters[key] != null) {
-      conditions.push({ kind: 'boolean', field, value: Boolean(filters[key]) });
+      if (typeof filters[key] !== 'boolean') {
+        throw new TypeError(`Legacy boolean filter ${key} must be a boolean`);
+      }
+      conditions.push({ kind: 'boolean', field, value: filters[key] });
     }
   });
   if (filters.symbolSearch?.trim()) {
@@ -358,13 +330,23 @@ export function newCondition(field = 'composite_score', catalog = []) {
 }
 
 export function fieldMeta(field, catalog = [], fallbackType = 'range') {
-  return catalog.find((item) => item.field === field) ?? {
+  const shared = SHARED_FIELD_CATALOG.find((item) => item.field === field);
+  const runtime = catalog.find((item) => item.field === field);
+  if (shared || runtime) return { ...shared, ...runtime };
+  return {
     field,
     label: String(field || 'Unknown field').replaceAll('_', ' '),
     type: fallbackType,
+    value_type: fallbackType === 'range' ? 'number' : fallbackType,
     category: 'Other',
     sortable: false,
   };
+}
+
+export function fieldValueOptions(field, catalog = [], optionValues = {}) {
+  const meta = fieldMeta(field, catalog);
+  if (meta.options?.length) return meta.options;
+  return meta.option_source ? (optionValues[meta.option_source] ?? []) : [];
 }
 
 function validateCondition(condition, catalog) {
@@ -375,7 +357,7 @@ function validateCondition(condition, catalog) {
       errors.push(`${label} needs a minimum or maximum.`);
       return errors;
     }
-    const isDate = condition.field === 'ipo_date';
+    const isDate = fieldMeta(condition.field, catalog, condition.kind).value_type === 'date';
     const normalize = (value) => {
       if (value == null) return null;
       if (isDate) {

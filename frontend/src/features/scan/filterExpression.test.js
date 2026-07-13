@@ -12,6 +12,7 @@ import {
   evaluateCondition,
   evaluateExpression,
   expressionToLegacyFilters,
+  fieldValueOptions,
   legacyFiltersToExpression,
   stableExpressionKey,
   validateExpression,
@@ -87,6 +88,17 @@ describe('scan filter expressions', () => {
     expect(restored.rsRating).toEqual({ min: 80, max: 99 });
     expect(restored.gicsSectors).toEqual({ values: ['Technology'], mode: 'include' });
     expect(restored.maAlignment).toBe(false);
+  });
+
+  it('rejects string booleans instead of silently treating them as true', () => {
+    expect(() => legacyFiltersToExpression({ maAlignment: 'false' }))
+      .toThrow('must be a boolean');
+  });
+
+  it('resolves fixed and runtime categorical options from shared field metadata', () => {
+    expect(fieldValueOptions('market')).toContain('US');
+    expect(fieldValueOptions('rating', [], { ratings: ['Strong Buy', 'Buy'] }))
+      .toEqual(['Strong Buy', 'Buy']);
   });
 
   it('preserves legacy static performance aliases and company discovery search', () => {

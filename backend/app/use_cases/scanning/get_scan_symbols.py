@@ -10,11 +10,8 @@ from app.domain.scanning.filter_expression import (
     expression_fingerprint,
     require_passing_ratings,
 )
-from app.domain.scanning.filter_spec import (
-    FilterExpression,
-    PageSpec,
-    SortSpec,
-)
+from app.domain.common.query import PageSpec, SortSpec
+from app.domain.scanning.filter_expression_model import FilterExpression
 
 from ._resolve import resolve_scan
 

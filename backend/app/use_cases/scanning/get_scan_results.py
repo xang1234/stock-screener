@@ -21,7 +21,7 @@ from app.domain.scanning.filter_expression import (
     expression_fingerprint,
     require_passing_ratings,
 )
-from app.domain.scanning.filter_spec import QuerySpec
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.models import ResultPage
 
 from ._resolve import resolve_scan

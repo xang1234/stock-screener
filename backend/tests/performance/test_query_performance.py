@@ -18,10 +18,10 @@ import pytest
 from app.domain.common.query import (
     FilterSpec,
     PageSpec,
-    QuerySpec,
     SortOrder,
     SortSpec,
 )
+from app.domain.scanning.filter_expression_model import QuerySpec
 from tests.helpers.query_counter import count_queries
 
 from .conftest import PERF_FEATURE_RUN_ID, PERF_SCAN_ID

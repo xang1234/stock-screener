@@ -19,17 +19,19 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.domain.common.query import (
     CategoricalFilter,
-    FilterExpression,
-    FilterGroup,
     FilterSpec,
-    ListingDiscoveryFilter,
-    MatchOperator,
     PageSpec,
-    QuerySpec,
     RangeFilter,
     SortOrder,
     SortSpec,
     TextSearchFilter,
+)
+from app.domain.scanning.filter_expression_model import (
+    FilterExpression,
+    FilterGroup,
+    ListingDiscoveryFilter,
+    MatchOperator,
+    QuerySpec,
 )
 from app.domain.scanning.models import ResultPage, ScanResultItemDomain
 from app.infra.db.models.feature_store import (

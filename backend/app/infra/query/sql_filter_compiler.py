@@ -12,11 +12,13 @@ from sqlalchemy.orm import Query
 from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
-    FilterCondition,
     FilterMode,
-    ListingDiscoveryFilter,
     RangeFilter,
     TextSearchFilter,
+)
+from app.domain.scanning.filter_expression_model import (
+    FilterCondition,
+    ListingDiscoveryFilter,
 )
 from app.infra.db.portability import is_postgres, json_number, json_text
 from app.infra.query.like_pattern import literal_contains_pattern

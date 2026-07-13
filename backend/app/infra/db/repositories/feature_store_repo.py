@@ -11,10 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.query import (
-    FilterExpression,
     FilterSpec,
     PageSpec,
-    QuerySpec,
     SortSpec,
 )
 from app.domain.feature_store.models import (
@@ -25,6 +23,7 @@ from app.domain.feature_store.models import (
 )
 from app.domain.feature_store.ports import FeatureStoreRepository
 from app.domain.feature_store.quality import DQInputs
+from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.infra.db.models.feature_store import (
     FeatureRun,

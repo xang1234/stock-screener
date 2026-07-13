@@ -7,7 +7,12 @@ from typing import Any
 
 from sqlalchemy import and_, false, or_, true
 
-from app.domain.common.query import FilterCondition, FilterExpression, FilterGroup, MatchOperator
+from app.domain.scanning.filter_expression_model import (
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+    MatchOperator,
+)
 
 
 LeafCompiler = Callable[[FilterCondition], Any]

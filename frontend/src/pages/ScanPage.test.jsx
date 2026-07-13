@@ -54,7 +54,6 @@ vi.mock('../api/scans', () => ({
   createScan: vi.fn(),
   getScanBootstrap: vi.fn(),
   getScanStatus: vi.fn(),
-  getScanResults: vi.fn(),
   queryScanResults: vi.fn(),
   getUniverseStats: vi.fn().mockResolvedValue({
     active: 321,
@@ -65,7 +64,6 @@ vi.mock('../api/scans', () => ({
       AMEX: 21,
     },
   }),
-  exportScanResults: vi.fn(),
   exportScanResultsQuery: vi.fn(),
   getScans: vi.fn().mockResolvedValue({ scans: [] }),
   cancelScan: vi.fn(),
@@ -90,7 +88,6 @@ beforeEach(() => {
   });
   scanApi.getScanBootstrap.mockResolvedValue(null);
   scanApi.getScanStatus.mockResolvedValue({ status: 'completed' });
-  scanApi.getScanResults.mockResolvedValue({ total: 0, results: [] });
   scanApi.queryScanResults.mockResolvedValue({ total: 0, results: [] });
   scanApi.getFilterOptions.mockResolvedValue({
     ibd_industries: [],
@@ -356,7 +353,7 @@ describe('ScanPage', () => {
         ],
       });
     scanApi.getScanStatus.mockResolvedValue({ status: 'completed' });
-    scanApi.getScanResults.mockResolvedValue({
+    scanApi.queryScanResults.mockResolvedValue({
       total: 1,
       results: [
         {

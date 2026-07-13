@@ -15,6 +15,11 @@ describe('normalizeScanFilterOptions', () => {
       ibdIndustries: ['Semiconductors'],
       gicsSectors: ['Technology'],
       ratings: ['Strong Buy'],
+      optionValues: {
+        ibd_industries: ['Semiconductors'],
+        gics_sectors: ['Technology'],
+        ratings: ['Strong Buy'],
+      },
       filterCatalog: [{ field: 'rs_rating', type: 'range' }],
     });
   });
@@ -28,6 +33,11 @@ describe('normalizeScanFilterOptions', () => {
       ibdIndustries: ['Software'],
       gicsSectors: [],
       ratings: [],
+      optionValues: {
+        ibd_industries: ['Software'],
+        gics_sectors: [],
+        ratings: [],
+      },
       filterCatalog: [],
     });
   });

@@ -4,7 +4,6 @@ import { Box, CircularProgress, Container, Paper, Typography } from '@mui/materi
 import {
   cancelScan,
   createScan,
-  exportScanResults,
   exportScanResultsQuery,
   getFilterOptions,
   getScanBootstrap,
@@ -15,7 +14,6 @@ import {
 } from '../../../api/scans';
 import FilterPanel from '../components/FilterPanelContainer';
 import ChartViewerModal from '../../../components/Scan/ChartViewerModalLazy';
-import { buildFilterParams } from '../../../utils/filterUtils';
 import {
   fetchPriceHistory,
   prefetchPriceHistoryBatch,
@@ -40,6 +38,10 @@ import {
   legacyFiltersToExpression,
 } from '../filterExpression';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
+import {
+  createScanFilterQuery,
+  stableScanFilterQueryKey,
+} from '../hooks/useScanFilterQueryState';
 import { useScanResultsController } from '../hooks/useScanResultsController';
 import {
   buildUniverseDef,
@@ -52,6 +54,10 @@ import {
 } from '../runtimeUniverseSelections';
 
 const INITIAL_UNIVERSE_SELECTION = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
+const DEFAULT_SCAN_EXPRESSION = legacyFiltersToExpression(buildDefaultScanFilters());
+const DEFAULT_SCAN_QUERY_KEY = stableScanFilterQueryKey(
+  createScanFilterQuery(DEFAULT_SCAN_EXPRESSION),
+);
 
 // "No market auto-loaded yet" marker for the scan auto-load ref.
 const NO_MARKET_AUTOLOADED = Symbol('no-market-autoloaded');
@@ -121,9 +127,8 @@ function ScanPage() {
   } = useScanResultsController({
     currentScanId,
     scanStatus,
-    groupedFilteringEnabled,
     debouncedFilters,
-    initialExpression: legacyFiltersToExpression(buildDefaultScanFilters()),
+    initialExpression: DEFAULT_SCAN_EXPRESSION,
   });
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
@@ -185,10 +190,12 @@ function ScanPage() {
       }
 
       queryClient.setQueryData(['filterOptions', selectedScanId], payload.filter_options ?? null);
-      queryClient.setQueryData(
-        ['scanResults', selectedScanId, 1, 50, 'composite_score', 'desc', DEFAULT_FILTER_KEY],
-        payload.results_page ?? null
-      );
+      if (payload.results_page != null) {
+        queryClient.setQueryData(
+          ['scanResultsQuery', selectedScanId, DEFAULT_SCAN_QUERY_KEY],
+          payload.results_page
+        );
+      }
       if (payload.selected_scan_status) {
         queryClient.setQueryData(['scanStatus', selectedScanId], payload.selected_scan_status);
       } else if (payload.selected_scan) {
@@ -221,7 +228,7 @@ function ScanPage() {
     sortOrder,
     setFilters,
     applyQuery: requestQuery,
-    expression: groupedFilteringEnabled ? requestedExpression : null,
+    expression: requestedExpression,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -528,18 +535,13 @@ function ScanPage() {
 
   const handleExport = async () => {
     try {
-      const blob = groupedFilteringEnabled
-        ? await exportScanResultsQuery(
-            currentScanId,
-            buildScanQueryRequest(displayedQuery.expression, {
-              sortBy: displayedQuery.sortBy,
-              sortOrder: displayedQuery.sortOrder,
-            }),
-          )
-        : await exportScanResults(
-            currentScanId,
-            buildFilterParams(debouncedFilters, { sortBy, sortOrder }),
-          );
+      const blob = await exportScanResultsQuery(
+        currentScanId,
+        buildScanQueryRequest(displayedQuery.expression, {
+          sortBy: displayedQuery.sortBy,
+          sortOrder: displayedQuery.sortOrder,
+        }),
+      );
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -704,7 +706,7 @@ function ScanPage() {
         <ScanResultsSection
           resultsLoading={resultsLoading}
           resultsData={displayedResultsData}
-          expression={groupedFilteringEnabled ? displayedQuery.expression : null}
+          expression={displayedQuery.expression}
           resultsFetching={resultsFetching}
           resultsError={resultsError}
           onExport={handleExport}
@@ -735,7 +737,7 @@ function ScanPage() {
         initialSymbol={selectedSymbol}
         scanId={currentScanId}
         filters={debouncedFilters}
-        expression={groupedFilteringEnabled ? displayedQuery.expression : null}
+        expression={displayedQuery.expression}
         sortBy={displayedQuery.sortBy}
         sortOrder={displayedQuery.sortOrder}
         currentPageResults={displayedResultsData?.results || []}

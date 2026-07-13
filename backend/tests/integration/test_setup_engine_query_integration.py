@@ -28,11 +28,11 @@ from app.domain.common.query import (
     CategoricalFilter,
     FilterMode,
     FilterSpec,
-    QuerySpec,
     RangeFilter,
     SortOrder,
     SortSpec,
 )
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.scan_result_repo import (

@@ -15,6 +15,7 @@ from app.domain.scanning.filter_spec import (
     RangeFilter,
     SortOrder,
     SortSpec,
+    filter_spec_to_expression,
 )
 from app.domain.scanning.models import ExportFormat
 from app.use_cases.scanning.export_scan_results import (
@@ -301,11 +302,11 @@ class TestFilterAndSortPassthrough:
 
         filters = FilterSpec()
         filters.add_range("rs_rating", 70, None)
-        uc.execute(uow, _make_query(expression=filters.to_expression()))
+        uc.execute(uow, _make_query(expression=filter_spec_to_expression(filters)))
 
         # Use equality check (not identity) because use case copies filters
         expression = feature_store.last_query_all_args["expression"]
-        assert expression.required.conditions == filters.to_expression().required.conditions
+        assert expression.required.conditions == filter_spec_to_expression(filters).required.conditions
 
     def test_passes_sort_to_repository(self):
         feature_store = TrackingFeatureStoreRepo()

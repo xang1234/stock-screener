@@ -7,12 +7,14 @@ from typing import Any
 from sqlalchemy import asc, desc
 from sqlalchemy.orm import Query
 
-from app.domain.scanning.filter_spec import (
-    FilterExpression,
+from app.domain.common.query import (
     FilterSpec,
     PageSpec,
     SortOrder,
     SortSpec,
+)
+from app.domain.scanning.filter_expression_model import (
+    FilterExpression,
     filter_spec_to_expression,
 )
 from app.infra.db.portability import json_number, json_text, lean_count

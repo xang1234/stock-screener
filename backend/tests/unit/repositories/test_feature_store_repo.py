@@ -18,10 +18,10 @@ from app.domain.common.query import (
     FilterMode,
     FilterSpec,
     PageSpec,
-    QuerySpec,
     SortOrder,
     SortSpec,
 )
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.feature_store.models import FeaturePage, FeatureRow, FeatureRowWrite
 from app.domain.feature_store.quality import DQInputs
 from app.infra.db.models.feature_store import (  # noqa: F401 — register models
@@ -435,7 +435,7 @@ class TestJoinedColumnFilters:
     """
 
     def _seed(self, repo, session):
-        from app.domain.common.query import QuerySpec
+        from app.domain.scanning.filter_expression_model import QuerySpec
         from app.models.stock import StockFundamental
         from app.models.stock_universe import StockUniverse
 

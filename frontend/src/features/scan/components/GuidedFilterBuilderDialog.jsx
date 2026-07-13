@@ -31,6 +31,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import {
   conditionLabel,
   fieldMeta,
+  fieldValueOptions,
   newCondition,
   validateExpression,
 } from '../filterExpression';
@@ -43,6 +44,10 @@ function clone(value) {
 
 function ConditionEditor({ condition, onChange, onDelete, valueOptions = [], fieldCatalog }) {
   const meta = fieldMeta(condition.field, fieldCatalog, condition.kind);
+  const rangeInputType = meta.value_type === 'date' ? 'date' : 'number';
+  const rangeValue = (value) => (
+    value === '' ? null : (rangeInputType === 'date' ? value : Number(value))
+  );
   const handleFieldChange = (field) => onChange(newCondition(field, fieldCatalog));
 
   return (
@@ -71,22 +76,22 @@ function ConditionEditor({ condition, onChange, onDelete, valueOptions = [], fie
             <TextField
               size="small"
               label="Minimum"
-              type="number"
+              type={rangeInputType}
               value={condition.min ?? ''}
               onChange={(event) => onChange({
                 ...condition,
-                min: event.target.value === '' ? null : Number(event.target.value),
+                min: rangeValue(event.target.value),
               })}
               sx={{ width: 135 }}
             />
             <TextField
               size="small"
               label="Maximum"
-              type="number"
+              type={rangeInputType}
               value={condition.max ?? ''}
               onChange={(event) => onChange({
                 ...condition,
-                max: event.target.value === '' ? null : Number(event.target.value),
+                max: rangeValue(event.target.value),
               })}
               sx={{ width: 135 }}
             />
@@ -168,7 +173,7 @@ function SetupGroupCard({
   onChange,
   onDelete,
   onDuplicate,
-  filterOptions,
+  optionValues,
   fieldCatalog,
   defaultField,
 }) {
@@ -235,14 +240,7 @@ function SetupGroupCard({
               ...group,
               conditions: group.conditions.filter((_, itemIndex) => itemIndex !== conditionIndex),
             })}
-            valueOptions={(
-              condition.field === 'rating' ? filterOptions.ratings
-                : condition.field === 'ibd_industry_group' ? filterOptions.ibdIndustries
-                  : condition.field === 'gics_sector' ? filterOptions.gicsSectors
-                    : condition.field === 'market' ? filterOptions.markets
-                      : condition.field === 'se_pattern_primary' ? filterOptions.patterns
-                        : []
-            ) || []}
+            valueOptions={fieldValueOptions(condition.field, fieldCatalog, optionValues)}
             fieldCatalog={fieldCatalog}
           />
         ))}
@@ -299,21 +297,6 @@ export default function GuidedFilterBuilderDialog({
     () => validateExpression(draft, fieldCatalog),
     [draft, fieldCatalog],
   );
-  const guidedOptions = useMemo(() => ({
-    ratings: filterOptions.ratings || [],
-    ibdIndustries: filterOptions.ibdIndustries || [],
-    gicsSectors: filterOptions.gicsSectors || [],
-    markets: filterOptions.markets || ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE', 'SG', 'AU', 'MY'],
-    patterns: filterOptions.patterns || [
-      'cup_with_handle',
-      'double_bottom',
-      'high_tight_flag',
-      'first_pullback',
-      'vcp',
-      'three_weeks_tight',
-      'nr7_inside_day',
-    ],
-  }), [filterOptions]);
   const updateGroup = (index, group) => {
     const groups = [...draft.groups];
     groups[index] = group;
@@ -331,7 +314,7 @@ export default function GuidedFilterBuilderDialog({
           name: `Setup ${number}`,
           match: 'all',
           enabled: true,
-          conditions: [newCondition('composite_score', fieldCatalog)],
+          conditions: [newCondition(defaultField, fieldCatalog)],
         },
       ],
     });
@@ -406,7 +389,7 @@ export default function GuidedFilterBuilderDialog({
                 duplicate.name = `${group.name} copy`.slice(0, 60);
                 setDraft({ ...draft, groups: [...draft.groups, duplicate] });
               }}
-              filterOptions={guidedOptions}
+              optionValues={filterOptions.optionValues || {}}
               fieldCatalog={fieldCatalog}
               defaultField={defaultField}
             />

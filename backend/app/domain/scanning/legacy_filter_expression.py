@@ -8,10 +8,7 @@ from typing import Any, Mapping
 from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
-    FilterExpression,
-    FilterGroup,
     FilterMode,
-    ListingDiscoveryFilter,
     RangeFilter,
     TextSearchFilter,
 )
@@ -19,6 +16,11 @@ from app.domain.common.query import (
 from .filter_capabilities import (
     LEGACY_BOOLEAN_FILTER_FIELDS,
     LEGACY_RANGE_FILTER_FIELDS,
+)
+from .filter_expression_model import (
+    FilterExpression,
+    FilterGroup,
+    ListingDiscoveryFilter,
 )
 
 

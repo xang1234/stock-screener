@@ -38,6 +38,7 @@ ENV PATH=/opt/venv/bin:$PATH
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=stockscanner:stockscanner backend/ .
+COPY --chown=stockscanner:stockscanner contracts/scan_filter_fields.json /contracts/scan_filter_fields.json
 
 RUN mkdir -p /app/data/.cache && \
     chown -R stockscanner:stockscanner /app/data

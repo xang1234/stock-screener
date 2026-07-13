@@ -3,6 +3,7 @@
 from app.domain.scanning.filter_capabilities import (
     BOOLEAN_FIELDS,
     CATEGORICAL_FIELDS,
+    FIELD_CAPABILITIES,
     FILTER_FIELD_KINDS,
     RANGE_FIELDS,
     SORT_FIELDS,
@@ -35,3 +36,8 @@ def test_builder_catalog_is_a_typed_subset_of_the_server_contract():
     assert set(fields) <= set(FILTER_FIELD_KINDS)
     assert all(item["type"] == FILTER_FIELD_KINDS[item["field"]] for item in catalog)
     assert all(item["sortable"] == (item["field"] in SORT_FIELDS) for item in catalog)
+
+    by_field = {item["field"]: item for item in catalog}
+    assert FIELD_CAPABILITIES["ipo_date"].value_type == "date"
+    assert by_field["rating"]["option_source"] == "ratings"
+    assert "US" in by_field["market"]["options"]

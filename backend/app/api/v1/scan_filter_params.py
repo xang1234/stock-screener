@@ -14,7 +14,7 @@ from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException, Query
 
 from app.domain.scanning.filter_capabilities import SORT_FIELDS
-from app.domain.scanning.filter_spec import (
+from app.domain.common.query import (
     FilterMode,
     FilterSpec,
     PageSpec,

@@ -5,23 +5,26 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from datetime import date
-import math
+from enum import Enum
 from typing import Any, Mapping
 
 from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
-    FilterCondition,
-    FilterExpression,
-    FilterGroup,
     FilterMode,
-    ListingDiscoveryFilter,
-    MatchOperator,
     RangeFilter,
     TextSearchFilter,
 )
 
+from .filter_capabilities import FIELD_CAPABILITIES
+from .filter_expression_model import (
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+    ListingDiscoveryFilter,
+    MatchOperator,
+)
+from .filter_values import normalize_listing_min_volume, normalize_range_bound
 from .models import MatchedGroupDomain, ScanResultItemDomain
 
 
@@ -211,43 +214,19 @@ def canonical_expression_payload(expression: FilterExpression) -> dict[str, Any]
     }
 
 
-def normalize_range_bound(field: str, value: Any) -> int | float | str | None:
-    """Normalize one range bound using the canonical logical field contract."""
+class FilterExpressionDecodePolicy(str, Enum):
+    """Select which fields one external expression boundary may accept."""
 
-    if value is None:
-        return None
-    if field == "ipo_date":
-        if not isinstance(value, str):
-            raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings")
-        try:
-            return date.fromisoformat(value).isoformat()
-        except ValueError as exc:
-            raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings") from exc
-    if isinstance(value, bool):
-        raise ValueError("Numeric range bounds cannot be booleans")
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Numeric range bounds must be finite numbers") from exc
-    if not math.isfinite(normalized):
-        raise ValueError("Numeric range bounds must be finite numbers")
-    return int(normalized) if normalized.is_integer() else normalized
+    API = "api"
+    STATIC = "static"
 
 
-def normalize_listing_min_volume(value: Any) -> int | float:
-    if isinstance(value, bool):
-        raise ValueError("Listing-discovery volume must be a positive number")
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Listing-discovery volume must be a positive number") from exc
-    if not math.isfinite(normalized) or normalized <= 0:
-        raise ValueError("Listing-discovery volume must be a positive number")
-    return int(normalized) if normalized.is_integer() else normalized
-
-
-def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
-    """Strictly hydrate the canonical payload, including static-only fields."""
+def decode_filter_expression(
+    payload: Mapping[str, Any],
+    *,
+    policy: FilterExpressionDecodePolicy,
+) -> FilterExpression:
+    """Decode one external expression through the canonical domain codec."""
 
     if not isinstance(payload, Mapping):
         raise ValueError("Filter expressions must be objects")
@@ -266,32 +245,38 @@ def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
             raise ValueError(f"{label} must be a string")
         return value
 
+    def filter_field(item: Mapping[str, Any], kind: str) -> str:
+        field = string_value(item, "field", "Filter fields")
+        capability = FIELD_CAPABILITIES.get(field)
+        if capability is None or capability.filter_kind != kind:
+            raise ValueError(f"Unsupported {kind} field: {field}")
+        if policy == FilterExpressionDecodePolicy.API and not capability.api_filter:
+            raise ValueError(f"Unsupported {kind} field: {field}")
+        return field
+
     def condition_from_payload(item: Mapping[str, Any]) -> FilterCondition:
         if not isinstance(item, Mapping):
             raise ValueError("Filter conditions must be objects")
         kind = item.get("kind")
         if kind == "range":
-            field = string_value(item, "field", "Filter fields")
+            field = filter_field(item, kind)
             return RangeFilter(
                 field=field,
                 min_value=normalize_range_bound(field, item.get("min")),
                 max_value=normalize_range_bound(field, item.get("max")),
             )
         if kind == "categorical":
+            field = filter_field(item, kind)
             raw_values = item.get("values")
             if not isinstance(raw_values, (list, tuple)):
                 raise ValueError("Categorical conditions require a values array")
             if any(not isinstance(value, str) for value in raw_values):
                 raise ValueError("Categorical filter values must be strings")
             values = tuple(
-                dict.fromkeys(
-                    value.strip()
-                    for value in raw_values
-                    if value.strip()
-                )
+                dict.fromkeys(value.strip() for value in raw_values if value.strip())
             )
             return CategoricalFilter(
-                field=string_value(item, "field", "Filter fields"),
+                field=field,
                 values=values,
                 mode=FilterMode(
                     string_value(
@@ -303,19 +288,21 @@ def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
                 ),
             )
         if kind == "boolean":
+            field = filter_field(item, kind)
             value = item.get("value")
             if not isinstance(value, bool):
                 raise ValueError("Boolean filter values must be booleans")
             return BooleanFilter(
-                field=string_value(item, "field", "Filter fields"),
+                field=field,
                 value=value,
             )
         if kind == "text":
+            field = filter_field(item, kind)
             pattern = item.get("pattern")
             if not isinstance(pattern, str):
                 raise ValueError("Text patterns must be strings")
             return TextSearchFilter(
-                field=string_value(item, "field", "Filter fields"),
+                field=field,
                 pattern=pattern.strip(),
             )
         if kind == "listing_discovery":
@@ -335,7 +322,7 @@ def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
             raise ValueError("Filter group conditions must be arrays")
         return FilterGroup(
             id=string_value(item, "id", "Filter group IDs"),
-            name=string_value(item, "name", "Filter group names"),
+            name=string_value(item, "name", "Filter group names").strip(),
             match=MatchOperator(
                 string_value(
                     item,
@@ -346,8 +333,7 @@ def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
             ),
             enabled=enabled,
             conditions=tuple(
-                condition_from_payload(condition)
-                for condition in raw_conditions
+                condition_from_payload(condition) for condition in raw_conditions
             ),
         )
 
@@ -380,6 +366,15 @@ def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
     )
 
 
+def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
+    """Compatibility name for decoding static/persisted expressions."""
+
+    return decode_filter_expression(
+        payload,
+        policy=FilterExpressionDecodePolicy.STATIC,
+    )
+
+
 def expression_fingerprint(expression: FilterExpression) -> str:
     payload = json.dumps(
         canonical_expression_payload(expression),
@@ -392,11 +387,13 @@ def expression_fingerprint(expression: FilterExpression) -> str:
 __all__ = [
     "annotate_matched_groups",
     "canonical_expression_payload",
+    "decode_filter_expression",
     "evaluate_condition",
     "evaluate_expression",
     "evaluate_group",
     "expression_fingerprint",
     "expression_from_payload",
+    "FilterExpressionDecodePolicy",
     "matched_setup_groups",
     "normalize_listing_min_volume",
     "normalize_range_bound",

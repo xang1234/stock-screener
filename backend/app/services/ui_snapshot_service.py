@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import settings
 from app.database import is_corruption_error
 from app.domain.analytics.scope import market_scope_tag
-from app.domain.scanning.filter_spec import PageSpec, QuerySpec, SortOrder, SortSpec
+from app.domain.common.query import PageSpec, SortOrder, SortSpec
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.serialization import json_safe
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.industry import IBDGroupRank

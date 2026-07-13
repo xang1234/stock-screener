@@ -13,7 +13,9 @@ from __future__ import annotations
 import abc
 from typing import Protocol
 
-from .filter_spec import FilterExpression, PageSpec, QuerySpec, SortSpec
+from app.domain.common.query import PageSpec, SortSpec
+
+from .filter_expression_model import FilterExpression, QuerySpec
 from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
 
 

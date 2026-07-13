@@ -13,7 +13,8 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortOrder, SortSpec
+from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.market_breadth import MarketBreadth

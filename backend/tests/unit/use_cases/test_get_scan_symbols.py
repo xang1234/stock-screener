@@ -8,7 +8,12 @@ import pytest
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.feature_store.models import FeatureRow
-from app.domain.scanning.filter_spec import FilterSpec, PageSpec, SortSpec
+from app.domain.scanning.filter_spec import (
+    FilterSpec,
+    PageSpec,
+    SortSpec,
+    filter_spec_to_expression,
+)
 from app.use_cases.scanning.get_scan_symbols import (
     GetScanSymbolsQuery,
     GetScanSymbolsUseCase,
@@ -72,7 +77,7 @@ class TestUnboundScanRouting:
             uow,
             GetScanSymbolsQuery(
                 scan_id="scan-legacy",
-                expression=original_filters.to_expression(),
+                expression=filter_spec_to_expression(original_filters),
                 passes_only=True,
             ),
         )

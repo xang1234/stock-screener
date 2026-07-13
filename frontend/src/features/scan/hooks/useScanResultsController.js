@@ -1,15 +1,14 @@
 import { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { getScanResults, queryScanResults } from '../../../api/scans';
-import { buildFilterParams, getStableFilterKey } from '../../../utils/filterUtils';
+import { queryScanResults } from '../../../api/scans';
+import { getStableFilterKey } from '../../../utils/filterUtils';
 import { buildScanQueryRequest } from '../filterExpression';
 import { useScanFilterQueryState } from './useScanFilterQueryState';
 
 export function useScanResultsController({
   currentScanId,
   scanStatus,
-  groupedFilteringEnabled,
   debouncedFilters,
   initialExpression,
 }) {
@@ -37,11 +36,7 @@ export function useScanResultsController({
     () => getStableFilterKey(debouncedFilters),
     [debouncedFilters],
   );
-  const legacyFilterParams = useMemo(
-    () => buildFilterParams(debouncedFilters, { page, perPage, sortBy, sortOrder }),
-    [debouncedFilters, page, perPage, sortBy, sortOrder],
-  );
-  const groupedQueryRequest = useMemo(
+  const queryRequest = useMemo(
     () => buildScanQueryRequest(expression, {
       page,
       perPage,
@@ -54,13 +49,11 @@ export function useScanResultsController({
   );
 
   const resultQuery = useQuery({
-    queryKey: groupedFilteringEnabled
-      ? ['scanResultsQuery', currentScanId, requestedKey]
-      : ['scanResults', currentScanId, page, perPage, sortBy, sortOrder, stableFilterKey],
-    queryFn: ({ signal }) => (
-      groupedFilteringEnabled
-        ? queryScanResults(currentScanId, groupedQueryRequest, { signal })
-        : getScanResults(currentScanId, legacyFilterParams)
+    queryKey: ['scanResultsQuery', currentScanId, requestedKey],
+    queryFn: ({ signal }) => queryScanResults(
+      currentScanId,
+      queryRequest,
+      { signal },
     ),
     enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
     staleTime: 10 * 60 * 1000,
@@ -72,8 +65,7 @@ export function useScanResultsController({
 
   const currentSuccessSnapshot = useMemo(
     () => (
-      groupedFilteringEnabled
-      && resultQuery.isSuccess
+      resultQuery.isSuccess
       && !resultQuery.isPlaceholderData
         ? {
             request: requested,
@@ -85,7 +77,6 @@ export function useScanResultsController({
     ),
     [
       currentScanId,
-      groupedFilteringEnabled,
       requested,
       requestedKey,
       resultQuery.data,
@@ -105,12 +96,8 @@ export function useScanResultsController({
 
   const displayedSnapshot = currentSuccessSnapshot
     ?? (appliedSnapshot?.scanId === currentScanId ? appliedSnapshot : null);
-  const displayedResultsData = groupedFilteringEnabled
-    ? displayedSnapshot?.data
-    : resultQuery.data;
-  const displayedQuery = groupedFilteringEnabled
-    ? (displayedSnapshot?.request ?? requested)
-    : requested;
+  const displayedResultsData = displayedSnapshot?.data;
+  const displayedQuery = displayedSnapshot?.request ?? requested;
 
   return {
     ...queryState,

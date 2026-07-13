@@ -7,11 +7,7 @@ from pydantic import ValidationError
 from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
-    FilterExpression,
-    FilterGroup,
     FilterMode,
-    ListingDiscoveryFilter,
-    MatchOperator,
     RangeFilter,
 )
 from app.domain.scanning.filter_expression import (
@@ -23,8 +19,14 @@ from app.domain.scanning.filter_expression import (
     matched_setup_groups,
 )
 from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
+from app.domain.scanning.filter_expression_model import (
+    FilterExpression,
+    FilterGroup,
+    ListingDiscoveryFilter,
+    MatchOperator,
+)
 from app.domain.scanning.models import MatchedGroupDomain, ScanResultItemDomain
-from app.schemas.filter_expression import RangeConditionRequest, ScanQueryRequest
+from app.schemas.filter_expression import ScanQueryRequest
 
 
 def _expression(group_join: MatchOperator = MatchOperator.ANY) -> FilterExpression:
@@ -90,7 +92,10 @@ def test_disabled_groups_do_not_participate():
     expression = FilterExpression(
         required=expression.required,
         group_join=expression.group_join,
-        groups=(expression.groups[0], FilterGroup(**{**expression.groups[1].__dict__, "enabled": False})),
+        groups=(
+            expression.groups[0],
+            FilterGroup(**{**expression.groups[1].__dict__, "enabled": False}),
+        ),
     )
     row = {"price": 25, "rs_rating": 95, "vcp_ready_for_breakout": True}
     assert evaluate_expression(row, expression) is True
@@ -98,27 +103,28 @@ def test_disabled_groups_do_not_participate():
 
 def test_missing_values_follow_explicit_policy():
     assert evaluate_condition({}, BooleanFilter("ma_alignment", False)) is False
-    assert evaluate_condition(
-        {},
-        CategoricalFilter(
-            "rating", ("Pass",), mode=FilterMode.EXCLUDE
-        ),
-    ) is True
+    assert (
+        evaluate_condition(
+            {},
+            CategoricalFilter("rating", ("Pass",), mode=FilterMode.EXCLUDE),
+        )
+        is True
+    )
     assert evaluate_condition({}, RangeFilter("rs_rating", min_value=80)) is False
 
 
 def test_listing_discovery_preserves_liquidity_for_normal_rows():
     condition = ListingDiscoveryFilter(min_volume=1_000_000)
 
-    assert evaluate_condition(
-        {"scan_mode": "listing_only", "volume": None}, condition
-    ) is True
-    assert evaluate_condition(
-        {"scan_mode": "full", "volume": 100}, condition
-    ) is False
-    assert evaluate_condition(
-        {"scan_mode": "full", "volume": 2_000_000}, condition
-    ) is True
+    assert (
+        evaluate_condition({"scan_mode": "listing_only", "volume": None}, condition)
+        is True
+    )
+    assert evaluate_condition({"scan_mode": "full", "volume": 100}, condition) is False
+    assert (
+        evaluate_condition({"scan_mode": "full", "volume": 2_000_000}, condition)
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -133,21 +139,47 @@ def test_listing_discovery_preserves_liquidity_for_normal_rows():
 )
 def test_range_request_rejects_values_outside_the_field_type(field, minimum, maximum):
     with pytest.raises(ValidationError):
-        RangeConditionRequest(kind="range", field=field, min=minimum, max=maximum)
+        ScanQueryRequest.model_validate(
+            {
+                "required": {
+                    "id": "required",
+                    "name": "Always require",
+                    "conditions": [
+                        {
+                            "kind": "range",
+                            "field": field,
+                            "min": minimum,
+                            "max": maximum,
+                        }
+                    ],
+                }
+            }
+        )
 
 
 def test_range_request_normalizes_numeric_strings_and_iso_dates():
-    numeric = RangeConditionRequest(kind="range", field="price", min="10.5", max=20)
-    ipo_date = RangeConditionRequest(
-        kind="range",
-        field="ipo_date",
-        min="2026-01-01",
-        max="2026-07-13",
+    request = ScanQueryRequest.model_validate(
+        {
+            "required": {
+                "id": "required",
+                "name": "Always require",
+                "conditions": [
+                    {"kind": "range", "field": "price", "min": "10.5", "max": 20},
+                    {
+                        "kind": "range",
+                        "field": "ipo_date",
+                        "min": "2026-01-01",
+                        "max": "2026-07-13",
+                    },
+                ],
+            }
+        }
     )
+    numeric, ipo_date = request.to_expression().required.conditions
 
-    assert numeric.min == 10.5
-    assert numeric.max == 20
-    assert ipo_date.min == "2026-01-01"
+    assert numeric.min_value == 10.5
+    assert numeric.max_value == 20
+    assert ipo_date.min_value == "2026-01-01"
 
 
 def test_match_annotations_keep_missing_boolean_distinct_from_false():
@@ -181,9 +213,7 @@ def test_match_annotations_keep_missing_boolean_distinct_from_false():
 
     annotated = annotate_matched_groups((item,), expression)[0]
 
-    assert annotated.matched_groups == (
-        MatchedGroupDomain(id="score", name="Score"),
-    )
+    assert annotated.matched_groups == (MatchedGroupDomain(id="score", name="Score"),)
     assert "matched_groups" not in annotated.extended_fields
 
 
@@ -215,11 +245,7 @@ def test_request_contract_builds_domain_and_rejects_empty_enabled_group():
 
     with pytest.raises(ValidationError, match="Enabled setup groups cannot be empty"):
         ScanQueryRequest.model_validate(
-            {
-                "groups": [
-                    {"id": "empty", "name": "Empty", "conditions": []}
-                ]
-            }
+            {"groups": [{"id": "empty", "name": "Empty", "conditions": []}]}
         )
 
 
@@ -232,9 +258,7 @@ def test_request_contract_rejects_unknown_sort_and_accepts_listing_discovery():
             "required": {
                 "id": "required",
                 "name": "Always require",
-                "conditions": [
-                    {"kind": "listing_discovery", "min_volume": 1_000_000}
-                ],
+                "conditions": [{"kind": "listing_discovery", "min_volume": 1_000_000}],
             }
         }
     )
@@ -279,9 +303,7 @@ def test_domain_expression_rejects_invalid_structure_and_ranges():
         )
 
     with pytest.raises(ValueError, match="Enabled setup groups cannot be empty"):
-        FilterExpression(
-            groups=(FilterGroup(id="empty", name="Empty", conditions=()),)
-        )
+        FilterExpression(groups=(FilterGroup(id="empty", name="Empty", conditions=()),))
 
     with pytest.raises(ValueError, match="Group joins must be MatchOperator"):
         FilterExpression(group_join="some")
@@ -326,7 +348,7 @@ def test_payload_codec_rejects_string_booleans_instead_of_inverting_them():
     with pytest.raises(ValueError, match="Boolean filter values must be booleans"):
         expression_from_payload(payload)
 
-    with pytest.raises(ValidationError, match="Boolean filter values must be booleans"):
+    with pytest.raises(ValidationError, match="valid boolean"):
         ScanQueryRequest.model_validate(payload)
 
 
@@ -351,6 +373,24 @@ def test_payload_codecs_reject_values_they_cannot_preserve():
     with pytest.raises(ValueError, match="must be a boolean"):
         legacy_filters_to_expression({"maAlignment": "false"})
 
+
+def test_static_decoder_accepts_legacy_aliases_that_the_live_api_rejects():
+    payload = {
+        "required": {
+            "id": "required",
+            "name": "Always require",
+            "conditions": [
+                {"kind": "range", "field": "pct_day", "min": 5, "max": None}
+            ],
+        }
+    }
+
+    expression = expression_from_payload(payload)
+    assert expression.required.conditions == (RangeFilter("pct_day", min_value=5),)
+
+    with pytest.raises(ValidationError, match="Unsupported range field: pct_day"):
+        ScanQueryRequest.model_validate(payload)
+
     with pytest.raises(ValueError, match="versions must be integers"):
         expression_from_payload({"expression_version": "1"})
 
@@ -361,9 +401,7 @@ def test_payload_codecs_reject_values_they_cannot_preserve():
                     "id": "required",
                     "name": "Always require",
                     "match": "all",
-                    "conditions": [
-                        {"kind": "range", "field": 1, "min": 10}
-                    ],
+                    "conditions": [{"kind": "range", "field": 1, "min": 10}],
                 },
                 "group_join": "any",
             }

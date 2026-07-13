@@ -19,10 +19,8 @@ from app.domain.scanning.filter_expression import (
     annotate_matched_groups,
     require_passing_ratings,
 )
-from app.domain.scanning.filter_spec import (
-    FilterExpression,
-    SortSpec,
-)
+from app.domain.common.query import SortSpec
+from app.domain.scanning.filter_expression_model import FilterExpression
 from app.domain.scanning.models import ExportFormat, ScanResultItemDomain
 from app.infra.serialization import normalize_string_list
 

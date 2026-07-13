@@ -17,8 +17,9 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortOrder, SortSpec
+from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.markets.catalog import get_market_catalog
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.default_filters import resolve_default_scan_filters
 from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth

@@ -1,37 +1,25 @@
-"""Versioned HTTP contract for guided scan-result filter expressions."""
+"""Versioned HTTP shape for guided scan-result filter expressions."""
 
 from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
-from app.domain.common.query import (
-    BooleanFilter,
-    CategoricalFilter,
-    FilterCondition,
-    FilterExpression,
-    FilterGroup,
-    FilterMode,
-    ListingDiscoveryFilter,
-    MatchOperator,
-    PageSpec,
-    RangeFilter,
-    SortOrder,
-    SortSpec,
-    TextSearchFilter,
-)
-from app.domain.scanning.filter_capabilities import (
-    BOOLEAN_FIELDS,
-    CATEGORICAL_FIELDS,
-    RANGE_FIELDS,
-    SORT_FIELDS,
-    TEXT_FIELDS,
-)
+from app.domain.common.query import PageSpec, SortOrder, SortSpec
+from app.domain.scanning.filter_capabilities import SORT_FIELDS
 from app.domain.scanning.filter_expression import (
-    normalize_listing_min_volume,
-    normalize_range_bound,
+    FilterExpressionDecodePolicy,
+    decode_filter_expression,
 )
+from app.domain.scanning.filter_expression_model import FilterExpression
 
 
 class _ContractModel(BaseModel):
@@ -44,37 +32,6 @@ class RangeConditionRequest(_ContractModel):
     min: int | float | str | None = None
     max: int | float | str | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def reject_boolean_bounds(cls, value):
-        if isinstance(value, dict) and any(
-            isinstance(value.get(bound), bool) for bound in ("min", "max")
-        ):
-            raise ValueError("Numeric range bounds cannot be booleans")
-        return value
-
-    @field_validator("field")
-    @classmethod
-    def validate_field(cls, value: str) -> str:
-        if value not in RANGE_FIELDS:
-            raise ValueError(f"Unsupported range field: {value}")
-        return value
-
-    @model_validator(mode="after")
-    def validate_bounds(self):
-        if self.min is None and self.max is None:
-            raise ValueError("Range conditions require a minimum or maximum")
-
-        self.min = normalize_range_bound(self.field, self.min)
-        self.max = normalize_range_bound(self.field, self.max)
-
-        if self.min is not None and self.max is not None and self.min > self.max:
-            raise ValueError("Range minimum cannot exceed maximum")
-        return self
-
-    def to_domain(self) -> RangeFilter:
-        return RangeFilter(field=self.field, min_value=self.min, max_value=self.max)
-
 
 class CategoricalConditionRequest(_ContractModel):
     kind: Literal["categorical"]
@@ -82,50 +39,11 @@ class CategoricalConditionRequest(_ContractModel):
     values: list[str] = Field(min_length=1, max_length=100)
     mode: Literal["include", "exclude"] = "include"
 
-    @field_validator("field")
-    @classmethod
-    def validate_field(cls, value: str) -> str:
-        if value not in CATEGORICAL_FIELDS:
-            raise ValueError(f"Unsupported categorical field: {value}")
-        return value
-
-    @field_validator("values")
-    @classmethod
-    def normalize_values(cls, values: list[str]) -> list[str]:
-        normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
-        if not normalized:
-            raise ValueError("Categorical conditions require at least one value")
-        return normalized
-
-    def to_domain(self) -> CategoricalFilter:
-        return CategoricalFilter(
-            field=self.field,
-            values=tuple(self.values),
-            mode=FilterMode(self.mode),
-        )
-
 
 class BooleanConditionRequest(_ContractModel):
     kind: Literal["boolean"]
     field: str
     value: bool
-
-    @field_validator("value", mode="before")
-    @classmethod
-    def require_boolean_value(cls, value):
-        if not isinstance(value, bool):
-            raise ValueError("Boolean filter values must be booleans")
-        return value
-
-    @field_validator("field")
-    @classmethod
-    def validate_field(cls, value: str) -> str:
-        if value not in BOOLEAN_FIELDS:
-            raise ValueError(f"Unsupported boolean field: {value}")
-        return value
-
-    def to_domain(self) -> BooleanFilter:
-        return BooleanFilter(field=self.field, value=self.value)
 
 
 class TextConditionRequest(_ContractModel):
@@ -133,43 +51,10 @@ class TextConditionRequest(_ContractModel):
     field: str
     pattern: str = Field(min_length=1, max_length=100)
 
-    @field_validator("field")
-    @classmethod
-    def validate_field(cls, value: str) -> str:
-        if value not in TEXT_FIELDS:
-            raise ValueError(f"Unsupported text field: {value}")
-        return value
-
-    @field_validator("pattern")
-    @classmethod
-    def normalize_pattern(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("Text patterns cannot be blank")
-        return normalized
-
-    def to_domain(self) -> TextSearchFilter:
-        return TextSearchFilter(field=self.field, pattern=self.pattern)
-
 
 class ListingDiscoveryConditionRequest(_ContractModel):
     kind: Literal["listing_discovery"]
-    min_volume: float = Field(gt=0)
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_boolean_volume(cls, value):
-        if isinstance(value, dict) and isinstance(value.get("min_volume"), bool):
-            raise ValueError("Listing-discovery volume must be a positive number")
-        return value
-
-    @field_validator("min_volume")
-    @classmethod
-    def normalize_min_volume(cls, value: float) -> int | float:
-        return normalize_listing_min_volume(value)
-
-    def to_domain(self) -> ListingDiscoveryFilter:
-        return ListingDiscoveryFilter(min_volume=self.min_volume)
+    min_volume: int | float
 
 
 FilterConditionRequest = Annotated[
@@ -186,28 +71,10 @@ class FilterGroupRequest(_ContractModel):
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     name: str = Field(min_length=1, max_length=60)
     match: Literal["all", "any"] = "all"
-    conditions: list[FilterConditionRequest] = Field(default_factory=list, max_length=20)
+    conditions: list[FilterConditionRequest] = Field(
+        default_factory=list, max_length=20
+    )
     enabled: bool = True
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("Group names cannot be blank")
-        return normalized
-
-    def to_domain(self) -> FilterGroup:
-        conditions: tuple[FilterCondition, ...] = tuple(
-            condition.to_domain() for condition in self.conditions
-        )
-        return FilterGroup(
-            id=self.id,
-            name=self.name,
-            match=MatchOperator(self.match),
-            conditions=conditions,
-            enabled=self.enabled,
-        )
 
 
 class SortRequest(_ContractModel):
@@ -252,25 +119,25 @@ class ScanQueryRequest(_ContractModel):
     options: QueryOptionsRequest = Field(default_factory=QueryOptionsRequest)
     passes_only: bool = False
 
+    _expression: FilterExpression = PrivateAttr()
+
     @model_validator(mode="after")
-    def validate_expression(self):
-        self.to_expression()
+    def decode_expression(self):
+        self._expression = decode_filter_expression(
+            self.model_dump(
+                include={
+                    "expression_version",
+                    "required",
+                    "group_join",
+                    "groups",
+                }
+            ),
+            policy=FilterExpressionDecodePolicy.API,
+        )
         return self
 
     def to_expression(self) -> FilterExpression:
-        return FilterExpression(
-            required=self.required.to_domain(),
-            group_join=MatchOperator(self.group_join),
-            groups=tuple(group.to_domain() for group in self.groups),
-            version=self.expression_version,
-        )
+        return self._expression
 
 
-__all__ = [
-    "BOOLEAN_FIELDS",
-    "CATEGORICAL_FIELDS",
-    "RANGE_FIELDS",
-    "TEXT_FIELDS",
-    "FilterGroupRequest",
-    "ScanQueryRequest",
-]
+__all__ = ["FilterGroupRequest", "ScanQueryRequest"]

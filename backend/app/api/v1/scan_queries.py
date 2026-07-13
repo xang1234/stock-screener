@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.domain.common.errors import EntityNotFoundError
-from app.domain.scanning.filter_spec import PageSpec, QuerySpec
+from app.domain.common.query import PageSpec
+from app.domain.scanning.filter_expression_model import QuerySpec, filter_spec_to_expression
 from app.domain.scanning.models import ExportFormat
 from app.schemas.filter_expression import ScanQueryRequest
 from app.schemas.scanning import (
@@ -197,7 +198,7 @@ async def get_scan_symbols(
             uow,
             GetScanSymbolsQuery(
                 scan_id=scan_id,
-                expression=filters.to_expression(),
+                expression=filter_spec_to_expression(filters),
                 sort=sort,
                 page=_optional_page_spec(page, per_page),
                 passes_only=passes_only,
@@ -248,7 +249,7 @@ async def export_scan_results(
             uow,
             ExportScanResultsQuery(
                 scan_id=scan_id,
-                expression=filters.to_expression(),
+                expression=filter_spec_to_expression(filters),
                 sort=sort,
                 export_format=ExportFormat(format),
                 passes_only=passes_only,

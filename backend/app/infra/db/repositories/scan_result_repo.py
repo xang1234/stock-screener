@@ -9,12 +9,8 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.domain.scanning.filter_spec import (
-    FilterExpression,
-    PageSpec,
-    QuerySpec,
-    SortSpec,
-)
+from app.domain.common.query import PageSpec, SortSpec
+from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository
 from app.analysis.patterns.report import validate_setup_engine_report_payload
