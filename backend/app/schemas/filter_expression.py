@@ -15,6 +15,7 @@ from app.domain.common.query import (
     FilterExpression,
     FilterGroup,
     FilterMode,
+    ListingDiscoveryFilter,
     MatchOperator,
     PageSpec,
     RangeFilter,
@@ -22,40 +23,13 @@ from app.domain.common.query import (
     SortSpec,
     TextSearchFilter,
 )
-
-
-RANGE_FIELDS = frozenset(
-    {
-        "minervini_score", "composite_score", "canslim_score", "ipo_score",
-        "custom_score", "volume_breakthrough_score", "se_setup_score",
-        "se_distance_to_pivot_pct", "se_base_length_weeks", "se_base_depth_pct",
-        "se_support_tests_count", "se_tight_closes_count",
-        "se_bb_width_pctile_252", "se_volume_vs_50d",
-        "se_up_down_volume_ratio_10d", "se_quiet_days_10d", "rs_rating",
-        "rs_rating_1m", "rs_rating_3m", "rs_rating_12m", "price",
-        "adr_percent", "eps_growth_qq", "sales_growth_qq", "eps_growth_yy",
-        "sales_growth_yy", "peg_ratio", "eps_rating", "ibd_group_rank",
-        "volume", "market_cap", "market_cap_usd", "adv_usd", "vcp_score",
-        "vcp_pivot", "price_change_1d", "perf_week", "perf_month", "perf_3m",
-        "perf_6m", "ema_10_distance", "ema_20_distance", "ema_50_distance",
-        "week_52_high_distance", "week_52_low_distance", "ipo_date", "beta",
-        "beta_adj_rs", "beta_adj_rs_1m", "beta_adj_rs_3m", "beta_adj_rs_12m",
-        "gap_percent", "volume_surge", "stage",
-    }
+from app.domain.scanning.filter_capabilities import (
+    BOOLEAN_FIELDS,
+    CATEGORICAL_FIELDS,
+    RANGE_FIELDS,
+    SORT_FIELDS,
+    TEXT_FIELDS,
 )
-CATEGORICAL_FIELDS = frozenset(
-    {"rating", "ibd_industry_group", "gics_sector", "market", "se_pattern_primary"}
-)
-BOOLEAN_FIELDS = frozenset(
-    {
-        "vcp_detected", "vcp_ready_for_breakout", "ma_alignment", "pocket_pivot",
-        "power_trend", "passes_template", "se_setup_ready", "se_rs_line_new_high",
-        "se_rs_line_blue_dot", "rs_line_new_high", "rs_line_new_high_before_price",
-        "rs_line_blue_dot_recent", "se_in_early_zone", "se_extended_from_pivot",
-        "se_bb_squeeze",
-    }
-)
-TEXT_FIELDS = frozenset({"symbol", "listing_search"})
 
 
 class _ContractModel(BaseModel):
@@ -198,11 +172,27 @@ class TextConditionRequest(_ContractModel):
         return TextSearchFilter(field=self.field, pattern=self.pattern)
 
 
+class ListingDiscoveryConditionRequest(_ContractModel):
+    kind: Literal["listing_discovery"]
+    min_volume: float = Field(gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_boolean_volume(cls, value):
+        if isinstance(value, dict) and isinstance(value.get("min_volume"), bool):
+            raise ValueError("Listing-discovery volume must be a positive number")
+        return value
+
+    def to_domain(self) -> ListingDiscoveryFilter:
+        return ListingDiscoveryFilter(min_volume=self.min_volume)
+
+
 FilterConditionRequest = Annotated[
     RangeConditionRequest
     | CategoricalConditionRequest
     | BooleanConditionRequest
-    | TextConditionRequest,
+    | TextConditionRequest
+    | ListingDiscoveryConditionRequest,
     Field(discriminator="kind"),
 ]
 
@@ -238,6 +228,13 @@ class FilterGroupRequest(_ContractModel):
 class SortRequest(_ContractModel):
     field: str = Field(default="composite_score", min_length=1, max_length=80)
     order: Literal["asc", "desc"] = "desc"
+
+    @field_validator("field")
+    @classmethod
+    def validate_field(cls, value: str) -> str:
+        if value not in SORT_FIELDS:
+            raise ValueError(f"Unsupported sort field: {value}")
+        return value
 
     def to_domain(self) -> SortSpec:
         return SortSpec(field=self.field, order=SortOrder(self.order))

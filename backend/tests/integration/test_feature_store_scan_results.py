@@ -22,6 +22,7 @@ from app.domain.common.query import (
     FilterExpression,
     FilterGroup,
     FilterSpec,
+    ListingDiscoveryFilter,
     MatchOperator,
     PageSpec,
     QuerySpec,
@@ -219,11 +220,11 @@ class TestQueryRunAsScanResults:
         assert names["MSFT"] == "Microsoft Corp"
         assert names["GOOGL"] == "Alphabet Inc"
 
-    def test_listing_discovery_searches_company_without_a_volume_condition(
+    def test_listing_discovery_bypasses_volume_only_for_listing_rows(
         self, seeded_session
     ):
-        seeded_session.add(
-            StockFeatureDaily(
+        seeded_session.add_all(
+            [StockFeatureDaily(
                 run_id=1,
                 symbol="NEWCO",
                 as_of_date=AS_OF,
@@ -235,7 +236,35 @@ class TestQueryRunAsScanResults:
                     "current_price": 20,
                     "scan_mode": "listing_only",
                 },
-            )
+            ),
+            StockFeatureDaily(
+                run_id=1,
+                symbol="NEWCOLOW",
+                as_of_date=AS_OF,
+                composite_score=60,
+                overall_rating=3,
+                passes_count=0,
+                details_json={
+                    "rating": "Watch",
+                    "current_price": 20,
+                    "scan_mode": "full",
+                    "avg_dollar_volume": 100,
+                },
+            ),
+            StockFeatureDaily(
+                run_id=1,
+                symbol="NEWCOHIGH",
+                as_of_date=AS_OF,
+                composite_score=60,
+                overall_rating=3,
+                passes_count=0,
+                details_json={
+                    "rating": "Watch",
+                    "current_price": 20,
+                    "scan_mode": "full",
+                    "avg_dollar_volume": 2_000_000,
+                },
+            )]
         )
         seeded_session.commit()
         expression = FilterExpression(
@@ -244,6 +273,7 @@ class TestQueryRunAsScanResults:
                 name="Always require",
                 conditions=(
                     TextSearchFilter("listing_search", "newco"),
+                    ListingDiscoveryFilter(1_000_000),
                 ),
             )
         )
@@ -253,8 +283,7 @@ class TestQueryRunAsScanResults:
             QuerySpec(expression=expression),
         )
 
-        assert [str(item.symbol) for item in page.items] == ["NEWCO"]
-        assert page.items[0].extended_fields["passes_template"] is None
+        assert {str(item.symbol) for item in page.items} == {"NEWCO", "NEWCOHIGH"}
 
     def test_int_to_rating_mapping(self, seeded_session):
         repo = SqlFeatureStoreRepository(seeded_session)

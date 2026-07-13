@@ -88,6 +88,16 @@ class TextSearchFilter:
         return not self.pattern
 
 
+@dataclass(frozen=True)
+class ListingDiscoveryFilter:
+    """Retain listing-only discovery rows without weakening normal liquidity."""
+
+    min_volume: float | int
+
+    def is_empty(self) -> bool:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Composite Specifications
 # ---------------------------------------------------------------------------
@@ -151,7 +161,11 @@ class FilterSpec:
 
 
 FilterCondition: TypeAlias = (
-    RangeFilter | CategoricalFilter | BooleanFilter | TextSearchFilter
+    RangeFilter
+    | CategoricalFilter
+    | BooleanFilter
+    | TextSearchFilter
+    | ListingDiscoveryFilter
 )
 
 
@@ -295,6 +309,7 @@ __all__ = [
     "CategoricalFilter",
     "BooleanFilter",
     "TextSearchFilter",
+    "ListingDiscoveryFilter",
     "FilterSpec",
     "FilterCondition",
     "FilterGroup",

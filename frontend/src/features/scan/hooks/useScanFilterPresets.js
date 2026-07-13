@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import { buildDefaultScanFilters } from '../defaultFilters';
 import {
+  canonicalizeExpression,
   expressionToLegacyFilters,
   legacyFiltersToExpression,
+  stableExpressionKey,
 } from '../filterExpression';
 
 export function useScanFilterPresets({
@@ -27,11 +29,18 @@ export function useScanFilterPresets({
   const [saveDialogInitialDescription, setSaveDialogInitialDescription] = useState('');
   const [saveDialogError, setSaveDialogError] = useState(null);
 
-  const currentPresetFilters = useMemo(
-    () => (expression
-      ? { schema_version: 2, expression, legacy_filters: filters }
-      : filters),
+  const currentExpression = useMemo(
+    () => (expression ? legacyFiltersToExpression(filters, expression) : null),
     [expression, filters],
+  );
+  const currentPresetFilters = useMemo(
+    () => (currentExpression
+      ? {
+          schema_version: 2,
+          expression: canonicalizeExpression(currentExpression),
+        }
+      : filters),
+    [currentExpression, filters],
   );
 
   const clearActivePreset = useCallback(() => {
@@ -44,7 +53,11 @@ export function useScanFilterPresets({
     if (!activePresetId || !presetFiltersSnapshot) {
       return false;
     }
-    const filtersChanged = JSON.stringify(currentPresetFilters) !== JSON.stringify(presetFiltersSnapshot);
+    const filtersChanged = currentPresetFilters.schema_version === 2
+      && presetFiltersSnapshot.schema_version === 2
+      ? stableExpressionKey(currentPresetFilters.expression)
+        !== stableExpressionKey(presetFiltersSnapshot.expression)
+      : JSON.stringify(currentPresetFilters) !== JSON.stringify(presetFiltersSnapshot);
     const sortChanged =
       presetSortSnapshot &&
       (sortBy !== presetSortSnapshot.sortBy || sortOrder !== presetSortSnapshot.sortOrder);
@@ -65,8 +78,7 @@ export function useScanFilterPresets({
 
       const isExpressionPreset = preset.filters?.schema_version === 2 && preset.filters?.expression;
       const nextFilters = isExpressionPreset
-        ? (preset.filters.legacy_filters
-            || expressionToLegacyFilters(preset.filters.expression, buildDefaultScanFilters()))
+        ? expressionToLegacyFilters(preset.filters.expression, buildDefaultScanFilters())
         : preset.filters;
       setFilters(nextFilters);
       const nextExpression = isExpressionPreset
@@ -80,12 +92,14 @@ export function useScanFilterPresets({
       setActivePresetId(presetId);
       setPresetFiltersSnapshot(
         isExpressionPreset
-          ? preset.filters
+          ? {
+              schema_version: 2,
+              expression: canonicalizeExpression(preset.filters.expression),
+            }
           : (expression
               ? {
                   schema_version: 2,
-                  expression: nextExpression,
-                  legacy_filters: nextFilters,
+                  expression: canonicalizeExpression(nextExpression),
                 }
               : preset.filters),
       );

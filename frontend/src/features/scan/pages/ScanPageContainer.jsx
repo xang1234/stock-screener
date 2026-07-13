@@ -8,8 +8,6 @@ import {
   exportScanResultsQuery,
   getFilterOptions,
   getScanBootstrap,
-  getScanResults,
-  queryScanResults,
   getScans,
   getScanStatus,
   getUniverseStats,
@@ -17,7 +15,7 @@ import {
 } from '../../../api/scans';
 import FilterPanel from '../components/FilterPanelContainer';
 import ChartViewerModal from '../../../components/Scan/ChartViewerModalLazy';
-import { buildFilterParams, getStableFilterKey } from '../../../utils/filterUtils';
+import { buildFilterParams } from '../../../utils/filterUtils';
 import {
   fetchPriceHistory,
   prefetchPriceHistoryBatch,
@@ -42,7 +40,7 @@ import {
   legacyFiltersToExpression,
 } from '../filterExpression';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
-import { useScanFilterQueryState } from '../hooks/useScanFilterQueryState';
+import { useScanResultsController } from '../hooks/useScanResultsController';
 import {
   buildUniverseDef,
   parseLegacyUniverseDefault,
@@ -103,30 +101,34 @@ function ScanPage() {
   const [customFilters, setCustomFilters] = useState(DEFAULT_SCAN_DEFAULTS.criteria.custom_filters);
   const [filters, setFilters] = useState(buildDefaultScanFilters);
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  const groupedFilteringEnabled = features?.grouped_scan_filters === true;
   const {
-    requested: requestedQuery,
-    requestedKey,
-    appliedSnapshot,
+    requestedExpression,
+    sortBy,
+    sortOrder,
     requestExpression,
-    requestQuickFilters,
     requestPage,
     requestPerPage,
     requestSort,
     requestQuery,
-    markRequestSucceeded,
-  } = useScanFilterQueryState(legacyFiltersToExpression(buildDefaultScanFilters()));
-  const {
-    expression: requestedExpression,
-    page,
-    perPage,
-    sortBy,
-    sortOrder,
-  } = requestedQuery;
+    displayedQuery,
+    displayedResultsData,
+    stableFilterKey,
+    resultsLoading,
+    resultsFetching,
+    resultsError,
+    refetchResults,
+  } = useScanResultsController({
+    currentScanId,
+    scanStatus,
+    groupedFilteringEnabled,
+    debouncedFilters,
+    initialExpression: legacyFiltersToExpression(buildDefaultScanFilters()),
+  });
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
-  const groupedFilteringEnabled = features?.grouped_scan_filters === true;
 
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.scan);
   const initialQueriesEnabled = runtimeReady && (!snapshotEnabled || initialBootstrapSettled);
@@ -262,10 +264,6 @@ function ScanPage() {
     return () => clearTimeout(timer);
   }, [filters]);
 
-  useEffect(() => {
-    requestQuickFilters(debouncedFilters);
-  }, [debouncedFilters, requestQuickFilters]);
-
   const handleLoadScan = useCallback(
     async (scanId) => {
       if (!scanId) {
@@ -399,89 +397,6 @@ function ScanPage() {
     staleTime: 0,
     gcTime: 0,
   });
-
-  const getApiFilterParams = useCallback(
-    () => buildFilterParams(debouncedFilters, { page, perPage, sortBy, sortOrder }),
-    [debouncedFilters, page, perPage, sortBy, sortOrder]
-  );
-
-  const stableFilterKey = useMemo(() => getStableFilterKey(debouncedFilters), [debouncedFilters]);
-  const groupedQueryRequest = useMemo(
-    () => buildScanQueryRequest(requestedExpression, {
-      page,
-      perPage,
-      sortBy,
-      sortOrder,
-      includeSparklines: true,
-      detailLevel: 'table',
-    }),
-    [requestedExpression, page, perPage, sortBy, sortOrder],
-  );
-
-  const {
-    data: resultsData,
-    isLoading: resultsLoading,
-    isFetching: resultsFetching,
-    isError: resultsIsError,
-    error: resultsError,
-    isSuccess: resultsIsSuccess,
-    isPlaceholderData: resultsIsPlaceholderData,
-    refetch: refetchResults,
-  } = useQuery({
-    queryKey: groupedFilteringEnabled
-      ? ['scanResultsQuery', currentScanId, requestedKey]
-      : ['scanResults', currentScanId, page, perPage, sortBy, sortOrder, stableFilterKey],
-    queryFn: ({ signal }) => (
-      groupedFilteringEnabled
-        ? queryScanResults(currentScanId, groupedQueryRequest, { signal })
-        : getScanResults(currentScanId, getApiFilterParams())
-    ),
-    enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
-    staleTime: 10 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    placeholderData: (previousData, previousQuery) => (
-      previousQuery?.queryKey?.[1] === currentScanId ? previousData : undefined
-    ),
-  });
-
-  useEffect(() => {
-    if (groupedFilteringEnabled && resultsIsSuccess && !resultsIsPlaceholderData) {
-      markRequestSucceeded({
-        request: requestedQuery,
-        requestKey: requestedKey,
-        scanId: currentScanId,
-        data: resultsData,
-      });
-    }
-  }, [
-    currentScanId,
-    groupedFilteringEnabled,
-    markRequestSucceeded,
-    requestedKey,
-    requestedQuery,
-    resultsData,
-    resultsIsPlaceholderData,
-    resultsIsSuccess,
-  ]);
-
-  const currentSuccessSnapshot = groupedFilteringEnabled
-    && resultsIsSuccess
-    && !resultsIsPlaceholderData
-    ? {
-        request: requestedQuery,
-        requestKey: requestedKey,
-        scanId: currentScanId,
-        data: resultsData,
-      }
-    : null;
-  const displayedSnapshot = currentSuccessSnapshot
-    ?? (appliedSnapshot?.scanId === currentScanId ? appliedSnapshot : null);
-  const displayedResultsData = groupedFilteringEnabled
-    ? displayedSnapshot?.data
-    : resultsData;
-  const displayedQuery = groupedFilteringEnabled
-    ? (displayedSnapshot?.request ?? requestedQuery)
-    : requestedQuery;
 
   useEffect(() => {
     if (!statusData) {
@@ -791,7 +706,7 @@ function ScanPage() {
           resultsData={displayedResultsData}
           expression={groupedFilteringEnabled ? displayedQuery.expression : null}
           resultsFetching={resultsFetching}
-          resultsError={resultsIsError ? resultsError : null}
+          resultsError={resultsError}
           onExport={handleExport}
           page={displayedQuery.page}
           perPage={displayedQuery.perPage}

@@ -8,4 +8,7 @@ export const normalizeScanFilterOptions = (filterOptions = {}) => ({
     filterOptions.gicsSectors ?? filterOptions.gics_sectors
   ),
   ratings: normalizeOptionArray(filterOptions.ratings),
+  filterCatalog: normalizeOptionArray(
+    filterOptions.filterCatalog ?? filterOptions.filter_catalog
+  ),
 });

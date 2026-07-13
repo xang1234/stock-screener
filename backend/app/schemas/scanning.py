@@ -14,6 +14,7 @@ from ..domain.scanning.models import (
     ScanWarningCode,
     StockExplanation,
 )
+from ..domain.scanning.filter_capabilities import filter_field_catalog_payload
 from ..infra.serialization import (
     coerce_bool_or_false,
     normalize_string_list,
@@ -323,7 +324,7 @@ class ScanResultItem(BaseModel):
             rating=item.rating,
             matched_groups=[
                 MatchedGroup(id=group.id, name=group.name)
-                for group in item.matched_groups
+                for group in getattr(item, "matched_groups", ())
             ],
             # Individual screener scores
             minervini_score=ef.get("minervini_score"),
@@ -500,6 +501,9 @@ class FilterOptionsResponse(BaseModel):
     ibd_industries: List[str]
     gics_sectors: List[str]
     ratings: List[str]
+    filter_catalog: List[Dict[str, Any]] = Field(
+        default_factory=filter_field_catalog_payload
+    )
 
 
 # ---------------------------------------------------------------------------

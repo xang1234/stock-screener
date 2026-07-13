@@ -11,71 +11,12 @@ from __future__ import annotations
 import copy
 import heapq
 
-RANGE_FILTER_TO_FIELD: dict[str, str] = {
-    "compositeScore": "composite_score",
-    "minerviniScore": "minervini_score",
-    "canslimScore": "canslim_score",
-    "ipoScore": "ipo_score",
-    "customScore": "custom_score",
-    "volBreakthroughScore": "volume_breakthrough_score",
-    "seSetupScore": "se_setup_score",
-    "seDistanceToPivot": "se_distance_to_pivot_pct",
-    "seBbSqueeze": "se_bb_width_pctile_252",
-    "seVolumeVs50d": "se_volume_vs_50d",
-    "seUpDownVolume": "se_up_down_volume_ratio_10d",
-    "rsRating": "rs_rating",
-    "rs1m": "rs_rating_1m",
-    "rs3m": "rs_rating_3m",
-    "rs12m": "rs_rating_12m",
-    "epsRating": "eps_rating",
-    "ibdGroupRank": "ibd_group_rank",
-    "price": "current_price",
-    "adrPercent": "adr_percent",
-    "epsGrowth": "eps_growth_qq",
-    "salesGrowth": "sales_growth_qq",
-    "vcpScore": "vcp_score",
-    "vcpPivot": "vcp_pivot",
-    "perfDay": "price_change_1d",
-    "perfWeek": "perf_week",
-    "perfMonth": "perf_month",
-    "perf3m": "perf_3m",
-    "perf6m": "perf_6m",
-    "gapPercent": "gap_percent",
-    "volumeSurge": "volume_surge",
-    "ema10Distance": "ema_10_distance",
-    "ema20Distance": "ema_20_distance",
-    "ema50Distance": "ema_50_distance",
-    "week52HighDistance": "week_52_high_distance",
-    "week52LowDistance": "week_52_low_distance",
-    "beta": "beta",
-    "betaAdjRs": "beta_adj_rs",
-    "pctDay": "pct_day",
-    "pctWeek": "pct_week",
-    "pctMonth": "pct_month",
-}
-
-SCALAR_FILTER_TO_FIELD: dict[str, str] = {
-    "minVolume": "volume",
-    "minMarketCap": "market_cap",
-}
-
-BOOLEAN_FILTER_TO_FIELD: dict[str, str] = {
-    "seSetupReady": "se_setup_ready",
-    "seRsLineNewHigh": "se_rs_line_new_high",
-    "seRsLineBlueDot": "se_rs_line_blue_dot",
-    "rsLineBlueDotRecent": "rs_line_blue_dot_recent",
-    "vcpDetected": "vcp_detected",
-    "vcpReady": "vcp_ready_for_breakout",
-    "maAlignment": "ma_alignment",
-    "passesTemplate": "passes_template",
-    "pocketPivot": "pocket_pivot",
-    "powerTrend": "power_trend",
-}
-
-# Filters whose value is a list of accepted strings (membership test).
-LIST_FILTER_TO_FIELD: dict[str, str] = {
-    "sePatternPrimary": "se_pattern_primary",
-}
+from app.domain.scanning.filter_expression import (
+    canonical_expression_payload,
+    evaluate_expression,
+    expression_from_payload,
+)
+from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
 
 # ---------------------------------------------------------------------------
 # Preset screen definitions
@@ -486,61 +427,21 @@ def resolve_preset_screens_for_defaults(
             **inherited,
             **(screen.get("filters") or {}),
         }
+        expression = (
+            expression_from_payload(screen["filter_expression"])
+            if screen.get("filter_expression")
+            else legacy_filters_to_expression(screen["filters"])
+        )
+        screen["filter_schema_version"] = 2
+        screen["filter_expression"] = canonical_expression_payload(expression)
         resolved.append(screen)
     return resolved
 
 
 def _matches_preset_filters(row: dict, filters: dict) -> bool:
-    """Check if a serialized scan row matches a preset's filter criteria.
+    """Compatibility wrapper backed by the canonical expression evaluator."""
 
-    Mirrors the logic in frontend/src/static/scanClient.js filterStaticScanRows.
-    """
-    for key, value in filters.items():
-        # Stage filter (integer equality)
-        if key == "stage":
-            if row.get("stage") != value:
-                return False
-            continue
-
-        if key in SCALAR_FILTER_TO_FIELD:
-            if value is None:
-                continue
-            field = SCALAR_FILTER_TO_FIELD[key]
-            row_val = row.get(field)
-            if row_val is None or row_val < value:
-                return False
-            continue
-
-        # List-membership filter (e.g. se_pattern_primary)
-        if key in LIST_FILTER_TO_FIELD:
-            field = LIST_FILTER_TO_FIELD[key]
-            if row.get(field) not in value:
-                return False
-            continue
-
-        # Boolean filter
-        if key in BOOLEAN_FILTER_TO_FIELD:
-            field = BOOLEAN_FILTER_TO_FIELD[key]
-            if bool(row.get(field)) != value:
-                return False
-            continue
-
-        # Range filter
-        if key in RANGE_FILTER_TO_FIELD:
-            field = RANGE_FILTER_TO_FIELD[key]
-            row_val = row.get(field)
-            if isinstance(value, dict):
-                if value.get("min") is None and value.get("max") is None:
-                    continue
-                if row_val is None:
-                    return False
-                if value.get("min") is not None and row_val < value["min"]:
-                    return False
-                if value.get("max") is not None and row_val > value["max"]:
-                    return False
-            continue
-
-    return True
+    return evaluate_expression(row, legacy_filters_to_expression(filters))
 
 
 def get_preset_chart_symbols(
@@ -556,10 +457,14 @@ def get_preset_chart_symbols(
 
     symbols: set[str] = set()
     for preset in presets:
-        filters = preset.get("filters") or {}
+        expression = (
+            expression_from_payload(preset["filter_expression"])
+            if preset.get("filter_expression")
+            else legacy_filters_to_expression(preset.get("filters") or {})
+        )
         matching = [
             row for row in serialized_rows
-            if _matches_preset_filters(row, filters)
+            if evaluate_expression(row, expression)
         ]
         sort_field = preset.get("sort_by", "composite_score")
         descending = preset.get("sort_order", "desc") == "desc"

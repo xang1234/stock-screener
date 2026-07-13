@@ -13,12 +13,9 @@ const withMinimumPrice = (minimum) => createEmptyExpression([
 function succeed(state, data, scanId = 'scan-1') {
   return scanFilterQueryReducer(state, {
     type: 'request-succeeded',
-    snapshot: {
-      request: state.requested,
-      requestKey: state.requestedKey,
-      scanId,
-      data,
-    },
+    requestKey: state.requestedKey,
+    scanId,
+    data,
   });
 }
 
@@ -50,12 +47,9 @@ describe('scan filter query state', () => {
     });
     const stale = scanFilterQueryReducer(pending, {
       type: 'request-succeeded',
-      snapshot: {
-        request: original.requested,
-        requestKey: original.requestedKey,
-        scanId: 'scan-1',
-        data: { results: [{ symbol: 'STALE' }] },
-      },
+      requestKey: original.requestedKey,
+      scanId: 'scan-1',
+      data: { results: [{ symbol: 'STALE' }] },
     });
 
     expect(stale.appliedSnapshot).toBeNull();

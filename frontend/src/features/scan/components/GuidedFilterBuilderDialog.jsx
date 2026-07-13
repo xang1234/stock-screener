@@ -42,9 +42,9 @@ function clone(value) {
   return structuredClone(value);
 }
 
-function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
-  const meta = fieldMeta(condition.field);
-  const handleFieldChange = (field) => onChange(newCondition(field));
+function ConditionEditor({ condition, onChange, onDelete, valueOptions = [], fieldCatalog }) {
+  const meta = fieldMeta(condition.field, fieldCatalog);
+  const handleFieldChange = (field) => onChange(newCondition(field, fieldCatalog));
 
   return (
     <Paper variant="outlined" sx={{ p: 1, bgcolor: 'background.default' }}>
@@ -56,7 +56,7 @@ function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
             value={condition.field}
             onChange={(event) => handleFieldChange(event.target.value)}
           >
-            {FILTER_FIELD_CATALOG.map((item) => (
+            {fieldCatalog.map((item) => (
               <MenuItem key={item.field} value={item.field}>
                 <Box>
                   <Typography variant="body2">{item.label}</Typography>
@@ -163,7 +163,15 @@ function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
   );
 }
 
-function SetupGroupCard({ group, index, onChange, onDelete, onDuplicate, filterOptions }) {
+function SetupGroupCard({
+  group,
+  index,
+  onChange,
+  onDelete,
+  onDuplicate,
+  filterOptions,
+  fieldCatalog,
+}) {
   const updateCondition = (conditionIndex, condition) => {
     const conditions = [...group.conditions];
     conditions[conditionIndex] = condition;
@@ -235,6 +243,7 @@ function SetupGroupCard({ group, index, onChange, onDelete, onDuplicate, filterO
                       : condition.field === 'se_pattern_primary' ? filterOptions.patterns
                         : []
             ) || []}
+            fieldCatalog={fieldCatalog}
           />
         ))}
       </Stack>
@@ -246,7 +255,7 @@ function SetupGroupCard({ group, index, onChange, onDelete, onDuplicate, filterO
         disabled={group.conditions.length >= 20}
         onClick={() => onChange({
           ...group,
-          conditions: [...group.conditions, newCondition()],
+          conditions: [...group.conditions, newCondition('composite_score', fieldCatalog)],
         })}
       >
         Add rule
@@ -254,7 +263,7 @@ function SetupGroupCard({ group, index, onChange, onDelete, onDuplicate, filterO
 
       {group.conditions.length > 0 && (
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-          Reads as: {group.conditions.map(conditionLabel).join(group.match === 'all' ? ' AND ' : ' OR ')}
+          Reads as: {group.conditions.map((condition) => conditionLabel(condition, fieldCatalog)).join(group.match === 'all' ? ' AND ' : ' OR ')}
         </Typography>
       )}
     </Paper>
@@ -278,7 +287,13 @@ export default function GuidedFilterBuilderDialog({
     }
   }, [expression, open]);
 
-  const errors = useMemo(() => validateExpression(draft), [draft]);
+  const fieldCatalog = filterOptions.filterCatalog?.length
+    ? filterOptions.filterCatalog
+    : FILTER_FIELD_CATALOG;
+  const errors = useMemo(
+    () => validateExpression(draft, fieldCatalog),
+    [draft, fieldCatalog],
+  );
   const guidedOptions = useMemo(() => ({
     ratings: filterOptions.ratings || [],
     ibdIndustries: filterOptions.ibdIndustries || [],
@@ -311,7 +326,7 @@ export default function GuidedFilterBuilderDialog({
           name: `Setup ${number}`,
           match: 'all',
           enabled: true,
-          conditions: [newCondition()],
+          conditions: [newCondition('composite_score', fieldCatalog)],
         },
       ],
     });
@@ -342,7 +357,9 @@ export default function GuidedFilterBuilderDialog({
           </Stack>
           {draft.required.conditions.length > 0 && (
             <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
-              {draft.required.conditions.map(conditionLabel).join(' AND ')}
+              {draft.required.conditions
+                .map((condition) => conditionLabel(condition, fieldCatalog))
+                .join(' AND ')}
             </Typography>
           )}
         </Paper>
@@ -379,6 +396,7 @@ export default function GuidedFilterBuilderDialog({
                 setDraft({ ...draft, groups: [...draft.groups, duplicate] });
               }}
               filterOptions={guidedOptions}
+              fieldCatalog={fieldCatalog}
             />
           ))}
         </Stack>

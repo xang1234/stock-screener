@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -7,6 +10,7 @@ from app.domain.common.query import (
     FilterExpression,
     FilterGroup,
     FilterMode,
+    ListingDiscoveryFilter,
     MatchOperator,
     RangeFilter,
 )
@@ -14,6 +18,7 @@ from app.domain.scanning.filter_expression import (
     annotate_matched_groups,
     evaluate_condition,
     evaluate_expression,
+    expression_from_payload,
     expression_fingerprint,
     matched_setup_groups,
 )
@@ -99,6 +104,20 @@ def test_missing_values_follow_explicit_policy():
         ),
     ) is True
     assert evaluate_condition({}, RangeFilter("rs_rating", min_value=80)) is False
+
+
+def test_listing_discovery_preserves_liquidity_for_normal_rows():
+    condition = ListingDiscoveryFilter(min_volume=1_000_000)
+
+    assert evaluate_condition(
+        {"scan_mode": "listing_only", "volume": None}, condition
+    ) is True
+    assert evaluate_condition(
+        {"scan_mode": "full", "volume": 100}, condition
+    ) is False
+    assert evaluate_condition(
+        {"scan_mode": "full", "volume": 2_000_000}, condition
+    ) is True
 
 
 @pytest.mark.parametrize(
@@ -201,6 +220,43 @@ def test_request_contract_builds_domain_and_rejects_empty_enabled_group():
                 ]
             }
         )
+
+
+def test_request_contract_rejects_unknown_sort_and_accepts_listing_discovery():
+    with pytest.raises(ValidationError, match="Unsupported sort field"):
+        ScanQueryRequest.model_validate({"sort": {"field": "not_a_real_field"}})
+
+    request = ScanQueryRequest.model_validate(
+        {
+            "required": {
+                "id": "required",
+                "name": "Always require",
+                "conditions": [
+                    {"kind": "listing_discovery", "min_volume": 1_000_000}
+                ],
+            }
+        }
+    )
+    assert request.to_expression().required.conditions == (
+        ListingDiscoveryFilter(min_volume=1_000_000),
+    )
+
+
+def test_shared_browser_and_backend_truth_table():
+    fixture_path = (
+        Path(__file__).resolve().parents[4]
+        / "contracts"
+        / "scan_filter_truth_table.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    expression = expression_from_payload(fixture["expression"])
+
+    for case in fixture["rows"]:
+        assert evaluate_expression(case["row"], expression) is case["matches"]
+        if case["matches"]:
+            assert [
+                group.id for group in matched_setup_groups(case["row"], expression)
+            ] == case["matched_groups"]
 
 
 def test_fingerprint_is_stable_and_changes_with_logic():

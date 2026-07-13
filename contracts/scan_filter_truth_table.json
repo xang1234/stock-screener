@@ -1,0 +1,97 @@
+{
+  "expression": {
+    "expression_version": 1,
+    "required": {
+      "id": "required",
+      "name": "Always require",
+      "match": "all",
+      "enabled": true,
+      "conditions": [
+        { "kind": "text", "field": "listing_search", "pattern": "new" },
+        { "kind": "listing_discovery", "min_volume": 1000000 }
+      ]
+    },
+    "group_join": "any",
+    "groups": [
+      {
+        "id": "breakout",
+        "name": "Breakout ready",
+        "match": "all",
+        "enabled": true,
+        "conditions": [
+          { "kind": "range", "field": "rs_rating", "min": 90, "max": null },
+          { "kind": "boolean", "field": "vcp_detected", "value": true }
+        ]
+      },
+      {
+        "id": "growth",
+        "name": "Growth leader",
+        "match": "any",
+        "enabled": true,
+        "conditions": [
+          { "kind": "range", "field": "eps_growth_qq", "min": 30, "max": null },
+          { "kind": "range", "field": "sales_growth_qq", "min": 30, "max": null }
+        ]
+      }
+    ]
+  },
+  "rows": [
+    {
+      "row": {
+        "symbol": "NEWIPO",
+        "scan_mode": "listing_only",
+        "volume": null,
+        "rs_rating": 95,
+        "vcp_detected": true
+      },
+      "matches": true,
+      "matched_groups": ["breakout"]
+    },
+    {
+      "row": {
+        "symbol": "NEWLOW",
+        "scan_mode": "full",
+        "volume": 100,
+        "rs_rating": 95,
+        "vcp_detected": true
+      },
+      "matches": false,
+      "matched_groups": []
+    },
+    {
+      "row": {
+        "symbol": "NEWHIGH",
+        "scan_mode": "full",
+        "volume": 2000000,
+        "rs_rating": 40,
+        "vcp_detected": false,
+        "eps_growth_qq": 35
+      },
+      "matches": true,
+      "matched_groups": ["growth"]
+    },
+    {
+      "row": {
+        "symbol": "NEWNOSETUP",
+        "scan_mode": "full",
+        "volume": 2000000,
+        "rs_rating": 50,
+        "eps_growth_qq": 10,
+        "sales_growth_qq": 10
+      },
+      "matches": false,
+      "matched_groups": []
+    },
+    {
+      "row": {
+        "symbol": "OLDLEADER",
+        "scan_mode": "full",
+        "volume": 2000000,
+        "rs_rating": 99,
+        "vcp_detected": true
+      },
+      "matches": false,
+      "matched_groups": []
+    }
+  ]
+}

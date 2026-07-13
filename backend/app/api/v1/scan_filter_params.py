@@ -11,8 +11,9 @@ from datetime import datetime
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta
-from fastapi import Query
+from fastapi import HTTPException, Query
 
+from app.domain.scanning.filter_capabilities import SORT_FIELDS
 from app.domain.scanning.filter_spec import (
     FilterMode,
     FilterSpec,
@@ -348,7 +349,18 @@ def parse_scan_sort(
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
 ) -> SortSpec:
     """Build a SortSpec from HTTP query parameters."""
-    order = SortOrder.ASC if sort_order.lower() == "asc" else SortOrder.DESC
+    if sort_by not in SORT_FIELDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported sort field: {sort_by}",
+        )
+    normalized_order = sort_order.lower()
+    if normalized_order not in {"asc", "desc"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported sort order: {sort_order}",
+        )
+    order = SortOrder(normalized_order)
     return SortSpec(field=sort_by, order=order)
 
 

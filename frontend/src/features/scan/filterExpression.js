@@ -38,9 +38,9 @@ const LEGACY_FILTER_FIELDS = Object.freeze([
   ['betaAdjRs', 'beta_adj_rs', 'range'],
   ['marketCapUsd', 'market_cap_usd', 'range'],
   ['advUsd', 'adv_usd', 'range'],
-  ['pctDay', 'price_change_1d', 'range', false],
-  ['pctWeek', 'perf_week', 'range', false],
-  ['pctMonth', 'perf_month', 'range', false],
+  ['pctDay', 'pct_day', 'range'],
+  ['pctWeek', 'pct_week', 'range'],
+  ['pctMonth', 'pct_month', 'range'],
   ['seSetupReady', 'se_setup_ready', 'boolean'],
   ['seRsLineNewHigh', 'se_rs_line_new_high', 'boolean'],
   ['seRsLineBlueDot', 'se_rs_line_blue_dot', 'boolean'],
@@ -182,13 +182,15 @@ export function legacyFiltersToConditions(filters = {}, now = new Date()) {
       mode: 'include',
     });
   }
-  if (filters.minVolume != null && !filters.symbolSearch?.trim()) {
-    conditions.push({
-      kind: 'range',
-      field: 'volume',
-      min: filters.minVolume,
-      max: null,
-    });
+  if (filters.minVolume != null) {
+    conditions.push(filters.symbolSearch?.trim()
+      ? { kind: 'listing_discovery', min_volume: filters.minVolume }
+      : {
+          kind: 'range',
+          field: 'volume',
+          min: filters.minVolume,
+          max: null,
+        });
   }
   if (filters.minMarketCap != null) {
     conditions.push({ kind: 'range', field: 'market_cap', min: filters.minMarketCap, max: null });
@@ -241,6 +243,8 @@ export function expressionToLegacyFilters(expression, defaults) {
       }
       if (condition.field === 'market') result.markets = [...condition.values];
       if (condition.field === 'se_pattern_primary') result.sePatternPrimary = [...condition.values];
+    } else if (condition.kind === 'listing_discovery') {
+      result.minVolume = condition.min_volume;
     }
   });
   return result;
@@ -303,6 +307,10 @@ function rowValue(row, field) {
 }
 
 export function evaluateCondition(row, condition) {
+  if (condition.kind === 'listing_discovery') {
+    if (row?.scan_mode === 'listing_only') return true;
+    return row?.volume != null && row.volume >= condition.min_volume;
+  }
   const value = rowValue(row, condition.field);
   if (condition.kind === 'range') {
     if (value == null) return false;
@@ -349,8 +357,11 @@ export function annotateExpressionMatches(rows, expression) {
     .map((row) => ({ ...row, matched_groups: matchedGroupNames(row, expression) }));
 }
 
-export function conditionLabel(condition) {
-  const label = FIELD_META.get(condition.field)?.label ?? condition.field;
+export function conditionLabel(condition, catalog = FILTER_FIELD_CATALOG) {
+  if (condition.kind === 'listing_discovery') {
+    return `Listing discovery or dollar volume ≥ ${condition.min_volume}`;
+  }
+  const label = fieldMeta(condition.field, catalog)?.label ?? condition.field;
   if (condition.kind === 'range') {
     if (condition.min != null && condition.max != null) return `${label} ${condition.min}–${condition.max}`;
     if (condition.min != null) return `${label} ≥ ${condition.min}`;
@@ -374,19 +385,23 @@ export function expressionSummary(expression) {
   return `${requiredCount} required · match ${join} of ${enabledGroups.length} named ${enabledGroups.length === 1 ? 'setup' : 'setups'}`;
 }
 
-export function newCondition(field = 'composite_score') {
-  const meta = FIELD_META.get(field) ?? FIELD_META.get('composite_score');
+export function newCondition(field = 'composite_score', catalog = FILTER_FIELD_CATALOG) {
+  const meta = fieldMeta(field, catalog);
   if (meta.type === 'categorical') return { kind: 'categorical', field: meta.field, values: [], mode: 'include' };
   if (meta.type === 'boolean') return { kind: 'boolean', field: meta.field, value: true };
   if (meta.type === 'text') return { kind: 'text', field: meta.field, pattern: '' };
   return { kind: 'range', field: meta.field, min: null, max: null };
 }
 
-export function fieldMeta(field) {
-  return FIELD_META.get(field) ?? FILTER_FIELD_CATALOG[0];
+export function fieldMeta(field, catalog = FILTER_FIELD_CATALOG) {
+  const source = catalog.length ? catalog : FILTER_FIELD_CATALOG;
+  return source.find((item) => item.field === field)
+    ?? FIELD_META.get(field)
+    ?? source[0]
+    ?? FILTER_FIELD_CATALOG[0];
 }
 
-export function validateExpression(expression) {
+export function validateExpression(expression, catalog = FILTER_FIELD_CATALOG) {
   const errors = [];
   const groups = expression?.groups || [];
   if (groups.length > 8) errors.push('Use at most 8 setup groups.');
@@ -402,13 +417,13 @@ export function validateExpression(expression) {
     }
     (group.conditions || []).forEach((condition) => {
       if (condition.kind === 'range' && condition.min == null && condition.max == null) {
-        errors.push(`${fieldMeta(condition.field).label} needs a minimum or maximum.`);
+        errors.push(`${fieldMeta(condition.field, catalog).label} needs a minimum or maximum.`);
       }
       if (condition.kind === 'categorical' && !condition.values?.length) {
-        errors.push(`${fieldMeta(condition.field).label} needs at least one value.`);
+        errors.push(`${fieldMeta(condition.field, catalog).label} needs at least one value.`);
       }
       if (condition.kind === 'text' && !condition.pattern?.trim()) {
-        errors.push(`${fieldMeta(condition.field).label} needs search text.`);
+        errors.push(`${fieldMeta(condition.field, catalog).label} needs search text.`);
       }
     });
   });

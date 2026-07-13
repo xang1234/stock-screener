@@ -1,3 +1,6 @@
+from datetime import date
+
+from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
 from app.services.preset_screens import (
     PRESET_SCREENS,
     _matches_preset_filters,
@@ -55,8 +58,13 @@ def test_resolved_leaders_filters_materialize_market_defaults():
         "ibdGroupRank": {"min": None, "max": 40},
         "rsRating": {"min": 80, "max": None},
     }
-    assert "filter_schema_version" not in resolved_screen
-    assert "filter_expression" not in resolved_screen
+    assert resolved_screen["filter_schema_version"] == 2
+    assert resolved_screen["filter_expression"]["expression_version"] == 1
+    assert resolved_screen["filter_expression"]["required"]["conditions"] == [
+        {"kind": "range", "field": "rs_rating", "min": 80, "max": None},
+        {"kind": "range", "field": "ibd_group_rank", "min": None, "max": 40},
+        {"kind": "range", "field": "volume", "min": 1_300_000, "max": None},
+    ]
     assert "minVolume" not in screen["filters"]
 
 
@@ -98,3 +106,60 @@ def test_noop_scalar_and_range_filters_match_like_frontend():
         row,
         {"compositeScore": {"min": None, "max": None}},
     ) is True
+
+
+def test_chart_symbols_prefer_grouped_expression_over_legacy_filters():
+    preset = {
+        "filters": {"compositeScore": {"min": 101, "max": None}},
+        "filter_expression": {
+            "expression_version": 1,
+            "required": {
+                "id": "required",
+                "name": "Always require",
+                "match": "all",
+                "enabled": True,
+                "conditions": [],
+            },
+            "group_join": "any",
+            "groups": [
+                {
+                    "id": "growth",
+                    "name": "Growth",
+                    "match": "any",
+                    "enabled": True,
+                    "conditions": [
+                        {
+                            "kind": "range",
+                            "field": "eps_growth_qq",
+                            "min": 30,
+                            "max": None,
+                        },
+                        {
+                            "kind": "range",
+                            "field": "sales_growth_qq",
+                            "min": 30,
+                            "max": None,
+                        },
+                    ],
+                }
+            ],
+        },
+        "sort_by": "composite_score",
+        "sort_order": "desc",
+    }
+    rows = [
+        {"symbol": "EPS", "eps_growth_qq": 35, "composite_score": 80},
+        {"symbol": "SALES", "sales_growth_qq": 40, "composite_score": 70},
+        {"symbol": "SLOW", "eps_growth_qq": 10, "composite_score": 99},
+    ]
+
+    assert get_preset_chart_symbols(rows, presets=[preset]) == {"EPS", "SALES"}
+
+
+def test_legacy_ipo_preset_matches_browser_month_rollover():
+    expression = legacy_filters_to_expression(
+        {"ipoAfter": "6m"},
+        today=date(2026, 3, 31),
+    )
+
+    assert expression.required.conditions[0].min_value == "2025-10-01"

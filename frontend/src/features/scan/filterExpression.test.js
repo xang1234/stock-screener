@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { cwd } from 'node:process';
+
 import { describe, expect, it } from 'vitest';
 
 import { buildDefaultScanFilters } from './defaultFilters';
@@ -43,6 +47,11 @@ function groupedExpression(join = 'any') {
   };
 }
 
+const sharedTruthTable = JSON.parse(readFileSync(
+  resolve(cwd(), '../contracts/scan_filter_truth_table.json'),
+  'utf8',
+));
+
 describe('scan filter expressions', () => {
   it('requires the base group and matches any named setup', () => {
     const row = {
@@ -85,7 +94,9 @@ describe('scan filter expressions', () => {
       symbolSearch: 'nvidia',
     });
     const rows = [
-      { symbol: 'NVDA', company_name: 'Nvidia Corporation', pct_day: 7 },
+      {
+        symbol: 'NVDA', company_name: 'Nvidia Corporation', pct_day: 7, price_change_1d: 1,
+      },
       { symbol: 'LOW', company_name: 'Nvidia Supplier', pct_day: 1 },
       { symbol: 'AMD', company_name: 'Advanced Micro Devices', pct_day: 8 },
     ];
@@ -94,7 +105,7 @@ describe('scan filter expressions', () => {
       .toEqual(['NVDA']);
   });
 
-  it('ignores the default volume floor during listing discovery', () => {
+  it('bypasses the volume floor only for listing-only discovery rows', () => {
     const expression = legacyFiltersToExpression({
       symbolSearch: 'new',
       minVolume: 1_000_000,
@@ -106,9 +117,9 @@ describe('scan filter expressions', () => {
     ];
 
     expect(rows.filter((row) => evaluateExpression(row, expression)).map((row) => row.symbol))
-      .toEqual(['NEW', 'NEWLOW', 'NEWHIGH']);
-    expect(expression.required.conditions).not.toContainEqual(
-      expect.objectContaining({ field: 'volume' }),
+      .toEqual(['NEW', 'NEWHIGH']);
+    expect(expression.required.conditions).toContainEqual(
+      { kind: 'listing_discovery', min_volume: 1_000_000 },
     );
   });
 
@@ -135,5 +146,15 @@ describe('scan filter expressions', () => {
     expect(first.expression_version).toBe(1);
     expect(first.page).toEqual({ number: 1, size: 50 });
     expect(second.page.number).toBe(2);
+  });
+
+  it('matches the shared browser and backend truth table', () => {
+    sharedTruthTable.rows.forEach((item) => {
+      expect(evaluateExpression(item.row, sharedTruthTable.expression)).toBe(item.matches);
+      if (item.matches) {
+        expect(annotateExpressionMatches([item.row], sharedTruthTable.expression)[0]
+          .matched_groups.map((group) => group.id)).toEqual(item.matched_groups);
+      }
+    });
   });
 });

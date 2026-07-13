@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     feature_themes: bool = True
     feature_chatbot: bool = True
     feature_tasks: bool = True
-    feature_grouped_scan_filters: bool = True
+    feature_grouped_scan_filters: bool = False
 
     # Database
     database_url: str = ""

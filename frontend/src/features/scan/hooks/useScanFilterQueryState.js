@@ -80,13 +80,19 @@ export function scanFilterQueryReducer(state, action) {
   }
 
   if (action.type === 'request-succeeded') {
-    if (action.snapshot.requestKey !== state.requestedKey) return state;
+    if (action.requestKey !== state.requestedKey) return state;
+    const snapshot = {
+      request: state.requested,
+      requestKey: state.requestedKey,
+      scanId: action.scanId,
+      data: action.data,
+    };
     if (
-      action.snapshot.requestKey === state.appliedSnapshot?.requestKey
-      && action.snapshot.scanId === state.appliedSnapshot.scanId
-      && action.snapshot.data === state.appliedSnapshot.data
+      snapshot.requestKey === state.appliedSnapshot?.requestKey
+      && snapshot.scanId === state.appliedSnapshot.scanId
+      && snapshot.data === state.appliedSnapshot.data
     ) return state;
-    return { ...state, appliedSnapshot: action.snapshot };
+    return { ...state, appliedSnapshot: snapshot };
   }
 
   return state;
@@ -117,8 +123,8 @@ export function useScanFilterQueryState(initialExpression) {
   const requestQuery = useCallback((query) => {
     dispatch({ type: 'request-query', query });
   }, []);
-  const markRequestSucceeded = useCallback((snapshot) => {
-    dispatch({ type: 'request-succeeded', snapshot });
+  const markRequestSucceeded = useCallback((success) => {
+    dispatch({ type: 'request-succeeded', ...success });
   }, []);
   return {
     ...state,

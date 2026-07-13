@@ -14,6 +14,7 @@ from app.domain.common.query import (
     FilterExpression,
     FilterGroup,
     FilterMode,
+    ListingDiscoveryFilter,
     MatchOperator,
     RangeFilter,
     TextSearchFilter,
@@ -66,6 +67,17 @@ def _row_value(row: Mapping[str, Any], field: str) -> Any:
 
 def evaluate_condition(row: Mapping[str, Any], condition: FilterCondition) -> bool:
     """Evaluate one leaf using the documented missing-value policy."""
+
+    if isinstance(condition, ListingDiscoveryFilter):
+        if row.get("scan_mode") == "listing_only":
+            return True
+        volume = row.get("volume")
+        if volume is None:
+            return False
+        try:
+            return volume >= condition.min_volume
+        except TypeError:
+            return False
 
     value = _row_value(row, condition.field)
 
@@ -171,6 +183,11 @@ def _condition_payload(condition: FilterCondition) -> dict[str, Any]:
         return {"kind": "boolean", "field": condition.field, "value": condition.value}
     if isinstance(condition, TextSearchFilter):
         return {"kind": "text", "field": condition.field, "pattern": condition.pattern}
+    if isinstance(condition, ListingDiscoveryFilter):
+        return {
+            "kind": "listing_discovery",
+            "min_volume": condition.min_volume,
+        }
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
 
 
@@ -192,6 +209,60 @@ def canonical_expression_payload(expression: FilterExpression) -> dict[str, Any]
     }
 
 
+def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
+    """Hydrate a trusted canonical payload, including static-only fields."""
+
+    def condition_from_payload(item: Mapping[str, Any]) -> FilterCondition:
+        kind = item.get("kind")
+        if kind == "range":
+            return RangeFilter(
+                field=str(item["field"]),
+                min_value=item.get("min"),
+                max_value=item.get("max"),
+            )
+        if kind == "categorical":
+            return CategoricalFilter(
+                field=str(item["field"]),
+                values=tuple(str(value) for value in item.get("values", ())),
+                mode=FilterMode(str(item.get("mode", "include"))),
+            )
+        if kind == "boolean":
+            return BooleanFilter(field=str(item["field"]), value=bool(item["value"]))
+        if kind == "text":
+            return TextSearchFilter(
+                field=str(item["field"]),
+                pattern=str(item["pattern"]),
+            )
+        if kind == "listing_discovery":
+            return ListingDiscoveryFilter(min_volume=float(item["min_volume"]))
+        raise ValueError(f"Unsupported filter condition kind: {kind!r}")
+
+    def group_from_payload(item: Mapping[str, Any]) -> FilterGroup:
+        return FilterGroup(
+            id=str(item["id"]),
+            name=str(item["name"]),
+            match=MatchOperator(str(item.get("match", "all"))),
+            enabled=bool(item.get("enabled", True)),
+            conditions=tuple(
+                condition_from_payload(condition)
+                for condition in item.get("conditions", ())
+            ),
+        )
+
+    required_payload = payload.get("required") or {
+        "id": "required",
+        "name": "Always require",
+        "match": "all",
+        "conditions": [],
+    }
+    return FilterExpression(
+        required=group_from_payload(required_payload),
+        group_join=MatchOperator(str(payload.get("group_join", "any"))),
+        groups=tuple(group_from_payload(group) for group in payload.get("groups", ())),
+        version=int(payload.get("expression_version", 1)),
+    )
+
+
 def expression_fingerprint(expression: FilterExpression) -> str:
     payload = json.dumps(
         canonical_expression_payload(expression),
@@ -208,6 +279,7 @@ __all__ = [
     "evaluate_expression",
     "evaluate_group",
     "expression_fingerprint",
+    "expression_from_payload",
     "matched_setup_groups",
     "require_passing_ratings",
     "scan_result_values",

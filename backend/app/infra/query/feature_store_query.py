@@ -14,6 +14,7 @@ from app.domain.common.query import (
     FilterExpression,
     FilterMode,
     FilterSpec,
+    ListingDiscoveryFilter,
     PageSpec,
     RangeFilter,
     SortOrder,
@@ -224,8 +225,7 @@ def apply_sort_and_paginate(
         json_path = _JSON_FIELD_MAP[sort.field]
         query = query.order_by(_json_sort_expr(query, sort.field, StockFeatureDaily.details_json, json_path, sort.order))
     else:
-        # Unknown sort field — fall back to composite_score desc
-        query = query.order_by(desc(StockFeatureDaily.composite_score).nullslast())
+        raise ValueError(f"Unsupported feature-store sort field: {sort.field}")
 
     query = query.offset(page.offset).limit(page.limit)
     rows = query.all()
@@ -251,7 +251,7 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
         json_path = _JSON_FIELD_MAP[sort.field]
         query = query.order_by(_json_sort_expr(query, sort.field, StockFeatureDaily.details_json, json_path, sort.order))
     else:
-        query = query.order_by(desc(StockFeatureDaily.composite_score).nullslast())
+        raise ValueError(f"Unsupported feature-store sort field: {sort.field}")
     return query.all()
 
 
@@ -333,6 +333,23 @@ def _text_predicate(query: Query, ts: TextSearchFilter):
     raise ValueError(f"Unsupported feature-store text field: {ts.field}")
 
 
+def _listing_discovery_predicate(query: Query, condition: ListingDiscoveryFilter):
+    scan_mode = json_text(
+        StockFeatureDaily.details_json,
+        ("scan_mode",),
+        bind_or_session=query,
+    )
+    volume = json_number(
+        StockFeatureDaily.details_json,
+        ("avg_dollar_volume",),
+        bind_or_session=query,
+    )
+    return or_(
+        scan_mode == "listing_only",
+        and_(volume.isnot(None), volume >= condition.min_volume),
+    )
+
+
 def _condition_predicate(query: Query, condition: FilterCondition):
     if isinstance(condition, RangeFilter):
         return _range_predicate(query, condition)
@@ -342,4 +359,6 @@ def _condition_predicate(query: Query, condition: FilterCondition):
         return _boolean_predicate(query, condition)
     if isinstance(condition, TextSearchFilter):
         return _text_predicate(query, condition)
+    if isinstance(condition, ListingDiscoveryFilter):
+        return _listing_discovery_predicate(query, condition)
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
