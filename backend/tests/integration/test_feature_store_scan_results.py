@@ -219,6 +219,44 @@ class TestQueryRunAsScanResults:
         assert names["MSFT"] == "Microsoft Corp"
         assert names["GOOGL"] == "Alphabet Inc"
 
+    def test_listing_discovery_searches_company_and_preserves_listing_only_rows(
+        self, seeded_session
+    ):
+        seeded_session.add(
+            StockFeatureDaily(
+                run_id=1,
+                symbol="NEWCO",
+                as_of_date=AS_OF,
+                composite_score=60,
+                overall_rating=3,
+                passes_count=0,
+                details_json={
+                    "rating": "Watch",
+                    "current_price": 20,
+                    "scan_mode": "listing_only",
+                },
+            )
+        )
+        seeded_session.commit()
+        expression = FilterExpression(
+            required=FilterGroup(
+                id="required",
+                name="Always require",
+                conditions=(
+                    TextSearchFilter("listing_search", "newco"),
+                    RangeFilter("discovery_volume", min_value=1_000_000),
+                ),
+            )
+        )
+
+        page = SqlFeatureStoreRepository(seeded_session).query_run_as_scan_results(
+            1,
+            QuerySpec(expression=expression),
+        )
+
+        assert [str(item.symbol) for item in page.items] == ["NEWCO"]
+        assert page.items[0].extended_fields["passes_template"] is None
+
     def test_int_to_rating_mapping(self, seeded_session):
         repo = SqlFeatureStoreRepository(seeded_session)
 
@@ -258,8 +296,8 @@ class TestQueryRunAsScanResults:
         """Range filter on rs_rating (JSON field) works correctly."""
         repo = SqlFeatureStoreRepository(seeded_session)
 
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[RangeFilter(field="rs_rating", min_value=75.0)]
             )
         )
@@ -272,8 +310,8 @@ class TestQueryRunAsScanResults:
         """Categorical filter on gics_sector (JSON field) works correctly."""
         repo = SqlFeatureStoreRepository(seeded_session)
 
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(
                         field="gics_sector",
@@ -291,8 +329,8 @@ class TestQueryRunAsScanResults:
         """Text search on ibd_industry_group (JSON field) works correctly."""
         repo = SqlFeatureStoreRepository(seeded_session)
 
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 text_searches=[
                     TextSearchFilter(field="ibd_industry_group", pattern="Comp")
                 ]
@@ -383,8 +421,8 @@ class TestQueryRunAsScanResults:
         seeded_session.commit()
 
         repo = SqlFeatureStoreRepository(seeded_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 text_searches=[TextSearchFilter(field="symbol", pattern="NEWCO")]
             )
         )

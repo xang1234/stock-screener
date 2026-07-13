@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { buildDefaultScanFilters } from '../defaultFilters';
 import {
   expressionToLegacyFilters,
@@ -30,9 +30,12 @@ export function useScanFilterPresets({
   const [saveDialogInitialDescription, setSaveDialogInitialDescription] = useState('');
   const [saveDialogError, setSaveDialogError] = useState(null);
 
-  const currentPresetFilters = expression
-    ? { schema_version: 2, expression, legacy_filters: filters }
-    : filters;
+  const currentPresetFilters = useMemo(
+    () => (expression
+      ? { schema_version: 2, expression, legacy_filters: filters }
+      : filters),
+    [expression, filters],
+  );
 
   const clearActivePreset = useCallback(() => {
     setActivePresetId(null);

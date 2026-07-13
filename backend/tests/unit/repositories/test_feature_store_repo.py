@@ -464,7 +464,7 @@ class TestJoinedColumnFilters:
 
         filters = FilterSpec()
         filters.add_categorical("market", ("HK", "JP"))
-        spec = QuerySpec(filters=filters, sort=SortSpec(), page=PageSpec())
+        spec = QuerySpec.from_filter_spec(filters, sort=SortSpec(), page=PageSpec())
 
         result = repo.query_run_as_scan_results(run_id, spec)
 
@@ -479,7 +479,7 @@ class TestJoinedColumnFilters:
 
         filters = FilterSpec()
         filters.add_range("market_cap_usd", min_value=400_000_000_000)
-        spec = QuerySpec(filters=filters, sort=SortSpec(), page=PageSpec())
+        spec = QuerySpec.from_filter_spec(filters, sort=SortSpec(), page=PageSpec())
 
         result = repo.query_run_as_scan_results(run_id, spec)
 
@@ -490,7 +490,7 @@ class TestJoinedColumnFilters:
         self, repo: SqlFeatureStoreRepository, session: Session
     ):
         run_id, QuerySpec = self._seed(repo, session)
-        spec = QuerySpec(filters=FilterSpec(), sort=SortSpec(), page=PageSpec())
+        spec = QuerySpec.from_filter_spec(FilterSpec(), sort=SortSpec(), page=PageSpec())
 
         result = repo.query_run_as_scan_results(run_id, spec)
 

@@ -16,12 +16,16 @@ from sqlalchemy.orm import Session
 
 from app.domain.common.query import (
     CategoricalFilter,
+    FilterExpression,
+    FilterGroup,
     FilterSpec,
+    MatchOperator,
     PageSpec,
     QuerySpec,
     RangeFilter,
     SortOrder,
     SortSpec,
+    TextSearchFilter,
 )
 from app.domain.scanning.models import ResultPage, ScanResultItemDomain
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
@@ -173,8 +177,8 @@ class TestFieldByFieldParity:
 _FILTER_SORT_SPECS: list[tuple[str, QuerySpec]] = [
     (
         "range_rs_rating_min_80",
-        QuerySpec(
-            filters=FilterSpec(
+        QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[RangeFilter(field="rs_rating", min_value=80.0)]
             ),
             page=PageSpec(page=1, per_page=100),
@@ -182,8 +186,8 @@ _FILTER_SORT_SPECS: list[tuple[str, QuerySpec]] = [
     ),
     (
         "range_stage_2",
-        QuerySpec(
-            filters=FilterSpec(
+        QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[RangeFilter(field="stage", min_value=2, max_value=2)]
             ),
             page=PageSpec(page=1, per_page=100),
@@ -191,11 +195,45 @@ _FILTER_SORT_SPECS: list[tuple[str, QuerySpec]] = [
     ),
     (
         "categorical_gics_technology",
-        QuerySpec(
-            filters=FilterSpec(
+        QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(field="gics_sector", values=("Technology",))
                 ]
+            ),
+            page=PageSpec(page=1, per_page=100),
+        ),
+    ),
+    (
+        "listing_search_company_name",
+        QuerySpec(
+            expression=FilterExpression(
+                required=FilterGroup(
+                    id="required",
+                    name="Always require",
+                    conditions=(TextSearchFilter("listing_search", "Apple"),),
+                )
+            ),
+            page=PageSpec(page=1, per_page=100),
+        ),
+    ),
+    (
+        "grouped_any_expression",
+        QuerySpec(
+            expression=FilterExpression(
+                group_join=MatchOperator.ANY,
+                groups=(
+                    FilterGroup(
+                        id="leadership",
+                        name="Leadership",
+                        conditions=(RangeFilter("rs_rating", min_value=90),),
+                    ),
+                    FilterGroup(
+                        id="stage-two",
+                        name="Stage two",
+                        conditions=(RangeFilter("stage", min_value=2, max_value=2),),
+                    ),
+                ),
             ),
             page=PageSpec(page=1, per_page=100),
         ),

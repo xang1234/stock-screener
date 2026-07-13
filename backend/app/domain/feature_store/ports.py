@@ -215,7 +215,7 @@ class FeatureStoreRepository(abc.ABC):
     @abc.abstractmethod
     def query_latest(
         self,
-        filters: FilterSpec | FilterExpression | None = None,
+        filters: FilterSpec | None = None,
         sort: SortSpec | None = None,
         page: PageSpec | None = None,
     ) -> FeaturePage:
@@ -345,8 +345,8 @@ class FeatureStoreRepository(abc.ABC):
     def query_all_as_scan_results(
         self,
         run_id: int,
-        filters: FilterSpec | None = None,
-        sort: SortSpec | None = None,
+        expression: FilterExpression,
+        sort: SortSpec,
         include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
         """Return all rows from a feature run (no pagination; for export).
@@ -360,7 +360,7 @@ class FeatureStoreRepository(abc.ABC):
     def query_run_symbols(
         self,
         run_id: int,
-        filters: FilterSpec | FilterExpression,
+        expression: FilterExpression,
         sort: SortSpec,
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:

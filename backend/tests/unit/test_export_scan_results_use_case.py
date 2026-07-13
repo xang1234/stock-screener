@@ -41,15 +41,15 @@ class TrackingFeatureStoreRepo(FakeFeatureStoreRepository):
         super().__init__()
         self.last_query_all_args: dict | None = None
 
-    def query_all_as_scan_results(self, run_id, filters, sort, *, include_sparklines=False):
+    def query_all_as_scan_results(self, run_id, expression, sort, *, include_sparklines=False):
         self.last_query_all_args = {
             "run_id": run_id,
-            "filters": filters,
+            "expression": expression,
             "sort": sort,
             "include_sparklines": include_sparklines,
         }
         return super().query_all_as_scan_results(
-            run_id, filters, sort, include_sparklines=include_sparklines
+            run_id, expression, sort, include_sparklines=include_sparklines
         )
 
 
@@ -268,11 +268,11 @@ class TestFilterAndSortPassthrough:
 
         filters = FilterSpec()
         filters.add_range("rs_rating", 70, None)
-        uc.execute(uow, _make_query(filters=filters))
+        uc.execute(uow, _make_query(expression=filters.to_expression()))
 
         # Use equality check (not identity) because use case copies filters
-        passed_filters = feature_store.last_query_all_args["filters"]
-        assert passed_filters.range_filters == filters.range_filters
+        expression = feature_store.last_query_all_args["expression"]
+        assert expression.required.conditions == filters.to_expression().required.conditions
 
     def test_passes_sort_to_repository(self):
         feature_store = TrackingFeatureStoreRepo()
@@ -307,11 +307,11 @@ class TestPassesOnlyFilter:
 
         uc.execute(uow, _make_query(passes_only=True))
 
-        filters = feature_store.last_query_all_args["filters"]
-        cat_filters = filters.categorical_filters
-        assert len(cat_filters) == 1
-        assert cat_filters[0].field == "rating"
-        assert set(cat_filters[0].values) == {"Strong Buy", "Buy"}
+        expression = feature_store.last_query_all_args["expression"]
+        conditions = expression.required.conditions
+        assert len(conditions) == 1
+        assert conditions[0].field == "rating"
+        assert set(conditions[0].values) == {"Strong Buy", "Buy"}
 
 
 class TestUTF8BOM:

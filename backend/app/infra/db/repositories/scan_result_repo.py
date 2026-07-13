@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.domain.scanning.filter_spec import (
     FilterExpression,
-    FilterSpec,
     PageSpec,
     QuerySpec,
     SortSpec,
@@ -22,7 +21,6 @@ from app.analysis.patterns.report import validate_setup_engine_report_payload
 from app.infra.query import scan_result_query
 from app.infra.query.scan_result_query import (
     apply_filter_expression,
-    apply_filters,
     apply_sort_all,
     apply_sort_and_paginate,
 )
@@ -43,14 +41,6 @@ from app.services.market_taxonomy_service import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _apply_filter_input(query, filters: FilterSpec | FilterExpression):
-    """Route legacy flat filters and grouped expressions through one compiler."""
-
-    if isinstance(filters, FilterExpression):
-        return apply_filter_expression(query, filters)
-    return apply_filters(query, filters)
 
 
 def _scan_results_query(session: Session, scan_id: str):
@@ -633,7 +623,7 @@ class SqlScanResultRepository(ScanResultRepository):
         include_setup_payload: bool = True,
     ) -> ResultPage:
         q = _scan_results_query(self._session, scan_id)
-        q = apply_filter_expression(q, spec.effective_expression())
+        q = apply_filter_expression(q, spec.expression)
 
         rows, total, _python_sorted = apply_sort_and_paginate(
             q, spec.sort, spec.page,
@@ -658,7 +648,7 @@ class SqlScanResultRepository(ScanResultRepository):
     def query_symbols(
         self,
         scan_id: str,
-        filters: FilterSpec | FilterExpression,
+        expression: FilterExpression,
         sort: SortSpec,
         *,
         page: PageSpec | None = None,
@@ -667,7 +657,7 @@ class SqlScanResultRepository(ScanResultRepository):
         # Python-sort fields read ScanResult.details, so we need the full row.
         if scan_result_query.requires_python_sort(sort.field):
             q = _scan_results_query(self._session, scan_id)
-            q = _apply_filter_input(q, filters)
+            q = apply_filter_expression(q, expression)
             if page is None:
                 rows = apply_sort_all(q, sort)
                 symbols = tuple(row[0].symbol for row in rows)
@@ -677,7 +667,7 @@ class SqlScanResultRepository(ScanResultRepository):
             return symbols, total
 
         q = _scan_results_symbol_query(self._session, scan_id)
-        q = _apply_filter_input(q, filters)
+        q = apply_filter_expression(q, expression)
 
         if page is None:
             rows = apply_sort_all(q, sort)
@@ -691,13 +681,13 @@ class SqlScanResultRepository(ScanResultRepository):
     def query_all(
         self,
         scan_id: str,
-        filters: FilterSpec | FilterExpression,
+        expression: FilterExpression,
         sort: SortSpec,
         *,
         include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
         q = _scan_results_query(self._session, scan_id)
-        q = _apply_filter_input(q, filters)
+        q = apply_filter_expression(q, expression)
         rows = apply_sort_all(q, sort)
         return tuple(
             _map_row_to_domain(
@@ -854,7 +844,7 @@ def _map_row_to_domain(
         "vcp_ready_for_breakout": details.get("vcp_ready_for_breakout"),
         "vcp_contraction_ratio": details.get("vcp_contraction_ratio"),
         "vcp_atr_score": details.get("vcp_atr_score"),
-        "passes_template": details.get("passes_template", False),
+        "passes_template": details.get("passes_template"),
         "adr_percent": result.adr_percent,
         "eps_growth_qq": result.eps_growth_qq,
         "sales_growth_qq": result.sales_growth_qq,
@@ -870,11 +860,9 @@ def _map_row_to_domain(
         "gics_industry": result.gics_industry,
         "rs_sparkline_data": result.rs_sparkline_data if include_sparklines else None,
         "rs_trend": result.rs_trend,
-        "rs_line_new_high": coerce_bool_or_false(result.rs_line_new_high),
-        "rs_line_new_high_before_price": coerce_bool_or_false(
-            result.rs_line_new_high_before_price
-        ),
-        "rs_line_blue_dot_recent": coerce_bool_or_false(result.rs_line_blue_dot_recent),
+        "rs_line_new_high": result.rs_line_new_high,
+        "rs_line_new_high_before_price": result.rs_line_new_high_before_price,
+        "rs_line_blue_dot_recent": result.rs_line_blue_dot_recent,
         "rs_line_new_high_date": result.rs_line_new_high_date,
         "price_sparkline_data": result.price_sparkline_data if include_sparklines else None,
         "price_change_1d": result.price_change_1d,

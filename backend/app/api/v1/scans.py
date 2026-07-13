@@ -420,7 +420,7 @@ async def get_scan_results(
 
         query = GetScanResultsQuery(
             scan_id=scan_id,
-            query_spec=QuerySpec(filters=filters, sort=sort, page=page),
+            query_spec=QuerySpec.from_filter_spec(filters, sort=sort, page=page),
             include_sparklines=include_sparklines,
             include_setup_payload=(detail_level == "full"),
             passes_only=passes_only,
@@ -525,7 +525,7 @@ async def get_scan_symbols(
             uow,
             GetScanSymbolsQuery(
                 scan_id=scan_id,
-                filters=filters,
+                expression=filters.to_expression(),
                 sort=sort,
                 page=page_spec,
                 passes_only=passes_only,
@@ -639,7 +639,7 @@ async def export_scan_results(
 
         query = ExportScanResultsQuery(
             scan_id=scan_id,
-            filters=filters,
+            expression=filters.to_expression(),
             sort=sort,
             export_format=ExportFormat(format),
             passes_only=passes_only,

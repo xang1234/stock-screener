@@ -17,7 +17,6 @@ import {
   buildDefaultScanFilters,
 } from '../../features/scan/defaultFilters';
 import { normalizeScanFilterOptions } from '../../features/scan/filterOptions';
-import { getStableFilterKey } from '../../utils/filterUtils';
 import { paginateStaticScanRows, sortStaticScanRows } from '../scanClient';
 import StaticChartViewerModal from '../StaticChartViewerModal';
 import ScreenSelector from '../components/ScreenSelector';
@@ -219,17 +218,17 @@ function StaticScanPage() {
     setActiveScreenId,
   ]);
 
-  const filterKey = useMemo(() => getStableFilterKey(filters), [filters]);
   const expressionKey = useMemo(
     () => stableExpressionKey(appliedExpression),
     [appliedExpression],
   );
   useEffect(() => {
     setPage(1);
-  }, [expressionKey, filterKey]);
-  useEffect(() => {
-    setAppliedExpression((previous) => legacyFiltersToExpression(filters, previous));
-  }, [filters]);
+  }, [expressionKey]);
+  const handleQuickFiltersChange = useCallback((nextFilters) => {
+    setFilters(nextFilters);
+    setAppliedExpression((previous) => legacyFiltersToExpression(nextFilters, previous));
+  }, []);
   const chartEntries = useMemo(
     () => chartIndexQuery.data?.symbols || [],
     [chartIndexQuery.data]
@@ -342,8 +341,14 @@ function StaticScanPage() {
       {hydrationComplete && (
         <FilterPanel
           filters={filters}
-          onFilterChange={setFilters}
-          onReset={() => { setFilters(manifestDefaultFilters); setSortBy(manifestDefaultSortBy); setSortOrder(manifestDefaultSortOrder); setActiveScreenId(null); }}
+          onFilterChange={handleQuickFiltersChange}
+          onReset={() => {
+            setFilters(manifestDefaultFilters);
+            setAppliedExpression(legacyFiltersToExpression(manifestDefaultFilters));
+            setSortBy(manifestDefaultSortBy);
+            setSortOrder(manifestDefaultSortOrder);
+            setActiveScreenId(null);
+          }}
           filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}

@@ -13,10 +13,8 @@ from app.domain.scanning.filter_spec import (
     CategoricalFilter,
     FilterCondition,
     FilterExpression,
-    FilterGroup,
     FilterMode,
     FilterSpec,
-    MatchOperator,
     PageSpec,
     RangeFilter,
     SortOrder,
@@ -25,6 +23,7 @@ from app.domain.scanning.filter_spec import (
     filter_spec_to_expression,
 )
 from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
+from app.infra.query.expression_compiler import compile_expression
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
@@ -200,17 +199,10 @@ def apply_filter_expression(query: Query, expression: FilterExpression) -> Query
 
 
 def compile_filter_expression(query: Query, expression: FilterExpression):
-    required = _group_predicate(query, expression.required)
-    groups = expression.enabled_groups
-    if not groups:
-        return required
-    setup_predicates = [_group_predicate(query, group) for group in groups]
-    joined = (
-        and_(*setup_predicates)
-        if expression.group_join == MatchOperator.ALL
-        else or_(*setup_predicates)
+    return compile_expression(
+        expression,
+        lambda condition: _condition_predicate(query, condition),
     )
-    return and_(required, joined)
 
 
 def apply_sort_and_paginate(
@@ -278,12 +270,21 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
 # ── Private helpers ─────────────────────────────────────────────────────
 
 
-def _apply_range_filter(query: Query, rf: RangeFilter) -> Query:
-    return query.filter(_range_predicate(query, rf))
-
-
 def _range_predicate(query: Query, rf: RangeFilter):
     """Compile a numeric/date range — SQL column or dialect-aware JSON."""
+    if rf.field == "discovery_volume":
+        scan_mode = json_text(
+            ScanResult.details,
+            ("scan_mode",),
+            bind_or_session=query,
+        )
+        volume_predicates = [ScanResult.volume.isnot(None)]
+        if rf.min_value is not None:
+            volume_predicates.append(ScanResult.volume >= rf.min_value)
+        if rf.max_value is not None:
+            volume_predicates.append(ScanResult.volume <= rf.max_value)
+        return or_(scan_mode == "listing_only", and_(*volume_predicates))
+
     col = _COLUMN_MAP.get(rf.field)
     minimum = rf.min_value
     maximum = rf.max_value
@@ -308,10 +309,6 @@ def _range_predicate(query: Query, rf: RangeFilter):
     return and_(*predicates) if predicates else true()
 
 
-def _apply_categorical_filter(query: Query, cf: CategoricalFilter) -> Query:
-    return query.filter(_categorical_predicate(query, cf))
-
-
 def _categorical_predicate(query: Query, cf: CategoricalFilter):
     col = _COLUMN_MAP.get(cf.field)
     if col is not None:
@@ -325,10 +322,6 @@ def _categorical_predicate(query: Query, cf: CategoricalFilter):
             return or_(json_val.is_(None), ~json_val.in_(cf.values))
         return json_val.in_(cf.values)
     raise ValueError(f"Unsupported scan-result categorical field: {cf.field}")
-
-
-def _apply_boolean_filter(query: Query, bf: BooleanFilter) -> Query:
-    return query.filter(_boolean_predicate(query, bf))
 
 
 def _boolean_predicate(query: Query, bf: BooleanFilter):
@@ -350,11 +343,13 @@ def _boolean_predicate(query: Query, bf: BooleanFilter):
     raise ValueError(f"Unsupported scan-result boolean field: {bf.field}")
 
 
-def _apply_text_search(query: Query, ts: TextSearchFilter) -> Query:
-    return query.filter(_text_predicate(query, ts))
-
-
 def _text_predicate(query: Query, ts: TextSearchFilter):
+    if ts.field == "listing_search":
+        pattern = f"%{ts.pattern}%"
+        return or_(
+            ScanResult.symbol.ilike(pattern),
+            StockUniverse.name.ilike(pattern),
+        )
     col = _COLUMN_MAP.get(ts.field)
     if col is not None:
         return and_(col.isnot(None), col.ilike(f"%{ts.pattern}%"))
@@ -375,13 +370,6 @@ def _condition_predicate(query: Query, condition: FilterCondition):
     if isinstance(condition, TextSearchFilter):
         return _text_predicate(query, condition)
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
-
-
-def _group_predicate(query: Query, group: FilterGroup):
-    predicates = [_condition_predicate(query, item) for item in group.conditions]
-    if not predicates:
-        return true() if group.match == MatchOperator.ALL else ~true()
-    return and_(*predicates) if group.match == MatchOperator.ALL else or_(*predicates)
 
 
 def _sort_in_python(

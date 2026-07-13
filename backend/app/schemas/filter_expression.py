@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+import math
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -38,7 +40,7 @@ RANGE_FIELDS = frozenset(
         "perf_6m", "ema_10_distance", "ema_20_distance", "ema_50_distance",
         "week_52_high_distance", "week_52_low_distance", "ipo_date", "beta",
         "beta_adj_rs", "beta_adj_rs_1m", "beta_adj_rs_3m", "beta_adj_rs_12m",
-        "gap_percent", "volume_surge", "stage",
+        "gap_percent", "volume_surge", "stage", "discovery_volume",
     }
 )
 CATEGORICAL_FIELDS = frozenset(
@@ -53,7 +55,7 @@ BOOLEAN_FIELDS = frozenset(
         "se_bb_squeeze",
     }
 )
-TEXT_FIELDS = frozenset({"symbol"})
+TEXT_FIELDS = frozenset({"symbol", "listing_search"})
 
 
 class _ContractModel(BaseModel):
@@ -66,6 +68,15 @@ class RangeConditionRequest(_ContractModel):
     min: int | float | str | None = None
     max: int | float | str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_boolean_bounds(cls, value):
+        if isinstance(value, dict) and any(
+            isinstance(value.get(bound), bool) for bound in ("min", "max")
+        ):
+            raise ValueError("Numeric range bounds cannot be booleans")
+        return value
+
     @field_validator("field")
     @classmethod
     def validate_field(cls, value: str) -> str:
@@ -77,17 +88,45 @@ class RangeConditionRequest(_ContractModel):
     def validate_bounds(self):
         if self.min is None and self.max is None:
             raise ValueError("Range conditions require a minimum or maximum")
-        if (
-            self.min is not None
-            and self.max is not None
-            and type(self.min) is type(self.max)
-            and self.min > self.max
-        ):
+
+        if self.field == "ipo_date":
+            self.min = _normalize_iso_date(self.min)
+            self.max = _normalize_iso_date(self.max)
+        else:
+            self.min = _normalize_finite_number(self.min)
+            self.max = _normalize_finite_number(self.max)
+
+        if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError("Range minimum cannot exceed maximum")
         return self
 
     def to_domain(self) -> RangeFilter:
         return RangeFilter(field=self.field, min_value=self.min, max_value=self.max)
+
+
+def _normalize_iso_date(value: int | float | str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings")
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings") from exc
+
+
+def _normalize_finite_number(value: int | float | str | None) -> int | float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("Numeric range bounds cannot be booleans")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Numeric range bounds must be finite numbers") from exc
+    if not math.isfinite(normalized):
+        raise ValueError("Numeric range bounds must be finite numbers")
+    return int(normalized) if normalized.is_integer() else normalized
 
 
 class CategoricalConditionRequest(_ContractModel):

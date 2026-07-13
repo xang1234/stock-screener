@@ -1,4 +1,4 @@
-import { Box, Button, Chip, CircularProgress, LinearProgress, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, LinearProgress, Paper, Typography } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import ResultsTable from '../../../components/Scan/ResultsTable';
 import { expressionSummary } from '../filterExpression';
@@ -8,6 +8,7 @@ export default function ScanResultsSection({
   resultsData,
   expression,
   resultsFetching = false,
+  resultsError = null,
   onExport,
   page,
   perPage,
@@ -20,6 +21,10 @@ export default function ScanResultsSection({
   onRowHover,
   onRetry,
 }) {
+  const errorMessage = resultsError?.response?.data?.detail
+    || resultsError?.message
+    || 'The results request failed. Your previous results are still shown.';
+
   if (resultsLoading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 5 }}>
@@ -36,7 +41,17 @@ export default function ScanResultsSection({
       : false;
     return (
       <>
-        {resultsFetching && <LinearProgress sx={{ mb: 1 }} />}
+        {resultsFetching && (
+          <Box sx={{ mb: 1 }} role="status" aria-live="polite">
+            <LinearProgress />
+            <Typography variant="caption" color="text.secondary">Updating results…</Typography>
+          </Box>
+        )}
+        {resultsError && (
+          <Alert severity="error" action={<Button color="inherit" size="small" onClick={onRetry}>Retry</Button>} sx={{ mb: 1 }}>
+            {typeof errorMessage === 'string' ? errorMessage : 'The results request failed. Your previous results are still shown.'}
+          </Alert>
+        )}
         <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
           <Box>
             <Typography variant="h6">
@@ -79,10 +94,24 @@ export default function ScanResultsSection({
 
   return (
     <Paper sx={{ p: 5, textAlign: 'center' }}>
-      <Typography variant="h6">No stocks match the applied logic</Typography>
+      {resultsFetching && (
+        <Box sx={{ mb: 2 }} role="status" aria-live="polite">
+          <LinearProgress />
+          <Typography variant="caption" color="text.secondary">Updating results…</Typography>
+        </Box>
+      )}
+      <Typography variant="h6">
+        {resultsError ? 'Could not update scan results' : 'No stocks match the applied logic'}
+      </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-        {expression ? expressionSummary(expression) : 'The current filters returned no rows.'}
-        {' '}Try disabling one setup, switching “match all” to “match any,” or widening a range.
+        {resultsError
+          ? (typeof errorMessage === 'string' ? errorMessage : 'The results request failed.')
+          : (
+              <>
+                {expression ? expressionSummary(expression) : 'The current filters returned no rows.'}
+                {' '}Try disabling one setup, switching “match all” to “match any,” or widening a range.
+              </>
+            )}
       </Typography>
       <Button variant="outlined" onClick={onRetry} sx={{ mt: 2 }}>
         Retry Loading Results

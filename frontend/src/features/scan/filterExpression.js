@@ -1,63 +1,75 @@
-const RANGE_FILTER_TO_FIELD = Object.freeze({
-  compositeScore: 'composite_score',
-  minerviniScore: 'minervini_score',
-  canslimScore: 'canslim_score',
-  ipoScore: 'ipo_score',
-  customScore: 'custom_score',
-  volBreakthroughScore: 'volume_breakthrough_score',
-  seSetupScore: 'se_setup_score',
-  seDistanceToPivot: 'se_distance_to_pivot_pct',
-  seBbSqueeze: 'se_bb_width_pctile_252',
-  seVolumeVs50d: 'se_volume_vs_50d',
-  seUpDownVolume: 'se_up_down_volume_ratio_10d',
-  rsRating: 'rs_rating',
-  rs1m: 'rs_rating_1m',
-  rs3m: 'rs_rating_3m',
-  rs12m: 'rs_rating_12m',
-  epsRating: 'eps_rating',
-  ibdGroupRank: 'ibd_group_rank',
-  price: 'price',
-  adrPercent: 'adr_percent',
-  epsGrowth: 'eps_growth_qq',
-  salesGrowth: 'sales_growth_qq',
-  vcpScore: 'vcp_score',
-  vcpPivot: 'vcp_pivot',
-  perfDay: 'price_change_1d',
-  perfWeek: 'perf_week',
-  perfMonth: 'perf_month',
-  perf3m: 'perf_3m',
-  perf6m: 'perf_6m',
-  gapPercent: 'gap_percent',
-  volumeSurge: 'volume_surge',
-  ema10Distance: 'ema_10_distance',
-  ema20Distance: 'ema_20_distance',
-  ema50Distance: 'ema_50_distance',
-  week52HighDistance: 'week_52_high_distance',
-  week52LowDistance: 'week_52_low_distance',
-  beta: 'beta',
-  betaAdjRs: 'beta_adj_rs',
-  marketCapUsd: 'market_cap_usd',
-  advUsd: 'adv_usd',
-});
+const LEGACY_FILTER_FIELDS = Object.freeze([
+  ['compositeScore', 'composite_score', 'range'],
+  ['minerviniScore', 'minervini_score', 'range'],
+  ['canslimScore', 'canslim_score', 'range'],
+  ['ipoScore', 'ipo_score', 'range'],
+  ['customScore', 'custom_score', 'range'],
+  ['volBreakthroughScore', 'volume_breakthrough_score', 'range'],
+  ['seSetupScore', 'se_setup_score', 'range'],
+  ['seDistanceToPivot', 'se_distance_to_pivot_pct', 'range'],
+  ['seBbSqueeze', 'se_bb_width_pctile_252', 'range'],
+  ['seVolumeVs50d', 'se_volume_vs_50d', 'range'],
+  ['seUpDownVolume', 'se_up_down_volume_ratio_10d', 'range'],
+  ['rsRating', 'rs_rating', 'range'],
+  ['rs1m', 'rs_rating_1m', 'range'],
+  ['rs3m', 'rs_rating_3m', 'range'],
+  ['rs12m', 'rs_rating_12m', 'range'],
+  ['epsRating', 'eps_rating', 'range'],
+  ['ibdGroupRank', 'ibd_group_rank', 'range'],
+  ['price', 'price', 'range'],
+  ['adrPercent', 'adr_percent', 'range'],
+  ['epsGrowth', 'eps_growth_qq', 'range'],
+  ['salesGrowth', 'sales_growth_qq', 'range'],
+  ['vcpScore', 'vcp_score', 'range'],
+  ['vcpPivot', 'vcp_pivot', 'range'],
+  ['perfDay', 'price_change_1d', 'range'],
+  ['perfWeek', 'perf_week', 'range'],
+  ['perfMonth', 'perf_month', 'range'],
+  ['perf3m', 'perf_3m', 'range'],
+  ['perf6m', 'perf_6m', 'range'],
+  ['gapPercent', 'gap_percent', 'range'],
+  ['volumeSurge', 'volume_surge', 'range'],
+  ['ema10Distance', 'ema_10_distance', 'range'],
+  ['ema20Distance', 'ema_20_distance', 'range'],
+  ['ema50Distance', 'ema_50_distance', 'range'],
+  ['week52HighDistance', 'week_52_high_distance', 'range'],
+  ['week52LowDistance', 'week_52_low_distance', 'range'],
+  ['beta', 'beta', 'range'],
+  ['betaAdjRs', 'beta_adj_rs', 'range'],
+  ['marketCapUsd', 'market_cap_usd', 'range'],
+  ['advUsd', 'adv_usd', 'range'],
+  ['pctDay', 'price_change_1d', 'range', false],
+  ['pctWeek', 'perf_week', 'range', false],
+  ['pctMonth', 'perf_month', 'range', false],
+  ['seSetupReady', 'se_setup_ready', 'boolean'],
+  ['seRsLineNewHigh', 'se_rs_line_new_high', 'boolean'],
+  ['seRsLineBlueDot', 'se_rs_line_blue_dot', 'boolean'],
+  ['rsLineBlueDotRecent', 'rs_line_blue_dot_recent', 'boolean'],
+  ['vcpDetected', 'vcp_detected', 'boolean'],
+  ['vcpReady', 'vcp_ready_for_breakout', 'boolean'],
+  ['maAlignment', 'ma_alignment', 'boolean'],
+  ['pocketPivot', 'pocket_pivot', 'boolean'],
+  ['powerTrend', 'power_trend', 'boolean'],
+]);
 
-const BOOLEAN_FILTER_TO_FIELD = Object.freeze({
-  seSetupReady: 'se_setup_ready',
-  seRsLineNewHigh: 'se_rs_line_new_high',
-  seRsLineBlueDot: 'se_rs_line_blue_dot',
-  rsLineBlueDotRecent: 'rs_line_blue_dot_recent',
-  vcpDetected: 'vcp_detected',
-  vcpReady: 'vcp_ready_for_breakout',
-  maAlignment: 'ma_alignment',
-  passesTemplate: 'passes_template',
-  pocketPivot: 'pocket_pivot',
-  powerTrend: 'power_trend',
-});
+const mapLegacyFields = (kind) => Object.fromEntries(
+  LEGACY_FILTER_FIELDS
+    .filter(([, , fieldKind]) => fieldKind === kind)
+    .map(([key, field]) => [key, field]),
+);
+
+const RANGE_FILTER_TO_FIELD = Object.freeze(mapLegacyFields('range'));
+const BOOLEAN_FILTER_TO_FIELD = Object.freeze(mapLegacyFields('boolean'));
 
 const FIELD_TO_RANGE_FILTER = Object.fromEntries(
-  Object.entries(RANGE_FILTER_TO_FIELD).map(([key, field]) => [field, key]),
+  LEGACY_FILTER_FIELDS
+    .filter(([, , kind, restore = true]) => kind === 'range' && restore)
+    .map(([key, field]) => [field, key]),
 );
 const FIELD_TO_BOOLEAN_FILTER = Object.fromEntries(
-  Object.entries(BOOLEAN_FILTER_TO_FIELD).map(([key, field]) => [field, key]),
+  LEGACY_FILTER_FIELDS
+    .filter(([, , kind, restore = true]) => kind === 'boolean' && restore)
+    .map(([key, field]) => [field, key]),
 );
 
 const IPO_PRESET_MONTHS = { '6m': 6, '1y': 12, '2y': 24, '3y': 36, '5y': 60 };
@@ -93,7 +105,7 @@ export const FILTER_FIELD_CATALOG = Object.freeze([
   { field: 'perf_3m', label: '3-month performance %', type: 'range', category: 'Technicals' },
   { field: 'ma_alignment', label: 'MA alignment', type: 'boolean', category: 'Technicals' },
   { field: 'stage', label: 'Stage', type: 'range', category: 'Technicals' },
-  { field: 'symbol', label: 'Symbol contains', type: 'text', category: 'Identity' },
+  { field: 'listing_search', label: 'Symbol or company contains', type: 'text', category: 'Identity' },
 ]);
 
 const FIELD_META = new Map(FILTER_FIELD_CATALOG.map((item) => [item.field, item]));
@@ -145,7 +157,7 @@ export function legacyFiltersToConditions(filters = {}, now = new Date()) {
     }
   });
   if (filters.symbolSearch?.trim()) {
-    conditions.push({ kind: 'text', field: 'symbol', pattern: filters.symbolSearch.trim() });
+    conditions.push({ kind: 'text', field: 'listing_search', pattern: filters.symbolSearch.trim() });
   }
   if (filters.stage != null) {
     conditions.push({ kind: 'range', field: 'stage', min: filters.stage, max: filters.stage });
@@ -160,10 +172,23 @@ export function legacyFiltersToConditions(filters = {}, now = new Date()) {
     const condition = categoricalCondition(field, values, mode);
     if (condition) conditions.push(condition);
   });
-  // An explicit symbol lookup is a discovery action. Do not hide listing-only
-  // rows just because they lack the daily liquidity metric used by defaults.
-  if (filters.minVolume != null && !filters.symbolSearch?.trim()) {
-    conditions.push({ kind: 'range', field: 'volume', min: filters.minVolume, max: null });
+  if (filters.passesTemplate === true) {
+    // Legacy passes_only means passing rating categories, not the persisted
+    // passes_template boolean that happens to have a similar name.
+    conditions.push({
+      kind: 'categorical',
+      field: 'rating',
+      values: ['Strong Buy', 'Buy'],
+      mode: 'include',
+    });
+  }
+  if (filters.minVolume != null) {
+    conditions.push({
+      kind: 'range',
+      field: filters.symbolSearch?.trim() ? 'discovery_volume' : 'volume',
+      min: filters.minVolume,
+      max: null,
+    });
   }
   if (filters.minMarketCap != null) {
     conditions.push({ kind: 'range', field: 'market_cap', min: filters.minMarketCap, max: null });
@@ -199,12 +224,13 @@ export function expressionToLegacyFilters(expression, defaults) {
       if (key) result[key] = { min: condition.min ?? null, max: condition.max ?? null };
       if (condition.field === 'stage' && condition.min === condition.max) result.stage = condition.min;
       if (condition.field === 'volume' && condition.max == null) result.minVolume = condition.min;
+      if (condition.field === 'discovery_volume' && condition.max == null) result.minVolume = condition.min;
       if (condition.field === 'market_cap' && condition.max == null) result.minMarketCap = condition.min;
       if (condition.field === 'ipo_date' && condition.max == null) result.ipoAfter = condition.min;
     } else if (condition.kind === 'boolean') {
       const key = FIELD_TO_BOOLEAN_FILTER[condition.field];
       if (key) result[key] = condition.value;
-    } else if (condition.kind === 'text' && condition.field === 'symbol') {
+    } else if (condition.kind === 'text' && ['symbol', 'listing_search'].includes(condition.field)) {
       result.symbolSearch = condition.pattern;
     } else if (condition.kind === 'categorical') {
       if (condition.field === 'rating') result.ratings = [...condition.values];
@@ -265,6 +291,13 @@ export function buildScanQueryRequest(expression, {
 
 function rowValue(row, field) {
   if (field === 'price') return row.price ?? row.current_price;
+  if (field === 'listing_search') return `${row.symbol || ''} ${row.company_name || ''}`.trim();
+  if (field === 'discovery_volume') {
+    return row.scan_mode === 'listing_only' ? Number.POSITIVE_INFINITY : row.volume;
+  }
+  if (field === 'price_change_1d') return row.price_change_1d ?? row.pct_day;
+  if (field === 'perf_week') return row.perf_week ?? row.pct_week;
+  if (field === 'perf_month') return row.perf_month ?? row.pct_month;
   if (field === 'market_cap_usd') {
     const currency = String(row.currency || '').toUpperCase();
     return row.market_cap_usd

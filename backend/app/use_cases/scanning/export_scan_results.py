@@ -15,11 +15,12 @@ from datetime import datetime
 from typing import Any
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_expression import annotate_matched_groups
+from app.domain.scanning.filter_expression import (
+    annotate_matched_groups,
+    require_passing_ratings,
+)
 from app.domain.scanning.filter_spec import (
-    CategoricalFilter,
     FilterExpression,
-    FilterSpec,
     SortSpec,
 )
 from app.domain.scanning.models import ExportFormat, ScanResultItemDomain
@@ -38,8 +39,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ExportScanResultsQuery:
     scan_id: str
-    filters: FilterSpec = field(default_factory=FilterSpec)
-    expression: FilterExpression | None = None
+    expression: FilterExpression = field(default_factory=FilterExpression)
     sort: SortSpec = field(default_factory=SortSpec)
     export_format: ExportFormat = ExportFormat.CSV
     passes_only: bool = False
@@ -238,26 +238,9 @@ class ExportScanResultsUseCase:
         with uow:
             scan, run_id = resolve_scan(uow, query.scan_id)
 
-            filters: FilterSpec | FilterExpression = query.expression or query.filters
-            if query.passes_only:
-                rating_filter = CategoricalFilter(
-                    field="rating", values=("Strong Buy", "Buy")
-                )
-                if isinstance(filters, FilterExpression):
-                    filters = filters.with_required_condition(rating_filter)
-                else:
-                    filters = FilterSpec(
-                        range_filters=list(filters.range_filters),
-                        categorical_filters=[
-                            *filters.categorical_filters,
-                            rating_filter,
-                        ],
-                        boolean_filters=list(filters.boolean_filters),
-                        text_searches=list(filters.text_searches),
-                    )
-
-            expression = (
-                filters if isinstance(filters, FilterExpression) else filters.to_expression()
+            expression = require_passing_ratings(
+                query.expression,
+                enabled=query.passes_only,
             )
 
             if run_id:
@@ -268,7 +251,7 @@ class ExportScanResultsUseCase:
                 )
                 items = uow.feature_store.query_all_as_scan_results(
                     run_id,
-                    filters,
+                    expression,
                     query.sort,
                 )
             else:
@@ -278,7 +261,7 @@ class ExportScanResultsUseCase:
                 )
                 items = uow.scan_results.query_all(
                     query.scan_id,
-                    filters,
+                    expression,
                     query.sort,
                 )
 

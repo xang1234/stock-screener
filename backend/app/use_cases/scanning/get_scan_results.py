@@ -19,8 +19,9 @@ from app.domain.common.uow import UnitOfWork
 from app.domain.scanning.filter_expression import (
     annotate_matched_groups,
     expression_fingerprint,
+    require_passing_ratings,
 )
-from app.domain.scanning.filter_spec import CategoricalFilter, FilterSpec, QuerySpec
+from app.domain.scanning.filter_spec import QuerySpec
 from app.domain.scanning.models import ResultPage
 
 from ._resolve import resolve_scan
@@ -66,38 +67,11 @@ class GetScanResultsUseCase:
         with uow:
             scan, run_id = resolve_scan(uow, query.scan_id)
 
-            # Apply passes_only as an always-required condition. Legacy GET
-            # requests keep their FilterSpec shape for compatibility; grouped
-            # POST requests retain their complete expression.
-            query_spec = query.query_spec
-            if query.passes_only:
-                rating_filter = CategoricalFilter(
-                    field="rating", values=("Strong Buy", "Buy")
-                )
-                if query_spec.expression is not None:
-                    query_spec = QuerySpec(
-                        filters=query_spec.filters,
-                        sort=query_spec.sort,
-                        page=query_spec.page,
-                        expression=query_spec.expression.with_required_condition(
-                            rating_filter
-                        ),
-                    )
-                else:
-                    augmented = FilterSpec(
-                        range_filters=list(query_spec.filters.range_filters),
-                        categorical_filters=list(query_spec.filters.categorical_filters),
-                        boolean_filters=list(query_spec.filters.boolean_filters),
-                        text_searches=list(query_spec.filters.text_searches),
-                    )
-                    augmented.add_categorical("rating", ("Strong Buy", "Buy"))
-                    query_spec = QuerySpec(
-                        filters=augmented,
-                        sort=query_spec.sort,
-                        page=query_spec.page,
-                    )
-
-            expression = query_spec.effective_expression()
+            expression = require_passing_ratings(
+                query.query_spec.expression,
+                enabled=query.passes_only,
+            )
+            query_spec = replace(query.query_spec, expression=expression)
 
             if run_id:
                 logger.info(

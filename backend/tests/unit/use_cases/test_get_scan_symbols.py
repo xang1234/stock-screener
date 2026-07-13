@@ -72,15 +72,16 @@ class TestUnboundScanRouting:
             uow,
             GetScanSymbolsQuery(
                 scan_id="scan-legacy",
-                filters=original_filters,
+                expression=original_filters.to_expression(),
                 passes_only=True,
             ),
         )
 
-        forwarded = scan_results.last_query_symbols_args["filters"]
+        forwarded = scan_results.last_query_symbols_args["expression"]
         assert any(
-            cf.field == "rating" and tuple(cf.values) == ("Strong Buy", "Buy")
-            for cf in forwarded.categorical_filters
+            condition.field == "rating"
+            and tuple(condition.values) == ("Strong Buy", "Buy")
+            for condition in forwarded.required.conditions
         )
         assert not any(
             cf.field == "rating" for cf in original_filters.categorical_filters

@@ -251,8 +251,8 @@ def _query_scan_rows(
 ) -> list[dict[str, Any]]:
     query = GetScanResultsQuery(
         scan_id=scan_id,
-        query_spec=QuerySpec(
-            filters=filters,
+        query_spec=QuerySpec.from_filter_spec(
+            filters,
             sort=SortSpec(field="composite_score", order=SortOrder.DESC),
             page=PageSpec(page=1, per_page=DAILY_SNAPSHOT_TOP_RESULTS),
         ),

@@ -51,14 +51,6 @@ from app.services.growth_cadence_service import build_row_field_availability
 _BATCH_SIZE = 500
 
 
-def _apply_filter_input(query, filters: FilterSpec | FilterExpression):
-    """Route legacy flat filters and grouped expressions through one compiler."""
-
-    if isinstance(filters, FilterExpression):
-        return apply_filter_expression(query, filters)
-    return apply_filters(query, filters)
-
-
 def _feature_results_query(session: Session, run_id: int):
     """Base feature-store query joining market-identity + USD-normalised fields.
 
@@ -360,7 +352,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_query(self._session, run_id)
-        q = apply_filter_expression(q, spec.effective_expression())
+        q = apply_filter_expression(q, spec.expression)
         rows, total = apply_sort_and_paginate(q, spec.sort, spec.page)
 
         items = tuple(
@@ -579,7 +571,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
     def query_all_as_scan_results(
         self,
         run_id: int,
-        filters: FilterSpec | FilterExpression,
+        expression: FilterExpression,
         sort: SortSpec,
         *,
         include_sparklines: bool = False,
@@ -594,7 +586,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_query(self._session, run_id)
-        q = _apply_filter_input(q, filters)
+        q = apply_filter_expression(q, expression)
         rows = apply_sort_all(q, sort)
 
         return tuple(
@@ -608,7 +600,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
     def query_run_symbols(
         self,
         run_id: int,
-        filters: FilterSpec | FilterExpression,
+        expression: FilterExpression,
         sort: SortSpec,
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:
@@ -617,7 +609,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_symbol_query(self._session, run_id)
-        q = _apply_filter_input(q, filters)
+        q = apply_filter_expression(q, expression)
 
         if page is None:
             rows = apply_sort_all(q, sort)
@@ -765,7 +757,9 @@ def _map_feature_to_scan_result(
         None if raw_score is None else max(0.0, min(100.0, float(raw_score)))
     )
 
-    rating = INT_TO_RATING.get(row.overall_rating, d.get("rating", "Pass"))
+    # Filtering uses the persisted details rating, so result explainability
+    # must use that same value before falling back to the compact integer.
+    rating = d.get("rating") or INT_TO_RATING.get(row.overall_rating, "Pass")
 
     extended: dict[str, Any] = {
         "company_name": joined.get("company_name"),
@@ -805,7 +799,7 @@ def _map_feature_to_scan_result(
         "vcp_ready_for_breakout": d.get("vcp_ready_for_breakout"),
         "vcp_contraction_ratio": d.get("vcp_contraction_ratio"),
         "vcp_atr_score": d.get("vcp_atr_score"),
-        "passes_template": d.get("passes_template", False),
+        "passes_template": d.get("passes_template"),
         "adr_percent": d.get("adr_percent"),
         "eps_growth_qq": d.get("eps_growth_qq"),
         "sales_growth_qq": d.get("sales_growth_qq"),
@@ -821,17 +815,17 @@ def _map_feature_to_scan_result(
         "gics_industry": d.get("gics_industry"),
         "rs_sparkline_data": d.get("rs_sparkline_data") if include_sparklines else None,
         "rs_trend": d.get("rs_trend"),
-        "rs_line_new_high": coerce_bool_or_false(
+        "rs_line_new_high": (
             row.rs_line_new_high
             if row.rs_line_new_high is not None
             else d.get("rs_line_new_high")
         ),
-        "rs_line_new_high_before_price": coerce_bool_or_false(
+        "rs_line_new_high_before_price": (
             row.rs_line_new_high_before_price
             if row.rs_line_new_high_before_price is not None
             else d.get("rs_line_new_high_before_price")
         ),
-        "rs_line_blue_dot_recent": coerce_bool_or_false(
+        "rs_line_blue_dot_recent": (
             row.rs_line_blue_dot_recent
             if row.rs_line_blue_dot_recent is not None
             else d.get("rs_line_blue_dot_recent")

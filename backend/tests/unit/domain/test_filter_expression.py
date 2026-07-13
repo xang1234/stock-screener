@@ -11,12 +11,14 @@ from app.domain.common.query import (
     RangeFilter,
 )
 from app.domain.scanning.filter_expression import (
+    annotate_matched_groups,
     evaluate_condition,
     evaluate_expression,
     expression_fingerprint,
     matched_setup_groups,
 )
-from app.schemas.filter_expression import ScanQueryRequest
+from app.domain.scanning.models import ScanResultItemDomain
+from app.schemas.filter_expression import RangeConditionRequest, ScanQueryRequest
 
 
 def _expression(group_join: MatchOperator = MatchOperator.ANY) -> FilterExpression:
@@ -97,6 +99,71 @@ def test_missing_values_follow_explicit_policy():
         ),
     ) is True
     assert evaluate_condition({}, RangeFilter("rs_rating", min_value=80)) is False
+
+
+@pytest.mark.parametrize(
+    ("field", "minimum", "maximum"),
+    [
+        ("price", "not-a-number", None),
+        ("price", float("inf"), None),
+        ("price", True, None),
+        ("ipo_date", 20260713, None),
+        ("ipo_date", "2026-99-99", None),
+    ],
+)
+def test_range_request_rejects_values_outside_the_field_type(field, minimum, maximum):
+    with pytest.raises(ValidationError):
+        RangeConditionRequest(kind="range", field=field, min=minimum, max=maximum)
+
+
+def test_range_request_normalizes_numeric_strings_and_iso_dates():
+    numeric = RangeConditionRequest(kind="range", field="price", min="10.5", max=20)
+    ipo_date = RangeConditionRequest(
+        kind="range",
+        field="ipo_date",
+        min="2026-01-01",
+        max="2026-07-13",
+    )
+
+    assert numeric.min == 10.5
+    assert numeric.max == 20
+    assert ipo_date.min == "2026-01-01"
+
+
+def test_match_annotations_keep_missing_boolean_distinct_from_false():
+    item = ScanResultItemDomain(
+        symbol="MISS",
+        composite_score=80,
+        rating="Buy",
+        current_price=25,
+        screener_outputs={},
+        screeners_run=[],
+        composite_method="weighted_average",
+        screeners_passed=0,
+        screeners_total=0,
+        extended_fields={"passes_template": None},
+    )
+    expression = FilterExpression(
+        group_join=MatchOperator.ANY,
+        groups=(
+            FilterGroup(
+                id="not-passing",
+                name="Not passing",
+                conditions=(BooleanFilter("passes_template", False),),
+            ),
+            FilterGroup(
+                id="score",
+                name="Score",
+                conditions=(RangeFilter("composite_score", min_value=70),),
+            ),
+        ),
+    )
+
+    annotated = annotate_matched_groups((item,), expression)[0]
+
+    assert annotated.extended_fields["matched_groups"] == [
+        {"id": "score", "name": "Score"}
+    ]
 
 
 def test_request_contract_builds_domain_and_rejects_empty_enabled_group():

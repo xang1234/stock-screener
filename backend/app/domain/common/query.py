@@ -258,17 +258,29 @@ class PageSpec:
         return self.per_page
 
 
-@dataclass
+@dataclass(frozen=True)
 class QuerySpec:
-    """Complete query = filters + sort + pagination."""
+    """Complete result query using the canonical filter expression."""
 
-    filters: FilterSpec = field(default_factory=FilterSpec)
+    expression: FilterExpression = field(default_factory=FilterExpression)
     sort: SortSpec = field(default_factory=SortSpec)
     page: PageSpec = field(default_factory=PageSpec)
-    expression: FilterExpression | None = None
 
-    def effective_expression(self) -> FilterExpression:
-        return self.expression or filter_spec_to_expression(self.filters)
+    @classmethod
+    def from_filter_spec(
+        cls,
+        filters: FilterSpec,
+        *,
+        sort: SortSpec | None = None,
+        page: PageSpec | None = None,
+    ) -> QuerySpec:
+        """Convert a legacy flat filter at the transport boundary."""
+
+        return cls(
+            expression=filter_spec_to_expression(filters),
+            sort=sort or SortSpec(),
+            page=page or PageSpec(),
+        )
 
 
 # ---------------------------------------------------------------------------

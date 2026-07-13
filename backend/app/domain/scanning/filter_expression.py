@@ -22,6 +22,24 @@ from app.domain.common.query import (
 from .models import ScanResultItemDomain
 
 
+PASSES_ONLY_CONDITION = CategoricalFilter(
+    field="rating",
+    values=("Strong Buy", "Buy"),
+)
+
+
+def require_passing_ratings(
+    expression: FilterExpression,
+    *,
+    enabled: bool,
+) -> FilterExpression:
+    """Apply the legacy passes-only policy to one canonical expression."""
+
+    if not enabled or PASSES_ONLY_CONDITION in expression.required.conditions:
+        return expression
+    return expression.with_required_condition(PASSES_ONLY_CONDITION)
+
+
 def scan_result_values(item: ScanResultItemDomain) -> dict[str, Any]:
     """Flatten a scan-result domain item into canonical filter field names."""
 
@@ -41,6 +59,12 @@ def scan_result_values(item: ScanResultItemDomain) -> dict[str, Any]:
 def _row_value(row: Mapping[str, Any], field: str) -> Any:
     if field == "price":
         return row.get("price", row.get("current_price"))
+    if field == "listing_search":
+        return f"{row.get('symbol', '')} {row.get('company_name', '')}".strip()
+    if field == "discovery_volume":
+        if row.get("scan_mode") == "listing_only":
+            return float("inf")
+        return row.get("volume")
     return row.get(field)
 
 
@@ -186,5 +210,6 @@ __all__ = [
     "evaluate_group",
     "expression_fingerprint",
     "matched_setup_groups",
+    "require_passing_ratings",
     "scan_result_values",
 ]

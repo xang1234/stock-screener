@@ -40,9 +40,9 @@ import {
   buildScanQueryRequest,
   expressionToLegacyFilters,
   legacyFiltersToExpression,
-  stableExpressionKey,
 } from '../filterExpression';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
+import { useScanFilterQueryState } from '../hooks/useScanFilterQueryState';
 import {
   buildUniverseDef,
   parseLegacyUniverseDefault,
@@ -107,9 +107,16 @@ function ScanPage() {
   const [sortOrder, setSortOrder] = useState('desc');
   const [filters, setFilters] = useState(buildDefaultScanFilters);
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
-  const [appliedExpression, setAppliedExpression] = useState(
-    () => legacyFiltersToExpression(buildDefaultScanFilters()),
-  );
+  const {
+    requestedExpression,
+    requestedKey: expressionKey,
+    appliedExpression,
+    appliedResultsData,
+    appliedScanId,
+    requestExpression,
+    requestQuickFilters,
+    markRequestSucceeded,
+  } = useScanFilterQueryState(legacyFiltersToExpression(buildDefaultScanFilters()));
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
@@ -209,8 +216,8 @@ function ScanPage() {
     setSortBy,
     setSortOrder,
     setPage,
-    expression: groupedFilteringEnabled ? appliedExpression : null,
-    setExpression: groupedFilteringEnabled ? setAppliedExpression : null,
+    expression: groupedFilteringEnabled ? requestedExpression : null,
+    setExpression: groupedFilteringEnabled ? requestExpression : null,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -254,8 +261,8 @@ function ScanPage() {
   }, [filters]);
 
   useEffect(() => {
-    setAppliedExpression((previous) => legacyFiltersToExpression(debouncedFilters, previous));
-  }, [debouncedFilters]);
+    requestQuickFilters(debouncedFilters);
+  }, [debouncedFilters, requestQuickFilters]);
 
   const handleLoadScan = useCallback(
     async (scanId) => {
@@ -397,12 +404,8 @@ function ScanPage() {
   );
 
   const stableFilterKey = useMemo(() => getStableFilterKey(debouncedFilters), [debouncedFilters]);
-  const expressionKey = useMemo(
-    () => stableExpressionKey(appliedExpression),
-    [appliedExpression],
-  );
   const groupedQueryRequest = useMemo(
-    () => buildScanQueryRequest(appliedExpression, {
+    () => buildScanQueryRequest(requestedExpression, {
       page,
       perPage,
       sortBy,
@@ -410,13 +413,17 @@ function ScanPage() {
       includeSparklines: true,
       detailLevel: 'table',
     }),
-    [appliedExpression, page, perPage, sortBy, sortOrder],
+    [requestedExpression, page, perPage, sortBy, sortOrder],
   );
 
   const {
     data: resultsData,
     isLoading: resultsLoading,
     isFetching: resultsFetching,
+    isError: resultsIsError,
+    error: resultsError,
+    isSuccess: resultsIsSuccess,
+    isPlaceholderData: resultsIsPlaceholderData,
     refetch: refetchResults,
   } = useQuery({
     queryKey: [
@@ -436,15 +443,30 @@ function ScanPage() {
     enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
-    // Grouped requests intentionally clear prior rows while loading so draft
-    // labels can never be attached to stale results. Legacy GETs retain their
-    // previous within-scan placeholder behavior.
-    placeholderData: groupedFilteringEnabled
-      ? undefined
-      : (previousData, previousQuery) => (
-          previousQuery?.queryKey?.[1] === currentScanId ? previousData : undefined
-        ),
+    placeholderData: (previousData, previousQuery) => (
+      previousQuery?.queryKey?.[1] === currentScanId ? previousData : undefined
+    ),
   });
+
+  useEffect(() => {
+    if (groupedFilteringEnabled && resultsIsSuccess && !resultsIsPlaceholderData) {
+      markRequestSucceeded(expressionKey, resultsData, currentScanId);
+    }
+  }, [
+    currentScanId,
+    expressionKey,
+    groupedFilteringEnabled,
+    markRequestSucceeded,
+    resultsData,
+    resultsIsPlaceholderData,
+    resultsIsSuccess,
+  ]);
+
+  const displayedResultsData = groupedFilteringEnabled
+    && appliedScanId === currentScanId
+    && (resultsFetching || resultsIsError || !resultsData)
+    ? appliedResultsData
+    : resultsData;
 
   useEffect(() => {
     if (!statusData) {
@@ -567,7 +589,7 @@ function ScanPage() {
     const defaults = buildDefaultScanFilters();
     setFilters(defaults);
     setDebouncedFilters(defaults);
-    setAppliedExpression(legacyFiltersToExpression(defaults));
+    requestExpression(legacyFiltersToExpression(defaults));
     setPage(1);
     presetState.clearActivePreset();
   };
@@ -620,7 +642,7 @@ function ScanPage() {
   );
 
   useEffect(() => {
-    if (!resultsData?.results || resultsData.results.length === 0) {
+    if (!displayedResultsData?.results || displayedResultsData.results.length === 0) {
       return;
     }
     if (
@@ -634,7 +656,7 @@ function ScanPage() {
       return;
     }
 
-    const visibleSymbols = resultsData.results
+    const visibleSymbols = displayedResultsData.results
       .slice(0, 20)
       .map((result) => result.symbol)
       .filter(Boolean);
@@ -666,7 +688,7 @@ function ScanPage() {
     page,
     perPage,
     queryClient,
-    resultsData?.results,
+    displayedResultsData?.results,
     sortBy,
     sortOrder,
     stableFilterKey,
@@ -744,7 +766,7 @@ function ScanPage() {
           onSaveDialogClose={presetState.handleSaveDialogClose}
           onSaveDialogSave={presetState.handleSaveDialogSave}
           groupedFilteringEnabled={groupedFilteringEnabled}
-          expression={appliedExpression}
+          expression={requestedExpression}
           onOpenLogicBuilder={() => setLogicBuilderOpen(true)}
         />
       )}
@@ -752,9 +774,10 @@ function ScanPage() {
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (
         <ScanResultsSection
           resultsLoading={resultsLoading}
-          resultsData={resultsData}
+          resultsData={displayedResultsData}
           expression={groupedFilteringEnabled ? appliedExpression : null}
           resultsFetching={resultsFetching}
+          resultsError={resultsIsError ? resultsError : null}
           onExport={handleExport}
           page={page}
           perPage={perPage}
@@ -786,16 +809,16 @@ function ScanPage() {
         expression={groupedFilteringEnabled ? appliedExpression : null}
         sortBy={sortBy}
         sortOrder={sortOrder}
-        currentPageResults={resultsData?.results || []}
+        currentPageResults={displayedResultsData?.results || []}
       />
 
       {groupedFilteringEnabled && (
         <GuidedFilterBuilderDialog
           open={logicBuilderOpen}
-          expression={appliedExpression}
+          expression={requestedExpression}
           onClose={() => setLogicBuilderOpen(false)}
           onApply={(nextExpression) => {
-            setAppliedExpression(nextExpression);
+            requestExpression(nextExpression);
             setFilters(expressionToLegacyFilters(nextExpression, buildDefaultScanFilters()));
             setPage(1);
             setLogicBuilderOpen(false);

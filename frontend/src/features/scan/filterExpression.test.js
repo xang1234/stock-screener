@@ -79,6 +79,50 @@ describe('scan filter expressions', () => {
     expect(restored.maAlignment).toBe(false);
   });
 
+  it('preserves legacy static performance aliases and company discovery search', () => {
+    const expression = legacyFiltersToExpression({
+      pctDay: { min: 5 },
+      symbolSearch: 'nvidia',
+    });
+    const rows = [
+      { symbol: 'NVDA', company_name: 'Nvidia Corporation', pct_day: 7 },
+      { symbol: 'LOW', company_name: 'Nvidia Supplier', pct_day: 1 },
+      { symbol: 'AMD', company_name: 'Advanced Micro Devices', pct_day: 8 },
+    ];
+
+    expect(rows.filter((row) => evaluateExpression(row, expression)).map((row) => row.symbol))
+      .toEqual(['NVDA']);
+  });
+
+  it('keeps listing-only discovery rows while enforcing volume elsewhere', () => {
+    const expression = legacyFiltersToExpression({
+      symbolSearch: 'new',
+      minVolume: 1_000_000,
+    });
+    const rows = [
+      { symbol: 'NEW', scan_mode: 'listing_only', volume: null },
+      { symbol: 'NEWLOW', scan_mode: 'full', volume: 100 },
+      { symbol: 'NEWHIGH', scan_mode: 'full', volume: 2_000_000 },
+    ];
+
+    expect(rows.filter((row) => evaluateExpression(row, expression)).map((row) => row.symbol))
+      .toEqual(['NEW', 'NEWHIGH']);
+  });
+
+  it('maps the legacy passes toggle to passing ratings', () => {
+    const enabled = legacyFiltersToExpression({ passesTemplate: true });
+    const disabled = legacyFiltersToExpression({ passesTemplate: false });
+    const rows = [
+      { symbol: 'BUY', rating: 'Buy', passes_template: false },
+      { symbol: 'WATCH', rating: 'Watch', passes_template: true },
+    ];
+
+    expect(rows.filter((row) => evaluateExpression(row, enabled)).map((row) => row.symbol))
+      .toEqual(['BUY']);
+    expect(rows.filter((row) => evaluateExpression(row, disabled)).map((row) => row.symbol))
+      .toEqual(['BUY', 'WATCH']);
+  });
+
   it('builds a page-independent stable expression key and versioned request', () => {
     const expression = groupedExpression();
     const first = buildScanQueryRequest(expression, { page: 1, perPage: 50 });
