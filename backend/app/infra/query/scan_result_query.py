@@ -24,6 +24,7 @@ from app.domain.scanning.filter_spec import (
 )
 from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
 from app.infra.query.expression_compiler import compile_expression
+from app.infra.query.like_pattern import literal_contains_pattern
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
@@ -272,19 +273,6 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
 
 def _range_predicate(query: Query, rf: RangeFilter):
     """Compile a numeric/date range — SQL column or dialect-aware JSON."""
-    if rf.field == "discovery_volume":
-        scan_mode = json_text(
-            ScanResult.details,
-            ("scan_mode",),
-            bind_or_session=query,
-        )
-        volume_predicates = [ScanResult.volume.isnot(None)]
-        if rf.min_value is not None:
-            volume_predicates.append(ScanResult.volume >= rf.min_value)
-        if rf.max_value is not None:
-            volume_predicates.append(ScanResult.volume <= rf.max_value)
-        return or_(scan_mode == "listing_only", and_(*volume_predicates))
-
     col = _COLUMN_MAP.get(rf.field)
     minimum = rf.min_value
     maximum = rf.max_value
@@ -344,19 +332,19 @@ def _boolean_predicate(query: Query, bf: BooleanFilter):
 
 
 def _text_predicate(query: Query, ts: TextSearchFilter):
+    pattern = literal_contains_pattern(ts.pattern)
     if ts.field == "listing_search":
-        pattern = f"%{ts.pattern}%"
         return or_(
-            ScanResult.symbol.ilike(pattern),
-            StockUniverse.name.ilike(pattern),
+            ScanResult.symbol.ilike(pattern, escape="\\"),
+            StockUniverse.name.ilike(pattern, escape="\\"),
         )
     col = _COLUMN_MAP.get(ts.field)
     if col is not None:
-        return and_(col.isnot(None), col.ilike(f"%{ts.pattern}%"))
+        return and_(col.isnot(None), col.ilike(pattern, escape="\\"))
     elif ts.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[ts.field]
         json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
-        return and_(json_val.isnot(None), json_val.ilike(f"%{ts.pattern}%"))
+        return and_(json_val.isnot(None), json_val.ilike(pattern, escape="\\"))
     raise ValueError(f"Unsupported scan-result text field: {ts.field}")
 
 

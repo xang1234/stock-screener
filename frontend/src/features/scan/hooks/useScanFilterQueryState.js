@@ -1,47 +1,92 @@
 import { useCallback, useReducer } from 'react';
 
-import { legacyFiltersToExpression, stableExpressionKey } from '../filterExpression';
+import {
+  canonicalizeExpression,
+  legacyFiltersToExpression,
+} from '../filterExpression';
+
+const DEFAULT_QUERY = Object.freeze({
+  page: 1,
+  perPage: 50,
+  sortBy: 'composite_score',
+  sortOrder: 'desc',
+});
+
+export function createScanFilterQuery(expression, overrides = {}) {
+  return {
+    expression,
+    ...DEFAULT_QUERY,
+    ...overrides,
+  };
+}
+
+export function stableScanFilterQueryKey(query) {
+  return JSON.stringify({
+    expression: canonicalizeExpression(query.expression),
+    page: query.page,
+    perPage: query.perPage,
+    sortBy: query.sortBy,
+    sortOrder: query.sortOrder,
+  });
+}
 
 export function createScanFilterQueryState(expression) {
-  const key = stableExpressionKey(expression);
+  const requested = createScanFilterQuery(expression);
   return {
-    requestedExpression: expression,
-    requestedKey: key,
-    appliedExpression: expression,
-    appliedKey: key,
-    appliedResultsData: null,
-    appliedScanId: null,
+    requested,
+    requestedKey: stableScanFilterQueryKey(requested),
+    appliedSnapshot: null,
   };
+}
+
+function updateRequestedQuery(state, updates) {
+  const requested = { ...state.requested, ...updates };
+  const requestedKey = stableScanFilterQueryKey(requested);
+  return requestedKey === state.requestedKey
+    ? state
+    : { ...state, requested, requestedKey };
 }
 
 export function scanFilterQueryReducer(state, action) {
   if (action.type === 'request-expression') {
-    const requestedKey = stableExpressionKey(action.expression);
-    if (requestedKey === state.requestedKey) return state;
-    return { ...state, requestedExpression: action.expression, requestedKey };
+    return updateRequestedQuery(state, { expression: action.expression, page: 1 });
   }
 
   if (action.type === 'request-quick-filters') {
-    const expression = legacyFiltersToExpression(action.filters, state.requestedExpression);
-    const requestedKey = stableExpressionKey(expression);
-    if (requestedKey === state.requestedKey) return state;
-    return { ...state, requestedExpression: expression, requestedKey };
+    return updateRequestedQuery(state, {
+      expression: legacyFiltersToExpression(action.filters, state.requested.expression),
+      page: 1,
+    });
+  }
+
+  if (action.type === 'request-page') {
+    return updateRequestedQuery(state, { page: action.page });
+  }
+
+  if (action.type === 'request-per-page') {
+    return updateRequestedQuery(state, { page: 1, perPage: action.perPage });
+  }
+
+  if (action.type === 'request-sort') {
+    return updateRequestedQuery(state, {
+      page: 1,
+      sortBy: action.sortBy,
+      sortOrder: action.sortOrder,
+    });
+  }
+
+  if (action.type === 'request-query') {
+    return updateRequestedQuery(state, { ...action.query, page: action.query.page ?? 1 });
   }
 
   if (action.type === 'request-succeeded') {
-    if (action.key !== state.requestedKey) return state;
+    if (action.snapshot.requestKey !== state.requestedKey) return state;
     if (
-      action.key === state.appliedKey
-      && action.scanId === state.appliedScanId
-      && action.data === state.appliedResultsData
+      action.snapshot.requestKey === state.appliedSnapshot?.requestKey
+      && action.snapshot.scanId === state.appliedSnapshot.scanId
+      && action.snapshot.data === state.appliedSnapshot.data
     ) return state;
-    return {
-      ...state,
-      appliedExpression: state.requestedExpression,
-      appliedKey: state.requestedKey,
-      appliedResultsData: action.data,
-      appliedScanId: action.scanId,
-    };
+    return { ...state, appliedSnapshot: action.snapshot };
   }
 
   return state;
@@ -60,13 +105,29 @@ export function useScanFilterQueryState(initialExpression) {
   const requestQuickFilters = useCallback((filters) => {
     dispatch({ type: 'request-quick-filters', filters });
   }, []);
-  const markRequestSucceeded = useCallback((key, data, scanId) => {
-    dispatch({ type: 'request-succeeded', key, data, scanId });
+  const requestPage = useCallback((page) => {
+    dispatch({ type: 'request-page', page });
+  }, []);
+  const requestPerPage = useCallback((perPage) => {
+    dispatch({ type: 'request-per-page', perPage });
+  }, []);
+  const requestSort = useCallback((sortBy, sortOrder) => {
+    dispatch({ type: 'request-sort', sortBy, sortOrder });
+  }, []);
+  const requestQuery = useCallback((query) => {
+    dispatch({ type: 'request-query', query });
+  }, []);
+  const markRequestSucceeded = useCallback((snapshot) => {
+    dispatch({ type: 'request-succeeded', snapshot });
   }, []);
   return {
     ...state,
     requestExpression,
     requestQuickFilters,
+    requestPage,
+    requestPerPage,
+    requestSort,
+    requestQuery,
     markRequestSucceeded,
   };
 }

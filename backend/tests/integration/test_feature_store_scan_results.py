@@ -219,7 +219,7 @@ class TestQueryRunAsScanResults:
         assert names["MSFT"] == "Microsoft Corp"
         assert names["GOOGL"] == "Alphabet Inc"
 
-    def test_listing_discovery_searches_company_and_preserves_listing_only_rows(
+    def test_listing_discovery_searches_company_without_a_volume_condition(
         self, seeded_session
     ):
         seeded_session.add(
@@ -244,7 +244,6 @@ class TestQueryRunAsScanResults:
                 name="Always require",
                 conditions=(
                     TextSearchFilter("listing_search", "newco"),
-                    RangeFilter("discovery_volume", min_value=1_000_000),
                 ),
             )
         )

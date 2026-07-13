@@ -101,22 +101,27 @@ function ScanPage() {
   const [selectedScreeners, setSelectedScreeners] = useState(DEFAULT_SCAN_DEFAULTS.screeners);
   const [compositeMethod, setCompositeMethod] = useState(DEFAULT_SCAN_DEFAULTS.composite_method);
   const [customFilters, setCustomFilters] = useState(DEFAULT_SCAN_DEFAULTS.criteria.custom_filters);
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(50);
-  const [sortBy, setSortBy] = useState('composite_score');
-  const [sortOrder, setSortOrder] = useState('desc');
   const [filters, setFilters] = useState(buildDefaultScanFilters);
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
   const {
-    requestedExpression,
-    requestedKey: expressionKey,
-    appliedExpression,
-    appliedResultsData,
-    appliedScanId,
+    requested: requestedQuery,
+    requestedKey,
+    appliedSnapshot,
     requestExpression,
     requestQuickFilters,
+    requestPage,
+    requestPerPage,
+    requestSort,
+    requestQuery,
     markRequestSucceeded,
   } = useScanFilterQueryState(legacyFiltersToExpression(buildDefaultScanFilters()));
+  const {
+    expression: requestedExpression,
+    page,
+    perPage,
+    sortBy,
+    sortOrder,
+  } = requestedQuery;
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
@@ -213,11 +218,8 @@ function ScanPage() {
     sortBy,
     sortOrder,
     setFilters,
-    setSortBy,
-    setSortOrder,
-    setPage,
+    applyQuery: requestQuery,
     expression: groupedFilteringEnabled ? requestedExpression : null,
-    setExpression: groupedFilteringEnabled ? requestExpression : null,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -270,7 +272,7 @@ function ScanPage() {
         setCurrentScanId(null);
         setBootstrappedScanId(null);
         setScanStatus(null);
-        setPage(1);
+        requestPage(1);
         autoLoadedMarketRef.current = globalMarketRef.current;
         return;
       }
@@ -280,7 +282,7 @@ function ScanPage() {
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
       setScanStatus(knownStatus);
-      setPage(1);
+      requestPage(1);
 
       if (snapshotEnabled) {
         try {
@@ -303,7 +305,7 @@ function ScanPage() {
         setScanStatus(knownStatus);
       }
     },
-    [applyScanBootstrapSnapshot, queryClient, snapshotEnabled]
+    [applyScanBootstrapSnapshot, queryClient, requestPage, snapshotEnabled]
   );
 
   const { data: universeStats, isLoading: statsLoading } = useQuery({
@@ -362,7 +364,7 @@ function ScanPage() {
       setCurrentScanId(data.scan_id);
       setBootstrappedScanId(null);
       setScanStatus(data.status);
-      setPage(1);
+      requestPage(1);
       refetchScans();
     },
   });
@@ -426,15 +428,9 @@ function ScanPage() {
     isPlaceholderData: resultsIsPlaceholderData,
     refetch: refetchResults,
   } = useQuery({
-    queryKey: [
-      'scanResults',
-      currentScanId,
-      page,
-      perPage,
-      sortBy,
-      sortOrder,
-      groupedFilteringEnabled ? expressionKey : stableFilterKey,
-    ],
+    queryKey: groupedFilteringEnabled
+      ? ['scanResultsQuery', currentScanId, requestedKey]
+      : ['scanResults', currentScanId, page, perPage, sortBy, sortOrder, stableFilterKey],
     queryFn: ({ signal }) => (
       groupedFilteringEnabled
         ? queryScanResults(currentScanId, groupedQueryRequest, { signal })
@@ -450,23 +446,42 @@ function ScanPage() {
 
   useEffect(() => {
     if (groupedFilteringEnabled && resultsIsSuccess && !resultsIsPlaceholderData) {
-      markRequestSucceeded(expressionKey, resultsData, currentScanId);
+      markRequestSucceeded({
+        request: requestedQuery,
+        requestKey: requestedKey,
+        scanId: currentScanId,
+        data: resultsData,
+      });
     }
   }, [
     currentScanId,
-    expressionKey,
     groupedFilteringEnabled,
     markRequestSucceeded,
+    requestedKey,
+    requestedQuery,
     resultsData,
     resultsIsPlaceholderData,
     resultsIsSuccess,
   ]);
 
+  const currentSuccessSnapshot = groupedFilteringEnabled
+    && resultsIsSuccess
+    && !resultsIsPlaceholderData
+    ? {
+        request: requestedQuery,
+        requestKey: requestedKey,
+        scanId: currentScanId,
+        data: resultsData,
+      }
+    : null;
+  const displayedSnapshot = currentSuccessSnapshot
+    ?? (appliedSnapshot?.scanId === currentScanId ? appliedSnapshot : null);
   const displayedResultsData = groupedFilteringEnabled
-    && appliedScanId === currentScanId
-    && (resultsFetching || resultsIsError || !resultsData)
-    ? appliedResultsData
+    ? displayedSnapshot?.data
     : resultsData;
+  const displayedQuery = groupedFilteringEnabled
+    ? (displayedSnapshot?.request ?? requestedQuery)
+    : requestedQuery;
 
   useEffect(() => {
     if (!statusData) {
@@ -570,19 +585,16 @@ function ScanPage() {
   };
 
   const handleSortChange = (field, nextOrder) => {
-    setSortBy(field);
-    setSortOrder(nextOrder);
-    setPage(1);
+    requestSort(field, nextOrder);
   };
 
   const handlePerPageChange = (nextPerPage) => {
-    setPerPage(nextPerPage);
-    setPage(1);
+    requestPerPage(nextPerPage);
   };
 
   const handleFilterChange = (newFilters) => {
     setFilters(newFilters);
-    setPage(1);
+    requestPage(1);
   };
 
   const handleResetFilters = () => {
@@ -590,7 +602,6 @@ function ScanPage() {
     setFilters(defaults);
     setDebouncedFilters(defaults);
     requestExpression(legacyFiltersToExpression(defaults));
-    setPage(1);
     presetState.clearActivePreset();
   };
 
@@ -605,7 +616,10 @@ function ScanPage() {
       const blob = groupedFilteringEnabled
         ? await exportScanResultsQuery(
             currentScanId,
-            buildScanQueryRequest(appliedExpression, { sortBy, sortOrder }),
+            buildScanQueryRequest(displayedQuery.expression, {
+              sortBy: displayedQuery.sortBy,
+              sortOrder: displayedQuery.sortOrder,
+            }),
           )
         : await exportScanResults(
             currentScanId,
@@ -647,10 +661,10 @@ function ScanPage() {
     }
     if (
       bootstrappedScanId === currentScanId &&
-      page === 1 &&
-      perPage === 50 &&
-      sortBy === 'composite_score' &&
-      sortOrder === 'desc' &&
+      displayedQuery.page === 1 &&
+      displayedQuery.perPage === 50 &&
+      displayedQuery.sortBy === 'composite_score' &&
+      displayedQuery.sortOrder === 'desc' &&
       stableFilterKey === DEFAULT_FILTER_KEY
     ) {
       return;
@@ -685,12 +699,12 @@ function ScanPage() {
   }, [
     bootstrappedScanId,
     currentScanId,
-    page,
-    perPage,
     queryClient,
     displayedResultsData?.results,
-    sortBy,
-    sortOrder,
+    displayedQuery.page,
+    displayedQuery.perPage,
+    displayedQuery.sortBy,
+    displayedQuery.sortOrder,
     stableFilterKey,
   ]);
 
@@ -775,15 +789,15 @@ function ScanPage() {
         <ScanResultsSection
           resultsLoading={resultsLoading}
           resultsData={displayedResultsData}
-          expression={groupedFilteringEnabled ? appliedExpression : null}
+          expression={groupedFilteringEnabled ? displayedQuery.expression : null}
           resultsFetching={resultsFetching}
           resultsError={resultsIsError ? resultsError : null}
           onExport={handleExport}
-          page={page}
-          perPage={perPage}
-          sortBy={sortBy}
-          sortOrder={sortOrder}
-          onPageChange={setPage}
+          page={displayedQuery.page}
+          perPage={displayedQuery.perPage}
+          sortBy={displayedQuery.sortBy}
+          sortOrder={displayedQuery.sortOrder}
+          onPageChange={requestPage}
           onPerPageChange={handlePerPageChange}
           onSortChange={handleSortChange}
           onOpenChart={handleOpenChart}
@@ -806,9 +820,9 @@ function ScanPage() {
         initialSymbol={selectedSymbol}
         scanId={currentScanId}
         filters={debouncedFilters}
-        expression={groupedFilteringEnabled ? appliedExpression : null}
-        sortBy={sortBy}
-        sortOrder={sortOrder}
+        expression={groupedFilteringEnabled ? displayedQuery.expression : null}
+        sortBy={displayedQuery.sortBy}
+        sortOrder={displayedQuery.sortOrder}
         currentPageResults={displayedResultsData?.results || []}
       />
 
@@ -820,7 +834,6 @@ function ScanPage() {
           onApply={(nextExpression) => {
             requestExpression(nextExpression);
             setFilters(expressionToLegacyFilters(nextExpression, buildDefaultScanFilters()));
-            setPage(1);
             setLogicBuilderOpen(false);
             presetState.clearActivePreset();
           }}

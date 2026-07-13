@@ -5,9 +5,7 @@ import { useScanFilterPresets } from './useScanFilterPresets';
 
 function setup(overrides = {}) {
   const setFilters = vi.fn();
-  const setSortBy = vi.fn();
-  const setSortOrder = vi.fn();
-  const setPage = vi.fn();
+  const applyQuery = vi.fn();
   const createPresetAsync = vi.fn().mockResolvedValue({ id: 'preset-2' });
   const updatePresetAsync = vi.fn().mockResolvedValue({});
   const deletePreset = vi.fn();
@@ -37,9 +35,7 @@ function setup(overrides = {}) {
     sortBy: 'composite_score',
     sortOrder: 'desc',
     setFilters,
-    setSortBy,
-    setSortOrder,
-    setPage,
+    applyQuery,
     ...overrides,
   };
 
@@ -51,9 +47,7 @@ function setup(overrides = {}) {
     hook,
     props,
     setFilters,
-    setSortBy,
-    setSortOrder,
-    setPage,
+    applyQuery,
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
@@ -62,16 +56,18 @@ function setup(overrides = {}) {
 
 describe('useScanFilterPresets', () => {
   it('loads a preset and updates filter + sort state', () => {
-    const { hook, setFilters, setSortBy, setSortOrder, setPage } = setup();
+    const { hook, setFilters, applyQuery } = setup();
 
     act(() => {
       hook.result.current.handleLoadPreset('preset-1');
     });
 
     expect(setFilters).toHaveBeenCalledWith(expect.objectContaining({ symbolSearch: 'NVDA' }));
-    expect(setSortBy).toHaveBeenCalledWith('composite_score');
-    expect(setSortOrder).toHaveBeenCalledWith('desc');
-    expect(setPage).toHaveBeenCalledWith(1);
+    expect(applyQuery).toHaveBeenCalledWith(expect.objectContaining({
+      expression: expect.objectContaining({ expression_version: 1 }),
+      sortBy: 'composite_score',
+      sortOrder: 'desc',
+    }));
   });
 
   it('tracks unsaved changes after preset load', () => {

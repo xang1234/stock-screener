@@ -40,7 +40,7 @@ RANGE_FIELDS = frozenset(
         "perf_6m", "ema_10_distance", "ema_20_distance", "ema_50_distance",
         "week_52_high_distance", "week_52_low_distance", "ipo_date", "beta",
         "beta_adj_rs", "beta_adj_rs_1m", "beta_adj_rs_3m", "beta_adj_rs_12m",
-        "gap_percent", "volume_surge", "stage", "discovery_volume",
+        "gap_percent", "volume_surge", "stage",
     }
 )
 CATEGORICAL_FIELDS = frozenset(

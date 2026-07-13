@@ -321,7 +321,10 @@ class ScanResultItem(BaseModel):
             company_name=ef.get("company_name"),
             composite_score=item.composite_score,
             rating=item.rating,
-            matched_groups=ef.get("matched_groups") or [],
+            matched_groups=[
+                MatchedGroup(id=group.id, name=group.name)
+                for group in item.matched_groups
+            ],
             # Individual screener scores
             minervini_score=ef.get("minervini_score"),
             canslim_score=ef.get("canslim_score"),

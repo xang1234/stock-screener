@@ -14,11 +14,8 @@ export function useScanFilterPresets({
   sortBy,
   sortOrder,
   setFilters,
-  setSortBy,
-  setSortOrder,
-  setPage,
+  applyQuery,
   expression = null,
-  setExpression = null,
 }) {
   const [activePresetId, setActivePresetId] = useState(null);
   const [presetFiltersSnapshot, setPresetFiltersSnapshot] = useState(null);
@@ -72,31 +69,29 @@ export function useScanFilterPresets({
             || expressionToLegacyFilters(preset.filters.expression, buildDefaultScanFilters()))
         : preset.filters;
       setFilters(nextFilters);
-      if (setExpression) {
-        setExpression(
-          isExpressionPreset
-            ? preset.filters.expression
-            : legacyFiltersToExpression(nextFilters),
-        );
-      }
-      setSortBy(preset.sort_by);
-      setSortOrder(preset.sort_order);
+      const nextExpression = isExpressionPreset
+        ? preset.filters.expression
+        : legacyFiltersToExpression(nextFilters);
+      applyQuery({
+        expression: nextExpression,
+        sortBy: preset.sort_by,
+        sortOrder: preset.sort_order,
+      });
       setActivePresetId(presetId);
       setPresetFiltersSnapshot(
         isExpressionPreset
           ? preset.filters
-          : (setExpression
+          : (expression
               ? {
                   schema_version: 2,
-                  expression: legacyFiltersToExpression(nextFilters),
+                  expression: nextExpression,
                   legacy_filters: nextFilters,
                 }
               : preset.filters),
       );
       setPresetSortSnapshot({ sortBy: preset.sort_by, sortOrder: preset.sort_order });
-      setPage(1);
     },
-    [clearActivePreset, presets, setExpression, setFilters, setPage, setSortBy, setSortOrder]
+    [applyQuery, clearActivePreset, expression, presets, setFilters]
   );
 
   const handleOpenSaveDialog = useCallback(() => {

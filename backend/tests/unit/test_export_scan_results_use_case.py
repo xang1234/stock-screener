@@ -8,7 +8,14 @@ import pytest
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.feature_store.models import FeatureRow
-from app.domain.scanning.filter_spec import FilterSpec, SortOrder, SortSpec
+from app.domain.scanning.filter_spec import (
+    FilterExpression,
+    FilterGroup,
+    FilterSpec,
+    RangeFilter,
+    SortOrder,
+    SortSpec,
+)
 from app.domain.scanning.models import ExportFormat
 from app.use_cases.scanning.export_scan_results import (
     ExportScanResultsQuery,
@@ -174,6 +181,32 @@ class TestHappyPath:
         data_row = rows[1]
         name_idx = header.index("Company Name")
         assert data_row[name_idx] == "Apple Inc."
+
+    def test_csv_contains_typed_matched_group_names(self):
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        _setup_bound_scan(
+            uow,
+            feature_store,
+            rows=[_make_feature_row("AAPL", rs_rating=95)],
+        )
+        expression = FilterExpression(
+            groups=(
+                FilterGroup(
+                    id="leadership",
+                    name="Leadership",
+                    conditions=(RangeFilter("rs_rating", min_value=90),),
+                ),
+            )
+        )
+
+        rows = _parse_csv_bytes(
+            ExportScanResultsUseCase()
+            .execute(uow, _make_query(expression=expression))
+            .content
+        )
+
+        assert rows[1][rows[0].index("Matched Groups")] == "Leadership"
 
     def test_csv_coerces_scalar_market_themes_without_character_splitting(self):
         feature_store = FakeFeatureStoreRepository()

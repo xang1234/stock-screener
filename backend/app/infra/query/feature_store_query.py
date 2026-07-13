@@ -24,6 +24,7 @@ from app.domain.common.query import (
 from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
 from app.infra.db.models.feature_store import StockFeatureDaily
 from app.infra.query.expression_compiler import compile_expression
+from app.infra.query.like_pattern import literal_contains_pattern
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
 
@@ -258,24 +259,6 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
 
 
 def _range_predicate(query: Query, rf: RangeFilter):
-    if rf.field == "discovery_volume":
-        volume = json_number(
-            StockFeatureDaily.details_json,
-            ("avg_dollar_volume",),
-            bind_or_session=query,
-        )
-        scan_mode = json_text(
-            StockFeatureDaily.details_json,
-            ("scan_mode",),
-            bind_or_session=query,
-        )
-        volume_predicates = [volume.isnot(None)]
-        if rf.min_value is not None:
-            volume_predicates.append(volume >= rf.min_value)
-        if rf.max_value is not None:
-            volume_predicates.append(volume <= rf.max_value)
-        return or_(scan_mode == "listing_only", and_(*volume_predicates))
-
     col = _COLUMN_MAP.get(rf.field)
     predicates = []
     if col is not None:
@@ -334,19 +317,19 @@ def _boolean_predicate(query: Query, bf: BooleanFilter):
 
 
 def _text_predicate(query: Query, ts: TextSearchFilter):
+    pattern = literal_contains_pattern(ts.pattern)
     if ts.field == "listing_search":
-        pattern = f"%{ts.pattern}%"
         return or_(
-            StockFeatureDaily.symbol.ilike(pattern),
-            StockUniverse.name.ilike(pattern),
+            StockFeatureDaily.symbol.ilike(pattern, escape="\\"),
+            StockUniverse.name.ilike(pattern, escape="\\"),
         )
     col = _COLUMN_MAP.get(ts.field)
     if col is not None:
-        return and_(col.isnot(None), col.ilike(f"%{ts.pattern}%"))
+        return and_(col.isnot(None), col.ilike(pattern, escape="\\"))
     elif ts.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[ts.field]
         json_val = json_text(StockFeatureDaily.details_json, json_path, bind_or_session=query)
-        return and_(json_val.isnot(None), json_val.ilike(f"%{ts.pattern}%"))
+        return and_(json_val.isnot(None), json_val.ilike(pattern, escape="\\"))
     raise ValueError(f"Unsupported feature-store text field: {ts.field}")
 
 

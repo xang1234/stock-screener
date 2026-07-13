@@ -19,7 +19,7 @@ from app.domain.common.query import (
     TextSearchFilter,
 )
 
-from .models import ScanResultItemDomain
+from .models import MatchedGroupDomain, ScanResultItemDomain
 
 
 PASSES_ONLY_CONDITION = CategoricalFilter(
@@ -61,10 +61,6 @@ def _row_value(row: Mapping[str, Any], field: str) -> Any:
         return row.get("price", row.get("current_price"))
     if field == "listing_search":
         return f"{row.get('symbol', '')} {row.get('company_name', '')}".strip()
-    if field == "discovery_volume":
-        if row.get("scan_mode") == "listing_only":
-            return float("inf")
-        return row.get("volume")
     return row.get(field)
 
 
@@ -128,11 +124,11 @@ def evaluate_expression(row: Mapping[str, Any], expression: FilterExpression) ->
 
 def matched_setup_groups(
     row: Mapping[str, Any], expression: FilterExpression
-) -> tuple[dict[str, str], ...]:
+) -> tuple[MatchedGroupDomain, ...]:
     """Return the enabled setup groups satisfied by an already-matching row."""
 
     return tuple(
-        {"id": group.id, "name": group.name}
+        MatchedGroupDomain(id=group.id, name=group.name)
         for group in expression.enabled_groups
         if evaluate_group(row, group)
     )
@@ -145,11 +141,14 @@ def annotate_matched_groups(
 
     annotated: list[ScanResultItemDomain] = []
     for item in items:
-        fields = dict(item.extended_fields or {})
-        fields["matched_groups"] = list(
-            matched_setup_groups(scan_result_values(item), expression)
+        annotated.append(
+            replace(
+                item,
+                matched_groups=matched_setup_groups(
+                    scan_result_values(item), expression
+                ),
+            )
         )
-        annotated.append(replace(item, extended_fields=fields))
     return tuple(annotated)
 
 

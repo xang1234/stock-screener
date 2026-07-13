@@ -182,10 +182,10 @@ export function legacyFiltersToConditions(filters = {}, now = new Date()) {
       mode: 'include',
     });
   }
-  if (filters.minVolume != null) {
+  if (filters.minVolume != null && !filters.symbolSearch?.trim()) {
     conditions.push({
       kind: 'range',
-      field: filters.symbolSearch?.trim() ? 'discovery_volume' : 'volume',
+      field: 'volume',
       min: filters.minVolume,
       max: null,
     });
@@ -224,7 +224,6 @@ export function expressionToLegacyFilters(expression, defaults) {
       if (key) result[key] = { min: condition.min ?? null, max: condition.max ?? null };
       if (condition.field === 'stage' && condition.min === condition.max) result.stage = condition.min;
       if (condition.field === 'volume' && condition.max == null) result.minVolume = condition.min;
-      if (condition.field === 'discovery_volume' && condition.max == null) result.minVolume = condition.min;
       if (condition.field === 'market_cap' && condition.max == null) result.minMarketCap = condition.min;
       if (condition.field === 'ipo_date' && condition.max == null) result.ipoAfter = condition.min;
     } else if (condition.kind === 'boolean') {
@@ -292,9 +291,6 @@ export function buildScanQueryRequest(expression, {
 function rowValue(row, field) {
   if (field === 'price') return row.price ?? row.current_price;
   if (field === 'listing_search') return `${row.symbol || ''} ${row.company_name || ''}`.trim();
-  if (field === 'discovery_volume') {
-    return row.scan_mode === 'listing_only' ? Number.POSITIVE_INFINITY : row.volume;
-  }
   if (field === 'price_change_1d') return row.price_change_1d ?? row.pct_day;
   if (field === 'perf_week') return row.perf_week ?? row.pct_week;
   if (field === 'perf_month') return row.perf_month ?? row.pct_month;

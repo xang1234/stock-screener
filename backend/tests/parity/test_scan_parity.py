@@ -30,6 +30,7 @@ from app.domain.common.query import (
 from app.domain.scanning.models import ResultPage, ScanResultItemDomain
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
+from app.models.stock_universe import StockUniverse
 
 from .conftest import FEATURE_RUN_ID, LEGACY_SCAN_ID
 from .golden_fixtures import GOLDEN_TICKERS
@@ -96,6 +97,7 @@ def assert_scan_result_parity(
     _compare(mismatches, "composite_method", legacy.composite_method, feature_store.composite_method)
     _compare(mismatches, "screeners_passed", legacy.screeners_passed, feature_store.screeners_passed)
     _compare(mismatches, "screeners_total", legacy.screeners_total, feature_store.screeners_total)
+    _compare(mismatches, "matched_groups", legacy.matched_groups, feature_store.matched_groups)
 
     # Extended fields — compare every key present in either side
     all_keys = set(legacy.extended_fields) | set(feature_store.extended_fields)
@@ -275,6 +277,33 @@ class TestFilterSortParity:
             f"  legacy:  {legacy_symbols}\n"
             f"  feature: {feature_symbols}"
         )
+
+    def test_listing_search_treats_like_metacharacters_as_literal(
+        self, seeded_session: Session
+    ):
+        seeded_session.query(StockUniverse).filter_by(symbol="AAPL").one().name = (
+            "Fund_100% Labs"
+        )
+        seeded_session.query(StockUniverse).filter_by(symbol="MSFT").one().name = (
+            "FundA100Z Labs"
+        )
+        seeded_session.flush()
+        spec = QuerySpec(
+            expression=FilterExpression(
+                required=FilterGroup(
+                    id="required",
+                    name="Always require",
+                    conditions=(TextSearchFilter("listing_search", "_100%"),),
+                )
+            ),
+            page=PageSpec(page=1, per_page=100),
+        )
+
+        legacy_symbols = [item.symbol for item in _query_legacy(seeded_session, spec).items]
+        feature_symbols = [item.symbol for item in _query_feature(seeded_session, spec).items]
+
+        assert legacy_symbols == ["AAPL"]
+        assert feature_symbols == legacy_symbols
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -248,6 +248,14 @@ class StockExplanation:
 
 
 @dataclass(frozen=True)
+class MatchedGroupDomain:
+    """Named setup group satisfied by a scan-result row."""
+
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
 class ScanResultItemDomain:
     """One stock's composite result from a multi-screener scan.
 
@@ -273,6 +281,9 @@ class ScanResultItemDomain:
 
     # Flexible screener-specific fields
     extended_fields: dict[str, Any] = field(default_factory=dict)
+
+    # Query explanation metadata
+    matched_groups: tuple[MatchedGroupDomain, ...] = ()
 
     # Errors
     data_errors: dict[str, str] | None = None

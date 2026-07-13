@@ -94,7 +94,7 @@ describe('scan filter expressions', () => {
       .toEqual(['NVDA']);
   });
 
-  it('keeps listing-only discovery rows while enforcing volume elsewhere', () => {
+  it('ignores the default volume floor during listing discovery', () => {
     const expression = legacyFiltersToExpression({
       symbolSearch: 'new',
       minVolume: 1_000_000,
@@ -106,7 +106,10 @@ describe('scan filter expressions', () => {
     ];
 
     expect(rows.filter((row) => evaluateExpression(row, expression)).map((row) => row.symbol))
-      .toEqual(['NEW', 'NEWHIGH']);
+      .toEqual(['NEW', 'NEWLOW', 'NEWHIGH']);
+    expect(expression.required.conditions).not.toContainEqual(
+      expect.objectContaining({ field: 'volume' }),
+    );
   });
 
   it('maps the legacy passes toggle to passing ratings', () => {

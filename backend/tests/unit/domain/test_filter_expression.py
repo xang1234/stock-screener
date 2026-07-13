@@ -17,7 +17,7 @@ from app.domain.scanning.filter_expression import (
     expression_fingerprint,
     matched_setup_groups,
 )
-from app.domain.scanning.models import ScanResultItemDomain
+from app.domain.scanning.models import MatchedGroupDomain, ScanResultItemDomain
 from app.schemas.filter_expression import RangeConditionRequest, ScanQueryRequest
 
 
@@ -64,7 +64,7 @@ def test_required_and_any_setup_semantics_with_explanations():
 
     assert evaluate_expression(row, expression) is True
     assert matched_setup_groups(row, expression) == (
-        {"id": "breakout", "name": "Breakout ready"},
+        MatchedGroupDomain(id="breakout", name="Breakout ready"),
     )
 
 
@@ -161,9 +161,10 @@ def test_match_annotations_keep_missing_boolean_distinct_from_false():
 
     annotated = annotate_matched_groups((item,), expression)[0]
 
-    assert annotated.extended_fields["matched_groups"] == [
-        {"id": "score", "name": "Score"}
-    ]
+    assert annotated.matched_groups == (
+        MatchedGroupDomain(id="score", name="Score"),
+    )
+    assert "matched_groups" not in annotated.extended_fields
 
 
 def test_request_contract_builds_domain_and_rejects_empty_enabled_group():

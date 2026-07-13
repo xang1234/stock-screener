@@ -55,6 +55,8 @@ def test_resolved_leaders_filters_materialize_market_defaults():
         "ibdGroupRank": {"min": None, "max": 40},
         "rsRating": {"min": 80, "max": None},
     }
+    assert "filter_schema_version" not in resolved_screen
+    assert "filter_expression" not in resolved_screen
     assert "minVolume" not in screen["filters"]
 
 

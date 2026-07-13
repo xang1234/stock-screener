@@ -62,9 +62,7 @@ _CSV_COLUMNS: list[tuple[str, Any]] = [
     (
         "Matched Groups",
         lambda item: " | ".join(
-            group.get("name", "")
-            for group in item.extended_fields.get("matched_groups", [])
-            if isinstance(group, dict) and group.get("name")
+            group.name for group in item.matched_groups if group.name
         ),
     ),
     ("Company Name", lambda item: item.extended_fields.get("company_name")),
