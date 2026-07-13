@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TypeAlias
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,13 @@ class FilterMode(str, Enum):
     EXCLUDE = "exclude"
 
 
+class MatchOperator(str, Enum):
+    """How conditions inside a group, or setup groups at the root, combine."""
+
+    ALL = "all"
+    ANY = "any"
+
+
 # ---------------------------------------------------------------------------
 # Individual Filter Types
 # ---------------------------------------------------------------------------
@@ -39,8 +47,8 @@ class RangeFilter:
     """Numeric range constraint on a single field."""
 
     field: str
-    min_value: float | int | None = None
-    max_value: float | int | None = None
+    min_value: float | int | str | None = None
+    max_value: float | int | str | None = None
 
     def is_empty(self) -> bool:
         return self.min_value is None and self.max_value is None
@@ -103,8 +111,8 @@ class FilterSpec:
     def add_range(
         self,
         field_name: str,
-        min_value: float | int | None = None,
-        max_value: float | int | None = None,
+        min_value: float | int | str | None = None,
+        max_value: float | int | str | None = None,
     ) -> FilterSpec:
         if min_value is not None or max_value is not None:
             self.range_filters.append(
@@ -135,6 +143,89 @@ class FilterSpec:
                 TextSearchFilter(field=field_name, pattern=pattern)
             )
         return self
+
+    def to_expression(self) -> FilterExpression:
+        """Convert legacy flat AND filters into the canonical expression."""
+
+        return filter_spec_to_expression(self)
+
+
+FilterCondition: TypeAlias = (
+    RangeFilter | CategoricalFilter | BooleanFilter | TextSearchFilter
+)
+
+
+@dataclass(frozen=True)
+class FilterGroup:
+    """A named, bounded set of leaf conditions."""
+
+    id: str
+    name: str
+    match: MatchOperator = MatchOperator.ALL
+    conditions: tuple[FilterCondition, ...] = ()
+    enabled: bool = True
+
+
+def _required_group() -> FilterGroup:
+    return FilterGroup(id="required", name="Always require")
+
+
+@dataclass(frozen=True)
+class FilterExpression:
+    """Bounded grouped filter expression used by every result read path."""
+
+    required: FilterGroup = field(default_factory=_required_group)
+    group_join: MatchOperator = MatchOperator.ANY
+    groups: tuple[FilterGroup, ...] = ()
+    version: int = 1
+
+    @property
+    def enabled_groups(self) -> tuple[FilterGroup, ...]:
+        return tuple(group for group in self.groups if group.enabled)
+
+    @property
+    def condition_count(self) -> int:
+        return len(self.required.conditions) + sum(
+            len(group.conditions) for group in self.groups
+        )
+
+    @property
+    def is_required_only(self) -> bool:
+        return not self.enabled_groups
+
+    def with_required_condition(self, condition: FilterCondition) -> FilterExpression:
+        required = FilterGroup(
+            id=self.required.id,
+            name=self.required.name,
+            match=MatchOperator.ALL,
+            conditions=(*self.required.conditions, condition),
+            enabled=True,
+        )
+        return FilterExpression(
+            required=required,
+            group_join=self.group_join,
+            groups=self.groups,
+            version=self.version,
+        )
+
+
+def filter_spec_to_expression(filters: FilterSpec) -> FilterExpression:
+    """Preserve existing flat-filter semantics as one required ALL group."""
+
+    conditions: tuple[FilterCondition, ...] = (
+        *filters.range_filters,
+        *filters.categorical_filters,
+        *filters.boolean_filters,
+        *filters.text_searches,
+    )
+    return FilterExpression(
+        required=FilterGroup(
+            id="required",
+            name="Always require",
+            match=MatchOperator.ALL,
+            conditions=conditions,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -174,6 +265,10 @@ class QuerySpec:
     filters: FilterSpec = field(default_factory=FilterSpec)
     sort: SortSpec = field(default_factory=SortSpec)
     page: PageSpec = field(default_factory=PageSpec)
+    expression: FilterExpression | None = None
+
+    def effective_expression(self) -> FilterExpression:
+        return self.expression or filter_spec_to_expression(self.filters)
 
 
 # ---------------------------------------------------------------------------
@@ -183,11 +278,16 @@ class QuerySpec:
 __all__ = [
     "SortOrder",
     "FilterMode",
+    "MatchOperator",
     "RangeFilter",
     "CategoricalFilter",
     "BooleanFilter",
     "TextSearchFilter",
     "FilterSpec",
+    "FilterCondition",
+    "FilterGroup",
+    "FilterExpression",
+    "filter_spec_to_expression",
     "SortSpec",
     "PageSpec",
     "QuerySpec",

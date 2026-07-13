@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     feature_themes: bool = True
     feature_chatbot: bool = True
     feature_tasks: bool = True
+    feature_grouped_scan_filters: bool = True
 
     # Database
     database_url: str = ""
@@ -830,6 +831,7 @@ class Settings(BaseSettings):
             "themes": self.feature_themes,
             "chatbot": self.feature_chatbot,
             "tasks": self.feature_tasks,
+            "grouped_scan_filters": self.feature_grouped_scan_filters,
             "ui_snapshots": True,
         }
 

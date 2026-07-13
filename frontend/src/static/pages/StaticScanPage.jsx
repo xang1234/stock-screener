@@ -8,6 +8,7 @@ import {
   Typography,
 } from '@mui/material';
 import FilterPanel from '../../components/Scan/FilterPanel';
+import GuidedFilterBuilderDialog from '../../features/scan/components/GuidedFilterBuilderDialog';
 import ResultsTable from '../../components/Scan/ResultsTable';
 import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
@@ -17,15 +18,17 @@ import {
 } from '../../features/scan/defaultFilters';
 import { normalizeScanFilterOptions } from '../../features/scan/filterOptions';
 import { getStableFilterKey } from '../../utils/filterUtils';
-import {
-  filterStaticScanRows,
-  paginateStaticScanRows,
-  sortStaticScanRows,
-} from '../scanClient';
+import { paginateStaticScanRows, sortStaticScanRows } from '../scanClient';
 import StaticChartViewerModal from '../StaticChartViewerModal';
 import ScreenSelector from '../components/ScreenSelector';
 import { usePresetScreens, buildFiltersFromPreset } from '../hooks/usePresetScreens';
 import { useStaticMarket } from '../StaticMarketContext';
+import {
+  annotateExpressionMatches,
+  expressionToLegacyFilters,
+  legacyFiltersToExpression,
+  stableExpressionKey,
+} from '../../features/scan/filterExpression';
 
 const HYDRATION_BATCH_SIZE = 2;
 
@@ -45,6 +48,10 @@ function StaticScanPage() {
   const chartIndexQuery = useStaticChartIndex(scanManifestQuery.data?.charts?.path);
 
   const [filters, setFilters] = useState(buildDefaultScanFilters);
+  const [appliedExpression, setAppliedExpression] = useState(
+    () => legacyFiltersToExpression(buildDefaultScanFilters()),
+  );
+  const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(50);
@@ -93,6 +100,7 @@ function StaticScanPage() {
       return;
     }
     setFilters(manifestDefaultFilters);
+    setAppliedExpression(legacyFiltersToExpression(manifestDefaultFilters));
   }, [manifestDefaultFilters, scanManifestQuery.data]);
 
   useEffect(() => {
@@ -188,12 +196,17 @@ function StaticScanPage() {
     setActiveScreenId(screenId);
     if (!screenId) {
       setFilters(manifestDefaultFilters);
+      setAppliedExpression(legacyFiltersToExpression(manifestDefaultFilters));
       setSortBy(manifestDefaultSortBy);
       setSortOrder(manifestDefaultSortOrder);
     } else {
       const screen = presetScreens?.find((s) => s.id === screenId);
       if (screen) {
         setFilters(buildFiltersFromPreset(screen));
+        setAppliedExpression(
+          screen.filter_expression
+            || legacyFiltersToExpression(buildFiltersFromPreset(screen)),
+        );
         setSortBy(screen.sort_by);
         setSortOrder(screen.sort_order);
       }
@@ -207,9 +220,16 @@ function StaticScanPage() {
   ]);
 
   const filterKey = useMemo(() => getStableFilterKey(filters), [filters]);
+  const expressionKey = useMemo(
+    () => stableExpressionKey(appliedExpression),
+    [appliedExpression],
+  );
   useEffect(() => {
     setPage(1);
-  }, [filterKey]);
+  }, [expressionKey, filterKey]);
+  useEffect(() => {
+    setAppliedExpression((previous) => legacyFiltersToExpression(filters, previous));
+  }, [filters]);
   const chartEntries = useMemo(
     () => chartIndexQuery.data?.symbols || [],
     [chartIndexQuery.data]
@@ -219,8 +239,10 @@ function StaticScanPage() {
     [chartEntries]
   );
   const filteredRows = useMemo(
-    () => (hydrationComplete ? filterStaticScanRows(hydratedRows, filters) : hydratedRows),
-    [filters, hydratedRows, hydrationComplete]
+    () => (hydrationComplete
+      ? annotateExpressionMatches(hydratedRows, appliedExpression)
+      : hydratedRows),
+    [appliedExpression, hydratedRows, hydrationComplete]
   );
   const sortedRows = useMemo(
     () => (
@@ -327,6 +349,9 @@ function StaticScanPage() {
           onToggle={() => setShowFilters((previous) => !previous)}
           presetsEnabled={false}
           sectionDefaultExpanded={sectionDefaultExpanded}
+          groupedFilteringEnabled
+          expression={appliedExpression}
+          onOpenLogicBuilder={() => setLogicBuilderOpen(true)}
         />
       )}
 
@@ -361,6 +386,20 @@ function StaticScanPage() {
         initialSymbol={selectedChartSymbol}
         chartIndex={chartIndexQuery.data}
         navigationSymbols={navigationSymbols}
+      />
+
+      <GuidedFilterBuilderDialog
+        open={logicBuilderOpen}
+        expression={appliedExpression}
+        onClose={() => setLogicBuilderOpen(false)}
+        onApply={(nextExpression) => {
+          setAppliedExpression(nextExpression);
+          setFilters(expressionToLegacyFilters(nextExpression, buildDefaultScanFilters()));
+          setPage(1);
+          setActiveScreenId(null);
+          setLogicBuilderOpen(false);
+        }}
+        filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
       />
     </Box>
   );

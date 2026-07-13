@@ -12,6 +12,7 @@ import FilterListIcon from '@mui/icons-material/FilterList';
 import ClearIcon from '@mui/icons-material/Clear';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import {
   FilterPresets,
   SavePresetDialog,
@@ -60,6 +61,9 @@ function FilterPanel({
   saveDialogError = null,
   onSaveDialogClose,
   onSaveDialogSave,
+  groupedFilteringEnabled = false,
+  expression = null,
+  onOpenLogicBuilder,
 }) {
   const updateFilter = (key, value) => {
     onFilterChange({ ...filters, [key]: value });
@@ -77,6 +81,7 @@ function FilterPanel({
   const fundamentalCount = countActiveInCategory(filters, FUNDAMENTAL_KEYS);
   const technicalCount = countActiveInCategory(filters, TECHNICAL_KEYS);
   const ratingCount = countActiveInCategory(filters, RATING_KEYS);
+  const enabledSetupCount = expression?.groups?.filter((group) => group.enabled !== false).length ?? 0;
 
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
@@ -120,6 +125,21 @@ function FilterPanel({
               onDeletePreset={onDeletePreset}
             />
           </Box>
+        )}
+
+        {groupedFilteringEnabled && (
+          <Button
+            size="small"
+            variant={enabledSetupCount ? 'contained' : 'outlined'}
+            startIcon={<AccountTreeOutlinedIcon sx={{ fontSize: 16 }} />}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenLogicBuilder?.();
+            }}
+            sx={{ ml: 1, fontSize: '0.72rem', whiteSpace: 'nowrap' }}
+          >
+            Logic builder{enabledSetupCount ? ` · ${enabledSetupCount}` : ''}
+          </Button>
         )}
 
         <Box sx={{ flexGrow: 1 }} />

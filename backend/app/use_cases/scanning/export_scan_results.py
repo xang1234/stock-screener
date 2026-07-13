@@ -6,7 +6,6 @@ No HTTP, no ORM — just business logic for formatting scan results.
 
 from __future__ import annotations
 
-import copy
 import csv
 import io
 import logging
@@ -16,7 +15,13 @@ from datetime import datetime
 from typing import Any
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_spec import FilterSpec, SortSpec
+from app.domain.scanning.filter_expression import annotate_matched_groups
+from app.domain.scanning.filter_spec import (
+    CategoricalFilter,
+    FilterExpression,
+    FilterSpec,
+    SortSpec,
+)
 from app.domain.scanning.models import ExportFormat, ScanResultItemDomain
 from app.infra.serialization import normalize_string_list
 
@@ -34,6 +39,7 @@ logger = logging.getLogger(__name__)
 class ExportScanResultsQuery:
     scan_id: str
     filters: FilterSpec = field(default_factory=FilterSpec)
+    expression: FilterExpression | None = None
     sort: SortSpec = field(default_factory=SortSpec)
     export_format: ExportFormat = ExportFormat.CSV
     passes_only: bool = False
@@ -53,6 +59,14 @@ class ExportScanResultsResult:
 # Each entry is (header_name, extractor_fn) — ordered for the output CSV.
 _CSV_COLUMNS: list[tuple[str, Any]] = [
     ("Symbol", lambda item: item.symbol),
+    (
+        "Matched Groups",
+        lambda item: " | ".join(
+            group.get("name", "")
+            for group in item.extended_fields.get("matched_groups", [])
+            if isinstance(group, dict) and group.get("name")
+        ),
+    ),
     ("Company Name", lambda item: item.extended_fields.get("company_name")),
     ("Market", lambda item: item.extended_fields.get("market")),
     ("Exchange", lambda item: item.extended_fields.get("exchange")),
@@ -224,12 +238,27 @@ class ExportScanResultsUseCase:
         with uow:
             scan, run_id = resolve_scan(uow, query.scan_id)
 
-            # Build effective filters — copy to avoid mutating the frozen query
-            filters = copy.copy(query.filters)
+            filters: FilterSpec | FilterExpression = query.expression or query.filters
             if query.passes_only:
-                filters.add_categorical(
-                    "rating", ("Strong Buy", "Buy")
+                rating_filter = CategoricalFilter(
+                    field="rating", values=("Strong Buy", "Buy")
                 )
+                if isinstance(filters, FilterExpression):
+                    filters = filters.with_required_condition(rating_filter)
+                else:
+                    filters = FilterSpec(
+                        range_filters=list(filters.range_filters),
+                        categorical_filters=[
+                            *filters.categorical_filters,
+                            rating_filter,
+                        ],
+                        boolean_filters=list(filters.boolean_filters),
+                        text_searches=list(filters.text_searches),
+                    )
+
+            expression = (
+                filters if isinstance(filters, FilterExpression) else filters.to_expression()
+            )
 
             if run_id:
                 logger.info(
@@ -252,6 +281,8 @@ class ExportScanResultsUseCase:
                     filters,
                     query.sort,
                 )
+
+        items = annotate_matched_groups(items, expression)
 
         # Format output
         if query.export_format == ExportFormat.CSV:

@@ -10,7 +10,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.domain.common.errors import EntityNotFoundError
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortSpec
+from app.domain.common.query import (
+    FilterExpression,
+    FilterSpec,
+    PageSpec,
+    QuerySpec,
+    SortSpec,
+)
 from app.domain.feature_store.models import (
     INT_TO_RATING,
     FeaturePage,
@@ -33,6 +39,7 @@ from app.infra.serialization import (
     normalize_string_list,
 )
 from app.infra.query.feature_store_query import (
+    apply_filter_expression,
     apply_filters,
     apply_sort_all,
     apply_sort_and_paginate,
@@ -42,6 +49,14 @@ from app.models.stock_universe import StockUniverse
 from app.services.growth_cadence_service import build_row_field_availability
 
 _BATCH_SIZE = 500
+
+
+def _apply_filter_input(query, filters: FilterSpec | FilterExpression):
+    """Route legacy flat filters and grouped expressions through one compiler."""
+
+    if isinstance(filters, FilterExpression):
+        return apply_filter_expression(query, filters)
+    return apply_filters(query, filters)
 
 
 def _feature_results_query(session: Session, run_id: int):
@@ -345,7 +360,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_query(self._session, run_id)
-        q = apply_filters(q, spec.filters)
+        q = apply_filter_expression(q, spec.effective_expression())
         rows, total = apply_sort_and_paginate(q, spec.sort, spec.page)
 
         items = tuple(
@@ -564,7 +579,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
     def query_all_as_scan_results(
         self,
         run_id: int,
-        filters: FilterSpec,
+        filters: FilterSpec | FilterExpression,
         sort: SortSpec,
         *,
         include_sparklines: bool = False,
@@ -579,7 +594,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_query(self._session, run_id)
-        q = apply_filters(q, filters)
+        q = _apply_filter_input(q, filters)
         rows = apply_sort_all(q, sort)
 
         return tuple(
@@ -593,7 +608,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
     def query_run_symbols(
         self,
         run_id: int,
-        filters: FilterSpec,
+        filters: FilterSpec | FilterExpression,
         sort: SortSpec,
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:
@@ -602,7 +617,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_symbol_query(self._session, run_id)
-        q = apply_filters(q, filters)
+        q = _apply_filter_input(q, filters)
 
         if page is None:
             rows = apply_sort_all(q, sort)

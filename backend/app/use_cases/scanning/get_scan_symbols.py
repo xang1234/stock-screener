@@ -6,7 +6,14 @@ import logging
 from dataclasses import dataclass, field
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_spec import FilterSpec, PageSpec, SortSpec
+from app.domain.scanning.filter_expression import expression_fingerprint
+from app.domain.scanning.filter_spec import (
+    CategoricalFilter,
+    FilterExpression,
+    FilterSpec,
+    PageSpec,
+    SortSpec,
+)
 
 from ._resolve import resolve_scan
 
@@ -19,6 +26,7 @@ class GetScanSymbolsQuery:
 
     scan_id: str
     filters: FilterSpec = field(default_factory=FilterSpec)
+    expression: FilterExpression | None = None
     sort: SortSpec = field(default_factory=SortSpec)
     page: PageSpec | None = None
     passes_only: bool = False
@@ -32,6 +40,7 @@ class GetScanSymbolsResult:
     total: int
     page: int | None = None
     per_page: int | None = None
+    query_fingerprint: str | None = None
 
 
 class GetScanSymbolsUseCase:
@@ -45,16 +54,27 @@ class GetScanSymbolsUseCase:
         with uow:
             _scan, run_id = resolve_scan(uow, query.scan_id)
 
-            filters = query.filters
+            filters: FilterSpec | FilterExpression = query.expression or query.filters
             if query.passes_only:
-                augmented = FilterSpec(
-                    range_filters=list(filters.range_filters),
-                    categorical_filters=list(filters.categorical_filters),
-                    boolean_filters=list(filters.boolean_filters),
-                    text_searches=list(filters.text_searches),
-                )
-                augmented.add_categorical("rating", ("Strong Buy", "Buy"))
-                filters = augmented
+                if isinstance(filters, FilterExpression):
+                    filters = filters.with_required_condition(
+                        CategoricalFilter(
+                            field="rating", values=("Strong Buy", "Buy")
+                        )
+                    )
+                else:
+                    augmented = FilterSpec(
+                        range_filters=list(filters.range_filters),
+                        categorical_filters=list(filters.categorical_filters),
+                        boolean_filters=list(filters.boolean_filters),
+                        text_searches=list(filters.text_searches),
+                    )
+                    augmented.add_categorical("rating", ("Strong Buy", "Buy"))
+                    filters = augmented
+
+            effective_expression = (
+                filters if isinstance(filters, FilterExpression) else filters.to_expression()
+            )
 
             if run_id:
                 logger.info(
@@ -85,4 +105,5 @@ class GetScanSymbolsUseCase:
             total=total,
             page=query.page.page if query.page else None,
             per_page=query.page.per_page if query.page else None,
+            query_fingerprint=expression_fingerprint(effective_expression),
         )

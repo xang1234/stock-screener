@@ -156,6 +156,7 @@ export const DEFAULT_CAPABILITIES = {
     themes: true,
     chatbot: true,
     tasks: true,
+    grouped_scan_filters: true,
   },
   auth: {
     required: false,

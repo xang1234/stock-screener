@@ -463,6 +463,67 @@ STATIC_PRESET_DEFAULT_FILTER_KEYS: dict[str, tuple[str, ...]] = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _legacy_filters_to_expression(filters: dict) -> dict:
+    """Emit the v2 static contract while retaining v1 filters for old clients."""
+
+    conditions: list[dict] = []
+    for key, value in filters.items():
+        if key == "stage" and value is not None:
+            conditions.append(
+                {"kind": "range", "field": "stage", "min": value, "max": value}
+            )
+        elif key in RANGE_FILTER_TO_FIELD and isinstance(value, dict):
+            minimum, maximum = value.get("min"), value.get("max")
+            if minimum is not None or maximum is not None:
+                field = RANGE_FILTER_TO_FIELD[key]
+                conditions.append(
+                    {
+                        "kind": "range",
+                        "field": "price" if field == "current_price" else field,
+                        "min": minimum,
+                        "max": maximum,
+                    }
+                )
+        elif key in SCALAR_FILTER_TO_FIELD and value is not None:
+            conditions.append(
+                {
+                    "kind": "range",
+                    "field": SCALAR_FILTER_TO_FIELD[key],
+                    "min": value,
+                    "max": None,
+                }
+            )
+        elif key in BOOLEAN_FILTER_TO_FIELD and value is not None:
+            conditions.append(
+                {
+                    "kind": "boolean",
+                    "field": BOOLEAN_FILTER_TO_FIELD[key],
+                    "value": bool(value),
+                }
+            )
+        elif key in LIST_FILTER_TO_FIELD and value:
+            conditions.append(
+                {
+                    "kind": "categorical",
+                    "field": LIST_FILTER_TO_FIELD[key],
+                    "values": list(value),
+                    "mode": "include",
+                }
+            )
+
+    return {
+        "expression_version": 1,
+        "required": {
+            "id": "required",
+            "name": "Always require",
+            "match": "all",
+            "enabled": True,
+            "conditions": conditions,
+        },
+        "group_join": "any",
+        "groups": [],
+    }
+
 def resolve_preset_screens_for_defaults(
     presets: list[dict],
     default_filters: dict | None = None,
@@ -486,6 +547,8 @@ def resolve_preset_screens_for_defaults(
             **inherited,
             **(screen.get("filters") or {}),
         }
+        screen["filter_schema_version"] = 2
+        screen["filter_expression"] = _legacy_filters_to_expression(screen["filters"])
         resolved.append(screen)
     return resolved
 

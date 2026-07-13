@@ -4,19 +4,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, asc, desc, func, or_
+from sqlalchemy import and_, asc, desc, func, or_, true
 from sqlalchemy.orm import Query
 
 from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
     FilterMode,
     FilterSpec,
+    MatchOperator,
     PageSpec,
     RangeFilter,
     SortOrder,
     SortSpec,
     TextSearchFilter,
+    filter_spec_to_expression,
 )
 from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
 from app.infra.db.models.feature_store import StockFeatureDaily
@@ -184,16 +189,27 @@ def _json_sort_expr(query: Query, field: str, column, json_path: tuple[str, ...]
 
 
 def apply_filters(query: Query, filters: FilterSpec) -> Query:
-    """Apply all FilterSpec constraints as SQLAlchemy WHERE clauses."""
-    for rf in filters.range_filters:
-        query = _apply_range_filter(query, rf)
-    for cf in filters.categorical_filters:
-        query = _apply_categorical_filter(query, cf)
-    for bf in filters.boolean_filters:
-        query = _apply_boolean_filter(query, bf)
-    for ts in filters.text_searches:
-        query = _apply_text_search(query, ts)
-    return query
+    """Backward-compatible adapter for existing flat-filter callers."""
+
+    return apply_filter_expression(query, filter_spec_to_expression(filters))
+
+
+def apply_filter_expression(query: Query, expression: FilterExpression) -> Query:
+    return query.filter(compile_filter_expression(query, expression))
+
+
+def compile_filter_expression(query: Query, expression: FilterExpression):
+    required = _group_predicate(query, expression.required)
+    groups = expression.enabled_groups
+    if not groups:
+        return required
+    setup_predicates = [_group_predicate(query, group) for group in groups]
+    joined = (
+        and_(*setup_predicates)
+        if expression.group_join == MatchOperator.ALL
+        else or_(*setup_predicates)
+    )
+    return and_(required, joined)
 
 
 def apply_sort_and_paginate(
@@ -250,52 +266,60 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
 
 
 def _apply_range_filter(query: Query, rf: RangeFilter) -> Query:
-    """Apply a numeric range filter — SQL column or dialect-aware JSON."""
+    return query.filter(_range_predicate(query, rf))
+
+
+def _range_predicate(query: Query, rf: RangeFilter):
     col = _COLUMN_MAP.get(rf.field)
+    predicates = []
     if col is not None:
         if rf.min_value is not None:
-            query = query.filter(col >= rf.min_value)
+            predicates.append(col >= rf.min_value)
         if rf.max_value is not None:
-            query = query.filter(col <= rf.max_value)
+            predicates.append(col <= rf.max_value)
     elif rf.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[rf.field]
-        json_val = json_number(StockFeatureDaily.details_json, json_path, bind_or_session=query)
+        json_val = (
+            json_text(StockFeatureDaily.details_json, json_path, bind_or_session=query)
+            if rf.field == "ipo_date"
+            else json_number(StockFeatureDaily.details_json, json_path, bind_or_session=query)
+        )
         if rf.min_value is not None:
-            query = query.filter(and_(
-                json_val.isnot(None),
-                json_val >= rf.min_value,
-            ))
+            predicates.extend((json_val.isnot(None), json_val >= rf.min_value))
         if rf.max_value is not None:
-            query = query.filter(and_(
-                json_val.isnot(None),
-                json_val <= rf.max_value,
-            ))
-    return query
+            predicates.extend((json_val.isnot(None), json_val <= rf.max_value))
+    else:
+        raise ValueError(f"Unsupported feature-store range field: {rf.field}")
+    return and_(*predicates) if predicates else true()
 
 
 def _apply_categorical_filter(query: Query, cf: CategoricalFilter) -> Query:
-    """Apply an include/exclude categorical filter on a SQL column or JSON field."""
+    return query.filter(_categorical_predicate(query, cf))
+
+
+def _categorical_predicate(query: Query, cf: CategoricalFilter):
     col = _COLUMN_MAP.get(cf.field)
     if col is not None:
         if cf.mode == FilterMode.EXCLUDE:
-            query = query.filter(or_(col.is_(None), ~col.in_(cf.values)))
-        else:
-            query = query.filter(col.in_(cf.values))
+            return or_(col.is_(None), ~col.in_(cf.values))
+        return col.in_(cf.values)
     elif cf.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[cf.field]
         json_val = json_text(StockFeatureDaily.details_json, json_path, bind_or_session=query)
         if cf.mode == FilterMode.EXCLUDE:
-            query = query.filter(or_(json_val.is_(None), ~json_val.in_(cf.values)))
-        else:
-            query = query.filter(json_val.in_(cf.values))
-    return query
+            return or_(json_val.is_(None), ~json_val.in_(cf.values))
+        return json_val.in_(cf.values)
+    raise ValueError(f"Unsupported feature-store categorical field: {cf.field}")
 
 
 def _apply_boolean_filter(query: Query, bf: BooleanFilter) -> Query:
-    """Apply a boolean filter — SQL column or dialect-aware JSON."""
+    return query.filter(_boolean_predicate(query, bf))
+
+
+def _boolean_predicate(query: Query, bf: BooleanFilter):
     col = _COLUMN_MAP.get(bf.field)
     if col is not None:
-        query = query.filter(col == bf.value)
+        return and_(col.isnot(None), col == bf.value)
     elif bf.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[bf.field]
         if is_postgres(query):
@@ -304,20 +328,42 @@ def _apply_boolean_filter(query: Query, bf: BooleanFilter) -> Query:
         else:
             json_val = json_text(StockFeatureDaily.details_json, json_path, bind_or_session=query)
             expected = 1 if bf.value else 0
-        query = query.filter(and_(
+        return and_(
             json_val.isnot(None),
             json_val == expected,
-        ))
-    return query
+        )
+    raise ValueError(f"Unsupported feature-store boolean field: {bf.field}")
 
 
 def _apply_text_search(query: Query, ts: TextSearchFilter) -> Query:
-    """Apply a LIKE text search on a SQL column or JSON field."""
+    return query.filter(_text_predicate(query, ts))
+
+
+def _text_predicate(query: Query, ts: TextSearchFilter):
     col = _COLUMN_MAP.get(ts.field)
     if col is not None:
-        query = query.filter(col.ilike(f"%{ts.pattern}%"))
+        return and_(col.isnot(None), col.ilike(f"%{ts.pattern}%"))
     elif ts.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[ts.field]
         json_val = json_text(StockFeatureDaily.details_json, json_path, bind_or_session=query)
-        query = query.filter(json_val.ilike(f"%{ts.pattern}%"))
-    return query
+        return and_(json_val.isnot(None), json_val.ilike(f"%{ts.pattern}%"))
+    raise ValueError(f"Unsupported feature-store text field: {ts.field}")
+
+
+def _condition_predicate(query: Query, condition: FilterCondition):
+    if isinstance(condition, RangeFilter):
+        return _range_predicate(query, condition)
+    if isinstance(condition, CategoricalFilter):
+        return _categorical_predicate(query, condition)
+    if isinstance(condition, BooleanFilter):
+        return _boolean_predicate(query, condition)
+    if isinstance(condition, TextSearchFilter):
+        return _text_predicate(query, condition)
+    raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
+
+
+def _group_predicate(query: Query, group: FilterGroup):
+    predicates = [_condition_predicate(query, item) for item in group.conditions]
+    if not predicates:
+        return true() if group.match == MatchOperator.ALL else ~true()
+    return and_(*predicates) if group.match == MatchOperator.ALL else or_(*predicates)

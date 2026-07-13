@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 import logging
 
 from ...schemas.cache import SmartRefreshResponse
+from ...schemas.filter_expression import ScanQueryRequest
 from ...schemas.scanning import (
     ExplainResponse,
     FilterOptionsResponse,
@@ -444,6 +445,62 @@ async def get_scan_results(
             )
             for item in result.page.items
         ],
+        unfiltered_total=result.unfiltered_total,
+        query_fingerprint=result.query_fingerprint,
+    )
+
+
+@router.post("/{scan_id}/results/query", response_model=ScanResultsResponse)
+async def query_scan_results(
+    scan_id: str,
+    request: ScanQueryRequest,
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_scan_results_use_case),
+):
+    """Run a versioned, bounded grouped-filter expression."""
+    try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...domain.scanning.filter_spec import PageSpec, QuerySpec
+        from ...use_cases.scanning.get_scan_results import GetScanResultsQuery
+
+        page = request.page.to_domain() if request.page else PageSpec()
+        result = use_case.execute(
+            uow,
+            GetScanResultsQuery(
+                scan_id=scan_id,
+                query_spec=QuerySpec(
+                    expression=request.to_expression(),
+                    sort=request.sort.to_domain(),
+                    page=page,
+                ),
+                include_sparklines=request.options.include_sparklines,
+                include_setup_payload=request.options.detail_level == "full",
+                passes_only=request.passes_only,
+            ),
+        )
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error("Error querying grouped scan results: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Error querying scan results")
+
+    return ScanResultsResponse(
+        scan_id=scan_id,
+        total=result.page.total,
+        unfiltered_total=result.unfiltered_total,
+        page=result.page.page,
+        per_page=result.page.per_page,
+        pages=result.page.total_pages,
+        query_fingerprint=result.query_fingerprint,
+        results=[
+            ScanResultItem.from_domain(
+                item,
+                include_setup_payload=request.options.detail_level == "full",
+            )
+            for item in result.page.items
+        ],
     )
 
 
@@ -487,6 +544,48 @@ async def get_scan_symbols(
         page=result.page,
         per_page=result.per_page,
         next_cursor=None,
+        query_fingerprint=result.query_fingerprint,
+    )
+
+
+@router.post("/{scan_id}/symbols/query", response_model=ScanSymbolsResponse)
+async def query_scan_symbols(
+    scan_id: str,
+    request: ScanQueryRequest,
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_scan_symbols_use_case),
+):
+    """Return chart-navigation symbols using the applied expression."""
+    try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...use_cases.scanning.get_scan_symbols import GetScanSymbolsQuery
+
+        result = use_case.execute(
+            uow,
+            GetScanSymbolsQuery(
+                scan_id=scan_id,
+                expression=request.to_expression(),
+                sort=request.sort.to_domain(),
+                page=request.page.to_domain() if request.page else None,
+                passes_only=request.passes_only,
+            ),
+        )
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error("Error querying grouped scan symbols: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Error querying scan symbols")
+
+    return ScanSymbolsResponse(
+        scan_id=scan_id,
+        total=result.total,
+        symbols=list(result.symbols),
+        page=result.page,
+        per_page=result.per_page,
+        next_cursor=None,
+        query_fingerprint=result.query_fingerprint,
     )
 
 
@@ -551,6 +650,47 @@ async def export_scan_results(
     except Exception as e:
         logger.error(f"Error exporting scan results: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error exporting scan results: {str(e)}")
+
+    return StreamingResponse(
+        iter([result.content]),
+        media_type=result.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.filename}"',
+            "Content-Length": str(len(result.content)),
+        },
+    )
+
+
+@router.post("/{scan_id}/export/query")
+async def export_grouped_scan_results(
+    scan_id: str,
+    request: ScanQueryRequest,
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_export_scan_results_use_case),
+):
+    """Export every row matching the applied grouped expression."""
+    try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...domain.scanning.models import ExportFormat
+        from ...use_cases.scanning.export_scan_results import ExportScanResultsQuery
+
+        result = use_case.execute(
+            uow,
+            ExportScanResultsQuery(
+                scan_id=scan_id,
+                expression=request.to_expression(),
+                sort=request.sort.to_domain(),
+                export_format=ExportFormat.CSV,
+                passes_only=request.passes_only,
+            ),
+        )
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error("Error exporting grouped scan results: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Error exporting scan results")
 
     return StreamingResponse(
         iter([result.content]),

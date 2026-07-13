@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.domain.common.query import (
     CategoricalFilter,
+    FilterExpression,
+    FilterGroup,
     FilterSpec,
+    MatchOperator,
     PageSpec,
     QuerySpec,
     RangeFilter,
@@ -163,6 +166,45 @@ class TestQueryRunAsScanResults:
         assert len(page.items) == 3
         for item in page.items:
             assert isinstance(item, ScanResultItemDomain)
+
+    @pytest.mark.parametrize(
+        ("group_join", "expected"),
+        [
+            (MatchOperator.ANY, {"AAPL", "MSFT"}),
+            (MatchOperator.ALL, {"AAPL"}),
+        ],
+    )
+    def test_grouped_expression_compiles_across_json_and_columns(
+        self, seeded_session, group_join, expected
+    ):
+        repo = SqlFeatureStoreRepository(seeded_session)
+        expression = FilterExpression(
+            required=FilterGroup(
+                id="required",
+                name="Always require",
+                conditions=(RangeFilter("stage", min_value=2, max_value=2),),
+            ),
+            group_join=group_join,
+            groups=(
+                FilterGroup(
+                    id="leadership",
+                    name="Leadership",
+                    conditions=(RangeFilter("rs_rating", min_value=90),),
+                ),
+                FilterGroup(
+                    id="score",
+                    name="Score",
+                    conditions=(RangeFilter("composite_score", min_value=75),),
+                ),
+            ),
+        )
+
+        page = repo.query_run_as_scan_results(
+            1,
+            QuerySpec(expression=expression),
+        )
+
+        assert {str(item.symbol) for item in page.items} == expected
 
     def test_company_name_resolved_via_join(self, seeded_session):
         repo = SqlFeatureStoreRepository(seeded_session)

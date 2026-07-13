@@ -9,12 +9,23 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.domain.scanning.filter_spec import FilterSpec, PageSpec, QuerySpec, SortSpec
+from app.domain.scanning.filter_spec import (
+    FilterExpression,
+    FilterSpec,
+    PageSpec,
+    QuerySpec,
+    SortSpec,
+)
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository
 from app.analysis.patterns.report import validate_setup_engine_report_payload
 from app.infra.query import scan_result_query
-from app.infra.query.scan_result_query import apply_filters, apply_sort_all, apply_sort_and_paginate
+from app.infra.query.scan_result_query import (
+    apply_filter_expression,
+    apply_filters,
+    apply_sort_all,
+    apply_sort_and_paginate,
+)
 from app.infra.serialization import (
     coerce_bool_or_false,
     convert_numpy_types,
@@ -32,6 +43,14 @@ from app.services.market_taxonomy_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_filter_input(query, filters: FilterSpec | FilterExpression):
+    """Route legacy flat filters and grouped expressions through one compiler."""
+
+    if isinstance(filters, FilterExpression):
+        return apply_filter_expression(query, filters)
+    return apply_filters(query, filters)
 
 
 def _scan_results_query(session: Session, scan_id: str):
@@ -614,7 +633,7 @@ class SqlScanResultRepository(ScanResultRepository):
         include_setup_payload: bool = True,
     ) -> ResultPage:
         q = _scan_results_query(self._session, scan_id)
-        q = apply_filters(q, spec.filters)
+        q = apply_filter_expression(q, spec.effective_expression())
 
         rows, total, _python_sorted = apply_sort_and_paginate(
             q, spec.sort, spec.page,
@@ -639,7 +658,7 @@ class SqlScanResultRepository(ScanResultRepository):
     def query_symbols(
         self,
         scan_id: str,
-        filters: FilterSpec,
+        filters: FilterSpec | FilterExpression,
         sort: SortSpec,
         *,
         page: PageSpec | None = None,
@@ -648,7 +667,7 @@ class SqlScanResultRepository(ScanResultRepository):
         # Python-sort fields read ScanResult.details, so we need the full row.
         if scan_result_query.requires_python_sort(sort.field):
             q = _scan_results_query(self._session, scan_id)
-            q = apply_filters(q, filters)
+            q = _apply_filter_input(q, filters)
             if page is None:
                 rows = apply_sort_all(q, sort)
                 symbols = tuple(row[0].symbol for row in rows)
@@ -658,7 +677,7 @@ class SqlScanResultRepository(ScanResultRepository):
             return symbols, total
 
         q = _scan_results_symbol_query(self._session, scan_id)
-        q = apply_filters(q, filters)
+        q = _apply_filter_input(q, filters)
 
         if page is None:
             rows = apply_sort_all(q, sort)
@@ -672,13 +691,13 @@ class SqlScanResultRepository(ScanResultRepository):
     def query_all(
         self,
         scan_id: str,
-        filters: FilterSpec,
+        filters: FilterSpec | FilterExpression,
         sort: SortSpec,
         *,
         include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
         q = _scan_results_query(self._session, scan_id)
-        q = apply_filters(q, filters)
+        q = _apply_filter_input(q, filters)
         rows = apply_sort_all(q, sort)
         return tuple(
             _map_row_to_domain(

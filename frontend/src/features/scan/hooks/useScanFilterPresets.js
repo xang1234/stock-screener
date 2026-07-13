@@ -1,4 +1,9 @@
 import { useCallback, useState } from 'react';
+import { buildDefaultScanFilters } from '../defaultFilters';
+import {
+  expressionToLegacyFilters,
+  legacyFiltersToExpression,
+} from '../filterExpression';
 
 export function useScanFilterPresets({
   presets,
@@ -12,6 +17,8 @@ export function useScanFilterPresets({
   setSortBy,
   setSortOrder,
   setPage,
+  expression = null,
+  setExpression = null,
 }) {
   const [activePresetId, setActivePresetId] = useState(null);
   const [presetFiltersSnapshot, setPresetFiltersSnapshot] = useState(null);
@@ -23,6 +30,10 @@ export function useScanFilterPresets({
   const [saveDialogInitialDescription, setSaveDialogInitialDescription] = useState('');
   const [saveDialogError, setSaveDialogError] = useState(null);
 
+  const currentPresetFilters = expression
+    ? { schema_version: 2, expression, legacy_filters: filters }
+    : filters;
+
   const clearActivePreset = useCallback(() => {
     setActivePresetId(null);
     setPresetFiltersSnapshot(null);
@@ -33,12 +44,12 @@ export function useScanFilterPresets({
     if (!activePresetId || !presetFiltersSnapshot) {
       return false;
     }
-    const filtersChanged = JSON.stringify(filters) !== JSON.stringify(presetFiltersSnapshot);
+    const filtersChanged = JSON.stringify(currentPresetFilters) !== JSON.stringify(presetFiltersSnapshot);
     const sortChanged =
       presetSortSnapshot &&
       (sortBy !== presetSortSnapshot.sortBy || sortOrder !== presetSortSnapshot.sortOrder);
     return filtersChanged || sortChanged;
-  }, [activePresetId, filters, presetFiltersSnapshot, presetSortSnapshot, sortBy, sortOrder]);
+  }, [activePresetId, currentPresetFilters, presetFiltersSnapshot, presetSortSnapshot, sortBy, sortOrder]);
 
   const handleLoadPreset = useCallback(
     (presetId) => {
@@ -52,15 +63,37 @@ export function useScanFilterPresets({
         return;
       }
 
-      setFilters(preset.filters);
+      const isExpressionPreset = preset.filters?.schema_version === 2 && preset.filters?.expression;
+      const nextFilters = isExpressionPreset
+        ? (preset.filters.legacy_filters
+            || expressionToLegacyFilters(preset.filters.expression, buildDefaultScanFilters()))
+        : preset.filters;
+      setFilters(nextFilters);
+      if (setExpression) {
+        setExpression(
+          isExpressionPreset
+            ? preset.filters.expression
+            : legacyFiltersToExpression(nextFilters),
+        );
+      }
       setSortBy(preset.sort_by);
       setSortOrder(preset.sort_order);
       setActivePresetId(presetId);
-      setPresetFiltersSnapshot(preset.filters);
+      setPresetFiltersSnapshot(
+        isExpressionPreset
+          ? preset.filters
+          : (setExpression
+              ? {
+                  schema_version: 2,
+                  expression: legacyFiltersToExpression(nextFilters),
+                  legacy_filters: nextFilters,
+                }
+              : preset.filters),
+      );
       setPresetSortSnapshot({ sortBy: preset.sort_by, sortOrder: preset.sort_order });
       setPage(1);
     },
-    [clearActivePreset, presets, setFilters, setPage, setSortBy, setSortOrder]
+    [clearActivePreset, presets, setExpression, setFilters, setPage, setSortBy, setSortOrder]
   );
 
   const handleOpenSaveDialog = useCallback(() => {
@@ -80,18 +113,18 @@ export function useScanFilterPresets({
       await updatePresetAsync({
         presetId: activePresetId,
         updates: {
-          filters,
+          filters: currentPresetFilters,
           sort_by: sortBy,
           sort_order: sortOrder,
         },
       });
-      setPresetFiltersSnapshot(filters);
+      setPresetFiltersSnapshot(currentPresetFilters);
       setPresetSortSnapshot({ sortBy, sortOrder });
     } catch (error) {
       console.error('Failed to update preset:', error);
       alert('Failed to update preset. Please try again.');
     }
-  }, [activePresetId, filters, sortBy, sortOrder, updatePresetAsync]);
+  }, [activePresetId, currentPresetFilters, sortBy, sortOrder, updatePresetAsync]);
 
   const handleRenamePreset = useCallback(
     (presetId) => {
@@ -134,12 +167,12 @@ export function useScanFilterPresets({
           const newPreset = await createPresetAsync({
             name,
             description: description || null,
-            filters,
+            filters: currentPresetFilters,
             sort_by: sortBy,
             sort_order: sortOrder,
           });
           setActivePresetId(newPreset.id);
-          setPresetFiltersSnapshot(filters);
+          setPresetFiltersSnapshot(currentPresetFilters);
           setPresetSortSnapshot({ sortBy, sortOrder });
         } else {
           const targetPresetId = saveDialogPresetId ?? activePresetId;
@@ -163,7 +196,7 @@ export function useScanFilterPresets({
     [
       activePresetId,
       createPresetAsync,
-      filters,
+      currentPresetFilters,
       saveDialogMode,
       saveDialogPresetId,
       sortBy,

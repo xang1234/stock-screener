@@ -11,7 +11,7 @@ import abc
 from collections.abc import Sequence
 from datetime import date
 
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortSpec
+from app.domain.common.query import FilterExpression, FilterSpec, PageSpec, QuerySpec, SortSpec
 from app.domain.feature_store.quality import DQInputs, DQResult
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 
@@ -215,7 +215,7 @@ class FeatureStoreRepository(abc.ABC):
     @abc.abstractmethod
     def query_latest(
         self,
-        filters: FilterSpec | None = None,
+        filters: FilterSpec | FilterExpression | None = None,
         sort: SortSpec | None = None,
         page: PageSpec | None = None,
     ) -> FeaturePage:
@@ -360,7 +360,7 @@ class FeatureStoreRepository(abc.ABC):
     def query_run_symbols(
         self,
         run_id: int,
-        filters: FilterSpec,
+        filters: FilterSpec | FilterExpression,
         sort: SortSpec,
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:

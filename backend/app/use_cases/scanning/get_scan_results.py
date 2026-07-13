@@ -13,10 +13,14 @@ FastAPI, or any other infrastructure.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_spec import FilterSpec, QuerySpec
+from app.domain.scanning.filter_expression import (
+    annotate_matched_groups,
+    expression_fingerprint,
+)
+from app.domain.scanning.filter_spec import CategoricalFilter, FilterSpec, QuerySpec
 from app.domain.scanning.models import ResultPage
 
 from ._resolve import resolve_scan
@@ -46,6 +50,8 @@ class GetScanResultsResult:
     """What the use case returns to the caller."""
 
     page: ResultPage
+    unfiltered_total: int
+    query_fingerprint: str
 
 
 # ── Use Case ────────────────────────────────────────────────────────────
@@ -60,23 +66,38 @@ class GetScanResultsUseCase:
         with uow:
             scan, run_id = resolve_scan(uow, query.scan_id)
 
-            # Apply passes_only business rule: augment filters to
-            # include only "Strong Buy" and "Buy" ratings.
+            # Apply passes_only as an always-required condition. Legacy GET
+            # requests keep their FilterSpec shape for compatibility; grouped
+            # POST requests retain their complete expression.
             query_spec = query.query_spec
             if query.passes_only:
-                # Build a fresh FilterSpec to avoid mutating the caller's object.
-                augmented = FilterSpec(
-                    range_filters=list(query_spec.filters.range_filters),
-                    categorical_filters=list(query_spec.filters.categorical_filters),
-                    boolean_filters=list(query_spec.filters.boolean_filters),
-                    text_searches=list(query_spec.filters.text_searches),
+                rating_filter = CategoricalFilter(
+                    field="rating", values=("Strong Buy", "Buy")
                 )
-                augmented.add_categorical("rating", ("Strong Buy", "Buy"))
-                query_spec = QuerySpec(
-                    filters=augmented,
-                    sort=query_spec.sort,
-                    page=query_spec.page,
-                )
+                if query_spec.expression is not None:
+                    query_spec = QuerySpec(
+                        filters=query_spec.filters,
+                        sort=query_spec.sort,
+                        page=query_spec.page,
+                        expression=query_spec.expression.with_required_condition(
+                            rating_filter
+                        ),
+                    )
+                else:
+                    augmented = FilterSpec(
+                        range_filters=list(query_spec.filters.range_filters),
+                        categorical_filters=list(query_spec.filters.categorical_filters),
+                        boolean_filters=list(query_spec.filters.boolean_filters),
+                        text_searches=list(query_spec.filters.text_searches),
+                    )
+                    augmented.add_categorical("rating", ("Strong Buy", "Buy"))
+                    query_spec = QuerySpec(
+                        filters=augmented,
+                        sort=query_spec.sort,
+                        page=query_spec.page,
+                    )
+
+            expression = query_spec.effective_expression()
 
             if run_id:
                 logger.info(
@@ -90,6 +111,7 @@ class GetScanResultsUseCase:
                     include_sparklines=query.include_sparklines,
                     include_setup_payload=query.include_setup_payload,
                 )
+                unfiltered_total = uow.feature_store.count_by_run_id(run_id)
             else:
                 logger.info(
                     "Scan %s: reading from scan_results (no feature run)",
@@ -101,5 +123,14 @@ class GetScanResultsUseCase:
                     include_sparklines=query.include_sparklines,
                     include_setup_payload=query.include_setup_payload,
                 )
+                unfiltered_total = uow.scan_results.count_by_scan_id(query.scan_id)
 
-        return GetScanResultsResult(page=result_page)
+        result_page = replace(
+            result_page,
+            items=annotate_matched_groups(result_page.items, expression),
+        )
+        return GetScanResultsResult(
+            page=result_page,
+            unfiltered_total=unfiltered_total,
+            query_fingerprint=expression_fingerprint(expression),
+        )

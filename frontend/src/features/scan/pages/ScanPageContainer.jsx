@@ -5,9 +5,11 @@ import {
   cancelScan,
   createScan,
   exportScanResults,
+  exportScanResultsQuery,
   getFilterOptions,
   getScanBootstrap,
   getScanResults,
+  queryScanResults,
   getScans,
   getScanStatus,
   getUniverseStats,
@@ -33,6 +35,13 @@ import { normalizeScanFilterOptions } from '../filterOptions';
 import { DEFAULT_FILTER_KEY } from '../constants';
 import ScanControlBar from '../components/ScanControlBar';
 import ScanResultsSection from '../components/ScanResultsSection';
+import GuidedFilterBuilderDialog from '../components/GuidedFilterBuilderDialog';
+import {
+  buildScanQueryRequest,
+  expressionToLegacyFilters,
+  legacyFiltersToExpression,
+  stableExpressionKey,
+} from '../filterExpression';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
 import {
   buildUniverseDef,
@@ -69,7 +78,7 @@ function normalizeScanWarnings(warnings) {
 }
 
 function ScanPage() {
-  const { runtimeReady, uiSnapshots, scanDefaults, universeOptions } = useRuntime();
+  const { runtimeReady, uiSnapshots, scanDefaults, universeOptions, features } = useRuntime();
   const { selectedMarket: globalMarket } = useMarket();
   const { activeProfileDetail } = useStrategyProfileData();
   const scanDefaultsAppliedRef = useRef(null);
@@ -98,9 +107,14 @@ function ScanPage() {
   const [sortOrder, setSortOrder] = useState('desc');
   const [filters, setFilters] = useState(buildDefaultScanFilters);
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  const [appliedExpression, setAppliedExpression] = useState(
+    () => legacyFiltersToExpression(buildDefaultScanFilters()),
+  );
+  const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+  const groupedFilteringEnabled = features?.grouped_scan_filters === true;
 
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.scan);
   const initialQueriesEnabled = runtimeReady && (!snapshotEnabled || initialBootstrapSettled);
@@ -195,6 +209,8 @@ function ScanPage() {
     setSortBy,
     setSortOrder,
     setPage,
+    expression: groupedFilteringEnabled ? appliedExpression : null,
+    setExpression: groupedFilteringEnabled ? setAppliedExpression : null,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -236,6 +252,10 @@ function ScanPage() {
     }, 300);
     return () => clearTimeout(timer);
   }, [filters]);
+
+  useEffect(() => {
+    setAppliedExpression((previous) => legacyFiltersToExpression(debouncedFilters, previous));
+  }, [debouncedFilters]);
 
   const handleLoadScan = useCallback(
     async (scanId) => {
@@ -377,23 +397,53 @@ function ScanPage() {
   );
 
   const stableFilterKey = useMemo(() => getStableFilterKey(debouncedFilters), [debouncedFilters]);
+  const expressionKey = useMemo(
+    () => stableExpressionKey(appliedExpression),
+    [appliedExpression],
+  );
+  const groupedQueryRequest = useMemo(
+    () => buildScanQueryRequest(appliedExpression, {
+      page,
+      perPage,
+      sortBy,
+      sortOrder,
+      includeSparklines: true,
+      detailLevel: 'table',
+    }),
+    [appliedExpression, page, perPage, sortBy, sortOrder],
+  );
 
   const {
     data: resultsData,
     isLoading: resultsLoading,
+    isFetching: resultsFetching,
     refetch: refetchResults,
   } = useQuery({
-    queryKey: ['scanResults', currentScanId, page, perPage, sortBy, sortOrder, stableFilterKey],
-    queryFn: () => getScanResults(currentScanId, getApiFilterParams()),
+    queryKey: [
+      'scanResults',
+      currentScanId,
+      page,
+      perPage,
+      sortBy,
+      sortOrder,
+      groupedFilteringEnabled ? expressionKey : stableFilterKey,
+    ],
+    queryFn: ({ signal }) => (
+      groupedFilteringEnabled
+        ? queryScanResults(currentScanId, groupedQueryRequest, { signal })
+        : getScanResults(currentScanId, getApiFilterParams())
+    ),
     enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
-    // Keep the previous page visible across page/sort/filter changes, but
-    // only within the same scan — a scan switch (e.g. via the global market
-    // selector) must not show another scan's rows while loading.
-    placeholderData: (previousData, previousQuery) => (
-      previousQuery?.queryKey?.[1] === currentScanId ? previousData : undefined
-    ),
+    // Grouped requests intentionally clear prior rows while loading so draft
+    // labels can never be attached to stale results. Legacy GETs retain their
+    // previous within-scan placeholder behavior.
+    placeholderData: groupedFilteringEnabled
+      ? undefined
+      : (previousData, previousQuery) => (
+          previousQuery?.queryKey?.[1] === currentScanId ? previousData : undefined
+        ),
   });
 
   useEffect(() => {
@@ -514,7 +564,10 @@ function ScanPage() {
   };
 
   const handleResetFilters = () => {
-    setFilters(buildDefaultScanFilters());
+    const defaults = buildDefaultScanFilters();
+    setFilters(defaults);
+    setDebouncedFilters(defaults);
+    setAppliedExpression(legacyFiltersToExpression(defaults));
     setPage(1);
     presetState.clearActivePreset();
   };
@@ -527,8 +580,15 @@ function ScanPage() {
 
   const handleExport = async () => {
     try {
-      const exportParams = buildFilterParams(debouncedFilters, { sortBy, sortOrder });
-      const blob = await exportScanResults(currentScanId, exportParams);
+      const blob = groupedFilteringEnabled
+        ? await exportScanResultsQuery(
+            currentScanId,
+            buildScanQueryRequest(appliedExpression, { sortBy, sortOrder }),
+          )
+        : await exportScanResults(
+            currentScanId,
+            buildFilterParams(debouncedFilters, { sortBy, sortOrder }),
+          );
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -683,6 +743,9 @@ function ScanPage() {
           saveDialogError={presetState.saveDialogError}
           onSaveDialogClose={presetState.handleSaveDialogClose}
           onSaveDialogSave={presetState.handleSaveDialogSave}
+          groupedFilteringEnabled={groupedFilteringEnabled}
+          expression={appliedExpression}
+          onOpenLogicBuilder={() => setLogicBuilderOpen(true)}
         />
       )}
 
@@ -690,7 +753,8 @@ function ScanPage() {
         <ScanResultsSection
           resultsLoading={resultsLoading}
           resultsData={resultsData}
-          filters={filters}
+          expression={groupedFilteringEnabled ? appliedExpression : null}
+          resultsFetching={resultsFetching}
           onExport={handleExport}
           page={page}
           perPage={perPage}
@@ -719,10 +783,27 @@ function ScanPage() {
         initialSymbol={selectedSymbol}
         scanId={currentScanId}
         filters={debouncedFilters}
+        expression={groupedFilteringEnabled ? appliedExpression : null}
         sortBy={sortBy}
         sortOrder={sortOrder}
         currentPageResults={resultsData?.results || []}
       />
+
+      {groupedFilteringEnabled && (
+        <GuidedFilterBuilderDialog
+          open={logicBuilderOpen}
+          expression={appliedExpression}
+          onClose={() => setLogicBuilderOpen(false)}
+          onApply={(nextExpression) => {
+            setAppliedExpression(nextExpression);
+            setFilters(expressionToLegacyFilters(nextExpression, buildDefaultScanFilters()));
+            setPage(1);
+            setLogicBuilderOpen(false);
+            presetState.clearActivePreset();
+          }}
+          filterOptions={normalizedFilterOptions}
+        />
+      )}
     </Container>
   );
 }

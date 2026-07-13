@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { applyScanFilterDefaults } from '../../features/scan/defaultFilters';
 import { filterStaticScanRows } from '../scanClient';
+import { annotateExpressionMatches } from '../../features/scan/filterExpression';
 
 export function buildFiltersFromPreset(screen) {
   return applyScanFilterDefaults(screen?.filters ?? {});
@@ -18,7 +19,9 @@ export function usePresetScreens({
     return Object.fromEntries(
       screens.map((s) => [
         s.id,
-        filterStaticScanRows(allRows, buildFiltersFromPreset(s)).length,
+        s.filter_expression
+          ? annotateExpressionMatches(allRows, s.filter_expression).length
+          : filterStaticScanRows(allRows, buildFiltersFromPreset(s)).length,
       ]),
     );
   }, [allRows, hydrationComplete, screens]);

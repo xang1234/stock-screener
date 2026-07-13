@@ -13,7 +13,7 @@ from __future__ import annotations
 import abc
 from typing import Protocol
 
-from .filter_spec import FilterSpec, PageSpec, QuerySpec, SortSpec
+from .filter_spec import FilterExpression, FilterSpec, PageSpec, QuerySpec, SortSpec
 from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
 
 
@@ -116,7 +116,7 @@ class ScanResultRepository(abc.ABC):
     def query_symbols(
         self,
         scan_id: str,
-        filters: FilterSpec,
+        filters: FilterSpec | FilterExpression,
         sort: SortSpec,
         *,
         page: PageSpec | None = None,
@@ -135,7 +135,7 @@ class ScanResultRepository(abc.ABC):
     def query_all(
         self,
         scan_id: str,
-        filters: FilterSpec,
+        filters: FilterSpec | FilterExpression,
         sort: SortSpec,
         *,
         include_sparklines: bool = False,

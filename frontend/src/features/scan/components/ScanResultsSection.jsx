@@ -1,28 +1,13 @@
-import { Box, Button, CircularProgress, Paper, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, LinearProgress, Paper, Typography } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import ResultsTable from '../../../components/Scan/ResultsTable';
-
-function isFiltered(filters) {
-  return Boolean(
-    filters.symbolSearch ||
-      filters.stage != null ||
-      filters.ratings?.length > 0 ||
-      filters.ibdIndustries?.values?.length > 0 ||
-      filters.gicsSectors?.values?.length > 0 ||
-      filters.compositeScore?.min != null ||
-      filters.compositeScore?.max != null ||
-      filters.minerviniScore?.min != null ||
-      filters.minerviniScore?.max != null ||
-      filters.vcpDetected != null ||
-      filters.maAlignment != null ||
-      filters.passesTemplate != null
-  );
-}
+import { expressionSummary } from '../filterExpression';
 
 export default function ScanResultsSection({
   resultsLoading,
   resultsData,
-  filters,
+  expression,
+  resultsFetching = false,
   onExport,
   page,
   perPage,
@@ -45,13 +30,30 @@ export default function ScanResultsSection({
   }
 
   if (resultsData && resultsData.results && resultsData.results.length > 0) {
+    const unfilteredTotal = resultsData.unfiltered_total ?? resultsData.total;
+    const hasAppliedFilter = expression
+      ? expression.required.conditions.length > 0 || expression.groups.some((group) => group.enabled !== false)
+      : false;
     return (
       <>
-        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Typography variant="h6">
-            Results: {resultsData.total} stocks
-            {isFiltered(filters) ? ' (filtered)' : ''}
-          </Typography>
+        {resultsFetching && <LinearProgress sx={{ mb: 1 }} />}
+        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+          <Box>
+            <Typography variant="h6">
+              Results: {resultsData.total.toLocaleString()} stocks
+              {hasAppliedFilter && unfilteredTotal !== resultsData.total
+                ? ` matching of ${unfilteredTotal.toLocaleString()}`
+                : ''}
+            </Typography>
+            {expression && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
+                <Chip size="small" color={hasAppliedFilter ? 'primary' : 'default'} label="Applied" />
+                <Typography variant="caption" color="text.secondary">
+                  {expressionSummary(expression)}
+                </Typography>
+              </Box>
+            )}
+          </Box>
           <Button variant="outlined" startIcon={<DownloadIcon />} onClick={onExport} disabled={!resultsData.total}>
             Export to CSV
           </Button>
@@ -77,11 +79,10 @@ export default function ScanResultsSection({
 
   return (
     <Paper sx={{ p: 5, textAlign: 'center' }}>
-      <Typography variant="body1" color="text.secondary">
-        No results available. This could mean:
-        <br />- The scan is still processing
-        <br />- The scan failed
-        <br />- All results were filtered out
+      <Typography variant="h6">No stocks match the applied logic</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        {expression ? expressionSummary(expression) : 'The current filters returned no rows.'}
+        {' '}Try disabling one setup, switching “match all” to “match any,” or widening a range.
       </Typography>
       <Button variant="outlined" onClick={onRetry} sx={{ mt: 2 }}>
         Retry Loading Results
