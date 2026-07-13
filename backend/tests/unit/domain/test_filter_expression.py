@@ -22,6 +22,7 @@ from app.domain.scanning.filter_expression import (
     expression_fingerprint,
     matched_setup_groups,
 )
+from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
 from app.domain.scanning.models import MatchedGroupDomain, ScanResultItemDomain
 from app.schemas.filter_expression import RangeConditionRequest, ScanQueryRequest
 
@@ -265,3 +266,105 @@ def test_fingerprint_is_stable_and_changes_with_logic():
     assert expression_fingerprint(expression) != expression_fingerprint(
         _expression(MatchOperator.ALL)
     )
+
+
+def test_domain_expression_rejects_invalid_structure_and_ranges():
+    with pytest.raises(ValueError, match="minimum cannot exceed maximum"):
+        FilterExpression(
+            required=FilterGroup(
+                id="required",
+                name="Always require",
+                conditions=(RangeFilter("price", min_value=100, max_value=10),),
+            )
+        )
+
+    with pytest.raises(ValueError, match="Enabled setup groups cannot be empty"):
+        FilterExpression(
+            groups=(FilterGroup(id="empty", name="Empty", conditions=()),)
+        )
+
+    with pytest.raises(ValueError, match="Group joins must be MatchOperator"):
+        FilterExpression(group_join="some")
+
+    with pytest.raises(ValueError, match="Numeric range bounds must be numbers"):
+        FilterExpression(
+            required=FilterGroup(
+                id="required",
+                name="Always require",
+                conditions=(RangeFilter("price", min_value="10"),),
+            )
+        )
+
+
+def test_payload_codec_rejects_string_booleans_instead_of_inverting_them():
+    payload = {
+        "expression_version": 1,
+        "required": {
+            "id": "required",
+            "name": "Always require",
+            "match": "all",
+            "enabled": True,
+            "conditions": [],
+        },
+        "groups": [
+            {
+                "id": "boolean",
+                "name": "Boolean",
+                "match": "all",
+                "enabled": True,
+                "conditions": [
+                    {
+                        "kind": "boolean",
+                        "field": "vcp_detected",
+                        "value": "false",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Boolean filter values must be booleans"):
+        expression_from_payload(payload)
+
+    with pytest.raises(ValidationError, match="Boolean filter values must be booleans"):
+        ScanQueryRequest.model_validate(payload)
+
+
+def test_payload_codecs_reject_values_they_cannot_preserve():
+    payload = {
+        "required": {
+            "id": "required",
+            "name": "Always require",
+            "conditions": [
+                {
+                    "kind": "categorical",
+                    "field": "rating",
+                    "values": ["Buy", 1],
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(ValueError, match="Categorical filter values must be strings"):
+        expression_from_payload(payload)
+
+    with pytest.raises(ValueError, match="must be a boolean"):
+        legacy_filters_to_expression({"maAlignment": "false"})
+
+    with pytest.raises(ValueError, match="versions must be integers"):
+        expression_from_payload({"expression_version": "1"})
+
+    with pytest.raises(ValueError, match="Filter fields must be a string"):
+        expression_from_payload(
+            {
+                "required": {
+                    "id": "required",
+                    "name": "Always require",
+                    "match": "all",
+                    "conditions": [
+                        {"kind": "range", "field": 1, "min": 10}
+                    ],
+                },
+                "group_join": "any",
+            }
+        )

@@ -11,7 +11,10 @@ Backward-compatible re-export from ``app.domain.scanning.filter_spec``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from enum import Enum
+import math
+import re
 from typing import TypeAlias
 
 
@@ -193,6 +196,9 @@ class FilterExpression:
     groups: tuple[FilterGroup, ...] = ()
     version: int = 1
 
+    def __post_init__(self) -> None:
+        validate_filter_expression(self)
+
     @property
     def enabled_groups(self) -> tuple[FilterGroup, ...]:
         return tuple(group for group in self.groups if group.enabled)
@@ -221,6 +227,124 @@ class FilterExpression:
             groups=self.groups,
             version=self.version,
         )
+
+
+_GROUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _validate_filter_condition(condition: FilterCondition) -> None:
+    field_name = getattr(condition, "field", None)
+    if field_name is not None and (not isinstance(field_name, str) or not field_name):
+        raise ValueError("Filter fields must be non-empty strings")
+
+    if isinstance(condition, RangeFilter):
+        if condition.is_empty():
+            raise ValueError("Range conditions require a minimum or maximum")
+        for bound in (condition.min_value, condition.max_value):
+            if bound is None:
+                continue
+            if condition.field == "ipo_date":
+                if not isinstance(bound, str):
+                    raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings")
+                try:
+                    date.fromisoformat(bound)
+                except ValueError as exc:
+                    raise ValueError(
+                        "IPO date bounds must use ISO YYYY-MM-DD strings"
+                    ) from exc
+                continue
+            if isinstance(bound, bool):
+                raise ValueError("Numeric range bounds cannot be booleans")
+            if not isinstance(bound, (int, float)):
+                raise ValueError("Numeric range bounds must be numbers")
+            if not math.isfinite(float(bound)):
+                raise ValueError("Numeric range bounds must be finite numbers")
+        if condition.min_value is not None and condition.max_value is not None:
+            try:
+                if condition.min_value > condition.max_value:
+                    raise ValueError("Range minimum cannot exceed maximum")
+            except TypeError as exc:
+                raise ValueError("Range bounds must use comparable value types") from exc
+        return
+
+    if isinstance(condition, CategoricalFilter):
+        if condition.is_empty():
+            raise ValueError("Categorical conditions require at least one value")
+        if any(not isinstance(value, str) or not value.strip() for value in condition.values):
+            raise ValueError("Categorical values must be non-empty strings")
+        if len(condition.values) > 100:
+            raise ValueError("Categorical conditions allow at most 100 values")
+        return
+
+    if isinstance(condition, BooleanFilter):
+        if not isinstance(condition.value, bool):
+            raise ValueError("Boolean filter values must be booleans")
+        return
+
+    if isinstance(condition, TextSearchFilter):
+        if not isinstance(condition.pattern, str) or not condition.pattern.strip():
+            raise ValueError("Text patterns cannot be blank")
+        if len(condition.pattern) > 100:
+            raise ValueError("Text patterns allow at most 100 characters")
+        return
+
+    if isinstance(condition, ListingDiscoveryFilter):
+        if isinstance(condition.min_volume, bool):
+            raise ValueError("Listing-discovery volume must be a positive number")
+        try:
+            value = float(condition.min_volume)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Listing-discovery volume must be a positive number") from exc
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("Listing-discovery volume must be a positive number")
+        return
+
+    raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
+
+
+def validate_filter_expression(expression: FilterExpression) -> None:
+    """Enforce canonical expression invariants for every construction path."""
+
+    if type(expression.version) is not int or expression.version != 1:
+        raise ValueError("Unsupported filter expression version")
+    if not isinstance(expression.group_join, MatchOperator):
+        raise ValueError("Group joins must be MatchOperator values")
+    required = expression.required
+    if not isinstance(required, FilterGroup):
+        raise ValueError("The required group must be a FilterGroup")
+    if required.id != "required" or required.match != MatchOperator.ALL:
+        raise ValueError("The required group must use id='required' and match='all'")
+    if not required.enabled:
+        raise ValueError("The required group cannot be disabled")
+    if len(expression.groups) > 8:
+        raise ValueError("An expression can contain at most 8 setup groups")
+
+    group_ids: set[str] = set()
+    for group in (required, *expression.groups):
+        if not isinstance(group, FilterGroup):
+            raise ValueError("Expression groups must be FilterGroup values")
+        if not isinstance(group.match, MatchOperator):
+            raise ValueError("Group match operators must be MatchOperator values")
+        if not isinstance(group.enabled, bool):
+            raise ValueError("Group enabled flags must be booleans")
+        if not isinstance(group.id, str) or len(group.id) > 64 or not _GROUP_ID_PATTERN.fullmatch(group.id):
+            raise ValueError("Group IDs must be 1-64 URL-safe characters")
+        if not isinstance(group.name, str) or not group.name.strip() or len(group.name) > 60:
+            raise ValueError("Group names must be 1-60 non-blank characters")
+        if len(group.conditions) > 20:
+            raise ValueError("A filter group can contain at most 20 conditions")
+        for condition in group.conditions:
+            _validate_filter_condition(condition)
+
+    for group in expression.groups:
+        if group.id == "required" or group.id in group_ids:
+            raise ValueError("Setup group IDs must be unique and cannot use 'required'")
+        group_ids.add(group.id)
+        if group.enabled and not group.conditions:
+            raise ValueError("Enabled setup groups cannot be empty")
+
+    if expression.condition_count > 100:
+        raise ValueError("An expression can contain at most 100 conditions")
 
 
 def filter_spec_to_expression(filters: FilterSpec) -> FilterExpression:
@@ -314,6 +438,7 @@ __all__ = [
     "FilterCondition",
     "FilterGroup",
     "FilterExpression",
+    "validate_filter_expression",
     "filter_spec_to_expression",
     "SortSpec",
     "PageSpec",

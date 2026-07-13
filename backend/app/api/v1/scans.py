@@ -6,23 +6,18 @@ Handles creating scans, checking progress, and retrieving results.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import StreamingResponse
 from typing import List, Literal, Any
 from pydantic import BaseModel, ValidationError
 import logging
 
 from ...schemas.cache import SmartRefreshResponse
-from ...schemas.filter_expression import ScanQueryRequest
 from ...schemas.scanning import (
     ExplainResponse,
-    FilterOptionsResponse,
     ScanCreateRequest,
     ScanCreateResponse,
     ScanListItem,
     ScanListResponse,
     ScanResultItem,
-    ScanResultsResponse,
-    ScanSymbolsResponse,
     ScanStatusResponse,
     SetupDetailsResponse,
     normalize_scan_warnings_for_response,
@@ -37,22 +32,19 @@ from ...services.market_activity_service import get_runtime_activity_status
 from ...wiring.bootstrap import (
     get_uow,
     get_create_scan_use_case,
-    get_get_filter_options_use_case,
-    get_get_scan_results_use_case,
-    get_get_scan_symbols_use_case,
     get_get_single_result_use_case,
     get_get_setup_details_use_case,
     get_get_peers_use_case,
-    get_export_scan_results_use_case,
     get_explain_stock_use_case,
     get_job_backend,
     get_ui_snapshot_service,
 )
-from .scan_filter_params import parse_scan_filters, parse_scan_sort, parse_page_spec
+from .scan_queries import router as scan_queries_router
 from ...use_cases.scanning.create_scan import ActiveScanConflictError, StaleMarketDataError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+router.include_router(scan_queries_router)
 _market_catalog = get_market_catalog()
 SUPPORTED_SCAN_REFRESH_MARKETS = _market_catalog.market_codes_with_capability(
     "feature_snapshot"
@@ -261,21 +253,6 @@ def _build_universe_resolution(request: ScanCreateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _build_optional_page_spec(
-    page: int | None,
-    per_page: int | None,
-) -> PageSpec | None:
-    """Build optional pagination settings for symbol-list endpoints."""
-    from ...domain.scanning.filter_spec import PageSpec
-
-    if page is None and per_page is None:
-        return None
-    return PageSpec(
-        page=page or 1,
-        per_page=per_page or 100,
-    )
-
-
 @router.get("/{scan_id}/status", response_model=ScanStatusResponse)
 async def get_scan_status(
     scan_id: str,
@@ -397,198 +374,6 @@ async def cancel_scan(
         raise HTTPException(status_code=500, detail=f"Error cancelling scan: {str(e)}")
 
 
-@router.get("/{scan_id}/results", response_model=ScanResultsResponse)
-async def get_scan_results(
-    scan_id: str,
-    passes_only: bool = Query(False, description="Show only stocks passing template"),
-    include_sparklines: bool = Query(True, description="Include sparkline data"),
-    detail_level: Literal["table", "full"] = Query(
-        "table",
-        description="Response detail level. 'table' excludes heavy setup-engine payload fields.",
-    ),
-    filters=Depends(parse_scan_filters),
-    sort=Depends(parse_scan_sort),
-    page=Depends(parse_page_spec),
-    uow: Any = Depends(get_uow),
-    use_case: Any = Depends(get_get_scan_results_use_case),
-):
-    """Get scan results with pagination, sorting, and filtering."""
-    try:
-        from ...domain.common.errors import EntityNotFoundError
-        from ...domain.scanning.filter_spec import QuerySpec
-        from ...use_cases.scanning.get_scan_results import GetScanResultsQuery
-
-        query = GetScanResultsQuery(
-            scan_id=scan_id,
-            query_spec=QuerySpec.from_filter_spec(filters, sort=sort, page=page),
-            include_sparklines=include_sparklines,
-            include_setup_payload=(detail_level == "full"),
-            passes_only=passes_only,
-        )
-        result = use_case.execute(uow, query)
-    except EntityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error getting scan results: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting scan results: {str(e)}")
-
-    return ScanResultsResponse(
-        scan_id=scan_id,
-        total=result.page.total,
-        page=result.page.page,
-        per_page=result.page.per_page,
-        pages=result.page.total_pages,
-        results=[
-            ScanResultItem.from_domain(
-                item,
-                include_setup_payload=(detail_level == "full"),
-            )
-            for item in result.page.items
-        ],
-        unfiltered_total=result.unfiltered_total,
-        query_fingerprint=result.query_fingerprint,
-    )
-
-
-@router.post("/{scan_id}/results/query", response_model=ScanResultsResponse)
-async def query_scan_results(
-    scan_id: str,
-    request: ScanQueryRequest,
-    uow: Any = Depends(get_uow),
-    use_case: Any = Depends(get_get_scan_results_use_case),
-):
-    """Run a versioned, bounded grouped-filter expression."""
-    try:
-        from ...domain.common.errors import EntityNotFoundError
-        from ...domain.scanning.filter_spec import PageSpec, QuerySpec
-        from ...use_cases.scanning.get_scan_results import GetScanResultsQuery
-
-        page = request.page.to_domain() if request.page else PageSpec()
-        result = use_case.execute(
-            uow,
-            GetScanResultsQuery(
-                scan_id=scan_id,
-                query_spec=QuerySpec(
-                    expression=request.to_expression(),
-                    sort=request.sort.to_domain(),
-                    page=page,
-                ),
-                include_sparklines=request.options.include_sparklines,
-                include_setup_payload=request.options.detail_level == "full",
-                passes_only=request.passes_only,
-            ),
-        )
-    except EntityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.error("Error querying grouped scan results: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Error querying scan results")
-
-    return ScanResultsResponse(
-        scan_id=scan_id,
-        total=result.page.total,
-        unfiltered_total=result.unfiltered_total,
-        page=result.page.page,
-        per_page=result.page.per_page,
-        pages=result.page.total_pages,
-        query_fingerprint=result.query_fingerprint,
-        results=[
-            ScanResultItem.from_domain(
-                item,
-                include_setup_payload=request.options.detail_level == "full",
-            )
-            for item in result.page.items
-        ],
-    )
-
-
-@router.get("/{scan_id}/symbols", response_model=ScanSymbolsResponse)
-async def get_scan_symbols(
-    scan_id: str,
-    passes_only: bool = Query(False, description="Show only stocks passing template"),
-    page: int | None = Query(None, ge=1, description="Optional page number"),
-    per_page: int | None = Query(None, ge=1, le=100, description="Optional results per page"),
-    filters=Depends(parse_scan_filters),
-    sort=Depends(parse_scan_sort),
-    uow: Any = Depends(get_uow),
-    use_case: Any = Depends(get_get_scan_symbols_use_case),
-):
-    """Get a lightweight, filtered symbol list for chart navigation."""
-    try:
-        from ...domain.common.errors import EntityNotFoundError
-        from ...use_cases.scanning.get_scan_symbols import GetScanSymbolsQuery
-
-        page_spec = _build_optional_page_spec(page, per_page)
-        result = use_case.execute(
-            uow,
-            GetScanSymbolsQuery(
-                scan_id=scan_id,
-                expression=filters.to_expression(),
-                sort=sort,
-                page=page_spec,
-                passes_only=passes_only,
-            ),
-        )
-    except EntityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error getting scan symbols: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting scan symbols: {str(e)}")
-
-    return ScanSymbolsResponse(
-        scan_id=scan_id,
-        total=result.total,
-        symbols=list(result.symbols),
-        page=result.page,
-        per_page=result.per_page,
-        next_cursor=None,
-        query_fingerprint=result.query_fingerprint,
-    )
-
-
-@router.post("/{scan_id}/symbols/query", response_model=ScanSymbolsResponse)
-async def query_scan_symbols(
-    scan_id: str,
-    request: ScanQueryRequest,
-    uow: Any = Depends(get_uow),
-    use_case: Any = Depends(get_get_scan_symbols_use_case),
-):
-    """Return chart-navigation symbols using the applied expression."""
-    try:
-        from ...domain.common.errors import EntityNotFoundError
-        from ...use_cases.scanning.get_scan_symbols import GetScanSymbolsQuery
-
-        result = use_case.execute(
-            uow,
-            GetScanSymbolsQuery(
-                scan_id=scan_id,
-                expression=request.to_expression(),
-                sort=request.sort.to_domain(),
-                page=request.page.to_domain() if request.page else None,
-                passes_only=request.passes_only,
-            ),
-        )
-    except EntityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.error("Error querying grouped scan symbols: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Error querying scan symbols")
-
-    return ScanSymbolsResponse(
-        scan_id=scan_id,
-        total=result.total,
-        symbols=list(result.symbols),
-        page=result.page,
-        per_page=result.per_page,
-        next_cursor=None,
-        query_fingerprint=result.query_fingerprint,
-    )
-
-
 @router.delete("/{scan_id}")
 async def delete_scan(
     scan_id: str,
@@ -619,117 +404,6 @@ async def delete_scan(
     except Exception as e:
         logger.error(f"Error deleting scan: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error deleting scan: {str(e)}")
-
-
-@router.get("/{scan_id}/export")
-async def export_scan_results(
-    scan_id: str,
-    format: str = Query(default="csv", pattern="^(csv)$"),
-    passes_only: bool = Query(False, description="Show only stocks passing template"),
-    filters=Depends(parse_scan_filters),
-    sort=Depends(parse_scan_sort),
-    uow: Any = Depends(get_uow),
-    use_case: Any = Depends(get_export_scan_results_use_case),
-):
-    """Export scan results to CSV with full filter and sort support."""
-    try:
-        from ...domain.common.errors import EntityNotFoundError
-        from ...domain.scanning.models import ExportFormat
-        from ...use_cases.scanning.export_scan_results import ExportScanResultsQuery
-
-        query = ExportScanResultsQuery(
-            scan_id=scan_id,
-            expression=filters.to_expression(),
-            sort=sort,
-            export_format=ExportFormat(format),
-            passes_only=passes_only,
-        )
-        result = use_case.execute(uow, query)
-    except EntityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error exporting scan results: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error exporting scan results: {str(e)}")
-
-    return StreamingResponse(
-        iter([result.content]),
-        media_type=result.media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{result.filename}"',
-            "Content-Length": str(len(result.content)),
-        },
-    )
-
-
-@router.post("/{scan_id}/export/query")
-async def export_grouped_scan_results(
-    scan_id: str,
-    request: ScanQueryRequest,
-    uow: Any = Depends(get_uow),
-    use_case: Any = Depends(get_export_scan_results_use_case),
-):
-    """Export every row matching the applied grouped expression."""
-    try:
-        from ...domain.common.errors import EntityNotFoundError
-        from ...domain.scanning.models import ExportFormat
-        from ...use_cases.scanning.export_scan_results import ExportScanResultsQuery
-
-        result = use_case.execute(
-            uow,
-            ExportScanResultsQuery(
-                scan_id=scan_id,
-                expression=request.to_expression(),
-                sort=request.sort.to_domain(),
-                export_format=ExportFormat.CSV,
-                passes_only=request.passes_only,
-            ),
-        )
-    except EntityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.error("Error exporting grouped scan results: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Error exporting scan results")
-
-    return StreamingResponse(
-        iter([result.content]),
-        media_type=result.media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{result.filename}"',
-            "Content-Length": str(len(result.content)),
-        },
-    )
-
-
-@router.get("/{scan_id}/filter-options", response_model=FilterOptionsResponse)
-async def get_filter_options(
-    scan_id: str,
-    uow: Any = Depends(get_uow),
-    use_case: Any = Depends(get_get_filter_options_use_case),
-):
-    """
-    Get unique values for categorical filters from this scan's results.
-
-    Returns lists of unique IBD industries, GICS sectors, and ratings
-    that exist in the scan results, for populating filter dropdowns.
-    """
-    try:
-        from ...domain.common.errors import EntityNotFoundError
-        from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery
-
-        result = use_case.execute(uow, GetFilterOptionsQuery(scan_id=scan_id))
-    except EntityNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error getting filter options: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting filter options: {str(e)}")
-
-    return FilterOptionsResponse(
-        ibd_industries=list(result.options.ibd_industries),
-        gics_sectors=list(result.options.gics_sectors),
-        ratings=list(result.options.ratings),
-    )
 
 
 @router.get("/{scan_id}/result/{symbol}", response_model=ScanResultItem)

@@ -69,7 +69,9 @@ def legacy_filters_to_expression(
     for key, field in LEGACY_BOOLEAN_FILTER_FIELDS.items():
         value = values.get(key)
         if value is not None:
-            conditions.append(BooleanFilter(field, bool(value)))
+            if not isinstance(value, bool):
+                raise ValueError(f"Legacy boolean filter {key!r} must be a boolean")
+            conditions.append(BooleanFilter(field, value))
 
     symbol_search = str(values.get("symbolSearch") or "").strip()
     if symbol_search:

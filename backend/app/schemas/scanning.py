@@ -495,14 +495,25 @@ class ScanListResponse(BaseModel):
     scans: List[ScanListItem]
 
 
+class FilterFieldCapabilityResponse(BaseModel):
+    """One server-owned field exposed by the guided filter builder."""
+
+    field: str
+    label: str
+    type: Literal["range", "categorical", "boolean", "text"]
+    category: str
+    sortable: bool = False
+
+
 class FilterOptionsResponse(BaseModel):
     """Response model for filter options."""
 
     ibd_industries: List[str]
     gics_sectors: List[str]
     ratings: List[str]
-    filter_catalog: List[Dict[str, Any]] = Field(
-        default_factory=filter_field_catalog_payload
+    filter_catalog: List[FilterFieldCapabilityResponse] = Field(
+        default_factory=filter_field_catalog_payload,
+        validate_default=True,
     )
 
 

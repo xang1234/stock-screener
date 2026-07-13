@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from datetime import date
+import math
 from typing import Any, Mapping
 
 from app.domain.common.query import (
@@ -209,57 +211,172 @@ def canonical_expression_payload(expression: FilterExpression) -> dict[str, Any]
     }
 
 
+def normalize_range_bound(field: str, value: Any) -> int | float | str | None:
+    """Normalize one range bound using the canonical logical field contract."""
+
+    if value is None:
+        return None
+    if field == "ipo_date":
+        if not isinstance(value, str):
+            raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings")
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError as exc:
+            raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings") from exc
+    if isinstance(value, bool):
+        raise ValueError("Numeric range bounds cannot be booleans")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Numeric range bounds must be finite numbers") from exc
+    if not math.isfinite(normalized):
+        raise ValueError("Numeric range bounds must be finite numbers")
+    return int(normalized) if normalized.is_integer() else normalized
+
+
+def normalize_listing_min_volume(value: Any) -> int | float:
+    if isinstance(value, bool):
+        raise ValueError("Listing-discovery volume must be a positive number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Listing-discovery volume must be a positive number") from exc
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError("Listing-discovery volume must be a positive number")
+    return int(normalized) if normalized.is_integer() else normalized
+
+
 def expression_from_payload(payload: Mapping[str, Any]) -> FilterExpression:
-    """Hydrate a trusted canonical payload, including static-only fields."""
+    """Strictly hydrate the canonical payload, including static-only fields."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("Filter expressions must be objects")
+
+    missing = object()
+
+    def string_value(
+        item: Mapping[str, Any],
+        key: str,
+        label: str,
+        *,
+        default: object = missing,
+    ) -> str:
+        value = item.get(key, default)
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be a string")
+        return value
 
     def condition_from_payload(item: Mapping[str, Any]) -> FilterCondition:
+        if not isinstance(item, Mapping):
+            raise ValueError("Filter conditions must be objects")
         kind = item.get("kind")
         if kind == "range":
+            field = string_value(item, "field", "Filter fields")
             return RangeFilter(
-                field=str(item["field"]),
-                min_value=item.get("min"),
-                max_value=item.get("max"),
+                field=field,
+                min_value=normalize_range_bound(field, item.get("min")),
+                max_value=normalize_range_bound(field, item.get("max")),
             )
         if kind == "categorical":
+            raw_values = item.get("values")
+            if not isinstance(raw_values, (list, tuple)):
+                raise ValueError("Categorical conditions require a values array")
+            if any(not isinstance(value, str) for value in raw_values):
+                raise ValueError("Categorical filter values must be strings")
+            values = tuple(
+                dict.fromkeys(
+                    value.strip()
+                    for value in raw_values
+                    if value.strip()
+                )
+            )
             return CategoricalFilter(
-                field=str(item["field"]),
-                values=tuple(str(value) for value in item.get("values", ())),
-                mode=FilterMode(str(item.get("mode", "include"))),
+                field=string_value(item, "field", "Filter fields"),
+                values=values,
+                mode=FilterMode(
+                    string_value(
+                        item,
+                        "mode",
+                        "Filter modes",
+                        default="include",
+                    )
+                ),
             )
         if kind == "boolean":
-            return BooleanFilter(field=str(item["field"]), value=bool(item["value"]))
+            value = item.get("value")
+            if not isinstance(value, bool):
+                raise ValueError("Boolean filter values must be booleans")
+            return BooleanFilter(
+                field=string_value(item, "field", "Filter fields"),
+                value=value,
+            )
         if kind == "text":
+            pattern = item.get("pattern")
+            if not isinstance(pattern, str):
+                raise ValueError("Text patterns must be strings")
             return TextSearchFilter(
-                field=str(item["field"]),
-                pattern=str(item["pattern"]),
+                field=string_value(item, "field", "Filter fields"),
+                pattern=pattern.strip(),
             )
         if kind == "listing_discovery":
-            return ListingDiscoveryFilter(min_volume=float(item["min_volume"]))
+            return ListingDiscoveryFilter(
+                min_volume=normalize_listing_min_volume(item.get("min_volume"))
+            )
         raise ValueError(f"Unsupported filter condition kind: {kind!r}")
 
     def group_from_payload(item: Mapping[str, Any]) -> FilterGroup:
+        if not isinstance(item, Mapping):
+            raise ValueError("Filter groups must be objects")
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError("Filter group enabled values must be booleans")
+        raw_conditions = item.get("conditions", ())
+        if not isinstance(raw_conditions, (list, tuple)):
+            raise ValueError("Filter group conditions must be arrays")
         return FilterGroup(
-            id=str(item["id"]),
-            name=str(item["name"]),
-            match=MatchOperator(str(item.get("match", "all"))),
-            enabled=bool(item.get("enabled", True)),
+            id=string_value(item, "id", "Filter group IDs"),
+            name=string_value(item, "name", "Filter group names"),
+            match=MatchOperator(
+                string_value(
+                    item,
+                    "match",
+                    "Group match operators",
+                    default="all",
+                )
+            ),
+            enabled=enabled,
             conditions=tuple(
                 condition_from_payload(condition)
-                for condition in item.get("conditions", ())
+                for condition in raw_conditions
             ),
         )
 
-    required_payload = payload.get("required") or {
-        "id": "required",
-        "name": "Always require",
-        "match": "all",
-        "conditions": [],
-    }
+    required_payload = payload.get("required")
+    if required_payload is None:
+        required_payload = {
+            "id": "required",
+            "name": "Always require",
+            "match": "all",
+            "conditions": [],
+        }
+    raw_groups = payload.get("groups", ())
+    if not isinstance(raw_groups, (list, tuple)):
+        raise ValueError("Filter expression groups must be an array")
+    version = payload.get("expression_version", 1)
+    if type(version) is not int:
+        raise ValueError("Filter expression versions must be integers")
     return FilterExpression(
         required=group_from_payload(required_payload),
-        group_join=MatchOperator(str(payload.get("group_join", "any"))),
-        groups=tuple(group_from_payload(group) for group in payload.get("groups", ())),
-        version=int(payload.get("expression_version", 1)),
+        group_join=MatchOperator(
+            string_value(
+                payload,
+                "group_join",
+                "Group join operators",
+                default="any",
+            )
+        ),
+        groups=tuple(group_from_payload(group) for group in raw_groups),
+        version=version,
     )
 
 
@@ -281,6 +398,8 @@ __all__ = [
     "expression_fingerprint",
     "expression_from_payload",
     "matched_setup_groups",
+    "normalize_listing_min_volume",
+    "normalize_range_bound",
     "require_passing_ratings",
     "scan_result_values",
 ]

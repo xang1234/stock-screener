@@ -74,42 +74,6 @@ const FIELD_TO_BOOLEAN_FILTER = Object.fromEntries(
 
 const IPO_PRESET_MONTHS = { '6m': 6, '1y': 12, '2y': 24, '3y': 36, '5y': 60 };
 
-export const FILTER_FIELD_CATALOG = Object.freeze([
-  { field: 'composite_score', label: 'Composite score', type: 'range', category: 'Scores' },
-  { field: 'minervini_score', label: 'Minervini score', type: 'range', category: 'Scores' },
-  { field: 'canslim_score', label: 'CANSLIM score', type: 'range', category: 'Scores' },
-  { field: 'se_setup_score', label: 'Setup score', type: 'range', category: 'Setups' },
-  { field: 'se_distance_to_pivot_pct', label: 'Distance to pivot %', type: 'range', category: 'Setups' },
-  { field: 'se_pattern_primary', label: 'Setup pattern', type: 'categorical', category: 'Setups' },
-  { field: 'se_setup_ready', label: 'Setup ready', type: 'boolean', category: 'Setups' },
-  { field: 'vcp_detected', label: 'VCP detected', type: 'boolean', category: 'Setups' },
-  { field: 'vcp_ready_for_breakout', label: 'VCP ready', type: 'boolean', category: 'Setups' },
-  { field: 'pocket_pivot', label: 'Pocket pivot', type: 'boolean', category: 'Setups' },
-  { field: 'power_trend', label: 'Power trend', type: 'boolean', category: 'Setups' },
-  { field: 'rating', label: 'Rating', type: 'categorical', category: 'Ratings' },
-  { field: 'rs_rating', label: 'RS rating', type: 'range', category: 'Ratings' },
-  { field: 'rs_rating_1m', label: 'RS rating 1M', type: 'range', category: 'Ratings' },
-  { field: 'rs_rating_3m', label: 'RS rating 3M', type: 'range', category: 'Ratings' },
-  { field: 'eps_rating', label: 'EPS rating', type: 'range', category: 'Fundamentals' },
-  { field: 'eps_growth_qq', label: 'EPS growth Q/Q %', type: 'range', category: 'Fundamentals' },
-  { field: 'sales_growth_qq', label: 'Sales growth Q/Q %', type: 'range', category: 'Fundamentals' },
-  { field: 'ibd_group_rank', label: 'IBD group rank', type: 'range', category: 'Fundamentals' },
-  { field: 'ibd_industry_group', label: 'IBD industry', type: 'categorical', category: 'Classification' },
-  { field: 'gics_sector', label: 'GICS sector', type: 'categorical', category: 'Classification' },
-  { field: 'market', label: 'Market', type: 'categorical', category: 'Classification' },
-  { field: 'price', label: 'Price', type: 'range', category: 'Liquidity' },
-  { field: 'market_cap_usd', label: 'Market cap USD', type: 'range', category: 'Liquidity' },
-  { field: 'adv_usd', label: 'Average dollar volume USD', type: 'range', category: 'Liquidity' },
-  { field: 'adr_percent', label: 'ADR %', type: 'range', category: 'Technicals' },
-  { field: 'perf_month', label: '1-month performance %', type: 'range', category: 'Technicals' },
-  { field: 'perf_3m', label: '3-month performance %', type: 'range', category: 'Technicals' },
-  { field: 'ma_alignment', label: 'MA alignment', type: 'boolean', category: 'Technicals' },
-  { field: 'stage', label: 'Stage', type: 'range', category: 'Technicals' },
-  { field: 'listing_search', label: 'Symbol or company contains', type: 'text', category: 'Identity' },
-]);
-
-const FIELD_META = new Map(FILTER_FIELD_CATALOG.map((item) => [item.field, item]));
-
 export function createEmptyExpression(requiredConditions = []) {
   return {
     expression_version: 1,
@@ -357,11 +321,11 @@ export function annotateExpressionMatches(rows, expression) {
     .map((row) => ({ ...row, matched_groups: matchedGroupNames(row, expression) }));
 }
 
-export function conditionLabel(condition, catalog = FILTER_FIELD_CATALOG) {
+export function conditionLabel(condition, catalog = []) {
   if (condition.kind === 'listing_discovery') {
     return `Listing discovery or dollar volume ≥ ${condition.min_volume}`;
   }
-  const label = fieldMeta(condition.field, catalog)?.label ?? condition.field;
+  const label = fieldMeta(condition.field, catalog, condition.kind).label;
   if (condition.kind === 'range') {
     if (condition.min != null && condition.max != null) return `${label} ${condition.min}–${condition.max}`;
     if (condition.min != null) return `${label} ≥ ${condition.min}`;
@@ -385,7 +349,7 @@ export function expressionSummary(expression) {
   return `${requiredCount} required · match ${join} of ${enabledGroups.length} named ${enabledGroups.length === 1 ? 'setup' : 'setups'}`;
 }
 
-export function newCondition(field = 'composite_score', catalog = FILTER_FIELD_CATALOG) {
+export function newCondition(field = 'composite_score', catalog = []) {
   const meta = fieldMeta(field, catalog);
   if (meta.type === 'categorical') return { kind: 'categorical', field: meta.field, values: [], mode: 'include' };
   if (meta.type === 'boolean') return { kind: 'boolean', field: meta.field, value: true };
@@ -393,20 +357,68 @@ export function newCondition(field = 'composite_score', catalog = FILTER_FIELD_C
   return { kind: 'range', field: meta.field, min: null, max: null };
 }
 
-export function fieldMeta(field, catalog = FILTER_FIELD_CATALOG) {
-  const source = catalog.length ? catalog : FILTER_FIELD_CATALOG;
-  return source.find((item) => item.field === field)
-    ?? FIELD_META.get(field)
-    ?? source[0]
-    ?? FILTER_FIELD_CATALOG[0];
+export function fieldMeta(field, catalog = [], fallbackType = 'range') {
+  return catalog.find((item) => item.field === field) ?? {
+    field,
+    label: String(field || 'Unknown field').replaceAll('_', ' '),
+    type: fallbackType,
+    category: 'Other',
+    sortable: false,
+  };
 }
 
-export function validateExpression(expression, catalog = FILTER_FIELD_CATALOG) {
+function validateCondition(condition, catalog) {
+  const errors = [];
+  const label = fieldMeta(condition.field, catalog, condition.kind).label;
+  if (condition.kind === 'range') {
+    if (condition.min == null && condition.max == null) {
+      errors.push(`${label} needs a minimum or maximum.`);
+      return errors;
+    }
+    const isDate = condition.field === 'ipo_date';
+    const normalize = (value) => {
+      if (value == null) return null;
+      if (isDate) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return Number.NaN;
+        const parsed = new Date(`${value}T00:00:00Z`);
+        return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+          ? value : Number.NaN;
+      }
+      return Number(value);
+    };
+    const minimum = normalize(condition.min);
+    const maximum = normalize(condition.max);
+    if ((minimum != null && (isDate ? Number.isNaN(minimum) : !Number.isFinite(minimum)))
+      || (maximum != null && (isDate ? Number.isNaN(maximum) : !Number.isFinite(maximum)))) {
+      errors.push(`${label} needs ${isDate ? 'valid ISO dates' : 'finite numeric values'}.`);
+    } else if (minimum != null && maximum != null && minimum > maximum) {
+      errors.push(`${label} minimum cannot exceed maximum.`);
+    }
+  } else if (condition.kind === 'categorical' && !condition.values?.length) {
+    errors.push(`${label} needs at least one value.`);
+  } else if (condition.kind === 'boolean' && typeof condition.value !== 'boolean') {
+    errors.push(`${label} needs a Yes or No value.`);
+  } else if (condition.kind === 'text' && !condition.pattern?.trim()) {
+    errors.push(`${label} needs search text.`);
+  } else if (
+    condition.kind === 'listing_discovery'
+    && (!Number.isFinite(Number(condition.min_volume)) || Number(condition.min_volume) <= 0)
+  ) {
+    errors.push('Listing discovery needs a positive finite dollar-volume value.');
+  }
+  return errors;
+}
+
+export function validateExpression(expression, catalog = []) {
   const errors = [];
   const groups = expression?.groups || [];
   if (groups.length > 8) errors.push('Use at most 8 setup groups.');
   const ids = new Set();
-  let total = expression?.required?.conditions?.length ?? 0;
+  const requiredConditions = expression?.required?.conditions ?? [];
+  let total = requiredConditions.length;
+  requiredConditions.forEach((condition) => {
+    errors.push(...validateCondition(condition, catalog));
+  });
   groups.forEach((group, index) => {
     total += group.conditions?.length ?? 0;
     if (!group.name?.trim()) errors.push(`Setup ${index + 1} needs a name.`);
@@ -416,15 +428,7 @@ export function validateExpression(expression, catalog = FILTER_FIELD_CATALOG) {
       errors.push(`${group.name || `Setup ${index + 1}`} needs at least one rule or must be disabled.`);
     }
     (group.conditions || []).forEach((condition) => {
-      if (condition.kind === 'range' && condition.min == null && condition.max == null) {
-        errors.push(`${fieldMeta(condition.field, catalog).label} needs a minimum or maximum.`);
-      }
-      if (condition.kind === 'categorical' && !condition.values?.length) {
-        errors.push(`${fieldMeta(condition.field, catalog).label} needs at least one value.`);
-      }
-      if (condition.kind === 'text' && !condition.pattern?.trim()) {
-        errors.push(`${fieldMeta(condition.field, catalog).label} needs search text.`);
-      }
+      errors.push(...validateCondition(condition, catalog));
     });
   });
   if (total > 100) errors.push('Use at most 100 rules in one filter.');

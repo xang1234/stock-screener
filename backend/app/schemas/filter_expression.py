@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date
-import math
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -30,10 +28,14 @@ from app.domain.scanning.filter_capabilities import (
     SORT_FIELDS,
     TEXT_FIELDS,
 )
+from app.domain.scanning.filter_expression import (
+    normalize_listing_min_volume,
+    normalize_range_bound,
+)
 
 
 class _ContractModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class RangeConditionRequest(_ContractModel):
@@ -63,12 +65,8 @@ class RangeConditionRequest(_ContractModel):
         if self.min is None and self.max is None:
             raise ValueError("Range conditions require a minimum or maximum")
 
-        if self.field == "ipo_date":
-            self.min = _normalize_iso_date(self.min)
-            self.max = _normalize_iso_date(self.max)
-        else:
-            self.min = _normalize_finite_number(self.min)
-            self.max = _normalize_finite_number(self.max)
+        self.min = normalize_range_bound(self.field, self.min)
+        self.max = normalize_range_bound(self.field, self.max)
 
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError("Range minimum cannot exceed maximum")
@@ -76,31 +74,6 @@ class RangeConditionRequest(_ContractModel):
 
     def to_domain(self) -> RangeFilter:
         return RangeFilter(field=self.field, min_value=self.min, max_value=self.max)
-
-
-def _normalize_iso_date(value: int | float | str | None) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings")
-    try:
-        return date.fromisoformat(value).isoformat()
-    except ValueError as exc:
-        raise ValueError("IPO date bounds must use ISO YYYY-MM-DD strings") from exc
-
-
-def _normalize_finite_number(value: int | float | str | None) -> int | float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise ValueError("Numeric range bounds cannot be booleans")
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Numeric range bounds must be finite numbers") from exc
-    if not math.isfinite(normalized):
-        raise ValueError("Numeric range bounds must be finite numbers")
-    return int(normalized) if normalized.is_integer() else normalized
 
 
 class CategoricalConditionRequest(_ContractModel):
@@ -136,6 +109,13 @@ class BooleanConditionRequest(_ContractModel):
     kind: Literal["boolean"]
     field: str
     value: bool
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def require_boolean_value(cls, value):
+        if not isinstance(value, bool):
+            raise ValueError("Boolean filter values must be booleans")
+        return value
 
     @field_validator("field")
     @classmethod
@@ -182,6 +162,11 @@ class ListingDiscoveryConditionRequest(_ContractModel):
         if isinstance(value, dict) and isinstance(value.get("min_volume"), bool):
             raise ValueError("Listing-discovery volume must be a positive number")
         return value
+
+    @field_validator("min_volume")
+    @classmethod
+    def normalize_min_volume(cls, value: float) -> int | float:
+        return normalize_listing_min_volume(value)
 
     def to_domain(self) -> ListingDiscoveryFilter:
         return ListingDiscoveryFilter(min_volume=self.min_volume)
@@ -269,21 +254,7 @@ class ScanQueryRequest(_ContractModel):
 
     @model_validator(mode="after")
     def validate_expression(self):
-        if self.required.id != "required" or self.required.match != "all":
-            raise ValueError("The required group must use id='required' and match='all'")
-        if not self.required.enabled:
-            raise ValueError("The required group cannot be disabled")
-        enabled_groups = [group for group in self.groups if group.enabled]
-        if any(not group.conditions for group in enabled_groups):
-            raise ValueError("Enabled setup groups cannot be empty")
-        ids = [group.id for group in self.groups]
-        if len(ids) != len(set(ids)) or "required" in ids:
-            raise ValueError("Setup group IDs must be unique and cannot use 'required'")
-        total = len(self.required.conditions) + sum(
-            len(group.conditions) for group in self.groups
-        )
-        if total > 100:
-            raise ValueError("An expression can contain at most 100 conditions")
+        self.to_expression()
         return self
 
     def to_expression(self) -> FilterExpression:

@@ -6,6 +6,15 @@ import { renderWithProviders } from '../../../test/renderWithProviders';
 import { createEmptyExpression } from '../filterExpression';
 import GuidedFilterBuilderDialog from './GuidedFilterBuilderDialog';
 
+const filterCatalog = [
+  {
+    field: 'composite_score',
+    label: 'Composite score',
+    type: 'range',
+    category: 'Scores',
+  },
+];
+
 describe('GuidedFilterBuilderDialog', () => {
   it('keeps draft changes private until a valid expression is applied', async () => {
     const user = userEvent.setup();
@@ -17,6 +26,7 @@ describe('GuidedFilterBuilderDialog', () => {
         expression={createEmptyExpression()}
         onClose={onClose}
         onApply={onApply}
+        filterOptions={{ filterCatalog }}
       />,
     );
 
@@ -50,11 +60,34 @@ describe('GuidedFilterBuilderDialog', () => {
         expression={createEmptyExpression()}
         onClose={onClose}
         onApply={onApply}
+        filterOptions={{ filterCatalog }}
       />,
     );
 
     await user.click(screen.getByRole('button', { name: /cancel/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('keeps a contradictory range in the dialog and explains the error', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    renderWithProviders(
+      <GuidedFilterBuilderDialog
+        open
+        expression={createEmptyExpression()}
+        onClose={vi.fn()}
+        onApply={onApply}
+        filterOptions={{ filterCatalog }}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /add named setup/i }));
+    await user.type(screen.getByLabelText('Minimum'), '100');
+    await user.type(screen.getByLabelText('Maximum'), '10');
+    await user.click(screen.getByRole('button', { name: /apply logic/i }));
+
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.getByText(/composite score minimum cannot exceed maximum/i)).toBeInTheDocument();
   });
 });

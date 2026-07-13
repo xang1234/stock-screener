@@ -14,6 +14,7 @@ import {
   expressionToLegacyFilters,
   legacyFiltersToExpression,
   stableExpressionKey,
+  validateExpression,
 } from './filterExpression';
 
 function groupedExpression(join = 'any') {
@@ -146,6 +147,34 @@ describe('scan filter expressions', () => {
     expect(first.expression_version).toBe(1);
     expect(first.page).toEqual({ number: 1, size: 50 });
     expect(second.page.number).toBe(2);
+  });
+
+  it('rejects invalid ranges in required rules and named setups before querying', () => {
+    const expression = groupedExpression();
+    expression.required.conditions = [
+      { kind: 'range', field: 'price', min: 100, max: 10 },
+    ];
+    expression.groups[0].conditions = [
+      { kind: 'range', field: 'rs_rating', min: Number.POSITIVE_INFINITY, max: null },
+    ];
+
+    expect(validateExpression(expression, [
+      { field: 'price', label: 'Price', type: 'range', category: 'Liquidity' },
+      { field: 'rs_rating', label: 'RS rating', type: 'range', category: 'Ratings' },
+    ])).toEqual(expect.arrayContaining([
+      'Price minimum cannot exceed maximum.',
+      'RS rating needs finite numeric values.',
+    ]));
+  });
+
+  it('rejects calendar dates that JavaScript would otherwise roll forward', () => {
+    const expression = createEmptyExpression([
+      { kind: 'range', field: 'ipo_date', min: '2026-02-31', max: null },
+    ]);
+
+    expect(validateExpression(expression, [
+      { field: 'ipo_date', label: 'IPO date', type: 'range', category: 'Company' },
+    ])).toContain('IPO date needs valid ISO dates.');
   });
 
   it('matches the shared browser and backend truth table', () => {

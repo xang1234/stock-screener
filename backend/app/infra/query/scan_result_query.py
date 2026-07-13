@@ -2,30 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
-from sqlalchemy import and_, asc, desc, func, or_, true
+from sqlalchemy import asc, desc
 from sqlalchemy.orm import Query
 
 from app.domain.scanning.filter_spec import (
-    BooleanFilter,
-    CategoricalFilter,
-    FilterCondition,
     FilterExpression,
-    FilterMode,
     FilterSpec,
-    ListingDiscoveryFilter,
     PageSpec,
-    RangeFilter,
     SortOrder,
     SortSpec,
-    TextSearchFilter,
     filter_spec_to_expression,
 )
-from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
+from app.infra.db.portability import json_number, json_text, lean_count
 from app.infra.query.expression_compiler import compile_expression
-from app.infra.query.like_pattern import literal_contains_pattern
+from app.infra.query.sql_filter_compiler import (
+    SqlFilterFieldResolver,
+    compile_sql_condition,
+)
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
@@ -144,6 +139,15 @@ _JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "se_pivot_type": ("setup_engine", "pivot_type"),
 }
 
+_FILTER_FIELD_RESOLVER = SqlFilterFieldResolver(
+    source_name="scan-result",
+    columns=_COLUMN_MAP,
+    json_paths=_JSON_FIELD_MAP,
+    json_column=ScanResult.details,
+    symbol_column=ScanResult.symbol,
+    company_name_column=StockUniverse.name,
+)
+
 # JSON fields requiring CAST(... AS FLOAT) for correct numeric sorting.
 _JSON_SORT_NUMERIC: frozenset[str] = frozenset({
     "vcp_score", "vcp_pivot",
@@ -203,8 +207,20 @@ def apply_filter_expression(query: Query, expression: FilterExpression) -> Query
 def compile_filter_expression(query: Query, expression: FilterExpression):
     return compile_expression(
         expression,
-        lambda condition: _condition_predicate(query, condition),
+        lambda condition: compile_sql_condition(
+            query,
+            condition,
+            _FILTER_FIELD_RESOLVER,
+        ),
     )
+
+
+def supported_filter_fields() -> frozenset[str]:
+    return _FILTER_FIELD_RESOLVER.supported_filter_fields
+
+
+def supported_sort_fields() -> frozenset[str]:
+    return frozenset((*_COLUMN_MAP, *_JSON_FIELD_MAP, *_PYTHON_SORT_FIELDS))
 
 
 def apply_sort_and_paginate(
@@ -266,115 +282,6 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
     else:
         raise ValueError(f"Unsupported scan-result sort field: {sort.field}")
     return query.all()
-
-
-# ── Private helpers ─────────────────────────────────────────────────────
-
-
-def _range_predicate(query: Query, rf: RangeFilter):
-    """Compile a numeric/date range — SQL column or dialect-aware JSON."""
-    col = _COLUMN_MAP.get(rf.field)
-    minimum = rf.min_value
-    maximum = rf.max_value
-    if rf.field == "ipo_date":
-        minimum = date.fromisoformat(minimum) if isinstance(minimum, str) else minimum
-        maximum = date.fromisoformat(maximum) if isinstance(maximum, str) else maximum
-    predicates = []
-    if col is not None:
-        if minimum is not None:
-            predicates.append(col >= minimum)
-        if maximum is not None:
-            predicates.append(col <= maximum)
-    elif rf.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[rf.field]
-        json_val = json_number(ScanResult.details, json_path, bind_or_session=query)
-        if rf.min_value is not None:
-            predicates.extend((json_val.isnot(None), json_val >= rf.min_value))
-        if rf.max_value is not None:
-            predicates.extend((json_val.isnot(None), json_val <= rf.max_value))
-    else:
-        raise ValueError(f"Unsupported scan-result range field: {rf.field}")
-    return and_(*predicates) if predicates else true()
-
-
-def _categorical_predicate(query: Query, cf: CategoricalFilter):
-    col = _COLUMN_MAP.get(cf.field)
-    if col is not None:
-        if cf.mode == FilterMode.EXCLUDE:
-            return or_(col.is_(None), ~col.in_(cf.values))
-        return col.in_(cf.values)
-    elif cf.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[cf.field]
-        json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
-        if cf.mode == FilterMode.EXCLUDE:
-            return or_(json_val.is_(None), ~json_val.in_(cf.values))
-        return json_val.in_(cf.values)
-    raise ValueError(f"Unsupported scan-result categorical field: {cf.field}")
-
-
-def _boolean_predicate(query: Query, bf: BooleanFilter):
-    col = _COLUMN_MAP.get(bf.field)
-    if col is not None:
-        return and_(col.isnot(None), col == bf.value)
-    elif bf.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[bf.field]
-        if is_postgres(query):
-            json_val = func.lower(json_text(ScanResult.details, json_path, bind_or_session=query))
-            expected = "true" if bf.value else "false"
-        else:
-            json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
-            expected = 1 if bf.value else 0
-        return and_(
-            json_val.isnot(None),
-            json_val == expected,
-        )
-    raise ValueError(f"Unsupported scan-result boolean field: {bf.field}")
-
-
-def _text_predicate(query: Query, ts: TextSearchFilter):
-    pattern = literal_contains_pattern(ts.pattern)
-    if ts.field == "listing_search":
-        return or_(
-            ScanResult.symbol.ilike(pattern, escape="\\"),
-            StockUniverse.name.ilike(pattern, escape="\\"),
-        )
-    col = _COLUMN_MAP.get(ts.field)
-    if col is not None:
-        return and_(col.isnot(None), col.ilike(pattern, escape="\\"))
-    elif ts.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[ts.field]
-        json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
-        return and_(json_val.isnot(None), json_val.ilike(pattern, escape="\\"))
-    raise ValueError(f"Unsupported scan-result text field: {ts.field}")
-
-
-def _listing_discovery_predicate(query: Query, condition: ListingDiscoveryFilter):
-    scan_mode = json_text(
-        ScanResult.details,
-        ("scan_mode",),
-        bind_or_session=query,
-    )
-    return or_(
-        scan_mode == "listing_only",
-        and_(
-            ScanResult.volume.isnot(None),
-            ScanResult.volume >= condition.min_volume,
-        ),
-    )
-
-
-def _condition_predicate(query: Query, condition: FilterCondition):
-    if isinstance(condition, RangeFilter):
-        return _range_predicate(query, condition)
-    if isinstance(condition, CategoricalFilter):
-        return _categorical_predicate(query, condition)
-    if isinstance(condition, BooleanFilter):
-        return _boolean_predicate(query, condition)
-    if isinstance(condition, TextSearchFilter):
-        return _text_predicate(query, condition)
-    if isinstance(condition, ListingDiscoveryFilter):
-        return _listing_discovery_predicate(query, condition)
-    raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
 
 
 def _sort_in_python(
