@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
 import sys
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,6 +17,47 @@ import app.tasks.fundamentals_tasks as fundamentals_tasks
 import app.tasks.universe_tasks as universe_tasks
 from app.domain.markets import market_registry
 from app.interfaces.tasks import feature_store_tasks
+from app.services.group_rank_history_backfill_service import (
+    DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS,
+    GroupRankHistoryBackfillResult,
+    GroupRankHistoryBackfillStatus,
+)
+
+
+def _backfill_result(
+    *,
+    status: GroupRankHistoryBackfillStatus,
+    market: str,
+    as_of_date: date,
+    error: str | None = None,
+) -> GroupRankHistoryBackfillResult:
+    return GroupRankHistoryBackfillResult(
+        status=status,
+        market=market,
+        as_of_date=as_of_date,
+        lookback_start_date=(
+            as_of_date - timedelta(days=DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS)
+        ),
+        errors=1 if status is GroupRankHistoryBackfillStatus.ERRORED else 0,
+        error=error,
+    )
+
+
+def _stub_ready_group_rank_history(monkeypatch) -> None:
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_group_rank_history",
+        lambda *, as_of_date, market: _backfill_result(
+            status=GroupRankHistoryBackfillStatus.SKIPPED,
+            market=market,
+            as_of_date=as_of_date,
+        ),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda **_kwargs: {"status": "skipped"},
+    )
 
 
 def test_static_export_markets_match_market_registry():
@@ -34,70 +74,6 @@ def _stub_static_market_exposure(monkeypatch):
             "exposure_score": 50.0,
         },
     )
-
-
-def test_ensure_group_rank_history_uses_market_calendar_for_non_us_market(monkeypatch):
-    query = MagicMock()
-    query.filter.return_value = query
-    query.distinct.return_value = query
-    query.all.return_value = []
-
-    db = MagicMock()
-    db.query.return_value = query
-
-    @contextmanager
-    def fake_session():
-        yield db
-
-    calendar_calls: list[tuple[str, date]] = []
-    hk_trading_dates = {date(2026, 4, 3), date(2026, 4, 7)}
-
-    def is_trading_day(market: str, day: date) -> bool:
-        calendar_calls.append((market, day))
-        return day in hk_trading_dates
-
-    fill_calls: list[dict] = []
-
-    def fill_gaps_optimized(db_arg, missing_dates, *, market):
-        fill_calls.append(
-            {
-                "db": db_arg,
-                "missing_dates": list(missing_dates),
-                "market": market,
-            }
-        )
-        return {"processed": len(missing_dates), "errors": 0}
-
-    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
-    monkeypatch.setattr(
-        export_script,
-        "get_market_calendar_service",
-        lambda: SimpleNamespace(is_trading_day=is_trading_day),
-    )
-    monkeypatch.setattr(
-        export_script,
-        "get_group_rank_service",
-        lambda: SimpleNamespace(fill_gaps_optimized=fill_gaps_optimized),
-    )
-
-    result = export_script._ensure_group_rank_history(  # noqa: SLF001 - intentional unit test coverage
-        as_of_date=date(2026, 4, 7),
-        market="hk",
-    )
-
-    assert {market for market, _day in calendar_calls} == {"HK"}
-    assert calendar_calls[0] == ("HK", date(2025, 12, 28))
-    assert calendar_calls[-1] == ("HK", date(2026, 4, 7))
-    assert fill_calls == [
-        {
-            "db": db,
-            "missing_dates": [date(2026, 4, 3), date(2026, 4, 7)],
-            "market": "HK",
-        }
-    ]
-    assert result["status"] == "completed"
-    assert result["market"] == "HK"
-    assert result["missing_dates"] == 2
 
 
 def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
@@ -138,6 +114,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
         "_upsert_feature_run_pointer",
         lambda *, pointer_key, run_id: calls.append(f"pointer:{pointer_key}:{run_id}"),
     )
+    _stub_ready_group_rank_history(monkeypatch)
     _stub_static_market_exposure(monkeypatch)
 
     results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
@@ -212,6 +189,7 @@ def test_run_daily_refresh_uses_resolved_tracked_ibd_csv_path(monkeypatch, tmp_p
         lambda db, csv_path=None: load_calls.append((db, csv_path)) or 10105,
     )
     monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+    _stub_ready_group_rank_history(monkeypatch)
     _stub_static_market_exposure(monkeypatch)
 
     results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
@@ -263,16 +241,7 @@ def test_run_daily_refresh_computes_market_exposure_before_snapshot(monkeypatch)
         "load_from_csv",
         lambda db, csv_path=None: 10105,
     )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_group_rank_history",
-        lambda *, as_of_date, market: {"status": "skipped", "market": market},
-    )
-    monkeypatch.setattr(
-        feature_store_tasks,
-        "_enrich_feature_run_with_ibd_metadata",
-        lambda **_kwargs: {"status": "skipped"},
-    )
+    _stub_ready_group_rank_history(monkeypatch)
     monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
 
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
@@ -435,6 +404,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
         "_upsert_feature_run_pointer",
         lambda *, pointer_key, run_id: calls.append(f"pointer:{pointer_key}:{run_id}"),
     )
+    _stub_ready_group_rank_history(monkeypatch)
     _stub_static_market_exposure(monkeypatch)
 
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
@@ -503,6 +473,7 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
         ),
     )
     monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+    _stub_ready_group_rank_history(monkeypatch)
     _stub_static_market_exposure(monkeypatch)
 
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
@@ -873,7 +844,11 @@ def test_run_daily_refresh_reenriches_ibd_metadata_after_group_rank_backfill(mon
     def fake_ensure_group_rank_history(*, as_of_date, market):
         events.append(f"group_rank:{market}")
         group_rank_calls.append({"as_of_date": as_of_date, "market": market})
-        return {"status": "completed", "market": market, "missing_dates": 1}
+        return _backfill_result(
+            status=GroupRankHistoryBackfillStatus.COMPLETED,
+            market=market,
+            as_of_date=as_of_date,
+        )
 
     monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
@@ -955,11 +930,12 @@ def test_run_daily_refresh_skips_reenrich_when_group_rank_backfill_errored(monke
     monkeypatch.setattr(
         export_script,
         "_ensure_group_rank_history",
-        lambda *, as_of_date, market: {
-            "status": "errored",
-            "market": market,
-            "error": "Failed to fetch SPY benchmark data",
-        },
+        lambda *, as_of_date, market: _backfill_result(
+            status=GroupRankHistoryBackfillStatus.ERRORED,
+            market=market,
+            as_of_date=as_of_date,
+            error="Failed to fetch SPY benchmark data",
+        ),
     )
     monkeypatch.setattr(
         export_script,
@@ -1014,7 +990,11 @@ def test_run_daily_refresh_skips_reenrich_when_snapshot_not_ready(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_ensure_group_rank_history",
-        lambda **_kwargs: {"status": "completed"},
+        lambda *, as_of_date, market: _backfill_result(
+            status=GroupRankHistoryBackfillStatus.COMPLETED,
+            market=market,
+            as_of_date=as_of_date,
+        ),
     )
     monkeypatch.setattr(
         export_script,

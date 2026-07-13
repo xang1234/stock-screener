@@ -5,7 +5,10 @@ import json
 
 import requests
 
-from app.services.github_release_sync_service import GitHubReleaseSyncService
+from app.services.github_release_sync_service import (
+    GitHubReleaseSyncService,
+    NamedAssetFetchStatus,
+)
 
 
 class _FakeResponse:
@@ -518,3 +521,63 @@ def test_fetch_latest_bundle_rejects_bundle_asset_name_with_path_separator(tmp_p
 
     assert result["status"] == "invalid_manifest"
     assert "bundle asset name" in str(result["error"]).lower()
+
+
+def test_fetch_named_asset_downloads_exact_asset_atomically(tmp_path):
+    asset_bytes = b"rolling-rrg-history"
+    session = _FakeSession(
+        {
+            "https://api.github.com/repos/xang1234/stock-screener/releases/tags/rrg-history-data": _FakeResponse(
+                json_data={
+                    "assets": [
+                        {
+                            "name": "rrg-history-hk.json.gz",
+                            "browser_download_url": "https://example.com/rrg-history.json.gz",
+                        }
+                    ]
+                }
+            ),
+            "https://example.com/rrg-history.json.gz": _FakeResponse(
+                content=asset_bytes
+            ),
+        }
+    )
+    output_path = tmp_path / "rrg-history-hk.json.gz"
+
+    result = GitHubReleaseSyncService(session=session).fetch_named_asset(
+        repository_full_name="xang1234/stock-screener",
+        release_tag="rrg-history-data",
+        asset_name=output_path.name,
+        output_path=output_path,
+    )
+
+    assert result.status is NamedAssetFetchStatus.SUCCESS
+    assert result.output_path == output_path
+    assert output_path.read_bytes() == asset_bytes
+    assert not list(tmp_path.glob(f".{output_path.name}.*.tmp"))
+
+
+def test_fetch_named_asset_distinguishes_confirmed_missing_from_failure(tmp_path):
+    release_url = (
+        "https://api.github.com/repos/xang1234/stock-screener/"
+        "releases/tags/rrg-history-data"
+    )
+    missing = GitHubReleaseSyncService(
+        session=_FakeSession({release_url: _FakeResponse(json_data={"assets": []})})
+    ).fetch_named_asset(
+        repository_full_name="xang1234/stock-screener",
+        release_tag="rrg-history-data",
+        asset_name="rrg-history-hk.json.gz",
+        output_path=tmp_path / "rrg-history-hk.json.gz",
+    )
+    failed = GitHubReleaseSyncService(
+        session=_FakeSession({release_url: _FakeResponse(status_code=503)})
+    ).fetch_named_asset(
+        repository_full_name="xang1234/stock-screener",
+        release_tag="rrg-history-data",
+        asset_name="rrg-history-hk.json.gz",
+        output_path=tmp_path / "rrg-history-hk.json.gz",
+    )
+
+    assert missing.status is NamedAssetFetchStatus.MISSING
+    assert failed.status is NamedAssetFetchStatus.NETWORK_ERROR

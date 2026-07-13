@@ -63,11 +63,10 @@ def select_market_run_series(
             continue
         if run.as_of_date in seen_dates:
             continue
-        should_include = (
-            len(market_runs) < min_runs
-            or cutoff_date is None
-            or run.as_of_date >= cutoff_date
-        )
+        if cutoff_date is None:
+            should_include = min_runs <= 0 or len(market_runs) < min_runs
+        else:
+            should_include = len(market_runs) < min_runs or run.as_of_date >= cutoff_date
         if not should_include:
             break
         market_runs.append(run)

@@ -32,6 +32,7 @@ from ..services.ibd_group_rank_service import (
 )
 from ..services.market_taxonomy_service import TaxonomyLoadError
 from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
+from .date_resolution import resolve_task_target_date
 from .group_rank_memory import release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory
 from .workload_coordination import serialized_market_workload
 
@@ -425,6 +426,7 @@ def calculate_daily_group_rankings(
 
 def _calculate_daily_group_rankings_in_process(
     *,
+    calculation_date: str | None = None,
     market: str | None = None,
     activity_lifecycle: str | None = None,
 ):
@@ -447,14 +449,20 @@ def _calculate_daily_group_rankings_in_process(
     from .workload_coordination import disable_serialized_market_workload
 
     task = calculate_daily_group_rankings
+    kwargs = {
+        "market": market,
+        "activity_lifecycle": activity_lifecycle,
+    }
+    if calculation_date is not None:
+        kwargs["calculation_date"] = calculation_date
     transient_token = _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.set(True)
     try:
         if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-            return task(market=market, activity_lifecycle=activity_lifecycle)
+            return task(**kwargs)
         with disable_serialized_market_workload():
             if hasattr(task, "request") and callable(getattr(task, "run", None)):
-                return task.run(market=market, activity_lifecycle=activity_lifecycle)
-            return task(market=market, activity_lifecycle=activity_lifecycle)
+                return task.run(**kwargs)
+            return task(**kwargs)
     finally:
         _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.reset(transient_token)
 
@@ -471,6 +479,7 @@ def calculate_daily_group_rankings_with_gapfill(
     max_gap_days: int | None = None,
     market: str | None = None,
     activity_lifecycle: str | None = None,
+    calculation_date: str | None = None,
 ):
     """
     Calculate daily group rankings with automatic gap detection and filling.
@@ -573,6 +582,13 @@ def calculate_daily_group_rankings_with_gapfill(
             return result
 
         service = get_group_rank_service()
+        calendar_service = get_market_calendar_service()
+        resolved_date = resolve_task_target_date(
+            calculation_date,
+            market=effective_market,
+            calendar_service=calendar_service,
+        )
+        target_date = resolved_date.target_date
 
         if settings.group_rank_gapfill_enabled:
             logger.info(
@@ -583,6 +599,7 @@ def calculate_daily_group_rankings_with_gapfill(
                 db,
                 lookback_days=max_gap_days,
                 market=effective_market,
+                end_date=target_date,
             )
             if missing_dates:
                 logger.info(
@@ -612,18 +629,17 @@ def calculate_daily_group_rankings_with_gapfill(
             logger.info("Group ranking gap-fill disabled in settings, skipping detection")
             result['gap_fill'] = {'message': 'Gap-fill disabled'}
 
-        calendar_service = get_market_calendar_service()
-        today_local = calendar_service.market_now(effective_market).date()
-
-        if calendar_service.is_trading_day(effective_market, today_local):
+        if calendar_service.is_trading_day(effective_market, target_date):
             logger.info(
-                "Calculating group rankings for today (%s, %s)...",
-                effective_market, today_local,
+                "Calculating group rankings for %s (%s)...",
+                effective_market, target_date,
             )
-            today_result = _calculate_daily_group_rankings_in_process(
-                market=market,
-                activity_lifecycle=activity_lifecycle,
-            )
+            inner_kwargs = {
+                "market": market,
+                "activity_lifecycle": activity_lifecycle,
+                **resolved_date.nested_daily_kwargs(),
+            }
+            today_result = _calculate_daily_group_rankings_in_process(**inner_kwargs)
             result['today'] = today_result
             today_error = None
             if isinstance(today_result, dict) and today_result.get("error"):
@@ -634,13 +650,13 @@ def calculate_daily_group_rankings_with_gapfill(
             last_trading = calendar_service.last_completed_trading_day(effective_market)
             logger.info(
                 "Today (%s) is not a trading day for %s. Skipping same-day calc.",
-                today_local, effective_market,
+                target_date, effective_market,
             )
             result['today'] = {
                 'skipped': True,
-                'reason': f'{today_local} is not a trading day for {effective_market}',
+                'reason': f'{target_date} is not a trading day for {effective_market}',
                 'last_trading_day': last_trading.strftime('%Y-%m-%d'),
-                'date': today_local.strftime('%Y-%m-%d'),
+                'date': target_date.strftime('%Y-%m-%d'),
                 'timestamp': datetime.now().isoformat(),
             }
 
@@ -730,21 +746,7 @@ def calculate_daily_group_rankings_with_gapfill(
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings')
 @serialized_market_workload('backfill_group_rankings')
 def backfill_group_rankings(self, start_date: str, end_date: str, market: str = "US"):
-    """
-    Backfill historical group rankings for a date range (optimized version).
-
-    This optimized backfill:
-    1. Uses same universe as bulk scans (intersection of IBD groups and stock_universe)
-    2. Deletes existing rankings and recalculates (no skipping)
-    3. Pre-fetches all data once for efficiency
-
-    Args:
-        start_date: Start date in YYYY-MM-DD format
-        end_date: End date in YYYY-MM-DD format
-
-    Returns:
-        Dict with backfill statistics
-    """
+    """Backfill historical group rankings for a date range."""
     logger.info("=" * 60)
     logger.info("TASK: Backfill IBD Group Rankings (Optimized)")
     logger.info(f"Date range: {start_date} to {end_date}")
@@ -833,23 +835,7 @@ def backfill_group_rankings(self, start_date: str, end_date: str, market: str = 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.gapfill_group_rankings')
 @serialized_market_workload('gapfill_group_rankings')
 def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
-    """
-    Detect and fill gaps in group ranking data (optimized version).
-
-    This optimized gap-fill:
-    1. Uses same universe as bulk scans (intersection of IBD groups and stock_universe)
-    2. Pre-fetches all data once for efficiency
-    3. Processes all missing dates with cached data
-
-    Serialization with other same-market write workloads is handled by the
-    market workload lease and the market-jobs queue family.
-
-    Args:
-        max_days: Maximum days to look back for gaps
-
-    Returns:
-        Dict with gap-fill statistics
-    """
+    """Detect and fill gaps in group ranking data."""
     logger.info("=" * 60)
     logger.info("TASK: Gap-Fill IBD Group Rankings (Optimized)")
     logger.info(f"Looking back {max_days} days")

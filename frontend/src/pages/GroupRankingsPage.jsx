@@ -63,6 +63,7 @@ import GroupChartsGrid from '../components/Charts/GroupChartsGrid';
 import { rrgScopesForMarket } from '../utils/rrgScopes';
 
 const GROUP_RANKING_MARKET_FALLBACKS = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA'];
+const EMPTY_AS_OF_ARGS = [];
 
 const REASON_HINTS = {
   warmup_incomplete: 'Wait for the post-close cache warmup to finish, then retry.',
@@ -508,6 +509,7 @@ function GroupRankingsPage() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculationTaskId, setCalculationTaskId] = useState(null);
   const [calculationError, setCalculationError] = useState(null);
+  const [liveRankingMarket, setLiveRankingMarket] = useState(null);
   const [showHistoricalRanks, setShowHistoricalRanks] = useState(false); // Toggle between change vs actual rank
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.groups);
 
@@ -525,8 +527,15 @@ function GroupRankingsPage() {
       const snapshot = await getGroupsBootstrap(selectedMarket);
       if (snapshot && !snapshot.is_stale) {
         const payload = snapshot.payload ?? {};
-        queryClient.setQueryData(['groupRankings', selectedMarket], payload.rankings ?? null);
-        queryClient.setQueryData(['groupMovers', '1w', selectedMarket], payload.movers ?? null);
+        const rankingDate = payload.rankings?.date ?? null;
+        queryClient.setQueryData(
+          ['groupRankings', selectedMarket, rankingDate],
+          payload.rankings ?? null,
+        );
+        queryClient.setQueryData(
+          ['groupMovers', '1w', selectedMarket, rankingDate],
+          payload.movers ?? null,
+        );
       }
       return snapshot;
     },
@@ -534,6 +543,15 @@ function GroupRankingsPage() {
     retry: false,
     staleTime: 60_000,
   });
+  const groupsBootstrapPayload = (
+    groupsBootstrapQuery.data && !groupsBootstrapQuery.data.is_stale
+      ? (groupsBootstrapQuery.data.payload ?? {})
+      : null
+  );
+  const groupsAsOfDate = liveRankingMarket === selectedMarket
+    ? null
+    : (groupsBootstrapPayload?.rankings?.date ?? null);
+  const groupAsOfArgs = groupsAsOfDate ? [groupsAsOfDate] : EMPTY_AS_OF_ARGS;
   // Live queries wait for the bootstrap to resolve either way: on success
   // their caches are freshly seeded (no fetch); on error or a stale
   // snapshot they fetch live data.
@@ -556,10 +574,9 @@ function GroupRankingsPage() {
     data: rankings,
     isLoading: isLoadingRankings,
     error: errorRankings,
-    refetch: refetchRankings,
   } = useQuery({
-    queryKey: ['groupRankings', selectedMarket],
-    queryFn: () => getCurrentRankings(197, selectedMarket),
+    queryKey: ['groupRankings', selectedMarket, groupsAsOfDate],
+    queryFn: () => getCurrentRankings(197, selectedMarket, ...groupAsOfArgs),
     enabled: liveQueriesEnabled && !isRrgView,
     refetchInterval: 60000,
     staleTime: 60_000,
@@ -570,8 +587,8 @@ function GroupRankingsPage() {
     data: movers,
     isLoading: isLoadingMovers,
   } = useQuery({
-    queryKey: ['groupMovers', selectedPeriod, selectedMarket],
-    queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket),
+    queryKey: ['groupMovers', selectedPeriod, selectedMarket, groupsAsOfDate],
+    queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket, ...groupAsOfArgs),
     enabled: liveQueriesEnabled && !isRrgView,
     staleTime: 60_000,
   });
@@ -582,8 +599,8 @@ function GroupRankingsPage() {
     isLoading: isLoadingRRG,
     error: errorRRG,
   } = useQuery({
-    queryKey: ['groupRRGBundle', selectedMarket],
-    queryFn: () => getRRGBundle(8, 197, selectedMarket),
+    queryKey: ['groupRRGBundle', selectedMarket, groupsAsOfDate],
+    queryFn: () => getRRGBundle(8, 197, selectedMarket, ...groupAsOfArgs),
     enabled: liveQueriesEnabled && isRrgView && rrgAvailable,
     staleTime: 60_000,
   });
@@ -613,7 +630,23 @@ function GroupRankingsPage() {
       setIsCalculating(false);
       if (calcStatus.status === 'completed') {
         setCalculationError(null);
-        refetchRankings();
+        queryClient.invalidateQueries({
+          queryKey: ['groupRankings', selectedMarket, null],
+          exact: true,
+        });
+        queryClient.invalidateQueries({
+          predicate: ({ queryKey }) => (
+            queryKey[0] === 'groupMovers'
+            && queryKey[2] === selectedMarket
+            && queryKey[3] === null
+          ),
+          refetchType: 'active',
+        });
+        queryClient.invalidateQueries({
+          queryKey: ['groupRRGBundle', selectedMarket, null],
+          exact: true,
+        });
+        setLiveRankingMarket(selectedMarket);
       } else {
         const baseMessage = calcStatus.error || 'Calculation failed. See server logs for details.';
         const hint = REASON_HINTS[calcStatus.reason_code];
@@ -622,7 +655,7 @@ function GroupRankingsPage() {
         setCalculationError(message);
       }
     }
-  }, [calcStatus, refetchRankings]);
+  }, [calcStatus, queryClient, selectedMarket]);
 
   const handlePeriodChange = (event, newValue) => {
     setSelectedPeriod(newValue);

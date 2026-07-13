@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -288,6 +288,51 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
         market="US",
         cache_only=True,
         cache_requirement=GroupRankCacheRequirement.strict(),
+    )
+
+
+def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        lambda db, market: ["Tech"],
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 17, 12, 0, 0))
+
+    captured = []
+
+    def fake_inner(calculation_date=None, market=None, activity_lifecycle=None):
+        captured.append((calculation_date, market, activity_lifecycle))
+        return {"date": calculation_date, "market": market}
+
+    monkeypatch.setattr(module, "_calculate_daily_group_rankings_in_process", fake_inner)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(
+        market="HK",
+        calculation_date="2026-03-16",
+        activity_lifecycle="daily_refresh",
+    )
+
+    assert result["today"]["date"] == "2026-03-16"
+    assert captured == [("2026-03-16", "HK", "daily_refresh")]
+    fake_service.find_missing_dates.assert_called_once_with(
+        fake_db,
+        lookback_days=365,
+        market="HK",
+        end_date=date(2026, 3, 16),
     )
 
 
@@ -760,9 +805,18 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
 
     assert result["gap_fill"]["processed"] == 1
     assert result["today"]["date"] == "2026-03-20"
-    assert daily_calls == [{"market": "US", "activity_lifecycle": "daily_refresh"}]
+    assert daily_calls == [
+        {
+            "market": "US",
+            "activity_lifecycle": "daily_refresh",
+            "calculation_date": "2026-03-20",
+        }
+    ]
     fake_service.find_missing_dates.assert_called_once_with(
-        fake_db, lookback_days=365, market="US",
+        fake_db,
+        lookback_days=365,
+        market="US",
+        end_date=date(2026, 3, 20),
     )
     fake_service.fill_gaps_optimized.assert_called_once_with(
         fake_db, [date_cls(2026, 3, 19)], market="US",
@@ -1044,7 +1098,10 @@ def test_orchestrator_runs_for_non_us_market(monkeypatch):
     assert result["today"]["market"] == "HK"
     assert result["today"]["date"] == "2026-03-20"
     fake_service.find_missing_dates.assert_called_once_with(
-        fake_db, lookback_days=365, market="HK",
+        fake_db,
+        lookback_days=365,
+        market="HK",
+        end_date=date(2026, 3, 20),
     )
 
 

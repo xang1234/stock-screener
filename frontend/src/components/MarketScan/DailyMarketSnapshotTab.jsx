@@ -31,6 +31,7 @@ import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/c
 import { useMarket } from '../../contexts/MarketContext';
 import { marketFlag } from '../../utils/marketFlags';
 import { formatLocalCurrency } from '../../utils/formatUtils';
+import { formatSnapshotFreshnessLabel } from '../../utils/snapshotFreshness';
 
 const EMPTY_ROWS = [];
 const DEFAULT_TOP_RESULTS = 20;
@@ -123,6 +124,7 @@ function DailyMarketSnapshotTab() {
 
   const flag = marketFlag(snapshot?.market);
   const marketDisplay = snapshot?.market_display_name || snapshot?.market || '';
+  const freshnessLabel = formatSnapshotFreshnessLabel(freshness);
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', pr: 1 }}>
@@ -145,7 +147,7 @@ function DailyMarketSnapshotTab() {
           color="text.secondary"
           sx={{ fontFamily: 'monospace', fontSize: '11px' }}
         >
-          {`Snapshot ${freshness.scan_as_of_date || '-'} · Breadth ${freshness.breadth_latest_date || '-'} · Groups ${freshness.groups_latest_date || '-'}`}
+          {freshnessLabel}
         </Typography>
       </Box>
 

@@ -70,10 +70,15 @@ class MarketGroupRankingService:
         *,
         market: str,
         days: int,
+        as_of_date: date | None = None,
     ) -> GroupRankingHistoryResult:
         """Return RRG-ready group-rank history from published feature runs."""
         normalized_market = str(market or "").strip().upper()
-        latest_run = self._get_latest_published_run(db, market=normalized_market)
+        latest_run = self._get_latest_published_run(
+            db,
+            market=normalized_market,
+            calculation_date=as_of_date,
+        )
         if latest_run is None:
             return None, {}, {}
 

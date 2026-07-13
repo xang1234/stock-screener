@@ -1,6 +1,6 @@
 """Market Scan schemas"""
-from pydantic import BaseModel, ConfigDict
-from typing import Dict, Optional, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Dict, Literal, Optional, List
 from datetime import datetime
 
 from .scanning import ScanResultItem
@@ -68,14 +68,36 @@ class KeyMarketEntry(BaseModel):
     history: List[KeyMarketHistoryPoint]
 
 
+class KeyMarketDateRange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min: Optional[str] = None
+    max: Optional[str] = None
+
+
+class KeyMarketDateMismatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    latest_date: Optional[str] = None
+    status: Literal["missing", "stale", "future"]
+
+
 class DailySnapshotFreshness(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scan_id: Optional[str] = None
     scan_as_of_date: Optional[str] = None
     scan_published_at: Optional[str] = None
+    snapshot_as_of_date: Optional[str] = None
+    market_timezone: Optional[str] = None
     breadth_latest_date: Optional[str] = None
     groups_latest_date: Optional[str] = None
+    exposure_latest_date: Optional[str] = None
+    key_markets_latest_date: Optional[str] = None
+    key_markets_date_range: Optional[KeyMarketDateRange] = None
+    key_markets_mismatched_symbols: List[KeyMarketDateMismatch] = Field(default_factory=list)
+    date_coherence_status: str = "unknown"
 
 
 class DailySnapshotTopCandidates(BaseModel):

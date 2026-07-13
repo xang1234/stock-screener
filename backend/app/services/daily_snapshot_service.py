@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from time import monotonic
 from typing import Any, Callable
 
@@ -27,11 +27,15 @@ from app.schemas.scanning import ScanResultItem
 from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.redis_pool import get_redis_client
+from app.services.snapshot_date_coherence import (
+    SnapshotSectionDates,
+    build_snapshot_freshness,
+)
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
 
-DAILY_SNAPSHOT_SCHEMA_VERSION = 2
+DAILY_SNAPSHOT_SCHEMA_VERSION = 3
 DAILY_SNAPSHOT_CACHE_TTL_SECONDS = 600
 DAILY_SNAPSHOT_TOP_RESULTS = 20
 LEADERS_MAX_GROUP_RANK = 40
@@ -229,6 +233,15 @@ def _scan_freshness(scan: Scan | None) -> dict[str, Any]:
     }
 
 
+def _snapshot_anchor_date(scan: Scan | None) -> date | None:
+    if scan is None:
+        return None
+    run = scan.feature_run
+    if run is None or run.as_of_date is None:
+        return None
+    return run.as_of_date
+
+
 def _query_scan_rows(
     *,
     uow: Any,
@@ -253,13 +266,21 @@ def _query_scan_rows(
     ]
 
 
-def _build_top_groups(db: Session, market: str) -> tuple[list[dict[str, Any]], str | None]:
+def _build_top_groups(
+    db: Session,
+    market: str,
+    *,
+    as_of_date: date | None,
+) -> tuple[list[dict[str, Any]], str | None]:
     from app.wiring.bootstrap import get_group_rank_service
 
     if not get_market_catalog().get(market).capabilities.group_rankings:
         return [], None
     rankings = get_group_rank_service().get_current_rankings(
-        db, limit=TOP_GROUPS_LIMIT, market=market
+        db,
+        limit=TOP_GROUPS_LIMIT,
+        market=market,
+        calculation_date=as_of_date,
     )
     if not rankings:
         return [], None
@@ -276,13 +297,16 @@ def _build_top_groups(db: Session, market: str) -> tuple[list[dict[str, Any]], s
     return [{key: row.get(key) for key in keep} for row in rankings], groups_date
 
 
-def _latest_breadth_date(db: Session, market: str) -> str | None:
-    latest = (
-        db.query(MarketBreadth.date)
-        .filter(MarketBreadth.market == market)
-        .order_by(MarketBreadth.date.desc())
-        .first()
-    )
+def _latest_breadth_date(
+    db: Session,
+    market: str,
+    *,
+    as_of_date: date | None,
+) -> str | None:
+    query = db.query(MarketBreadth.date).filter(MarketBreadth.market == market)
+    if as_of_date is not None:
+        query = query.filter(MarketBreadth.date == as_of_date)
+    latest = query.order_by(MarketBreadth.date.desc()).first()
     if latest is None or latest[0] is None:
         return None
     value = latest[0]
@@ -329,10 +353,29 @@ def build_daily_snapshot_payload(
             filters=leader_filters,
         )
 
-    top_groups, groups_date = _build_top_groups(db, normalized)
-    freshness = _scan_freshness(scan)
-    freshness["breadth_latest_date"] = _latest_breadth_date(db, normalized)
-    freshness["groups_latest_date"] = groups_date
+    anchor_date = _snapshot_anchor_date(scan)
+    market_entry = get_market_catalog().get(normalized)
+    top_groups, groups_date = _build_top_groups(db, normalized, as_of_date=anchor_date)
+    breadth_date = _latest_breadth_date(db, normalized, as_of_date=anchor_date)
+    key_markets = build_key_market_entries(db, normalized, as_of_date=anchor_date)
+    market_health_exposure = build_exposure_payload(db, normalized, as_of_date=anchor_date)
+    exposure_date = (
+        market_health_exposure.get("date")
+        if isinstance(market_health_exposure, dict)
+        else None
+    )
+    freshness = build_snapshot_freshness(
+        base_freshness=_scan_freshness(scan),
+        anchor=anchor_date,
+        market_timezone=market_entry.display_timezone,
+        section_dates=SnapshotSectionDates.from_raw(
+            breadth=breadth_date,
+            groups=groups_date,
+            exposure=exposure_date,
+        ),
+        key_markets=key_markets,
+        groups_applicable=market_entry.capabilities.group_rankings,
+    )
 
     return {
         "schema_version": DAILY_SNAPSHOT_SCHEMA_VERSION,
@@ -341,8 +384,8 @@ def build_daily_snapshot_payload(
         "market_display_name": market_display_name,
         "scan_id": freshness["scan_id"],
         "freshness": freshness,
-        "key_markets": build_key_market_entries(db, normalized),
-        "market_health_exposure": build_exposure_payload(db, normalized),
+        "key_markets": key_markets,
+        "market_health_exposure": market_health_exposure,
         "top_candidates": {
             "min_dollar_volume": min_volume,
             "rows": top_candidates,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -154,6 +156,7 @@ async def test_get_rank_movers_supports_non_us_market_scope(monkeypatch, client)
         def get_rank_movers(self, db, period="1w", limit=20, calculation_date=None, *, market="US"):  # noqa: ARG002
             assert market == "JP"
             assert period == "1m"
+            assert calculation_date == date(2026, 4, 18)
             return {
                 "period": "1m",
                 "gainers": [
@@ -184,7 +187,10 @@ async def test_get_rank_movers_supports_non_us_market_scope(monkeypatch, client)
         lambda: _FakeGroupRankService(),
     )
 
-    response = await client.get("/api/v1/groups/rankings/movers", params={"market": "JP", "period": "1m"})
+    response = await client.get(
+        "/api/v1/groups/rankings/movers",
+        params={"market": "JP", "period": "1m", "as_of_date": "2026-04-18"},
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -366,9 +372,10 @@ async def test_get_rrg_scopes_returns_bundle_with_available_scopes(monkeypatch, 
             assert market == "HK"
             return ("groups", "sectors")
 
-        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400):  # noqa: ARG002
+        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400, as_of_date=None):  # noqa: ARG002
             assert market == "HK"
             assert scopes == ("groups", "sectors")
+            assert as_of_date is None
             return {
                 "groups": {
                     "date": "2026-04-18",
@@ -422,9 +429,10 @@ async def test_get_rrg_scopes_returns_sector_only_bundle(monkeypatch, client):
             assert market == "HK"
             return ("sectors",)
 
-        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400):  # noqa: ARG002
+        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400, as_of_date=None):  # noqa: ARG002
             assert market == "HK"
             assert scopes == ("sectors",)
+            assert as_of_date is None
             return {
                 "sectors": {
                     "date": "2026-04-18",
@@ -471,9 +479,10 @@ async def test_get_rrg_scopes_requests_only_market_supported_scopes(monkeypatch,
             assert market == "TW"
             return ("groups",)
 
-        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400):  # noqa: ARG002
+        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400, as_of_date=None):  # noqa: ARG002
             assert market == "TW"
             assert scopes == ("groups",)
+            assert as_of_date is None
             return {
                 "groups": {
                     "date": "2026-04-18",

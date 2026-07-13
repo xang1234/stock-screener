@@ -11,13 +11,16 @@ from typing import Any, Literal, Sequence
 from app.config import settings
 from app.database import SessionLocal
 from app.infra.db.models.feature_store import FeatureRunPointer
-from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.domain.markets import market_registry
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
+from app.services.group_rank_history_backfill_service import (
+    GroupRankHistoryBackfillResult,
+    GroupRankHistoryBackfillService,
+)
 from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
@@ -25,8 +28,13 @@ from app.services.static_daily_price_refresh_service import (
 )
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
+    STATIC_SITE_SCHEMA_VERSION,
     StaticSiteExportService,
 )
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGRollingHistoryExportSession,
+)
+from app.services.static_rrg_history_contract import StaticRRGHistoryBundleError
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
 from app.wiring.bootstrap import (
@@ -37,7 +45,6 @@ from app.wiring.bootstrap import (
 )
 
 
-STATIC_GROUP_HISTORY_LOOKBACK_DAYS = 100
 STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS = 20
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_BUILD_MODE_PRICE_DELTA = "price_delta"
@@ -219,100 +226,24 @@ def _generate_trading_dates(
     market: str = STATIC_DEFAULT_MARKET,
 ) -> list[date]:
     normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
-    calendar_service = get_market_calendar_service()
-    trading_dates: list[date] = []
-    current = start_date
-    while current <= end_date:
-        if calendar_service.is_trading_day(normalized_market, current):
-            trading_dates.append(current)
-        current += timedelta(days=1)
-    return trading_dates
-
-
-def _ensure_group_rank_history(*, as_of_date: date, market: str = "US") -> dict[str, Any]:
-    """Backfill recent group-rank history so 1W/1M/3M deltas can be rendered."""
-    normalized_market = (market or "US").upper()
-    start_date = as_of_date - timedelta(days=STATIC_GROUP_HISTORY_LOOKBACK_DAYS)
-    desired_dates = _generate_trading_dates(
+    return get_market_calendar_service().trading_days(
+        normalized_market,
         start_date,
-        as_of_date,
-        market=normalized_market,
+        end_date,
     )
 
-    with SessionLocal() as db:
-        if not hasattr(db, "query"):
-            return {
-                "status": "skipped",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": 0,
-                "processed": 0,
-                "errors": 0,
-                "reason": "session_factory_stub",
-            }
-        existing_dates = {
-            record_date
-            for record_date, in db.query(IBDGroupRank.date)
-            .filter(
-                IBDGroupRank.date >= start_date,
-                IBDGroupRank.date <= as_of_date,
-                IBDGroupRank.market == normalized_market,
-            )
-            .distinct()
-            .all()
-        }
-        missing_dates = [calc_date for calc_date in desired_dates if calc_date not in existing_dates]
-        if not missing_dates:
-            print(
-                f"[static-groups:{normalized_market}] Existing rankings already cover "
-                f"{len(desired_dates):,} trading dates through {as_of_date}.",
-                flush=True,
-            )
-            return {
-                "status": "skipped",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": 0,
-                "processed": 0,
-                "errors": 0,
-            }
 
-        print(
-            f"[static-groups:{normalized_market}] Backfilling {len(missing_dates):,} missing trading dates "
-            f"from {missing_dates[0]} to {missing_dates[-1]} before publishing {as_of_date}.",
-            flush=True,
-        )
-        try:
-            stats = get_group_rank_service().fill_gaps_optimized(
-                db, missing_dates, market=normalized_market,
-            )
-        except Exception as exc:
-            print(
-                f"[static-groups:{normalized_market}] Group-rank backfill failed: {exc}",
-                flush=True,
-            )
-            return {
-                "status": "errored",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": len(missing_dates),
-                "processed": 0,
-                "errors": len(missing_dates),
-                "error": str(exc),
-            }
-        stats.update(
-            {
-                "status": "completed",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "missing_dates": len(missing_dates),
-            }
-        )
-        return stats
+def _ensure_group_rank_history(
+    *,
+    as_of_date: date,
+    market: str = "US",
+) -> GroupRankHistoryBackfillResult:
+    """Backfill recent group-rank history so 1W/1M/3M deltas can be rendered."""
+    return GroupRankHistoryBackfillService(
+        session_factory=SessionLocal,
+        calendar_service=get_market_calendar_service(),
+        group_rank_service=get_group_rank_service(),
+    ).backfill(as_of_date=as_of_date, market=market)
 
 
 def _ensure_breadth_history(
@@ -514,21 +445,24 @@ def _run_daily_refresh(
 
         results["feature_snapshots"] = feature_snapshots
 
-        group_rank_history: dict[str, Any] = {}
+        group_rank_history: dict[str, GroupRankHistoryBackfillResult] = {}
+        group_rank_history_report: dict[str, dict[str, Any]] = {}
         for selected_market in selected_markets:
             snapshot = feature_snapshots.get(selected_market, {})
             if not _snapshot_publishable(snapshot):
-                group_rank_history[selected_market] = {
+                group_rank_history_report[selected_market] = {
                     "status": "skipped",
                     "market": selected_market,
                     "reason": "snapshot_not_ready",
                 }
                 continue
-            group_rank_history[selected_market] = _ensure_group_rank_history(
+            backfill = _ensure_group_rank_history(
                 as_of_date=as_of_by_market[selected_market],
                 market=selected_market,
             )
-        results["group_rank_history_backfill"] = group_rank_history
+            group_rank_history[selected_market] = backfill
+            group_rank_history_report[selected_market] = backfill.as_dict()
+        results["group_rank_history_backfill"] = group_rank_history_report
 
         # Re-enrich feature runs after the IBDGroupRank backfill above.
         # build_daily_snapshot's inner enrichment runs *before* group ranks
@@ -554,12 +488,12 @@ def _run_daily_refresh(
                     "reason": "snapshot_not_ready",
                 }
                 continue
-            backfill_status = (group_rank_history.get(selected_market) or {}).get("status")
-            if backfill_status not in ("completed", "skipped"):
+            backfill = group_rank_history[selected_market]
+            if not backfill.ready_for_enrichment:
                 ibd_metadata_refresh[selected_market] = {
                     "status": "skipped",
                     "market": selected_market,
-                    "reason": f"group_rank_backfill_{backfill_status or 'missing'}",
+                    "reason": f"group_rank_backfill_{backfill.status.value}",
                 }
                 continue
             feature_run_id = (
@@ -675,6 +609,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Do not delete the output directory before exporting.",
     )
+    parser.add_argument(
+        "--rrg-history-dir",
+        help="Optional directory holding the market's rolling RRG history state.",
+    )
     args = parser.parse_args(argv)
 
     if args.combine_artifacts_dir and args.refresh_daily:
@@ -683,6 +621,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
     if args.fallback_artifacts_dir and not args.combine_artifacts_dir:
         raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
+    if args.rrg_history_dir and not args.market:
+        raise SystemExit("--rrg-history-dir requires --market")
+    if args.combine_artifacts_dir and args.rrg_history_dir:
+        raise SystemExit("--rrg-history-dir cannot be used while combining artifacts")
 
     refresh_warnings: list[str] = []
     selected_market_non_publishable_snapshot: dict[str, Any] | None = None
@@ -701,13 +643,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         prepare_runtime()
 
         if args.refresh_daily:
-            refresh_results, refresh_warnings = _run_daily_refresh(
+            refresh_results, daily_refresh_warnings = _run_daily_refresh(
                 market=args.market,
                 skip_universe_refresh=args.skip_universe_refresh,
                 skip_fundamentals_refresh=args.skip_fundamentals_refresh,
                 build_mode=args.build_mode,
                 hydrate_published_snapshot=args.hydrate_published_snapshot,
             )
+            refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")
             for name, result_item in refresh_results.items():
                 print(f"  - {name}: {result_item}")
@@ -744,7 +687,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
 
-        service = StaticSiteExportService(SessionLocal)
+        rrg_history_session = (
+            StaticGroupsRRGRollingHistoryExportSession(
+                schema_version=STATIC_SITE_SCHEMA_VERSION,
+                market=args.market,
+                directory=Path(args.rrg_history_dir),
+            )
+            if args.rrg_history_dir
+            else None
+        )
+
+        service = StaticSiteExportService(
+            SessionLocal,
+            rrg_payload_source=rrg_history_session,
+        )
         try:
             result = service.export(
                 Path(args.output_dir),
@@ -770,6 +726,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
             raise
+
+        if rrg_history_session is not None:
+            refresh_warnings.extend(rrg_history_session.warnings)
+            try:
+                history_stats = rrg_history_session.persist(
+                    exported_as_of_date=date.fromisoformat(result.as_of_date),
+                )
+                if history_stats is not None:
+                    print(f"Updated rolling RRG history: {history_stats}")
+            except StaticRRGHistoryBundleError as exc:
+                refresh_warnings.append(f"Rolling RRG history was not persisted: {exc}")
 
     print("Static site export complete:")
     print(f"  - output_dir: {result.output_dir}")

@@ -3,15 +3,25 @@
  */
 import apiClient from './client';
 
+export const groupRequestParams = (params, asOfDate = null) => ({
+  ...params,
+  ...(asOfDate ? { as_of_date: asOfDate } : {}),
+});
+
 /**
  * Get current IBD group rankings.
  *
  * @param {number} limit - Maximum number of groups to return (default: 50)
+ * @param {string} market - Market code (default: 'US')
+ * @param {string|null} asOfDate - Optional YYYY-MM-DD snapshot date; null uses the latest ranking
  * @returns {Promise<Object>} Rankings response with date, total_groups, and rankings array
  */
-export const getCurrentRankings = async (limit = 50, market = 'US') => {
+export const getCurrentRankings = async (limit = 50, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rankings/current', {
-    params: { limit, market }
+    params: groupRequestParams({
+      limit,
+      market,
+    }, asOfDate)
   });
   return response.data;
 };
@@ -33,9 +43,13 @@ export const getGroupsBootstrap = async (market = 'US') => {
  * @param {number} limit - Number of movers per direction (default: 20)
  * @returns {Promise<Object>} Object with period, gainers, and losers arrays
  */
-export const getRankMovers = async (period = '1w', limit = 20, market = 'US') => {
+export const getRankMovers = async (period = '1w', limit = 20, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rankings/movers', {
-    params: { period, limit, market }
+    params: groupRequestParams({
+      period,
+      limit,
+      market,
+    }, asOfDate)
   });
   return response.data;
 };
@@ -63,9 +77,20 @@ export const getGroupDetail = async (industryGroup, days = 180, market = 'US') =
  * @param {string} market - Market code (default: 'US')
  * @returns {Promise<Object>} RRG response: { date, market, scope, groups: [...] }
  */
-export const getRRG = async (scope = 'groups', tailWeeks = 8, limit = 197, market = 'US') => {
+export const getRRG = async (
+  scope = 'groups',
+  tailWeeks = 8,
+  limit = 197,
+  market = 'US',
+  asOfDate = null,
+) => {
   const response = await apiClient.get('/v1/groups/rrg', {
-    params: { scope, tail_weeks: tailWeeks, limit, market }
+    params: groupRequestParams({
+      scope,
+      tail_weeks: tailWeeks,
+      limit,
+      market,
+    }, asOfDate)
   });
   return response.data;
 };
@@ -78,9 +103,13 @@ export const getRRG = async (scope = 'groups', tailWeeks = 8, limit = 197, marke
  * @param {string} market - Market code (default: 'US')
  * @returns {Promise<Object>} RRG bundle: { date, market, available_scopes, payload }
  */
-export const getRRGBundle = async (tailWeeks = 8, limit = 197, market = 'US') => {
+export const getRRGBundle = async (tailWeeks = 8, limit = 197, market = 'US', asOfDate = null) => {
   const response = await apiClient.get('/v1/groups/rrg/scopes', {
-    params: { tail_weeks: tailWeeks, limit, market }
+    params: groupRequestParams({
+      tail_weeks: tailWeeks,
+      limit,
+      market,
+    }, asOfDate)
   });
   return response.data;
 };

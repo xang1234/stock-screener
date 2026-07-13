@@ -19,7 +19,6 @@ from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.markets.catalog import get_market_catalog
-from app.domain.markets.key_markets import key_market_instruments
 from app.domain.scanning.default_filters import (
     DEFAULT_SCAN_FILTERS_BY_MARKET,
     DEFAULT_SCAN_FILTERS_FALLBACK,
@@ -41,6 +40,7 @@ from app.services.group_ranking_history import (
 from app.services.group_ranking_payloads import (
     compute_group_rankings_from_serialized_rows,
 )
+from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.preset_screens import (
     PRESET_SCREENS,
@@ -48,12 +48,17 @@ from app.services.preset_screens import (
     resolve_preset_screens_for_defaults,
 )
 from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGDatabasePayloadSource,
     StaticGroupsRRGUnavailableError,
-    StaticGroupsRRGPayloadBuilder,
+    StaticGroupsRRGPayloadSource,
 )
 from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
+)
+from app.services.snapshot_date_coherence import (
+    SnapshotSectionDates,
+    build_snapshot_freshness,
 )
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
@@ -132,8 +137,20 @@ class StaticSiteSectionUnavailableError(RuntimeError):
 class StaticSiteExportService:
     """Generate a static JSON bundle for the read-only frontend."""
 
-    def __init__(self, session_factory: sessionmaker) -> None:
+    def __init__(
+        self,
+        session_factory: sessionmaker,
+        *,
+        rrg_payload_source: StaticGroupsRRGPayloadSource | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._rrg_payload_source = (
+            rrg_payload_source
+            if rrg_payload_source is not None
+            else StaticGroupsRRGDatabasePayloadSource(
+                schema_version=STATIC_SITE_SCHEMA_VERSION,
+            )
+        )
         self._ui_snapshot_service = UISnapshotService(session_factory)
         self._price_cache = get_price_cache()
         self._fundamentals_cache = get_fundamentals_cache()
@@ -538,9 +555,7 @@ class StaticSiteExportService:
         this optional section is reported unavailable without aborting export.
         """
         try:
-            return StaticGroupsRRGPayloadBuilder.from_runtime_services(
-                schema_version=STATIC_SITE_SCHEMA_VERSION
-            ).build(
+            return self._rrg_payload_source.build(
                 db=db,
                 generated_at=generated_at,
                 expected_as_of_date=expected_as_of_date,
@@ -1189,30 +1204,52 @@ class StaticSiteExportService:
         breadth_payload: dict[str, Any],
         groups_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        key_markets = self._build_key_markets(market)
+        key_markets = build_key_market_entries(
+            db,
+            market,
+            as_of_date=latest_run.as_of_date,
+        )
         top_groups = (
             ((groups_payload.get("payload") or {}).get("rankings") or {}).get("rankings") or []
         )[:10]
 
         breadth_current = ((breadth_payload.get("payload") or {}).get("current")) or {}
+        exposure_payload = build_exposure_payload(db, market, as_of_date=latest_run.as_of_date)
+        exposure_date = (
+            exposure_payload.get("date")
+            if isinstance(exposure_payload, dict)
+            else None
+        )
+        snapshot_date = latest_run.as_of_date.isoformat()
+        market_entry = get_market_catalog().get(market)
+        breadth_date = breadth_current.get("date")
+        groups_date = (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date"))
+        freshness = build_snapshot_freshness(
+            base_freshness={
+                "scan_run_id": latest_run.id,
+                "scan_as_of_date": snapshot_date,
+                "scan_published_at": _coerce_datetime(latest_run.published_at),
+            },
+            anchor=latest_run.as_of_date,
+            market_timezone=market_entry.display_timezone,
+            section_dates=SnapshotSectionDates.from_raw(
+                breadth=breadth_date,
+                groups=groups_date,
+                exposure=exposure_date,
+            ),
+            key_markets=key_markets,
+            groups_applicable=market_entry.capabilities.group_rankings,
+        )
 
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
-            "as_of_date": latest_run.as_of_date.isoformat(),
+            "as_of_date": snapshot_date,
             "market": market,
             "market_display_name": STATIC_MARKET_DISPLAY.get(market, market),
-            "freshness": {
-                "scan_run_id": latest_run.id,
-                "scan_as_of_date": latest_run.as_of_date.isoformat(),
-                "scan_published_at": _coerce_datetime(latest_run.published_at),
-                "breadth_latest_date": breadth_current.get("date"),
-                "groups_latest_date": (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date")),
-            },
+            "freshness": freshness,
             "key_markets": key_markets,
-            # Pin exposure to the published run's date so the section stays
-            # coherent with the rest of home.json (breadth/groups/scan).
-            "market_health_exposure": build_exposure_payload(db, market, as_of_date=latest_run.as_of_date),
+            "market_health_exposure": exposure_payload,
             "scan_summary": {
                 "run_id": latest_run.id,
                 "rows_total": scan_manifest.get("rows_total", 0),
@@ -1221,31 +1258,6 @@ class StaticSiteExportService:
             },
             "top_groups": top_groups,
         }
-
-    def _build_key_markets(self, market: str = STATIC_DEFAULT_MARKET) -> list[dict[str, Any]]:
-        # Reads the warmed price cache; the DB-backed equivalent used by the
-        # live Daily Snapshot endpoint is key_market_history.build_key_market_entries.
-        entries: list[dict[str, Any]] = []
-        for instrument in key_market_instruments(market):
-            history = self._get_symbol_price_history(instrument.data_symbol, period="6mo")
-            ordered = self._serialize_close_history(history, days=30)
-            latest = ordered[-1] if ordered else None
-            previous = ordered[-2] if len(ordered) > 1 else None
-            change_1d = None
-            if latest is not None and previous is not None and previous.get("close") not in (None, 0):
-                change_1d = round(((latest["close"] - previous["close"]) / previous["close"]) * 100, 2)
-            entries.append(
-                {
-                    "symbol": instrument.display_symbol,
-                    "display_name": instrument.display_name,
-                    "currency": instrument.currency,
-                    "latest_close": latest["close"] if latest is not None else None,
-                    "latest_date": latest["date"] if latest is not None else None,
-                    "change_1d": change_1d,
-                    "history": ordered,
-                }
-            )
-        return entries
 
     def _compute_group_rankings_from_rows(
         self,

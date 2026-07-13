@@ -7,7 +7,7 @@ rank movers, and manual calculation triggers.
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from ...config import settings
 from ...database import get_db
@@ -89,36 +89,70 @@ def _normalize_rrg_market_param(market: str | None) -> str:
 # Rankings change once per trading day; these wrappers cache the computed
 # service payloads in Redis (epoch-invalidated by the calculation tasks) so
 # the 60s frontend refetch loop doesn't recompute ~26K-row rank histories.
-def _fetch_rankings_cached(db: Session, *, market: str, limit: int) -> list:
+def _fetch_rankings_cached(
+    db: Session,
+    *,
+    market: str,
+    limit: int,
+    as_of_date: date | None = None,
+) -> list:
+    date_param = as_of_date.isoformat() if as_of_date else "latest"
     return cached_group_payload(
         market=market,
         name="rankings",
-        params=f"limit={limit}",
+        params=f"limit={limit}:as_of={date_param}",
         compute=lambda: _get_group_rank_service().get_current_rankings(
-            db, limit=limit, market=market
+            db,
+            limit=limit,
+            market=market,
+            calculation_date=as_of_date,
         ),
     )
 
 
-def _fetch_movers_cached(db: Session, *, market: str, period: str, limit: int) -> dict:
+def _fetch_movers_cached(
+    db: Session,
+    *,
+    market: str,
+    period: str,
+    limit: int,
+    as_of_date: date | None = None,
+) -> dict:
+    date_param = as_of_date.isoformat() if as_of_date else "latest"
     return cached_group_payload(
         market=market,
         name="movers",
-        params=f"period={period}:limit={limit}",
+        params=f"period={period}:limit={limit}:as_of={date_param}",
         compute=lambda: _get_group_rank_service().get_rank_movers(
-            db, period=period, limit=limit, market=market
+            db,
+            period=period,
+            limit=limit,
+            calculation_date=as_of_date,
+            market=market,
         ),
         should_cache=lambda v: bool(v.get("gainers") or v.get("losers")),
     )
 
 
-def _fetch_rrg_scopes_cached(db: Session, *, market: str, scopes: list, tail_weeks: int) -> dict:
+def _fetch_rrg_scopes_cached(
+    db: Session,
+    *,
+    market: str,
+    scopes: list,
+    tail_weeks: int,
+    as_of_date: date | None = None,
+) -> dict:
+    date_param = as_of_date.isoformat() if as_of_date else "latest"
     return cached_group_payload(
         market=market,
         name="rrg_scopes",
-        params=f"tail={tail_weeks}:scopes={','.join(scopes)}",
+        params=f"tail={tail_weeks}:scopes={','.join(scopes)}:as_of={date_param}",
         compute=lambda: _get_rrg_service().get_rrg_scopes(
-            db, market=market, scopes=scopes, tail_weeks=tail_weeks
+            db,
+            market=market,
+            scopes=scopes,
+            tail_weeks=tail_weeks,
+            as_of_date=as_of_date,
         ),
         should_cache=lambda v: any(_rrg_scope_has_data(v.get(s)) for s in scopes),
     )
@@ -167,6 +201,7 @@ def _require_task_controls() -> None:
 async def get_current_rankings(
     limit: int = Query(50, ge=1, le=197, description="Number of groups to return"),
     market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
+    as_of_date: date | None = Query(None, description="Optional YYYY-MM-DD snapshot date"),
     db: Session = Depends(get_db)
 ):
     """
@@ -176,7 +211,12 @@ async def get_current_rankings(
     for 1 week, 1 month, 3 months, and 6 months.
     """
     normalized_market = _normalize_market_param(market)
-    rankings = _fetch_rankings_cached(db, market=normalized_market, limit=limit)
+    rankings = _fetch_rankings_cached(
+        db,
+        market=normalized_market,
+        limit=limit,
+        as_of_date=as_of_date,
+    )
 
     if not rankings:
         raise HTTPException(
@@ -232,6 +272,7 @@ async def get_rrg_scopes(
     tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
     limit: int = Query(197, ge=1, le=197, description="Top-N series by rank"),
     market: str = Query("US", description=RRG_MARKET_QUERY_DESCRIPTION),
+    as_of_date: date | None = Query(None, description="Optional YYYY-MM-DD snapshot date"),
     db: Session = Depends(get_db),
 ):
     """Relative Rotation Graph coordinates for all scopes available to a market."""
@@ -243,6 +284,7 @@ async def get_rrg_scopes(
         market=normalized_market,
         scopes=requested_scopes,
         tail_weeks=tail_weeks,
+        as_of_date=as_of_date,
     )
     if not any(_rrg_scope_has_data(scopes.get(scope)) for scope in requested_scopes):
         raise HTTPException(
@@ -287,6 +329,7 @@ async def get_rrg(
     ),
     limit: int = Query(197, ge=1, le=197, description="Top-N series by rank"),
     market: str = Query("US", description=RRG_MARKET_QUERY_DESCRIPTION),
+    as_of_date: date | None = Query(None, description="Optional YYYY-MM-DD snapshot date"),
     db: Session = Depends(get_db),
 ):
     """Relative Rotation Graph coordinates for IBD groups (or GICS-sector roll-ups).
@@ -307,7 +350,11 @@ async def get_rrg(
             ),
         )
     payload = service.get_rrg(
-        db, market=normalized_market, scope=scope, tail_weeks=tail_weeks
+        db,
+        market=normalized_market,
+        scope=scope,
+        tail_weeks=tail_weeks,
+        as_of_date=as_of_date,
     )
 
     if not payload.get("groups"):
@@ -368,6 +415,7 @@ async def get_rank_movers(
     period: str = Query("1w", pattern="^(1w|1m|3m|6m)$", description="Time period"),
     limit: int = Query(20, ge=1, le=50, description="Number of movers per direction"),
     market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
+    as_of_date: date | None = Query(None, description="Optional YYYY-MM-DD snapshot date"),
     db: Session = Depends(get_db)
 ):
     """
@@ -382,7 +430,11 @@ async def get_rank_movers(
     """
     normalized_market = _normalize_market_param(market)
     movers = _fetch_movers_cached(
-        db, market=normalized_market, period=period, limit=limit
+        db,
+        market=normalized_market,
+        period=period,
+        limit=limit,
+        as_of_date=as_of_date,
     )
 
     if not movers.get('gainers') and not movers.get('losers'):

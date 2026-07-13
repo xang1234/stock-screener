@@ -166,7 +166,10 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
         guard_price_refresh.s(market=market_code).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
-        calculate_daily_breadth_with_gapfill.si(market=market_code).set(
+        calculate_daily_breadth_with_gapfill.si(
+            market=market_code,
+            calculation_date=as_of_date,
+        ).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
         guard_breadth_result.s(market=market_code).set(
@@ -180,7 +183,10 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
         guard_exposure_result.s(market=market_code).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
-        calculate_daily_group_rankings_with_gapfill.si(market=market_code).set(
+        calculate_daily_group_rankings_with_gapfill.si(
+            market=market_code,
+            calculation_date=as_of_date,
+        ).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
         guard_group_result.s(market=market_code).set(

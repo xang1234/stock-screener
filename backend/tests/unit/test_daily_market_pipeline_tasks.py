@@ -66,6 +66,14 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
         "app.tasks.daily_market_pipeline_tasks.guard_snapshot_result",
     ]
     assert signatures[0].kwargs == {"mode": "delta", "market": "HK"}
+    assert signatures[2].kwargs == {
+        "market": "HK",
+        "calculation_date": "2026-03-16",
+    }
+    assert signatures[6].kwargs == {
+        "market": "HK",
+        "calculation_date": "2026-03-16",
+    }
     assert signatures[-2].kwargs == {
         "market": "HK",
         "as_of_date_str": "2026-03-16",

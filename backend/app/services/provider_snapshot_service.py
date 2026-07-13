@@ -31,6 +31,13 @@ from .finviz_parser import FinvizParser
 from .github_release_sync_service import GitHubReleaseSyncService
 from .security_master_service import security_master_resolver
 from .technical_calculator_service import TechnicalCalculatorService
+from .weekly_reference_github_sync import (
+    WEEKLY_REFERENCE_LEGACY_MANIFEST_NAME,
+    WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION,
+    WEEKLY_REFERENCE_RELEASE_TAG,
+    fetch_weekly_reference_bundle,
+    weekly_reference_manifest_name,
+)
 
 if TYPE_CHECKING:
     from app.services.fundamentals_cache_service import FundamentalsCacheService
@@ -41,9 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION = "weekly-reference-bundle-v1"
-WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = "weekly-reference-manifest-v1"
-WEEKLY_REFERENCE_RELEASE_TAG = "weekly-reference-data"
-WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = "weekly-reference-latest.json"
+WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = WEEKLY_REFERENCE_LEGACY_MANIFEST_NAME
 WEEKLY_REFERENCE_MARKETS: tuple[str, ...] = market_registry.supported_market_codes()
 WEEKLY_REFERENCE_SNAPSHOT_KEYS: dict[str, str] = {
     market: f"fundamentals_v1_{market.lower()}" for market in WEEKLY_REFERENCE_MARKETS
@@ -140,7 +145,7 @@ class ProviderSnapshotService:
 
     @classmethod
     def weekly_reference_latest_manifest_name_for_market(cls, market: str) -> str:
-        return f"weekly-reference-latest-{str(market or '').strip().lower()}.json"
+        return weekly_reference_manifest_name(market)
 
     @staticmethod
     def _infer_market_from_bundle_rows(
@@ -1110,6 +1115,7 @@ class ProviderSnapshotService:
         market: str,
         hydrate_cache: bool = True,
         hydrate_mode: Literal["static", "full"] = "static",
+        allow_stale: bool = False,
         github_sync_service: GitHubReleaseSyncService | None = None,
     ) -> Dict[str, Any]:
         normalized_market = str(market or "").strip().upper()
@@ -1129,24 +1135,13 @@ class ProviderSnapshotService:
         download_dir = Path(
             tempfile.mkdtemp(prefix=f"weekly-reference-{normalized_market.lower()}-")
         )
-        sync_result = sync_service.fetch_latest_bundle(
-            repository_full_name=settings.github_data_repository,
-            release_tag=settings.github_weekly_reference_release_tag or self.WEEKLY_REFERENCE_RELEASE_TAG,
-            manifest_asset_name=self.weekly_reference_latest_manifest_name_for_market(normalized_market),
-            source_mode=settings.market_data_source_mode,
+        sync_result = fetch_weekly_reference_bundle(
+            sync_service=sync_service,
+            market=normalized_market,
             current_revision=current_revision,
-            expected_manifest_schema=self.WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION,
-            required_manifest_keys=(
-                "market",
-                "as_of_date",
-                "source_revision",
-                "bundle_asset_name",
-                "sha256",
-            ),
-            stale_validator=self._validate_weekly_reference_manifest_freshness,
-            github_token=settings.github_data_token,
-            request_timeout_seconds=settings.github_data_timeout_seconds,
             output_dir=download_dir,
+            stale_validator=self._validate_weekly_reference_manifest_freshness,
+            allow_stale=allow_stale,
         )
         sync_result["source"] = "github"
         sync_result["market"] = normalized_market

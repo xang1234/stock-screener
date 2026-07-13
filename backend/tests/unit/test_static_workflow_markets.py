@@ -70,18 +70,63 @@ def test_static_site_manual_dispatch_can_run_china_only():
     assert 'china) markets="$CN_ONLY" ;;' in select_markets_job
 
 
-def test_static_workflow_legacy_weekly_reference_manifest_is_us_only():
+def test_static_workflow_uses_canonical_weekly_reference_sync_boundary():
     content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(encoding="utf-8")
 
-    assert '[ "${{ matrix.market }}" = "US" ] &&' in content
-    assert "No market-scoped weekly reference manifest found" in content
+    assert "app.scripts.sync_weekly_reference_from_github" in content
+    assert "gh release download weekly-reference-data" not in content
+    assert "retry_list_assets" not in content
+    assert "retry_download" not in content
 
 
-def test_static_workflow_fails_fast_when_weekly_reference_assets_cannot_be_listed():
-    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(encoding="utf-8")
+def test_static_workflow_uses_canonical_rrg_plan_for_restore_and_publish():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
 
-    assert 'if ! ASSET_NAMES="$(retry_list_assets)"; then' in content
-    assert "Failed to list weekly-reference release assets" in content
+    assert "rrg-history-data" in content
+    assert "app.scripts.describe_static_rrg_history" in content
+    assert "steps.rrg-history.outputs.enabled == 'true'" in content
+    assert "steps.rrg-history.outputs.source_path" in content
+    assert "steps.rrg-history.outputs.output_path" in content
+    assert 'gh release upload rrg-history-data "$HISTORY_PATH" --clobber' in content
+    assert "--rrg-history-dir" in content
+    assert "continue-on-error: true" in content
+    assert content.index("Upload market artifact") < content.index("Publish rolling RRG history")
+    assert "/current/rrg-history-${MARKET_LOWER}.json.gz" not in content
+
+
+def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "id: restore-rrg-history" in content
+    assert "app.scripts.restore_static_rrg_history" in content
+    assert "SAFE_TO_PUBLISH=false" in content
+    assert (
+        "steps.restore-rrg-history.outputs.safe_to_publish == 'true'" in content
+    )
+    assert "RRG_HISTORY_ENABLED: ${{ steps.rrg-history.outputs.enabled }}" in content
+    assert (
+        "RRG_RESTORE_STATUS: "
+        "${{ steps.restore-rrg-history.outputs.restore_status }}" in content
+    )
+    assert (
+        '[ "$RRG_HISTORY_ENABLED" = "true" ] '
+        '&& [ "$RRG_RESTORE_STATUS" = "failed" ]' in content
+    )
+    failure_guard = content.index(
+        '[ "$RRG_HISTORY_ENABLED" = "true" ] '
+        '&& [ "$RRG_RESTORE_STATUS" = "failed" ]'
+    )
+    artifact_success = content.index(
+        'echo "has_artifact=true" >> "$GITHUB_OUTPUT"',
+        failure_guard,
+    )
+    upload_artifact = content.index("- name: Upload market artifact", artifact_success)
+    assert failure_guard < artifact_success < upload_artifact
+    assert "outputs.restore_status != 'failed'" not in content
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

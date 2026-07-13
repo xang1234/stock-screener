@@ -14,14 +14,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 import app.services.static_site_export_service as export_module
-import app.services.static_groups_rrg_export as rrg_export_module
 from app.database import Base
 from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
 from app.services.group_ranking_history import select_market_run_series
-from app.services.static_groups_rrg_export import StaticGroupsRRGPayloadBuilder
+from app.services.key_market_history import build_key_market_entries
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGUnavailableError,
+    StaticGroupsRRGPayloadBuilder,
+)
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
@@ -79,6 +82,11 @@ class _FakePriceCache:
 
     def get_cached_only(self, symbol, period="2y"):
         return self.get_many_cached_only([symbol], period=period).get(symbol.upper())
+
+
+def _empty_key_market_entries(session_factory, market: str) -> list[dict]:
+    with session_factory() as db:
+        return build_key_market_entries(db, market, as_of_date=date(2026, 6, 9))
 
 
 def _static_rrg_payload(market: str, as_of_date: str) -> dict:
@@ -589,33 +597,18 @@ def test_resolve_static_default_filters_returns_per_market_threshold():
 
 
 def test_static_key_markets_include_australia_benchmark_symbols(service_and_session_factory):
-    service, _session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
 
-    symbols = [item["symbol"] for item in service._build_key_markets("AU")]  # noqa: SLF001
+    symbols = [item["symbol"] for item in _empty_key_market_entries(session_factory, "AU")]
 
     assert symbols[:2] == ["^AXJO", "IOZ.AX"]
     assert {"BHP.AX", "CBA.AX"} <= set(symbols)
 
 
-def test_static_key_markets_resolve_us_tradingview_symbols_to_cache_symbols(
-    service_and_session_factory,
-    monkeypatch,
-):
-    service, _session_factory = service_and_session_factory
-    lookup_symbols: list[str] = []
-    history = [
-        {"date": "2026-06-08", "close": 100.0},
-        {"date": "2026-06-09", "close": 101.0},
-    ]
+def test_static_key_markets_include_us_display_symbols(service_and_session_factory):
+    _service, session_factory = service_and_session_factory
 
-    def _fake_get_symbol_price_history(symbol, *, period):
-        lookup_symbols.append(symbol)
-        return [symbol, period]
-
-    monkeypatch.setattr(service, "_get_symbol_price_history", _fake_get_symbol_price_history)
-    monkeypatch.setattr(service, "_serialize_close_history", lambda history_payload, days=30: history)
-
-    markets = service._build_key_markets("US")  # noqa: SLF001 - intentional unit test coverage
+    markets = _empty_key_market_entries(session_factory, "US")
 
     assert [item["symbol"] for item in markets] == [
         "SPY",
@@ -628,17 +621,62 @@ def test_static_key_markets_resolve_us_tradingview_symbols_to_cache_symbols(
         "TLT",
         "TVC:VIX",
     ]
-    assert lookup_symbols == [
-        "SPY",
-        "QQQ",
-        "IWM",
-        "DX-Y.NYB",
-        "SGD=X",
-        "BTC-USD",
-        "GLD",
-        "TLT",
-        "^VIX",
+
+
+def test_home_payload_builds_key_markets_with_canonical_as_of_date(
+    service_and_session_factory,
+    monkeypatch,
+):
+    service, session_factory = service_and_session_factory
+    calls = []
+    expected_key_markets = [
+        {"symbol": "SPY", "latest_date": "2026-04-18", "history": []},
+        {"symbol": "QQQ", "latest_date": "2026-04-17", "history": []},
     ]
+
+    def fake_build_key_market_entries(db, market, *, as_of_date=None):
+        calls.append((db, market, as_of_date))
+        return expected_key_markets
+
+    monkeypatch.setattr(
+        export_module,
+        "build_key_market_entries",
+        fake_build_key_market_entries,
+    )
+    monkeypatch.setattr(
+        export_module,
+        "build_exposure_payload",
+        lambda db, market, as_of_date=None: {"date": as_of_date.isoformat()},
+    )
+
+    latest_run = SimpleNamespace(
+        id=42,
+        as_of_date=date(2026, 4, 18),
+        published_at=datetime(2026, 4, 18, 22, 0, 0),
+    )
+    with session_factory() as db:
+        payload = service._build_home_payload(  # noqa: SLF001 - verifies export assembly contract
+            db=db,
+            generated_at="2026-04-18T22:00:00Z",
+            latest_run=latest_run,
+            market="US",
+            scan_manifest={"rows_total": 0, "default_filtered_rows_total": 0, "preview_rows": []},
+            breadth_payload={"payload": {"current": {"date": "2026-04-18"}}},
+            groups_payload={"payload": {"rankings": {"date": "2026-04-18", "rankings": []}}},
+        )
+
+    assert payload["key_markets"] == expected_key_markets
+    assert len(calls) == 1
+    assert calls[0][1:] == ("US", date(2026, 4, 18))
+    assert payload["freshness"]["key_markets_latest_date"] == "2026-04-18"
+    assert payload["freshness"]["key_markets_date_range"] == {
+        "min": "2026-04-17",
+        "max": "2026-04-18",
+    }
+    assert payload["freshness"]["key_markets_mismatched_symbols"] == [
+        {"symbol": "QQQ", "latest_date": "2026-04-17", "status": "stale"},
+    ]
+    assert payload["freshness"]["date_coherence_status"] == "partial"
 
 
 def test_static_default_min_volume_filters_notional_turnover_not_share_count():
@@ -1703,9 +1741,10 @@ def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_fac
     _service, session_factory = service_and_session_factory
 
     class _FakeRRGService:
-        def get_rrg_scopes(self, db, *, market, scopes):  # noqa: ARG002
+        def get_rrg_scopes(self, db, *, market, scopes, as_of_date=None):  # noqa: ARG002
             assert market == "HK"
             assert scopes == ("groups", "sectors")
+            assert as_of_date == date(2026, 4, 18)
             return {
                 "groups": {
                     "date": "2026-04-18",
@@ -1754,6 +1793,63 @@ def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_fac
     assert payload["payload"]["groups"]["groups"][0]["industry_group"] == "Internet Services"
 
 
+def test_build_groups_rrg_payload_rejects_date_mismatch(
+    service_and_session_factory,
+    monkeypatch,
+):
+    _service, session_factory = service_and_session_factory
+
+    class _FakeRRGService:
+        def get_rrg_scopes(self, db, *, market, scopes, as_of_date=None):  # noqa: ARG002
+            assert as_of_date == date(2026, 4, 18)
+            return {
+                "groups": {
+                    "date": "2026-04-19",
+                    "market": "HK",
+                    "scope": "groups",
+                    "groups": [
+                        {
+                            "industry_group": "Internet Services",
+                            "rank": 1,
+                            "num_stocks": 9,
+                            "avg_rs_rating": 82.0,
+                            "quadrant": "Leading",
+                            "is_provisional": False,
+                            "current": {"date": "2026-04-19", "x": 104.0, "y": 103.0},
+                            "tail": [{"date": "2026-04-19", "x": 104.0, "y": 103.0}],
+                        }
+                    ],
+                },
+                "sectors": {
+                    "date": "2026-04-19",
+                    "market": "HK",
+                    "scope": "sectors",
+                    "groups": [],
+                },
+            }
+
+    monkeypatch.setattr(
+        StaticGroupsRRGPayloadBuilder,
+        "_preflight_tables",
+        lambda self, db, market: None,  # noqa: ARG005
+    )
+    builder = StaticGroupsRRGPayloadBuilder(
+        schema_version=STATIC_SITE_SCHEMA_VERSION,
+        rrg_service=_FakeRRGService(),
+    )
+
+    with session_factory() as db, pytest.raises(
+        StaticGroupsRRGUnavailableError,
+        match="2026-04-18",
+    ):
+        builder.build(
+            db=db,
+            generated_at="2026-04-18T22:00:00Z",
+            expected_as_of_date=date(2026, 4, 18),
+            market="HK",
+        )
+
+
 def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     service_and_session_factory,
     monkeypatch,
@@ -1761,9 +1857,10 @@ def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     _service, session_factory = service_and_session_factory
 
     class _FakeRRGService:
-        def get_rrg_scopes(self, db, *, market, scopes):  # noqa: ARG002
+        def get_rrg_scopes(self, db, *, market, scopes, as_of_date=None):  # noqa: ARG002
             assert market == "TW"
             assert scopes == ("groups",)
+            assert as_of_date == date(2026, 4, 18)
             return {
                 "groups": {
                     "date": "2026-04-18",
@@ -1806,21 +1903,14 @@ def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     assert set(payload["payload"]) == {"groups"}
 
 
-def test_static_groups_rrg_builder_uses_runtime_rrg_service(monkeypatch):
-    fake_service = object()
-
-    monkeypatch.setattr(
-        rrg_export_module,
-        "get_rrg_service",
-        lambda: fake_service,
-        raising=False,
-    )
-
-    builder = StaticGroupsRRGPayloadBuilder.from_runtime_services(
+@pytest.mark.parametrize("market", ["HK", "IN", "JP", "TW"])
+def test_static_rrg_preflight_needs_no_database_tables_for_group_only_markets(market):
+    builder = StaticGroupsRRGPayloadBuilder(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
+        rrg_service=object(),
     )
 
-    assert builder.rrg_service is fake_service
+    assert builder._required_table_names(market) == ()  # noqa: SLF001
 
 
 def test_static_groups_rrg_builder_propagates_sql_errors_after_preflight(
@@ -1854,19 +1944,17 @@ def test_static_groups_rrg_builder_propagates_sql_errors_after_preflight(
 
 def test_build_groups_rrg_payload_propagates_non_missing_table_sql_errors(
     service_and_session_factory,
-    monkeypatch,
 ):
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
 
-    class _FakeBuilder:
-        @classmethod
-        def from_runtime_services(cls, *, schema_version):  # noqa: ARG003
-            return cls()
-
+    class _FakeSource:
         def build(self, **kwargs):  # noqa: ANN003
             raise SQLAlchemyError("connection failed")
 
-    monkeypatch.setattr(export_module, "StaticGroupsRRGPayloadBuilder", _FakeBuilder)
+    service = StaticSiteExportService(
+        session_factory,
+        rrg_payload_source=_FakeSource(),
+    )
 
     with session_factory() as db, pytest.raises(SQLAlchemyError, match="connection failed"):
         service._build_groups_rrg_payload(  # noqa: SLF001
@@ -2457,8 +2545,6 @@ def test_export_chart_bundle_expands_coverage_for_top_groups_constituents(
 def test_build_key_market_entries_skips_change_when_latest_close_is_null(service_and_session_factory):
     # Shared DB-backed builder used by the live Daily Snapshot endpoint;
     # must mirror the exporter's null-close semantics.
-    from app.services.key_market_history import build_key_market_entries
-
     from datetime import timedelta
 
     _service, session_factory = service_and_session_factory
@@ -2480,46 +2566,28 @@ def test_build_key_market_entries_skips_change_when_latest_close_is_null(service
     assert spy["change_1d"] is None
 
 
-def test_build_key_markets_includes_india_defaults(service_and_session_factory, monkeypatch):
-    service, _session_factory = service_and_session_factory
-    history = [
-        {"date": "2026-03-30", "close": 100.0},
-        {"date": "2026-03-31", "close": 101.0},
-    ]
-    monkeypatch.setattr(service, "_get_symbol_price_history", lambda symbol, period="6mo": [symbol, period])
-    monkeypatch.setattr(service, "_serialize_close_history", lambda history_payload, days=30: history)
+def test_key_market_entries_include_india_defaults(service_and_session_factory):
+    _service, session_factory = service_and_session_factory
 
-    markets = service._build_key_markets("IN")  # noqa: SLF001 - intentional unit test coverage
+    markets = _empty_key_market_entries(session_factory, "IN")
 
     assert [item["symbol"] for item in markets] == ["^NSEI", "NIFTYBEES.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"]
     assert all(item["currency"] == "INR" for item in markets)
 
 
-def test_build_key_markets_includes_canada_defaults(service_and_session_factory, monkeypatch):
-    service, _session_factory = service_and_session_factory
-    history = [
-        {"date": "2026-05-08", "close": 100.0},
-        {"date": "2026-05-09", "close": 101.0},
-    ]
-    monkeypatch.setattr(service, "_get_symbol_price_history", lambda symbol, period="6mo": [symbol, period])
-    monkeypatch.setattr(service, "_serialize_close_history", lambda history_payload, days=30: history)
+def test_key_market_entries_include_canada_defaults(service_and_session_factory):
+    _service, session_factory = service_and_session_factory
 
-    markets = service._build_key_markets("CA")  # noqa: SLF001 - intentional unit test coverage
+    markets = _empty_key_market_entries(session_factory, "CA")
 
     assert [item["symbol"] for item in markets] == ["^GSPTSE", "XIU.TO", "RY.TO", "SHOP.TO", "CNR.TO"]
     assert all(item["currency"] == "CAD" for item in markets)
 
 
-def test_build_key_markets_includes_singapore_defaults(service_and_session_factory, monkeypatch):
-    service, _session_factory = service_and_session_factory
-    history = [
-        {"date": "2026-05-08", "close": 100.0},
-        {"date": "2026-05-09", "close": 101.0},
-    ]
-    monkeypatch.setattr(service, "_get_symbol_price_history", lambda symbol, period="6mo": [symbol, period])
-    monkeypatch.setattr(service, "_serialize_close_history", lambda history_payload, days=30: history)
+def test_key_market_entries_include_singapore_defaults(service_and_session_factory):
+    _service, session_factory = service_and_session_factory
 
-    markets = service._build_key_markets("SG")  # noqa: SLF001 - intentional unit test coverage
+    markets = _empty_key_market_entries(session_factory, "SG")
 
     assert [item["symbol"] for item in markets] == [
         "^STI",

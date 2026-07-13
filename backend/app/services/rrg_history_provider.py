@@ -23,6 +23,7 @@ class RRGHistoryProvider(Protocol):
         *,
         market: str,
         days: int,
+        as_of_date: date | None = None,
     ) -> RRGHistoryResult:
         """Return latest date, current ranking metadata, and daily RS series."""
 
@@ -39,6 +40,7 @@ class USGroupRankHistoryProvider:
         *,
         market: str,
         days: int,
+        as_of_date: date | None = None,
     ) -> RRGHistoryResult:
         from datetime import date as _date
 
@@ -48,13 +50,15 @@ class USGroupRankHistoryProvider:
             db,
             limit=197,
             market=market,
+            calculation_date=as_of_date,
         )
         if not current:
             return None, {}, {}
 
         latest_date = current[0]["date"]
         meta = {row["industry_group"]: row for row in current}
-        cutoff = _date.fromisoformat(latest_date) - timedelta(days=days)
+        latest_day = _date.fromisoformat(latest_date)
+        cutoff = latest_day - timedelta(days=days)
         rows = (
             db.query(
                 IBDGroupRank.industry_group,
@@ -62,7 +66,11 @@ class USGroupRankHistoryProvider:
                 IBDGroupRank.avg_rs_rating,
                 IBDGroupRank.num_stocks,
             )
-            .filter(IBDGroupRank.market == market, IBDGroupRank.date >= cutoff)
+            .filter(
+                IBDGroupRank.market == market,
+                IBDGroupRank.date >= cutoff,
+                IBDGroupRank.date <= latest_day,
+            )
             .order_by(IBDGroupRank.industry_group, IBDGroupRank.date)
             .all()
         )
@@ -89,13 +97,19 @@ class MarketDispatchRRGHistoryProvider:
         *,
         market: str,
         days: int,
+        as_of_date: date | None = None,
     ) -> RRGHistoryResult:
         provider = (
             self._us_provider
             if str(market or "").upper() == self._us_market
             else self._non_us_provider
         )
-        return provider.get_all_groups_history(db, market=market, days=days)
+        return provider.get_all_groups_history(
+            db,
+            market=market,
+            days=days,
+            as_of_date=as_of_date,
+        )
 
 
 def build_rrg_history_provider(

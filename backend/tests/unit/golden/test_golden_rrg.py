@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from app.analysis.rrg_weekly import bucket_rrg_weekly
 from app.services.rrg_service import (
     MIN_TAIL_WEEKS,
     RRGParams,
-    _bucket_weekly,
     _ema,
     classify_quadrant,
     compute_group_rrg,
@@ -73,7 +73,7 @@ def test_bucket_weekly_uses_utc_sunday_start_and_close_of_week():
         (date(2024, 1, 4), 13.0),
         (date(2024, 1, 5), 14.0),
     ]
-    assert _bucket_weekly(days) == [(date(2023, 12, 31), 14.0)]
+    assert bucket_rrg_weekly(days) == [(date(2023, 12, 31), 14.0)]
 
 
 def test_bucket_weekly_one_point_per_week_ascending():
@@ -84,7 +84,7 @@ def test_bucket_weekly_one_point_per_week_ascending():
         (date(2024, 1, 5), 14.0),   # Fri, week of 2023-12-31
         (date(2024, 1, 8), 20.0),   # Mon, week of 2024-01-07
     ]
-    assert _bucket_weekly(days) == [
+    assert bucket_rrg_weekly(days) == [
         (date(2023, 12, 31), 14.0),
         (date(2024, 1, 7), 22.0),
     ]
@@ -92,7 +92,9 @@ def test_bucket_weekly_one_point_per_week_ascending():
 
 def test_bucket_weekly_sunday_maps_to_itself():
     # A Sunday is its own week start (getUTCDay() == 0).
-    assert _bucket_weekly([(date(2024, 1, 7), 5.0)]) == [(date(2024, 1, 7), 5.0)]
+    assert bucket_rrg_weekly([(date(2024, 1, 7), 5.0)]) == [
+        (date(2024, 1, 7), 5.0)
+    ]
 
 
 # ---------------------------------------------------------------------------
