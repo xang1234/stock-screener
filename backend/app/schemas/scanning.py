@@ -14,7 +14,6 @@ from ..domain.scanning.models import (
     ScanWarningCode,
     StockExplanation,
 )
-from ..domain.scanning.filter_capabilities import filter_field_catalog_payload
 from ..infra.serialization import (
     coerce_bool_or_false,
     normalize_string_list,
@@ -495,29 +494,12 @@ class ScanListResponse(BaseModel):
     scans: List[ScanListItem]
 
 
-class FilterFieldCapabilityResponse(BaseModel):
-    """One server-owned field exposed by the guided filter builder."""
-
-    field: str
-    label: str
-    type: Literal["range", "categorical", "boolean", "text"]
-    value_type: Literal["number", "date", "string", "boolean"]
-    category: str
-    sortable: bool = False
-    option_source: Optional[str] = None
-    options: List[str] = Field(default_factory=list)
-
-
 class FilterOptionsResponse(BaseModel):
     """Response model for filter options."""
 
     ibd_industries: List[str]
     gics_sectors: List[str]
     ratings: List[str]
-    filter_catalog: List[FilterFieldCapabilityResponse] = Field(
-        default_factory=filter_field_catalog_payload,
-        validate_default=True,
-    )
 
 
 # ---------------------------------------------------------------------------

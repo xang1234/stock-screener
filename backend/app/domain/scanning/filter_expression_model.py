@@ -105,7 +105,15 @@ class FilterExpression:
         )
 
 
-_GROUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+MAX_EXPRESSION_GROUPS = 8
+MAX_GROUP_CONDITIONS = 20
+MAX_EXPRESSION_CONDITIONS = 100
+MAX_GROUP_ID_LENGTH = 64
+MAX_GROUP_NAME_LENGTH = 60
+MAX_TEXT_PATTERN_LENGTH = 100
+MAX_CATEGORICAL_VALUES = 100
+GROUP_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
+_GROUP_ID_PATTERN = re.compile(GROUP_ID_PATTERN)
 
 
 def _require_filter_field(field_name: object) -> str:
@@ -162,8 +170,10 @@ def _validate_filter_condition(condition: FilterCondition) -> None:
             for value in condition.values
         ):
             raise ValueError("Categorical values must be non-empty strings")
-        if len(condition.values) > 100:
-            raise ValueError("Categorical conditions allow at most 100 values")
+        if len(condition.values) > MAX_CATEGORICAL_VALUES:
+            raise ValueError(
+                f"Categorical conditions allow at most {MAX_CATEGORICAL_VALUES} values"
+            )
         return
 
     if isinstance(condition, BooleanFilter):
@@ -176,8 +186,10 @@ def _validate_filter_condition(condition: FilterCondition) -> None:
         _require_filter_field(condition.field)
         if not isinstance(condition.pattern, str) or not condition.pattern.strip():
             raise ValueError("Text patterns cannot be blank")
-        if len(condition.pattern) > 100:
-            raise ValueError("Text patterns allow at most 100 characters")
+        if len(condition.pattern) > MAX_TEXT_PATTERN_LENGTH:
+            raise ValueError(
+                f"Text patterns allow at most {MAX_TEXT_PATTERN_LENGTH} characters"
+            )
         return
 
     if isinstance(condition, ListingDiscoveryFilter):
@@ -210,8 +222,10 @@ def validate_filter_expression(expression: FilterExpression) -> None:
         raise ValueError("The required group must use id='required' and match='all'")
     if not required.enabled:
         raise ValueError("The required group cannot be disabled")
-    if len(expression.groups) > 8:
-        raise ValueError("An expression can contain at most 8 setup groups")
+    if len(expression.groups) > MAX_EXPRESSION_GROUPS:
+        raise ValueError(
+            f"An expression can contain at most {MAX_EXPRESSION_GROUPS} setup groups"
+        )
 
     group_ids: set[str] = set()
     for group in (required, *expression.groups):
@@ -223,18 +237,20 @@ def validate_filter_expression(expression: FilterExpression) -> None:
             raise ValueError("Group enabled flags must be booleans")
         if (
             not isinstance(group.id, str)
-            or len(group.id) > 64
+            or len(group.id) > MAX_GROUP_ID_LENGTH
             or not _GROUP_ID_PATTERN.fullmatch(group.id)
         ):
             raise ValueError("Group IDs must be 1-64 URL-safe characters")
         if (
             not isinstance(group.name, str)
             or not group.name.strip()
-            or len(group.name) > 60
+            or len(group.name) > MAX_GROUP_NAME_LENGTH
         ):
             raise ValueError("Group names must be 1-60 non-blank characters")
-        if len(group.conditions) > 20:
-            raise ValueError("A filter group can contain at most 20 conditions")
+        if len(group.conditions) > MAX_GROUP_CONDITIONS:
+            raise ValueError(
+                f"A filter group can contain at most {MAX_GROUP_CONDITIONS} conditions"
+            )
         for condition in group.conditions:
             _validate_filter_condition(condition)
 
@@ -245,8 +261,10 @@ def validate_filter_expression(expression: FilterExpression) -> None:
         if group.enabled and not group.conditions:
             raise ValueError("Enabled setup groups cannot be empty")
 
-    if expression.condition_count > 100:
-        raise ValueError("An expression can contain at most 100 conditions")
+    if expression.condition_count > MAX_EXPRESSION_CONDITIONS:
+        raise ValueError(
+            f"An expression can contain at most {MAX_EXPRESSION_CONDITIONS} conditions"
+        )
 
 
 def filter_spec_to_expression(filters: FilterSpec) -> FilterExpression:
@@ -297,6 +315,14 @@ __all__ = [
     "FilterGroup",
     "ListingDiscoveryFilter",
     "MatchOperator",
+    "GROUP_ID_PATTERN",
+    "MAX_CATEGORICAL_VALUES",
+    "MAX_EXPRESSION_CONDITIONS",
+    "MAX_EXPRESSION_GROUPS",
+    "MAX_GROUP_CONDITIONS",
+    "MAX_GROUP_ID_LENGTH",
+    "MAX_GROUP_NAME_LENGTH",
+    "MAX_TEXT_PATTERN_LENGTH",
     "QuerySpec",
     "filter_spec_to_expression",
     "validate_filter_expression",

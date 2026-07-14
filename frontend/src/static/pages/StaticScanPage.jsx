@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -24,10 +24,17 @@ import { usePresetScreens, buildFiltersFromPreset } from '../hooks/usePresetScre
 import { useStaticMarket } from '../StaticMarketContext';
 import {
   annotateExpressionMatches,
-  expressionToLegacyFilters,
-  legacyFiltersToExpression,
+} from '../../features/scan/filterExpressionEvaluator';
+import {
   stableExpressionKey,
-} from '../../features/scan/filterExpression';
+} from '../../features/scan/filterExpressionModel';
+import {
+  legacyFiltersToExpression,
+} from '../../features/scan/legacyFilterExpression';
+import {
+  createFilterState,
+  filterStateReducer,
+} from '../../features/scan/filterState';
 
 const HYDRATION_BATCH_SIZE = 2;
 
@@ -46,10 +53,12 @@ function StaticScanPage() {
   });
   const chartIndexQuery = useStaticChartIndex(scanManifestQuery.data?.charts?.path);
 
-  const [filters, setFilters] = useState(buildDefaultScanFilters);
-  const [appliedExpression, setAppliedExpression] = useState(
-    () => legacyFiltersToExpression(buildDefaultScanFilters()),
+  const [filterState, dispatchFilterState] = useReducer(
+    filterStateReducer,
+    { defaultFilters: buildDefaultScanFilters() },
+    createFilterState,
   );
+  const { filters, expression: appliedExpression } = filterState;
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [page, setPage] = useState(1);
@@ -98,8 +107,10 @@ function StaticScanPage() {
     if (!scanManifestQuery.data) {
       return;
     }
-    setFilters(manifestDefaultFilters);
-    setAppliedExpression(legacyFiltersToExpression(manifestDefaultFilters));
+    dispatchFilterState({
+      type: 'reset-filters',
+      defaultFilters: manifestDefaultFilters,
+    });
   }, [manifestDefaultFilters, scanManifestQuery.data]);
 
   useEffect(() => {
@@ -194,18 +205,20 @@ function StaticScanPage() {
   const handleSelectScreen = useCallback((screenId) => {
     setActiveScreenId(screenId);
     if (!screenId) {
-      setFilters(manifestDefaultFilters);
-      setAppliedExpression(legacyFiltersToExpression(manifestDefaultFilters));
+      dispatchFilterState({
+        type: 'reset-filters',
+        defaultFilters: manifestDefaultFilters,
+      });
       setSortBy(manifestDefaultSortBy);
       setSortOrder(manifestDefaultSortOrder);
     } else {
       const screen = presetScreens?.find((s) => s.id === screenId);
       if (screen) {
-        setFilters(buildFiltersFromPreset(screen));
-        setAppliedExpression(
-          screen.filter_expression
+        dispatchFilterState({
+          type: 'apply-expression',
+          expression: screen.filter_expression
             || legacyFiltersToExpression(buildFiltersFromPreset(screen)),
-        );
+        });
         setSortBy(screen.sort_by);
         setSortOrder(screen.sort_order);
       }
@@ -226,8 +239,7 @@ function StaticScanPage() {
     setPage(1);
   }, [expressionKey]);
   const handleQuickFiltersChange = useCallback((nextFilters) => {
-    setFilters(nextFilters);
-    setAppliedExpression((previous) => legacyFiltersToExpression(nextFilters, previous));
+    dispatchFilterState({ type: 'apply-quick-filters', filters: nextFilters });
   }, []);
   const chartEntries = useMemo(
     () => chartIndexQuery.data?.symbols || [],
@@ -343,8 +355,10 @@ function StaticScanPage() {
           filters={filters}
           onFilterChange={handleQuickFiltersChange}
           onReset={() => {
-            setFilters(manifestDefaultFilters);
-            setAppliedExpression(legacyFiltersToExpression(manifestDefaultFilters));
+            dispatchFilterState({
+              type: 'reset-filters',
+              defaultFilters: manifestDefaultFilters,
+            });
             setSortBy(manifestDefaultSortBy);
             setSortOrder(manifestDefaultSortOrder);
             setActiveScreenId(null);
@@ -398,8 +412,7 @@ function StaticScanPage() {
         expression={appliedExpression}
         onClose={() => setLogicBuilderOpen(false)}
         onApply={(nextExpression) => {
-          setAppliedExpression(nextExpression);
-          setFilters(expressionToLegacyFilters(nextExpression, buildDefaultScanFilters()));
+          dispatchFilterState({ type: 'apply-expression', expression: nextExpression });
           setPage(1);
           setActiveScreenId(null);
           setLogicBuilderOpen(false);

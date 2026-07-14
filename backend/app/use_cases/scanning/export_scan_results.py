@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_expression import (
+from app.domain.scanning.filter_expression_evaluator import (
     annotate_matched_groups,
     require_passing_ratings,
 )

@@ -6,10 +6,8 @@ import logging
 from dataclasses import dataclass, field
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_expression import (
-    expression_fingerprint,
-    require_passing_ratings,
-)
+from app.domain.scanning.filter_expression_evaluator import require_passing_ratings
+from app.domain.scanning.filter_expression_serialization import expression_fingerprint
 from app.domain.common.query import PageSpec, SortSpec
 from app.domain.scanning.filter_expression_model import FilterExpression
 

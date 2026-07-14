@@ -1,11 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
-import { buildDefaultScanFilters } from '../defaultFilters';
 import {
   canonicalizeExpression,
-  expressionToLegacyFilters,
-  legacyFiltersToExpression,
   stableExpressionKey,
-} from '../filterExpression';
+} from '../filterExpressionModel';
+import { legacyFiltersToExpression } from '../legacyFilterExpression';
 
 export function useScanFilterPresets({
   presets,
@@ -15,7 +13,6 @@ export function useScanFilterPresets({
   filters,
   sortBy,
   sortOrder,
-  setFilters,
   applyQuery,
   expression = null,
 }) {
@@ -77,13 +74,9 @@ export function useScanFilterPresets({
       }
 
       const isExpressionPreset = preset.filters?.schema_version === 2 && preset.filters?.expression;
-      const nextFilters = isExpressionPreset
-        ? expressionToLegacyFilters(preset.filters.expression, buildDefaultScanFilters())
-        : preset.filters;
-      setFilters(nextFilters);
       const nextExpression = isExpressionPreset
         ? preset.filters.expression
-        : legacyFiltersToExpression(nextFilters);
+        : legacyFiltersToExpression(preset.filters);
       applyQuery({
         expression: nextExpression,
         sortBy: preset.sort_by,
@@ -105,7 +98,7 @@ export function useScanFilterPresets({
       );
       setPresetSortSnapshot({ sortBy: preset.sort_by, sortOrder: preset.sort_order });
     },
-    [applyQuery, clearActivePreset, expression, presets, setFilters]
+    [applyQuery, clearActivePreset, expression, presets]
   );
 
   const handleOpenSaveDialog = useCallback(() => {

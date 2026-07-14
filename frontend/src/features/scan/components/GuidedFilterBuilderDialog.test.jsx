@@ -3,17 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
-import { createEmptyExpression } from '../filterExpression';
+import { createEmptyExpression } from '../filterExpressionModel';
 import GuidedFilterBuilderDialog from './GuidedFilterBuilderDialog';
-
-const filterCatalog = [
-  {
-    field: 'composite_score',
-    label: 'Composite score',
-    type: 'range',
-    category: 'Scores',
-  },
-];
 
 describe('GuidedFilterBuilderDialog', () => {
   it('keeps draft changes private until a valid expression is applied', async () => {
@@ -26,7 +17,6 @@ describe('GuidedFilterBuilderDialog', () => {
         expression={createEmptyExpression()}
         onClose={onClose}
         onApply={onApply}
-        filterOptions={{ filterCatalog }}
       />,
     );
 
@@ -60,7 +50,6 @@ describe('GuidedFilterBuilderDialog', () => {
         expression={createEmptyExpression()}
         onClose={onClose}
         onApply={onApply}
-        filterOptions={{ filterCatalog }}
       />,
     );
 
@@ -78,7 +67,6 @@ describe('GuidedFilterBuilderDialog', () => {
         expression={createEmptyExpression()}
         onClose={vi.fn()}
         onApply={onApply}
-        filterOptions={{ filterCatalog }}
       />,
     );
 

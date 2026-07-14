@@ -30,11 +30,14 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import {
   conditionLabel,
-  fieldMeta,
-  fieldValueOptions,
   newCondition,
   validateExpression,
-} from '../filterExpression';
+} from '../filterExpressionBuilder';
+import {
+  BUILDER_FIELD_CATALOG,
+  fieldMeta,
+  fieldValueOptions,
+} from '../scanFilterFields';
 
 const groupId = () => `setup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -42,13 +45,13 @@ function clone(value) {
   return structuredClone(value);
 }
 
-function ConditionEditor({ condition, onChange, onDelete, valueOptions = [], fieldCatalog }) {
-  const meta = fieldMeta(condition.field, fieldCatalog, condition.kind);
+function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
+  const meta = fieldMeta(condition.field, condition.kind);
   const rangeInputType = meta.value_type === 'date' ? 'date' : 'number';
   const rangeValue = (value) => (
     value === '' ? null : (rangeInputType === 'date' ? value : Number(value))
   );
-  const handleFieldChange = (field) => onChange(newCondition(field, fieldCatalog));
+  const handleFieldChange = (field) => onChange(newCondition(field));
 
   return (
     <Paper variant="outlined" sx={{ p: 1, bgcolor: 'background.default' }}>
@@ -60,7 +63,7 @@ function ConditionEditor({ condition, onChange, onDelete, valueOptions = [], fie
             value={condition.field}
             onChange={(event) => handleFieldChange(event.target.value)}
           >
-            {fieldCatalog.map((item) => (
+            {BUILDER_FIELD_CATALOG.map((item) => (
               <MenuItem key={item.field} value={item.field}>
                 <Box>
                   <Typography variant="body2">{item.label}</Typography>
@@ -174,7 +177,6 @@ function SetupGroupCard({
   onDelete,
   onDuplicate,
   optionValues,
-  fieldCatalog,
   defaultField,
 }) {
   const updateCondition = (conditionIndex, condition) => {
@@ -240,8 +242,7 @@ function SetupGroupCard({
               ...group,
               conditions: group.conditions.filter((_, itemIndex) => itemIndex !== conditionIndex),
             })}
-            valueOptions={fieldValueOptions(condition.field, fieldCatalog, optionValues)}
-            fieldCatalog={fieldCatalog}
+            valueOptions={fieldValueOptions(condition.field, optionValues)}
           />
         ))}
       </Stack>
@@ -253,7 +254,7 @@ function SetupGroupCard({
         disabled={!defaultField || group.conditions.length >= 20}
         onClick={() => onChange({
           ...group,
-          conditions: [...group.conditions, newCondition(defaultField, fieldCatalog)],
+          conditions: [...group.conditions, newCondition(defaultField)],
         })}
       >
         Add rule
@@ -261,7 +262,7 @@ function SetupGroupCard({
 
       {group.conditions.length > 0 && (
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-          Reads as: {group.conditions.map((condition) => conditionLabel(condition, fieldCatalog)).join(group.match === 'all' ? ' AND ' : ' OR ')}
+          Reads as: {group.conditions.map((condition) => conditionLabel(condition)).join(group.match === 'all' ? ' AND ' : ' OR ')}
         </Typography>
       )}
     </Paper>
@@ -285,17 +286,12 @@ export default function GuidedFilterBuilderDialog({
     }
   }, [expression, open]);
 
-  const fieldCatalog = useMemo(
-    () => filterOptions.filterCatalog || [],
-    [filterOptions.filterCatalog],
-  );
-  const catalogReady = fieldCatalog.length > 0;
-  const defaultField = fieldCatalog.some((item) => item.field === 'composite_score')
+  const defaultField = BUILDER_FIELD_CATALOG.some((item) => item.field === 'composite_score')
     ? 'composite_score'
-    : fieldCatalog[0]?.field;
+    : BUILDER_FIELD_CATALOG[0]?.field;
   const errors = useMemo(
-    () => validateExpression(draft, fieldCatalog),
-    [draft, fieldCatalog],
+    () => validateExpression(draft),
+    [draft],
   );
   const updateGroup = (index, group) => {
     const groups = [...draft.groups];
@@ -314,7 +310,7 @@ export default function GuidedFilterBuilderDialog({
           name: `Setup ${number}`,
           match: 'all',
           enabled: true,
-          conditions: [newCondition(defaultField, fieldCatalog)],
+          conditions: [newCondition(defaultField)],
         },
       ],
     });
@@ -322,7 +318,7 @@ export default function GuidedFilterBuilderDialog({
 
   const handleApply = () => {
     setShowErrors(true);
-    if (!catalogReady || errors.length) return;
+    if (errors.length) return;
     onApply(draft);
   };
 
@@ -335,12 +331,6 @@ export default function GuidedFilterBuilderDialog({
           This makes the result list explainable without exposing raw boolean syntax.
         </Typography>
 
-        {!catalogReady && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            Filter definitions are unavailable. Close this dialog and reload the scan results.
-          </Alert>
-        )}
-
         <Paper variant="outlined" sx={{ p: 1.5, mb: 2, bgcolor: 'action.hover' }}>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
             <Typography variant="subtitle2">Always require</Typography>
@@ -352,7 +342,7 @@ export default function GuidedFilterBuilderDialog({
           {draft.required.conditions.length > 0 && (
             <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
               {draft.required.conditions
-                .map((condition) => conditionLabel(condition, fieldCatalog))
+                .map((condition) => conditionLabel(condition))
                 .join(' AND ')}
             </Typography>
           )}
@@ -390,7 +380,6 @@ export default function GuidedFilterBuilderDialog({
                 setDraft({ ...draft, groups: [...draft.groups, duplicate] });
               }}
               optionValues={filterOptions.optionValues || {}}
-              fieldCatalog={fieldCatalog}
               defaultField={defaultField}
             />
           ))}
@@ -407,7 +396,7 @@ export default function GuidedFilterBuilderDialog({
         <Button
           startIcon={<AddIcon />}
           onClick={addGroup}
-          disabled={!catalogReady || draft.groups.length >= 8}
+          disabled={!defaultField || draft.groups.length >= 8}
           sx={{ mt: 1.5 }}
         >
           Add named setup
@@ -421,7 +410,7 @@ export default function GuidedFilterBuilderDialog({
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 1.5 }}>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={handleApply} disabled={!catalogReady}>Apply logic</Button>
+        <Button variant="contained" onClick={handleApply}>Apply logic</Button>
       </DialogActions>
     </Dialog>
   );

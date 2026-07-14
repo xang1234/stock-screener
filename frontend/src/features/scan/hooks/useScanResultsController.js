@@ -2,22 +2,26 @@ import { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { queryScanResults } from '../../../api/scans';
-import { getStableFilterKey } from '../../../utils/filterUtils';
-import { buildScanQueryRequest } from '../filterExpression';
+import { buildScanQueryRequest } from '../filterExpressionModel';
 import { useScanFilterQueryState } from './useScanFilterQueryState';
 
 export function useScanResultsController({
   currentScanId,
   scanStatus,
-  debouncedFilters,
+  initialFilters,
   initialExpression,
 }) {
-  const queryState = useScanFilterQueryState(initialExpression);
+  const queryState = useScanFilterQueryState({
+    defaultFilters: initialFilters,
+    expression: initialExpression,
+  });
   const {
     requested,
     requestedKey,
     appliedSnapshot,
-    requestQuickFilters,
+    filterKey,
+    committedFilterKey,
+    commitQuickFilters,
     markRequestSucceeded,
   } = queryState;
   const {
@@ -29,13 +33,11 @@ export function useScanResultsController({
   } = requested;
 
   useEffect(() => {
-    requestQuickFilters(debouncedFilters);
-  }, [debouncedFilters, requestQuickFilters]);
+    if (filterKey === committedFilterKey) return undefined;
+    const timer = setTimeout(() => commitQuickFilters(filterKey), 300);
+    return () => clearTimeout(timer);
+  }, [commitQuickFilters, committedFilterKey, filterKey]);
 
-  const stableFilterKey = useMemo(
-    () => getStableFilterKey(debouncedFilters),
-    [debouncedFilters],
-  );
   const queryRequest = useMemo(
     () => buildScanQueryRequest(expression, {
       page,
@@ -108,7 +110,7 @@ export function useScanResultsController({
     sortOrder,
     displayedQuery,
     displayedResultsData,
-    stableFilterKey,
+    stableFilterKey: committedFilterKey,
     resultsLoading: resultQuery.isLoading,
     resultsFetching: resultQuery.isFetching,
     resultsError: resultQuery.isError ? resultQuery.error : null,

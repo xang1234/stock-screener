@@ -16,12 +16,12 @@ import logging
 from dataclasses import dataclass, field, replace
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_expression import (
+from app.domain.scanning.filter_expression_evaluator import (
     annotate_matched_groups,
-    expression_fingerprint,
     require_passing_ratings,
 )
 from app.domain.scanning.filter_expression_model import QuerySpec
+from app.domain.scanning.filter_expression_serialization import expression_fingerprint
 from app.domain.scanning.models import ResultPage
 
 from ._resolve import resolve_scan

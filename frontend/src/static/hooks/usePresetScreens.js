@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { applyScanFilterDefaults } from '../../features/scan/defaultFilters';
 import { filterStaticScanRows } from '../scanClient';
-import { annotateExpressionMatches } from '../../features/scan/filterExpression';
+import { annotateExpressionMatches } from '../../features/scan/filterExpressionEvaluator';
 
 export function buildFiltersFromPreset(screen) {
   return applyScanFilterDefaults(screen?.filters ?? {});

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyExpression } from '../filterExpression';
+import { createEmptyExpression } from '../filterExpressionModel';
+import { buildDefaultScanFilters } from '../defaultFilters';
 import {
   createScanFilterQueryState,
   scanFilterQueryReducer,
@@ -9,6 +10,10 @@ import {
 const withMinimumPrice = (minimum) => createEmptyExpression([
   { kind: 'range', field: 'price', min: minimum, max: null },
 ]);
+const createState = (expression) => createScanFilterQueryState({
+  defaultFilters: buildDefaultScanFilters(),
+  expression,
+});
 
 function succeed(state, data, scanId = 'scan-1') {
   return scanFilterQueryReducer(state, {
@@ -21,7 +26,7 @@ function succeed(state, data, scanId = 'scan-1') {
 
 describe('scan filter query state', () => {
   it('promotes the complete request and result as one applied snapshot', () => {
-    const original = createScanFilterQueryState(withMinimumPrice(10));
+    const original = createState(withMinimumPrice(10));
     const originalData = { results: [{ symbol: 'NVDA' }] };
     const appliedOriginal = succeed(original, originalData);
     const pendingSort = scanFilterQueryReducer(appliedOriginal, {
@@ -40,7 +45,7 @@ describe('scan filter query state', () => {
   });
 
   it('ignores stale success and atomically applies the matching query', () => {
-    const original = createScanFilterQueryState(withMinimumPrice(10));
+    const original = createState(withMinimumPrice(10));
     const pending = scanFilterQueryReducer(original, {
       type: 'request-expression',
       expression: withMinimumPrice(20),
@@ -62,7 +67,7 @@ describe('scan filter query state', () => {
 
   it('resets pagination when page-size, sort, or the complete query changes', () => {
     const pageThree = scanFilterQueryReducer(
-      createScanFilterQueryState(withMinimumPrice(10)),
+      createState(withMinimumPrice(10)),
       { type: 'request-page', page: 3 },
     );
     const resized = scanFilterQueryReducer(pageThree, {
@@ -76,5 +81,31 @@ describe('scan filter query state', () => {
 
     expect(resized.requested).toMatchObject({ page: 1, perPage: 100 });
     expect(replaced.requested).toMatchObject({ page: 1, sortBy: 'price', sortOrder: 'asc' });
+  });
+
+  it('keeps quick-filter drafts local until the matching debounced commit', () => {
+    const original = createState(withMinimumPrice(10));
+    const nextFilters = { ...original.filterState.filters, symbolSearch: 'NVDA' };
+    const edited = scanFilterQueryReducer(original, {
+      type: 'edit-quick-filters',
+      filters: nextFilters,
+    });
+
+    expect(edited.filterState.filters.symbolSearch).toBe('NVDA');
+    expect(edited.requestedKey).toBe(original.requestedKey);
+
+    const staleCommit = scanFilterQueryReducer(edited, {
+      type: 'commit-quick-filters',
+      filterKey: original.filterState.filterKey,
+    });
+    expect(staleCommit).toBe(edited);
+
+    const committed = scanFilterQueryReducer(edited, {
+      type: 'commit-quick-filters',
+      filterKey: edited.filterState.filterKey,
+    });
+    expect(committed.requested.expression.required.conditions).toContainEqual(
+      expect.objectContaining({ kind: 'text', pattern: 'NVDA' }),
+    );
   });
 });

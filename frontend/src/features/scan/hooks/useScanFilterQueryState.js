@@ -2,8 +2,8 @@ import { useCallback, useReducer } from 'react';
 
 import {
   canonicalizeExpression,
-  legacyFiltersToExpression,
-} from '../filterExpression';
+} from '../filterExpressionModel';
+import { createFilterState, filterStateReducer } from '../filterState';
 
 const DEFAULT_QUERY = Object.freeze({
   page: 1,
@@ -30,9 +30,11 @@ export function stableScanFilterQueryKey(query) {
   });
 }
 
-export function createScanFilterQueryState(expression) {
-  const requested = createScanFilterQuery(expression);
+export function createScanFilterQueryState({ defaultFilters, expression = null }) {
+  const filterState = createFilterState({ defaultFilters, expression });
+  const requested = createScanFilterQuery(filterState.expression);
   return {
+    filterState,
     requested,
     requestedKey: stableScanFilterQueryKey(requested),
     appliedSnapshot: null,
@@ -47,16 +49,28 @@ function updateRequestedQuery(state, updates) {
     : { ...state, requested, requestedKey };
 }
 
+function updateFilterAndRequestedQuery(state, action) {
+  const filterState = filterStateReducer(state.filterState, action);
+  if (filterState === state.filterState) return state;
+  const nextState = { ...state, filterState };
+  if (filterState.expression === state.filterState.expression) return nextState;
+  return updateRequestedQuery(nextState, { expression: filterState.expression, page: 1 });
+}
+
 export function scanFilterQueryReducer(state, action) {
   if (action.type === 'request-expression') {
-    return updateRequestedQuery(state, { expression: action.expression, page: 1 });
+    return updateFilterAndRequestedQuery(state, {
+      type: 'apply-expression',
+      expression: action.expression,
+    });
   }
 
-  if (action.type === 'request-quick-filters') {
-    return updateRequestedQuery(state, {
-      expression: legacyFiltersToExpression(action.filters, state.requested.expression),
-      page: 1,
-    });
+  if (action.type === 'edit-quick-filters' || action.type === 'commit-quick-filters') {
+    return updateFilterAndRequestedQuery(state, action);
+  }
+
+  if (action.type === 'reset-filters') {
+    return updateFilterAndRequestedQuery(state, action);
   }
 
   if (action.type === 'request-page') {
@@ -76,7 +90,15 @@ export function scanFilterQueryReducer(state, action) {
   }
 
   if (action.type === 'request-query') {
-    return updateRequestedQuery(state, { ...action.query, page: action.query.page ?? 1 });
+    const expression = action.query.expression;
+    const withFilters = expression
+      ? updateFilterAndRequestedQuery(state, { type: 'apply-expression', expression })
+      : state;
+    return updateRequestedQuery(withFilters, {
+      ...action.query,
+      expression: withFilters.filterState.expression,
+      page: action.query.page ?? 1,
+    });
   }
 
   if (action.type === 'request-succeeded') {
@@ -98,18 +120,24 @@ export function scanFilterQueryReducer(state, action) {
   return state;
 }
 
-export function useScanFilterQueryState(initialExpression) {
+export function useScanFilterQueryState(initialState) {
   const [state, dispatch] = useReducer(
     scanFilterQueryReducer,
-    initialExpression,
+    initialState,
     createScanFilterQueryState,
   );
 
   const requestExpression = useCallback((expression) => {
     dispatch({ type: 'request-expression', expression });
   }, []);
-  const requestQuickFilters = useCallback((filters) => {
-    dispatch({ type: 'request-quick-filters', filters });
+  const editQuickFilters = useCallback((filters) => {
+    dispatch({ type: 'edit-quick-filters', filters });
+  }, []);
+  const commitQuickFilters = useCallback((filterKey) => {
+    dispatch({ type: 'commit-quick-filters', filterKey });
+  }, []);
+  const resetFilters = useCallback((defaultFilters) => {
+    dispatch({ type: 'reset-filters', defaultFilters });
   }, []);
   const requestPage = useCallback((page) => {
     dispatch({ type: 'request-page', page });
@@ -128,8 +156,13 @@ export function useScanFilterQueryState(initialExpression) {
   }, []);
   return {
     ...state,
+    filters: state.filterState.filters,
+    filterKey: state.filterState.filterKey,
+    committedFilterKey: state.filterState.committedFilterKey,
     requestExpression,
-    requestQuickFilters,
+    editQuickFilters,
+    commitQuickFilters,
+    resetFilters,
     requestPage,
     requestPerPage,
     requestSort,

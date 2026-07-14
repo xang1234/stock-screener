@@ -10,14 +10,13 @@ from app.domain.common.query import (
     FilterMode,
     RangeFilter,
 )
-from app.domain.scanning.filter_expression import (
+from app.domain.scanning.filter_expression_evaluator import (
     annotate_matched_groups,
     evaluate_condition,
     evaluate_expression,
-    expression_from_payload,
-    expression_fingerprint,
     matched_setup_groups,
 )
+from app.domain.scanning.filter_expression_serialization import expression_fingerprint
 from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
 from app.domain.scanning.filter_expression_model import (
     FilterExpression,
@@ -27,6 +26,7 @@ from app.domain.scanning.filter_expression_model import (
 )
 from app.domain.scanning.models import MatchedGroupDomain, ScanResultItemDomain
 from app.schemas.filter_expression import ScanQueryRequest
+from app.schemas.filter_expression_payload import expression_from_payload
 
 
 def _expression(group_join: MatchOperator = MatchOperator.ANY) -> FilterExpression:
@@ -345,7 +345,7 @@ def test_payload_codec_rejects_string_booleans_instead_of_inverting_them():
         ],
     }
 
-    with pytest.raises(ValueError, match="Boolean filter values must be booleans"):
+    with pytest.raises(ValidationError, match="valid boolean"):
         expression_from_payload(payload)
 
     with pytest.raises(ValidationError, match="valid boolean"):
@@ -367,7 +367,7 @@ def test_payload_codecs_reject_values_they_cannot_preserve():
         }
     }
 
-    with pytest.raises(ValueError, match="Categorical filter values must be strings"):
+    with pytest.raises(ValidationError, match="valid string"):
         expression_from_payload(payload)
 
     with pytest.raises(ValueError, match="must be a boolean"):
@@ -391,10 +391,10 @@ def test_static_decoder_accepts_legacy_aliases_that_the_live_api_rejects():
     with pytest.raises(ValidationError, match="Unsupported range field: pct_day"):
         ScanQueryRequest.model_validate(payload)
 
-    with pytest.raises(ValueError, match="versions must be integers"):
+    with pytest.raises(ValidationError, match="Input should be 1"):
         expression_from_payload({"expression_version": "1"})
 
-    with pytest.raises(ValueError, match="Filter fields must be a string"):
+    with pytest.raises(ValidationError, match="valid string"):
         expression_from_payload(
             {
                 "required": {

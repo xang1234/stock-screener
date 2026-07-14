@@ -456,15 +456,6 @@ describe('StaticScanPage', () => {
               ibd_industries: ['Semiconductors'],
               gics_sectors: ['Technology'],
               ratings: ['Strong Buy'],
-              filter_catalog: [
-                {
-                  field: 'rs_rating',
-                  label: 'RS rating',
-                  type: 'range',
-                  category: 'Ratings',
-                  sortable: true,
-                },
-              ],
             },
             initial_rows: [
               { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
@@ -509,7 +500,6 @@ describe('StaticScanPage', () => {
             ibdIndustries: ['Semiconductors'],
             gicsSectors: ['Technology'],
             ratings: ['Strong Buy'],
-            filterCatalog: [expect.objectContaining({ field: 'rs_rating', type: 'range' })],
           }),
           sectionDefaultExpanded: {
             fundamental: false,

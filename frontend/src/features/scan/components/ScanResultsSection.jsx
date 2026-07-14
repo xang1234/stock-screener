@@ -1,7 +1,7 @@
 import { Alert, Box, Button, Chip, CircularProgress, LinearProgress, Paper, Typography } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import ResultsTable from '../../../components/Scan/ResultsTable';
-import { expressionSummary } from '../filterExpression';
+import { expressionSummary } from '../filterExpressionBuilder';
 
 export default function ScanResultsSection({
   resultsLoading,

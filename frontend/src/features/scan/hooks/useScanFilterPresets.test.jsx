@@ -1,11 +1,10 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { buildDefaultScanFilters } from '../defaultFilters';
-import { legacyFiltersToExpression } from '../filterExpression';
+import { legacyFiltersToExpression } from '../legacyFilterExpression';
 import { useScanFilterPresets } from './useScanFilterPresets';
 
 function setup(overrides = {}) {
-  const setFilters = vi.fn();
   const applyQuery = vi.fn();
   const createPresetAsync = vi.fn().mockResolvedValue({ id: 'preset-2' });
   const updatePresetAsync = vi.fn().mockResolvedValue({});
@@ -35,7 +34,6 @@ function setup(overrides = {}) {
     filters: buildDefaultScanFilters(),
     sortBy: 'composite_score',
     sortOrder: 'desc',
-    setFilters,
     applyQuery,
     ...overrides,
   };
@@ -47,7 +45,6 @@ function setup(overrides = {}) {
   return {
     hook,
     props,
-    setFilters,
     applyQuery,
     createPresetAsync,
     updatePresetAsync,
@@ -56,16 +53,22 @@ function setup(overrides = {}) {
 }
 
 describe('useScanFilterPresets', () => {
-  it('loads a preset and updates filter + sort state', () => {
-    const { hook, setFilters, applyQuery } = setup();
+  it('loads a preset as one canonical filter + sort transition', () => {
+    const { hook, applyQuery } = setup();
 
     act(() => {
       hook.result.current.handleLoadPreset('preset-1');
     });
 
-    expect(setFilters).toHaveBeenCalledWith(expect.objectContaining({ symbolSearch: 'NVDA' }));
     expect(applyQuery).toHaveBeenCalledWith(expect.objectContaining({
-      expression: expect.objectContaining({ expression_version: 1 }),
+      expression: expect.objectContaining({
+        expression_version: 1,
+        required: expect.objectContaining({
+          conditions: expect.arrayContaining([
+            expect.objectContaining({ kind: 'text', pattern: 'NVDA' }),
+          ]),
+        }),
+      }),
       sortBy: 'composite_score',
       sortOrder: 'desc',
     }));
@@ -142,7 +145,7 @@ describe('useScanFilterPresets', () => {
   it('loads V2 presets from the expression even when stale legacy filters exist', () => {
     const canonicalFilters = { ...buildDefaultScanFilters(), symbolSearch: 'GOOGL' };
     const staleFilters = { ...buildDefaultScanFilters(), symbolSearch: 'STALE' };
-    const { hook, setFilters, applyQuery } = setup({
+    const { hook, applyQuery } = setup({
       expression: legacyFiltersToExpression(buildDefaultScanFilters()),
       presets: [
         {
@@ -163,7 +166,6 @@ describe('useScanFilterPresets', () => {
       hook.result.current.handleLoadPreset('preset-v2');
     });
 
-    expect(setFilters).toHaveBeenCalledWith(expect.objectContaining({ symbolSearch: 'GOOGL' }));
     expect(applyQuery).toHaveBeenCalledWith(expect.objectContaining({
       expression: expect.objectContaining({
         required: expect.objectContaining({

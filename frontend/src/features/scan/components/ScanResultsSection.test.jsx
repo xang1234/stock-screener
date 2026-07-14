@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createEmptyExpression } from '../filterExpression';
+import { createEmptyExpression } from '../filterExpressionModel';
 import ScanResultsSection from './ScanResultsSection';
 
 vi.mock('../../../components/Scan/ResultsTable', () => ({

@@ -7,16 +7,20 @@ import { describe, expect, it } from 'vitest';
 import { buildDefaultScanFilters } from './defaultFilters';
 import {
   annotateExpressionMatches,
-  buildScanQueryRequest,
-  createEmptyExpression,
   evaluateCondition,
   evaluateExpression,
-  expressionToLegacyFilters,
-  fieldValueOptions,
-  legacyFiltersToExpression,
+} from './filterExpressionEvaluator';
+import {
+  buildScanQueryRequest,
+  createEmptyExpression,
   stableExpressionKey,
-  validateExpression,
-} from './filterExpression';
+} from './filterExpressionModel';
+import { validateExpression } from './filterExpressionBuilder';
+import {
+  expressionToLegacyFilters,
+  legacyFiltersToExpression,
+} from './legacyFilterExpression';
+import { fieldValueOptions } from './scanFilterFields';
 
 function groupedExpression(join = 'any') {
   return {
@@ -97,7 +101,7 @@ describe('scan filter expressions', () => {
 
   it('resolves fixed and runtime categorical options from shared field metadata', () => {
     expect(fieldValueOptions('market')).toContain('US');
-    expect(fieldValueOptions('rating', [], { ratings: ['Strong Buy', 'Buy'] }))
+    expect(fieldValueOptions('rating', { ratings: ['Strong Buy', 'Buy'] }))
       .toEqual(['Strong Buy', 'Buy']);
   });
 
@@ -170,10 +174,7 @@ describe('scan filter expressions', () => {
       { kind: 'range', field: 'rs_rating', min: Number.POSITIVE_INFINITY, max: null },
     ];
 
-    expect(validateExpression(expression, [
-      { field: 'price', label: 'Price', type: 'range', category: 'Liquidity' },
-      { field: 'rs_rating', label: 'RS rating', type: 'range', category: 'Ratings' },
-    ])).toEqual(expect.arrayContaining([
+    expect(validateExpression(expression)).toEqual(expect.arrayContaining([
       'Price minimum cannot exceed maximum.',
       'RS rating needs finite numeric values.',
     ]));
@@ -184,9 +185,7 @@ describe('scan filter expressions', () => {
       { kind: 'range', field: 'ipo_date', min: '2026-02-31', max: null },
     ]);
 
-    expect(validateExpression(expression, [
-      { field: 'ipo_date', label: 'IPO date', type: 'range', category: 'Company' },
-    ])).toContain('IPO date needs valid ISO dates.');
+    expect(validateExpression(expression)).toContain('ipo date needs valid ISO dates.');
   });
 
   it('matches the shared browser and backend truth table', () => {

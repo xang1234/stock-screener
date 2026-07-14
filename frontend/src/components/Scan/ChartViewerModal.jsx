@@ -34,7 +34,7 @@ import { getGroupRankColor } from '../../utils/colorUtils';
 import {
   buildScanQueryRequest,
   stableExpressionKey,
-} from '../../features/scan/filterExpression';
+} from '../../features/scan/filterExpressionModel';
 
 const inferMarketFromSymbol = (symbol) => {
   const normalized = String(symbol || '').toUpperCase();

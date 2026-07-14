@@ -34,9 +34,10 @@ import ScanResultsSection from '../components/ScanResultsSection';
 import GuidedFilterBuilderDialog from '../components/GuidedFilterBuilderDialog';
 import {
   buildScanQueryRequest,
-  expressionToLegacyFilters,
+} from '../filterExpressionModel';
+import {
   legacyFiltersToExpression,
-} from '../filterExpression';
+} from '../legacyFilterExpression';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
 import {
   createScanFilterQuery,
@@ -54,7 +55,8 @@ import {
 } from '../runtimeUniverseSelections';
 
 const INITIAL_UNIVERSE_SELECTION = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
-const DEFAULT_SCAN_EXPRESSION = legacyFiltersToExpression(buildDefaultScanFilters());
+const DEFAULT_SCAN_FILTERS = buildDefaultScanFilters();
+const DEFAULT_SCAN_EXPRESSION = legacyFiltersToExpression(DEFAULT_SCAN_FILTERS);
 const DEFAULT_SCAN_QUERY_KEY = stableScanFilterQueryKey(
   createScanFilterQuery(DEFAULT_SCAN_EXPRESSION),
 );
@@ -105,14 +107,15 @@ function ScanPage() {
   const [selectedScreeners, setSelectedScreeners] = useState(DEFAULT_SCAN_DEFAULTS.screeners);
   const [compositeMethod, setCompositeMethod] = useState(DEFAULT_SCAN_DEFAULTS.composite_method);
   const [customFilters, setCustomFilters] = useState(DEFAULT_SCAN_DEFAULTS.criteria.custom_filters);
-  const [filters, setFilters] = useState(buildDefaultScanFilters);
-  const [debouncedFilters, setDebouncedFilters] = useState(filters);
   const groupedFilteringEnabled = features?.grouped_scan_filters === true;
   const {
+    filters,
     requestedExpression,
     sortBy,
     sortOrder,
     requestExpression,
+    editQuickFilters,
+    resetFilters,
     requestPage,
     requestPerPage,
     requestSort,
@@ -127,7 +130,7 @@ function ScanPage() {
   } = useScanResultsController({
     currentScanId,
     scanStatus,
-    debouncedFilters,
+    initialFilters: DEFAULT_SCAN_FILTERS,
     initialExpression: DEFAULT_SCAN_EXPRESSION,
   });
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
@@ -226,7 +229,6 @@ function ScanPage() {
     filters,
     sortBy,
     sortOrder,
-    setFilters,
     applyQuery: requestQuery,
     expression: requestedExpression,
   });
@@ -263,13 +265,6 @@ function ScanPage() {
     scanBootstrapQuery.isSuccess,
     snapshotEnabled,
   ]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedFilters(filters);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [filters]);
 
   const handleLoadScan = useCallback(
     async (scanId) => {
@@ -515,15 +510,11 @@ function ScanPage() {
   };
 
   const handleFilterChange = (newFilters) => {
-    setFilters(newFilters);
-    requestPage(1);
+    editQuickFilters(newFilters);
   };
 
   const handleResetFilters = () => {
-    const defaults = buildDefaultScanFilters();
-    setFilters(defaults);
-    setDebouncedFilters(defaults);
-    requestExpression(legacyFiltersToExpression(defaults));
+    resetFilters(DEFAULT_SCAN_FILTERS);
     presetState.clearActivePreset();
   };
 
@@ -736,7 +727,7 @@ function ScanPage() {
         onClose={() => setChartModalOpen(false)}
         initialSymbol={selectedSymbol}
         scanId={currentScanId}
-        filters={debouncedFilters}
+        filters={filters}
         expression={displayedQuery.expression}
         sortBy={displayedQuery.sortBy}
         sortOrder={displayedQuery.sortOrder}
@@ -750,7 +741,6 @@ function ScanPage() {
           onClose={() => setLogicBuilderOpen(false)}
           onApply={(nextExpression) => {
             requestExpression(nextExpression);
-            setFilters(expressionToLegacyFilters(nextExpression, buildDefaultScanFilters()));
             setLogicBuilderOpen(false);
             presetState.clearActivePreset();
           }}

@@ -1,7 +1,9 @@
 import {
   evaluateExpression,
+} from '../features/scan/filterExpressionEvaluator';
+import {
   legacyFiltersToExpression,
-} from '../features/scan/filterExpression';
+} from '../features/scan/legacyFilterExpression';
 
 const RATING_SORT_ORDER = {
   'Strong Buy': 5,

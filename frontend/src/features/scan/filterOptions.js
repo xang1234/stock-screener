@@ -18,8 +18,5 @@ export const normalizeScanFilterOptions = (filterOptions = {}) => {
       gics_sectors: gicsSectors,
       ratings,
     },
-    filterCatalog: normalizeOptionArray(
-      filterOptions.filterCatalog ?? filterOptions.filter_catalog
-    ),
   };
 };
