@@ -1,6 +1,9 @@
 function rowValue(row, field) {
   if (field === 'price') return row.price ?? row.current_price;
   if (field === 'listing_search') return `${row.symbol || ''} ${row.company_name || ''}`.trim();
+  if (field === 'listing_aware_volume') {
+    return row?.scan_mode === 'listing_only' ? Number.POSITIVE_INFINITY : row?.volume;
+  }
   if (field === 'price_change_1d') return row.price_change_1d ?? row.pct_day;
   if (field === 'perf_week') return row.perf_week ?? row.pct_week;
   if (field === 'perf_month') return row.perf_month ?? row.pct_month;
@@ -33,10 +36,6 @@ const CONDITION_EVALUATORS = {
     const value = rowValue(row, condition.field);
     return value != null && String(value).toLowerCase().includes(condition.pattern.toLowerCase());
   },
-  listing_discovery: (row, condition) => (
-    row?.scan_mode === 'listing_only'
-    || (row?.volume != null && row.volume >= condition.min_volume)
-  ),
 };
 
 export function evaluateCondition(row, condition) {

@@ -59,13 +59,6 @@ const CONDITION_HANDLERS = {
       condition.pattern?.trim() ? [] : [`${label} needs search text.`]
     ),
   },
-  listing_discovery: {
-    label: (condition) => `Listing discovery or dollar volume ≥ ${condition.min_volume}`,
-    validate: (condition) => (
-      Number.isFinite(Number(condition.min_volume)) && Number(condition.min_volume) > 0
-        ? [] : ['Listing discovery needs a positive finite dollar-volume value.']
-    ),
-  },
 };
 
 export function conditionLabel(condition) {

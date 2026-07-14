@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyExpression } from '../filterExpressionModel';
+import { createEmptyExpression, stableExpressionKey } from '../filterExpressionModel';
 import { buildDefaultScanFilters } from '../defaultFilters';
+import { selectQuickFilters } from '../filterState';
 import {
   createScanFilterQueryState,
   scanFilterQueryReducer,
@@ -15,54 +16,28 @@ const createState = (expression) => createScanFilterQueryState({
   expression,
 });
 
-function succeed(state, data, scanId = 'scan-1') {
-  return scanFilterQueryReducer(state, {
-    type: 'request-succeeded',
-    requestKey: state.requestedKey,
-    scanId,
-    data,
-  });
-}
-
 describe('scan filter query state', () => {
-  it('promotes the complete request and result as one applied snapshot', () => {
+  it('updates requested query dimensions without owning server response data', () => {
     const original = createState(withMinimumPrice(10));
-    const originalData = { results: [{ symbol: 'NVDA' }] };
-    const appliedOriginal = succeed(original, originalData);
-    const pendingSort = scanFilterQueryReducer(appliedOriginal, {
+    const pendingSort = scanFilterQueryReducer(original, {
       type: 'request-sort',
       sortBy: 'price',
       sortOrder: 'asc',
     });
 
     expect(pendingSort.requested.sortBy).toBe('price');
-    expect(pendingSort.appliedSnapshot).toEqual({
-      request: original.requested,
-      requestKey: original.requestedKey,
-      scanId: 'scan-1',
-      data: originalData,
-    });
+    expect(pendingSort).not.toHaveProperty('appliedSnapshot');
   });
 
-  it('ignores stale success and atomically applies the matching query', () => {
+  it('applies a complete expression as one query transition', () => {
     const original = createState(withMinimumPrice(10));
     const pending = scanFilterQueryReducer(original, {
       type: 'request-expression',
       expression: withMinimumPrice(20),
     });
-    const stale = scanFilterQueryReducer(pending, {
-      type: 'request-succeeded',
-      requestKey: original.requestedKey,
-      scanId: 'scan-1',
-      data: { results: [{ symbol: 'STALE' }] },
-    });
 
-    expect(stale.appliedSnapshot).toBeNull();
-
-    const data = { results: [{ symbol: 'NVDA' }] };
-    const applied = succeed(pending, data);
-    expect(applied.appliedSnapshot.request).toEqual(pending.requested);
-    expect(applied.appliedSnapshot.data).toBe(data);
+    expect(pending.requested.expression).toEqual(withMinimumPrice(20));
+    expect(pending.requested.page).toBe(1);
   });
 
   it('resets pagination when page-size, sort, or the complete query changes', () => {
@@ -85,27 +60,74 @@ describe('scan filter query state', () => {
 
   it('keeps quick-filter drafts local until the matching debounced commit', () => {
     const original = createState(withMinimumPrice(10));
-    const nextFilters = { ...original.filterState.filters, symbolSearch: 'NVDA' };
+    const nextFilters = {
+      ...selectQuickFilters(original.filterState),
+      symbolSearch: 'NVDA',
+    };
     const edited = scanFilterQueryReducer(original, {
       type: 'edit-quick-filters',
       filters: nextFilters,
     });
 
-    expect(edited.filterState.filters.symbolSearch).toBe('NVDA');
+    expect(selectQuickFilters(edited.filterState).symbolSearch).toBe('NVDA');
     expect(edited.requestedKey).toBe(original.requestedKey);
 
     const staleCommit = scanFilterQueryReducer(edited, {
       type: 'commit-quick-filters',
-      filterKey: original.filterState.filterKey,
+      expressionKey: stableExpressionKey(original.filterState.draftExpression),
     });
     expect(staleCommit).toBe(edited);
 
     const committed = scanFilterQueryReducer(edited, {
       type: 'commit-quick-filters',
-      filterKey: edited.filterState.filterKey,
+      expressionKey: stableExpressionKey(edited.filterState.draftExpression),
     });
     expect(committed.requested.expression.required.conditions).toContainEqual(
       expect.objectContaining({ kind: 'text', pattern: 'NVDA' }),
     );
+  });
+
+  it('preserves required conditions that the quick-filter grid cannot represent', () => {
+    const expression = createEmptyExpression([
+      {
+        kind: 'categorical',
+        field: 'rating',
+        values: ['Sell'],
+        mode: 'exclude',
+      },
+      { kind: 'range', field: 'volume', min: null, max: 5_000_000 },
+    ]);
+    expression.groups = [{
+      id: 'breakout',
+      name: 'Breakout',
+      match: 'all',
+      enabled: true,
+      conditions: [{ kind: 'boolean', field: 'vcp_detected', value: true }],
+    }];
+    const original = createState(expression);
+    const edited = scanFilterQueryReducer(original, {
+      type: 'edit-quick-filters',
+      filters: {
+        ...selectQuickFilters(original.filterState),
+        symbolSearch: 'NVDA',
+      },
+    });
+    const committed = scanFilterQueryReducer(edited, {
+      type: 'commit-quick-filters',
+      expressionKey: stableExpressionKey(edited.filterState.draftExpression),
+    });
+
+    expect(committed.requested.expression.required.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'categorical',
+          field: 'rating',
+          mode: 'exclude',
+        }),
+        expect.objectContaining({ kind: 'range', field: 'volume', max: 5_000_000 }),
+        expect.objectContaining({ kind: 'text', pattern: 'NVDA' }),
+      ]),
+    );
+    expect(committed.requested.expression.groups).toEqual(expression.groups);
   });
 });

@@ -1,9 +1,22 @@
 import { useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { queryScanResults } from '../../../api/scans';
 import { buildScanQueryRequest } from '../filterExpressionModel';
 import { useScanFilterQueryState } from './useScanFilterQueryState';
+
+function latestCachedEnvelope(queryClient, scanId) {
+  if (!scanId) return undefined;
+  return queryClient.getQueryCache().findAll({
+    queryKey: ['scanResultsQuery', scanId],
+  }).reduce((latest, query) => {
+    if (query.state.data == null) return latest;
+    if (latest == null || query.state.dataUpdatedAt > latest.updatedAt) {
+      return { data: query.state.data, updatedAt: query.state.dataUpdatedAt };
+    }
+    return latest;
+  }, null)?.data;
+}
 
 export function useScanResultsController({
   currentScanId,
@@ -11,6 +24,7 @@ export function useScanResultsController({
   initialFilters,
   initialExpression,
 }) {
+  const queryClient = useQueryClient();
   const queryState = useScanFilterQueryState({
     defaultFilters: initialFilters,
     expression: initialExpression,
@@ -18,11 +32,9 @@ export function useScanResultsController({
   const {
     requested,
     requestedKey,
-    appliedSnapshot,
-    filterKey,
-    committedFilterKey,
+    draftExpressionKey,
+    committedExpressionKey,
     commitQuickFilters,
-    markRequestSucceeded,
   } = queryState;
   const {
     expression,
@@ -33,10 +45,10 @@ export function useScanResultsController({
   } = requested;
 
   useEffect(() => {
-    if (filterKey === committedFilterKey) return undefined;
-    const timer = setTimeout(() => commitQuickFilters(filterKey), 300);
+    if (draftExpressionKey === committedExpressionKey) return undefined;
+    const timer = setTimeout(() => commitQuickFilters(draftExpressionKey), 300);
     return () => clearTimeout(timer);
-  }, [commitQuickFilters, committedFilterKey, filterKey]);
+  }, [commitQuickFilters, committedExpressionKey, draftExpressionKey]);
 
   const queryRequest = useMemo(
     () => buildScanQueryRequest(expression, {
@@ -52,11 +64,12 @@ export function useScanResultsController({
 
   const resultQuery = useQuery({
     queryKey: ['scanResultsQuery', currentScanId, requestedKey],
-    queryFn: ({ signal }) => queryScanResults(
-      currentScanId,
-      queryRequest,
-      { signal },
-    ),
+    queryFn: async ({ signal }) => ({
+      data: await queryScanResults(currentScanId, queryRequest, { signal }),
+      request: requested,
+      requestKey: requestedKey,
+      scanId: currentScanId,
+    }),
     enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
@@ -65,55 +78,23 @@ export function useScanResultsController({
     ),
   });
 
-  const currentSuccessSnapshot = useMemo(
-    () => (
-      resultQuery.isSuccess
-      && !resultQuery.isPlaceholderData
-        ? {
-            request: requested,
-            requestKey: requestedKey,
-            scanId: currentScanId,
-            data: resultQuery.data,
-          }
-        : null
-    ),
-    [
-      currentScanId,
-      requested,
-      requestedKey,
-      resultQuery.data,
-      resultQuery.isPlaceholderData,
-      resultQuery.isSuccess,
-    ],
-  );
-
-  useEffect(() => {
-    if (!currentSuccessSnapshot) return;
-    markRequestSucceeded({
-      requestKey: currentSuccessSnapshot.requestKey,
-      scanId: currentSuccessSnapshot.scanId,
-      data: currentSuccessSnapshot.data,
-    });
-  }, [currentSuccessSnapshot, markRequestSucceeded]);
-
-  const displayedSnapshot = currentSuccessSnapshot
-    ?? (appliedSnapshot?.scanId === currentScanId ? appliedSnapshot : null);
-  const displayedResultsData = displayedSnapshot?.data;
-  const displayedQuery = displayedSnapshot?.request ?? requested;
+  const displayedEnvelope = resultQuery.data
+    ?? latestCachedEnvelope(queryClient, currentScanId);
+  const displayedResultsData = displayedEnvelope?.data;
+  const displayedQuery = displayedEnvelope?.request ?? requested;
 
   return {
     ...queryState,
-    requestedExpression: expression,
     page,
     perPage,
     sortBy,
     sortOrder,
     displayedQuery,
     displayedResultsData,
-    stableFilterKey: committedFilterKey,
-    resultsLoading: resultQuery.isLoading,
+    stableFilterKey: committedExpressionKey,
+    resultsLoading: resultQuery.isPending && !displayedEnvelope,
     resultsFetching: resultQuery.isFetching,
-    resultsError: resultQuery.isError ? resultQuery.error : null,
+    resultsError: resultQuery.error ?? null,
     refetchResults: resultQuery.refetch,
   };
 }

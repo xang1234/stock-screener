@@ -29,7 +29,6 @@ from app.domain.common.query import (
 from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     FilterGroup,
-    ListingDiscoveryFilter,
     MatchOperator,
     QuerySpec,
 )
@@ -222,7 +221,7 @@ class TestQueryRunAsScanResults:
         assert names["MSFT"] == "Microsoft Corp"
         assert names["GOOGL"] == "Alphabet Inc"
 
-    def test_listing_discovery_bypasses_volume_only_for_listing_rows(
+    def test_listing_aware_volume_bypasses_volume_only_for_listing_rows(
         self, seeded_session
     ):
         seeded_session.add_all(
@@ -275,7 +274,7 @@ class TestQueryRunAsScanResults:
                 name="Always require",
                 conditions=(
                     TextSearchFilter("listing_search", "newco"),
-                    ListingDiscoveryFilter(1_000_000),
+                    RangeFilter("listing_aware_volume", min_value=1_000_000),
                 ),
             )
         )

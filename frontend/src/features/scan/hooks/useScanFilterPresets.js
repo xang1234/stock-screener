@@ -10,7 +10,6 @@ export function useScanFilterPresets({
   createPresetAsync,
   updatePresetAsync,
   deletePreset,
-  filters,
   sortBy,
   sortOrder,
   applyQuery,
@@ -26,18 +25,12 @@ export function useScanFilterPresets({
   const [saveDialogInitialDescription, setSaveDialogInitialDescription] = useState('');
   const [saveDialogError, setSaveDialogError] = useState(null);
 
-  const currentExpression = useMemo(
-    () => (expression ? legacyFiltersToExpression(filters, expression) : null),
-    [expression, filters],
-  );
   const currentPresetFilters = useMemo(
-    () => (currentExpression
-      ? {
-          schema_version: 2,
-          expression: canonicalizeExpression(currentExpression),
-        }
-      : filters),
-    [currentExpression, filters],
+    () => ({
+      schema_version: 2,
+      expression: canonicalizeExpression(expression),
+    }),
+    [expression],
   );
 
   const clearActivePreset = useCallback(() => {
@@ -84,21 +77,14 @@ export function useScanFilterPresets({
       });
       setActivePresetId(presetId);
       setPresetFiltersSnapshot(
-        isExpressionPreset
-          ? {
-              schema_version: 2,
-              expression: canonicalizeExpression(preset.filters.expression),
-            }
-          : (expression
-              ? {
-                  schema_version: 2,
-                  expression: canonicalizeExpression(nextExpression),
-                }
-              : preset.filters),
+        {
+          schema_version: 2,
+          expression: canonicalizeExpression(nextExpression),
+        },
       );
       setPresetSortSnapshot({ sortBy: preset.sort_by, sortOrder: preset.sort_order });
     },
-    [applyQuery, clearActivePreset, expression, presets]
+    [applyQuery, clearActivePreset, presets]
   );
 
   const handleOpenSaveDialog = useCallback(() => {

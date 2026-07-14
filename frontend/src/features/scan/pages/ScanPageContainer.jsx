@@ -57,9 +57,8 @@ import {
 const INITIAL_UNIVERSE_SELECTION = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
 const DEFAULT_SCAN_FILTERS = buildDefaultScanFilters();
 const DEFAULT_SCAN_EXPRESSION = legacyFiltersToExpression(DEFAULT_SCAN_FILTERS);
-const DEFAULT_SCAN_QUERY_KEY = stableScanFilterQueryKey(
-  createScanFilterQuery(DEFAULT_SCAN_EXPRESSION),
-);
+const DEFAULT_SCAN_QUERY = createScanFilterQuery(DEFAULT_SCAN_EXPRESSION);
+const DEFAULT_SCAN_QUERY_KEY = stableScanFilterQueryKey(DEFAULT_SCAN_QUERY);
 
 // "No market auto-loaded yet" marker for the scan auto-load ref.
 const NO_MARKET_AUTOLOADED = Symbol('no-market-autoloaded');
@@ -110,7 +109,7 @@ function ScanPage() {
   const groupedFilteringEnabled = features?.grouped_scan_filters === true;
   const {
     filters,
-    requestedExpression,
+    draftExpression,
     sortBy,
     sortOrder,
     requestExpression,
@@ -196,7 +195,12 @@ function ScanPage() {
       if (payload.results_page != null) {
         queryClient.setQueryData(
           ['scanResultsQuery', selectedScanId, DEFAULT_SCAN_QUERY_KEY],
-          payload.results_page
+          {
+            data: payload.results_page,
+            request: DEFAULT_SCAN_QUERY,
+            requestKey: DEFAULT_SCAN_QUERY_KEY,
+            scanId: selectedScanId,
+          }
         );
       }
       if (payload.selected_scan_status) {
@@ -226,11 +230,10 @@ function ScanPage() {
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
-    filters,
     sortBy,
     sortOrder,
     applyQuery: requestQuery,
-    expression: requestedExpression,
+    expression: draftExpression,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -688,7 +691,7 @@ function ScanPage() {
           onSaveDialogClose={presetState.handleSaveDialogClose}
           onSaveDialogSave={presetState.handleSaveDialogSave}
           groupedFilteringEnabled={groupedFilteringEnabled}
-          expression={requestedExpression}
+          expression={draftExpression}
           onOpenLogicBuilder={() => setLogicBuilderOpen(true)}
         />
       )}
@@ -737,7 +740,7 @@ function ScanPage() {
       {groupedFilteringEnabled && (
         <GuidedFilterBuilderDialog
           open={logicBuilderOpen}
-          expression={requestedExpression}
+          expression={draftExpression}
           onClose={() => setLogicBuilderOpen(false)}
           onApply={(nextExpression) => {
             requestExpression(nextExpression);

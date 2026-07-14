@@ -30,22 +30,8 @@ class MatchOperator(str, Enum):
     ANY = "any"
 
 
-@dataclass(frozen=True)
-class ListingDiscoveryFilter:
-    """Retain listing-only discovery rows without weakening normal liquidity."""
-
-    min_volume: float | int
-
-    def is_empty(self) -> bool:
-        return False
-
-
 FilterCondition: TypeAlias = (
-    RangeFilter
-    | CategoricalFilter
-    | BooleanFilter
-    | TextSearchFilter
-    | ListingDiscoveryFilter
+    RangeFilter | CategoricalFilter | BooleanFilter | TextSearchFilter
 )
 
 
@@ -192,19 +178,6 @@ def _validate_filter_condition(condition: FilterCondition) -> None:
             )
         return
 
-    if isinstance(condition, ListingDiscoveryFilter):
-        if isinstance(condition.min_volume, bool):
-            raise ValueError("Listing-discovery volume must be a positive number")
-        try:
-            value = float(condition.min_volume)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "Listing-discovery volume must be a positive number"
-            ) from exc
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError("Listing-discovery volume must be a positive number")
-        return
-
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
 
 
@@ -313,7 +286,6 @@ __all__ = [
     "FilterCondition",
     "FilterExpression",
     "FilterGroup",
-    "ListingDiscoveryFilter",
     "MatchOperator",
     "GROUP_ID_PATTERN",
     "MAX_CATEGORICAL_VALUES",

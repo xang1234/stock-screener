@@ -39,16 +39,4 @@ def normalize_range_bound(field: str, value: Any) -> int | float | str | None:
     return int(normalized) if normalized.is_integer() else normalized
 
 
-def normalize_listing_min_volume(value: Any) -> int | float:
-    if isinstance(value, bool):
-        raise ValueError("Listing-discovery volume must be a positive number")
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Listing-discovery volume must be a positive number") from exc
-    if not math.isfinite(normalized) or normalized <= 0:
-        raise ValueError("Listing-discovery volume must be a positive number")
-    return int(normalized) if normalized.is_integer() else normalized
-
-
-__all__ = ["normalize_listing_min_volume", "normalize_range_bound"]
+__all__ = ["normalize_range_bound"]

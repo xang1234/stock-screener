@@ -1,4 +1,4 @@
-"""Typed external payload codec for scan-filter expressions."""
+"""Typed external codec shared by HTTP and persisted scan-filter payloads."""
 
 from __future__ import annotations
 
@@ -26,13 +26,9 @@ from app.domain.scanning.filter_expression_model import (
     FilterCondition,
     FilterExpression,
     FilterGroup,
-    ListingDiscoveryFilter,
     MatchOperator,
 )
-from app.domain.scanning.filter_values import (
-    normalize_listing_min_volume,
-    normalize_range_bound,
-)
+from app.domain.scanning.filter_values import normalize_range_bound
 
 
 class FilterExpressionFieldPolicy(str, Enum):
@@ -110,23 +106,11 @@ class TextConditionPayload(ExpressionPayloadModel):
         )
 
 
-class ListingDiscoveryConditionPayload(ExpressionPayloadModel):
-    kind: Literal["listing_discovery"]
-    min_volume: int | float
-
-    def to_domain(self, policy: FilterExpressionFieldPolicy) -> FilterCondition:
-        del policy
-        return ListingDiscoveryFilter(
-            min_volume=normalize_listing_min_volume(self.min_volume)
-        )
-
-
 FilterConditionPayload = Annotated[
     RangeConditionPayload
     | CategoricalConditionPayload
     | BooleanConditionPayload
-    | TextConditionPayload
-    | ListingDiscoveryConditionPayload,
+    | TextConditionPayload,
     Field(discriminator="kind"),
 ]
 

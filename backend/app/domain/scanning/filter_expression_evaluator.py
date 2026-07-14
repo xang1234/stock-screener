@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
 from typing import Any, Mapping
 
 from app.domain.common.query import (
@@ -17,7 +18,6 @@ from .filter_expression_model import (
     FilterCondition,
     FilterExpression,
     FilterGroup,
-    ListingDiscoveryFilter,
     MatchOperator,
 )
 from .models import MatchedGroupDomain, ScanResultItemDomain
@@ -58,6 +58,8 @@ def scan_result_values(item: ScanResultItemDomain) -> dict[str, Any]:
 
 
 def _row_value(row: Mapping[str, Any], field: str) -> Any:
+    if field == "listing_aware_volume":
+        return math.inf if row.get("scan_mode") == "listing_only" else row.get("volume")
     if field == "price":
         return row.get("price", row.get("current_price"))
     if field == "listing_search":
@@ -67,17 +69,6 @@ def _row_value(row: Mapping[str, Any], field: str) -> Any:
 
 def evaluate_condition(row: Mapping[str, Any], condition: FilterCondition) -> bool:
     """Evaluate one leaf using the documented missing-value policy."""
-
-    if isinstance(condition, ListingDiscoveryFilter):
-        if row.get("scan_mode") == "listing_only":
-            return True
-        volume = row.get("volume")
-        if volume is None:
-            return False
-        try:
-            return volume >= condition.min_volume
-        except TypeError:
-            return False
 
     value = _row_value(row, condition.field)
     if isinstance(condition, RangeFilter):
@@ -102,7 +93,9 @@ def evaluate_condition(row: Mapping[str, Any], condition: FilterCondition) -> bo
             return bool(value) is condition.value
         return False
     if isinstance(condition, TextSearchFilter):
-        return value is not None and condition.pattern.casefold() in str(value).casefold()
+        return (
+            value is not None and condition.pattern.casefold() in str(value).casefold()
+        )
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
 
 

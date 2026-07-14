@@ -20,7 +20,6 @@ from .filter_capabilities import (
 from .filter_expression_model import (
     FilterExpression,
     FilterGroup,
-    ListingDiscoveryFilter,
 )
 
 
@@ -109,14 +108,12 @@ def legacy_filters_to_expression(
             )
 
     if values.get("passesTemplate") is True:
-        conditions.append(
-            CategoricalFilter("rating", ("Strong Buy", "Buy"))
-        )
+        conditions.append(CategoricalFilter("rating", ("Strong Buy", "Buy")))
 
     min_volume = values.get("minVolume")
     if min_volume is not None:
         conditions.append(
-            ListingDiscoveryFilter(min_volume)
+            RangeFilter("listing_aware_volume", min_volume, None)
             if symbol_search
             else RangeFilter("volume", min_volume, None)
         )

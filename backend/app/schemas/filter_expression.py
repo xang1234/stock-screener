@@ -6,20 +6,19 @@ from typing import Literal
 
 from pydantic import (
     Field,
-    PrivateAttr,
     field_validator,
     model_validator,
 )
 
-from app.domain.common.query import PageSpec, SortOrder, SortSpec
-from app.domain.scanning.filter_capabilities import SORT_FIELDS
-from app.domain.scanning.filter_expression_model import FilterExpression
-from app.schemas.filter_expression_payload import (
+from app.contracts.filter_expression import (
     ExpressionPayloadModel,
     FilterExpressionFieldPolicy,
     FilterExpressionPayload,
     FilterGroupPayload,
 )
+from app.domain.common.query import PageSpec, SortOrder, SortSpec
+from app.domain.scanning.filter_capabilities import SORT_FIELDS
+from app.domain.scanning.filter_expression_model import FilterExpression
 
 
 class SortRequest(ExpressionPayloadModel):
@@ -55,17 +54,14 @@ class ScanQueryRequest(FilterExpressionPayload):
     page: PageRequest | None = None
     options: QueryOptionsRequest = Field(default_factory=QueryOptionsRequest)
     passes_only: bool = False
-    _domain_expression: FilterExpression = PrivateAttr()
 
     @model_validator(mode="after")
     def validate_domain_expression(self):
-        self._domain_expression = self.to_domain_expression(
-            FilterExpressionFieldPolicy.API
-        )
+        self.to_domain_expression(FilterExpressionFieldPolicy.API)
         return self
 
     def to_expression(self) -> FilterExpression:
-        return self._domain_expression
+        return self.to_domain_expression(FilterExpressionFieldPolicy.API)
 
 
 FilterGroupRequest = FilterGroupPayload

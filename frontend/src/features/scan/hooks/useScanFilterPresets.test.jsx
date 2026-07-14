@@ -31,7 +31,7 @@ function setup(overrides = {}) {
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
-    filters: buildDefaultScanFilters(),
+    expression: legacyFiltersToExpression(buildDefaultScanFilters()),
     sortBy: 'composite_score',
     sortOrder: 'desc',
     applyQuery,
@@ -82,13 +82,19 @@ describe('useScanFilterPresets', () => {
     });
     hook.rerender({
       ...props,
-      filters: { ...buildDefaultScanFilters(), symbolSearch: 'NVDA' },
+      expression: legacyFiltersToExpression({
+        ...buildDefaultScanFilters(),
+        symbolSearch: 'NVDA',
+      }),
     });
     expect(hook.result.current.hasUnsavedChanges()).toBe(false);
 
     hook.rerender({
       ...props,
-      filters: { ...props.filters, symbolSearch: 'AAPL' },
+      expression: legacyFiltersToExpression({
+        ...buildDefaultScanFilters(),
+        symbolSearch: 'AAPL',
+      }),
     });
 
     expect(hook.result.current.hasUnsavedChanges()).toBe(true);
@@ -114,11 +120,9 @@ describe('useScanFilterPresets', () => {
   });
 
   it('stores one canonical V2 expression using the current quick-filter draft', async () => {
-    const originalFilters = { ...buildDefaultScanFilters(), symbolSearch: 'NVDA' };
     const currentFilters = { ...buildDefaultScanFilters(), symbolSearch: 'AAPL' };
     const { hook, createPresetAsync } = setup({
-      expression: legacyFiltersToExpression(originalFilters),
-      filters: currentFilters,
+      expression: legacyFiltersToExpression(currentFilters),
     });
 
     act(() => {

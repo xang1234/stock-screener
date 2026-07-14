@@ -372,7 +372,7 @@ class TestFilterSpec:
     def test_range_filter_on_json_field(
         self, repo: SqlFeatureStoreRepository, session: Session
     ):
-        """Verifies json_extract + CAST path via _JSON_FIELD_MAP."""
+        """Verifies the JSON field binding uses json_extract + CAST."""
         run_id = _create_run(session)
         rows = [
             FeatureRowWrite(
@@ -428,7 +428,7 @@ class TestFilterSpec:
 class TestJoinedColumnFilters:
     """Verify filters on StockUniverse + StockFundamental columns work end-to-end.
 
-    Regression coverage for asia.8.3: feature_store_query._COLUMN_MAP must
+    Regression coverage for asia.8.3: feature_store_query._FIELD_BINDINGS must
     contain entries for `market`/`market_cap_usd`/`adv_usd` and the SQL
     queries must apply the matching outer joins, otherwise USD/market filters
     silently drop on feature-store-backed scans.

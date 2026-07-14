@@ -21,6 +21,9 @@ from sqlalchemy.orm import Session
 from app.scanners.base_screener import ScreenerResult, StockData
 from app.scanners.scan_orchestrator import ScanOrchestrator
 from app.infra.db.repositories.scan_result_repo import _map_orchestrator_result
+from app.infra.query.feature_store_query import _FIELD_BINDINGS as FS_FIELD_BINDINGS
+from app.infra.query.scan_result_query import _FIELD_BINDINGS as SR_FIELD_BINDINGS
+from app.use_cases.feature_store.build_daily_snapshot import _map_orchestrator_to_feature_row
 
 
 def _sqlite_json_path(path_segments):
@@ -29,17 +32,21 @@ def _sqlite_json_path(path_segments):
     if not parts:
         return "$"
     return "$." + ".".join(parts)
-from app.infra.query.scan_result_query import _JSON_FIELD_MAP as SR_JSON_FIELD_MAP
-from app.infra.query.feature_store_query import _JSON_FIELD_MAP as FS_JSON_FIELD_MAP
-from app.use_cases.feature_store.build_daily_snapshot import _map_orchestrator_to_feature_row
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 # All se_* keys from both query builders
-_SR_SE_KEYS = {k: v for k, v in SR_JSON_FIELD_MAP.items() if k.startswith("se_")}
-_FS_SE_KEYS = {k: v for k, v in FS_JSON_FIELD_MAP.items() if k.startswith("se_")}
+_SR_SE_KEYS = {
+    field: binding.json_path
+    for field, binding in SR_FIELD_BINDINGS.items()
+    if field.startswith("se_")
+}
+_FS_SE_KEYS = {
+    field: binding.json_path
+    for field, binding in FS_FIELD_BINDINGS.items()
+    if field.startswith("se_")
+}
 
 # Canonical test payload matching SetupEnginePayload schema
 _SE_PAYLOAD: dict[str, Any] = {

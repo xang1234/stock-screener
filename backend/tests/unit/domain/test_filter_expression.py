@@ -21,12 +21,11 @@ from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expre
 from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     FilterGroup,
-    ListingDiscoveryFilter,
     MatchOperator,
 )
 from app.domain.scanning.models import MatchedGroupDomain, ScanResultItemDomain
+from app.contracts.filter_expression import expression_from_payload
 from app.schemas.filter_expression import ScanQueryRequest
-from app.schemas.filter_expression_payload import expression_from_payload
 
 
 def _expression(group_join: MatchOperator = MatchOperator.ANY) -> FilterExpression:
@@ -113,8 +112,8 @@ def test_missing_values_follow_explicit_policy():
     assert evaluate_condition({}, RangeFilter("rs_rating", min_value=80)) is False
 
 
-def test_listing_discovery_preserves_liquidity_for_normal_rows():
-    condition = ListingDiscoveryFilter(min_volume=1_000_000)
+def test_listing_aware_volume_preserves_liquidity_for_normal_rows():
+    condition = RangeFilter("listing_aware_volume", min_value=1_000_000)
 
     assert (
         evaluate_condition({"scan_mode": "listing_only", "volume": None}, condition)
@@ -124,6 +123,13 @@ def test_listing_discovery_preserves_liquidity_for_normal_rows():
     assert (
         evaluate_condition({"scan_mode": "full", "volume": 2_000_000}, condition)
         is True
+    )
+    assert (
+        evaluate_condition(
+            {"scan_mode": "listing_only", "volume": None},
+            RangeFilter("listing_aware_volume", max_value=5_000_000),
+        )
+        is False
     )
 
 
@@ -249,7 +255,7 @@ def test_request_contract_builds_domain_and_rejects_empty_enabled_group():
         )
 
 
-def test_request_contract_rejects_unknown_sort_and_accepts_listing_discovery():
+def test_request_contract_rejects_unknown_sort_and_accepts_listing_aware_volume():
     with pytest.raises(ValidationError, match="Unsupported sort field"):
         ScanQueryRequest.model_validate({"sort": {"field": "not_a_real_field"}})
 
@@ -258,12 +264,19 @@ def test_request_contract_rejects_unknown_sort_and_accepts_listing_discovery():
             "required": {
                 "id": "required",
                 "name": "Always require",
-                "conditions": [{"kind": "listing_discovery", "min_volume": 1_000_000}],
+                "conditions": [
+                    {
+                        "kind": "range",
+                        "field": "listing_aware_volume",
+                        "min": 1_000_000,
+                        "max": None,
+                    }
+                ],
             }
         }
     )
     assert request.to_expression().required.conditions == (
-        ListingDiscoveryFilter(min_volume=1_000_000),
+        RangeFilter("listing_aware_volume", min_value=1_000_000),
     )
 
 

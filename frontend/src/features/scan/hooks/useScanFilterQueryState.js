@@ -1,9 +1,14 @@
-import { useCallback, useReducer } from 'react';
+import { useCallback, useMemo, useReducer } from 'react';
 
 import {
   canonicalizeExpression,
+  stableExpressionKey,
 } from '../filterExpressionModel';
-import { createFilterState, filterStateReducer } from '../filterState';
+import {
+  createFilterState,
+  filterStateReducer,
+  selectQuickFilters,
+} from '../filterState';
 
 const DEFAULT_QUERY = Object.freeze({
   page: 1,
@@ -32,12 +37,11 @@ export function stableScanFilterQueryKey(query) {
 
 export function createScanFilterQueryState({ defaultFilters, expression = null }) {
   const filterState = createFilterState({ defaultFilters, expression });
-  const requested = createScanFilterQuery(filterState.expression);
+  const requested = createScanFilterQuery(filterState.committedExpression);
   return {
     filterState,
     requested,
     requestedKey: stableScanFilterQueryKey(requested),
-    appliedSnapshot: null,
   };
 }
 
@@ -53,8 +57,14 @@ function updateFilterAndRequestedQuery(state, action) {
   const filterState = filterStateReducer(state.filterState, action);
   if (filterState === state.filterState) return state;
   const nextState = { ...state, filterState };
-  if (filterState.expression === state.filterState.expression) return nextState;
-  return updateRequestedQuery(nextState, { expression: filterState.expression, page: 1 });
+  if (
+    filterState.committedExpression
+    === state.filterState.committedExpression
+  ) return nextState;
+  return updateRequestedQuery(nextState, {
+    expression: filterState.committedExpression,
+    page: 1,
+  });
 }
 
 export function scanFilterQueryReducer(state, action) {
@@ -96,25 +106,9 @@ export function scanFilterQueryReducer(state, action) {
       : state;
     return updateRequestedQuery(withFilters, {
       ...action.query,
-      expression: withFilters.filterState.expression,
+      expression: withFilters.filterState.committedExpression,
       page: action.query.page ?? 1,
     });
-  }
-
-  if (action.type === 'request-succeeded') {
-    if (action.requestKey !== state.requestedKey) return state;
-    const snapshot = {
-      request: state.requested,
-      requestKey: state.requestedKey,
-      scanId: action.scanId,
-      data: action.data,
-    };
-    if (
-      snapshot.requestKey === state.appliedSnapshot?.requestKey
-      && snapshot.scanId === state.appliedSnapshot.scanId
-      && snapshot.data === state.appliedSnapshot.data
-    ) return state;
-    return { ...state, appliedSnapshot: snapshot };
   }
 
   return state;
@@ -133,8 +127,8 @@ export function useScanFilterQueryState(initialState) {
   const editQuickFilters = useCallback((filters) => {
     dispatch({ type: 'edit-quick-filters', filters });
   }, []);
-  const commitQuickFilters = useCallback((filterKey) => {
-    dispatch({ type: 'commit-quick-filters', filterKey });
+  const commitQuickFilters = useCallback((expressionKey) => {
+    dispatch({ type: 'commit-quick-filters', expressionKey });
   }, []);
   const resetFilters = useCallback((defaultFilters) => {
     dispatch({ type: 'reset-filters', defaultFilters });
@@ -151,14 +145,21 @@ export function useScanFilterQueryState(initialState) {
   const requestQuery = useCallback((query) => {
     dispatch({ type: 'request-query', query });
   }, []);
-  const markRequestSucceeded = useCallback((success) => {
-    dispatch({ type: 'request-succeeded', ...success });
-  }, []);
+  const filters = useMemo(
+    () => selectQuickFilters(state.filterState),
+    [state.filterState],
+  );
+  const draftExpression = state.filterState.draftExpression;
+  const draftExpressionKey = stableExpressionKey(draftExpression);
+  const committedExpressionKey = stableExpressionKey(
+    state.filterState.committedExpression,
+  );
   return {
     ...state,
-    filters: state.filterState.filters,
-    filterKey: state.filterState.filterKey,
-    committedFilterKey: state.filterState.committedFilterKey,
+    filters,
+    draftExpression,
+    draftExpressionKey,
+    committedExpressionKey,
     requestExpression,
     editQuickFilters,
     commitQuickFilters,
@@ -167,6 +168,5 @@ export function useScanFilterQueryState(initialState) {
     requestPerPage,
     requestSort,
     requestQuery,
-    markRequestSucceeded,
   };
 }

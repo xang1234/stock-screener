@@ -1,64 +1,65 @@
-import { getStableFilterKey } from '../../utils/filterUtils';
 import {
   expressionToLegacyFilters,
   legacyFiltersToExpression,
+  patchExpressionQuickFilters,
 } from './legacyFilterExpression';
+import { stableExpressionKey } from './filterExpressionModel';
 
 const clone = (value) => structuredClone(value);
 
 export function createFilterState({ defaultFilters, expression = null }) {
   const defaults = clone(defaultFilters);
   const canonicalExpression = expression ?? legacyFiltersToExpression(defaults);
-  const filters = expressionToLegacyFilters(canonicalExpression, defaults);
-  const filterKey = getStableFilterKey(filters);
   return {
     defaultFilters: defaults,
-    filters,
-    filterKey,
-    committedFilterKey: filterKey,
-    expression: canonicalExpression,
+    draftExpression: canonicalExpression,
+    committedExpression: canonicalExpression,
   };
 }
 
 function applyExpression(state, expression) {
-  const filters = expressionToLegacyFilters(expression, state.defaultFilters);
-  const filterKey = getStableFilterKey(filters);
   return {
     ...state,
-    filters,
-    filterKey,
-    committedFilterKey: filterKey,
-    expression,
+    draftExpression: expression,
+    committedExpression: expression,
   };
 }
 
-function commitQuickFilters(state, filterKey) {
-  if (filterKey !== state.filterKey || filterKey === state.committedFilterKey) return state;
+function commitQuickFilters(state, expressionKey) {
+  if (
+    expressionKey !== stableExpressionKey(state.draftExpression)
+    || expressionKey === stableExpressionKey(state.committedExpression)
+  ) return state;
   return {
     ...state,
-    committedFilterKey: filterKey,
-    expression: legacyFiltersToExpression(state.filters, state.expression),
+    committedExpression: state.draftExpression,
   };
 }
 
 export function filterStateReducer(state, action) {
   if (action.type === 'edit-quick-filters') {
-    const filterKey = getStableFilterKey(action.filters);
-    if (filterKey === state.filterKey) return state;
-    return { ...state, filters: action.filters, filterKey };
+    const draftExpression = patchExpressionQuickFilters(
+      state.draftExpression,
+      action.filters,
+    );
+    if (
+      stableExpressionKey(draftExpression)
+      === stableExpressionKey(state.draftExpression)
+    ) return state;
+    return { ...state, draftExpression };
   }
   if (action.type === 'commit-quick-filters') {
-    return commitQuickFilters(state, action.filterKey);
+    return commitQuickFilters(state, action.expressionKey);
   }
   if (action.type === 'apply-quick-filters') {
-    const filters = action.filters;
-    const filterKey = getStableFilterKey(filters);
+    const expression = patchExpressionQuickFilters(
+      state.draftExpression,
+      action.filters,
+    );
     return {
       ...state,
-      filters,
-      filterKey,
-      committedFilterKey: filterKey,
-      expression: legacyFiltersToExpression(filters, state.expression),
+      draftExpression: expression,
+      committedExpression: expression,
     };
   }
   if (action.type === 'apply-expression') {
@@ -70,4 +71,8 @@ export function filterStateReducer(state, action) {
     });
   }
   return state;
+}
+
+export function selectQuickFilters(state) {
+  return expressionToLegacyFilters(state.draftExpression, state.defaultFilters);
 }

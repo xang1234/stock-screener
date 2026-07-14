@@ -8,11 +8,36 @@ between scan_result_query and feature_store_query.
 import pytest
 
 from app.infra.query.feature_store_query import (
-    _COLUMN_MAP,
-    _JSON_FIELD_MAP,
-    _JSON_SORT_NUMERIC,
+    _FIELD_BINDINGS,
 )
 from app.infra.query import scan_result_query as srq
+
+
+def _column_map(bindings):
+    return {
+        field: binding.column
+        for field, binding in bindings.items()
+        if binding.column is not None
+    }
+
+
+def _json_field_map(bindings):
+    return {
+        field: binding.json_path
+        for field, binding in bindings.items()
+        if binding.json_path is not None
+    }
+
+
+def _json_sort_numeric(bindings):
+    return frozenset(
+        field for field, binding in bindings.items() if binding.numeric_sort
+    )
+
+
+_COLUMN_MAP = _column_map(_FIELD_BINDINGS)
+_JSON_FIELD_MAP = _json_field_map(_FIELD_BINDINGS)
+_JSON_SORT_NUMERIC = _json_sort_numeric(_FIELD_BINDINGS)
 
 
 class TestSetupEngineFieldCoverage:
@@ -90,20 +115,26 @@ class TestParityWithScanResultQuery:
             k: v for k, v in _JSON_FIELD_MAP.items() if k.startswith("se_")
         }
         se_fields_sr = {
-            k: v for k, v in srq._JSON_FIELD_MAP.items() if k.startswith("se_")
+            k: v
+            for k, v in _json_field_map(srq._FIELD_BINDINGS).items()
+            if k.startswith("se_")
         }
         assert se_fields_fs == se_fields_sr
 
     def test_se_sort_numeric_parity(self):
         """se_* fields in _JSON_SORT_NUMERIC must be the same in both modules."""
         se_numeric_fs = {f for f in _JSON_SORT_NUMERIC if f.startswith("se_")}
-        se_numeric_sr = {f for f in srq._JSON_SORT_NUMERIC if f.startswith("se_")}
+        se_numeric_sr = {
+            f for f in _json_sort_numeric(srq._FIELD_BINDINGS) if f.startswith("se_")
+        }
         assert se_numeric_fs == se_numeric_sr
 
     def test_vcp_sort_numeric_parity(self):
         """vcp_* fields in _JSON_SORT_NUMERIC must be the same in both modules."""
         vcp_numeric_fs = {f for f in _JSON_SORT_NUMERIC if f.startswith("vcp_")}
-        vcp_numeric_sr = {f for f in srq._JSON_SORT_NUMERIC if f.startswith("vcp_")}
+        vcp_numeric_sr = {
+            f for f in _json_sort_numeric(srq._FIELD_BINDINGS) if f.startswith("vcp_")
+        }
         assert vcp_numeric_fs == vcp_numeric_sr
 
 

@@ -16,10 +16,22 @@ from app.domain.scanning.filter_spec import (
     SortSpec,
 )
 from app.infra.query.scan_result_query import (
-    _COLUMN_MAP,
-    _JSON_FIELD_MAP,
-    _JSON_SORT_NUMERIC,
+    _FIELD_BINDINGS,
     _PYTHON_SORT_FIELDS,
+)
+
+_COLUMN_MAP = {
+    field: binding.column
+    for field, binding in _FIELD_BINDINGS.items()
+    if binding.column is not None
+}
+_JSON_FIELD_MAP = {
+    field: binding.json_path
+    for field, binding in _FIELD_BINDINGS.items()
+    if binding.json_path is not None
+}
+_JSON_SORT_NUMERIC = frozenset(
+    field for field, binding in _FIELD_BINDINGS.items() if binding.numeric_sort
 )
 
 

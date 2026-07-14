@@ -78,7 +78,7 @@ def _scan_results_symbol_query(session: Session, scan_id: str):
     """Symbol-only variant of ``_scan_results_query``.
 
     Applies the same StockUniverse + StockFundamental outer joins so filters/
-    sorts on joined columns still resolve through ``_COLUMN_MAP``, but selects
+    sorts on joined columns still resolve through ``_FIELD_BINDINGS``, but selects
     only ``ScanResult.symbol`` to avoid hydrating full ORM rows for symbol-list
     endpoints. Callers that need ``ScanResult.details`` (Python-sort fields)
     must use the row-fetching variant instead.

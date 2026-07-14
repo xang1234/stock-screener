@@ -68,7 +68,7 @@ export function legacyFiltersToConditions(filters = {}, now = new Date()) {
   }
   if (filters.minVolume != null) {
     conditions.push(filters.symbolSearch?.trim()
-      ? { kind: 'listing_discovery', min_volume: filters.minVolume }
+      ? { kind: 'range', field: 'listing_aware_volume', min: filters.minVolume, max: null }
       : { kind: 'range', field: 'volume', min: filters.minVolume, max: null });
   }
   if (filters.minMarketCap != null) {
@@ -81,19 +81,47 @@ export function legacyFiltersToConditions(filters = {}, now = new Date()) {
   return conditions;
 }
 
-export function legacyFiltersToExpression(filters = {}, previousExpression = null, now = new Date()) {
-  const base = previousExpression ? structuredClone(previousExpression) : createEmptyExpression();
+function isQuickFilterCondition(condition) {
+  if (condition.kind === 'range') {
+    if (FIELD_TO_RANGE_FILTER[condition.field]) return true;
+    if (condition.field === 'stage') return condition.min === condition.max;
+    return condition.min != null
+      && condition.max == null
+      && ['volume', 'listing_aware_volume', 'market_cap', 'ipo_date']
+        .includes(condition.field);
+  }
+  if (condition.kind === 'boolean') {
+    return Boolean(FIELD_TO_BOOLEAN_FILTER[condition.field]);
+  }
+  if (condition.kind === 'text') {
+    return ['symbol', 'listing_search'].includes(condition.field);
+  }
+  if (condition.kind !== 'categorical') return false;
+  if (['ibd_industry_group', 'gics_sector'].includes(condition.field)) return true;
+  return condition.mode !== 'exclude'
+    && ['rating', 'market', 'se_pattern_primary'].includes(condition.field);
+}
+
+export function patchExpressionQuickFilters(expression, filters, now = new Date()) {
+  const base = expression ? structuredClone(expression) : createEmptyExpression();
+  const preserved = (base.required?.conditions || []).filter(
+    (condition) => !isQuickFilterCondition(condition),
+  );
   base.expression_version = 1;
   base.required = {
     id: 'required',
     name: 'Always require',
     match: 'all',
     enabled: true,
-    conditions: legacyFiltersToConditions(filters, now),
+    conditions: [...preserved, ...legacyFiltersToConditions(filters, now)],
   };
   base.group_join = base.group_join === 'all' ? 'all' : 'any';
   base.groups = Array.isArray(base.groups) ? base.groups : [];
   return base;
+}
+
+export function legacyFiltersToExpression(filters = {}, previousExpression = null, now = new Date()) {
+  return patchExpressionQuickFilters(previousExpression, filters, now);
 }
 
 export function expressionToLegacyFilters(expression, defaults) {
@@ -105,6 +133,9 @@ export function expressionToLegacyFilters(expression, defaults) {
       if (key) result[key] = { min: condition.min ?? null, max: condition.max ?? null };
       if (condition.field === 'stage' && condition.min === condition.max) result.stage = condition.min;
       if (condition.field === 'volume' && condition.max == null) result.minVolume = condition.min;
+      if (condition.field === 'listing_aware_volume' && condition.max == null) {
+        result.minVolume = condition.min;
+      }
       if (condition.field === 'market_cap' && condition.max == null) result.minMarketCap = condition.min;
       if (condition.field === 'ipo_date' && condition.max == null) result.ipoAfter = condition.min;
     } else if (condition.kind === 'boolean') {
@@ -113,17 +144,21 @@ export function expressionToLegacyFilters(expression, defaults) {
     } else if (condition.kind === 'text' && ['symbol', 'listing_search'].includes(condition.field)) {
       result.symbolSearch = condition.pattern;
     } else if (condition.kind === 'categorical') {
-      if (condition.field === 'rating') result.ratings = [...condition.values];
+      if (condition.field === 'rating' && condition.mode !== 'exclude') {
+        result.ratings = [...condition.values];
+      }
       if (condition.field === 'ibd_industry_group') {
         result.ibdIndustries = { values: [...condition.values], mode: condition.mode };
       }
       if (condition.field === 'gics_sector') {
         result.gicsSectors = { values: [...condition.values], mode: condition.mode };
       }
-      if (condition.field === 'market') result.markets = [...condition.values];
-      if (condition.field === 'se_pattern_primary') result.sePatternPrimary = [...condition.values];
-    } else if (condition.kind === 'listing_discovery') {
-      result.minVolume = condition.min_volume;
+      if (condition.field === 'market' && condition.mode !== 'exclude') {
+        result.markets = [...condition.values];
+      }
+      if (condition.field === 'se_pattern_primary' && condition.mode !== 'exclude') {
+        result.sePatternPrimary = [...condition.values];
+      }
     }
   });
   return result;

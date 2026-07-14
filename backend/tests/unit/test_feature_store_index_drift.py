@@ -21,7 +21,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.infra.db.models.feature_store import StockFeatureDaily
 from app.infra.db.portability import json_number
-from app.infra.query.feature_store_query import _JSON_FIELD_MAP
+from app.infra.query.feature_store_query import _FIELD_BINDINGS
 
 _MIGRATION = (
     Path(__file__).parents[2]
@@ -59,7 +59,8 @@ def test_indexed_fields_are_flat_top_level_keys():
     """A nested path would make the flat index expression index the wrong key."""
     migration = _load_migration()
     for field in migration._FIELDS:
-        path = _JSON_FIELD_MAP.get(field)
+        binding = _FIELD_BINDINGS.get(field)
+        path = binding.json_path if binding is not None else None
         assert path is not None, f"{field} is not a JSON details field"
         assert len(path) == 1, (
             f"{field} maps to nested path {path}; the migration's flat "

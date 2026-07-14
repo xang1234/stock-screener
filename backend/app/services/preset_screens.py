@@ -11,12 +11,12 @@ from __future__ import annotations
 import copy
 import heapq
 
+from app.contracts.filter_expression import expression_from_payload
 from app.domain.scanning.filter_expression_evaluator import evaluate_expression
 from app.domain.scanning.filter_expression_serialization import (
     canonical_expression_payload,
 )
 from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
-from app.schemas.filter_expression_payload import expression_from_payload
 
 # ---------------------------------------------------------------------------
 # Preset screen definitions
@@ -403,7 +403,6 @@ STATIC_PRESET_DEFAULT_FILTER_KEYS: dict[str, tuple[str, ...]] = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 def resolve_preset_screens_for_defaults(
     presets: list[dict],
     default_filters: dict | None = None,

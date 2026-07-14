@@ -309,7 +309,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         """Build and execute a filtered, sorted, paginated feature query.
 
         Applies the StockUniverse + StockFundamental outer joins so the
-        joined-column entries in ``feature_store_query._COLUMN_MAP``
+        joined-column entries in ``feature_store_query._FIELD_BINDINGS``
         (market, exchange, currency, market_cap_usd, adv_usd) resolve to
         valid SQL even though FeaturePage rows don't surface those columns.
         Without the joins, a filter referencing them would produce broken

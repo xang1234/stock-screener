@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from sqlalchemy import asc, desc
 from sqlalchemy.orm import Query
 
 from app.domain.common.query import (
@@ -17,11 +14,15 @@ from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     filter_spec_to_expression,
 )
-from app.infra.db.portability import json_number, json_text, lean_count
+from app.infra.db.portability import lean_count
 from app.infra.query.expression_compiler import compile_expression
 from app.infra.query.sql_filter_compiler import (
     SqlFilterFieldResolver,
+    apply_sql_sort,
+    column_bindings,
     compile_sql_condition,
+    json_bindings,
+    listing_aware_volume_predicate,
 )
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental
@@ -29,9 +30,8 @@ from app.models.stock_universe import StockUniverse
 
 # ── Column resolution ───────────────────────────────────────────────────
 
-# Maps domain filter/sort field names to ScanResult column attributes.
-# Fields NOT in this map are treated as JSON details fields.
-_COLUMN_MAP: dict[str, Any] = {
+# One adapter-owned registry maps each logical field to its physical source.
+_FIELD_BINDINGS = column_bindings({
     "symbol": ScanResult.symbol,
     "composite_score": ScanResult.composite_score,
     "minervini_score": ScanResult.minervini_score,
@@ -93,11 +93,7 @@ _COLUMN_MAP: dict[str, Any] = {
     "currency": StockUniverse.currency,
     "market_cap_usd": StockFundamental.market_cap_usd,
     "adv_usd": StockFundamental.adv_usd,
-}
-
-# JSON details paths for fields stored in the details blob.
-# Maps domain field name to nested path segments.
-_JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
+}) | json_bindings({
     # VCP
     "vcp_score": ("vcp_score",),
     "vcp_pivot": ("vcp_pivot",),
@@ -139,29 +135,16 @@ _JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
     # Setup Engine (string)
     "se_pattern_primary": ("setup_engine", "pattern_primary"),
     "se_pivot_type": ("setup_engine", "pivot_type"),
-}
+})
 
 _FILTER_FIELD_RESOLVER = SqlFilterFieldResolver(
     source_name="scan-result",
-    columns=_COLUMN_MAP,
-    json_paths=_JSON_FIELD_MAP,
+    bindings=_FIELD_BINDINGS,
     json_column=ScanResult.details,
     symbol_column=ScanResult.symbol,
     company_name_column=StockUniverse.name,
+    range_predicates={"listing_aware_volume": listing_aware_volume_predicate},
 )
-
-# JSON fields requiring CAST(... AS FLOAT) for correct numeric sorting.
-_JSON_SORT_NUMERIC: frozenset[str] = frozenset({
-    "vcp_score", "vcp_pivot",
-    "se_setup_score", "se_quality_score", "se_readiness_score",
-    "se_pattern_confidence", "se_pivot_price", "se_distance_to_pivot_pct",
-    "se_base_length_weeks", "se_base_depth_pct", "se_support_tests_count",
-    "se_tight_closes_count",
-    "se_atr14_pct", "se_atr14_pct_trend", "se_bb_width_pct",
-    "se_bb_width_pctile_252", "se_volume_vs_50d",
-    "se_up_down_volume_ratio_10d", "se_quiet_days_10d", "se_rs",
-    "se_rs_vs_spy_65d", "se_rs_vs_spy_trend_20d",
-})
 
 # Sort fields that must be fetched and sorted in Python (not in SQL).
 _PYTHON_SORT_FIELDS = frozenset({
@@ -173,17 +156,6 @@ _PYTHON_SORT_FIELDS = frozenset({
 
 # Cap for Python-sorted queries to prevent memory issues.
 _PYTHON_SORT_LIMIT = 1000
-
-
-def _json_sort_expr(query: Query, field: str, column, json_path: tuple[str, ...], order: SortOrder):
-    """ORDER BY expression for a JSON field: numeric cast + nulls-last."""
-    expr = (
-        json_number(column, json_path, bind_or_session=query)
-        if field in _JSON_SORT_NUMERIC
-        else json_text(column, json_path, bind_or_session=query)
-    )
-    order_fn = asc if order == SortOrder.ASC else desc
-    return order_fn(expr).nullslast()
 
 
 def requires_python_sort(field: str) -> bool:
@@ -222,7 +194,7 @@ def supported_filter_fields() -> frozenset[str]:
 
 
 def supported_sort_fields() -> frozenset[str]:
-    return frozenset((*_COLUMN_MAP, *_JSON_FIELD_MAP, *_PYTHON_SORT_FIELDS))
+    return _FILTER_FIELD_RESOLVER.supported_sort_fields | _PYTHON_SORT_FIELDS
 
 
 def apply_sort_and_paginate(
@@ -244,18 +216,7 @@ def apply_sort_and_paginate(
         rows = _sort_in_python(rows, sort)
         rows = rows[page.offset : page.offset + page.limit]
     else:
-        col = _COLUMN_MAP.get(sort.field)
-        if col is not None:
-            order_fn = asc if sort.order == SortOrder.ASC else desc
-            ordered_col = order_fn(col)
-            if sort.field == "composite_score":
-                ordered_col = ordered_col.nullslast()
-            query = query.order_by(ordered_col)
-        elif sort.field in _JSON_FIELD_MAP:
-            json_path = _JSON_FIELD_MAP[sort.field]
-            query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
-        else:
-            raise ValueError(f"Unsupported scan-result sort field: {sort.field}")
+        query = apply_sql_sort(query, sort, _FILTER_FIELD_RESOLVER)
         query = query.offset(page.offset).limit(page.limit)
         rows = query.all()
 
@@ -271,19 +232,7 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
         rows = query.all()
         return _sort_in_python(rows, sort)
 
-    col = _COLUMN_MAP.get(sort.field)
-    if col is not None:
-        order_fn = asc if sort.order == SortOrder.ASC else desc
-        ordered_col = order_fn(col)
-        if sort.field == "composite_score":
-            ordered_col = ordered_col.nullslast()
-        query = query.order_by(ordered_col)
-    elif sort.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[sort.field]
-        query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
-    else:
-        raise ValueError(f"Unsupported scan-result sort field: {sort.field}")
-    return query.all()
+    return apply_sql_sort(query, sort, _FILTER_FIELD_RESOLVER).all()
 
 
 def _sort_in_python(

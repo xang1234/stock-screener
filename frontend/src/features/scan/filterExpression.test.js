@@ -136,8 +136,12 @@ describe('scan filter expressions', () => {
     expect(rows.filter((row) => evaluateExpression(row, expression)).map((row) => row.symbol))
       .toEqual(['NEW', 'NEWHIGH']);
     expect(expression.required.conditions).toContainEqual(
-      { kind: 'listing_discovery', min_volume: 1_000_000 },
+      { kind: 'range', field: 'listing_aware_volume', min: 1_000_000, max: null },
     );
+    expect(evaluateCondition(
+      rows[0],
+      { kind: 'range', field: 'listing_aware_volume', min: null, max: 5_000_000 },
+    )).toBe(false);
   });
 
   it('maps the legacy passes toggle to passing ratings', () => {

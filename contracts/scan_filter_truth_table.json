@@ -8,7 +8,7 @@
       "enabled": true,
       "conditions": [
         { "kind": "text", "field": "listing_search", "pattern": "new" },
-        { "kind": "listing_discovery", "min_volume": 1000000 }
+        { "kind": "range", "field": "listing_aware_volume", "min": 1000000, "max": null }
       ]
     },
     "group_join": "any",

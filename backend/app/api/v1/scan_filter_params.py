@@ -215,7 +215,7 @@ def parse_scan_filters(
     if symbol_search:
         f.add_text_search("symbol", symbol_search)
 
-    # Range filters — using domain field names matching _COLUMN_MAP
+    # Range filters — using canonical logical scan-field names
     f.add_range("minervini_score", min_score, max_score)
     f.add_range("composite_score", min_composite, max_composite)
     f.add_range("canslim_score", min_canslim, max_canslim)

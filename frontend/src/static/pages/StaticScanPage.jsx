@@ -34,6 +34,7 @@ import {
 import {
   createFilterState,
   filterStateReducer,
+  selectQuickFilters,
 } from '../../features/scan/filterState';
 
 const HYDRATION_BATCH_SIZE = 2;
@@ -58,7 +59,8 @@ function StaticScanPage() {
     { defaultFilters: buildDefaultScanFilters() },
     createFilterState,
   );
-  const { filters, expression: appliedExpression } = filterState;
+  const appliedExpression = filterState.committedExpression;
+  const filters = useMemo(() => selectQuickFilters(filterState), [filterState]);
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [page, setPage] = useState(1);

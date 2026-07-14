@@ -17,7 +17,6 @@ from .filter_expression_model import (
     FilterCondition,
     FilterExpression,
     FilterGroup,
-    ListingDiscoveryFilter,
 )
 
 
@@ -40,8 +39,6 @@ def _condition_payload(condition: FilterCondition) -> dict[str, Any]:
         return {"kind": "boolean", "field": condition.field, "value": condition.value}
     if isinstance(condition, TextSearchFilter):
         return {"kind": "text", "field": condition.field, "pattern": condition.pattern}
-    if isinstance(condition, ListingDiscoveryFilter):
-        return {"kind": "listing_discovery", "min_volume": condition.min_volume}
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
 
 
