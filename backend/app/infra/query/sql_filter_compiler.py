@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field as dataclass_field
-from datetime import date
 from typing import Any, Mapping
 
 from sqlalchemy import and_, asc, desc, false, func, or_, true
@@ -119,9 +118,6 @@ def _range_predicate(
     column = binding.column if binding is not None else None
     minimum = condition.min_value
     maximum = condition.max_value
-    if column is not None and condition.field == "ipo_date":
-        minimum = date.fromisoformat(minimum) if isinstance(minimum, str) else minimum
-        maximum = date.fromisoformat(maximum) if isinstance(maximum, str) else maximum
 
     if column is not None:
         value = column

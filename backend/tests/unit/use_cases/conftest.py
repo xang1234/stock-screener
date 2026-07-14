@@ -957,7 +957,11 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
             if field == "symbol":
                 return row.symbol
             details = row.details or {}
-            return details.get(field) if isinstance(details, dict) else None
+            if not isinstance(details, dict):
+                return None
+            if field == "price":
+                return details.get("price", details.get("current_price"))
+            return details.get(field)
 
         if filters is not None:
             from app.domain.common.query import FilterMode

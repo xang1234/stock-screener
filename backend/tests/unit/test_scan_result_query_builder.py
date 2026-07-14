@@ -20,6 +20,7 @@ from app.infra.query.scan_result_query import (
     _FIELD_BINDINGS,
     _FILTER_FIELD_RESOLVER,
     _PYTHON_SORT_FIELDS,
+    apply_filters,
 )
 from app.infra.query.sql_filter_compiler import apply_sql_sort
 from app.models.scan_result import ScanResult
@@ -239,6 +240,24 @@ class TestPageSpec:
     def test_per_page_zero_raises(self):
         with pytest.raises(ValueError, match="per_page must be 1-100"):
             PageSpec(page=1, per_page=0)
+
+
+class TestRangeCompilation:
+    def test_ipo_date_range_keeps_iso_string_bounds_for_string_column(self):
+        filters = FilterSpec()
+        filters.add_range(
+            "ipo_date",
+            min_value="2024-01-02",
+            max_value="2025-03-04",
+        )
+
+        with Session() as session:
+            query = apply_filters(session.query(ScanResult), filters)
+
+        assert set(query.statement.compile().params.values()) == {
+            "2024-01-02",
+            "2025-03-04",
+        }
 
 
 class TestSortSpec:
