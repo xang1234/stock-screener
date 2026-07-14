@@ -145,6 +145,7 @@ def annotate_matched_groups(
 
 
 __all__ = [
+    "PASSES_ONLY_CONDITION",
     "annotate_matched_groups",
     "evaluate_condition",
     "evaluate_expression",

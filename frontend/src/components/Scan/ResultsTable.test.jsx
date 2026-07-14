@@ -52,6 +52,30 @@ const defaultProps = {
 };
 
 describe('ResultsTable', () => {
+  it('rerenders a retained row when matched setups change', () => {
+    const firstRow = {
+      ...fullSeRow,
+      matched_groups: [{ id: 'growth', name: 'Growth' }],
+    };
+    const { rerender } = renderWithProviders(
+      <ResultsTable {...defaultProps} results={[firstRow]} />,
+    );
+    expect(screen.getByText('Growth')).toBeInTheDocument();
+
+    rerender(
+      <ResultsTable
+        {...defaultProps}
+        results={[{
+          ...firstRow,
+          matched_groups: [{ id: 'momentum', name: 'Momentum' }],
+        }]}
+      />,
+    );
+
+    expect(screen.queryByText('Growth')).not.toBeInTheDocument();
+    expect(screen.getByText('Momentum')).toBeInTheDocument();
+  });
+
   // ── SE column rendering — full data ──────────────────────────────────
   describe('SE column rendering — full data', () => {
     beforeEach(() => {

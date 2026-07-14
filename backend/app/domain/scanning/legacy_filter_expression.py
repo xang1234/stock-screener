@@ -21,6 +21,7 @@ from .filter_expression_model import (
     FilterExpression,
     FilterGroup,
 )
+from .filter_expression_evaluator import PASSES_ONLY_CONDITION
 
 
 _IPO_PRESET_MONTHS = {"6m": 6, "1y": 12, "2y": 24, "3y": 36, "5y": 60}
@@ -108,7 +109,7 @@ def legacy_filters_to_expression(
             )
 
     if values.get("passesTemplate") is True:
-        conditions.append(CategoricalFilter("rating", ("Strong Buy", "Buy")))
+        conditions.append(PASSES_ONLY_CONDITION)
 
     min_volume = values.get("minVolume")
     if min_volume is not None:

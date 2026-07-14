@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 import app.services.market_group_ranking_service as market_group_module
 from app.database import Base
+from app.domain.scanning.filter_expression_model import FilterExpression
 from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun
 from app.services.market_group_ranking_service import MarketGroupRankingService
@@ -31,6 +32,36 @@ class _FakeRedis:
         self.set_calls.append((key, ttl_seconds))
         self.values[key] = value
         return True
+
+
+def test_load_run_rows_uses_empty_filter_expression(monkeypatch):
+    observed = {}
+
+    def query_all(_repo, run_id, expression, sort, *, include_sparklines=False):
+        observed.update(
+            run_id=run_id,
+            expression=expression,
+            sort=sort,
+            include_sparklines=include_sparklines,
+        )
+        return ()
+
+    monkeypatch.setattr(
+        market_group_module.SqlFeatureStoreRepository,
+        "query_all_as_scan_results",
+        query_all,
+    )
+
+    rows = MarketGroupRankingService()._load_run_rows(  # noqa: SLF001
+        Session(),
+        17,
+        include_sparklines=False,
+    )
+
+    assert rows == ()
+    assert observed["run_id"] == 17
+    assert observed["expression"] == FilterExpression()
+    assert observed["include_sparklines"] is False
 
 
 def test_get_rank_movers_separates_gainers_and_losers(monkeypatch):

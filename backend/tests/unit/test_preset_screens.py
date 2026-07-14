@@ -1,5 +1,8 @@
 from datetime import date
 
+import pytest
+from pydantic import ValidationError
+
 from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
 from app.services.preset_screens import (
     PRESET_SCREENS,
@@ -163,3 +166,22 @@ def test_legacy_ipo_preset_matches_browser_month_rollover():
     )
 
     assert expression.required.conditions[0].min_value == "2025-10-01"
+
+
+def test_invalid_stored_expression_fails_closed_with_validation_error():
+    preset = {
+        "id": "invalid",
+        "filters": {},
+        "filter_expression": {
+            "required": {
+                "id": "required",
+                "name": "Always require",
+                "conditions": [
+                    {"kind": "text", "field": "missing_field", "pattern": "x"}
+                ],
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError, match="Unsupported text field: missing_field"):
+        resolve_preset_screens_for_defaults([preset])

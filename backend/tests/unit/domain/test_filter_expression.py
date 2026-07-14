@@ -1,3 +1,4 @@
+from datetime import date
 import json
 from pathlib import Path
 
@@ -13,13 +14,17 @@ from app.domain.common.query import (
     TextSearchFilter,
 )
 from app.domain.scanning.filter_expression_evaluator import (
+    PASSES_ONLY_CONDITION,
     annotate_matched_groups,
     evaluate_condition,
     evaluate_expression,
     matched_setup_groups,
 )
 from app.domain.scanning.filter_expression_serialization import expression_fingerprint
-from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
+from app.domain.scanning.legacy_filter_expression import (
+    _ipo_cutoff,
+    legacy_filters_to_expression,
+)
 from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     FilterGroup,
@@ -483,3 +488,39 @@ def test_static_decoder_accepts_legacy_aliases_that_the_live_api_rejects():
                 "group_join": "any",
             }
         )
+
+
+def test_static_decoder_wraps_domain_field_errors_as_validation_errors():
+    with pytest.raises(ValidationError, match="Unsupported text field: missing_field"):
+        expression_from_payload(
+            {
+                "required": {
+                    "id": "required",
+                    "name": "Always require",
+                    "conditions": [
+                        {"kind": "text", "field": "missing_field", "pattern": "x"}
+                    ],
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "today", "expected"),
+    [
+        ("6m", date(2026, 8, 31), "2026-03-03"),
+        ("6m", date(2026, 1, 15), "2025-07-15"),
+        ("2024-02-29", date(2026, 1, 15), "2024-02-29"),
+        ("unsupported", date(2026, 1, 15), None),
+    ],
+)
+def test_ipo_cutoff_preserves_browser_rollover_and_year_boundaries(
+    value, today, expected
+):
+    assert _ipo_cutoff(value, today=today) == expected
+
+
+def test_legacy_passes_template_reuses_canonical_condition():
+    expression = legacy_filters_to_expression({"passesTemplate": True})
+
+    assert expression.required.conditions == (PASSES_ONLY_CONDITION,)

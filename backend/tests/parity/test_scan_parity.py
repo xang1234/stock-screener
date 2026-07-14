@@ -9,6 +9,7 @@ field-for-field identical.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -29,7 +30,12 @@ from app.domain.scanning.filter_expression_model import (
     MatchOperator,
     QuerySpec,
 )
-from app.domain.scanning.models import ResultPage, ScanResultItemDomain
+from app.domain.scanning.filter_expression_evaluator import annotate_matched_groups
+from app.domain.scanning.models import (
+    MatchedGroupDomain,
+    ResultPage,
+    ScanResultItemDomain,
+)
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.models.stock_universe import StockUniverse
@@ -43,13 +49,23 @@ from .golden_fixtures import GOLDEN_TICKERS
 # ---------------------------------------------------------------------------
 
 def _query_legacy(session: Session, spec: QuerySpec | None = None) -> ResultPage:
+    query_spec = spec or QuerySpec()
     repo = SqlScanResultRepository(session)
-    return repo.query(LEGACY_SCAN_ID, spec or QuerySpec())
+    page = repo.query(LEGACY_SCAN_ID, query_spec)
+    return replace(
+        page,
+        items=annotate_matched_groups(page.items, query_spec.expression),
+    )
 
 
 def _query_feature(session: Session, spec: QuerySpec | None = None) -> ResultPage:
+    query_spec = spec or QuerySpec()
     repo = SqlFeatureStoreRepository(session)
-    return repo.query_run_as_scan_results(FEATURE_RUN_ID, spec or QuerySpec())
+    page = repo.query_run_as_scan_results(FEATURE_RUN_ID, query_spec)
+    return replace(
+        page,
+        items=annotate_matched_groups(page.items, query_spec.expression),
+    )
 
 
 def _find(page: ResultPage, symbol: str) -> ScanResultItemDomain:
@@ -158,18 +174,27 @@ class TestFieldByFieldParity:
 
     @pytest.mark.parametrize("ticker", GOLDEN_TICKERS)
     def test_parity(self, seeded_session: Session, ticker: str):
-        legacy_page = _query_legacy(
-            seeded_session,
-            QuerySpec(page=PageSpec(page=1, per_page=100)),
+        spec = QuerySpec(
+            expression=FilterExpression(
+                groups=(
+                    FilterGroup(
+                        id="scored",
+                        name="Scored",
+                        conditions=(RangeFilter("composite_score", min_value=0),),
+                    ),
+                )
+            ),
+            page=PageSpec(page=1, per_page=100),
         )
-        feature_page = _query_feature(
-            seeded_session,
-            QuerySpec(page=PageSpec(page=1, per_page=100)),
-        )
+        legacy_page = _query_legacy(seeded_session, spec)
+        feature_page = _query_feature(seeded_session, spec)
 
         legacy_item = _find(legacy_page, ticker)
         feature_item = _find(feature_page, ticker)
 
+        assert legacy_item.matched_groups == (
+            MatchedGroupDomain(id="scored", name="Scored"),
+        )
         assert_scan_result_parity(legacy_item, feature_item)
 
 

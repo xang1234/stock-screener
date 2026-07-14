@@ -1,6 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { cwd } from 'node:process';
 
 import { describe, expect, it } from 'vitest';
 
@@ -12,6 +10,7 @@ import {
 } from './filterExpressionEvaluator';
 import {
   buildScanQueryRequest,
+  canonicalizeExpression,
   createEmptyExpression,
   stableExpressionKey,
 } from './filterExpressionModel';
@@ -53,12 +52,37 @@ function groupedExpression(join = 'any') {
   };
 }
 
-const sharedTruthTable = JSON.parse(readFileSync(
-  resolve(cwd(), '../contracts/scan_filter_truth_table.json'),
-  'utf8',
-));
+const sharedTruthTableUrl = new URL(
+  '../../../../contracts/scan_filter_truth_table.json',
+  import.meta.url,
+);
+const sharedTruthTablePath = decodeURIComponent(sharedTruthTableUrl.pathname)
+  .replace(/^\/@fs\//, '/');
+const sharedTruthTable = JSON.parse(readFileSync(sharedTruthTablePath, 'utf8'));
 
 describe('scan filter expressions', () => {
+  it('canonicalizes malformed persisted collection shapes without crashing', () => {
+    expect(canonicalizeExpression({ required: null, groups: [] }).required).toEqual(
+      createEmptyExpression().required,
+    );
+    expect(canonicalizeExpression({
+      required: { conditions: [{ kind: 'categorical', field: 'rating', values: {} }] },
+      groups: {},
+    })).toMatchObject({
+      required: {
+        conditions: [{ kind: 'categorical', field: 'rating', values: [] }],
+      },
+      groups: [],
+    });
+    expect(canonicalizeExpression({
+      required: { conditions: [null] },
+      groups: [null],
+    })).toMatchObject({
+      required: { conditions: [{}] },
+      groups: [{ name: '', match: 'all', enabled: true, conditions: [] }],
+    });
+  });
+
   it('requires the base group and matches any named setup', () => {
     const row = {
       symbol: 'AAA',

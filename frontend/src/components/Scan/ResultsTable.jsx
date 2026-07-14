@@ -543,6 +543,8 @@ const VirtualTableRow = memo(function VirtualTableRow({
          prevProps.row.rs_line_blue_dot_recent === nextProps.row.rs_line_blue_dot_recent &&
          prevProps.row.rs_line_new_high_date === nextProps.row.rs_line_new_high_date &&
          (prevProps.row.market_themes || []).join('|') === (nextProps.row.market_themes || []).join('|') &&
+         JSON.stringify(prevProps.row.matched_groups || []) ===
+           JSON.stringify(nextProps.row.matched_groups || []) &&
          prevProps.row.rating === nextProps.row.rating &&
          prevProps.mcapDisplay === nextProps.mcapDisplay &&
          prevProps.showActions === nextProps.showActions &&

@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.common.query import (
     BooleanFilter,
@@ -166,10 +166,20 @@ class FilterExpressionPayload(ExpressionPayloadModel):
         )
 
 
+class _StoredFilterExpressionPayload(FilterExpressionPayload):
+    """Validate stored/static domain rules inside Pydantic's error boundary."""
+
+    @model_validator(mode="after")
+    def validate_domain_expression(self):
+        self.to_domain_expression(FilterExpressionFieldPolicy.STATIC)
+        return self
+
+
 def expression_from_payload(payload: Mapping[str, object]) -> FilterExpression:
     """Validate and decode a persisted/static expression through the typed codec."""
 
-    return FilterExpressionPayload.model_validate(payload).to_domain_expression(
+    validated = _StoredFilterExpressionPayload.model_validate(payload)
+    return validated.to_domain_expression(
         FilterExpressionFieldPolicy.STATIC
     )
 

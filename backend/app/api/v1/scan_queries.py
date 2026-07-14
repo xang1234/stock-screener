@@ -237,7 +237,7 @@ async def query_scan_symbols(
 @router.get("/{scan_id}/export")
 async def export_scan_results(
     scan_id: str,
-    format: str = Query(default="csv", pattern="^(csv)$"),
+    export_format: str = Query(default="csv", pattern="^(csv)$", alias="format"),
     passes_only: bool = Query(False, description="Show only stocks passing template"),
     filters=Depends(parse_scan_filters),
     sort=Depends(parse_scan_sort),
@@ -251,7 +251,7 @@ async def export_scan_results(
                 scan_id=scan_id,
                 expression=filter_spec_to_expression(filters),
                 sort=sort,
-                export_format=ExportFormat(format),
+                export_format=ExportFormat(export_format),
                 passes_only=passes_only,
             ),
         ),

@@ -240,7 +240,7 @@ def apply_sql_sort(
     sort: SortSpec,
     resolver: SqlFilterFieldResolver,
 ) -> Query:
-    """Apply an adapter binding as one SQL ORDER BY clause."""
+    """Apply adapter-owned primary sorting with a stable symbol tie-breaker."""
 
     binding = resolver.bindings.get(sort.field)
     if binding is None:
@@ -260,7 +260,9 @@ def apply_sql_sort(
     ordered = order_fn(value)
     if binding.json_path is not None or sort.field == "composite_score":
         ordered = ordered.nullslast()
-    return query.order_by(ordered)
+    if sort.field == "symbol":
+        return query.order_by(ordered)
+    return query.order_by(ordered, asc(resolver.symbol_column))
 
 
 def compile_sql_condition(
