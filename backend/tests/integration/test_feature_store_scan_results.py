@@ -181,11 +181,7 @@ class TestQueryRunAsScanResults:
     ):
         repo = SqlFeatureStoreRepository(seeded_session)
         expression = FilterExpression(
-            required=FilterGroup(
-                id="required",
-                name="Always require",
-                conditions=(RangeFilter("stage", min_value=2, max_value=2),),
-            ),
+            required_conditions=(RangeFilter("stage", min_value=2, max_value=2),),
             group_join=group_join,
             groups=(
                 FilterGroup(
@@ -269,13 +265,9 @@ class TestQueryRunAsScanResults:
         )
         seeded_session.commit()
         expression = FilterExpression(
-            required=FilterGroup(
-                id="required",
-                name="Always require",
-                conditions=(
-                    TextSearchFilter("listing_search", "newco"),
-                    RangeFilter("listing_aware_volume", min_value=1_000_000),
-                ),
+            required_conditions=(
+                TextSearchFilter("listing_search", "newco"),
+                RangeFilter("listing_aware_volume", min_value=1_000_000),
             )
         )
 

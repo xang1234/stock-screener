@@ -33,6 +33,19 @@ class ScanFieldCapability:
         return kind in self.api_filter_kinds
 
 
+@dataclass(frozen=True, slots=True)
+class FilterExpressionLimits:
+    """Cross-runtime complexity and payload bounds for one filter expression."""
+
+    max_groups: int
+    max_group_conditions: int
+    max_conditions: int
+    max_group_id_length: int
+    max_group_name_length: int
+    max_text_pattern_length: int
+    max_categorical_values: int
+
+
 def _default_value_type(kind: FilterKind | None) -> FieldValueType:
     if kind == "range":
         return "number"
@@ -41,13 +54,35 @@ def _default_value_type(kind: FilterKind | None) -> FieldValueType:
     return "string"
 
 
-def _load_contract() -> tuple[ScanFieldCapability, ...]:
+def _positive_limit(raw_limits: object, name: str) -> int:
+    if not isinstance(raw_limits, dict):
+        raise RuntimeError("Scan filter expression limits must be an object")
+    value = raw_limits.get(name)
+    if type(value) is not int or value <= 0:
+        raise RuntimeError(f"Scan filter expression limit {name!r} must be positive")
+    return value
+
+
+def _load_contract() -> tuple[
+    FilterExpressionLimits,
+    tuple[ScanFieldCapability, ...],
+]:
     payload = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
     if payload.get("schema_version") != 1 or not isinstance(
         payload.get("fields"), list
     ):
         raise RuntimeError("Unsupported scan filter field contract")
 
+    raw_limits = payload.get("expression_limits")
+    limits = FilterExpressionLimits(
+        max_groups=_positive_limit(raw_limits, "max_groups"),
+        max_group_conditions=_positive_limit(raw_limits, "max_group_conditions"),
+        max_conditions=_positive_limit(raw_limits, "max_conditions"),
+        max_group_id_length=_positive_limit(raw_limits, "max_group_id_length"),
+        max_group_name_length=_positive_limit(raw_limits, "max_group_name_length"),
+        max_text_pattern_length=_positive_limit(raw_limits, "max_text_pattern_length"),
+        max_categorical_values=_positive_limit(raw_limits, "max_categorical_values"),
+    )
     capabilities: list[ScanFieldCapability] = []
     for raw in payload["fields"]:
         if not isinstance(raw, dict):
@@ -99,10 +134,10 @@ def _load_contract() -> tuple[ScanFieldCapability, ...]:
                 legacy_key=raw.get("legacy_key"),
             )
         )
-    return tuple(capabilities)
+    return limits, tuple(capabilities)
 
 
-SCAN_FIELD_CAPABILITIES: Final = _load_contract()
+FILTER_EXPRESSION_LIMITS, SCAN_FIELD_CAPABILITIES = _load_contract()
 _capability_map = {item.field: item for item in SCAN_FIELD_CAPABILITIES}
 if len(_capability_map) != len(SCAN_FIELD_CAPABILITIES):
     raise RuntimeError("Duplicate logical scan field capability")
@@ -157,7 +192,9 @@ __all__ = [
     "BOOLEAN_FIELDS",
     "CATEGORICAL_FIELDS",
     "FIELD_CAPABILITIES",
+    "FILTER_EXPRESSION_LIMITS",
     "FILTER_FIELD_KINDS",
+    "FilterExpressionLimits",
     "LEGACY_BOOLEAN_FILTER_FIELDS",
     "LEGACY_RANGE_FILTER_FIELDS",
     "RANGE_FIELDS",

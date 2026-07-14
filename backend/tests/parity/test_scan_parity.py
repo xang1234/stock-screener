@@ -237,11 +237,7 @@ _FILTER_SORT_SPECS: list[tuple[str, QuerySpec]] = [
         "listing_search_company_name",
         QuerySpec(
             expression=FilterExpression(
-                required=FilterGroup(
-                    id="required",
-                    name="Always require",
-                    conditions=(TextSearchFilter("listing_search", "Apple"),),
-                )
+                required_conditions=(TextSearchFilter("listing_search", "Apple"),)
             ),
             page=PageSpec(page=1, per_page=100),
         ),
@@ -317,11 +313,7 @@ class TestFilterSortParity:
         seeded_session.flush()
         spec = QuerySpec(
             expression=FilterExpression(
-                required=FilterGroup(
-                    id="required",
-                    name="Always require",
-                    conditions=(TextSearchFilter("listing_search", "_100%"),),
-                )
+                required_conditions=(TextSearchFilter("listing_search", "_100%"),)
             ),
             page=PageSpec(page=1, per_page=100),
         )

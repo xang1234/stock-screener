@@ -19,7 +19,7 @@ import {
   legacyFiltersToExpression,
 } from './legacyFilterExpression';
 import { expressionToQuickFilters } from './quickFilterExpression';
-import { fieldValueOptions } from './scanFilterFields';
+import { EXPRESSION_LIMITS, fieldValueOptions } from './scanFilterFields';
 
 function groupedExpression(join = 'any') {
   return {
@@ -59,6 +59,13 @@ const sharedTruthTableUrl = new URL(
 const sharedTruthTablePath = decodeURIComponent(sharedTruthTableUrl.pathname)
   .replace(/^\/@fs\//, '/');
 const sharedTruthTable = JSON.parse(readFileSync(sharedTruthTablePath, 'utf8'));
+const legacyCompatibilityUrl = new URL(
+  '../../../../contracts/scan_filter_legacy_compatibility.json',
+  import.meta.url,
+);
+const legacyCompatibilityPath = decodeURIComponent(legacyCompatibilityUrl.pathname)
+  .replace(/^\/@fs\//, '/');
+const legacyCompatibility = JSON.parse(readFileSync(legacyCompatibilityPath, 'utf8'));
 
 describe('scan filter expressions', () => {
   it('canonicalizes malformed persisted collection shapes without crashing', () => {
@@ -118,27 +125,13 @@ describe('scan filter expressions', () => {
     expect(restored.maAlignment).toBe(false);
   });
 
-  it('preserves legacy array-shaped industry and sector filters', () => {
-    const expression = legacyFiltersToExpression({
-      ibdIndustries: ['Software'],
-      gicsSectors: ['Technology'],
-    });
-
-    expect(expression.required.conditions).toEqual([
-      {
-        kind: 'categorical',
-        field: 'ibd_industry_group',
-        values: ['Software'],
-        mode: 'include',
-      },
-      {
-        kind: 'categorical',
-        field: 'gics_sector',
-        values: ['Technology'],
-        mode: 'include',
-      },
-    ]);
-  });
+  it.each(legacyCompatibility.cases)(
+    'preserves legacy category compatibility: $name',
+    ({ filters, required_conditions: requiredConditions }) => {
+      expect(legacyFiltersToExpression(filters).required.conditions)
+        .toEqual(requiredConditions);
+    },
+  );
 
   it('rejects string booleans instead of silently treating them as true', () => {
     expect(() => legacyFiltersToExpression({ maAlignment: 'false' }))
@@ -242,6 +235,18 @@ describe('scan filter expressions', () => {
       'Price minimum cannot exceed maximum.',
       'RS rating needs finite numeric values.',
     ]));
+  });
+
+  it('rejects named setups above the shared per-group rule limit', () => {
+    const expression = groupedExpression();
+    expression.groups[0].conditions = Array.from(
+      { length: EXPRESSION_LIMITS.maxGroupConditions + 1 },
+      () => ({ kind: 'range', field: 'price', min: 10, max: null }),
+    );
+
+    expect(validateExpression(expression)).toContain(
+      `Breakout ready can contain at most ${EXPRESSION_LIMITS.maxGroupConditions} rules.`,
+    );
   });
 
   it('rejects calendar dates that JavaScript would otherwise roll forward', () => {

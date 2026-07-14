@@ -20,7 +20,7 @@ from app.domain.common.query import (
     TextSearchFilter,
 )
 
-from .filter_capabilities import FIELD_CAPABILITIES
+from .filter_capabilities import FIELD_CAPABILITIES, FILTER_EXPRESSION_LIMITS
 
 
 class MatchOperator(str, Enum):
@@ -46,15 +46,11 @@ class FilterGroup:
     enabled: bool = True
 
 
-def _required_group() -> FilterGroup:
-    return FilterGroup(id="required", name="Always require")
-
-
 @dataclass(frozen=True)
 class FilterExpression:
     """Bounded grouped filter expression used by every scan-result read path."""
 
-    required: FilterGroup = field(default_factory=_required_group)
+    required_conditions: tuple[FilterCondition, ...] = ()
     group_join: MatchOperator = MatchOperator.ANY
     groups: tuple[FilterGroup, ...] = ()
     version: int = 1
@@ -68,7 +64,7 @@ class FilterExpression:
 
     @property
     def condition_count(self) -> int:
-        return len(self.required.conditions) + sum(
+        return len(self.required_conditions) + sum(
             len(group.conditions) for group in self.groups
         )
 
@@ -78,26 +74,20 @@ class FilterExpression:
 
     def with_required_condition(self, condition: FilterCondition) -> FilterExpression:
         return FilterExpression(
-            required=FilterGroup(
-                id=self.required.id,
-                name=self.required.name,
-                match=MatchOperator.ALL,
-                conditions=(*self.required.conditions, condition),
-                enabled=True,
-            ),
+            required_conditions=(*self.required_conditions, condition),
             group_join=self.group_join,
             groups=self.groups,
             version=self.version,
         )
 
 
-MAX_EXPRESSION_GROUPS = 8
-MAX_GROUP_CONDITIONS = 20
-MAX_EXPRESSION_CONDITIONS = 100
-MAX_GROUP_ID_LENGTH = 64
-MAX_GROUP_NAME_LENGTH = 60
-MAX_TEXT_PATTERN_LENGTH = 100
-MAX_CATEGORICAL_VALUES = 100
+MAX_EXPRESSION_GROUPS = FILTER_EXPRESSION_LIMITS.max_groups
+MAX_GROUP_CONDITIONS = FILTER_EXPRESSION_LIMITS.max_group_conditions
+MAX_EXPRESSION_CONDITIONS = FILTER_EXPRESSION_LIMITS.max_conditions
+MAX_GROUP_ID_LENGTH = FILTER_EXPRESSION_LIMITS.max_group_id_length
+MAX_GROUP_NAME_LENGTH = FILTER_EXPRESSION_LIMITS.max_group_name_length
+MAX_TEXT_PATTERN_LENGTH = FILTER_EXPRESSION_LIMITS.max_text_pattern_length
+MAX_CATEGORICAL_VALUES = FILTER_EXPRESSION_LIMITS.max_categorical_values
 GROUP_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 _GROUP_ID_PATTERN = re.compile(GROUP_ID_PATTERN)
 
@@ -191,20 +181,16 @@ def validate_filter_expression(expression: FilterExpression) -> None:
         raise ValueError("Unsupported filter expression version")
     if not isinstance(expression.group_join, MatchOperator):
         raise ValueError("Group joins must be MatchOperator values")
-    required = expression.required
-    if not isinstance(required, FilterGroup):
-        raise ValueError("The required group must be a FilterGroup")
-    if required.id != "required" or required.match != MatchOperator.ALL:
-        raise ValueError("The required group must use id='required' and match='all'")
-    if not required.enabled:
-        raise ValueError("The required group cannot be disabled")
     if len(expression.groups) > MAX_EXPRESSION_GROUPS:
         raise ValueError(
             f"An expression can contain at most {MAX_EXPRESSION_GROUPS} setup groups"
         )
 
+    for condition in expression.required_conditions:
+        _validate_filter_condition(condition)
+
     group_ids: set[str] = set()
-    for group in (required, *expression.groups):
+    for group in expression.groups:
         if not isinstance(group, FilterGroup):
             raise ValueError("Expression groups must be FilterGroup values")
         if not isinstance(group.match, MatchOperator):
@@ -216,26 +202,28 @@ def validate_filter_expression(expression: FilterExpression) -> None:
             or len(group.id) > MAX_GROUP_ID_LENGTH
             or not _GROUP_ID_PATTERN.fullmatch(group.id)
         ):
-            raise ValueError("Group IDs must be 1-64 URL-safe characters")
+            raise ValueError(
+                f"Group IDs must be 1-{MAX_GROUP_ID_LENGTH} URL-safe characters"
+            )
         if (
             not isinstance(group.name, str)
             or not group.name.strip()
             or len(group.name) > MAX_GROUP_NAME_LENGTH
         ):
-            raise ValueError("Group names must be 1-60 non-blank characters")
-        if group is not required and len(group.conditions) > MAX_GROUP_CONDITIONS:
             raise ValueError(
-                f"A filter group can contain at most {MAX_GROUP_CONDITIONS} conditions"
+                f"Group names must be 1-{MAX_GROUP_NAME_LENGTH} non-blank characters"
             )
-        for condition in group.conditions:
-            _validate_filter_condition(condition)
-
-    for group in expression.groups:
         if group.id == "required" or group.id in group_ids:
             raise ValueError("Setup group IDs must be unique and cannot use 'required'")
         group_ids.add(group.id)
+        if len(group.conditions) > MAX_GROUP_CONDITIONS:
+            raise ValueError(
+                f"A filter group can contain at most {MAX_GROUP_CONDITIONS} conditions"
+            )
         if group.enabled and not group.conditions:
             raise ValueError("Enabled setup groups cannot be empty")
+        for condition in group.conditions:
+            _validate_filter_condition(condition)
 
     if expression.condition_count > MAX_EXPRESSION_CONDITIONS:
         raise ValueError(
@@ -244,7 +232,7 @@ def validate_filter_expression(expression: FilterExpression) -> None:
 
 
 def filter_spec_to_expression(filters: FilterSpec) -> FilterExpression:
-    """Preserve existing flat-filter semantics as one required ALL group."""
+    """Preserve existing flat-filter semantics as required ALL conditions."""
 
     conditions: tuple[FilterCondition, ...] = (
         *filters.range_filters,
@@ -252,14 +240,7 @@ def filter_spec_to_expression(filters: FilterSpec) -> FilterExpression:
         *filters.boolean_filters,
         *filters.text_searches,
     )
-    return FilterExpression(
-        required=FilterGroup(
-            id="required",
-            name="Always require",
-            match=MatchOperator.ALL,
-            conditions=conditions,
-        )
-    )
+    return FilterExpression(required_conditions=conditions)
 
 
 @dataclass(frozen=True)

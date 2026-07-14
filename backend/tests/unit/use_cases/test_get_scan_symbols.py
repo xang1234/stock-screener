@@ -86,7 +86,7 @@ class TestUnboundScanRouting:
         assert any(
             condition.field == "rating"
             and tuple(condition.values) == ("Strong Buy", "Buy")
-            for condition in forwarded.required.conditions
+            for condition in forwarded.required_conditions
         )
         assert not any(
             cf.field == "rating" for cf in original_filters.categorical_filters

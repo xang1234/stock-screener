@@ -54,7 +54,15 @@ def canonical_expression_payload(expression: FilterExpression) -> dict[str, Any]
 
     return {
         "expression_version": expression.version,
-        "required": group_payload(expression.required),
+        "required": {
+            "id": "required",
+            "name": "Always require",
+            "match": "all",
+            "enabled": True,
+            "conditions": [
+                _condition_payload(item) for item in expression.required_conditions
+            ],
+        },
         "group_join": expression.group_join.value,
         "groups": [group_payload(group) for group in expression.groups],
     }

@@ -35,6 +35,7 @@ import {
 } from '../filterExpressionBuilder';
 import {
   BUILDER_FIELD_CATALOG,
+  EXPRESSION_LIMITS,
   fieldMeta,
   fieldValueOptions,
 } from '../scanFilterFields';
@@ -195,7 +196,7 @@ function SetupGroupCard({
           size="small"
           label={`Setup ${index + 1} name`}
           value={group.name}
-          inputProps={{ maxLength: 60 }}
+          inputProps={{ maxLength: EXPRESSION_LIMITS.maxGroupNameLength }}
           onChange={(event) => onChange({ ...group, name: event.target.value })}
           sx={{ minWidth: 230 }}
         />
@@ -251,7 +252,7 @@ function SetupGroupCard({
         size="small"
         startIcon={<AddIcon />}
         sx={{ mt: 1 }}
-        disabled={!defaultField || group.conditions.length >= 20}
+        disabled={!defaultField || group.conditions.length >= EXPRESSION_LIMITS.maxGroupConditions}
         onClick={() => onChange({
           ...group,
           conditions: [...group.conditions, newCondition(defaultField)],
@@ -373,10 +374,13 @@ export default function GuidedFilterBuilderDialog({
                 groups: draft.groups.filter((_, itemIndex) => itemIndex !== index),
               })}
               onDuplicate={() => {
-                if (draft.groups.length >= 8) return;
+                if (draft.groups.length >= EXPRESSION_LIMITS.maxGroups) return;
                 const duplicate = clone(group);
                 duplicate.id = groupId();
-                duplicate.name = `${group.name} copy`.slice(0, 60);
+                duplicate.name = `${group.name} copy`.slice(
+                  0,
+                  EXPRESSION_LIMITS.maxGroupNameLength,
+                );
                 setDraft({ ...draft, groups: [...draft.groups, duplicate] });
               }}
               optionValues={filterOptions.optionValues || {}}
@@ -396,7 +400,7 @@ export default function GuidedFilterBuilderDialog({
         <Button
           startIcon={<AddIcon />}
           onClick={addGroup}
-          disabled={!defaultField || draft.groups.length >= 8}
+          disabled={!defaultField || draft.groups.length >= EXPRESSION_LIMITS.maxGroups}
           sx={{ mt: 1.5 }}
         >
           Add named setup

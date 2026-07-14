@@ -1,5 +1,15 @@
 import scanFilterContract from './scanFilterFields.json';
 
+export const EXPRESSION_LIMITS = Object.freeze({
+  maxGroups: scanFilterContract.expression_limits.max_groups,
+  maxGroupConditions: scanFilterContract.expression_limits.max_group_conditions,
+  maxConditions: scanFilterContract.expression_limits.max_conditions,
+  maxGroupIdLength: scanFilterContract.expression_limits.max_group_id_length,
+  maxGroupNameLength: scanFilterContract.expression_limits.max_group_name_length,
+  maxTextPatternLength: scanFilterContract.expression_limits.max_text_pattern_length,
+  maxCategoricalValues: scanFilterContract.expression_limits.max_categorical_values,
+});
+
 const LEGACY_FILTER_FIELDS = Object.freeze(
   scanFilterContract.fields
     .filter((item) => item.legacy_key && ['range', 'boolean'].includes(item.kind))

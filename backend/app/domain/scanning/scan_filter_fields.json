@@ -1,5 +1,14 @@
 {
   "schema_version": 1,
+  "expression_limits": {
+    "max_groups": 8,
+    "max_group_conditions": 20,
+    "max_conditions": 100,
+    "max_group_id_length": 64,
+    "max_group_name_length": 60,
+    "max_text_pattern_length": 100,
+    "max_categorical_values": 100
+  },
   "fields": [
     {"field": "composite_score", "kind": "range", "sortable": true, "legacy_key": "compositeScore", "builder": {"label": "Composite score", "category": "Scores"}},
     {"field": "minervini_score", "kind": "range", "sortable": true, "legacy_key": "minerviniScore", "builder": {"label": "Minervini score", "category": "Scores"}},

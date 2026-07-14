@@ -283,18 +283,27 @@ def compile_sql_condition(
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
 
 
+def _compile_sql_conditions(
+    query: Query,
+    conditions: tuple[FilterCondition, ...],
+    match: MatchOperator,
+    resolver: SqlFilterFieldResolver,
+):
+    predicates = [
+        compile_sql_condition(query, condition, resolver)
+        for condition in conditions
+    ]
+    if not predicates:
+        return true() if match == MatchOperator.ALL else false()
+    return and_(*predicates) if match == MatchOperator.ALL else or_(*predicates)
+
+
 def _compile_sql_group(
     query: Query,
     group: FilterGroup,
     resolver: SqlFilterFieldResolver,
 ):
-    predicates = [
-        compile_sql_condition(query, condition, resolver)
-        for condition in group.conditions
-    ]
-    if not predicates:
-        return true() if group.match == MatchOperator.ALL else false()
-    return and_(*predicates) if group.match == MatchOperator.ALL else or_(*predicates)
+    return _compile_sql_conditions(query, group.conditions, group.match, resolver)
 
 
 def compile_sql_expression(
@@ -304,7 +313,12 @@ def compile_sql_expression(
 ):
     """Compile one canonical expression against an adapter's SQL bindings."""
 
-    required = _compile_sql_group(query, expression.required, resolver)
+    required = _compile_sql_conditions(
+        query,
+        expression.required_conditions,
+        MatchOperator.ALL,
+        resolver,
+    )
     groups = expression.enabled_groups
     if not groups:
         return required

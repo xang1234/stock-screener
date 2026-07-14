@@ -140,11 +140,25 @@ class FilterGroupPayload(ExpressionPayloadModel):
         )
 
 
-class RequiredFilterGroupPayload(FilterGroupPayload):
+class RequiredFilterGroupPayload(ExpressionPayloadModel):
+    id: Literal["required"] = "required"
+    name: str = Field(
+        default="Always require",
+        min_length=1,
+        max_length=MAX_GROUP_NAME_LENGTH,
+    )
+    match: Literal["all"] = "all"
     conditions: list[FilterConditionPayload] = Field(
         default_factory=list,
         max_length=MAX_EXPRESSION_CONDITIONS,
     )
+    enabled: Literal[True] = True
+
+    def to_domain_conditions(
+        self,
+        policy: FilterExpressionFieldPolicy,
+    ) -> tuple[FilterCondition, ...]:
+        return tuple(condition.to_domain(policy) for condition in self.conditions)
 
 
 class FilterExpressionPayload(ExpressionPayloadModel):
@@ -167,7 +181,7 @@ class FilterExpressionPayload(ExpressionPayloadModel):
         policy: FilterExpressionFieldPolicy,
     ) -> FilterExpression:
         return FilterExpression(
-            required=self.required.to_domain(policy),
+            required_conditions=self.required.to_domain_conditions(policy),
             group_join=MatchOperator(self.group_join),
             groups=tuple(group.to_domain(policy) for group in self.groups),
             version=self.expression_version,

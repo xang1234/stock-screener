@@ -1,4 +1,4 @@
-import { fieldMeta } from './scanFilterFields';
+import { EXPRESSION_LIMITS, fieldMeta } from './scanFilterFields';
 
 const rangeValue = (value, isDate) => {
   if (value == null) return null;
@@ -91,21 +91,31 @@ function validateCondition(condition) {
 export function validateExpression(expression) {
   const errors = [];
   const groups = expression?.groups || [];
-  if (groups.length > 8) errors.push('Use at most 8 setup groups.');
+  if (groups.length > EXPRESSION_LIMITS.maxGroups) {
+    errors.push(`Use at most ${EXPRESSION_LIMITS.maxGroups} setup groups.`);
+  }
   const ids = new Set();
   const requiredConditions = expression?.required?.conditions ?? [];
   let total = requiredConditions.length;
   requiredConditions.forEach((condition) => errors.push(...validateCondition(condition)));
   groups.forEach((group, index) => {
-    total += group.conditions?.length ?? 0;
+    const groupConditionCount = group.conditions?.length ?? 0;
+    total += groupConditionCount;
     if (!group.name?.trim()) errors.push(`Setup ${index + 1} needs a name.`);
     if (ids.has(group.id)) errors.push('Setup group IDs must be unique.');
     ids.add(group.id);
     if (group.enabled !== false && !group.conditions?.length) {
       errors.push(`${group.name || `Setup ${index + 1}`} needs at least one rule or must be disabled.`);
     }
+    if (groupConditionCount > EXPRESSION_LIMITS.maxGroupConditions) {
+      errors.push(
+        `${group.name || `Setup ${index + 1}`} can contain at most ${EXPRESSION_LIMITS.maxGroupConditions} rules.`,
+      );
+    }
     (group.conditions || []).forEach((condition) => errors.push(...validateCondition(condition)));
   });
-  if (total > 100) errors.push('Use at most 100 rules in one filter.');
+  if (total > EXPRESSION_LIMITS.maxConditions) {
+    errors.push(`Use at most ${EXPRESSION_LIMITS.maxConditions} rules in one filter.`);
+  }
   return [...new Set(errors)];
 }

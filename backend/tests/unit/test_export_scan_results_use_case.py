@@ -306,7 +306,7 @@ class TestFilterAndSortPassthrough:
 
         # Use equality check (not identity) because use case copies filters
         expression = feature_store.last_query_all_args["expression"]
-        assert expression.required.conditions == filter_spec_to_expression(filters).required.conditions
+        assert expression.required_conditions == filter_spec_to_expression(filters).required_conditions
 
     def test_passes_sort_to_repository(self):
         feature_store = TrackingFeatureStoreRepo()
@@ -342,7 +342,7 @@ class TestPassesOnlyFilter:
         uc.execute(uow, _make_query(passes_only=True))
 
         expression = feature_store.last_query_all_args["expression"]
-        conditions = expression.required.conditions
+        conditions = expression.required_conditions
         assert len(conditions) == 1
         assert conditions[0].field == "rating"
         assert set(conditions[0].values) == {"Strong Buy", "Buy"}

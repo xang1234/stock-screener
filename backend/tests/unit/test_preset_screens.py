@@ -165,7 +165,7 @@ def test_legacy_ipo_preset_matches_browser_month_rollover():
         today=date(2026, 3, 31),
     )
 
-    assert expression.required.conditions[0].min_value == "2025-10-01"
+    assert expression.required_conditions[0].min_value == "2025-10-01"
 
 
 def test_invalid_stored_expression_fails_closed_with_validation_error():

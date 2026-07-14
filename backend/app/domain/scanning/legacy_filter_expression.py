@@ -19,12 +19,17 @@ from .filter_capabilities import (
 )
 from .filter_expression_model import (
     FilterExpression,
-    FilterGroup,
 )
 from .filter_expression_evaluator import PASSES_ONLY_CONDITION
 
 
 _IPO_PRESET_MONTHS = {"6m": 6, "1y": 12, "2y": 24, "3y": 36, "5y": 60}
+
+
+def _legacy_category_selector(value: Any) -> tuple[Any, str]:
+    if isinstance(value, Mapping):
+        return value.get("values"), str(value.get("mode", "include"))
+    return value, "include"
 
 
 def _ipo_cutoff(value: Any, today: date | None = None) -> str | None:
@@ -83,18 +88,16 @@ def legacy_filters_to_expression(
     if stage is not None:
         conditions.append(RangeFilter("stage", stage, stage))
 
+    ibd_industries, ibd_industries_mode = _legacy_category_selector(
+        values.get("ibdIndustries")
+    )
+    gics_sectors, gics_sectors_mode = _legacy_category_selector(
+        values.get("gicsSectors")
+    )
     categorical_values = (
         ("rating", values.get("ratings"), "include"),
-        (
-            "ibd_industry_group",
-            (values.get("ibdIndustries") or {}).get("values"),
-            (values.get("ibdIndustries") or {}).get("mode", "include"),
-        ),
-        (
-            "gics_sector",
-            (values.get("gicsSectors") or {}).get("values"),
-            (values.get("gicsSectors") or {}).get("mode", "include"),
-        ),
+        ("ibd_industry_group", ibd_industries, ibd_industries_mode),
+        ("gics_sector", gics_sectors, gics_sectors_mode),
         ("market", values.get("markets"), "include"),
         ("se_pattern_primary", values.get("sePatternPrimary"), "include"),
     )
@@ -127,13 +130,7 @@ def legacy_filters_to_expression(
     if cutoff:
         conditions.append(RangeFilter("ipo_date", cutoff, None))
 
-    return FilterExpression(
-        required=FilterGroup(
-            id="required",
-            name="Always require",
-            conditions=tuple(conditions),
-        )
-    )
+    return FilterExpression(required_conditions=tuple(conditions))
 
 
 __all__ = ["legacy_filters_to_expression"]

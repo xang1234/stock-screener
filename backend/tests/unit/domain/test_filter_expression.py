@@ -20,7 +20,10 @@ from app.domain.scanning.filter_expression_evaluator import (
     evaluate_expression,
     matched_setup_groups,
 )
-from app.domain.scanning.filter_expression_serialization import expression_fingerprint
+from app.domain.scanning.filter_expression_serialization import (
+    canonical_expression_payload,
+    expression_fingerprint,
+)
 from app.domain.scanning.legacy_filter_expression import (
     _ipo_cutoff,
     legacy_filters_to_expression,
@@ -37,13 +40,17 @@ from app.contracts.filter_expression import expression_from_payload
 from app.schemas.filter_expression import ScanQueryRequest
 
 
+_CONTRACT_ROOT = Path(__file__).resolve().parents[4] / "contracts"
+_LEGACY_COMPATIBILITY_CASES = json.loads(
+    (_CONTRACT_ROOT / "scan_filter_legacy_compatibility.json").read_text(
+        encoding="utf-8"
+    )
+)["cases"]
+
+
 def _expression(group_join: MatchOperator = MatchOperator.ANY) -> FilterExpression:
     return FilterExpression(
-        required=FilterGroup(
-            id="required",
-            name="Always require",
-            conditions=(RangeFilter("price", min_value=10),),
-        ),
+        required_conditions=(RangeFilter("price", min_value=10),),
         group_join=group_join,
         groups=(
             FilterGroup(
@@ -84,6 +91,22 @@ def test_required_and_any_setup_semantics_with_explanations():
     )
 
 
+def test_required_conditions_are_explicit_domain_state_with_fixed_wire_shape():
+    condition = RangeFilter("price", min_value=10)
+    expression = FilterExpression(required_conditions=(condition,))
+
+    assert expression.required_conditions == (condition,)
+    assert canonical_expression_payload(expression)["required"] == {
+        "id": "required",
+        "name": "Always require",
+        "match": "all",
+        "enabled": True,
+        "conditions": [
+            {"kind": "range", "field": "price", "min": 10, "max": None}
+        ],
+    }
+
+
 def test_all_setup_join_requires_every_enabled_group():
     row = {
         "price": 25,
@@ -98,7 +121,7 @@ def test_all_setup_join_requires_every_enabled_group():
 def test_disabled_groups_do_not_participate():
     expression = _expression(MatchOperator.ALL)
     expression = FilterExpression(
-        required=expression.required,
+        required_conditions=expression.required_conditions,
         group_join=expression.group_join,
         groups=(
             expression.groups[0],
@@ -190,7 +213,7 @@ def test_range_request_normalizes_numeric_strings_and_iso_dates():
             }
         }
     )
-    numeric, ipo_date = request.to_expression().required.conditions
+    numeric, ipo_date = request.to_expression().required_conditions
 
     assert numeric.min_value == 10.5
     assert numeric.max_value == 20
@@ -278,7 +301,7 @@ def test_request_contract_allows_required_group_over_setup_rule_limit():
         }
     )
 
-    assert len(request.to_expression().required.conditions) == MAX_GROUP_CONDITIONS + 1
+    assert len(request.to_expression().required_conditions) == MAX_GROUP_CONDITIONS + 1
 
 
 def test_request_contract_keeps_named_setup_group_rule_limit():
@@ -322,7 +345,7 @@ def test_request_contract_rejects_unknown_sort_and_accepts_listing_aware_volume(
             }
         }
     )
-    assert request.to_expression().required.conditions == (
+    assert request.to_expression().required_conditions == (
         RangeFilter("listing_aware_volume", min_value=1_000_000),
     )
 
@@ -355,10 +378,8 @@ def test_fingerprint_is_stable_and_changes_with_logic():
 def test_domain_expression_rejects_invalid_structure_and_ranges():
     with pytest.raises(ValueError, match="minimum cannot exceed maximum"):
         FilterExpression(
-            required=FilterGroup(
-                id="required",
-                name="Always require",
-                conditions=(RangeFilter("price", min_value=100, max_value=10),),
+            required_conditions=(
+                RangeFilter("price", min_value=100, max_value=10),
             )
         )
 
@@ -370,11 +391,7 @@ def test_domain_expression_rejects_invalid_structure_and_ranges():
 
     with pytest.raises(ValueError, match="Numeric range bounds must be numbers"):
         FilterExpression(
-            required=FilterGroup(
-                id="required",
-                name="Always require",
-                conditions=(RangeFilter("price", min_value="10"),),
-            )
+            required_conditions=(RangeFilter("price", min_value="10"),)
         )
 
 
@@ -389,11 +406,7 @@ def test_domain_expression_rejects_invalid_structure_and_ranges():
 def test_domain_expression_rejects_condition_kind_mismatches(condition):
     with pytest.raises(ValueError, match=f"Unsupported .* field: {condition.field}"):
         FilterExpression(
-            required=FilterGroup(
-                id="required",
-                name="Always require",
-                conditions=(condition,),
-            )
+            required_conditions=(condition,)
         )
 
 
@@ -405,7 +418,7 @@ def test_filter_spec_multi_kind_fields_keep_canonical_names_and_evaluator_parity
         )
     )
 
-    assert expression.required.conditions == (
+    assert expression.required_conditions == (
         CategoricalFilter("symbol", ("NVDA",)),
         TextSearchFilter("ibd_industry_group", "Semi"),
     )
@@ -428,7 +441,7 @@ def test_flat_filter_compatibility_can_exceed_the_setup_group_rule_limit():
 
     expression = filter_spec_to_expression(filters)
 
-    assert len(expression.required.conditions) == MAX_GROUP_CONDITIONS + 1
+    assert len(expression.required_conditions) == MAX_GROUP_CONDITIONS + 1
 
 
 @pytest.mark.parametrize(
@@ -447,7 +460,7 @@ def test_internal_filter_kinds_remain_unavailable_to_the_public_api(condition):
         }
     }
 
-    assert expression_from_payload(payload).required.conditions
+    assert expression_from_payload(payload).required_conditions
     with pytest.raises(ValidationError, match="Unsupported .* field"):
         ScanQueryRequest.model_validate(payload)
 
@@ -508,6 +521,26 @@ def test_payload_codecs_reject_values_they_cannot_preserve():
         legacy_filters_to_expression({"maAlignment": "false"})
 
 
+@pytest.mark.parametrize(
+    "case",
+    _LEGACY_COMPATIBILITY_CASES,
+    ids=[case["name"] for case in _LEGACY_COMPATIBILITY_CASES],
+)
+def test_legacy_converter_matches_shared_category_compatibility_contract(case):
+    expression = legacy_filters_to_expression(case["filters"])
+    expected = expression_from_payload(
+        {
+            "required": {
+                "id": "required",
+                "name": "Always require",
+                "conditions": case["required_conditions"],
+            }
+        }
+    )
+
+    assert expression.required_conditions == expected.required_conditions
+
+
 def test_static_decoder_accepts_legacy_aliases_that_the_live_api_rejects():
     payload = {
         "required": {
@@ -520,7 +553,7 @@ def test_static_decoder_accepts_legacy_aliases_that_the_live_api_rejects():
     }
 
     expression = expression_from_payload(payload)
-    assert expression.required.conditions == (RangeFilter("pct_day", min_value=5),)
+    assert expression.required_conditions == (RangeFilter("pct_day", min_value=5),)
 
     with pytest.raises(ValidationError, match="Unsupported range field: pct_day"):
         ScanQueryRequest.model_validate(payload)
@@ -575,4 +608,4 @@ def test_ipo_cutoff_preserves_browser_rollover_and_year_boundaries(
 def test_legacy_passes_template_reuses_canonical_condition():
     expression = legacy_filters_to_expression({"passesTemplate": True})
 
-    assert expression.required.conditions == (PASSES_ONLY_CONDITION,)
+    assert expression.required_conditions == (PASSES_ONLY_CONDITION,)

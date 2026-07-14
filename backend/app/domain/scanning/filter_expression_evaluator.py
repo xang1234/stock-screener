@@ -36,7 +36,7 @@ def require_passing_ratings(
 ) -> FilterExpression:
     """Apply the legacy passes-only policy to one canonical expression."""
 
-    if not enabled or PASSES_ONLY_CONDITION in expression.required.conditions:
+    if not enabled or PASSES_ONLY_CONDITION in expression.required_conditions:
         return expression
     return expression.with_required_condition(PASSES_ONLY_CONDITION)
 
@@ -109,7 +109,10 @@ def evaluate_group(row: Mapping[str, Any], group: FilterGroup) -> bool:
 
 
 def evaluate_expression(row: Mapping[str, Any], expression: FilterExpression) -> bool:
-    if not evaluate_group(row, expression.required):
+    if not all(
+        evaluate_condition(row, condition)
+        for condition in expression.required_conditions
+    ):
         return False
     groups = expression.enabled_groups
     if not groups:
