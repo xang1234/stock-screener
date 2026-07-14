@@ -223,7 +223,7 @@ def validate_filter_expression(expression: FilterExpression) -> None:
             or len(group.name) > MAX_GROUP_NAME_LENGTH
         ):
             raise ValueError("Group names must be 1-60 non-blank characters")
-        if len(group.conditions) > MAX_GROUP_CONDITIONS:
+        if group is not required and len(group.conditions) > MAX_GROUP_CONDITIONS:
             raise ValueError(
                 f"A filter group can contain at most {MAX_GROUP_CONDITIONS} conditions"
             )

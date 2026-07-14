@@ -118,6 +118,28 @@ describe('scan filter expressions', () => {
     expect(restored.maAlignment).toBe(false);
   });
 
+  it('preserves legacy array-shaped industry and sector filters', () => {
+    const expression = legacyFiltersToExpression({
+      ibdIndustries: ['Software'],
+      gicsSectors: ['Technology'],
+    });
+
+    expect(expression.required.conditions).toEqual([
+      {
+        kind: 'categorical',
+        field: 'ibd_industry_group',
+        values: ['Software'],
+        mode: 'include',
+      },
+      {
+        kind: 'categorical',
+        field: 'gics_sector',
+        values: ['Technology'],
+        mode: 'include',
+      },
+    ]);
+  });
+
   it('rejects string booleans instead of silently treating them as true', () => {
     expect(() => legacyFiltersToExpression({ maAlignment: 'false' }))
       .toThrow('must be a boolean');

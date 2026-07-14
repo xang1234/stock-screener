@@ -110,7 +110,11 @@ function includeCategoricalSpec(field) {
 function selectableCategoricalSpec(field) {
   return {
     matches: (condition) => condition.kind === 'categorical' && condition.field === field,
-    encode: (value) => categoricalCondition(field, value?.values, value?.mode),
+    encode: (value) => categoricalCondition(
+      field,
+      Array.isArray(value) ? value : value?.values,
+      Array.isArray(value) ? 'include' : value?.mode,
+    ),
     decode: effectiveCategoricalSelection,
   };
 }

@@ -28,6 +28,7 @@ from app.domain.scanning.legacy_filter_expression import (
 from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     FilterGroup,
+    MAX_GROUP_CONDITIONS,
     MatchOperator,
     filter_spec_to_expression,
 )
@@ -263,6 +264,44 @@ def test_request_contract_builds_domain_and_rejects_empty_enabled_group():
         )
 
 
+def test_request_contract_allows_required_group_over_setup_rule_limit():
+    request = ScanQueryRequest.model_validate(
+        {
+            "required": {
+                "id": "required",
+                "name": "Always require",
+                "conditions": [
+                    {"kind": "range", "field": "price", "min": index}
+                    for index in range(MAX_GROUP_CONDITIONS + 1)
+                ],
+            }
+        }
+    )
+
+    assert len(request.to_expression().required.conditions) == MAX_GROUP_CONDITIONS + 1
+
+
+def test_request_contract_keeps_named_setup_group_rule_limit():
+    with pytest.raises(
+        ValidationError,
+        match=f"at most {MAX_GROUP_CONDITIONS} items",
+    ):
+        ScanQueryRequest.model_validate(
+            {
+                "groups": [
+                    {
+                        "id": "oversized",
+                        "name": "Oversized setup",
+                        "conditions": [
+                            {"kind": "range", "field": "price", "min": index}
+                            for index in range(MAX_GROUP_CONDITIONS + 1)
+                        ],
+                    }
+                ]
+            }
+        )
+
+
 def test_request_contract_rejects_unknown_sort_and_accepts_listing_aware_volume():
     with pytest.raises(ValidationError, match="Unsupported sort field"):
         ScanQueryRequest.model_validate({"sort": {"field": "not_a_real_field"}})
@@ -377,6 +416,19 @@ def test_filter_spec_multi_kind_fields_keep_canonical_names_and_evaluator_parity
         },
         expression,
     ) is True
+
+
+def test_flat_filter_compatibility_can_exceed_the_setup_group_rule_limit():
+    filters = FilterSpec(
+        range_filters=[
+            RangeFilter("price", min_value=index)
+            for index in range(MAX_GROUP_CONDITIONS + 1)
+        ]
+    )
+
+    expression = filter_spec_to_expression(filters)
+
+    assert len(expression.required.conditions) == MAX_GROUP_CONDITIONS + 1
 
 
 @pytest.mark.parametrize(

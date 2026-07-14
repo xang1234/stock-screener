@@ -18,6 +18,7 @@ from app.domain.scanning.filter_capabilities import FIELD_CAPABILITIES
 from app.domain.scanning.filter_expression_model import (
     GROUP_ID_PATTERN,
     MAX_CATEGORICAL_VALUES,
+    MAX_EXPRESSION_CONDITIONS,
     MAX_EXPRESSION_GROUPS,
     MAX_GROUP_CONDITIONS,
     MAX_GROUP_ID_LENGTH,
@@ -139,10 +140,17 @@ class FilterGroupPayload(ExpressionPayloadModel):
         )
 
 
+class RequiredFilterGroupPayload(FilterGroupPayload):
+    conditions: list[FilterConditionPayload] = Field(
+        default_factory=list,
+        max_length=MAX_EXPRESSION_CONDITIONS,
+    )
+
+
 class FilterExpressionPayload(ExpressionPayloadModel):
     expression_version: Literal[1] = 1
-    required: FilterGroupPayload = Field(
-        default_factory=lambda: FilterGroupPayload(
+    required: RequiredFilterGroupPayload = Field(
+        default_factory=lambda: RequiredFilterGroupPayload(
             id="required",
             name="Always require",
             match="all",
