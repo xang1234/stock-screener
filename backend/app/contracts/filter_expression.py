@@ -48,9 +48,9 @@ def _filter_field(
     policy: FilterExpressionFieldPolicy,
 ) -> str:
     capability = FIELD_CAPABILITIES.get(field)
-    if capability is None or capability.filter_kind != kind:
+    if capability is None or not capability.supports(kind):
         raise ValueError(f"Unsupported {kind} field: {field}")
-    if policy == FilterExpressionFieldPolicy.API and not capability.api_filter:
+    if policy == FilterExpressionFieldPolicy.API and not capability.supports_api(kind):
         raise ValueError(f"Unsupported {kind} field: {field}")
     return field
 

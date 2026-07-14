@@ -143,6 +143,38 @@ describe('scan filter query state', () => {
       { kind: 'range', field: 'price', min: null, max: 50 },
       { kind: 'text', field: 'listing_search', pattern: 'NVDA' },
     ]);
-    expect(selectQuickFilters(edited.filterState).price).toEqual({ min: 10, max: null });
+    expect(selectQuickFilters(edited.filterState).price).toEqual({ min: 10, max: 50 });
+  });
+
+  it('atomically replaces every condition owned by the edited quick-filter key', () => {
+    const original = createState(createEmptyExpression([
+      { kind: 'range', field: 'price', min: 10, max: null },
+      { kind: 'range', field: 'price', min: null, max: 50 },
+    ]));
+    const edited = scanFilterQueryReducer(original, {
+      type: 'edit-quick-filter',
+      key: 'price',
+      value: { min: 20, max: 100 },
+    });
+
+    expect(edited.filterState.draftExpression.required.conditions).toEqual([
+      { kind: 'range', field: 'price', min: 20, max: 100 },
+    ]);
+    expect(selectQuickFilters(edited.filterState).price).toEqual({ min: 20, max: 100 });
+  });
+
+  it('clears every condition owned by the quick-filter key', () => {
+    const original = createState(createEmptyExpression([
+      { kind: 'range', field: 'price', min: 10, max: null },
+      { kind: 'range', field: 'price', min: null, max: 50 },
+    ]));
+    const cleared = scanFilterQueryReducer(original, {
+      type: 'edit-quick-filter',
+      key: 'price',
+      value: { min: null, max: null },
+    });
+
+    expect(cleared.filterState.draftExpression.required.conditions).toEqual([]);
+    expect(selectQuickFilters(cleared.filterState).price).toEqual({ min: null, max: null });
   });
 });

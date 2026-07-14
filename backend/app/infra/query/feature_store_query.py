@@ -31,7 +31,6 @@ from app.models.stock_universe import StockUniverse
 # One adapter-owned registry maps each logical field to its physical source.
 _FIELD_BINDINGS = column_bindings({
     "symbol": StockFeatureDaily.symbol,
-    "symbol_exact": StockFeatureDaily.symbol,
     "composite_score": StockFeatureDaily.composite_score,
     "overall_rating": StockFeatureDaily.overall_rating,
     "passes_count": StockFeatureDaily.passes_count,
@@ -78,7 +77,6 @@ _FIELD_BINDINGS = column_bindings({
     "eps_rating": ("eps_rating",),
     # Classification
     "ibd_industry_group": ("ibd_industry_group",),
-    "ibd_industry_group_search": ("ibd_industry_group",),
     "ibd_group_rank": ("ibd_group_rank",),
     "gics_sector": ("gics_sector",),
     "gics_industry": ("gics_industry",),

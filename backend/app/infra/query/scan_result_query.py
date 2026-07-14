@@ -32,7 +32,6 @@ from app.models.stock_universe import StockUniverse
 # One adapter-owned registry maps each logical field to its physical source.
 _FIELD_BINDINGS = column_bindings({
     "symbol": ScanResult.symbol,
-    "symbol_exact": ScanResult.symbol,
     "composite_score": ScanResult.composite_score,
     "minervini_score": ScanResult.minervini_score,
     "canslim_score": ScanResult.canslim_score,
@@ -58,7 +57,6 @@ _FIELD_BINDINGS = column_bindings({
     "adr_percent": ScanResult.adr_percent,
     "eps_rating": ScanResult.eps_rating,
     "ibd_industry_group": ScanResult.ibd_industry_group,
-    "ibd_industry_group_search": ScanResult.ibd_industry_group,
     "ibd_group_rank": ScanResult.ibd_group_rank,
     "gics_sector": ScanResult.gics_sector,
     "gics_industry": ScanResult.gics_industry,

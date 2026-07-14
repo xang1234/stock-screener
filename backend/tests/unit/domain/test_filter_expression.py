@@ -8,7 +8,9 @@ from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
     FilterMode,
+    FilterSpec,
     RangeFilter,
+    TextSearchFilter,
 )
 from app.domain.scanning.filter_expression_evaluator import (
     annotate_matched_groups,
@@ -22,6 +24,7 @@ from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     FilterGroup,
     MatchOperator,
+    filter_spec_to_expression,
 )
 from app.domain.scanning.models import MatchedGroupDomain, ScanResultItemDomain
 from app.contracts.filter_expression import expression_from_payload
@@ -348,6 +351,48 @@ def test_domain_expression_rejects_condition_kind_mismatches(condition):
                 conditions=(condition,),
             )
         )
+
+
+def test_filter_spec_multi_kind_fields_keep_canonical_names_and_evaluator_parity():
+    expression = filter_spec_to_expression(
+        FilterSpec(
+            categorical_filters=[CategoricalFilter("symbol", ("NVDA",))],
+            text_searches=[TextSearchFilter("ibd_industry_group", "Semi")],
+        )
+    )
+
+    assert expression.required.conditions == (
+        CategoricalFilter("symbol", ("NVDA",)),
+        TextSearchFilter("ibd_industry_group", "Semi"),
+    )
+    assert evaluate_expression(
+        {
+            "symbol": "NVDA",
+            "ibd_industry_group": "Semiconductor Manufacturing",
+        },
+        expression,
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {"kind": "categorical", "field": "symbol", "values": ["NVDA"]},
+        {"kind": "text", "field": "ibd_industry_group", "pattern": "Semi"},
+    ],
+)
+def test_internal_filter_kinds_remain_unavailable_to_the_public_api(condition):
+    payload = {
+        "required": {
+            "id": "required",
+            "name": "Always require",
+            "conditions": [condition],
+        }
+    }
+
+    assert expression_from_payload(payload).required.conditions
+    with pytest.raises(ValidationError, match="Unsupported .* field"):
+        ScanQueryRequest.model_validate(payload)
 
 
 def test_payload_codec_rejects_string_booleans_instead_of_inverting_them():

@@ -15,7 +15,7 @@ def normalize_range_bound(field: str, value: Any) -> int | float | str | None:
     if value is None:
         return None
     capability = FIELD_CAPABILITIES.get(field)
-    if capability is None or capability.filter_kind != "range":
+    if capability is None or not capability.supports("range"):
         raise ValueError(f"Unsupported range field: {field}")
     if capability.value_type == "date":
         if not isinstance(value, str):

@@ -160,6 +160,18 @@ describe('scan filter expressions', () => {
       .toBe(true);
   });
 
+  it('keeps explicit ratings and the passing-rating alias as separate quick-filter owners', () => {
+    const expression = createEmptyExpression([
+      { kind: 'categorical', field: 'rating', values: ['Watch'], mode: 'include' },
+      { kind: 'categorical', field: 'rating', values: ['Strong Buy', 'Buy'], mode: 'include' },
+    ]);
+
+    expect(expressionToQuickFilters(expression, buildDefaultScanFilters())).toMatchObject({
+      ratings: ['Watch'],
+      passesTemplate: true,
+    });
+  });
+
   it('builds a page-independent stable expression key and versioned request', () => {
     const expression = groupedExpression();
     const first = buildScanQueryRequest(expression, { page: 1, perPage: 50 });
