@@ -331,6 +331,25 @@ def test_domain_expression_rejects_invalid_structure_and_ranges():
         )
 
 
+@pytest.mark.parametrize(
+    "condition",
+    [
+        RangeFilter("rating", min_value=1),
+        CategoricalFilter("price", ("10",)),
+        BooleanFilter("price", True),
+    ],
+)
+def test_domain_expression_rejects_condition_kind_mismatches(condition):
+    with pytest.raises(ValueError, match=f"Unsupported .* field: {condition.field}"):
+        FilterExpression(
+            required=FilterGroup(
+                id="required",
+                name="Always require",
+                conditions=(condition,),
+            )
+        )
+
+
 def test_payload_codec_rejects_string_booleans_instead_of_inverting_them():
     payload = {
         "expression_version": 1,

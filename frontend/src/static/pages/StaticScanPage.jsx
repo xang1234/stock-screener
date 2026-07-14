@@ -240,8 +240,8 @@ function StaticScanPage() {
   useEffect(() => {
     setPage(1);
   }, [expressionKey]);
-  const handleQuickFiltersChange = useCallback((nextFilters) => {
-    dispatchFilterState({ type: 'apply-quick-filters', filters: nextFilters });
+  const handleQuickFiltersChange = useCallback((key, value) => {
+    dispatchFilterState({ type: 'apply-quick-filter', key, value });
   }, []);
   const chartEntries = useMemo(
     () => chartIndexQuery.data?.symbols || [],

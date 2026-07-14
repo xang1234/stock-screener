@@ -65,16 +65,12 @@ function FilterPanel({
   expression = null,
   onOpenLogicBuilder,
 }) {
-  const updateFilter = (key, value) => {
-    onFilterChange({ ...filters, [key]: value });
-  };
+  const updateFilter = (key, value) => onFilterChange(key, value);
 
-  const updateRangeFilter = (key, range) => {
-    onFilterChange({ ...filters, [key]: range });
-  };
+  const updateRangeFilter = (key, range) => onFilterChange(key, range);
 
   const handleDeleteFilter = (key) => {
-    onFilterChange({ ...filters, [key]: resetFilterValue(key) });
+    onFilterChange(key, resetFilterValue(key));
   };
 
   const activeFilters = buildActiveFilters(filters);

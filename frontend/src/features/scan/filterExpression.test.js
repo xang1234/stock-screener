@@ -17,9 +17,9 @@ import {
 } from './filterExpressionModel';
 import { validateExpression } from './filterExpressionBuilder';
 import {
-  expressionToLegacyFilters,
   legacyFiltersToExpression,
 } from './legacyFilterExpression';
+import { expressionToQuickFilters } from './quickFilterExpression';
 import { fieldValueOptions } from './scanFilterFields';
 
 function groupedExpression(join = 'any') {
@@ -87,7 +87,7 @@ describe('scan filter expressions', () => {
     filters.gicsSectors = { values: ['Technology'], mode: 'include' };
     filters.maAlignment = false;
     const expression = legacyFiltersToExpression(filters);
-    const restored = expressionToLegacyFilters(expression, buildDefaultScanFilters());
+    const restored = expressionToQuickFilters(expression, buildDefaultScanFilters());
 
     expect(restored.rsRating).toEqual({ min: 80, max: 99 });
     expect(restored.gicsSectors).toEqual({ values: ['Technology'], mode: 'include' });
@@ -156,6 +156,8 @@ describe('scan filter expressions', () => {
       .toEqual(['BUY']);
     expect(rows.filter((row) => evaluateExpression(row, disabled)).map((row) => row.symbol))
       .toEqual(['BUY', 'WATCH']);
+    expect(expressionToQuickFilters(enabled, buildDefaultScanFilters()).passesTemplate)
+      .toBe(true);
   });
 
   it('builds a page-independent stable expression key and versioned request', () => {

@@ -60,13 +60,10 @@ describe('scan filter query state', () => {
 
   it('keeps quick-filter drafts local until the matching debounced commit', () => {
     const original = createState(withMinimumPrice(10));
-    const nextFilters = {
-      ...selectQuickFilters(original.filterState),
-      symbolSearch: 'NVDA',
-    };
     const edited = scanFilterQueryReducer(original, {
-      type: 'edit-quick-filters',
-      filters: nextFilters,
+      type: 'edit-quick-filter',
+      key: 'symbolSearch',
+      value: 'NVDA',
     });
 
     expect(selectQuickFilters(edited.filterState).symbolSearch).toBe('NVDA');
@@ -106,11 +103,9 @@ describe('scan filter query state', () => {
     }];
     const original = createState(expression);
     const edited = scanFilterQueryReducer(original, {
-      type: 'edit-quick-filters',
-      filters: {
-        ...selectQuickFilters(original.filterState),
-        symbolSearch: 'NVDA',
-      },
+      type: 'edit-quick-filter',
+      key: 'symbolSearch',
+      value: 'NVDA',
     });
     const committed = scanFilterQueryReducer(edited, {
       type: 'commit-quick-filters',
@@ -129,5 +124,25 @@ describe('scan filter query state', () => {
       ]),
     );
     expect(committed.requested.expression.groups).toEqual(expression.groups);
+  });
+
+  it('preserves duplicate quick-filter conditions when another key changes', () => {
+    const expression = createEmptyExpression([
+      { kind: 'range', field: 'price', min: 10, max: null },
+      { kind: 'range', field: 'price', min: null, max: 50 },
+    ]);
+    const original = createState(expression);
+    const edited = scanFilterQueryReducer(original, {
+      type: 'edit-quick-filter',
+      key: 'symbolSearch',
+      value: 'NVDA',
+    });
+
+    expect(edited.filterState.draftExpression.required.conditions).toEqual([
+      { kind: 'range', field: 'price', min: 10, max: null },
+      { kind: 'range', field: 'price', min: null, max: 50 },
+      { kind: 'text', field: 'listing_search', pattern: 'NVDA' },
+    ]);
+    expect(selectQuickFilters(edited.filterState).price).toEqual({ min: 10, max: null });
   });
 });

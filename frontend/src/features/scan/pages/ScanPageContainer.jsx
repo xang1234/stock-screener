@@ -113,7 +113,7 @@ function ScanPage() {
     sortBy,
     sortOrder,
     requestExpression,
-    editQuickFilters,
+    editQuickFilter,
     resetFilters,
     requestPage,
     requestPerPage,
@@ -512,8 +512,8 @@ function ScanPage() {
     requestPerPage(nextPerPage);
   };
 
-  const handleFilterChange = (newFilters) => {
-    editQuickFilters(newFilters);
+  const handleFilterChange = (key, value) => {
+    editQuickFilter(key, value);
   };
 
   const handleResetFilters = () => {

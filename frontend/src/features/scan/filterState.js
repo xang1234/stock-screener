@@ -1,8 +1,10 @@
 import {
-  expressionToLegacyFilters,
   legacyFiltersToExpression,
-  patchExpressionQuickFilters,
 } from './legacyFilterExpression';
+import {
+  expressionToQuickFilters,
+  patchExpressionQuickFilter,
+} from './quickFilterExpression';
 import { stableExpressionKey } from './filterExpressionModel';
 
 const clone = (value) => structuredClone(value);
@@ -36,31 +38,37 @@ function commitQuickFilters(state, expressionKey) {
   };
 }
 
+function updateQuickFilter(state, action, commit) {
+  const filters = {
+    ...selectQuickFilters(state),
+    [action.key]: action.value,
+  };
+  const draftExpression = patchExpressionQuickFilter(
+    state.draftExpression,
+    action.key,
+    action.value,
+    filters,
+  );
+  if (
+    stableExpressionKey(draftExpression)
+    === stableExpressionKey(state.draftExpression)
+  ) return state;
+  return {
+    ...state,
+    draftExpression,
+    committedExpression: commit ? draftExpression : state.committedExpression,
+  };
+}
+
 export function filterStateReducer(state, action) {
-  if (action.type === 'edit-quick-filters') {
-    const draftExpression = patchExpressionQuickFilters(
-      state.draftExpression,
-      action.filters,
-    );
-    if (
-      stableExpressionKey(draftExpression)
-      === stableExpressionKey(state.draftExpression)
-    ) return state;
-    return { ...state, draftExpression };
+  if (action.type === 'edit-quick-filter') {
+    return updateQuickFilter(state, action, false);
+  }
+  if (action.type === 'apply-quick-filter') {
+    return updateQuickFilter(state, action, true);
   }
   if (action.type === 'commit-quick-filters') {
     return commitQuickFilters(state, action.expressionKey);
-  }
-  if (action.type === 'apply-quick-filters') {
-    const expression = patchExpressionQuickFilters(
-      state.draftExpression,
-      action.filters,
-    );
-    return {
-      ...state,
-      draftExpression: expression,
-      committedExpression: expression,
-    };
   }
   if (action.type === 'apply-expression') {
     return applyExpression(state, action.expression);
@@ -74,5 +82,5 @@ export function filterStateReducer(state, action) {
 }
 
 export function selectQuickFilters(state) {
-  return expressionToLegacyFilters(state.draftExpression, state.defaultFilters);
+  return expressionToQuickFilters(state.draftExpression, state.defaultFilters);
 }

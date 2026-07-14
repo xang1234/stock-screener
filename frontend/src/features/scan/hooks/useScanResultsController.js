@@ -1,22 +1,9 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { queryScanResults } from '../../../api/scans';
 import { buildScanQueryRequest } from '../filterExpressionModel';
 import { useScanFilterQueryState } from './useScanFilterQueryState';
-
-function latestCachedEnvelope(queryClient, scanId) {
-  if (!scanId) return undefined;
-  return queryClient.getQueryCache().findAll({
-    queryKey: ['scanResultsQuery', scanId],
-  }).reduce((latest, query) => {
-    if (query.state.data == null) return latest;
-    if (latest == null || query.state.dataUpdatedAt > latest.updatedAt) {
-      return { data: query.state.data, updatedAt: query.state.dataUpdatedAt };
-    }
-    return latest;
-  }, null)?.data;
-}
 
 export function useScanResultsController({
   currentScanId,
@@ -25,6 +12,7 @@ export function useScanResultsController({
   initialExpression,
 }) {
   const queryClient = useQueryClient();
+  const [lastDisplayedRequest, setLastDisplayedRequest] = useState(null);
   const queryState = useScanFilterQueryState({
     defaultFilters: initialFilters,
     expression: initialExpression,
@@ -62,8 +50,12 @@ export function useScanResultsController({
     [expression, page, perPage, sortBy, sortOrder],
   );
 
+  const resultQueryKey = useMemo(
+    () => ['scanResultsQuery', currentScanId, requestedKey],
+    [currentScanId, requestedKey],
+  );
   const resultQuery = useQuery({
-    queryKey: ['scanResultsQuery', currentScanId, requestedKey],
+    queryKey: resultQueryKey,
     queryFn: async ({ signal }) => ({
       data: await queryScanResults(currentScanId, queryRequest, { signal }),
       request: requested,
@@ -78,8 +70,29 @@ export function useScanResultsController({
     ),
   });
 
+  useEffect(() => {
+    const envelope = resultQuery.data;
+    if (
+      resultQuery.isPlaceholderData
+      || envelope?.scanId !== currentScanId
+      || envelope?.requestKey !== requestedKey
+    ) return;
+    setLastDisplayedRequest((previous) => (
+      previous?.scanId === currentScanId && previous?.requestKey === requestedKey
+        ? previous
+        : { scanId: currentScanId, requestKey: requestedKey }
+    ));
+  }, [currentScanId, requestedKey, resultQuery.data, resultQuery.isPlaceholderData]);
+
+  const cachedDisplayedEnvelope = lastDisplayedRequest?.scanId === currentScanId
+    ? queryClient.getQueryData([
+      'scanResultsQuery',
+      lastDisplayedRequest.scanId,
+      lastDisplayedRequest.requestKey,
+    ])
+    : undefined;
   const displayedEnvelope = resultQuery.data
-    ?? latestCachedEnvelope(queryClient, currentScanId);
+    ?? cachedDisplayedEnvelope;
   const displayedResultsData = displayedEnvelope?.data;
   const displayedQuery = displayedEnvelope?.request ?? requested;
 

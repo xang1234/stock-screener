@@ -15,12 +15,11 @@ from app.domain.scanning.filter_expression_model import (
 )
 from app.infra.db.portability import lean_count
 from app.infra.db.models.feature_store import StockFeatureDaily
-from app.infra.query.expression_compiler import compile_expression
 from app.infra.query.sql_filter_compiler import (
     SqlFilterFieldResolver,
     apply_sql_sort,
     column_bindings,
-    compile_sql_condition,
+    compile_sql_expression,
     json_bindings,
     listing_aware_volume_predicate,
 )
@@ -32,6 +31,7 @@ from app.models.stock_universe import StockUniverse
 # One adapter-owned registry maps each logical field to its physical source.
 _FIELD_BINDINGS = column_bindings({
     "symbol": StockFeatureDaily.symbol,
+    "symbol_exact": StockFeatureDaily.symbol,
     "composite_score": StockFeatureDaily.composite_score,
     "overall_rating": StockFeatureDaily.overall_rating,
     "passes_count": StockFeatureDaily.passes_count,
@@ -78,6 +78,7 @@ _FIELD_BINDINGS = column_bindings({
     "eps_rating": ("eps_rating",),
     # Classification
     "ibd_industry_group": ("ibd_industry_group",),
+    "ibd_industry_group_search": ("ibd_industry_group",),
     "ibd_group_rank": ("ibd_group_rank",),
     "gics_sector": ("gics_sector",),
     "gics_industry": ("gics_industry",),
@@ -177,14 +178,7 @@ def apply_filter_expression(query: Query, expression: FilterExpression) -> Query
 
 
 def compile_filter_expression(query: Query, expression: FilterExpression):
-    return compile_expression(
-        expression,
-        lambda condition: compile_sql_condition(
-            query,
-            condition,
-            _FILTER_FIELD_RESOLVER,
-        ),
-    )
+    return compile_sql_expression(query, expression, _FILTER_FIELD_RESOLVER)
 
 
 def supported_filter_fields() -> frozenset[str]:

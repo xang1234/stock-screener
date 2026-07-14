@@ -15,12 +15,11 @@ from app.domain.scanning.filter_expression_model import (
     filter_spec_to_expression,
 )
 from app.infra.db.portability import lean_count
-from app.infra.query.expression_compiler import compile_expression
 from app.infra.query.sql_filter_compiler import (
     SqlFilterFieldResolver,
     apply_sql_sort,
     column_bindings,
-    compile_sql_condition,
+    compile_sql_expression,
     json_bindings,
     listing_aware_volume_predicate,
 )
@@ -33,6 +32,7 @@ from app.models.stock_universe import StockUniverse
 # One adapter-owned registry maps each logical field to its physical source.
 _FIELD_BINDINGS = column_bindings({
     "symbol": ScanResult.symbol,
+    "symbol_exact": ScanResult.symbol,
     "composite_score": ScanResult.composite_score,
     "minervini_score": ScanResult.minervini_score,
     "canslim_score": ScanResult.canslim_score,
@@ -58,6 +58,7 @@ _FIELD_BINDINGS = column_bindings({
     "adr_percent": ScanResult.adr_percent,
     "eps_rating": ScanResult.eps_rating,
     "ibd_industry_group": ScanResult.ibd_industry_group,
+    "ibd_industry_group_search": ScanResult.ibd_industry_group,
     "ibd_group_rank": ScanResult.ibd_group_rank,
     "gics_sector": ScanResult.gics_sector,
     "gics_industry": ScanResult.gics_industry,
@@ -179,14 +180,7 @@ def apply_filter_expression(query: Query, expression: FilterExpression) -> Query
 
 
 def compile_filter_expression(query: Query, expression: FilterExpression):
-    return compile_expression(
-        expression,
-        lambda condition: compile_sql_condition(
-            query,
-            condition,
-            _FILTER_FIELD_RESOLVER,
-        ),
-    )
+    return compile_sql_expression(query, expression, _FILTER_FIELD_RESOLVER)
 
 
 def supported_filter_fields() -> frozenset[str]:

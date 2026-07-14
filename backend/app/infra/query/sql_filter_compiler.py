@@ -20,7 +20,12 @@ from app.domain.common.query import (
     TextSearchFilter,
 )
 from app.domain.scanning.filter_capabilities import FIELD_CAPABILITIES
-from app.domain.scanning.filter_expression_model import FilterCondition
+from app.domain.scanning.filter_expression_model import (
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+    MatchOperator,
+)
 from app.infra.db.portability import is_postgres, json_number, json_text
 from app.infra.query.like_pattern import literal_contains_pattern
 
@@ -276,12 +281,47 @@ def compile_sql_condition(
     raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
 
 
+def _compile_sql_group(
+    query: Query,
+    group: FilterGroup,
+    resolver: SqlFilterFieldResolver,
+):
+    predicates = [
+        compile_sql_condition(query, condition, resolver)
+        for condition in group.conditions
+    ]
+    if not predicates:
+        return true() if group.match == MatchOperator.ALL else false()
+    return and_(*predicates) if group.match == MatchOperator.ALL else or_(*predicates)
+
+
+def compile_sql_expression(
+    query: Query,
+    expression: FilterExpression,
+    resolver: SqlFilterFieldResolver,
+):
+    """Compile one canonical expression against an adapter's SQL bindings."""
+
+    required = _compile_sql_group(query, expression.required, resolver)
+    groups = expression.enabled_groups
+    if not groups:
+        return required
+    predicates = [_compile_sql_group(query, group, resolver) for group in groups]
+    joined = (
+        and_(*predicates)
+        if expression.group_join == MatchOperator.ALL
+        else or_(*predicates)
+    )
+    return and_(required, joined)
+
+
 __all__ = [
     "SqlFieldBinding",
     "SqlFilterFieldResolver",
     "apply_sql_sort",
     "column_bindings",
     "compile_sql_condition",
+    "compile_sql_expression",
     "json_bindings",
     "listing_aware_volume_predicate",
 ]

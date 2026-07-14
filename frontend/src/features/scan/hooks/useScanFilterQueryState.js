@@ -75,7 +75,7 @@ export function scanFilterQueryReducer(state, action) {
     });
   }
 
-  if (action.type === 'edit-quick-filters' || action.type === 'commit-quick-filters') {
+  if (action.type === 'edit-quick-filter' || action.type === 'commit-quick-filters') {
     return updateFilterAndRequestedQuery(state, action);
   }
 
@@ -124,8 +124,8 @@ export function useScanFilterQueryState(initialState) {
   const requestExpression = useCallback((expression) => {
     dispatch({ type: 'request-expression', expression });
   }, []);
-  const editQuickFilters = useCallback((filters) => {
-    dispatch({ type: 'edit-quick-filters', filters });
+  const editQuickFilter = useCallback((key, value) => {
+    dispatch({ type: 'edit-quick-filter', key, value });
   }, []);
   const commitQuickFilters = useCallback((expressionKey) => {
     dispatch({ type: 'commit-quick-filters', expressionKey });
@@ -161,7 +161,7 @@ export function useScanFilterQueryState(initialState) {
     draftExpressionKey,
     committedExpressionKey,
     requestExpression,
-    editQuickFilters,
+    editQuickFilter,
     commitQuickFilters,
     resetFilters,
     requestPage,

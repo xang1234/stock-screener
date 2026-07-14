@@ -100,17 +100,26 @@ MAX_TEXT_PATTERN_LENGTH = 100
 MAX_CATEGORICAL_VALUES = 100
 GROUP_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 _GROUP_ID_PATTERN = re.compile(GROUP_ID_PATTERN)
+_FILTER_SPEC_TEXT_FIELD_ALIASES = {
+    "ibd_industry_group": "ibd_industry_group_search",
+}
+_FILTER_SPEC_CATEGORICAL_FIELD_ALIASES = {
+    "symbol": "symbol_exact",
+}
 
 
-def _require_filter_field(field_name: object) -> str:
+def _require_filter_field(field_name: object, kind: str) -> str:
     if not isinstance(field_name, str) or not field_name:
         raise ValueError("Filter fields must be non-empty strings")
+    capability = FIELD_CAPABILITIES.get(field_name)
+    if capability is None or capability.filter_kind != kind:
+        raise ValueError(f"Unsupported {kind} field: {field_name}")
     return field_name
 
 
 def _validate_filter_condition(condition: FilterCondition) -> None:
     if isinstance(condition, RangeFilter):
-        field_name = _require_filter_field(condition.field)
+        field_name = _require_filter_field(condition.field, "range")
         if condition.is_empty():
             raise ValueError("Range conditions require a minimum or maximum")
         capability = FIELD_CAPABILITIES.get(field_name)
@@ -146,7 +155,7 @@ def _validate_filter_condition(condition: FilterCondition) -> None:
         return
 
     if isinstance(condition, CategoricalFilter):
-        _require_filter_field(condition.field)
+        _require_filter_field(condition.field, "categorical")
         if not isinstance(condition.mode, FilterMode):
             raise ValueError("Categorical modes must be FilterMode values")
         if condition.is_empty():
@@ -163,13 +172,13 @@ def _validate_filter_condition(condition: FilterCondition) -> None:
         return
 
     if isinstance(condition, BooleanFilter):
-        _require_filter_field(condition.field)
+        _require_filter_field(condition.field, "boolean")
         if not isinstance(condition.value, bool):
             raise ValueError("Boolean filter values must be booleans")
         return
 
     if isinstance(condition, TextSearchFilter):
-        _require_filter_field(condition.field)
+        _require_filter_field(condition.field, "text")
         if not isinstance(condition.pattern, str) or not condition.pattern.strip():
             raise ValueError("Text patterns cannot be blank")
         if len(condition.pattern) > MAX_TEXT_PATTERN_LENGTH:
@@ -243,11 +252,32 @@ def validate_filter_expression(expression: FilterExpression) -> None:
 def filter_spec_to_expression(filters: FilterSpec) -> FilterExpression:
     """Preserve existing flat-filter semantics as one required ALL group."""
 
+    text_searches = tuple(
+        TextSearchFilter(
+            field=_FILTER_SPEC_TEXT_FIELD_ALIASES.get(
+                condition.field,
+                condition.field,
+            ),
+            pattern=condition.pattern,
+        )
+        for condition in filters.text_searches
+    )
+    categorical_filters = tuple(
+        CategoricalFilter(
+            field=_FILTER_SPEC_CATEGORICAL_FIELD_ALIASES.get(
+                condition.field,
+                condition.field,
+            ),
+            values=condition.values,
+            mode=condition.mode,
+        )
+        for condition in filters.categorical_filters
+    )
     conditions: tuple[FilterCondition, ...] = (
         *filters.range_filters,
-        *filters.categorical_filters,
+        *categorical_filters,
         *filters.boolean_filters,
-        *filters.text_searches,
+        *text_searches,
     )
     return FilterExpression(
         required=FilterGroup(
