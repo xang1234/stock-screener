@@ -17,6 +17,12 @@ export function resolveIpoCutoff(preset, now = new Date()) {
   return cutoff.toISOString().slice(0, 10);
 }
 
+function restoreIpoPreset(cutoff, now) {
+  return Object.keys(IPO_PRESET_MONTHS).find(
+    (preset) => resolveIpoCutoff(preset, now) === cutoff,
+  ) ?? cutoff;
+}
+
 function rangeCondition(field, range) {
   if (!range || (range.min == null && range.max == null)) return [];
   return [{ kind: 'range', field, min: range.min ?? null, max: range.max ?? null }];
@@ -215,7 +221,10 @@ const QUICK_FILTER_SPECS = new Map([
       const cutoff = resolveIpoCutoff(value, now);
       return cutoff ? [{ kind: 'range', field: 'ipo_date', min: cutoff, max: null }] : [];
     },
-    decode: (conditions) => greatestBound(conditions, 'min'),
+    decode: (conditions, now) => restoreIpoPreset(
+      greatestBound(conditions, 'min'),
+      now,
+    ),
   }],
 ]);
 
@@ -255,13 +264,13 @@ export function patchExpressionQuickFilter(
   return base;
 }
 
-export function expressionToQuickFilters(expression, defaults) {
+export function expressionToQuickFilters(expression, defaults, now = new Date()) {
   const result = structuredClone(defaults);
   const conditions = expression?.required?.conditions ?? [];
   QUICK_FILTER_SPECS.forEach((spec, key) => {
     const owned = conditions.filter(spec.matches);
     if (!owned.length) return;
-    const value = spec.decode(owned);
+    const value = spec.decode(owned, now);
     if (!(Array.isArray(value) && value.length === 0)) {
       result[key] = value;
     }

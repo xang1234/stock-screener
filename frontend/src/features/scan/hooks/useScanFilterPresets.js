@@ -3,7 +3,7 @@ import {
   canonicalizeExpression,
   stableExpressionKey,
 } from '../filterExpressionModel';
-import { legacyFiltersToExpression } from '../legacyFilterExpression';
+import { legacyLiveFiltersToExpression } from '../legacyFilterExpression';
 
 export function useScanFilterPresets({
   presets,
@@ -69,7 +69,7 @@ export function useScanFilterPresets({
       const isExpressionPreset = preset.filters?.schema_version === 2 && preset.filters?.expression;
       const nextExpression = isExpressionPreset
         ? preset.filters.expression
-        : legacyFiltersToExpression(preset.filters);
+        : legacyLiveFiltersToExpression(preset.filters);
       applyQuery({
         expression: nextExpression,
         sortBy: preset.sort_by,

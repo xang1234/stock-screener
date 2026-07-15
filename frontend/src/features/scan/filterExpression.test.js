@@ -125,6 +125,29 @@ describe('scan filter expressions', () => {
     expect(restored.maAlignment).toBe(false);
   });
 
+  it('restores an IPO chip preset from its exact current cutoff', () => {
+    const now = new Date(Date.UTC(2026, 6, 15));
+    const expression = legacyFiltersToExpression({ ipoAfter: '1y' }, now);
+
+    expect(expression.required.conditions).toContainEqual({
+      kind: 'range', field: 'ipo_date', min: '2025-07-15', max: null,
+    });
+    expect(expressionToQuickFilters(
+      expression,
+      buildDefaultScanFilters(),
+      now,
+    ).ipoAfter).toBe('1y');
+
+    const absoluteDate = createEmptyExpression([{
+      kind: 'range', field: 'ipo_date', min: '2024-01-02', max: null,
+    }]);
+    expect(expressionToQuickFilters(
+      absoluteDate,
+      buildDefaultScanFilters(),
+      now,
+    ).ipoAfter).toBe('2024-01-02');
+  });
+
   it.each(legacyCompatibility.cases)(
     'preserves legacy category compatibility: $name',
     ({ filters, required_conditions: requiredConditions }) => {

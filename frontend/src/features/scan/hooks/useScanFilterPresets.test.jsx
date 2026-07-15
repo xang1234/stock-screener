@@ -74,6 +74,36 @@ describe('useScanFilterPresets', () => {
     }));
   });
 
+  it('omits static-only legacy aliases when loading a live preset', () => {
+    const { hook, applyQuery } = setup({
+      presets: [{
+        id: 'legacy-static-alias',
+        name: 'Legacy performance',
+        filters: {
+          ...buildDefaultScanFilters(),
+          pctDay: { min: 5, max: null },
+          pctWeek: { min: 10, max: null },
+          pctMonth: { min: 20, max: null },
+          symbolSearch: 'NVDA',
+        },
+        sort_by: 'composite_score',
+        sort_order: 'desc',
+      }],
+    });
+
+    act(() => {
+      hook.result.current.handleLoadPreset('legacy-static-alias');
+    });
+
+    const { conditions } = applyQuery.mock.calls[0][0].expression.required;
+    expect(conditions).toContainEqual(
+      expect.objectContaining({ kind: 'text', pattern: 'NVDA' }),
+    );
+    expect(conditions.map(({ field }) => field)).not.toEqual(
+      expect.arrayContaining(['pct_day', 'pct_week', 'pct_month']),
+    );
+  });
+
   it('tracks unsaved changes after preset load', () => {
     const { hook, props } = setup();
 

@@ -13,7 +13,13 @@ export const EXPRESSION_LIMITS = Object.freeze({
 const LEGACY_FILTER_FIELDS = Object.freeze(
   scanFilterContract.fields
     .filter((item) => item.legacy_key && ['range', 'boolean'].includes(item.kind))
-    .map((item) => [item.legacy_key, item.field, item.kind]),
+    .map((item) => [item.legacy_key, item.field, item.kind, item.api_filter !== false]),
+);
+
+export const STATIC_ONLY_LEGACY_FILTER_KEYS = Object.freeze(
+  LEGACY_FILTER_FIELDS
+    .filter(([, , , apiFilter]) => !apiFilter)
+    .map(([key]) => key),
 );
 
 export const FILTER_FIELD_CATALOG = Object.freeze(
