@@ -99,6 +99,12 @@ export const getScanResults = async (scanId, params = {}) => {
   return response.data;
 };
 
+/** Query scan results with the versioned grouped-filter contract. */
+export const queryScanResults = async (scanId, request, { signal } = {}) => {
+  const response = await apiClient.post(`/v1/scans/${scanId}/results/query`, request, { signal });
+  return response.data;
+};
+
 /**
  * Get lightweight filtered symbols for chart navigation
  * @param {string} scanId - Scan ID
@@ -109,6 +115,12 @@ export const getScanSymbols = async (scanId, params = {}) => {
   const response = await apiClient.get(`/v1/scans/${scanId}/symbols`, {
     params,
   });
+  return response.data;
+};
+
+/** Return all symbols matching the exact applied grouped expression. */
+export const queryScanSymbols = async (scanId, request, { signal } = {}) => {
+  const response = await apiClient.post(`/v1/scans/${scanId}/symbols/query`, request, { signal });
   return response.data;
 };
 
@@ -168,6 +180,14 @@ export const getUniverseStats = async () => {
 export const exportScanResults = async (scanId, params = {}) => {
   const response = await apiClient.get(`/v1/scans/${scanId}/export`, {
     params: { format: 'csv', ...params },
+    responseType: 'blob',
+  });
+  return response.data;
+};
+
+/** Export rows matching the exact applied grouped expression. */
+export const exportScanResultsQuery = async (scanId, request) => {
+  const response = await apiClient.post(`/v1/scans/${scanId}/export/query`, request, {
     responseType: 'blob',
   });
   return response.data;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -8,6 +8,7 @@ import {
   Typography,
 } from '@mui/material';
 import FilterPanel from '../../components/Scan/FilterPanel';
+import GuidedFilterBuilderDialog from '../../features/scan/components/GuidedFilterBuilderDialog';
 import ResultsTable from '../../components/Scan/ResultsTable';
 import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
@@ -16,16 +17,25 @@ import {
   buildDefaultScanFilters,
 } from '../../features/scan/defaultFilters';
 import { normalizeScanFilterOptions } from '../../features/scan/filterOptions';
-import { getStableFilterKey } from '../../utils/filterUtils';
-import {
-  filterStaticScanRows,
-  paginateStaticScanRows,
-  sortStaticScanRows,
-} from '../scanClient';
+import { paginateStaticScanRows, sortStaticScanRows } from '../scanClient';
 import StaticChartViewerModal from '../StaticChartViewerModal';
 import ScreenSelector from '../components/ScreenSelector';
 import { usePresetScreens, buildFiltersFromPreset } from '../hooks/usePresetScreens';
 import { useStaticMarket } from '../StaticMarketContext';
+import {
+  annotateExpressionMatches,
+} from '../../features/scan/filterExpressionEvaluator';
+import {
+  stableExpressionKey,
+} from '../../features/scan/filterExpressionModel';
+import {
+  legacyFiltersToExpression,
+} from '../../features/scan/legacyFilterExpression';
+import {
+  createFilterState,
+  filterStateReducer,
+  selectQuickFilters,
+} from '../../features/scan/filterState';
 
 const HYDRATION_BATCH_SIZE = 2;
 
@@ -44,7 +54,14 @@ function StaticScanPage() {
   });
   const chartIndexQuery = useStaticChartIndex(scanManifestQuery.data?.charts?.path);
 
-  const [filters, setFilters] = useState(buildDefaultScanFilters);
+  const [filterState, dispatchFilterState] = useReducer(
+    filterStateReducer,
+    { defaultFilters: buildDefaultScanFilters() },
+    createFilterState,
+  );
+  const appliedExpression = filterState.committedExpression;
+  const filters = useMemo(() => selectQuickFilters(filterState), [filterState]);
+  const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(50);
@@ -92,7 +109,10 @@ function StaticScanPage() {
     if (!scanManifestQuery.data) {
       return;
     }
-    setFilters(manifestDefaultFilters);
+    dispatchFilterState({
+      type: 'reset-filters',
+      defaultFilters: manifestDefaultFilters,
+    });
   }, [manifestDefaultFilters, scanManifestQuery.data]);
 
   useEffect(() => {
@@ -187,13 +207,20 @@ function StaticScanPage() {
   const handleSelectScreen = useCallback((screenId) => {
     setActiveScreenId(screenId);
     if (!screenId) {
-      setFilters(manifestDefaultFilters);
+      dispatchFilterState({
+        type: 'reset-filters',
+        defaultFilters: manifestDefaultFilters,
+      });
       setSortBy(manifestDefaultSortBy);
       setSortOrder(manifestDefaultSortOrder);
     } else {
       const screen = presetScreens?.find((s) => s.id === screenId);
       if (screen) {
-        setFilters(buildFiltersFromPreset(screen));
+        dispatchFilterState({
+          type: 'apply-expression',
+          expression: screen.filter_expression
+            || legacyFiltersToExpression(buildFiltersFromPreset(screen)),
+        });
         setSortBy(screen.sort_by);
         setSortOrder(screen.sort_order);
       }
@@ -206,10 +233,16 @@ function StaticScanPage() {
     setActiveScreenId,
   ]);
 
-  const filterKey = useMemo(() => getStableFilterKey(filters), [filters]);
+  const expressionKey = useMemo(
+    () => stableExpressionKey(appliedExpression),
+    [appliedExpression],
+  );
   useEffect(() => {
     setPage(1);
-  }, [filterKey]);
+  }, [expressionKey]);
+  const handleQuickFiltersChange = useCallback((key, value) => {
+    dispatchFilterState({ type: 'apply-quick-filter', key, value });
+  }, []);
   const chartEntries = useMemo(
     () => chartIndexQuery.data?.symbols || [],
     [chartIndexQuery.data]
@@ -219,8 +252,10 @@ function StaticScanPage() {
     [chartEntries]
   );
   const filteredRows = useMemo(
-    () => (hydrationComplete ? filterStaticScanRows(hydratedRows, filters) : hydratedRows),
-    [filters, hydratedRows, hydrationComplete]
+    () => (hydrationComplete
+      ? annotateExpressionMatches(hydratedRows, appliedExpression)
+      : hydratedRows),
+    [appliedExpression, hydratedRows, hydrationComplete]
   );
   const sortedRows = useMemo(
     () => (
@@ -320,13 +355,24 @@ function StaticScanPage() {
       {hydrationComplete && (
         <FilterPanel
           filters={filters}
-          onFilterChange={setFilters}
-          onReset={() => { setFilters(manifestDefaultFilters); setSortBy(manifestDefaultSortBy); setSortOrder(manifestDefaultSortOrder); setActiveScreenId(null); }}
+          onFilterChange={handleQuickFiltersChange}
+          onReset={() => {
+            dispatchFilterState({
+              type: 'reset-filters',
+              defaultFilters: manifestDefaultFilters,
+            });
+            setSortBy(manifestDefaultSortBy);
+            setSortOrder(manifestDefaultSortOrder);
+            setActiveScreenId(null);
+          }}
           filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}
           presetsEnabled={false}
           sectionDefaultExpanded={sectionDefaultExpanded}
+          groupedFilteringEnabled
+          expression={appliedExpression}
+          onOpenLogicBuilder={() => setLogicBuilderOpen(true)}
         />
       )}
 
@@ -361,6 +407,19 @@ function StaticScanPage() {
         initialSymbol={selectedChartSymbol}
         chartIndex={chartIndexQuery.data}
         navigationSymbols={navigationSymbols}
+      />
+
+      <GuidedFilterBuilderDialog
+        open={logicBuilderOpen}
+        expression={appliedExpression}
+        onClose={() => setLogicBuilderOpen(false)}
+        onApply={(nextExpression) => {
+          dispatchFilterState({ type: 'apply-expression', expression: nextExpression });
+          setPage(1);
+          setActiveScreenId(null);
+          setLogicBuilderOpen(false);
+        }}
+        filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
       />
     </Box>
   );

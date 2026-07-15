@@ -6,7 +6,6 @@ No HTTP, no ORM — just business logic for formatting scan results.
 
 from __future__ import annotations
 
-import copy
 import csv
 import io
 import logging
@@ -16,7 +15,12 @@ from datetime import datetime
 from typing import Any
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_spec import FilterSpec, SortSpec
+from app.domain.scanning.filter_expression_evaluator import (
+    annotate_matched_groups,
+    require_passing_ratings,
+)
+from app.domain.common.query import SortSpec
+from app.domain.scanning.filter_expression_model import FilterExpression
 from app.domain.scanning.models import ExportFormat, ScanResultItemDomain
 from app.infra.serialization import normalize_string_list
 
@@ -33,7 +37,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ExportScanResultsQuery:
     scan_id: str
-    filters: FilterSpec = field(default_factory=FilterSpec)
+    expression: FilterExpression = field(default_factory=FilterExpression)
     sort: SortSpec = field(default_factory=SortSpec)
     export_format: ExportFormat = ExportFormat.CSV
     passes_only: bool = False
@@ -53,6 +57,12 @@ class ExportScanResultsResult:
 # Each entry is (header_name, extractor_fn) — ordered for the output CSV.
 _CSV_COLUMNS: list[tuple[str, Any]] = [
     ("Symbol", lambda item: item.symbol),
+    (
+        "Matched Groups",
+        lambda item: " | ".join(
+            group.name for group in item.matched_groups if group.name
+        ),
+    ),
     ("Company Name", lambda item: item.extended_fields.get("company_name")),
     ("Market", lambda item: item.extended_fields.get("market")),
     ("Exchange", lambda item: item.extended_fields.get("exchange")),
@@ -224,12 +234,10 @@ class ExportScanResultsUseCase:
         with uow:
             scan, run_id = resolve_scan(uow, query.scan_id)
 
-            # Build effective filters — copy to avoid mutating the frozen query
-            filters = copy.copy(query.filters)
-            if query.passes_only:
-                filters.add_categorical(
-                    "rating", ("Strong Buy", "Buy")
-                )
+            expression = require_passing_ratings(
+                query.expression,
+                enabled=query.passes_only,
+            )
 
             if run_id:
                 logger.info(
@@ -239,7 +247,7 @@ class ExportScanResultsUseCase:
                 )
                 items = uow.feature_store.query_all_as_scan_results(
                     run_id,
-                    filters,
+                    expression,
                     query.sort,
                 )
             else:
@@ -249,9 +257,11 @@ class ExportScanResultsUseCase:
                 )
                 items = uow.scan_results.query_all(
                     query.scan_id,
-                    filters,
+                    expression,
                     query.sort,
                 )
+
+        items = annotate_matched_groups(items, expression)
 
         # Format output
         if query.export_format == ExportFormat.CSV:

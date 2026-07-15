@@ -16,7 +16,7 @@ import pandas as pd
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
-from app.domain.common.query import FilterSpec, SortOrder, SortSpec
+from app.domain.common.query import SortOrder, SortSpec
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.markets.catalog import get_market_catalog
 from app.domain.scanning.default_filters import (
@@ -24,6 +24,7 @@ from app.domain.scanning.default_filters import (
     DEFAULT_SCAN_FILTERS_FALLBACK,
     resolve_default_scan_filters,
 )
+from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.serialization import json_safe
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
@@ -647,7 +648,7 @@ class StaticSiteExportService:
         repo = SqlFeatureStoreRepository(db)
         return repo.query_all_as_scan_results(
             run.id,
-            FilterSpec(),
+            FilterExpression(),
             SortSpec(field="composite_score", order=SortOrder.DESC),
             include_sparklines=include_sparklines,
         )
@@ -675,14 +676,7 @@ class StaticSiteExportService:
         market: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if rows is None or filter_options is None:
-            repo = SqlFeatureStoreRepository(db)
-            rows = repo.query_all_as_scan_results(
-                run.id,
-                FilterSpec(),
-                SortSpec(field="composite_score", order=SortOrder.DESC),
-                include_sparklines=True,
-            )
-            filter_options = repo.get_filter_options_for_run(run.id)
+            rows, filter_options = self._load_scan_export_source(db, run)
 
         normalized_prefix = Path() if path_prefix is None else Path(path_prefix)
         scan_dir = output_dir / normalized_prefix / "scan"

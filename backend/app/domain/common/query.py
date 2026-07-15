@@ -39,8 +39,8 @@ class RangeFilter:
     """Numeric range constraint on a single field."""
 
     field: str
-    min_value: float | int | None = None
-    max_value: float | int | None = None
+    min_value: float | int | str | None = None
+    max_value: float | int | str | None = None
 
     def is_empty(self) -> bool:
         return self.min_value is None and self.max_value is None
@@ -103,8 +103,8 @@ class FilterSpec:
     def add_range(
         self,
         field_name: str,
-        min_value: float | int | None = None,
-        max_value: float | int | None = None,
+        min_value: float | int | str | None = None,
+        max_value: float | int | str | None = None,
     ) -> FilterSpec:
         if min_value is not None or max_value is not None:
             self.range_filters.append(
@@ -167,15 +167,6 @@ class PageSpec:
         return self.per_page
 
 
-@dataclass
-class QuerySpec:
-    """Complete query = filters + sort + pagination."""
-
-    filters: FilterSpec = field(default_factory=FilterSpec)
-    sort: SortSpec = field(default_factory=SortSpec)
-    page: PageSpec = field(default_factory=PageSpec)
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -190,5 +181,4 @@ __all__ = [
     "FilterSpec",
     "SortSpec",
     "PageSpec",
-    "QuerySpec",
 ]

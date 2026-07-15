@@ -10,7 +10,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.domain.common.errors import EntityNotFoundError
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortSpec
+from app.domain.common.query import (
+    FilterSpec,
+    PageSpec,
+    SortSpec,
+)
 from app.domain.feature_store.models import (
     INT_TO_RATING,
     FeaturePage,
@@ -19,6 +23,7 @@ from app.domain.feature_store.models import (
 )
 from app.domain.feature_store.ports import FeatureStoreRepository
 from app.domain.feature_store.quality import DQInputs
+from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.infra.db.models.feature_store import (
     FeatureRun,
@@ -33,6 +38,7 @@ from app.infra.serialization import (
     normalize_string_list,
 )
 from app.infra.query.feature_store_query import (
+    apply_filter_expression,
     apply_filters,
     apply_sort_all,
     apply_sort_and_paginate,
@@ -303,7 +309,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         """Build and execute a filtered, sorted, paginated feature query.
 
         Applies the StockUniverse + StockFundamental outer joins so the
-        joined-column entries in ``feature_store_query._COLUMN_MAP``
+        joined-column entries in ``feature_store_query._FIELD_BINDINGS``
         (market, exchange, currency, market_cap_usd, adv_usd) resolve to
         valid SQL even though FeaturePage rows don't surface those columns.
         Without the joins, a filter referencing them would produce broken
@@ -345,7 +351,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_query(self._session, run_id)
-        q = apply_filters(q, spec.filters)
+        q = apply_filter_expression(q, spec.expression)
         rows, total = apply_sort_and_paginate(q, spec.sort, spec.page)
 
         items = tuple(
@@ -564,7 +570,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
     def query_all_as_scan_results(
         self,
         run_id: int,
-        filters: FilterSpec,
+        expression: FilterExpression,
         sort: SortSpec,
         *,
         include_sparklines: bool = False,
@@ -579,7 +585,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_query(self._session, run_id)
-        q = apply_filters(q, filters)
+        q = apply_filter_expression(q, expression)
         rows = apply_sort_all(q, sort)
 
         return tuple(
@@ -593,7 +599,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
     def query_run_symbols(
         self,
         run_id: int,
-        filters: FilterSpec,
+        expression: FilterExpression,
         sort: SortSpec,
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:
@@ -602,7 +608,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         q = _feature_results_symbol_query(self._session, run_id)
-        q = apply_filters(q, filters)
+        q = apply_filter_expression(q, expression)
 
         if page is None:
             rows = apply_sort_all(q, sort)
@@ -750,7 +756,9 @@ def _map_feature_to_scan_result(
         None if raw_score is None else max(0.0, min(100.0, float(raw_score)))
     )
 
-    rating = INT_TO_RATING.get(row.overall_rating, d.get("rating", "Pass"))
+    # Filtering uses the persisted details rating, so result explainability
+    # must use that same value before falling back to the compact integer.
+    rating = d.get("rating") or INT_TO_RATING.get(row.overall_rating, "Pass")
 
     extended: dict[str, Any] = {
         "company_name": joined.get("company_name"),
@@ -790,7 +798,7 @@ def _map_feature_to_scan_result(
         "vcp_ready_for_breakout": d.get("vcp_ready_for_breakout"),
         "vcp_contraction_ratio": d.get("vcp_contraction_ratio"),
         "vcp_atr_score": d.get("vcp_atr_score"),
-        "passes_template": d.get("passes_template", False),
+        "passes_template": d.get("passes_template"),
         "adr_percent": d.get("adr_percent"),
         "eps_growth_qq": d.get("eps_growth_qq"),
         "sales_growth_qq": d.get("sales_growth_qq"),
@@ -806,17 +814,17 @@ def _map_feature_to_scan_result(
         "gics_industry": d.get("gics_industry"),
         "rs_sparkline_data": d.get("rs_sparkline_data") if include_sparklines else None,
         "rs_trend": d.get("rs_trend"),
-        "rs_line_new_high": coerce_bool_or_false(
+        "rs_line_new_high": (
             row.rs_line_new_high
             if row.rs_line_new_high is not None
             else d.get("rs_line_new_high")
         ),
-        "rs_line_new_high_before_price": coerce_bool_or_false(
+        "rs_line_new_high_before_price": (
             row.rs_line_new_high_before_price
             if row.rs_line_new_high_before_price is not None
             else d.get("rs_line_new_high_before_price")
         ),
-        "rs_line_blue_dot_recent": coerce_bool_or_false(
+        "rs_line_blue_dot_recent": (
             row.rs_line_blue_dot_recent
             if row.rs_line_blue_dot_recent is not None
             else d.get("rs_line_blue_dot_recent")

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "array-shaped industry and sector selectors",
+      "filters": {
+        "ibdIndustries": ["Software"],
+        "gicsSectors": ["Technology"]
+      },
+      "required_conditions": [
+        {
+          "kind": "categorical",
+          "field": "ibd_industry_group",
+          "values": ["Software"],
+          "mode": "include"
+        },
+        {
+          "kind": "categorical",
+          "field": "gics_sector",
+          "values": ["Technology"],
+          "mode": "include"
+        }
+      ]
+    },
+    {
+      "name": "mode-aware industry and sector selectors",
+      "filters": {
+        "ibdIndustries": {
+          "values": ["Banks"],
+          "mode": "exclude"
+        },
+        "gicsSectors": {
+          "values": ["Financials"],
+          "mode": "exclude"
+        }
+      },
+      "required_conditions": [
+        {
+          "kind": "categorical",
+          "field": "ibd_industry_group",
+          "values": ["Banks"],
+          "mode": "exclude"
+        },
+        {
+          "kind": "categorical",
+          "field": "gics_sector",
+          "values": ["Financials"],
+          "mode": "exclude"
+        }
+      ]
+    }
+  ]
+}

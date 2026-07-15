@@ -18,10 +18,10 @@ from app.domain.common.query import (
     FilterMode,
     FilterSpec,
     PageSpec,
-    QuerySpec,
     SortOrder,
     SortSpec,
 )
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.feature_store.models import FeaturePage, FeatureRow, FeatureRowWrite
 from app.domain.feature_store.quality import DQInputs
 from app.infra.db.models.feature_store import (  # noqa: F401 — register models
@@ -372,7 +372,7 @@ class TestFilterSpec:
     def test_range_filter_on_json_field(
         self, repo: SqlFeatureStoreRepository, session: Session
     ):
-        """Verifies json_extract + CAST path via _JSON_FIELD_MAP."""
+        """Verifies the JSON field binding uses json_extract + CAST."""
         run_id = _create_run(session)
         rows = [
             FeatureRowWrite(
@@ -428,14 +428,14 @@ class TestFilterSpec:
 class TestJoinedColumnFilters:
     """Verify filters on StockUniverse + StockFundamental columns work end-to-end.
 
-    Regression coverage for asia.8.3: feature_store_query._COLUMN_MAP must
+    Regression coverage for asia.8.3: feature_store_query._FIELD_BINDINGS must
     contain entries for `market`/`market_cap_usd`/`adv_usd` and the SQL
     queries must apply the matching outer joins, otherwise USD/market filters
     silently drop on feature-store-backed scans.
     """
 
     def _seed(self, repo, session):
-        from app.domain.common.query import QuerySpec
+        from app.domain.scanning.filter_expression_model import QuerySpec
         from app.models.stock import StockFundamental
         from app.models.stock_universe import StockUniverse
 
@@ -464,7 +464,7 @@ class TestJoinedColumnFilters:
 
         filters = FilterSpec()
         filters.add_categorical("market", ("HK", "JP"))
-        spec = QuerySpec(filters=filters, sort=SortSpec(), page=PageSpec())
+        spec = QuerySpec.from_filter_spec(filters, sort=SortSpec(), page=PageSpec())
 
         result = repo.query_run_as_scan_results(run_id, spec)
 
@@ -479,7 +479,7 @@ class TestJoinedColumnFilters:
 
         filters = FilterSpec()
         filters.add_range("market_cap_usd", min_value=400_000_000_000)
-        spec = QuerySpec(filters=filters, sort=SortSpec(), page=PageSpec())
+        spec = QuerySpec.from_filter_spec(filters, sort=SortSpec(), page=PageSpec())
 
         result = repo.query_run_as_scan_results(run_id, spec)
 
@@ -490,7 +490,7 @@ class TestJoinedColumnFilters:
         self, repo: SqlFeatureStoreRepository, session: Session
     ):
         run_id, QuerySpec = self._seed(repo, session)
-        spec = QuerySpec(filters=FilterSpec(), sort=SortSpec(), page=PageSpec())
+        spec = QuerySpec.from_filter_spec(FilterSpec(), sort=SortSpec(), page=PageSpec())
 
         result = repo.query_run_as_scan_results(run_id, spec)
 

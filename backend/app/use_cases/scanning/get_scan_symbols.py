@@ -6,7 +6,10 @@ import logging
 from dataclasses import dataclass, field
 
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_spec import FilterSpec, PageSpec, SortSpec
+from app.domain.scanning.filter_expression_evaluator import require_passing_ratings
+from app.domain.scanning.filter_expression_serialization import expression_fingerprint
+from app.domain.common.query import PageSpec, SortSpec
+from app.domain.scanning.filter_expression_model import FilterExpression
 
 from ._resolve import resolve_scan
 
@@ -18,7 +21,7 @@ class GetScanSymbolsQuery:
     """Immutable value object describing a symbol-list lookup."""
 
     scan_id: str
-    filters: FilterSpec = field(default_factory=FilterSpec)
+    expression: FilterExpression = field(default_factory=FilterExpression)
     sort: SortSpec = field(default_factory=SortSpec)
     page: PageSpec | None = None
     passes_only: bool = False
@@ -32,6 +35,7 @@ class GetScanSymbolsResult:
     total: int
     page: int | None = None
     per_page: int | None = None
+    query_fingerprint: str | None = None
 
 
 class GetScanSymbolsUseCase:
@@ -45,16 +49,10 @@ class GetScanSymbolsUseCase:
         with uow:
             _scan, run_id = resolve_scan(uow, query.scan_id)
 
-            filters = query.filters
-            if query.passes_only:
-                augmented = FilterSpec(
-                    range_filters=list(filters.range_filters),
-                    categorical_filters=list(filters.categorical_filters),
-                    boolean_filters=list(filters.boolean_filters),
-                    text_searches=list(filters.text_searches),
-                )
-                augmented.add_categorical("rating", ("Strong Buy", "Buy"))
-                filters = augmented
+            expression = require_passing_ratings(
+                query.expression,
+                enabled=query.passes_only,
+            )
 
             if run_id:
                 logger.info(
@@ -64,7 +62,7 @@ class GetScanSymbolsUseCase:
                 )
                 symbols, total = uow.feature_store.query_run_symbols(
                     run_id,
-                    filters,
+                    expression,
                     query.sort,
                     page=query.page,
                 )
@@ -75,7 +73,7 @@ class GetScanSymbolsUseCase:
                 )
                 symbols, total = uow.scan_results.query_symbols(
                     query.scan_id,
-                    filters,
+                    expression,
                     query.sort,
                     page=query.page,
                 )
@@ -85,4 +83,5 @@ class GetScanSymbolsUseCase:
             total=total,
             page=query.page.page if query.page else None,
             per_page=query.page.per_page if query.page else None,
+            query_fingerprint=expression_fingerprint(expression),
         )

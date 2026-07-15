@@ -1,13 +1,11 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { buildDefaultScanFilters } from '../defaultFilters';
+import { legacyFiltersToExpression } from '../legacyFilterExpression';
 import { useScanFilterPresets } from './useScanFilterPresets';
 
 function setup(overrides = {}) {
-  const setFilters = vi.fn();
-  const setSortBy = vi.fn();
-  const setSortOrder = vi.fn();
-  const setPage = vi.fn();
+  const applyQuery = vi.fn();
   const createPresetAsync = vi.fn().mockResolvedValue({ id: 'preset-2' });
   const updatePresetAsync = vi.fn().mockResolvedValue({});
   const deletePreset = vi.fn();
@@ -33,13 +31,10 @@ function setup(overrides = {}) {
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
-    filters: buildDefaultScanFilters(),
+    expression: legacyFiltersToExpression(buildDefaultScanFilters()),
     sortBy: 'composite_score',
     sortOrder: 'desc',
-    setFilters,
-    setSortBy,
-    setSortOrder,
-    setPage,
+    applyQuery,
     ...overrides,
   };
 
@@ -50,10 +45,7 @@ function setup(overrides = {}) {
   return {
     hook,
     props,
-    setFilters,
-    setSortBy,
-    setSortOrder,
-    setPage,
+    applyQuery,
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
@@ -61,17 +53,55 @@ function setup(overrides = {}) {
 }
 
 describe('useScanFilterPresets', () => {
-  it('loads a preset and updates filter + sort state', () => {
-    const { hook, setFilters, setSortBy, setSortOrder, setPage } = setup();
+  it('loads a preset as one canonical filter + sort transition', () => {
+    const { hook, applyQuery } = setup();
 
     act(() => {
       hook.result.current.handleLoadPreset('preset-1');
     });
 
-    expect(setFilters).toHaveBeenCalledWith(expect.objectContaining({ symbolSearch: 'NVDA' }));
-    expect(setSortBy).toHaveBeenCalledWith('composite_score');
-    expect(setSortOrder).toHaveBeenCalledWith('desc');
-    expect(setPage).toHaveBeenCalledWith(1);
+    expect(applyQuery).toHaveBeenCalledWith(expect.objectContaining({
+      expression: expect.objectContaining({
+        expression_version: 1,
+        required: expect.objectContaining({
+          conditions: expect.arrayContaining([
+            expect.objectContaining({ kind: 'text', pattern: 'NVDA' }),
+          ]),
+        }),
+      }),
+      sortBy: 'composite_score',
+      sortOrder: 'desc',
+    }));
+  });
+
+  it('omits static-only legacy aliases when loading a live preset', () => {
+    const { hook, applyQuery } = setup({
+      presets: [{
+        id: 'legacy-static-alias',
+        name: 'Legacy performance',
+        filters: {
+          ...buildDefaultScanFilters(),
+          pctDay: { min: 5, max: null },
+          pctWeek: { min: 10, max: null },
+          pctMonth: { min: 20, max: null },
+          symbolSearch: 'NVDA',
+        },
+        sort_by: 'composite_score',
+        sort_order: 'desc',
+      }],
+    });
+
+    act(() => {
+      hook.result.current.handleLoadPreset('legacy-static-alias');
+    });
+
+    const { conditions } = applyQuery.mock.calls[0][0].expression.required;
+    expect(conditions).toContainEqual(
+      expect.objectContaining({ kind: 'text', pattern: 'NVDA' }),
+    );
+    expect(conditions.map(({ field }) => field)).not.toEqual(
+      expect.arrayContaining(['pct_day', 'pct_week', 'pct_month']),
+    );
   });
 
   it('tracks unsaved changes after preset load', () => {
@@ -82,13 +112,19 @@ describe('useScanFilterPresets', () => {
     });
     hook.rerender({
       ...props,
-      filters: { ...buildDefaultScanFilters(), symbolSearch: 'NVDA' },
+      expression: legacyFiltersToExpression({
+        ...buildDefaultScanFilters(),
+        symbolSearch: 'NVDA',
+      }),
     });
     expect(hook.result.current.hasUnsavedChanges()).toBe(false);
 
     hook.rerender({
       ...props,
-      filters: { ...props.filters, symbolSearch: 'AAPL' },
+      expression: legacyFiltersToExpression({
+        ...buildDefaultScanFilters(),
+        symbolSearch: 'AAPL',
+      }),
     });
 
     expect(hook.result.current.hasUnsavedChanges()).toBe(true);
@@ -111,6 +147,68 @@ describe('useScanFilterPresets', () => {
         description: 'desc',
       })
     );
+  });
+
+  it('stores one canonical V2 expression using the current quick-filter draft', async () => {
+    const currentFilters = { ...buildDefaultScanFilters(), symbolSearch: 'AAPL' };
+    const { hook, createPresetAsync } = setup({
+      expression: legacyFiltersToExpression(currentFilters),
+    });
+
+    act(() => {
+      hook.result.current.handleOpenSaveDialog();
+    });
+    await act(async () => {
+      await hook.result.current.handleSaveDialogSave('Current draft', '');
+    });
+
+    const payload = createPresetAsync.mock.calls[0][0].filters;
+    expect(payload).toEqual({
+      schema_version: 2,
+      expression: expect.objectContaining({
+        required: expect.objectContaining({
+          conditions: expect.arrayContaining([
+            expect.objectContaining({ kind: 'text', pattern: 'AAPL' }),
+          ]),
+        }),
+      }),
+    });
+    expect(payload).not.toHaveProperty('legacy_filters');
+  });
+
+  it('loads V2 presets from the expression even when stale legacy filters exist', () => {
+    const canonicalFilters = { ...buildDefaultScanFilters(), symbolSearch: 'GOOGL' };
+    const staleFilters = { ...buildDefaultScanFilters(), symbolSearch: 'STALE' };
+    const { hook, applyQuery } = setup({
+      expression: legacyFiltersToExpression(buildDefaultScanFilters()),
+      presets: [
+        {
+          id: 'preset-v2',
+          name: 'Canonical',
+          filters: {
+            schema_version: 2,
+            expression: legacyFiltersToExpression(canonicalFilters),
+            legacy_filters: staleFilters,
+          },
+          sort_by: 'rs_rating',
+          sort_order: 'desc',
+        },
+      ],
+    });
+
+    act(() => {
+      hook.result.current.handleLoadPreset('preset-v2');
+    });
+
+    expect(applyQuery).toHaveBeenCalledWith(expect.objectContaining({
+      expression: expect.objectContaining({
+        required: expect.objectContaining({
+          conditions: expect.arrayContaining([
+            expect.objectContaining({ kind: 'text', pattern: 'GOOGL' }),
+          ]),
+        }),
+      }),
+    }));
   });
 
   it('renames the preset selected in the rename dialog, not the active preset', async () => {

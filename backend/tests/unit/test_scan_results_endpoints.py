@@ -70,6 +70,51 @@ async def client():
 
 @pytest.mark.asyncio
 class TestScanResultEndpoints:
+    async def test_grouped_results_endpoint_returns_query_identity_and_matches(self, client):
+        scan_results = FakeScanResultRepository(
+            items=[make_domain_item("AAPL", rs_rating=95.0)]
+        )
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["scan-grouped"] = _make_scan("scan-grouped")
+        uow = _FakeUoW(scans=scan_repo, scan_results=scan_results)
+        request = {
+            "expression_version": 1,
+            "required": {
+                "id": "required",
+                "name": "Always require",
+                "match": "all",
+                "conditions": [],
+            },
+            "group_join": "any",
+            "groups": [
+                {
+                    "id": "leadership",
+                    "name": "Leadership",
+                    "match": "all",
+                    "conditions": [
+                        {"kind": "range", "field": "rs_rating", "min": 90}
+                    ],
+                }
+            ],
+            "page": {"number": 1, "size": 50},
+        }
+
+        app.dependency_overrides[get_uow] = lambda: uow
+        try:
+            resp = await client.post(
+                "/api/v1/scans/scan-grouped/results/query",
+                json=request,
+            )
+            assert resp.status_code == 200
+            payload = resp.json()
+            assert len(payload["query_fingerprint"]) == 24
+            assert payload["results"][0]["matched_groups"] == [
+                {"id": "leadership", "name": "Leadership"}
+            ]
+            assert scan_results.last_query_args["spec"].expression is not None
+        finally:
+            app.dependency_overrides.pop(get_uow, None)
+
     async def test_results_default_table_excludes_setup_payload(self, client):
         scan_results = FakeScanResultRepository(
             items=[

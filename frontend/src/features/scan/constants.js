@@ -1,5 +1,6 @@
 import { buildDefaultScanFilters } from './defaultFilters';
-import { getStableFilterKey } from '../../utils/filterUtils';
+import { stableExpressionKey } from './filterExpressionModel';
+import { legacyFiltersToExpression } from './legacyFilterExpression';
 
 export const TEST_SYMBOLS = [
   'AAPL',
@@ -24,7 +25,9 @@ export const TEST_SYMBOLS = [
   'KO',
 ];
 
-export const DEFAULT_FILTER_KEY = getStableFilterKey(buildDefaultScanFilters());
+export const DEFAULT_FILTER_KEY = stableExpressionKey(
+  legacyFiltersToExpression(buildDefaultScanFilters()),
+);
 
 export const SCREENER_OPTIONS = [
   { id: 'minervini', label: 'Min' },

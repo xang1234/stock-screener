@@ -148,6 +148,13 @@ class ScanStatusResponse(BaseModel):
     universe_def: UniverseDefinition
 
 
+class MatchedGroup(BaseModel):
+    """Named setup group satisfied by a result row."""
+
+    id: str
+    name: str
+
+
 class ScanResultItem(BaseModel):
     """Individual scan result item."""
 
@@ -155,6 +162,7 @@ class ScanResultItem(BaseModel):
     company_name: Optional[str] = None
     composite_score: Optional[float] = None
     rating: str
+    matched_groups: List[MatchedGroup] = Field(default_factory=list)
 
     # Individual screener scores
     minervini_score: Optional[float] = None
@@ -313,6 +321,10 @@ class ScanResultItem(BaseModel):
             company_name=ef.get("company_name"),
             composite_score=item.composite_score,
             rating=item.rating,
+            matched_groups=[
+                MatchedGroup(id=group.id, name=group.name)
+                for group in getattr(item, "matched_groups", ())
+            ],
             # Individual screener scores
             minervini_score=ef.get("minervini_score"),
             canslim_score=ef.get("canslim_score"),
@@ -436,6 +448,8 @@ class ScanResultsResponse(BaseModel):
     per_page: int
     pages: int
     results: List[ScanResultItem]
+    unfiltered_total: Optional[int] = None
+    query_fingerprint: Optional[str] = None
 
 
 class ScanSymbolsResponse(BaseModel):
@@ -447,6 +461,7 @@ class ScanSymbolsResponse(BaseModel):
     page: Optional[int] = None
     per_page: Optional[int] = None
     next_cursor: Optional[str] = None
+    query_fingerprint: Optional[str] = None
 
 
 class SetupDetailsResponse(BaseModel):

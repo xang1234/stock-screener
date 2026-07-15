@@ -89,6 +89,30 @@ def test_find_candidates_applies_filters(read_only_service):
     assert symbols == ["NVDA", "PANW", "AVGO"]
 
 
+def test_find_candidates_preserves_sector_substring_filter(read_only_service):
+    payload = _tool_payload(
+        read_only_service.call_tool(
+            "find_candidates",
+            {
+                "filters": {
+                    "sector": "technology",
+                    "sort_field": "composite_score",
+                    "sort_order": "desc",
+                },
+                "limit": 10,
+            },
+        )
+    )
+
+    assert [row["symbol"] for row in payload["symbols"]] == [
+        "NVDA",
+        "PANW",
+        "AVGO",
+        "MSFT",
+        "SNOW",
+    ]
+
+
 def test_explain_symbol_full_returns_explanation_and_peers(read_only_service):
     payload = _tool_payload(
         read_only_service.call_tool(

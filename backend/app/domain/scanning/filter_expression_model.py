@@ -1,0 +1,285 @@
+"""Scan-owned grouped filter aggregate and query specification."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date
+from enum import Enum
+import math
+import re
+from typing import TypeAlias
+
+from app.domain.common.query import (
+    BooleanFilter,
+    CategoricalFilter,
+    FilterMode,
+    FilterSpec,
+    PageSpec,
+    RangeFilter,
+    SortSpec,
+    TextSearchFilter,
+)
+
+from .filter_capabilities import FIELD_CAPABILITIES, FILTER_EXPRESSION_LIMITS
+
+
+class MatchOperator(str, Enum):
+    """How conditions inside a group, or setup groups at the root, combine."""
+
+    ALL = "all"
+    ANY = "any"
+
+
+FilterCondition: TypeAlias = (
+    RangeFilter | CategoricalFilter | BooleanFilter | TextSearchFilter
+)
+
+
+@dataclass(frozen=True)
+class FilterGroup:
+    """A named, bounded set of leaf conditions."""
+
+    id: str
+    name: str
+    match: MatchOperator = MatchOperator.ALL
+    conditions: tuple[FilterCondition, ...] = ()
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class FilterExpression:
+    """Bounded grouped filter expression used by every scan-result read path."""
+
+    required_conditions: tuple[FilterCondition, ...] = ()
+    group_join: MatchOperator = MatchOperator.ANY
+    groups: tuple[FilterGroup, ...] = ()
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        validate_filter_expression(self)
+
+    @property
+    def enabled_groups(self) -> tuple[FilterGroup, ...]:
+        return tuple(group for group in self.groups if group.enabled)
+
+    @property
+    def condition_count(self) -> int:
+        return len(self.required_conditions) + sum(
+            len(group.conditions) for group in self.groups
+        )
+
+    @property
+    def is_required_only(self) -> bool:
+        return not self.enabled_groups
+
+    def with_required_condition(self, condition: FilterCondition) -> FilterExpression:
+        return FilterExpression(
+            required_conditions=(*self.required_conditions, condition),
+            group_join=self.group_join,
+            groups=self.groups,
+            version=self.version,
+        )
+
+
+MAX_EXPRESSION_GROUPS = FILTER_EXPRESSION_LIMITS.max_groups
+MAX_GROUP_CONDITIONS = FILTER_EXPRESSION_LIMITS.max_group_conditions
+MAX_EXPRESSION_CONDITIONS = FILTER_EXPRESSION_LIMITS.max_conditions
+MAX_GROUP_ID_LENGTH = FILTER_EXPRESSION_LIMITS.max_group_id_length
+MAX_GROUP_NAME_LENGTH = FILTER_EXPRESSION_LIMITS.max_group_name_length
+MAX_TEXT_PATTERN_LENGTH = FILTER_EXPRESSION_LIMITS.max_text_pattern_length
+MAX_CATEGORICAL_VALUES = FILTER_EXPRESSION_LIMITS.max_categorical_values
+GROUP_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
+_GROUP_ID_PATTERN = re.compile(GROUP_ID_PATTERN)
+
+
+def _require_filter_field(field_name: object, kind: str) -> str:
+    if not isinstance(field_name, str) or not field_name:
+        raise ValueError("Filter fields must be non-empty strings")
+    capability = FIELD_CAPABILITIES.get(field_name)
+    if capability is None or not capability.supports(kind):
+        raise ValueError(f"Unsupported {kind} field: {field_name}")
+    return field_name
+
+
+def _validate_filter_condition(condition: FilterCondition) -> None:
+    if isinstance(condition, RangeFilter):
+        field_name = _require_filter_field(condition.field, "range")
+        if condition.is_empty():
+            raise ValueError("Range conditions require a minimum or maximum")
+        capability = FIELD_CAPABILITIES.get(field_name)
+        for bound in (condition.min_value, condition.max_value):
+            if bound is None:
+                continue
+            if capability is not None and capability.value_type == "date":
+                if not isinstance(bound, str):
+                    raise ValueError(
+                        f"{field_name} bounds must use ISO YYYY-MM-DD strings"
+                    )
+                try:
+                    date.fromisoformat(bound)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"{field_name} bounds must use ISO YYYY-MM-DD strings"
+                    ) from exc
+                continue
+            if isinstance(bound, bool):
+                raise ValueError("Numeric range bounds cannot be booleans")
+            if not isinstance(bound, (int, float)):
+                raise ValueError("Numeric range bounds must be numbers")
+            if not math.isfinite(float(bound)):
+                raise ValueError("Numeric range bounds must be finite numbers")
+        if condition.min_value is not None and condition.max_value is not None:
+            try:
+                if condition.min_value > condition.max_value:
+                    raise ValueError("Range minimum cannot exceed maximum")
+            except TypeError as exc:
+                raise ValueError(
+                    "Range bounds must use comparable value types"
+                ) from exc
+        return
+
+    if isinstance(condition, CategoricalFilter):
+        _require_filter_field(condition.field, "categorical")
+        if not isinstance(condition.mode, FilterMode):
+            raise ValueError("Categorical modes must be FilterMode values")
+        if condition.is_empty():
+            raise ValueError("Categorical conditions require at least one value")
+        if any(
+            not isinstance(value, str) or not value.strip()
+            for value in condition.values
+        ):
+            raise ValueError("Categorical values must be non-empty strings")
+        if len(condition.values) > MAX_CATEGORICAL_VALUES:
+            raise ValueError(
+                f"Categorical conditions allow at most {MAX_CATEGORICAL_VALUES} values"
+            )
+        return
+
+    if isinstance(condition, BooleanFilter):
+        _require_filter_field(condition.field, "boolean")
+        if not isinstance(condition.value, bool):
+            raise ValueError("Boolean filter values must be booleans")
+        return
+
+    if isinstance(condition, TextSearchFilter):
+        _require_filter_field(condition.field, "text")
+        if not isinstance(condition.pattern, str) or not condition.pattern.strip():
+            raise ValueError("Text patterns cannot be blank")
+        if len(condition.pattern) > MAX_TEXT_PATTERN_LENGTH:
+            raise ValueError(
+                f"Text patterns allow at most {MAX_TEXT_PATTERN_LENGTH} characters"
+            )
+        return
+
+    raise TypeError(f"Unsupported filter condition: {type(condition)!r}")
+
+
+def validate_filter_expression(expression: FilterExpression) -> None:
+    """Enforce canonical scan-expression invariants for every construction path."""
+
+    if type(expression.version) is not int or expression.version != 1:
+        raise ValueError("Unsupported filter expression version")
+    if not isinstance(expression.group_join, MatchOperator):
+        raise ValueError("Group joins must be MatchOperator values")
+    if len(expression.groups) > MAX_EXPRESSION_GROUPS:
+        raise ValueError(
+            f"An expression can contain at most {MAX_EXPRESSION_GROUPS} setup groups"
+        )
+
+    for condition in expression.required_conditions:
+        _validate_filter_condition(condition)
+
+    group_ids: set[str] = set()
+    for group in expression.groups:
+        if not isinstance(group, FilterGroup):
+            raise ValueError("Expression groups must be FilterGroup values")
+        if not isinstance(group.match, MatchOperator):
+            raise ValueError("Group match operators must be MatchOperator values")
+        if not isinstance(group.enabled, bool):
+            raise ValueError("Group enabled flags must be booleans")
+        if (
+            not isinstance(group.id, str)
+            or len(group.id) > MAX_GROUP_ID_LENGTH
+            or not _GROUP_ID_PATTERN.fullmatch(group.id)
+        ):
+            raise ValueError(
+                f"Group IDs must be 1-{MAX_GROUP_ID_LENGTH} URL-safe characters"
+            )
+        if (
+            not isinstance(group.name, str)
+            or not group.name.strip()
+            or len(group.name) > MAX_GROUP_NAME_LENGTH
+        ):
+            raise ValueError(
+                f"Group names must be 1-{MAX_GROUP_NAME_LENGTH} non-blank characters"
+            )
+        if group.id == "required" or group.id in group_ids:
+            raise ValueError("Setup group IDs must be unique and cannot use 'required'")
+        group_ids.add(group.id)
+        if len(group.conditions) > MAX_GROUP_CONDITIONS:
+            raise ValueError(
+                f"A filter group can contain at most {MAX_GROUP_CONDITIONS} conditions"
+            )
+        if group.enabled and not group.conditions:
+            raise ValueError("Enabled setup groups cannot be empty")
+        for condition in group.conditions:
+            _validate_filter_condition(condition)
+
+    if expression.condition_count > MAX_EXPRESSION_CONDITIONS:
+        raise ValueError(
+            f"An expression can contain at most {MAX_EXPRESSION_CONDITIONS} conditions"
+        )
+
+
+def filter_spec_to_expression(filters: FilterSpec) -> FilterExpression:
+    """Preserve existing flat-filter semantics as required ALL conditions."""
+
+    conditions: tuple[FilterCondition, ...] = (
+        *filters.range_filters,
+        *filters.categorical_filters,
+        *filters.boolean_filters,
+        *filters.text_searches,
+    )
+    return FilterExpression(required_conditions=conditions)
+
+
+@dataclass(frozen=True)
+class QuerySpec:
+    """Complete scan-result query using the canonical filter expression."""
+
+    expression: FilterExpression = field(default_factory=FilterExpression)
+    sort: SortSpec = field(default_factory=SortSpec)
+    page: PageSpec = field(default_factory=PageSpec)
+
+    @classmethod
+    def from_filter_spec(
+        cls,
+        filters: FilterSpec,
+        *,
+        sort: SortSpec | None = None,
+        page: PageSpec | None = None,
+    ) -> QuerySpec:
+        return cls(
+            expression=filter_spec_to_expression(filters),
+            sort=sort or SortSpec(),
+            page=page or PageSpec(),
+        )
+
+
+__all__ = [
+    "FilterCondition",
+    "FilterExpression",
+    "FilterGroup",
+    "MatchOperator",
+    "GROUP_ID_PATTERN",
+    "MAX_CATEGORICAL_VALUES",
+    "MAX_EXPRESSION_CONDITIONS",
+    "MAX_EXPRESSION_GROUPS",
+    "MAX_GROUP_CONDITIONS",
+    "MAX_GROUP_ID_LENGTH",
+    "MAX_GROUP_NAME_LENGTH",
+    "MAX_TEXT_PATTERN_LENGTH",
+    "QuerySpec",
+    "filter_spec_to_expression",
+    "validate_filter_expression",
+]

@@ -13,7 +13,8 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortOrder, SortSpec
+from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.market_breadth import MarketBreadth
@@ -1206,8 +1207,8 @@ class MarketCopilotService:
         with self._uow_scope() as uow:
             page = uow.feature_store.query_run_as_scan_results(
                 run_id,
-                QuerySpec(
-                    filters=self._build_filter_spec(args.filters),
+                QuerySpec.from_filter_spec(
+                    self._build_filter_spec(args.filters),
                     sort=self._build_sort_spec(args.filters),
                     page=PageSpec(page=1, per_page=args.limit),
                 ),

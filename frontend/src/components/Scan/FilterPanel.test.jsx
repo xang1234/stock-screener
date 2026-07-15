@@ -126,7 +126,8 @@ describe('FilterPanel', () => {
 
       await waitFor(() => {
         expect(onFilterChange).toHaveBeenCalledWith(
-          expect.objectContaining({ seSetupScore: { min: 70, max: null } })
+          'seSetupScore',
+          { min: 70, max: null }
         );
       }, { timeout: 1000 });
     });
@@ -148,7 +149,8 @@ describe('FilterPanel', () => {
 
       await waitFor(() => {
         expect(onFilterChange).toHaveBeenCalledWith(
-          expect.objectContaining({ seDistanceToPivot: expect.objectContaining({ min: -5 }) })
+          'seDistanceToPivot',
+          expect.objectContaining({ min: -5 })
         );
       }, { timeout: 1000 });
     });
@@ -169,7 +171,8 @@ describe('FilterPanel', () => {
 
       await user.click(yesBtn);
       expect(onFilterChange).toHaveBeenCalledWith(
-        expect.objectContaining({ seSetupReady: true })
+        'seSetupReady',
+        true
       );
     });
 
@@ -186,7 +189,8 @@ describe('FilterPanel', () => {
 
       await user.click(noBtn);
       expect(onFilterChange).toHaveBeenCalledWith(
-        expect.objectContaining({ seRsLineNewHigh: false })
+        'seRsLineNewHigh',
+        false
       );
     });
 
@@ -203,7 +207,8 @@ describe('FilterPanel', () => {
 
       await user.click(yesBtn);
       expect(onFilterChange).toHaveBeenCalledWith(
-        expect.objectContaining({ rsLineBlueDotRecent: true })
+        'rsLineBlueDotRecent',
+        true
       );
     });
 
@@ -222,7 +227,8 @@ describe('FilterPanel', () => {
       await user.click(yesBtn);
       // CompactCheckbox toggles: clicking already-active value -> null
       expect(onFilterChange).toHaveBeenCalledWith(
-        expect.objectContaining({ seSetupReady: null })
+        'seSetupReady',
+        null
       );
     });
   });
@@ -242,7 +248,8 @@ describe('FilterPanel', () => {
       await user.click(await screen.findByRole('option', { name: '>$1B' }));
 
       expect(onFilterChange).toHaveBeenCalledWith(
-        expect.objectContaining({ minMarketCap: 1000000000 })
+        'minMarketCap',
+        1000000000
       );
 
       const volumeContainer = screen.getByText('Dollar Vol (local)').closest('[class*="MuiGrid-item"]');
@@ -251,7 +258,8 @@ describe('FilterPanel', () => {
       await user.click(await screen.findByRole('option', { name: '>$100M' }));
 
       expect(onFilterChange).toHaveBeenLastCalledWith(
-        expect.objectContaining({ minVolume: 100000000 })
+        'minVolume',
+        100000000
       );
     });
   });
@@ -305,7 +313,8 @@ describe('FilterPanel', () => {
 
       await user.click(deleteBtn);
       expect(onFilterChange).toHaveBeenCalledWith(
-        expect.objectContaining({ seSetupReady: null })
+        'seSetupReady',
+        null
       );
     });
   });

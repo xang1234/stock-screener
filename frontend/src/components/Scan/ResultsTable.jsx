@@ -224,7 +224,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
               growthMetricBasis={row.growth_metric_basis}
             />
           </Box>
-          {row.company_name || statusChip ? (
+          {row.company_name || statusChip || row.matched_groups?.length ? (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
               {row.company_name ? (
                 <Typography
@@ -244,6 +244,24 @@ const VirtualTableRow = memo(function VirtualTableRow({
                   size="small"
                   title={statusChip.title}
                   sx={{ height: 18, fontSize: 10, flexShrink: 0 }}
+                />
+              ) : null}
+              {row.matched_groups?.length ? (
+                <Chip
+                  label={row.matched_groups.length === 1
+                    ? row.matched_groups[0].name
+                    : `${row.matched_groups[0].name} +${row.matched_groups.length - 1}`}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  title={`Matched setups: ${row.matched_groups.map((group) => group.name).join(', ')}`}
+                  sx={{
+                    height: 18,
+                    maxWidth: 105,
+                    fontSize: 9,
+                    flexShrink: 0,
+                    '& .MuiChip-label': { px: 0.65, overflow: 'hidden', textOverflow: 'ellipsis' },
+                  }}
                 />
               ) : null}
             </Box>
@@ -525,6 +543,8 @@ const VirtualTableRow = memo(function VirtualTableRow({
          prevProps.row.rs_line_blue_dot_recent === nextProps.row.rs_line_blue_dot_recent &&
          prevProps.row.rs_line_new_high_date === nextProps.row.rs_line_new_high_date &&
          (prevProps.row.market_themes || []).join('|') === (nextProps.row.market_themes || []).join('|') &&
+         JSON.stringify(prevProps.row.matched_groups || []) ===
+           JSON.stringify(nextProps.row.matched_groups || []) &&
          prevProps.row.rating === nextProps.row.rating &&
          prevProps.mcapDisplay === nextProps.mcapDisplay &&
          prevProps.showActions === nextProps.showActions &&

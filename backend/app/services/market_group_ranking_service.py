@@ -16,7 +16,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.domain.common.query import FilterSpec, SortOrder, SortSpec
+from app.domain.common.query import SortOrder, SortSpec
+from app.domain.scanning.filter_expression_model import FilterExpression
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
@@ -428,7 +429,7 @@ class MarketGroupRankingService:
         repo = SqlFeatureStoreRepository(db)
         return repo.query_all_as_scan_results(
             run_id,
-            FilterSpec(),
+            FilterExpression(),
             SortSpec(field="composite_score", order=SortOrder.DESC),
             include_sparklines=include_sparklines,
         )

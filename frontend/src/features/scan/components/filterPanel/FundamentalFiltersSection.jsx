@@ -6,6 +6,7 @@ import {
   FilterSection,
   IpoDateFilter,
 } from '../../../../components/Scan/filters';
+import { EXPRESSION_LIMITS } from '../../scanFilterFields';
 import { MARKET_CAP_OPTIONS, MARKET_OPTIONS, VOLUME_OPTIONS } from './constants';
 
 function FundamentalFiltersSection({
@@ -116,6 +117,7 @@ function FundamentalFiltersSection({
             mode={filters.ibdIndustries?.mode || 'include'}
             onModeChange={(mode) => updateFilter('ibdIndustries', { ...filters.ibdIndustries, mode })}
             showModeToggle
+            maxValues={EXPRESSION_LIMITS.maxCategoricalValues}
           />
         </Grid>
         <Grid item xs={12} sm={6} md={2.5}>
@@ -127,6 +129,7 @@ function FundamentalFiltersSection({
             mode={filters.gicsSectors?.mode || 'include'}
             onModeChange={(mode) => updateFilter('gicsSectors', { ...filters.gicsSectors, mode })}
             showModeToggle
+            maxValues={EXPRESSION_LIMITS.maxCategoricalValues}
           />
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
@@ -152,6 +155,7 @@ function FundamentalFiltersSection({
             values={filters.markets || []}
             options={MARKET_OPTIONS}
             onChange={(values) => updateFilter('markets', values)}
+            maxValues={EXPRESSION_LIMITS.maxCategoricalValues}
           />
         </Grid>
         <Grid item xs={6} sm={4} md={2}>

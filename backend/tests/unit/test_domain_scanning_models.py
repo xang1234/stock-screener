@@ -32,6 +32,7 @@ from app.domain.scanning.models import (
 from app.domain.scanning.filter_spec import (
     BooleanFilter,
     CategoricalFilter,
+    FilterExpression,
     FilterMode,
     FilterSpec,
     PageSpec,
@@ -402,7 +403,7 @@ class TestSortSpec:
 class TestQuerySpec:
     def test_default_construction(self):
         qs = QuerySpec()
-        assert isinstance(qs.filters, FilterSpec)
+        assert isinstance(qs.expression, FilterExpression)
         assert isinstance(qs.sort, SortSpec)
         assert isinstance(qs.page, PageSpec)
 

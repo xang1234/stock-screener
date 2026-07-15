@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r backend/requirements.txt -r backend/requirements-test.txt
 
+      - name: Check generated scan-field contracts
+        run: python scripts/generate_scan_filter_contract.py --check
+
       - name: "Gate 0: Theme identity invariants"
         run: make gate-identity
 
