@@ -18,7 +18,10 @@ import { validateExpression } from './filterExpressionBuilder';
 import {
   legacyFiltersToExpression,
 } from './legacyFilterExpression';
-import { expressionToQuickFilters } from './quickFilterExpression';
+import {
+  expressionToQuickFilters,
+  quickFiltersToConditions,
+} from './quickFilterExpression';
 import { EXPRESSION_LIMITS, fieldValueOptions } from './scanFilterFields';
 
 function groupedExpression(join = 'any') {
@@ -123,6 +126,22 @@ describe('scan filter expressions', () => {
     expect(restored.rsRating).toEqual({ min: 80, max: 99 });
     expect(restored.gicsSectors).toEqual({ values: ['Technology'], mode: 'include' });
     expect(restored.maAlignment).toBe(false);
+  });
+
+  it('caps categorical quick filters at the shared request limit', () => {
+    const values = Array.from(
+      { length: EXPRESSION_LIMITS.maxCategoricalValues + 1 },
+      (_, index) => `Industry ${index + 1}`,
+    );
+
+    expect(quickFiltersToConditions({
+      ibdIndustries: { values, mode: 'include' },
+    })).toContainEqual({
+      kind: 'categorical',
+      field: 'ibd_industry_group',
+      values: values.slice(0, EXPRESSION_LIMITS.maxCategoricalValues),
+      mode: 'include',
+    });
   });
 
   it('restores an IPO chip preset from its exact current cutoff', () => {
@@ -269,6 +288,23 @@ describe('scan filter expressions', () => {
 
     expect(validateExpression(expression)).toContain(
       `Breakout ready can contain at most ${EXPRESSION_LIMITS.maxGroupConditions} rules.`,
+    );
+  });
+
+  it('rejects categorical rules above the shared value limit', () => {
+    const expression = groupedExpression();
+    expression.groups[0].conditions = [{
+      kind: 'categorical',
+      field: 'ibd_industry_group',
+      values: Array.from(
+        { length: EXPRESSION_LIMITS.maxCategoricalValues + 1 },
+        (_, index) => `Industry ${index + 1}`,
+      ),
+      mode: 'include',
+    }];
+
+    expect(validateExpression(expression)).toContain(
+      `IBD industry allows at most ${EXPRESSION_LIMITS.maxCategoricalValues} values.`,
     );
   });
 

@@ -41,9 +41,15 @@ const CONDITION_HANDLERS = {
     label: (condition, label) => (
       `${label} ${condition.mode === 'exclude' ? 'excludes' : 'is'} ${condition.values.join(', ')}`
     ),
-    validate: (condition, label) => (
-      condition.values?.length ? [] : [`${label} needs at least one value.`]
-    ),
+    validate: (condition, label) => {
+      if (!condition.values?.length) return [`${label} needs at least one value.`];
+      if (condition.values.length > EXPRESSION_LIMITS.maxCategoricalValues) {
+        return [
+          `${label} allows at most ${EXPRESSION_LIMITS.maxCategoricalValues} values.`,
+        ];
+      }
+      return [];
+    },
   },
   boolean: {
     create: (field) => ({ kind: 'boolean', field, value: true }),

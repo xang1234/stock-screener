@@ -48,6 +48,10 @@ function clone(value) {
 
 function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
   const meta = fieldMeta(condition.field, condition.kind);
+  const categoricalValueCount = condition.values?.length ?? 0;
+  const categoricalLimitExceeded = (
+    categoricalValueCount > EXPRESSION_LIMITS.maxCategoricalValues
+  );
   const rangeInputType = meta.value_type === 'date' ? 'date' : 'number';
   const rangeValue = (value) => (
     value === '' ? null : (rangeInputType === 'date' ? value : Number(value))
@@ -130,6 +134,8 @@ function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
                   {...params}
                   label="Values"
                   placeholder={valueOptions.length ? 'Choose or type a value' : 'Type a value, then press Enter'}
+                  error={categoricalLimitExceeded}
+                  helperText={`${categoricalValueCount}/${EXPRESSION_LIMITS.maxCategoricalValues} values`}
                 />
               )}
               sx={{ minWidth: 260, flex: 1 }}

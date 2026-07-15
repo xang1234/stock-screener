@@ -4,6 +4,7 @@ import { vi } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
 import { createEmptyExpression } from '../filterExpressionModel';
+import { EXPRESSION_LIMITS } from '../scanFilterFields';
 import GuidedFilterBuilderDialog from './GuidedFilterBuilderDialog';
 
 describe('GuidedFilterBuilderDialog', () => {
@@ -77,5 +78,41 @@ describe('GuidedFilterBuilderDialog', () => {
 
     expect(onApply).not.toHaveBeenCalled();
     expect(screen.getByText(/composite score minimum cannot exceed maximum/i)).toBeInTheDocument();
+  });
+
+  it('keeps an oversized categorical rule in the dialog and explains the limit', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    const expression = createEmptyExpression();
+    expression.groups = [{
+      id: 'industry',
+      name: 'Industry setup',
+      match: 'all',
+      enabled: true,
+      conditions: [{
+        kind: 'categorical',
+        field: 'ibd_industry_group',
+        values: Array.from(
+          { length: EXPRESSION_LIMITS.maxCategoricalValues + 1 },
+          (_, index) => `Industry ${index + 1}`,
+        ),
+        mode: 'include',
+      }],
+    }];
+    renderWithProviders(
+      <GuidedFilterBuilderDialog
+        open
+        expression={expression}
+        onClose={vi.fn()}
+        onApply={onApply}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /apply logic/i }));
+
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.getByText(
+      `IBD industry allows at most ${EXPRESSION_LIMITS.maxCategoricalValues} values.`,
+    )).toBeInTheDocument();
   });
 });

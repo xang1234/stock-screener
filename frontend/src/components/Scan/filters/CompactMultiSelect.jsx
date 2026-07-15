@@ -15,8 +15,15 @@ function CompactMultiSelect({
   mode = 'include',
   onModeChange,
   showModeToggle = false,
+  maxValues = null,
 }) {
   const isExcludeMode = mode === 'exclude';
+  const selectedValues = values || [];
+  const hasSelectionLimit = Number.isInteger(maxValues) && maxValues > 0;
+  const selectionLimitReached = hasSelectionLimit && selectedValues.length >= maxValues;
+  const showSelectionLimit = hasSelectionLimit && (
+    (options?.length ?? 0) > maxValues || selectionLimitReached
+  );
 
   const handleModeToggle = (e) => {
     e.stopPropagation();
@@ -64,10 +71,15 @@ function CompactMultiSelect({
       <Autocomplete
         multiple
         size="small"
-        value={values || []}
-        onChange={(event, newValue) => onChange(newValue)}
+        value={selectedValues}
+        onChange={(event, newValue) => onChange(
+          hasSelectionLimit ? newValue.slice(0, maxValues) : newValue,
+        )}
         options={options || []}
         disableCloseOnSelect
+        getOptionDisabled={(option) => (
+          selectionLimitReached && !selectedValues.includes(option)
+        )}
         renderInput={(params) => (
           <TextField
             {...params}
@@ -124,6 +136,15 @@ function CompactMultiSelect({
           },
         }}
       />
+      {showSelectionLimit && (
+        <Typography
+          variant="caption"
+          color={selectionLimitReached ? 'primary.main' : 'text.secondary'}
+          sx={{ display: 'block', mt: 0.25, fontSize: '0.65rem' }}
+        >
+          Up to {maxValues} values
+        </Typography>
+      )}
     </Box>
   );
 }

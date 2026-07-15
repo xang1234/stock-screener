@@ -1,6 +1,7 @@
 import { createEmptyExpression } from './filterExpressionModel';
 import {
   BOOLEAN_FILTER_TO_FIELD,
+  EXPRESSION_LIMITS,
   RANGE_FILTER_TO_FIELD,
 } from './scanFilterFields';
 
@@ -30,7 +31,9 @@ function rangeCondition(field, range) {
 
 function categoricalCondition(field, values, mode = 'include') {
   if (!Array.isArray(values) || values.length === 0) return [];
-  return [{ kind: 'categorical', field, values: [...new Set(values)], mode }];
+  const requestValues = [...new Set(values)]
+    .slice(0, EXPRESSION_LIMITS.maxCategoricalValues);
+  return [{ kind: 'categorical', field, values: requestValues, mode }];
 }
 
 function greatestBound(conditions, property) {
