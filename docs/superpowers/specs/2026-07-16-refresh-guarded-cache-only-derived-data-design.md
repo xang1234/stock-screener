@@ -1,7 +1,7 @@
 # Refresh-guarded cache-only breadth and group calculations
 
 **Date:** 2026-07-16
-**Status:** Approved in conversation; written-spec review pending
+**Status:** Implemented and verified
 **Issue:** GitHub #301 / Beads `stockscreenclaude-duw`
 
 ## Problem
