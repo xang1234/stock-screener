@@ -18,6 +18,7 @@ from ..models.market_breadth import MarketBreadth
 from .price_cache_service import PriceCacheService
 
 logger = logging.getLogger(__name__)
+CACHE_MISS_SYMBOL_SAMPLE_LIMIT = 20
 
 
 class BreadthCalculatorService:
@@ -213,6 +214,8 @@ class BreadthCalculatorService:
         metrics_by_date = {calc_date: self._empty_metrics() for calc_date in ordered_dates}
         batch_size = 500
         total_stocks = len(active_stocks)
+        cache_miss_symbols: set[str] = set()
+        insufficient_history_observations = 0
 
         for i in range(0, total_stocks, batch_size):
             batch = active_stocks[i:i + batch_size]
@@ -226,29 +229,40 @@ class BreadthCalculatorService:
             )
 
             batch_symbols = [stock.symbol for stock in batch]
-            price_data_by_symbol, _ = self._load_price_data_for_batch(
+            price_data_by_symbol, batch_cache_miss_symbols = self._load_price_data_for_batch(
                 batch_symbols=batch_symbols,
                 cache_only=cache_only,
             )
+            cache_miss_symbols.update(batch_cache_miss_symbols)
 
             for stock in batch:
                 try:
                     price_history = price_data_by_symbol.get(stock.symbol)
                     if price_history is None or price_history.empty:
+                        for calc_date in ordered_dates:
+                            metrics_by_date[calc_date]['cache_miss_stocks'] += 1
+                            metrics_by_date[calc_date]['skipped_stocks'] += 1
                         continue
 
                     stock_metrics_by_date = self._calculate_stock_metrics_by_date_from_prices(
                         prices_df=price_history,
                         calculation_dates=ordered_dates,
                     )
-                    for calc_date, stock_metrics in stock_metrics_by_date.items():
+                    for calc_date in ordered_dates:
                         daily_metrics = metrics_by_date[calc_date]
+                        stock_metrics = stock_metrics_by_date.get(calc_date)
+                        if stock_metrics is None:
+                            daily_metrics['insufficient_data_stocks'] += 1
+                            daily_metrics['skipped_stocks'] += 1
+                            insufficient_history_observations += 1
+                            continue
                         self._apply_stock_metrics(daily_metrics, stock_metrics)
                         daily_metrics['total_stocks_scanned'] += 1
                 except Exception as e:
                     logger.warning("Error processing %s in breadth backfill: %s", stock.symbol, e)
                     for calc_date in ordered_dates:
                         metrics_by_date[calc_date]['error_stocks'] += 1
+                        metrics_by_date[calc_date]['skipped_stocks'] += 1
 
         prior_counts = self._get_prior_breadth_counts(ordered_dates[0], limit=10)
         existing_counts = self._get_existing_breadth_counts_by_date(
@@ -294,12 +308,28 @@ class BreadthCalculatorService:
                 }
             )
 
-        return {
+        result = {
             'total_dates': len(ordered_dates),
             'processed': len(processed_dates),
             'errors': len(error_dates),
             'error_dates': error_dates,
         }
+        if cache_only:
+            result.update({
+                'target_symbols': total_stocks,
+                'symbols_with_cached_history': total_stocks - len(cache_miss_symbols),
+                'cache_miss_stocks': len(cache_miss_symbols),
+                'cache_miss_symbols_sample': sorted(cache_miss_symbols)[
+                    :CACHE_MISS_SYMBOL_SAMPLE_LIMIT
+                ],
+                'cache_coverage_ratio': (
+                    (total_stocks - len(cache_miss_symbols)) / total_stocks
+                    if total_stocks > 0
+                    else 0.0
+                ),
+                'insufficient_history_observations': insufficient_history_observations,
+            })
+        return result
 
     def _calculate_stock_metrics_by_date_from_prices(
         self,
@@ -678,7 +708,7 @@ class BreadthCalculatorService:
         logger.info(f"Found {len(missing_dates)} missing breadth dates in last {lookback_days} days")
         return sorted(missing_dates)
 
-    def fill_gaps(self, missing_dates: List[date]) -> Dict:
+    def fill_gaps(self, missing_dates: List[date], cache_only: bool = False) -> Dict:
         """
         Fill gaps by calculating breadth for missing dates.
 
@@ -711,6 +741,7 @@ class BreadthCalculatorService:
             ordered_dates[0],
             ordered_dates[-1],
             trading_dates=ordered_dates,
+            cache_only=cache_only,
         )
 
         logger.info(

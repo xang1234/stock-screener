@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -332,6 +333,49 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback():
     price_cache.get_historical_data.assert_not_called()
 
 
+def test_backfill_range_cache_only_reports_gaps_without_provider_fallback():
+    db = _make_db_session()
+    db.add_all([
+        StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+        StockUniverse(symbol="BBB", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+        StockUniverse(symbol="NEW", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+    ])
+    db.commit()
+
+    trading_date = date(2026, 3, 20)
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": _make_price_df(trading_date),
+        "BBB": None,
+        "NEW": _flat_price_df(trading_date, periods=20),
+    }
+    price_cache.get_historical_data.side_effect = AssertionError(
+        "guarded breadth gap-fill must not call a provider"
+    )
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.backfill_range(
+        trading_date,
+        trading_date,
+        trading_dates=[trading_date],
+        cache_only=True,
+    )
+
+    assert result == {
+        "total_dates": 1,
+        "processed": 1,
+        "errors": 0,
+        "error_dates": [],
+        "target_symbols": 3,
+        "symbols_with_cached_history": 2,
+        "cache_miss_stocks": 1,
+        "cache_miss_symbols_sample": ["BBB"],
+        "cache_coverage_ratio": pytest.approx(2 / 3),
+        "insufficient_history_observations": 1,
+    }
+    price_cache.get_historical_data.assert_not_called()
+
+
 def test_vectorized_stock_metrics_preserve_invalid_close_semantics():
     service = BreadthCalculatorService(MagicMock(), MagicMock())
     latest_date = date(2026, 3, 20)
@@ -381,6 +425,35 @@ def test_fill_gaps_delegates_to_single_backfill_range_call(monkeypatch):
         date(2026, 3, 12),
         date(2026, 3, 16),
         trading_dates=[date(2026, 3, 12), date(2026, 3, 16)],
+        cache_only=False,
+    )
+
+
+def test_fill_gaps_propagates_cache_only_to_backfill_range(monkeypatch):
+    service = BreadthCalculatorService(_make_db_session(), MagicMock())
+    expected = {
+        "total_dates": 1,
+        "processed": 1,
+        "errors": 0,
+        "error_dates": [],
+        "target_symbols": 2,
+        "symbols_with_cached_history": 1,
+        "cache_miss_stocks": 1,
+        "cache_miss_symbols_sample": ["BBB"],
+        "cache_coverage_ratio": 0.5,
+        "insufficient_history_observations": 0,
+    }
+    backfill_range = MagicMock(return_value=expected)
+    monkeypatch.setattr(service, "backfill_range", backfill_range)
+
+    result = service.fill_gaps([date(2026, 3, 12)], cache_only=True)
+
+    assert result == expected
+    backfill_range.assert_called_once_with(
+        date(2026, 3, 12),
+        date(2026, 3, 12),
+        trading_dates=[date(2026, 3, 12)],
+        cache_only=True,
     )
 
 
