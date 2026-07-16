@@ -9,6 +9,8 @@ from celery.exceptions import Retry, SoftTimeLimitExceeded
 from app.services.breadth_coverage import (
     BreadthCalculationResult,
     BreadthCoverageReport,
+    BreadthOutcomeReport,
+    BreadthPriceCoverage,
 )
 
 
@@ -80,7 +82,8 @@ def _breadth_result(
     insufficient = max(skipped - misses - errors, 0)
     return BreadthCalculationResult(
         indicators=indicators,
-        coverage=BreadthCoverageReport(
+        coverage=BreadthCoverageReport.from_parts(
+            BreadthPriceCoverage(
             candidate_stocks=candidates,
             symbols_with_cached_history=candidates - misses,
             cache_miss_stocks=misses,
@@ -92,11 +95,13 @@ def _breadth_result(
                 if candidates
                 else 0.0
             ),
-            total_stocks_scanned=scanned,
-            skipped_stocks=skipped,
-            insufficient_data_stocks=insufficient,
-            error_stocks=errors,
-            insufficient_history_observations=insufficient,
+            ),
+            BreadthOutcomeReport(
+                scanned=scanned,
+                cache_misses=misses,
+                insufficient=insufficient,
+                errors=errors,
+            ),
         ),
     )
 
@@ -573,6 +578,7 @@ def test_guarded_breadth_wrapper_propagates_cache_only_to_gapfill_and_target(mon
 
     fill_kwargs = fake_calculator.fill_gaps.call_args.kwargs
     assert fill_kwargs["policy"].mode.value == "refresh_guarded"
+    assert fill_kwargs["policy"] is fill_kwargs["policy"].for_gap_fill()
     target_call.assert_called_once_with(
         market="US",
         calculation_date="2026-03-19",

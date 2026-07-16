@@ -23,8 +23,7 @@ from ..database import SessionLocal
 from ..services.breadth_calculator_service import BreadthCalculatorService
 from ..services.breadth_coverage import BreadthCoverageReport
 from ..services.derived_data_execution_policy import (
-    DerivedDataExecutionMode,
-    DerivedDataExecutionPolicy,
+    DerivedDataValidationProfile,
     resolve_derived_data_execution_policy,
 )
 from ..services.market_activity_service import (
@@ -228,6 +227,7 @@ def calculate_daily_breadth(
 
     db = SessionLocal()
     start_time = time.time()
+    policy = None
 
     try:
         # Initialize breadth calculator service (market-scoped for universe selection)
@@ -256,34 +256,45 @@ def calculate_daily_breadth(
         duration = time.time() - start_time
         metrics['calculation_duration_seconds'] = round(duration, 2)
 
-        if policy.cache_only:
-            if policy.tolerates_partial_coverage:
-                completeness_error = _validate_refresh_guarded_breadth(coverage)
-            elif policy.requires_warmup_metadata:
-                completeness_error = _validate_same_day_cache_only_breadth(
-                    calculator.price_cache,
-                    coverage,
-                    market=effective_market,
-                )
-            else:
-                logger.info(
-                    "Bypassing same-day breadth warmup metadata gate for in-process static export"
-                )
-                completeness_error = _validate_strict_cache_only_breadth(coverage)
-            if completeness_error:
-                logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
-                logger.info("=" * 60)
-                error_result = {
-                    'error': completeness_error,
-                    'date': calc_date.strftime('%Y-%m-%d'),
-                    'timestamp': datetime.now().isoformat(),
-                    'cache_only': True,
-                    'metrics': coverage.to_daily_dict(),
-                }
-                if policy.mode is DerivedDataExecutionMode.REFRESH_GUARDED:
-                    error_result['cache_policy'] = 'refresh_guarded'
-                    error_result['cache_diagnostics'] = coverage.to_daily_dict()
-                return error_result
+        validation_profile = policy.validation_profile
+        completeness_error = None
+        if (
+            validation_profile
+            is DerivedDataValidationProfile.TOLERANT_CACHE_ONLY
+        ):
+            completeness_error = _validate_refresh_guarded_breadth(coverage)
+        elif (
+            validation_profile
+            is DerivedDataValidationProfile.STRICT_WITH_WARMUP
+        ):
+            completeness_error = _validate_same_day_cache_only_breadth(
+                calculator.price_cache,
+                coverage,
+                market=effective_market,
+            )
+        elif (
+            validation_profile
+            is DerivedDataValidationProfile.STRICT_WITHOUT_WARMUP
+        ):
+            logger.info(
+                "Bypassing same-day breadth warmup metadata gate for in-process static export"
+            )
+            completeness_error = _validate_strict_cache_only_breadth(coverage)
+
+        if completeness_error:
+            logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
+            logger.info("=" * 60)
+            error_result = {
+                'error': completeness_error,
+                'date': calc_date.strftime('%Y-%m-%d'),
+                'timestamp': datetime.now().isoformat(),
+                'cache_only': True,
+                'metrics': coverage.to_daily_dict(),
+            }
+            policy.annotate_response(error_result)
+            if policy.response_cache_policy is not None:
+                error_result['cache_diagnostics'] = coverage.to_daily_dict()
+            return error_result
 
         logger.info(f"✓ Breadth calculation completed in {duration:.2f}s")
         logger.info(f"  Stocks scanned: {metrics['total_stocks_scanned']}")
@@ -368,11 +379,10 @@ def calculate_daily_breadth(
             },
             'total_stocks_scanned': metrics['total_stocks_scanned'],
             'calculation_duration_seconds': duration,
-            'cache_only': policy.cache_only,
             'timestamp': datetime.now().isoformat()
         }
-        if policy.mode is DerivedDataExecutionMode.REFRESH_GUARDED:
-            task_result['cache_policy'] = 'refresh_guarded'
+        policy.annotate_response(task_result, include_cache_only=True)
+        if policy.response_cache_policy is not None:
             task_result['cache_diagnostics'] = coverage.to_daily_dict()
         return task_result
 
@@ -380,11 +390,14 @@ def calculate_daily_breadth(
         db.rollback()
         logger.error(f"✗ Error in calculate_daily_breadth task: {e}", exc_info=True)
         logger.info("=" * 60)
-        return {
+        error_result = {
             'error': str(e),
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
             'timestamp': datetime.now().isoformat()
         }
+        if policy is not None:
+            policy.annotate_response(error_result)
+        return error_result
 
     finally:
         db.close()
@@ -698,6 +711,7 @@ def calculate_daily_breadth_with_gapfill(
         'today': None,
         'timestamp': datetime.now().isoformat()
     }
+    policy = None
     try:
         mark_market_activity_started(
             db,
@@ -723,14 +737,8 @@ def calculate_daily_breadth_with_gapfill(
             target_date=target_date,
             current_date=current_date,
         )
-        gap_policy = (
-            DerivedDataExecutionPolicy.provider_allowed()
-            if policy.mode is DerivedDataExecutionMode.AUTO
-            else policy
-        )
-        if policy.mode is DerivedDataExecutionMode.REFRESH_GUARDED:
-            result['cache_only'] = True
-            result['cache_policy'] = 'refresh_guarded'
+        gap_policy = policy.for_gap_fill()
+        policy.annotate_response(result)
 
         # Step 1: Check if gap-fill is enabled
         if settings.breadth_gapfill_enabled:
@@ -864,12 +872,8 @@ def calculate_daily_breadth_with_gapfill(
             'today': result.get('today'),
             'timestamp': datetime.now().isoformat()
         }
-        if (
-            'policy' in locals()
-            and policy.mode is DerivedDataExecutionMode.REFRESH_GUARDED
-        ):
-            error_result['cache_only'] = True
-            error_result['cache_policy'] = 'refresh_guarded'
+        if policy is not None:
+            policy.annotate_response(error_result)
         return error_result
 
     finally:

@@ -352,6 +352,7 @@ def test_guarded_group_wrapper_propagates_policy_to_gapfill_and_target(
     fill_kwargs = fake_service.fill_gaps_optimized.call_args.kwargs
     assert fill_kwargs["market"] == "US"
     assert fill_kwargs["policy"].mode.value == "refresh_guarded"
+    assert fill_kwargs["policy"] is fill_kwargs["policy"].for_gap_fill()
     target_call.assert_called_once_with(
         market="US",
         activity_lifecycle="daily_refresh",
