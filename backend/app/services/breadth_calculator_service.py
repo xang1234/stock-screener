@@ -65,6 +65,10 @@ class BreadthCalculatorService:
             'cache_miss_stocks': 0,
             'insufficient_data_stocks': 0,
             'error_stocks': 0,
+            'candidate_stocks': 0,
+            'symbols_with_cached_history': 0,
+            'cache_coverage_ratio': 0.0,
+            'cache_miss_symbols_sample': [],
         }
 
     def calculate_daily_breadth(self, calculation_date: date = None, cache_only: bool = False) -> Dict:
@@ -125,6 +129,14 @@ class BreadthCalculatorService:
                 cache_only=cache_only,
             )
             metrics['cache_miss_stocks'] += len(cache_miss_symbols)
+            remaining_sample_slots = (
+                CACHE_MISS_SYMBOL_SAMPLE_LIMIT
+                - len(metrics['cache_miss_symbols_sample'])
+            )
+            if remaining_sample_slots > 0:
+                metrics['cache_miss_symbols_sample'].extend(
+                    sorted(cache_miss_symbols)[:remaining_sample_slots]
+                )
 
             for stock in batch:
                 try:
@@ -159,6 +171,13 @@ class BreadthCalculatorService:
             metrics['cache_miss_stocks'],
             metrics['insufficient_data_stocks'],
             metrics['error_stocks'],
+        )
+        metrics['candidate_stocks'] = total_stocks
+        metrics['symbols_with_cached_history'] = total_stocks - metrics['cache_miss_stocks']
+        metrics['cache_coverage_ratio'] = (
+            metrics['symbols_with_cached_history'] / total_stocks
+            if total_stocks > 0
+            else 0.0
         )
 
         # Calculate multi-day ratios from historical breadth data

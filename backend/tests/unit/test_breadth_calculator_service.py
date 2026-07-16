@@ -135,6 +135,10 @@ def test_calculate_daily_breadth_counts_fresh_cache_misses(monkeypatch):
     assert metrics["total_stocks_scanned"] == 1
     assert metrics["cache_miss_stocks"] == 1
     assert metrics["skipped_stocks"] == 1
+    assert metrics["candidate_stocks"] == 2
+    assert metrics["symbols_with_cached_history"] == 1
+    assert metrics["cache_coverage_ratio"] == 0.5
+    assert metrics["cache_miss_symbols_sample"] == ["BBB"]
 
 
 def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch):
