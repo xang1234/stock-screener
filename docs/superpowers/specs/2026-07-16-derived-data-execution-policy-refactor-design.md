@@ -1,7 +1,7 @@
 # Derived-data execution policy and diagnostics refactor
 
 **Date:** 2026-07-16
-**Status:** Approved for implementation
+**Status:** Implemented and verified
 **Issue:** GitHub #301 / Beads `stockscreenclaude-duw`
 **Supersedes:** The implementation structure in
 `2026-07-16-refresh-guarded-cache-only-derived-data-design.md`; its behavioral
