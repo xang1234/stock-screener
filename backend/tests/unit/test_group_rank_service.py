@@ -91,6 +91,39 @@ def _policy(mode: str, target: date):
     )
 
 
+def _prefetch_stats(
+    target_symbols: int,
+    *,
+    symbols_with_prices: int | None = None,
+    cache_miss_symbols: int = 0,
+    cache_miss_symbols_sample: tuple[str, ...] = (),
+    cache_only: bool = True,
+) -> GroupRankPrefetchStats:
+    available = (
+        target_symbols
+        if symbols_with_prices is None
+        else symbols_with_prices
+    )
+    return GroupRankPrefetchStats(
+        target_symbols=target_symbols,
+        symbols_with_prices=available,
+        cache_miss_symbols=cache_miss_symbols,
+        cache_miss_symbols_sample=cache_miss_symbols_sample,
+        cache_coverage_ratio=(
+            available / target_symbols
+            if target_symbols
+            else 1.0
+        ),
+        benchmark_available=True,
+        benchmark_cached=cache_only,
+        benchmark_symbol="SPY",
+        benchmark_role="primary",
+        market="US",
+        cache_only=cache_only,
+        skipped_unsupported_symbols=0,
+    )
+
+
 def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
     service = _make_group_rank_service()
 
@@ -349,27 +382,6 @@ def _price_frame() -> pd.DataFrame:
     )
 
 
-def _trend_price_frame(
-    *,
-    end: str = "2026-03-20",
-    periods: int = 260,
-    start_close: float = 100.0,
-    daily_return: float = 0.001,
-) -> pd.DataFrame:
-    dates = pd.date_range(end=end, periods=periods, freq="B")
-    closes = [start_close * ((1 + daily_return) ** idx) for idx in range(periods)]
-    return pd.DataFrame(
-        {
-            "Open": closes,
-            "High": closes,
-            "Low": closes,
-            "Close": closes,
-            "Volume": 1_000_000,
-        },
-        index=dates,
-    )
-
-
 def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, monkeypatch):
     price_cache = Mock()
     price_cache.get_cached_only_fresh.return_value = None
@@ -377,6 +389,7 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "^N225"
+    benchmark_cache.get_benchmark_candidates.return_value = ["^N225"]
     service = _make_group_rank_service(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
@@ -520,11 +533,13 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
         lambda db, **kwargs: ["Software"],
     )
     monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kwargs: prefetch)
-    monkeypatch.setattr(
-        service,
-        "_calculate_rs_by_symbol_for_dates",
-        lambda _prefetch, dates: {
-            dates[0]: {"AAA": 91.0, "BBB": 85.0, "CCC": 80.0}
+    service.ranking_calculator = Mock()
+    service.ranking_calculator.calculate_for_date.return_value = (
+        {
+            "industry_group": "Software",
+            "rank": 1,
+            "avg_rs_rating": 85.0,
+            "num_stocks": 3,
         },
     )
     store_rankings = Mock()
@@ -761,16 +776,10 @@ def test_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monk
     prefetch = group_rank_module.GroupRankPrefetchData(
         benchmark_prices=price_data,
         prices_by_symbol={symbol: price_data for symbol in symbols},
-        active_symbols=set(symbols),
+        active_symbols=frozenset(symbols),
         market_caps={symbol: 1_000_000_000 for symbol in symbols},
-        stats={
-            "target_symbols": 3,
-            "symbols_with_prices": 3,
-            "cache_miss_symbols": 0,
-            "spy_cached": True,
-            "skipped_unsupported_symbols": 0,
-        },
-        symbols_by_group={"Software": symbols},
+        stats=_prefetch_stats(3),
+        symbols_by_group={"Software": tuple(symbols)},
     )
     chunked_dates: list[list[date]] = []
 
@@ -791,14 +800,31 @@ def test_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monk
         lambda db, **kw: ["Software"],
     )
 
-    def fake_rs_for_dates(prefetch_arg, dates):
-        chunked_dates.append(list(dates))
+    def fake_rankings_for_dates(*, calculation_dates, **kwargs):
+        chunked_dates.append(list(calculation_dates))
         return {
-            calc_date: {symbol: 50.0 for symbol in symbols}
-            for calc_date in dates
+            calc_date: (
+                {
+                    "industry_group": "Software",
+                    "rank": 1,
+                    "avg_rs_rating": 50.0,
+                    "median_rs_rating": 50.0,
+                    "weighted_avg_rs_rating": 50.0,
+                    "rs_std_dev": 0.0,
+                    "num_stocks": 3,
+                    "num_stocks_rs_above_80": 0,
+                    "top_symbol": "AAA",
+                    "top_rs_rating": 50.0,
+                    "date": calc_date,
+                },
+            )
+            for calc_date in calculation_dates
         }
 
-    monkeypatch.setattr(service, "_calculate_rs_by_symbol_for_dates", fake_rs_for_dates)
+    service.ranking_calculator = Mock()
+    service.ranking_calculator.calculate_for_dates.side_effect = (
+        fake_rankings_for_dates
+    )
 
     stats = service.backfill_rankings_optimized(
         db_session,
@@ -835,12 +861,7 @@ def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatc
             calculate_calls.append(calc_date)
             or GroupRankCalculationResult(
                 rankings=({"rank": 1},),
-                prefetch_stats=GroupRankPrefetchStats.from_mapping({
-                    "target_symbols": 1,
-                    "symbols_with_prices": 1,
-                    "cache_miss_symbols": 0,
-                    "spy_cached": True,
-                }),
+                prefetch_stats=_prefetch_stats(1),
             )
         ),
     )
@@ -950,23 +971,15 @@ def test_fill_gaps_optimized_propagates_policy_and_returns_prefetch_stats(
     prefetch = group_rank_module.GroupRankPrefetchData(
         benchmark_prices=price_data,
         prices_by_symbol={"AAA": price_data, "BBB": None},
-        active_symbols={"AAA", "BBB"},
+        active_symbols=frozenset({"AAA", "BBB"}),
         market_caps={"AAA": 1_000_000_000},
-        stats={
-            "target_symbols": 2,
-            "symbols_with_prices": 1,
-            "cache_miss_symbols": 1,
-            "cache_miss_symbols_sample": ["BBB"],
-            "cache_coverage_ratio": 0.5,
-            "spy_cached": True,
-            "benchmark_cached": True,
-            "benchmark_symbol": "SPY",
-            "benchmark_role": "primary",
-            "market": "US",
-            "cache_only": True,
-            "skipped_unsupported_symbols": 0,
-        },
-        symbols_by_group={"Software": ["AAA", "BBB"]},
+        stats=_prefetch_stats(
+            2,
+            symbols_with_prices=1,
+            cache_miss_symbols=1,
+            cache_miss_symbols_sample=("BBB",),
+        ),
+        symbols_by_group={"Software": ("AAA", "BBB")},
     )
     monkeypatch.setattr(
         service,
@@ -998,16 +1011,10 @@ def test_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(
     prefetch = group_rank_module.GroupRankPrefetchData(
         benchmark_prices=price_data,
         prices_by_symbol={symbol: price_data for symbol in symbols},
-        active_symbols=set(symbols),
+        active_symbols=frozenset(symbols),
         market_caps={symbol: 1_000_000_000 for symbol in symbols},
-        stats={
-            "target_symbols": 3,
-            "symbols_with_prices": 3,
-            "cache_miss_symbols": 0,
-            "spy_cached": True,
-            "skipped_unsupported_symbols": 0,
-        },
-        symbols_by_group={"Software": symbols},
+        stats=_prefetch_stats(3),
+        symbols_by_group={"Software": tuple(symbols)},
     )
     monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kw: prefetch)
     monkeypatch.setattr(
@@ -1040,16 +1047,10 @@ def test_fill_gaps_optimized_chunks_rs_date_calculation(db_session, monkeypatch)
     prefetch = group_rank_module.GroupRankPrefetchData(
         benchmark_prices=price_data,
         prices_by_symbol={symbol: price_data for symbol in symbols},
-        active_symbols=set(symbols),
+        active_symbols=frozenset(symbols),
         market_caps={symbol: 1_000_000_000 for symbol in symbols},
-        stats={
-            "target_symbols": 3,
-            "symbols_with_prices": 3,
-            "cache_miss_symbols": 0,
-            "spy_cached": True,
-            "skipped_unsupported_symbols": 0,
-        },
-        symbols_by_group={"Software": symbols},
+        stats=_prefetch_stats(3),
+        symbols_by_group={"Software": tuple(symbols)},
     )
     missing_dates = [date(2026, 1, day) for day in range(1, 8)]
     chunked_dates: list[list[date]] = []
@@ -1061,139 +1062,37 @@ def test_fill_gaps_optimized_chunks_rs_date_calculation(db_session, monkeypatch)
         lambda db, **kw: ["Software"],
     )
 
-    def fake_rs_for_dates(prefetch_arg, dates):
-        chunked_dates.append(list(dates))
+    def fake_rankings_for_dates(*, calculation_dates, **kwargs):
+        chunked_dates.append(list(calculation_dates))
         return {
-            calc_date: {symbol: 50.0 for symbol in symbols}
-            for calc_date in dates
+            calc_date: (
+                {
+                    "industry_group": "Software",
+                    "rank": 1,
+                    "avg_rs_rating": 50.0,
+                    "median_rs_rating": 50.0,
+                    "weighted_avg_rs_rating": 50.0,
+                    "rs_std_dev": 0.0,
+                    "num_stocks": 3,
+                    "num_stocks_rs_above_80": 0,
+                    "top_symbol": "AAA",
+                    "top_rs_rating": 50.0,
+                    "date": calc_date,
+                },
+            )
+            for calc_date in calculation_dates
         }
 
-    monkeypatch.setattr(service, "_calculate_rs_by_symbol_for_dates", fake_rs_for_dates)
+    service.ranking_calculator = Mock()
+    service.ranking_calculator.calculate_for_dates.side_effect = (
+        fake_rankings_for_dates
+    )
 
     stats = service.fill_gaps_optimized(db_session, missing_dates, market="US")
 
     assert [len(chunk) for chunk in chunked_dates] == [3, 3, 1]
     assert stats["processed"] == 7
     assert db_session.query(IBDGroupRank).count() == 7
-
-
-def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_history(
-    db_session,
-    monkeypatch,
-):
-    service = _make_group_rank_service()
-    calculation_date = date(2026, 3, 20)
-    symbols = ["AAA", "BBB", "CCC", "NEW"]
-    benchmark_prices = _trend_price_frame(daily_return=0.0004)
-    prices_by_symbol = {
-        "AAA": _trend_price_frame(start_close=100.0, daily_return=0.0020),
-        "BBB": _trend_price_frame(start_close=80.0, daily_return=0.0011),
-        "CCC": _trend_price_frame(start_close=120.0, daily_return=-0.0002),
-        "NEW": _trend_price_frame(start_close=50.0, daily_return=0.0040, periods=200),
-    }
-    market_caps = {
-        "AAA": 10_000_000_000,
-        "BBB": 5_000_000_000,
-        "CCC": 1_000_000_000,
-        "NEW": 50_000_000_000,
-    }
-    active_symbols = set(symbols)
-    monkeypatch.setattr(
-        service,
-        "_get_validated_group_symbols",
-        lambda *_args, **_kwargs: symbols,
-    )
-    legacy_metrics = service._calculate_group_rs_from_cache(
-        db_session,
-        "Software",
-        benchmark_prices["Close"].sort_index(ascending=False),
-        prices_by_symbol,
-        active_symbols,
-        market_caps,
-        calculation_date,
-    )
-    prefetch = group_rank_module.GroupRankPrefetchData(
-        benchmark_prices=benchmark_prices,
-        prices_by_symbol=prices_by_symbol,
-        active_symbols=active_symbols,
-        market_caps=market_caps,
-        stats={},
-        symbols_by_group={"Software": symbols},
-    )
-
-    rs_by_date = service._calculate_rs_by_symbol_for_dates(prefetch, [calculation_date])
-    vectorized_metrics = service._calculate_group_metrics_from_rs(
-        "Software",
-        symbols,
-        rs_by_date[calculation_date],
-        market_caps,
-        calculation_date,
-    )
-
-    assert set(rs_by_date[calculation_date]) == {"AAA", "BBB", "CCC"}
-    assert vectorized_metrics == legacy_metrics
-
-
-def test_vectorized_group_rs_preserves_invalid_period_return_semantics(
-    db_session,
-    monkeypatch,
-):
-    service = _make_group_rank_service()
-    calculation_date = date(2026, 3, 20)
-    symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
-    benchmark_prices = _trend_price_frame(daily_return=0.0004)
-    prices_by_symbol = {
-        "AAA": _trend_price_frame(start_close=100.0, daily_return=0.0020),
-        "BBB": _trend_price_frame(start_close=80.0, daily_return=0.0011),
-        "CCC": _trend_price_frame(start_close=120.0, daily_return=-0.0002),
-        "DDD": _trend_price_frame(start_close=90.0, daily_return=0.0017),
-        "EEE": _trend_price_frame(start_close=70.0, daily_return=0.0009),
-    }
-    prices_by_symbol["BBB"].iloc[-63, prices_by_symbol["BBB"].columns.get_loc("Close")] = 0.0
-    prices_by_symbol["DDD"].iloc[-1, prices_by_symbol["DDD"].columns.get_loc("Close")] = float("nan")
-    prices_by_symbol["EEE"].iloc[-63, prices_by_symbol["EEE"].columns.get_loc("Close")] = float("nan")
-    market_caps = {
-        "AAA": 10_000_000_000,
-        "BBB": 5_000_000_000,
-        "CCC": 1_000_000_000,
-        "DDD": 7_000_000_000,
-        "EEE": 2_000_000_000,
-    }
-    active_symbols = set(symbols)
-    monkeypatch.setattr(
-        service,
-        "_get_validated_group_symbols",
-        lambda *_args, **_kwargs: symbols,
-    )
-    legacy_metrics = service._calculate_group_rs_from_cache(
-        db_session,
-        "Software",
-        benchmark_prices["Close"].sort_index(ascending=False),
-        prices_by_symbol,
-        active_symbols,
-        market_caps,
-        calculation_date,
-    )
-    prefetch = group_rank_module.GroupRankPrefetchData(
-        benchmark_prices=benchmark_prices,
-        prices_by_symbol=prices_by_symbol,
-        active_symbols=active_symbols,
-        market_caps=market_caps,
-        stats={},
-        symbols_by_group={"Software": symbols},
-    )
-
-    rs_by_date = service._calculate_rs_by_symbol_for_dates(prefetch, [calculation_date])
-    vectorized_metrics = service._calculate_group_metrics_from_rs(
-        "Software",
-        symbols,
-        rs_by_date[calculation_date],
-        market_caps,
-        calculation_date,
-    )
-
-    assert set(rs_by_date[calculation_date]) == {"AAA", "BBB", "CCC", "EEE"}
-    assert vectorized_metrics == legacy_metrics
 
 
 def test_get_current_rankings_can_target_explicit_date():

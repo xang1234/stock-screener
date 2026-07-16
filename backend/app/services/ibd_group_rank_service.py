@@ -5,7 +5,6 @@ Calculates daily rankings based on average RS rating of constituent stocks.
 """
 import gc
 import logging
-import math
 import statistics
 from typing import Any, Optional, Dict, List
 from datetime import datetime, date, timedelta
@@ -29,6 +28,7 @@ from .group_rank_models import (
 )
 from .group_rank_input_loader import GroupRankInputLoader
 from .group_rank_legacy_adapter import LegacyGroupRankPrefetchAdapter
+from .group_ranking_calculator import GroupRankingCalculator
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
@@ -88,6 +88,7 @@ class IBDGroupRankService:
         rs_calculator: RelativeStrengthCalculator | None = None,
         group_constituent_source: GroupConstituentSource | None = None,
         input_loader: GroupRankInputLoader,
+        ranking_calculator: GroupRankingCalculator | None = None,
         legacy_prefetch_adapter: (
             LegacyGroupRankPrefetchAdapter | None
         ) = None,
@@ -100,6 +101,10 @@ class IBDGroupRankService:
             group_constituent_source or GroupConstituentSource()
         )
         self.input_loader = input_loader
+        self.ranking_calculator = (
+            ranking_calculator
+            or GroupRankingCalculator(self.rs_calculator)
+        )
         self.legacy_prefetch_adapter = (
             legacy_prefetch_adapter
             or LegacyGroupRankPrefetchAdapter()
@@ -194,30 +199,13 @@ class IBDGroupRankService:
             group_names=all_groups,
             prefetch=prefetch,
         )
-        rs_by_date = self._calculate_rs_by_symbol_for_dates(
-            prefetch,
-            [calculation_date],
+        group_metrics = list(
+            self.ranking_calculator.calculate_for_date(
+                prefetch=prefetch,
+                group_names=all_groups,
+                calculation_date=calculation_date,
+            )
         )
-        rs_by_symbol = rs_by_date.get(calculation_date, {})
-
-        # Calculate RS for each group using pre-fetched cached data
-        group_metrics = []
-        symbols_by_group = prefetch.symbols_by_group
-
-        for group_name in all_groups:
-            try:
-                metrics = self._calculate_group_metrics_from_rs(
-                    group_name,
-                    symbols_by_group.get(group_name, []),
-                    rs_by_symbol,
-                    prefetch.market_caps,
-                    calculation_date,
-                )
-                if metrics:
-                    group_metrics.append(metrics)
-            except Exception as e:
-                logger.error(f"Error calculating RS for group {group_name}: {e}")
-                continue
 
         if not group_metrics:
             logger.error("No valid group metrics calculated")
@@ -225,12 +213,6 @@ class IBDGroupRankService:
                 rankings=(),
                 prefetch_stats=prefetch_stats,
             )
-
-        # Sort by avg_rs (descending) and assign ranks
-        group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
-
-        for rank, metrics in enumerate(group_metrics, start=1):
-            metrics['rank'] = rank
 
         # Store in database
         self._store_rankings(db, calculation_date, group_metrics, market=normalized_market)
@@ -529,7 +511,7 @@ class IBDGroupRankService:
         # Build result with rank changes
         result = []
         for ranking in rankings:
-            pct_above_80 = self._calculate_pct_above_80(
+            pct_above_80 = self.ranking_calculator._calculate_pct_above_80(
                 ranking.num_stocks_rs_above_80, ranking.num_stocks
             )
             item = self._rank_record_payload(
@@ -757,7 +739,7 @@ class IBDGroupRankService:
             as_of_date=current.date,
         )
 
-        pct_above_80 = self._calculate_pct_above_80(
+        pct_above_80 = self.ranking_calculator._calculate_pct_above_80(
             current.num_stocks_rs_above_80, current.num_stocks
         )
 
@@ -889,19 +871,6 @@ class IBDGroupRankService:
             symbols,
         )
 
-    def _calculate_pct_above_80(
-        self,
-        count_above_80: Optional[int],
-        total_count: Optional[int]
-    ) -> Optional[float]:
-        """
-        Calculate percent of group members with RS >= 80.
-        """
-        if not total_count:
-            return None
-        count = count_above_80 or 0
-        return round((count / total_count) * 100, 1)
-
     def _coerce_prefetch_data(self, prefetch: Any) -> GroupRankPrefetchData:
         """Adapt the legacy facade seam to the strict prefetch model."""
         return self.legacy_prefetch_adapter.adapt(prefetch)
@@ -949,270 +918,6 @@ class IBDGroupRankService:
             deleted, normalized_market, start_date, end_date,
         )
         return deleted
-
-    def _calculate_group_rs_from_cache(
-        self,
-        db: Session,
-        group_name: str,
-        spy_prices: pd.Series,
-        all_prices: Dict[str, pd.DataFrame],
-        active_symbols: set,
-        market_caps: Dict[str, float],
-        calculation_date: date,
-        *,
-        market: str = "US",
-    ) -> Optional[Dict]:
-        """
-        Calculate average RS rating for a single industry group using pre-fetched prices.
-
-        Only uses symbols that are active in stock_universe (intersection approach).
-        ``spy_prices`` is the per-market benchmark series (SPY for US, HSI for HK, etc).
-        """
-        symbols = self._get_validated_group_symbols(
-            db, group_name, active_symbols, market=market,
-        )
-
-        if not symbols:
-            logger.debug(f"No validated symbols found for group: {group_name}")
-            return None
-
-        # Calculate RS for each symbol using cached prices
-        rs_ratings = []
-        top_symbol = None
-        top_rs = -1
-        rs_above_80_count = 0
-        weighted_sum = 0.0
-        weighted_total = 0.0
-
-        for symbol in symbols:
-            prices = all_prices.get(symbol)
-            if prices is None or prices.empty:
-                continue
-
-            # Filter to calculation_date for accurate historical rankings
-            if calculation_date < datetime.now().date():
-                prices_filtered = prices[prices.index.date <= calculation_date]
-            else:
-                prices_filtered = prices
-
-            # Skip if insufficient data after filtering
-            if prices_filtered.empty:
-                continue
-
-            # Prepare stock prices (most recent first)
-            stock_prices = prices_filtered['Close'].sort_index(ascending=False)
-
-            # Need at least 252 days for full RS calculation
-            if len(stock_prices) < 252:
-                continue
-
-            try:
-                rs_result = self.rs_calculator.calculate_rs_rating(
-                    symbol, stock_prices, spy_prices
-                )
-                rs_rating = rs_result.get('rs_rating', 0)
-
-                if rs_rating > 0:
-                    rs_ratings.append(rs_rating)
-
-                    if rs_rating > top_rs:
-                        top_rs = rs_rating
-                        top_symbol = symbol
-
-                    if rs_rating >= 80:
-                        rs_above_80_count += 1
-
-                    market_cap = market_caps.get(symbol)
-                    if market_cap:
-                        weighted_sum += rs_rating * market_cap
-                        weighted_total += market_cap
-
-            except Exception as e:
-                logger.debug(f"Error calculating RS for {symbol}: {e}")
-                continue
-
-        # Need at least 3 stocks with valid RS to rank the group
-        if len(rs_ratings) < 3:
-            logger.debug(
-                f"Insufficient data for group {group_name}: "
-                f"only {len(rs_ratings)} stocks with valid RS"
-            )
-            return None
-
-        # Calculate average RS
-        avg_rs = sum(rs_ratings) / len(rs_ratings)
-        median_rs = statistics.median(rs_ratings)
-        rs_std_dev = statistics.pstdev(rs_ratings) if len(rs_ratings) > 1 else None
-        weighted_avg_rs = (weighted_sum / weighted_total) if weighted_total > 0 else None
-
-        return {
-            'industry_group': group_name,
-            'date': calculation_date,
-            'avg_rs_rating': round(avg_rs, 2),
-            'median_rs_rating': round(median_rs, 2),
-            'weighted_avg_rs_rating': round(weighted_avg_rs, 2) if weighted_avg_rs is not None else None,
-            'rs_std_dev': round(rs_std_dev, 2) if rs_std_dev is not None else None,
-            'num_stocks': len(rs_ratings),
-            'num_stocks_rs_above_80': rs_above_80_count,
-            'top_symbol': top_symbol,
-            'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
-        }
-
-    def _calculate_rs_by_symbol_for_dates(
-        self,
-        prefetch: GroupRankPrefetchData,
-        calculation_dates: List[date],
-    ) -> Dict[date, Dict[str, float]]:
-        """Precompute RS ratings once per symbol/date for group aggregation."""
-        ordered_dates = sorted(calculation_dates)
-        result: Dict[date, Dict[str, float]] = {calc_date: {} for calc_date in ordered_dates}
-        benchmark_close = self._close_series(prefetch.benchmark_prices)
-        if benchmark_close is None:
-            return result
-
-        periods = self.rs_calculator.PERIODS
-        max_period = max(periods.keys())
-        benchmark_returns = self._period_returns(benchmark_close, periods.keys())
-        benchmark_positions = self._positions_by_date(benchmark_close.index, ordered_dates)
-
-        for symbol, prices in prefetch.prices_by_symbol.items():
-            close = self._close_series(prices)
-            if close is None:
-                continue
-
-            symbol_returns = self._period_returns(close, periods.keys())
-            symbol_positions = self._positions_by_date(close.index, ordered_dates)
-            for calc_date in ordered_dates:
-                latest_idx = symbol_positions.get(calc_date, -1)
-                if latest_idx < max_period - 1:
-                    continue
-
-                benchmark_idx = benchmark_positions.get(calc_date, -1)
-                weighted_performance = 0.0
-                total_weight = 0.0
-                for period, weight in periods.items():
-                    if benchmark_idx < period - 1:
-                        continue
-                    stock_return = self._series_value_at(symbol_returns[period], latest_idx)
-                    benchmark_return = self._series_value_at(benchmark_returns[period], benchmark_idx)
-                    if stock_return is None or benchmark_return is None:
-                        continue
-                    weighted_performance += (stock_return - benchmark_return) * weight
-                    total_weight += weight
-
-                if total_weight == 0:
-                    continue
-
-                relative_performance = weighted_performance / total_weight
-                rs_rating = self._scale_relative_performance_to_rs(relative_performance)
-                if rs_rating > 0:
-                    result[calc_date][symbol] = rs_rating
-
-        return result
-
-    @staticmethod
-    def _close_series(prices: Optional[pd.DataFrame]) -> Optional[pd.Series]:
-        if prices is None or prices.empty or "Close" not in prices.columns:
-            return None
-        close = prices["Close"].sort_index()
-        return close
-
-    @staticmethod
-    def _period_returns(close: pd.Series, periods) -> Dict[int, pd.Series]:
-        return {
-            period: close.pct_change(periods=period - 1, fill_method=None)
-            for period in periods
-        }
-
-    @staticmethod
-    def _positions_by_date(index, calculation_dates: List[date]) -> Dict[date, int]:
-        positions: Dict[date, int] = {}
-        for calc_date in calculation_dates:
-            exclusive_end = pd.Timestamp(calc_date) + pd.Timedelta(days=1)
-            if isinstance(index, pd.DatetimeIndex) and index.tz is not None and exclusive_end.tz is None:
-                exclusive_end = exclusive_end.tz_localize(index.tz)
-            positions[calc_date] = index.searchsorted(exclusive_end, side="left") - 1
-        return positions
-
-    @staticmethod
-    def _series_value_at(series: pd.Series, index: int) -> Optional[float]:
-        try:
-            value = series.iloc[index]
-        except IndexError:
-            return None
-        if pd.isna(value) or not math.isfinite(float(value)):
-            return None
-        return float(value)
-
-    @staticmethod
-    def _scale_relative_performance_to_rs(relative_performance: float) -> float:
-        if relative_performance >= 0:
-            rs_rating = min(100, 50 + (relative_performance * 100))
-        else:
-            rs_rating = max(0, 50 + (relative_performance * 100))
-        return round(rs_rating, 2)
-
-    def _calculate_group_metrics_from_rs(
-        self,
-        group_name: str,
-        symbols: List[str],
-        rs_by_symbol: Dict[str, float],
-        market_caps: Dict[str, float],
-        calculation_date: date,
-    ) -> Optional[Dict]:
-        """Aggregate precomputed per-symbol RS ratings into one group metric row."""
-        if not symbols:
-            logger.debug(f"No validated symbols found for group: {group_name}")
-            return None
-
-        rs_ratings = []
-        top_symbol = None
-        top_rs = -1
-        rs_above_80_count = 0
-        weighted_sum = 0.0
-        weighted_total = 0.0
-
-        for symbol in symbols:
-            rs_rating = rs_by_symbol.get(symbol)
-            if rs_rating is None or rs_rating <= 0:
-                continue
-
-            rs_ratings.append(rs_rating)
-            if rs_rating > top_rs:
-                top_rs = rs_rating
-                top_symbol = symbol
-            if rs_rating >= 80:
-                rs_above_80_count += 1
-
-            market_cap = market_caps.get(symbol)
-            if market_cap:
-                weighted_sum += rs_rating * market_cap
-                weighted_total += market_cap
-
-        if len(rs_ratings) < 3:
-            logger.debug(
-                f"Insufficient data for group {group_name}: "
-                f"only {len(rs_ratings)} stocks with valid RS"
-            )
-            return None
-
-        avg_rs = sum(rs_ratings) / len(rs_ratings)
-        median_rs = statistics.median(rs_ratings)
-        rs_std_dev = statistics.pstdev(rs_ratings) if len(rs_ratings) > 1 else None
-        weighted_avg_rs = (weighted_sum / weighted_total) if weighted_total > 0 else None
-
-        return {
-            'industry_group': group_name,
-            'date': calculation_date,
-            'avg_rs_rating': round(avg_rs, 2),
-            'median_rs_rating': round(median_rs, 2),
-            'weighted_avg_rs_rating': round(weighted_avg_rs, 2) if weighted_avg_rs is not None else None,
-            'rs_std_dev': round(rs_std_dev, 2) if rs_std_dev is not None else None,
-            'num_stocks': len(rs_ratings),
-            'num_stocks_rs_above_80': rs_above_80_count,
-            'top_symbol': top_symbol,
-            'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
-        }
 
     def backfill_rankings_optimized(
         self,
@@ -1300,7 +1005,6 @@ class IBDGroupRankService:
 
         processed = 0
         errors = 0
-        symbols_by_group = prefetch.symbols_by_group
         chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
         logger.info(
             "Processing optimized group-ranking backfill in RS chunks of %d date(s)",
@@ -1310,30 +1014,18 @@ class IBDGroupRankService:
         # 4. Process each date using cached data
         for chunk_start in range(0, len(dates_to_process), chunk_size):
             date_chunk = dates_to_process[chunk_start:chunk_start + chunk_size]
-            rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, date_chunk)
+            rankings_by_date = self.ranking_calculator.calculate_for_dates(
+                prefetch=prefetch,
+                group_names=all_groups,
+                calculation_dates=date_chunk,
+            )
 
             for calc_date in date_chunk:
                 try:
-                    # Calculate RS for each group from cache
-                    group_metrics = []
-                    rs_by_symbol = rs_by_date.get(calc_date, {})
-                    for group_name in all_groups:
-                        metrics = self._calculate_group_metrics_from_rs(
-                            group_name,
-                            symbols_by_group.get(group_name, []),
-                            rs_by_symbol,
-                            prefetch.market_caps,
-                            calc_date,
-                        )
-                        if metrics:
-                            group_metrics.append(metrics)
-
+                    group_metrics = list(
+                        rankings_by_date.get(calc_date, ())
+                    )
                     if group_metrics:
-                        # Sort and rank
-                        group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
-                        for rank, metrics in enumerate(group_metrics, start=1):
-                            metrics['rank'] = rank
-
                         # Store
                         self._store_rankings(
                             db,
@@ -1356,7 +1048,7 @@ class IBDGroupRankService:
                     errors += 1
                     logger.error(f"Error processing {calc_date}: {e}")
 
-            rs_by_date.clear()
+            rankings_by_date.clear()
             gc.collect()
 
         duration = (datetime.now() - start_time).total_seconds()
@@ -1650,7 +1342,6 @@ class IBDGroupRankService:
             'prefetch_stats': prefetch.stats.to_dict(),
         }
 
-        symbols_by_group = prefetch.symbols_by_group
         chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
         logger.info(
             "Processing group-ranking gap-fill in RS chunks of %d date(s)",
@@ -1658,30 +1349,18 @@ class IBDGroupRankService:
         )
         for chunk_start in range(0, len(missing_dates), chunk_size):
             date_chunk = missing_dates[chunk_start:chunk_start + chunk_size]
-            rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, date_chunk)
+            rankings_by_date = self.ranking_calculator.calculate_for_dates(
+                prefetch=prefetch,
+                group_names=all_groups,
+                calculation_dates=date_chunk,
+            )
 
             for calc_date in date_chunk:
                 try:
-                    # Calculate RS for each group from cache
-                    group_metrics = []
-                    rs_by_symbol = rs_by_date.get(calc_date, {})
-                    for group_name in all_groups:
-                        metrics = self._calculate_group_metrics_from_rs(
-                            group_name,
-                            symbols_by_group.get(group_name, []),
-                            rs_by_symbol,
-                            prefetch.market_caps,
-                            calc_date,
-                        )
-                        if metrics:
-                            group_metrics.append(metrics)
-
+                    group_metrics = list(
+                        rankings_by_date.get(calc_date, ())
+                    )
                     if group_metrics:
-                        # Sort and rank
-                        group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
-                        for rank, metrics in enumerate(group_metrics, start=1):
-                            metrics['rank'] = rank
-
                         # Store
                         self._store_rankings(
                             db,
@@ -1699,7 +1378,7 @@ class IBDGroupRankService:
                     stats['errors'] += 1
                     logger.error(f"Error filling gap for {calc_date}: {e}")
 
-            rs_by_date.clear()
+            rankings_by_date.clear()
             gc.collect()
 
         duration = (datetime.now() - start_time).total_seconds()
