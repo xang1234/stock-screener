@@ -1,7 +1,7 @@
 # Derived-data thermo-review remediation
 
 **Date:** 2026-07-16
-**Status:** Design approved; pending written-spec review
+**Status:** Approved for implementation
 **Issue:** Beads `stockscreenclaude-2c1`
 **Parent:** GitHub #301 / Beads `stockscreenclaude-duw`
 **Builds on:** `2026-07-16-derived-data-execution-policy-refactor-design.md`
@@ -268,9 +268,9 @@ Create `GroupRankingRepository`, responsible for:
 The repository uses the supplied SQLAlchemy session per call and retains the
 existing query semantics and output dictionaries.
 
-### Historical coordinator
+### Historical calculator
 
-Create `GroupRankingHistoryCoordinator`, responsible for:
+Create `GroupRankHistoricalCalculator`, responsible for:
 
 - optimized range backfill;
 - gap detection and optimized gap fill;
@@ -279,8 +279,10 @@ Create `GroupRankingHistoryCoordinator`, responsible for:
 - reusing one typed prefetch across date chunks;
 - returning existing workflow statistics.
 
-It composes `GroupRankInputLoader`, `GroupRankingCalculator`, and
-`GroupRankingRepository`.
+It composes `GroupRankInputLoader`, `GroupRankingCalculator`,
+`GroupRankingRepository`, and the market calendar. The existing
+`GroupRankHistoryBackfillService` remains the outer static-export workflow and
+continues to call the compatibility facade.
 
 ### Compatibility facade
 
@@ -290,7 +292,7 @@ It composes `GroupRankInputLoader`, `GroupRankingCalculator`, and
 - calculation to the input loader, calculator, and repository;
 - read/history methods to the repository or the existing constituent-detail
   source;
-- backfill/gap methods to the historical coordinator.
+- backfill/gap methods to the historical calculator.
 
 Existing public signatures and result shapes remain unchanged. Private
 calculation methods needed by no production caller are removed after tests move
@@ -375,7 +377,7 @@ symbol-date calculation outcomes.
 3. Loader obtains all typed inputs through injected sources.
 4. Calculator produces rankings without persistence.
 5. Repository persists or queries ranking rows.
-6. Historical coordinator reuses typed prefetch data across date chunks.
+6. Historical calculator reuses typed prefetch data across date chunks.
 7. Facade and task boundary serialize existing external result shapes.
 8. Apply policy-owned response metadata.
 
@@ -409,7 +411,7 @@ Implementation follows red-green-refactor cycles in this order:
    models reject them.
 5. Calculator and repository characterization tests preserve group ranking,
    persistence, and query behavior while methods move.
-6. Historical coordinator tests preserve backfill/gap-fill results and provider
+6. Historical calculator tests preserve backfill/gap-fill results and provider
    exclusion.
 7. Breadth tests prove one shared symbol coverage object is reused across dates,
    per-date reports remain correct, and aggregate backfill units are explicit.
@@ -461,4 +463,4 @@ Source-level architecture tests assert:
   strict-cache-only, same-day auto, historical auto, success, and error paths.
 - **Oversized refactor:** changes land in independently testable commits for
   policy, breadth coverage, group input/adapter, calculator/repository,
-  historical coordinator, and facade cleanup.
+  historical calculator, and facade cleanup.
