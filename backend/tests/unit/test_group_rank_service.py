@@ -378,7 +378,14 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
         "target_symbols": 1,
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
+        "cache_miss_symbols_sample": [],
+        "cache_coverage_ratio": 1.0,
         "spy_cached": True,
+        "benchmark_cached": True,
+        "benchmark_symbol": "SPY",
+        "benchmark_role": "primary",
+        "market": "US",
+        "cache_only": True,
         "skipped_unsupported_symbols": 0,
     }
     price_cache.get_cached_only_fresh.assert_called_once_with("SPY", period="2y")
@@ -515,7 +522,14 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
         "target_symbols": 1,
         "symbols_with_prices": 0,
         "cache_miss_symbols": 1,
+        "cache_miss_symbols_sample": ["AAPL"],
+        "cache_coverage_ratio": 0.0,
         "spy_cached": True,
+        "benchmark_cached": True,
+        "benchmark_symbol": "SPY",
+        "benchmark_role": "primary",
+        "market": "US",
+        "cache_only": True,
         "skipped_unsupported_symbols": 0,
     }
     price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAPL"], period="2y")
@@ -570,7 +584,14 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
         "target_symbols": 1,
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
+        "cache_miss_symbols_sample": [],
+        "cache_coverage_ratio": 1.0,
         "spy_cached": True,
+        "benchmark_cached": False,
+        "benchmark_symbol": "SPY",
+        "benchmark_role": "primary",
+        "market": "US",
+        "cache_only": False,
         "skipped_unsupported_symbols": 0,
     }
     benchmark_cache.get_benchmark_data.assert_called_once_with(market="US", period="2y")
@@ -702,6 +723,73 @@ def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_sessio
     assert excinfo.value.stats["cache_coverage_ratio"] == 0.5
     assert excinfo.value.stats["cache_coverage_min"] == 0.55
     store_rankings.assert_not_called()
+
+
+def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disabled(
+    db_session,
+    monkeypatch,
+):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+    symbols = ["AAA", "BBB", "CCC", "MISS"]
+    stats = {
+        "target_symbols": 4,
+        "symbols_with_prices": 3,
+        "cache_miss_symbols": 1,
+        "cache_miss_symbols_sample": ["MISS"],
+        "cache_coverage_ratio": 0.75,
+        "spy_cached": True,
+        "benchmark_cached": True,
+        "benchmark_symbol": "SPY",
+        "benchmark_role": "primary",
+        "market": "US",
+        "cache_only": True,
+        "skipped_unsupported_symbols": 0,
+    }
+    prefetch = group_rank_module.GroupRankPrefetchData(
+        benchmark_prices=price_data,
+        prices_by_symbol={
+            "AAA": price_data,
+            "BBB": price_data,
+            "CCC": price_data,
+            "MISS": None,
+        },
+        active_symbols=set(symbols),
+        market_caps={symbol: 1_000_000_000 for symbol in symbols},
+        stats=stats,
+        symbols_by_group={"Software": symbols},
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kwargs: ["Software"],
+    )
+    monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kwargs: prefetch)
+    monkeypatch.setattr(
+        service,
+        "_calculate_rs_by_symbol_for_dates",
+        lambda _prefetch, dates: {
+            dates[0]: {"AAA": 91.0, "BBB": 85.0, "CCC": 80.0}
+        },
+    )
+    store_rankings = Mock()
+    monkeypatch.setattr(service, "_store_rankings", store_rankings)
+    diagnostics: dict = {}
+
+    results = service.calculate_group_rankings(
+        db_session,
+        date(2026, 3, 20),
+        market="US",
+        cache_only=True,
+        cache_requirement=GroupRankCacheRequirement.disabled(),
+        diagnostics=diagnostics,
+    )
+
+    assert len(results) == 1
+    assert results[0]["industry_group"] == "Software"
+    assert results[0]["num_stocks"] == 3
+    assert diagnostics["cache_miss_symbols"] == 1
+    assert diagnostics["cache_miss_symbols_sample"] == ["MISS"]
+    store_rankings.assert_called_once()
 
 
 def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback():
@@ -1074,6 +1162,56 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
     assert stats["errors"] == 1
     assert prefetch_kwargs["market"] == "HK"
     assert group_kwargs["market"] == "HK"
+
+
+def test_fill_gaps_optimized_propagates_cache_only_and_returns_prefetch_stats(
+    db_session,
+    monkeypatch,
+):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+    captured: dict = {}
+    prefetch = group_rank_module.GroupRankPrefetchData(
+        benchmark_prices=price_data,
+        prices_by_symbol={"AAA": price_data, "BBB": None},
+        active_symbols={"AAA", "BBB"},
+        market_caps={"AAA": 1_000_000_000},
+        stats={
+            "target_symbols": 2,
+            "symbols_with_prices": 1,
+            "cache_miss_symbols": 1,
+            "cache_miss_symbols_sample": ["BBB"],
+            "cache_coverage_ratio": 0.5,
+            "spy_cached": True,
+            "benchmark_cached": True,
+            "benchmark_symbol": "SPY",
+            "benchmark_role": "primary",
+            "market": "US",
+            "cache_only": True,
+            "skipped_unsupported_symbols": 0,
+        },
+        symbols_by_group={"Software": ["AAA", "BBB"]},
+    )
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db, **kwargs: captured.update(kwargs) or prefetch,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kwargs: ["Software"],
+    )
+
+    result = service.fill_gaps_optimized(
+        db_session,
+        [date(2026, 3, 20)],
+        market="US",
+        cache_only=True,
+    )
+
+    assert captured == {"market": "US", "cache_only": True}
+    assert result["prefetch_stats"]["cache_miss_symbols"] == 1
+    assert result["prefetch_stats"]["cache_miss_symbols_sample"] == ["BBB"]
 
 
 def test_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(db_session, monkeypatch):

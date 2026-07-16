@@ -30,6 +30,7 @@ from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
 
 logger = logging.getLogger(__name__)
 CACHE_MISS_TOLERANCE_RATIO = 0.05  # Allow up to 5% cache misses in cache-only group ranking runs
+CACHE_MISS_SYMBOL_SAMPLE_LIMIT = 20
 GROUP_RANK_CHANGE_CALENDAR_DAYS = {
     "1w": 7,
     "1m": 30,
@@ -110,6 +111,7 @@ class IBDGroupRankService:
         market: str | None = None,
         cache_only: bool = False,
         cache_requirement: GroupRankCacheRequirement = GroupRankCacheRequirement.disabled(),
+        diagnostics: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         """
         Calculate and store rankings for all IBD groups for a given date.
@@ -150,17 +152,22 @@ class IBDGroupRankService:
             )
         )
         prefetch_stats = prefetch.stats
+        if diagnostics is not None:
+            diagnostics.clear()
+            diagnostics.update(prefetch_stats)
 
         if cache_requirement.enabled:
             if not prefetch_stats.get("spy_cached"):
                 raise IncompleteGroupRankingCacheError(prefetch_stats)
             cache_miss_symbols = prefetch_stats.get("cache_miss_symbols", 0)
             target_symbols = prefetch_stats.get("target_symbols", 0)
-            coverage_ratio = (
-                prefetch_stats.get("symbols_with_prices", 0) / target_symbols
-                if target_symbols > 0
-                else 1.0
-            )
+            coverage_ratio = prefetch_stats.get("cache_coverage_ratio")
+            if coverage_ratio is None:
+                coverage_ratio = (
+                    prefetch_stats.get("symbols_with_prices", 0) / target_symbols
+                    if target_symbols > 0
+                    else 1.0
+                )
             prefetch_stats["cache_coverage_ratio"] = coverage_ratio
             prefetch_stats["cache_coverage_min"] = cache_requirement.min_coverage
             prefetch_stats["cache_requirement_reason"] = cache_requirement.reason
@@ -975,10 +982,15 @@ class IBDGroupRankService:
                     "target_symbols": 0,
                     "symbols_with_prices": 0,
                     "cache_miss_symbols": 0,
+                    "cache_miss_symbols_sample": [],
+                    "cache_coverage_ratio": 0.0,
                     "spy_cached": False,
                     "benchmark_cached": False,
                     "benchmark_symbol": benchmark_symbol,
+                    "benchmark_role": benchmark_role,
                     "market": normalized_market,
+                    "cache_only": cache_only,
+                    "skipped_unsupported_symbols": 0,
                 },
                 symbols_by_group={},
             )
@@ -1029,21 +1041,33 @@ class IBDGroupRankService:
         # 5. Fetch market caps for weighting
         market_caps = self._get_market_caps_for_symbols(db, list(symbols_to_fetch))
 
-        valid_count = sum(
-            1 for v in all_prices.values() if v is not None and not v.empty
+        missing_symbols = sorted(
+            symbol
+            for symbol in symbols_to_fetch
+            if all_prices.get(symbol) is None or all_prices[symbol].empty
+        )
+        valid_count = len(symbols_to_fetch) - len(missing_symbols)
+        cache_coverage_ratio = (
+            valid_count / len(symbols_to_fetch)
+            if symbols_to_fetch
+            else 1.0
         )
         logger.info(f"Pre-fetched prices: {valid_count}/{len(all_prices)} symbols have data")
 
         stats = {
             "target_symbols": len(symbols_to_fetch),
             "symbols_with_prices": valid_count,
-            "cache_miss_symbols": len(symbols_to_fetch) - valid_count,
+            "cache_miss_symbols": len(missing_symbols),
+            "cache_miss_symbols_sample": missing_symbols[:CACHE_MISS_SYMBOL_SAMPLE_LIMIT],
+            "cache_coverage_ratio": cache_coverage_ratio,
             "spy_cached": True,
+            "benchmark_cached": cache_only,
+            "benchmark_symbol": benchmark_symbol,
+            "benchmark_role": benchmark_role,
+            "market": normalized_market,
+            "cache_only": cache_only,
             "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
         }
-        if benchmark_role != "primary":
-            stats["benchmark_symbol"] = benchmark_symbol
-            stats["benchmark_role"] = benchmark_role
 
         return GroupRankPrefetchData(
             benchmark_prices=spy_data,
@@ -1728,6 +1752,7 @@ class IBDGroupRankService:
         missing_dates: List[date],
         *,
         market: str = "US",
+        cache_only: bool = False,
     ) -> Dict:
         """
         Fill specific missing dates using optimized approach.
@@ -1761,7 +1786,11 @@ class IBDGroupRankService:
 
         # Pre-fetch ALL data upfront
         prefetch = self._coerce_prefetch_data(
-            self._prefetch_all_data(db, market=normalized_market)
+            self._prefetch_all_data(
+                db,
+                market=normalized_market,
+                cache_only=cache_only,
+            )
         )
 
         if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
@@ -1772,6 +1801,7 @@ class IBDGroupRankService:
                 'skipped': 0,
                 'errors': len(missing_dates),
                 'error': 'Failed to fetch SPY benchmark data',
+                'prefetch_stats': prefetch.stats,
             }
 
         all_groups = list(prefetch.symbols_by_group) or IBDIndustryService.get_all_groups(
@@ -1784,6 +1814,7 @@ class IBDGroupRankService:
             'processed': 0,
             'skipped': 0,
             'errors': 0,
+            'prefetch_stats': prefetch.stats,
         }
 
         symbols_by_group = self._symbols_by_group_for_run(
