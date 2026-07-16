@@ -74,14 +74,13 @@ def test_guarded_load_uses_only_cached_benchmark_and_stock_reads(
         symbols={"Software": ["AAPL"]},
         active=["AAPL"],
     )
+    market_cap_loader = Mock(
+        return_value={"AAPL": 1_000_000_000}
+    )
     loader = GroupRankInputLoader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
-    )
-    monkeypatch.setattr(
-        loader,
-        "_market_caps",
-        lambda db, symbols: {"AAPL": 1_000_000_000},
+        market_cap_loader=market_cap_loader,
     )
 
     prefetch = loader.load(
@@ -93,8 +92,10 @@ def test_guarded_load_uses_only_cached_benchmark_and_stock_reads(
     assert prefetch.benchmark_prices is benchmark_prices
     assert prefetch.prices_by_symbol == {"AAPL": stock_prices}
     assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
+    assert prefetch.market_caps == {"AAPL": 1_000_000_000}
     assert prefetch.stats.cache_miss_symbols == 0
     assert prefetch.stats.benchmark_cached is True
+    market_cap_loader.assert_called_once_with(db_session, ["AAPL"])
     price_cache.get_many.assert_not_called()
     benchmark_cache.get_benchmark_data.assert_not_called()
 

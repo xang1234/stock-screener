@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -32,9 +32,13 @@ class GroupRankInputLoader:
         *,
         price_cache: PriceCacheService,
         benchmark_cache: BenchmarkCacheService,
+        market_cap_loader: (
+            Callable[[Session, list[str]], dict[str, float]] | None
+        ) = None,
     ) -> None:
         self.price_cache = price_cache
         self.benchmark_cache = benchmark_cache
+        self.market_cap_loader = market_cap_loader
 
     def load(
         self,
@@ -122,7 +126,8 @@ class GroupRankInputLoader:
             if prices.get(symbol) is None or prices[symbol].empty
         )
         valid_count = len(ordered_symbols) - len(missing)
-        market_caps = self._market_caps(db, ordered_symbols)
+        market_cap_loader = self.market_cap_loader or self._market_caps
+        market_caps = market_cap_loader(db, ordered_symbols)
         stats = GroupRankPrefetchStats(
             target_symbols=len(ordered_symbols),
             symbols_with_prices=valid_count,

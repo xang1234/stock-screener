@@ -98,6 +98,12 @@ class IBDGroupRankService:
         self.input_loader = input_loader or GroupRankInputLoader(
             price_cache=price_cache,
             benchmark_cache=benchmark_cache,
+            market_cap_loader=(
+                lambda db, symbols: self._get_market_caps_for_symbols(
+                    db,
+                    symbols,
+                )
+            ),
         )
 
     def calculate_group_rankings(
