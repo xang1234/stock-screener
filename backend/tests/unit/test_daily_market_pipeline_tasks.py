@@ -69,10 +69,12 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
     assert signatures[2].kwargs == {
         "market": "HK",
         "calculation_date": "2026-03-16",
+        "refresh_guarded_cache_only": True,
     }
     assert signatures[6].kwargs == {
         "market": "HK",
         "calculation_date": "2026-03-16",
+        "refresh_guarded_cache_only": True,
     }
     assert signatures[-2].kwargs == {
         "market": "HK",
