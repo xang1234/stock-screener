@@ -13,6 +13,17 @@ from app.database import Base
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 from app.services.breadth_calculator_service import BreadthCalculatorService
+from app.services.derived_data_execution_policy import (
+    resolve_derived_data_execution_policy,
+)
+
+
+def _policy(mode: str, target: date):
+    return resolve_derived_data_execution_policy(
+        execution_policy=mode,
+        target_date=target,
+        current_date=date(2026, 3, 20),
+    )
 
 
 def _make_price_df(end_date: date, base_close: float = 100.0) -> pd.DataFrame:
@@ -100,7 +111,11 @@ def test_calculate_daily_breadth_uses_bulk_cached_prices(monkeypatch):
         lambda calculation_date: {"ratio_5day": 1.5, "ratio_10day": 2.5},
     )
 
-    metrics = calculator.calculate_daily_breadth(date(2026, 3, 20), cache_only=True)
+    result = calculator.calculate_daily_breadth(
+        date(2026, 3, 20),
+        policy=_policy("refresh_guarded", date(2026, 3, 20)),
+    )
+    metrics = result.to_metrics_dict()
 
     assert metrics["total_stocks_scanned"] == 2
     assert metrics["skipped_stocks"] == 0
@@ -130,7 +145,11 @@ def test_calculate_daily_breadth_counts_fresh_cache_misses(monkeypatch):
         lambda calculation_date: {"ratio_5day": 1.5, "ratio_10day": 2.5},
     )
 
-    metrics = calculator.calculate_daily_breadth(date(2026, 3, 20), cache_only=True)
+    result = calculator.calculate_daily_breadth(
+        date(2026, 3, 20),
+        policy=_policy("refresh_guarded", date(2026, 3, 20)),
+    )
+    metrics = result.to_metrics_dict()
 
     assert metrics["total_stocks_scanned"] == 1
     assert metrics["cache_miss_stocks"] == 1
@@ -139,6 +158,7 @@ def test_calculate_daily_breadth_counts_fresh_cache_misses(monkeypatch):
     assert metrics["symbols_with_cached_history"] == 1
     assert metrics["cache_coverage_ratio"] == 0.5
     assert metrics["cache_miss_symbols_sample"] == ["BBB"]
+    assert result.coverage.cache_miss_symbols_sample == ("BBB",)
 
 
 def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch):
@@ -161,7 +181,11 @@ def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch
         lambda calculation_date: {"ratio_5day": 1.0, "ratio_10day": 1.2},
     )
 
-    metrics = calculator.calculate_daily_breadth(date(2026, 3, 19), cache_only=False)
+    result = calculator.calculate_daily_breadth(
+        date(2026, 3, 19),
+        policy=_policy("auto", date(2026, 3, 19)),
+    )
+    metrics = result.to_metrics_dict()
 
     assert metrics["total_stocks_scanned"] == 2
     assert metrics["cache_miss_stocks"] == 1
@@ -327,7 +351,7 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback():
         trading_date,
         trading_date,
         trading_dates=[trading_date],
-        cache_only=True,
+        policy=_policy("refresh_guarded", trading_date),
     )
 
     assert result["total_dates"] == 1
@@ -362,7 +386,7 @@ def test_backfill_range_cache_only_reports_gaps_without_provider_fallback():
         trading_date,
         trading_date,
         trading_dates=[trading_date],
-        cache_only=True,
+        policy=_policy("refresh_guarded", trading_date),
     )
 
     assert result == {
@@ -429,7 +453,7 @@ def test_fill_gaps_delegates_to_single_backfill_range_call(monkeypatch):
         date(2026, 3, 12),
         date(2026, 3, 16),
         trading_dates=[date(2026, 3, 12), date(2026, 3, 16)],
-        cache_only=False,
+        policy=_policy("auto", date(2026, 3, 16)),
     )
 
 
@@ -450,15 +474,67 @@ def test_fill_gaps_propagates_cache_only_to_backfill_range(monkeypatch):
     backfill_range = MagicMock(return_value=expected)
     monkeypatch.setattr(service, "backfill_range", backfill_range)
 
-    result = service.fill_gaps([date(2026, 3, 12)], cache_only=True)
+    guarded_policy = _policy("refresh_guarded", date(2026, 3, 12))
+    result = service.fill_gaps(
+        [date(2026, 3, 12)],
+        policy=guarded_policy,
+    )
 
     assert result == expected
     backfill_range.assert_called_once_with(
         date(2026, 3, 12),
         date(2026, 3, 12),
         trading_dates=[date(2026, 3, 12)],
-        cache_only=True,
+        policy=guarded_policy,
     )
+
+
+def test_backfill_range_cache_sample_is_sorted_across_batches(monkeypatch):
+    db = _make_db_session()
+    active_stocks = [
+        StockUniverse(
+            symbol=f"S{index:03d}",
+            market="US",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+        for index in range(501)
+    ]
+    db.add_all(active_stocks)
+    db.commit()
+    service = BreadthCalculatorService(db, MagicMock())
+    full_history = _make_price_df(date(2026, 3, 20))
+
+    responses = [
+        (
+            {
+                stock.symbol: (
+                    None if stock.symbol == "S499" else full_history
+                )
+                for stock in active_stocks[:500]
+            },
+            {"S499"},
+        ),
+        (
+            {"S500": None},
+            {"S500"},
+        ),
+    ]
+    monkeypatch.setattr(
+        service,
+        "_load_price_data_for_batch",
+        MagicMock(side_effect=responses),
+    )
+    monkeypatch.setattr(service, "_store_breadth_records", MagicMock())
+
+    result = service.backfill_range(
+        date(2026, 3, 20),
+        date(2026, 3, 20),
+        trading_dates=[date(2026, 3, 20)],
+        policy=_policy("refresh_guarded", date(2026, 3, 20)),
+    )
+
+    assert result["cache_miss_symbols_sample"] == ["S499", "S500"]
 
 
 def test_fill_gaps_refreshes_stale_cached_prices_before_counting():
