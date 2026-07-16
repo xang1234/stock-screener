@@ -27,15 +27,17 @@ from .group_rank_models import (
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
 )
-from .derived_data_execution_policy import DerivedDataExecutionPolicy
+from .group_rank_input_loader import GroupRankInputLoader
+from .derived_data_execution_policy import (
+    DerivedDataExecutionMode,
+    DerivedDataExecutionPolicy,
+)
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService
 from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
 
 logger = logging.getLogger(__name__)
-CACHE_MISS_TOLERANCE_RATIO = 0.05  # Allow up to 5% cache misses in cache-only group ranking runs
-CACHE_MISS_SYMBOL_SAMPLE_LIMIT = 20
 GROUP_RANK_CHANGE_CALENDAR_DAYS = {
     "1w": 7,
     "1m": 30,
@@ -87,6 +89,7 @@ class IBDGroupRankService:
         benchmark_cache: BenchmarkCacheService,
         rs_calculator: RelativeStrengthCalculator | None = None,
         group_constituent_source: GroupConstituentSource | None = None,
+        input_loader: GroupRankInputLoader | None = None,
     ):
         """Initialize the service."""
         self.price_cache = price_cache
@@ -94,6 +97,10 @@ class IBDGroupRankService:
         self.rs_calculator = rs_calculator or RelativeStrengthCalculator()
         self.group_constituent_source = (
             group_constituent_source or GroupConstituentSource()
+        )
+        self.input_loader = input_loader or GroupRankInputLoader(
+            price_cache=price_cache,
+            benchmark_cache=benchmark_cache,
         )
 
     def calculate_group_rankings(
@@ -142,7 +149,7 @@ class IBDGroupRankService:
             self._prefetch_all_data(
                 db,
                 market=normalized_market,
-                cache_only=policy.cache_only,
+                policy=policy,
             )
         )
         prefetch_stats = prefetch.stats.with_cache_requirement(
@@ -928,179 +935,26 @@ class IBDGroupRankService:
         *,
         market: str | None = None,
         cache_only: bool = False,
+        policy: DerivedDataExecutionPolicy | None = None,
     ) -> GroupRankPrefetchData:
-        """
-        Pre-fetch all data needed for backfill in one batch.
-
-        This optimization fetches:
-        1. SPY benchmark data once
-        2. Active symbols from stock_universe (same source as bulk scans)
-        3. All prices for all symbols across all groups in a single batch
-
-        Returns:
-            Tuple of (spy_prices_df, {symbol: prices_df}, active_symbols_set, {symbol: market_cap})
-        """
-        from ..wiring.bootstrap import get_stock_universe_service
-
-        normalized_market = (market or "US").upper()
-        benchmark_symbol = self.benchmark_cache.get_benchmark_symbol(normalized_market)
-        logger.info(
-            "Pre-fetching data for market=%s (benchmark=%s)...",
-            normalized_market, benchmark_symbol,
-        )
-
-        # 1. Get benchmark data once (SPY for US, HSI/N225/TAIEX/NIFTY for Asia)
-        benchmark_role = "primary"
-        if cache_only:
-            spy_data, benchmark_symbol, benchmark_role = self._get_cached_only_benchmark_data(
-                normalized_market,
-                benchmark_symbol,
-                period="2y",
+        effective_policy = policy
+        if effective_policy is None:
+            effective_policy = (
+                DerivedDataExecutionPolicy(
+                    mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+                    cache_only=True,
+                    strict_completeness=True,
+                    requires_warmup_metadata=False,
+                    tolerates_partial_coverage=False,
+                )
+                if cache_only
+                else DerivedDataExecutionPolicy.provider_allowed()
             )
-        else:
-            spy_data = self.benchmark_cache.get_benchmark_data(
-                market=normalized_market, period="2y",
-            )
-        if spy_data is None or spy_data.empty:
-            logger.error(
-                "Failed to get benchmark data (%s) for market %s",
-                benchmark_symbol, normalized_market,
-            )
-            return GroupRankPrefetchData(
-                benchmark_prices=None,
-                prices_by_symbol={},
-                active_symbols=set(),
-                market_caps={},
-                stats={
-                    "target_symbols": 0,
-                    "symbols_with_prices": 0,
-                    "cache_miss_symbols": 0,
-                    "cache_miss_symbols_sample": [],
-                    "cache_coverage_ratio": 0.0,
-                    "spy_cached": False,
-                    "benchmark_cached": False,
-                    "benchmark_symbol": benchmark_symbol,
-                    "benchmark_role": benchmark_role,
-                    "market": normalized_market,
-                    "cache_only": cache_only,
-                    "skipped_unsupported_symbols": 0,
-                },
-                symbols_by_group={},
-            )
-
-        logger.info(f"Fetched benchmark {benchmark_symbol}: {len(spy_data)} days")
-
-        # 2. Get active symbols from stock_universe (same as bulk scans)
-        active_symbols_list = get_stock_universe_service().get_active_symbols(
+        return self.input_loader.load(
             db,
-            market=normalized_market,
+            market=(market or "US").upper(),
+            policy=effective_policy,
         )
-        active_symbols = set(active_symbols_list)
-        logger.info(f"Found {len(active_symbols)} active symbols in stock_universe")
-
-        # 3. Collect ALL unique symbols across ALL groups for this market
-        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
-        symbols_to_fetch = set()
-        symbols_by_group: Dict[str, List[str]] = {}
-        skipped_unsupported_symbols = set()
-
-        for group in all_groups:
-            group_symbols = IBDIndustryService.get_group_symbols(db, group, market=normalized_market)
-            validated = []
-            for symbol in group_symbols:
-                if symbol not in active_symbols:
-                    continue
-                if is_unsupported_yahoo_price_symbol(symbol):
-                    skipped_unsupported_symbols.add(symbol)
-                    continue
-                validated.append(symbol)
-            symbols_by_group[group] = validated
-            symbols_to_fetch.update(validated)
-
-        logger.info(
-            f"Collecting prices for {len(symbols_to_fetch)} unique symbols "
-            f"across {len(all_groups)} groups"
-        )
-
-        # 4. Batch fetch ALL prices in one call
-        if cache_only:
-            all_prices = self.price_cache.get_many_cached_only_fresh(
-                list(symbols_to_fetch),
-                period="2y",
-            )
-        else:
-            all_prices = self.price_cache.get_many(list(symbols_to_fetch), period="2y")
-
-        # 5. Fetch market caps for weighting
-        market_caps = self._get_market_caps_for_symbols(db, list(symbols_to_fetch))
-
-        missing_symbols = sorted(
-            symbol
-            for symbol in symbols_to_fetch
-            if all_prices.get(symbol) is None or all_prices[symbol].empty
-        )
-        valid_count = len(symbols_to_fetch) - len(missing_symbols)
-        cache_coverage_ratio = (
-            valid_count / len(symbols_to_fetch)
-            if symbols_to_fetch
-            else 1.0
-        )
-        logger.info(f"Pre-fetched prices: {valid_count}/{len(all_prices)} symbols have data")
-
-        stats = {
-            "target_symbols": len(symbols_to_fetch),
-            "symbols_with_prices": valid_count,
-            "cache_miss_symbols": len(missing_symbols),
-            "cache_miss_symbols_sample": missing_symbols[:CACHE_MISS_SYMBOL_SAMPLE_LIMIT],
-            "cache_coverage_ratio": cache_coverage_ratio,
-            "spy_cached": True,
-            "benchmark_cached": cache_only,
-            "benchmark_symbol": benchmark_symbol,
-            "benchmark_role": benchmark_role,
-            "market": normalized_market,
-            "cache_only": cache_only,
-            "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
-        }
-
-        return GroupRankPrefetchData(
-            benchmark_prices=spy_data,
-            prices_by_symbol=all_prices,
-            active_symbols=active_symbols,
-            market_caps=market_caps,
-            stats=stats,
-            symbols_by_group=symbols_by_group,
-        )
-
-    def _get_cached_only_benchmark_data(
-        self,
-        market: str,
-        primary_symbol: str,
-        *,
-        period: str,
-    ) -> tuple[Optional[pd.DataFrame], str, str]:
-        candidates = [primary_symbol]
-        candidate_fn = getattr(self.benchmark_cache, "get_benchmark_candidates", None)
-        if callable(candidate_fn):
-            try:
-                resolved = [str(symbol) for symbol in candidate_fn(market) if symbol]
-                if resolved:
-                    candidates = resolved
-            except Exception:
-                logger.debug("Could not resolve benchmark candidates for market=%s", market, exc_info=True)
-
-        for idx, candidate in enumerate(candidates):
-            role = "primary" if idx == 0 else "fallback"
-            data = self.price_cache.get_cached_only_fresh(candidate, period=period)
-            if data is not None and not data.empty:
-                if role != "primary":
-                    logger.info(
-                        "Using cached fallback benchmark %s for market %s",
-                        candidate,
-                        market,
-                    )
-                return data, candidate, role
-
-        return None, primary_symbol, "primary"
 
     def _delete_rankings_for_range(
         self,

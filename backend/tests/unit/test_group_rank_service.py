@@ -1,7 +1,7 @@
 from datetime import date, datetime
 import inspect
 from uuid import uuid4
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -345,81 +345,17 @@ def _trend_price_frame(
     )
 
 
-def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monkeypatch):
-    service = _make_group_rank_service()
-    spy_data = _price_frame()
-    aapl_data = _price_frame()
-
-    price_cache = Mock()
-    price_cache.get_cached_only_fresh.return_value = spy_data
-    price_cache.get_many_cached_only_fresh.return_value = {"AAPL": aapl_data}
-    price_cache.get_many.side_effect = AssertionError("fetch-capable path should not be used")
-    service.price_cache = price_cache
-
-    benchmark_cache = Mock()
-    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
-    benchmark_cache.get_benchmark_data.side_effect = AssertionError("benchmark fetch should not be used")
-    service.benchmark_cache = benchmark_cache
-
-    stock_universe_service = Mock()
-    stock_universe_service.get_active_symbols.return_value = ["AAPL"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
-        lambda db, symbols: {"AAPL": 1_000_000_000},
-    )
-
-    prefetch = service._prefetch_all_data(
-        db_session,
-        cache_only=True,
-    )
-
-    assert prefetch.benchmark_prices is spy_data
-    assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
-    assert prefetch.active_symbols == {"AAPL"}
-    assert prefetch.market_caps == {"AAPL": 1_000_000_000}
-    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
-    assert prefetch.stats.to_dict() == {
-        "target_symbols": 1,
-        "symbols_with_prices": 1,
-        "cache_miss_symbols": 0,
-        "cache_miss_symbols_sample": [],
-        "cache_coverage_ratio": 1.0,
-        "spy_cached": True,
-        "benchmark_cached": True,
-        "benchmark_symbol": "SPY",
-        "benchmark_role": "primary",
-        "market": "US",
-        "cache_only": True,
-        "skipped_unsupported_symbols": 0,
-    }
-    price_cache.get_cached_only_fresh.assert_called_once_with("SPY", period="2y")
-    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAPL"], period="2y")
-
-
 def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, monkeypatch):
-    service = _make_group_rank_service()
-
     price_cache = Mock()
     price_cache.get_cached_only_fresh.return_value = None
     price_cache.get_many_cached_only_fresh.return_value = {}
-    service.price_cache = price_cache
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "^N225"
-    service.benchmark_cache = benchmark_cache
+    service = _make_group_rank_service(
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+    )
 
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
@@ -438,228 +374,6 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
     assert str(excinfo.value) == "^N225 benchmark data is missing from cache for JP"
     assert excinfo.value.stats.benchmark_symbol == "^N225"
     assert excinfo.value.stats.market == "JP"
-
-
-def test_cache_only_prefetch_uses_cached_market_benchmark_fallback(db_session, monkeypatch):
-    service = _make_group_rank_service()
-    fallback_data = _price_frame()
-    sony_data = _price_frame()
-
-    price_cache = Mock()
-    price_cache.get_cached_only_fresh.side_effect = [None, fallback_data]
-    price_cache.get_many_cached_only_fresh.return_value = {"6758.T": sony_data}
-    service.price_cache = price_cache
-
-    benchmark_cache = Mock()
-    benchmark_cache.get_benchmark_symbol.return_value = "^N225"
-    benchmark_cache.get_benchmark_candidates.return_value = ["^N225", "1306.T"]
-    service.benchmark_cache = benchmark_cache
-
-    stock_universe_service = Mock()
-    stock_universe_service.get_active_symbols.return_value = ["6758.T"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["JP_Technology"],
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["6758.T"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
-        lambda db, symbols: {"6758.T": 1_000_000_000},
-    )
-
-    prefetch = service._prefetch_all_data(
-        db_session,
-        market="JP",
-        cache_only=True,
-    )
-
-    assert prefetch.benchmark_prices is fallback_data
-    assert prefetch.stats.benchmark_symbol == "1306.T"
-    assert prefetch.stats.benchmark_role == "fallback"
-    assert price_cache.get_cached_only_fresh.call_args_list == [
-        call("^N225", period="2y"),
-        call("1306.T", period="2y"),
-    ]
-
-
-def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, monkeypatch):
-    service = _make_group_rank_service()
-    spy_data = _price_frame()
-
-    price_cache = Mock()
-    price_cache.get_cached_only_fresh.return_value = spy_data
-    price_cache.get_many_cached_only_fresh.return_value = {"AAPL": None}
-    price_cache.get_many.side_effect = AssertionError("fetch-capable path should not be used")
-    service.price_cache = price_cache
-
-    benchmark_cache = Mock()
-    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
-    benchmark_cache.get_benchmark_data.side_effect = AssertionError("benchmark fetch should not be used")
-    service.benchmark_cache = benchmark_cache
-
-    stock_universe_service = Mock()
-    stock_universe_service.get_active_symbols.return_value = ["AAPL"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
-        lambda db, symbols: {"AAPL": 1_000_000_000},
-    )
-
-    prefetch = service._prefetch_all_data(
-        db_session,
-        cache_only=True,
-    )
-
-    assert prefetch.benchmark_prices is spy_data
-    assert prefetch.prices_by_symbol == {"AAPL": None}
-    assert prefetch.active_symbols == {"AAPL"}
-    assert prefetch.market_caps == {"AAPL": 1_000_000_000}
-    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
-    assert prefetch.stats.to_dict() == {
-        "target_symbols": 1,
-        "symbols_with_prices": 0,
-        "cache_miss_symbols": 1,
-        "cache_miss_symbols_sample": ["AAPL"],
-        "cache_coverage_ratio": 0.0,
-        "spy_cached": True,
-        "benchmark_cached": True,
-        "benchmark_symbol": "SPY",
-        "benchmark_role": "primary",
-        "market": "US",
-        "cache_only": True,
-        "skipped_unsupported_symbols": 0,
-    }
-    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAPL"], period="2y")
-
-
-def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, monkeypatch):
-    service = _make_group_rank_service()
-    spy_data = _price_frame()
-    aapl_data = _price_frame()
-
-    price_cache = Mock()
-    price_cache.get_many.return_value = {"AAPL": aapl_data}
-    price_cache.get_many_cached_only.side_effect = AssertionError("cache-only path should not be used")
-    service.price_cache = price_cache
-
-    benchmark_cache = Mock()
-    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
-    benchmark_cache.get_benchmark_data.return_value = spy_data
-    service.benchmark_cache = benchmark_cache
-
-    stock_universe_service = Mock()
-    stock_universe_service.get_active_symbols.return_value = ["AAPL"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
-        lambda db, symbols: {"AAPL": 1_000_000_000},
-    )
-
-    prefetch = service._prefetch_all_data(
-        db_session,
-        cache_only=False,
-    )
-
-    assert prefetch.benchmark_prices is spy_data
-    assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
-    assert prefetch.active_symbols == {"AAPL"}
-    assert prefetch.market_caps == {"AAPL": 1_000_000_000}
-    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
-    assert prefetch.stats.to_dict() == {
-        "target_symbols": 1,
-        "symbols_with_prices": 1,
-        "cache_miss_symbols": 0,
-        "cache_miss_symbols_sample": [],
-        "cache_coverage_ratio": 1.0,
-        "spy_cached": True,
-        "benchmark_cached": False,
-        "benchmark_symbol": "SPY",
-        "benchmark_role": "primary",
-        "market": "US",
-        "cache_only": False,
-        "skipped_unsupported_symbols": 0,
-    }
-    benchmark_cache.get_benchmark_data.assert_called_once_with(market="US", period="2y")
-    price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
-
-
-def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypatch):
-    service = _make_group_rank_service()
-    spy_data = _price_frame()
-    aapl_data = _price_frame()
-
-    price_cache = Mock()
-    price_cache.get_many.return_value = {"AAPL": aapl_data}
-    service.price_cache = price_cache
-
-    benchmark_cache = Mock()
-    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
-    benchmark_cache.get_benchmark_data.return_value = spy_data
-    service.benchmark_cache = benchmark_cache
-
-    stock_universe_service = Mock()
-    stock_universe_service.get_active_symbols.return_value = ["AAPL", "MZYX-U"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL", "MZYX-U"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
-        lambda db, symbols: {"AAPL": 1_000_000_000},
-    )
-
-    prefetch = service._prefetch_all_data(
-        db_session,
-        cache_only=False,
-    )
-
-    assert prefetch.active_symbols == {"AAPL", "MZYX-U"}
-    assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
-    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
-    assert prefetch.stats.target_symbols == 1
-    assert prefetch.stats.skipped_unsupported_symbols == 1
-    price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
 
 
 def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_session, monkeypatch):
