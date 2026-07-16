@@ -1,17 +1,63 @@
 from app.services.breadth_coverage import (
     BreadthCalculationResult,
-    BreadthCoverageAccumulator,
+    BreadthCoverageReport,
+    BreadthOutcomeCounter,
+    BreadthOutcomeReport,
+    BreadthPriceCoverageAccumulator,
 )
 
 
+def _price_coverage():
+    accumulator = BreadthPriceCoverageAccumulator()
+    accumulator.record_batch(["AAA", "BBB", "MISS"], ["MISS"])
+    return accumulator.report()
+
+
 def _build_report(batch_order):
-    coverage = BreadthCoverageAccumulator()
+    price_coverage = BreadthPriceCoverageAccumulator()
     for candidates, misses in batch_order:
-        coverage.record_price_batch(candidates, misses)
-    coverage.record_scanned()
-    coverage.record_insufficient()
-    coverage.record_error()
-    return coverage.report()
+        price_coverage.record_batch(candidates, misses)
+    outcomes = BreadthOutcomeCounter()
+    outcomes.record_scanned()
+    outcomes.record_insufficient()
+    outcomes.record_error()
+    return BreadthCoverageReport.from_parts(
+        price_coverage.report(),
+        outcomes.report(),
+    )
+
+
+def test_composed_report_keeps_unique_symbols_separate_from_observations():
+    outcomes = BreadthOutcomeCounter()
+    outcomes.record_scanned()
+    outcomes.record_insufficient()
+    outcomes.record_cache_miss()
+
+    report = BreadthCoverageReport.from_parts(
+        _price_coverage(),
+        outcomes.report(),
+    )
+
+    assert report.candidate_stocks == 3
+    assert report.cache_miss_stocks == 1
+    assert report.total_stocks_scanned == 1
+    assert report.skipped_stocks == 2
+    assert report.insufficient_history_observations == 1
+
+
+def test_many_date_outcomes_share_one_price_coverage_value():
+    price_coverage = _price_coverage()
+    first = BreadthCoverageReport.from_parts(
+        price_coverage,
+        BreadthOutcomeReport(scanned=1),
+    )
+    second = BreadthCoverageReport.from_parts(
+        price_coverage,
+        BreadthOutcomeReport(cache_misses=1),
+    )
+
+    assert first.price_coverage is price_coverage
+    assert second.price_coverage is price_coverage
 
 
 def test_report_derives_counts_from_symbol_identity():
@@ -72,12 +118,16 @@ def test_daily_and_backfill_serializers_share_one_report():
 
 
 def test_calculation_result_serializes_indicators_and_coverage():
-    coverage = BreadthCoverageAccumulator()
-    coverage.record_price_batch(["AAA"], [])
-    coverage.record_scanned()
+    price_coverage = BreadthPriceCoverageAccumulator()
+    price_coverage.record_batch(["AAA"], [])
+    outcomes = BreadthOutcomeCounter()
+    outcomes.record_scanned()
     result = BreadthCalculationResult(
         indicators={"stocks_up_4pct": 1, "ratio_5day": None},
-        coverage=coverage.report(),
+        coverage=BreadthCoverageReport.from_parts(
+            price_coverage.report(),
+            outcomes.report(),
+        ),
     )
 
     assert result.to_metrics_dict() == {

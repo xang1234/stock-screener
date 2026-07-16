@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import app.services.breadth_calculator_service as breadth_module
 from app.database import Base
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
@@ -272,6 +273,54 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     assert stored[1].stocks_down_4pct == 0
     assert stored[1].ratio_5day == 1.8
     assert stored[1].ratio_10day == 1.9
+
+
+def test_backfill_allocates_symbol_coverage_once(monkeypatch):
+    created = 0
+    real_accumulator = breadth_module.BreadthPriceCoverageAccumulator
+
+    class CountingAccumulator(real_accumulator):
+        def __init__(self):
+            nonlocal created
+            created += 1
+            super().__init__()
+
+    monkeypatch.setattr(
+        breadth_module,
+        "BreadthPriceCoverageAccumulator",
+        CountingAccumulator,
+    )
+    db = _make_db_session()
+    db.add_all([
+        StockUniverse(
+            symbol="AAA",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        ),
+        StockUniverse(
+            symbol="BBB",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        ),
+    ])
+    db.commit()
+    trading_dates = [date(2026, 3, 19), date(2026, 3, 20)]
+    history = _make_price_df(trading_dates[-1])
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": history,
+        "BBB": history,
+    }
+    service = BreadthCalculatorService(db, price_cache)
+
+    service.backfill_range(
+        trading_dates[0],
+        trading_dates[-1],
+        trading_dates=trading_dates,
+        policy=_policy("refresh_guarded", trading_dates[-1]),
+    )
+
+    assert created == 1
 
 
 def test_backfill_range_fallback_uses_market_calendar(monkeypatch):
