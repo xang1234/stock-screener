@@ -27,60 +27,6 @@ class GroupRankPrefetchStats:
     cache_coverage_min: float | None = None
     cache_requirement_reason: str | None = None
 
-    @classmethod
-    def from_mapping(
-        cls,
-        values: Mapping[str, Any],
-    ) -> "GroupRankPrefetchStats":
-        target_symbols = int(values.get("target_symbols", 0) or 0)
-        symbols_with_prices = int(
-            values.get("symbols_with_prices", 0) or 0
-        )
-        coverage = values.get("cache_coverage_ratio")
-        return cls(
-            target_symbols=target_symbols,
-            symbols_with_prices=symbols_with_prices,
-            cache_miss_symbols=int(
-                values.get("cache_miss_symbols", 0) or 0
-            ),
-            cache_miss_symbols_sample=tuple(
-                values.get("cache_miss_symbols_sample", ())
-            ),
-            cache_coverage_ratio=(
-                float(coverage)
-                if coverage is not None
-                else (
-                    symbols_with_prices / target_symbols
-                    if target_symbols
-                    else 1.0
-                )
-            ),
-            benchmark_available=bool(
-                values.get(
-                    "benchmark_available",
-                    values.get("spy_cached", False),
-                )
-            ),
-            benchmark_cached=bool(
-                values.get("benchmark_cached", False)
-            ),
-            benchmark_symbol=str(
-                values.get("benchmark_symbol", "SPY")
-            ),
-            benchmark_role=str(
-                values.get("benchmark_role", "primary")
-            ),
-            market=str(values.get("market", "US")).upper(),
-            cache_only=bool(values.get("cache_only", False)),
-            skipped_unsupported_symbols=int(
-                values.get("skipped_unsupported_symbols", 0) or 0
-            ),
-            cache_coverage_min=values.get("cache_coverage_min"),
-            cache_requirement_reason=values.get(
-                "cache_requirement_reason"
-            ),
-        )
-
     def with_cache_requirement(
         self,
         requirement: GroupRankCacheRequirement,
@@ -131,25 +77,21 @@ class GroupRankPrefetchData:
     symbols_by_group: Mapping[str, tuple[str, ...]]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "active_symbols",
-            frozenset(self.active_symbols),
-        )
+        if not isinstance(self.prices_by_symbol, Mapping):
+            raise TypeError("prices_by_symbol must be a mapping")
+        if not isinstance(self.active_symbols, frozenset):
+            raise TypeError("active_symbols must be frozenset[str]")
+        if not isinstance(self.market_caps, Mapping):
+            raise TypeError("market_caps must be a mapping")
         if not isinstance(self.stats, GroupRankPrefetchStats):
-            object.__setattr__(
-                self,
-                "stats",
-                GroupRankPrefetchStats.from_mapping(self.stats),
-            )
-        object.__setattr__(
-            self,
-            "symbols_by_group",
-            {
-                group: tuple(symbols)
-                for group, symbols in self.symbols_by_group.items()
-            },
-        )
+            raise TypeError("stats must be GroupRankPrefetchStats")
+        if not isinstance(self.symbols_by_group, Mapping):
+            raise TypeError("symbols_by_group must be a mapping")
+        for group, symbols in self.symbols_by_group.items():
+            if not isinstance(symbols, tuple):
+                raise TypeError(
+                    f"symbols_by_group[{group!r}] must be tuple[str, ...]"
+                )
 
 
 @dataclass(frozen=True)

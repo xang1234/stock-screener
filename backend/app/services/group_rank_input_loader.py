@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
-from typing import Callable, Optional
+from typing import Optional, Sequence
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -11,14 +12,17 @@ from sqlalchemy.orm import Session
 from ..domain.providers.price_symbol_support import (
     is_unsupported_yahoo_price_symbol,
 )
-from ..models.stock_universe import StockUniverse
 from .benchmark_cache_service import BenchmarkCacheService
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
+from .group_rank_input_sources import (
+    GroupRankMarketCapSource,
+    GroupRankTaxonomySource,
+    GroupRankUniverseSource,
+)
 from .group_rank_models import (
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
 )
-from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
 
 
@@ -32,13 +36,15 @@ class GroupRankInputLoader:
         *,
         price_cache: PriceCacheService,
         benchmark_cache: BenchmarkCacheService,
-        market_cap_loader: (
-            Callable[[Session, list[str]], dict[str, float]] | None
-        ) = None,
+        universe_source: GroupRankUniverseSource,
+        taxonomy_source: GroupRankTaxonomySource,
+        market_cap_source: GroupRankMarketCapSource,
     ) -> None:
         self.price_cache = price_cache
         self.benchmark_cache = benchmark_cache
-        self.market_cap_loader = market_cap_loader
+        self.universe_source = universe_source
+        self.taxonomy_source = taxonomy_source
+        self.market_cap_source = market_cap_source
 
     def load(
         self,
@@ -47,8 +53,6 @@ class GroupRankInputLoader:
         market: str,
         policy: DerivedDataExecutionPolicy,
     ) -> GroupRankPrefetchData:
-        from ..wiring.bootstrap import get_stock_universe_service
-
         normalized_market = (market or "US").upper()
         primary_benchmark = self.benchmark_cache.get_benchmark_symbol(
             normalized_market
@@ -78,35 +82,38 @@ class GroupRankInputLoader:
                 benchmark_role=benchmark_role,
             )
 
-        active_symbols = frozenset(
-            get_stock_universe_service().get_active_symbols(
-                db,
-                market=normalized_market,
-            )
+        active_symbols = self.universe_source.active_symbols(
+            db,
+            normalized_market,
         )
-        groups = IBDIndustryService.get_all_groups(
+        groups = self.taxonomy_source.groups(
+            db,
+            normalized_market,
+        )
+        symbols_by_group = self._validated_symbols_by_group(
             db,
             market=normalized_market,
+            group_names=groups,
+            active_symbols=active_symbols,
         )
-        symbols_by_group: dict[str, tuple[str, ...]] = {}
-        symbols_to_fetch: set[str] = set()
-        unsupported_symbols: set[str] = set()
-
-        for group in groups:
-            validated: list[str] = []
-            for symbol in IBDIndustryService.get_group_symbols(
+        symbols_to_fetch = {
+            symbol
+            for symbols in symbols_by_group.values()
+            for symbol in symbols
+        }
+        unsupported_symbols = {
+            symbol
+            for group in groups
+            for symbol in self.taxonomy_source.symbols_for_group(
                 db,
                 group,
-                market=normalized_market,
-            ):
-                if symbol not in active_symbols:
-                    continue
-                if is_unsupported_yahoo_price_symbol(symbol):
-                    unsupported_symbols.add(symbol)
-                    continue
-                validated.append(symbol)
-            symbols_by_group[group] = tuple(validated)
-            symbols_to_fetch.update(validated)
+                normalized_market,
+            )
+            if (
+                symbol in active_symbols
+                and is_unsupported_yahoo_price_symbol(symbol)
+            )
+        }
 
         ordered_symbols = sorted(symbols_to_fetch)
         if policy.cache_only:
@@ -126,8 +133,10 @@ class GroupRankInputLoader:
             if prices.get(symbol) is None or prices[symbol].empty
         )
         valid_count = len(ordered_symbols) - len(missing)
-        market_cap_loader = self.market_cap_loader or self._market_caps
-        market_caps = market_cap_loader(db, ordered_symbols)
+        market_caps = self.market_cap_source.market_caps(
+            db,
+            ordered_symbols,
+        )
         stats = GroupRankPrefetchStats(
             target_symbols=len(ordered_symbols),
             symbols_with_prices=valid_count,
@@ -156,6 +165,48 @@ class GroupRankInputLoader:
             stats=stats,
             symbols_by_group=symbols_by_group,
         )
+
+    def complete_legacy_symbols(
+        self,
+        db: Session,
+        *,
+        market: str,
+        group_names: Sequence[str],
+        prefetch: GroupRankPrefetchData,
+    ) -> GroupRankPrefetchData:
+        if prefetch.symbols_by_group:
+            return prefetch
+        symbols_by_group = self._validated_symbols_by_group(
+            db,
+            market=market,
+            group_names=group_names,
+            active_symbols=prefetch.active_symbols,
+        )
+        return replace(prefetch, symbols_by_group=symbols_by_group)
+
+    def _validated_symbols_by_group(
+        self,
+        db: Session,
+        *,
+        market: str,
+        group_names: Sequence[str],
+        active_symbols: frozenset[str],
+    ) -> dict[str, tuple[str, ...]]:
+        return {
+            group: tuple(
+                symbol
+                for symbol in self.taxonomy_source.symbols_for_group(
+                    db,
+                    group,
+                    market,
+                )
+                if (
+                    symbol in active_symbols
+                    and not is_unsupported_yahoo_price_symbol(symbol)
+                )
+            )
+            for group in group_names
+        }
 
     def _empty_prefetch(
         self,
@@ -195,27 +246,14 @@ class GroupRankInputLoader:
         *,
         period: str,
     ) -> tuple[Optional[pd.DataFrame], str, str]:
-        candidates = [primary_symbol]
-        candidate_fn = getattr(
-            self.benchmark_cache,
-            "get_benchmark_candidates",
-            None,
-        )
-        if callable(candidate_fn):
-            try:
-                resolved = [
-                    str(symbol)
-                    for symbol in candidate_fn(market)
-                    if symbol
-                ]
-                if resolved:
-                    candidates = resolved
-            except Exception:
-                logger.debug(
-                    "Could not resolve benchmark candidates for market=%s",
-                    market,
-                    exc_info=True,
-                )
+        resolved = [
+            str(symbol)
+            for symbol in self.benchmark_cache.get_benchmark_candidates(
+                market
+            )
+            if symbol
+        ]
+        candidates = resolved or [primary_symbol]
 
         for index, candidate in enumerate(candidates):
             data = self.price_cache.get_cached_only_fresh(
@@ -232,20 +270,3 @@ class GroupRankInputLoader:
                     )
                 return data, candidate, role
         return None, primary_symbol, "primary"
-
-    @staticmethod
-    def _market_caps(
-        db: Session,
-        symbols: list[str],
-    ) -> dict[str, float]:
-        if not symbols:
-            return {}
-        rows = db.query(
-            StockUniverse.symbol,
-            StockUniverse.market_cap,
-        ).filter(StockUniverse.symbol.in_(symbols)).all()
-        return {
-            symbol: market_cap
-            for symbol, market_cap in rows
-            if market_cap and market_cap > 0
-        }

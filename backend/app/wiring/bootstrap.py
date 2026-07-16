@@ -183,12 +183,30 @@ class RuntimeServices:
         if self._group_rank_service is None:
             with self._init_lock:
                 if self._group_rank_service is None:
+                    from app.services.group_rank_input_loader import (
+                        GroupRankInputLoader,
+                    )
+                    from app.services.group_rank_input_sources import (
+                        IBDIndustryTaxonomySource,
+                        SqlGroupRankMarketCapSource,
+                        StockUniverseGroupRankSource,
+                    )
                     from app.services.ibd_group_rank_service import IBDGroupRankService
 
                     cache_bundle = self.cache_bundle()
+                    input_loader = GroupRankInputLoader(
+                        price_cache=cache_bundle.price,
+                        benchmark_cache=cache_bundle.benchmark,
+                        universe_source=StockUniverseGroupRankSource(
+                            self.stock_universe_service()
+                        ),
+                        taxonomy_source=IBDIndustryTaxonomySource(),
+                        market_cap_source=SqlGroupRankMarketCapSource(),
+                    )
                     self._group_rank_service = IBDGroupRankService(
                         price_cache=cache_bundle.price,
                         benchmark_cache=cache_bundle.benchmark,
+                        input_loader=input_loader,
                     )
         return self._group_rank_service
 

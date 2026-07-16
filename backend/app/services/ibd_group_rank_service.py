@@ -28,6 +28,7 @@ from .group_rank_models import (
     GroupRankPrefetchStats,
 )
 from .group_rank_input_loader import GroupRankInputLoader
+from .group_rank_legacy_adapter import LegacyGroupRankPrefetchAdapter
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
@@ -86,7 +87,10 @@ class IBDGroupRankService:
         benchmark_cache: BenchmarkCacheService,
         rs_calculator: RelativeStrengthCalculator | None = None,
         group_constituent_source: GroupConstituentSource | None = None,
-        input_loader: GroupRankInputLoader | None = None,
+        input_loader: GroupRankInputLoader,
+        legacy_prefetch_adapter: (
+            LegacyGroupRankPrefetchAdapter | None
+        ) = None,
     ):
         """Initialize the service."""
         self.price_cache = price_cache
@@ -95,15 +99,10 @@ class IBDGroupRankService:
         self.group_constituent_source = (
             group_constituent_source or GroupConstituentSource()
         )
-        self.input_loader = input_loader or GroupRankInputLoader(
-            price_cache=price_cache,
-            benchmark_cache=benchmark_cache,
-            market_cap_loader=(
-                lambda db, symbols: self._get_market_caps_for_symbols(
-                    db,
-                    symbols,
-                )
-            ),
+        self.input_loader = input_loader
+        self.legacy_prefetch_adapter = (
+            legacy_prefetch_adapter
+            or LegacyGroupRankPrefetchAdapter()
         )
 
     def calculate_group_rankings(
@@ -138,7 +137,10 @@ class IBDGroupRankService:
         start_time = datetime.now()
 
         # Get all unique industry groups for this market
-        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
+        all_groups = self.input_loader.taxonomy_source.groups(
+            db,
+            normalized_market,
+        )
         if not all_groups:
             logger.error("No industry groups found for market %s", normalized_market)
             raise MissingIBDIndustryMappingsError()
@@ -186,6 +188,12 @@ class IBDGroupRankService:
                 prefetch_stats=prefetch_stats,
             )
 
+        prefetch = self.input_loader.complete_legacy_symbols(
+            db,
+            market=normalized_market,
+            group_names=all_groups,
+            prefetch=prefetch,
+        )
         rs_by_date = self._calculate_rs_by_symbol_for_dates(
             prefetch,
             [calculation_date],
@@ -194,12 +202,7 @@ class IBDGroupRankService:
 
         # Calculate RS for each group using pre-fetched cached data
         group_metrics = []
-        symbols_by_group = self._symbols_by_group_for_run(
-            db,
-            all_groups,
-            prefetch,
-            market=normalized_market,
-        )
+        symbols_by_group = prefetch.symbols_by_group
 
         for group_name in all_groups:
             try:
@@ -272,7 +275,10 @@ class IBDGroupRankService:
         prices_dict = self.price_cache.get_many(symbols, period="2y")
 
         # Market caps for weighted RS
-        market_caps = self._get_market_caps_for_symbols(db, symbols)
+        market_caps = self.input_loader.market_cap_source.market_caps(
+            db,
+            symbols,
+        )
 
         # Calculate RS for each symbol
         rs_ratings = []
@@ -853,8 +859,10 @@ class IBDGroupRankService:
 
         This ensures group ranking uses the same universe as bulk scans.
         """
-        group_symbols = IBDIndustryService.get_group_symbols(
-            db, group_name, market=market
+        group_symbols = self.input_loader.taxonomy_source.symbols_for_group(
+            db,
+            group_name,
+            market,
         )
         return [
             symbol
@@ -876,11 +884,10 @@ class IBDGroupRankService:
         if not symbols:
             return {}
 
-        rows = db.query(StockUniverse.symbol, StockUniverse.market_cap).filter(
-            StockUniverse.symbol.in_(symbols)
-        ).all()
-
-        return {symbol: cap for symbol, cap in rows if cap and cap > 0}
+        return self.input_loader.market_cap_source.market_caps(
+            db,
+            symbols,
+        )
 
     def _calculate_pct_above_80(
         self,
@@ -895,42 +902,9 @@ class IBDGroupRankService:
         count = count_above_80 or 0
         return round((count / total_count) * 100, 1)
 
-    @staticmethod
-    def _coerce_prefetch_data(prefetch: Any) -> GroupRankPrefetchData:
-        """Accept legacy test tuples while the service uses a named prefetch object."""
-        if isinstance(prefetch, GroupRankPrefetchData):
-            return prefetch
-        spy_data, all_prices, active_symbols, market_caps, stats = prefetch
-        return GroupRankPrefetchData(
-            benchmark_prices=spy_data,
-            prices_by_symbol=all_prices,
-            active_symbols=frozenset(active_symbols),
-            market_caps=market_caps,
-            stats=GroupRankPrefetchStats.from_mapping(stats),
-            symbols_by_group={},
-        )
-
-    def _symbols_by_group_for_run(
-        self,
-        db: Session,
-        group_names: List[str],
-        prefetch: GroupRankPrefetchData,
-        *,
-        market: str,
-    ) -> Dict[str, List[str]]:
-        """Return prefetched group symbols, or build them once for legacy prefetch tuples."""
-        symbols_by_group: Dict[str, List[str]] = {}
-        for group_name in group_names:
-            if group_name in prefetch.symbols_by_group:
-                symbols_by_group[group_name] = prefetch.symbols_by_group[group_name]
-            else:
-                symbols_by_group[group_name] = self._get_validated_group_symbols(
-                    db,
-                    group_name,
-                    prefetch.active_symbols,
-                    market=market,
-                )
-        return symbols_by_group
+    def _coerce_prefetch_data(self, prefetch: Any) -> GroupRankPrefetchData:
+        """Adapt the legacy facade seam to the strict prefetch model."""
+        return self.legacy_prefetch_adapter.adapt(prefetch)
 
     def _prefetch_all_data(
         self,
@@ -1295,9 +1269,17 @@ class IBDGroupRankService:
                 'error': 'Failed to fetch SPY benchmark data',
             }
 
-        all_groups = list(prefetch.symbols_by_group) or IBDIndustryService.get_all_groups(
+        all_groups = list(prefetch.symbols_by_group) or list(
+            self.input_loader.taxonomy_source.groups(
+                db,
+                normalized_market,
+            )
+        )
+        prefetch = self.input_loader.complete_legacy_symbols(
             db,
             market=normalized_market,
+            group_names=all_groups,
+            prefetch=prefetch,
         )
 
         # 3. Generate trading dates using the target market's calendar.
@@ -1318,12 +1300,7 @@ class IBDGroupRankService:
 
         processed = 0
         errors = 0
-        symbols_by_group = self._symbols_by_group_for_run(
-            db,
-            all_groups,
-            prefetch,
-            market=normalized_market,
-        )
+        symbols_by_group = prefetch.symbols_by_group
         chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
         logger.info(
             "Processing optimized group-ranking backfill in RS chunks of %d date(s)",
@@ -1652,9 +1629,17 @@ class IBDGroupRankService:
                 'prefetch_stats': prefetch.stats.to_dict(),
             }
 
-        all_groups = list(prefetch.symbols_by_group) or IBDIndustryService.get_all_groups(
+        all_groups = list(prefetch.symbols_by_group) or list(
+            self.input_loader.taxonomy_source.groups(
+                db,
+                normalized_market,
+            )
+        )
+        prefetch = self.input_loader.complete_legacy_symbols(
             db,
             market=normalized_market,
+            group_names=all_groups,
+            prefetch=prefetch,
         )
 
         stats = {
@@ -1665,12 +1650,7 @@ class IBDGroupRankService:
             'prefetch_stats': prefetch.stats.to_dict(),
         }
 
-        symbols_by_group = self._symbols_by_group_for_run(
-            db,
-            all_groups,
-            prefetch,
-            market=normalized_market,
-        )
+        symbols_by_group = prefetch.symbols_by_group
         chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
         logger.info(
             "Processing group-ranking gap-fill in RS chunks of %d date(s)",

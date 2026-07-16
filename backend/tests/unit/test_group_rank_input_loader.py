@@ -1,12 +1,46 @@
+from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from unittest.mock import Mock
 
 import pandas as pd
 
+import app.services.group_rank_input_loader as group_loader_module
 from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
 from app.services.group_rank_input_loader import GroupRankInputLoader
+
+
+@dataclass
+class FakeUniverseSource:
+    symbols: tuple[str, ...]
+
+    def active_symbols(self, db, market):
+        return frozenset(self.symbols)
+
+
+@dataclass
+class FakeTaxonomySource:
+    symbols_by_group: dict[str, tuple[str, ...]]
+
+    def groups(self, db, market):
+        return tuple(self.symbols_by_group)
+
+    def symbols_for_group(self, db, group, market):
+        return self.symbols_by_group[group]
+
+
+@dataclass
+class FakeMarketCapSource:
+    values: dict[str, float]
+
+    def market_caps(self, db, symbols):
+        return {
+            symbol: self.values[symbol]
+            for symbol in symbols
+            if symbol in self.values
+        }
 
 
 def _price_frame() -> pd.DataFrame:
@@ -31,27 +65,24 @@ def _policy(mode: str):
     )
 
 
-def _configure_universe(monkeypatch, *, groups, symbols, active):
-    stock_universe_service = Mock()
-    stock_universe_service.get_active_symbols.return_value = active
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
-    )
-    monkeypatch.setattr(
-        "app.services.group_rank_input_loader.IBDIndustryService.get_all_groups",
-        lambda db, **kwargs: groups,
-    )
-    monkeypatch.setattr(
-        "app.services.group_rank_input_loader.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kwargs: symbols[group],
+def _loader(
+    *,
+    price_cache,
+    benchmark_cache,
+    groups: dict[str, tuple[str, ...]],
+    active: tuple[str, ...],
+    market_caps: dict[str, float] | None = None,
+) -> GroupRankInputLoader:
+    return GroupRankInputLoader(
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+        universe_source=FakeUniverseSource(active),
+        taxonomy_source=FakeTaxonomySource(groups),
+        market_cap_source=FakeMarketCapSource(market_caps or {}),
     )
 
 
-def test_guarded_load_uses_only_cached_benchmark_and_stock_reads(
-    db_session,
-    monkeypatch,
-):
+def test_guarded_load_uses_only_cached_benchmark_and_stock_reads(db_session):
     benchmark_prices = _price_frame()
     stock_prices = _price_frame()
     price_cache = Mock()
@@ -68,19 +99,12 @@ def test_guarded_load_uses_only_cached_benchmark_and_stock_reads(
     benchmark_cache.get_benchmark_data.side_effect = AssertionError(
         "guarded group load must not call provider-capable benchmark reads"
     )
-    _configure_universe(
-        monkeypatch,
-        groups=["Software"],
-        symbols={"Software": ["AAPL"]},
-        active=["AAPL"],
-    )
-    market_cap_loader = Mock(
-        return_value={"AAPL": 1_000_000_000}
-    )
-    loader = GroupRankInputLoader(
+    loader = _loader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
-        market_cap_loader=market_cap_loader,
+        groups={"Software": ("AAPL",)},
+        active=("AAPL",),
+        market_caps={"AAPL": 1_000_000_000},
     )
 
     prefetch = loader.load(
@@ -95,15 +119,11 @@ def test_guarded_load_uses_only_cached_benchmark_and_stock_reads(
     assert prefetch.market_caps == {"AAPL": 1_000_000_000}
     assert prefetch.stats.cache_miss_symbols == 0
     assert prefetch.stats.benchmark_cached is True
-    market_cap_loader.assert_called_once_with(db_session, ["AAPL"])
     price_cache.get_many.assert_not_called()
     benchmark_cache.get_benchmark_data.assert_not_called()
 
 
-def test_cache_only_load_uses_cached_fallback_benchmark(
-    db_session,
-    monkeypatch,
-):
+def test_cache_only_load_uses_cached_fallback_benchmark(db_session):
     fallback_prices = _price_frame()
     stock_prices = _price_frame()
     price_cache = Mock()
@@ -120,17 +140,12 @@ def test_cache_only_load_uses_cached_fallback_benchmark(
         "^N225",
         "1306.T",
     ]
-    _configure_universe(
-        monkeypatch,
-        groups=["JP_Software"],
-        symbols={"JP_Software": ["SONY"]},
-        active=["SONY"],
-    )
-    loader = GroupRankInputLoader(
+    loader = _loader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
+        groups={"JP_Software": ("SONY",)},
+        active=("SONY",),
     )
-    monkeypatch.setattr(loader, "_market_caps", lambda db, symbols: {})
 
     prefetch = loader.load(
         db_session,
@@ -143,10 +158,7 @@ def test_cache_only_load_uses_cached_fallback_benchmark(
     assert prefetch.stats.benchmark_role == "fallback"
 
 
-def test_historical_auto_load_uses_provider_capable_reads(
-    db_session,
-    monkeypatch,
-):
+def test_historical_auto_load_uses_provider_capable_reads(db_session):
     benchmark_prices = _price_frame()
     stock_prices = _price_frame()
     price_cache = Mock()
@@ -154,17 +166,12 @@ def test_historical_auto_load_uses_provider_capable_reads(
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "SPY"
     benchmark_cache.get_benchmark_data.return_value = benchmark_prices
-    _configure_universe(
-        monkeypatch,
-        groups=["Software"],
-        symbols={"Software": ["AAPL"]},
-        active=["AAPL"],
-    )
-    loader = GroupRankInputLoader(
+    loader = _loader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
+        groups={"Software": ("AAPL",)},
+        active=("AAPL",),
     )
-    monkeypatch.setattr(loader, "_market_caps", lambda db, symbols: {})
     policy = resolve_derived_data_execution_policy(
         execution_policy="auto",
         target_date=date(2026, 3, 19),
@@ -182,27 +189,19 @@ def test_historical_auto_load_uses_provider_capable_reads(
     price_cache.get_many_cached_only_fresh.assert_not_called()
 
 
-def test_load_skips_unsupported_symbols_before_bulk_read(
-    db_session,
-    monkeypatch,
-):
+def test_load_skips_unsupported_symbols_before_bulk_read(db_session):
     prices = _price_frame()
     price_cache = Mock()
     price_cache.get_many.return_value = {"AAPL": prices}
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "SPY"
     benchmark_cache.get_benchmark_data.return_value = prices
-    _configure_universe(
-        monkeypatch,
-        groups=["Software"],
-        symbols={"Software": ["AAPL", "MZYX-U"]},
-        active=["AAPL", "MZYX-U"],
-    )
-    loader = GroupRankInputLoader(
+    loader = _loader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
+        groups={"Software": ("AAPL", "MZYX-U")},
+        active=("AAPL", "MZYX-U"),
     )
-    monkeypatch.setattr(loader, "_market_caps", lambda db, symbols: {})
     policy = resolve_derived_data_execution_policy(
         execution_policy="auto",
         target_date=date(2026, 3, 19),
@@ -216,17 +215,17 @@ def test_load_skips_unsupported_symbols_before_bulk_read(
     price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
 
 
-def test_cache_only_missing_benchmark_returns_typed_empty_prefetch(
-    db_session,
-):
+def test_cache_only_missing_benchmark_returns_typed_empty_prefetch(db_session):
     price_cache = Mock()
     price_cache.get_cached_only_fresh.return_value = None
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "^N225"
     benchmark_cache.get_benchmark_candidates.return_value = ["^N225"]
-    loader = GroupRankInputLoader(
+    loader = _loader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
+        groups={},
+        active=(),
     )
 
     prefetch = loader.load(
@@ -239,3 +238,55 @@ def test_cache_only_missing_benchmark_returns_typed_empty_prefetch(
     assert prefetch.stats.benchmark_available is False
     assert prefetch.stats.benchmark_symbol == "^N225"
     assert prefetch.stats.market == "JP"
+
+
+def test_complete_legacy_symbols_uses_typed_taxonomy_source(db_session):
+    prices = _price_frame()
+    loader = _loader(
+        price_cache=Mock(),
+        benchmark_cache=Mock(),
+        groups={"Software": ("AAPL", "INACTIVE")},
+        active=("AAPL",),
+    )
+    from app.services.group_rank_models import (
+        GroupRankPrefetchData,
+        GroupRankPrefetchStats,
+    )
+
+    prefetch = GroupRankPrefetchData(
+        benchmark_prices=prices,
+        prices_by_symbol={"AAPL": prices},
+        active_symbols=frozenset({"AAPL"}),
+        market_caps={},
+        stats=GroupRankPrefetchStats(
+            target_symbols=1,
+            symbols_with_prices=1,
+            cache_miss_symbols=0,
+            cache_miss_symbols_sample=(),
+            cache_coverage_ratio=1.0,
+            benchmark_available=True,
+            benchmark_cached=True,
+            benchmark_symbol="SPY",
+            benchmark_role="primary",
+            market="US",
+            cache_only=True,
+            skipped_unsupported_symbols=0,
+        ),
+        symbols_by_group={},
+    )
+
+    completed = loader.complete_legacy_symbols(
+        db_session,
+        market="US",
+        group_names=("Software",),
+        prefetch=prefetch,
+    )
+
+    assert completed.symbols_by_group == {"Software": ("AAPL",)}
+
+
+def test_loader_has_no_service_location_or_facade_callback():
+    source = Path(group_loader_module.__file__).read_text()
+    assert "wiring.bootstrap" not in source
+    assert "IBDGroupRankService" not in source
+    assert "getattr(" not in source

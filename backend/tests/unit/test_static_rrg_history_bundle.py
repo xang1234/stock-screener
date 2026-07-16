@@ -14,6 +14,7 @@ from app.models.industry import IBDGroupRank
 from app.services.group_rank_history_backfill_service import (
     GroupRankHistoryBackfillService,
 )
+from app.services.group_rank_input_loader import GroupRankInputLoader
 from app.services.ibd_group_rank_service import IBDGroupRankService
 from app.services.market_calendar_service import MarketCalendarService
 from app.services.rrg_service import MIN_TAIL_WEEKS, RRGService
@@ -111,34 +112,40 @@ def test_first_static_build_bootstraps_via_production_gap_fill(
             assert period == "2y"
             return {symbol: prices_by_symbol[symbol] for symbol in requested_symbols}
 
-    class _Universe:
+    class _UniverseSource:
         @staticmethod
-        def get_active_symbols(_db, *, market):
+        def active_symbols(_db, market):
             assert market == "HK"
-            return symbols
+            return frozenset(symbols)
 
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: _Universe(),
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda _db, *, market: list(groups) if market == "HK" else [],
-    )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda _db, group, *, market: groups[group] if market == "HK" else [],
+    class _TaxonomySource:
+        @staticmethod
+        def groups(_db, market):
+            return tuple(groups) if market == "HK" else ()
+
+        @staticmethod
+        def symbols_for_group(_db, group, market):
+            return tuple(groups[group]) if market == "HK" else ()
+
+    class _MarketCapSource:
+        @staticmethod
+        def market_caps(_db, requested_symbols):
+            return {
+                symbol: 1_000_000_000
+                for symbol in requested_symbols
+            }
+
+    input_loader = GroupRankInputLoader(
+        price_cache=_PriceCache(),
+        benchmark_cache=_BenchmarkCache(),
+        universe_source=_UniverseSource(),
+        taxonomy_source=_TaxonomySource(),
+        market_cap_source=_MarketCapSource(),
     )
     group_rank_service = IBDGroupRankService(
         price_cache=_PriceCache(),
         benchmark_cache=_BenchmarkCache(),
-    )
-    monkeypatch.setattr(
-        group_rank_service,
-        "_get_market_caps_for_symbols",
-        lambda _db, requested_symbols: {
-            symbol: 1_000_000_000 for symbol in requested_symbols
-        },
+        input_loader=input_loader,
     )
 
     class _Taxonomy:

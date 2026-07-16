@@ -16,11 +16,18 @@ from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
 from app.services.group_rank_cache_policy import GroupRankCacheRequirement
+from app.services.group_rank_input_loader import GroupRankInputLoader
+from app.services.group_rank_input_sources import (
+    IBDIndustryTaxonomySource,
+    SqlGroupRankMarketCapSource,
+    StockUniverseGroupRankSource,
+)
 from app.services.group_rank_models import (
     GroupRankCalculationResult,
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
 )
+from app.services.stock_universe_service import StockUniverseService
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
@@ -54,10 +61,25 @@ def _make_session():
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
 
 
+def _input_loader(price_cache, benchmark_cache):
+    return GroupRankInputLoader(
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+        universe_source=StockUniverseGroupRankSource(
+            StockUniverseService()
+        ),
+        taxonomy_source=IBDIndustryTaxonomySource(),
+        market_cap_source=SqlGroupRankMarketCapSource(),
+    )
+
+
 def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: Mock | None = None):
+    price_cache = price_cache or Mock()
+    benchmark_cache = benchmark_cache or Mock()
     return IBDGroupRankService(
-        price_cache=price_cache or Mock(),
-        benchmark_cache=benchmark_cache or Mock(),
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+        input_loader=_input_loader(price_cache, benchmark_cache),
     )
 
 
@@ -270,9 +292,12 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
 
 
 def test_get_group_history_propagates_constituent_source_failures(monkeypatch):
+    price_cache = Mock()
+    benchmark_cache = Mock()
     service = IBDGroupRankService(
-        price_cache=Mock(),
-        benchmark_cache=Mock(),
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+        input_loader=_input_loader(price_cache, benchmark_cache),
         group_constituent_source=Mock(),
     )
     service.group_constituent_source.get_constituent_items.side_effect = RuntimeError(

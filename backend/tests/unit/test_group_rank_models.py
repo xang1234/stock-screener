@@ -62,36 +62,25 @@ def test_prefetch_stats_preserve_external_dictionary_keys():
     }
 
 
-def test_prefetch_stats_can_coerce_legacy_test_mapping():
-    stats = GroupRankPrefetchStats.from_mapping({
-        "target_symbols": 2,
-        "symbols_with_prices": 1,
-        "cache_miss_symbols": 1,
-        "spy_cached": True,
-    })
+def test_prefetch_data_rejects_legacy_stats_mapping():
+    with pytest.raises(TypeError, match="GroupRankPrefetchStats"):
+        GroupRankPrefetchData(
+            benchmark_prices=pd.DataFrame({"Close": [100.0]}),
+            prices_by_symbol={},
+            active_symbols=frozenset(),
+            market_caps={},
+            stats={"spy_cached": True},
+            symbols_by_group={},
+        )
 
-    assert stats.cache_coverage_ratio == 0.5
-    assert stats.benchmark_available is True
-    assert stats.cache_miss_symbols_sample == ()
 
-
-def test_prefetch_data_normalizes_legacy_container_values():
-    prices = pd.DataFrame({"Close": [100.0]})
-
-    prefetch = GroupRankPrefetchData(
-        benchmark_prices=prices,
-        prices_by_symbol={"AAA": prices},
-        active_symbols={"AAA"},
-        market_caps={"AAA": 1_000_000},
-        stats={
-            "target_symbols": 1,
-            "symbols_with_prices": 1,
-            "cache_miss_symbols": 0,
-            "spy_cached": True,
-        },
-        symbols_by_group={"Software": ["AAA"]},
-    )
-
-    assert prefetch.active_symbols == frozenset({"AAA"})
-    assert prefetch.symbols_by_group == {"Software": ("AAA",)}
-    assert isinstance(prefetch.stats, GroupRankPrefetchStats)
+def test_prefetch_data_rejects_mutable_group_symbol_lists():
+    with pytest.raises(TypeError, match="tuple"):
+        GroupRankPrefetchData(
+            benchmark_prices=None,
+            prices_by_symbol={},
+            active_symbols=frozenset(),
+            market_caps={},
+            stats=_stats(),
+            symbols_by_group={"Software": ["AAA"]},
+        )
