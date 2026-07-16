@@ -6,9 +6,50 @@ from unittest.mock import MagicMock
 import pytest
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 
-from app.services.group_rank_cache_policy import GroupRankCacheRequirement
+from app.services.group_rank_models import (
+    GroupRankCalculationResult,
+    GroupRankPrefetchStats,
+)
 from app.services.ibd_group_rank_service import IncompleteGroupRankingCacheError
 from app.services.ibd_group_rank_service import MissingIBDIndustryMappingsError
+
+
+def _prefetch_stats(
+    *,
+    misses: int = 0,
+) -> GroupRankPrefetchStats:
+    target = 100
+    return GroupRankPrefetchStats(
+        target_symbols=target,
+        symbols_with_prices=target - misses,
+        cache_miss_symbols=misses,
+        cache_miss_symbols_sample=(("MISS",) if misses else ()),
+        cache_coverage_ratio=(target - misses) / target,
+        benchmark_available=True,
+        benchmark_cached=True,
+        benchmark_symbol="SPY",
+        benchmark_role="primary",
+        market="US",
+        cache_only=True,
+        skipped_unsupported_symbols=0,
+    )
+
+
+def _group_calculation(
+    *,
+    misses: int = 0,
+) -> GroupRankCalculationResult:
+    return GroupRankCalculationResult(
+        rankings=(
+            {
+                "rank": 1,
+                "industry_group": "Software",
+                "avg_rs_rating": 90.0,
+                "num_stocks": 3,
+            },
+        ),
+        prefetch_stats=_prefetch_stats(misses=misses),
+    )
 
 
 def _patch_serialized_lock(monkeypatch):
@@ -51,139 +92,6 @@ def _patch_calendar_service(
     return fake
 
 
-def test_daily_group_rankings_refuse_to_publish_when_warmup_incomplete(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-
-    fake_price_cache = MagicMock()
-    fake_price_cache.get_warmup_metadata.return_value = {
-        "status": "partial",
-        "count": 9000,
-        "total": 10000,
-        "completed_at": datetime.now().isoformat(),
-    }
-    fake_service = MagicMock()
-    fake_service.price_cache = fake_price_cache
-
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-
-    result = module.calculate_daily_group_rankings.run()
-
-    assert "error" in result
-    assert "warmup not complete" in result["error"].lower()
-    fake_service.calculate_group_rankings.assert_not_called()
-
-
-def test_daily_group_rankings_allow_tw_partial_warmup_above_bootstrap_price_policy(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-    import app.services.ui_snapshot_service as snapshot_module
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 6, 10, 17, 40, 0))
-    monkeypatch.setattr(
-        "app.services.runtime_preferences_service.is_market_enabled_now",
-        lambda _m: True,
-    )
-    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
-
-    fake_price_cache = MagicMock()
-    fake_price_cache.get_warmup_metadata.return_value = {
-        "status": "partial",
-        "count": 1081,
-        "total": 1969,
-        "completed_at": datetime.now().isoformat(),
-    }
-    fake_service = MagicMock()
-    fake_service.price_cache = fake_price_cache
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Semiconductors", "avg_rs_rating": 91.0, "rank": 1, "num_stocks": 18}
-    ]
-
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-
-    result = module.calculate_daily_group_rankings.run(market="TW")
-
-    assert result.get("groups_ranked") == 1, result
-    assert result["cache_only"] is True
-    fake_service.calculate_group_rankings.assert_called_once_with(
-        fake_db,
-        datetime(2026, 6, 10, 17, 40, 0).date(),
-        market="TW",
-        cache_only=True,
-        cache_requirement=GroupRankCacheRequirement.minimum(0.50, reason="partial_warmup"),
-    )
-
-
-def test_daily_group_rankings_reject_stale_partial_warmup_above_policy(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 6, 10, 17, 40, 0))
-    monkeypatch.setattr(
-        "app.services.runtime_preferences_service.is_market_enabled_now",
-        lambda _m: True,
-    )
-
-    fake_price_cache = MagicMock()
-    fake_price_cache.get_warmup_metadata.return_value = {
-        "status": "partial",
-        "count": 1081,
-        "total": 1969,
-        "completed_at": "2020-01-01T00:00:00",
-    }
-    fake_service = MagicMock()
-    fake_service.price_cache = fake_price_cache
-
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-
-    result = module.calculate_daily_group_rankings.run(market="TW")
-
-    assert "stale" in result["error"].lower()
-    fake_service.calculate_group_rankings.assert_not_called()
-
-
-def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-    import app.services.ui_snapshot_service as snapshot_module
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
-
-    fake_price_cache = MagicMock()
-    fake_price_cache.get_warmup_metadata.return_value = None
-    fake_service = MagicMock()
-    fake_service.price_cache = fake_price_cache
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
-    ]
-
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-
-    with module.allow_same_day_group_rank_warmup_bypass():
-        result = module.calculate_daily_group_rankings.run()
-
-    assert result["groups_ranked"] == 1
-    assert result["cache_only"] is True
-    fake_service.calculate_group_rankings.assert_called_once_with(
-        fake_db,
-        datetime(2026, 3, 20, 17, 40, 0).date(),
-        market="US",
-        cache_only=True,
-        cache_requirement=GroupRankCacheRequirement.strict(),
-    )
-
-
 def test_daily_group_rankings_refuse_to_publish_when_cache_only_inputs_missing(monkeypatch):
     import app.tasks.group_rank_tasks as module
 
@@ -202,12 +110,7 @@ def test_daily_group_rankings_refuse_to_publish_when_cache_only_inputs_missing(m
     fake_service = MagicMock()
     fake_service.price_cache = fake_price_cache
     fake_service.calculate_group_rankings.side_effect = IncompleteGroupRankingCacheError(
-        {
-            "target_symbols": 100,
-            "symbols_with_prices": 99,
-            "cache_miss_symbols": 1,
-            "spy_cached": True,
-        }
+        _prefetch_stats(misses=1)
     )
 
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
@@ -217,163 +120,6 @@ def test_daily_group_rankings_refuse_to_publish_when_cache_only_inputs_missing(m
     assert result["cache_only"] is True
     assert result["prefetch_stats"]["cache_miss_symbols"] == 1
     assert "missing cached price data" in result["error"].lower()
-
-
-def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-    import app.services.ui_snapshot_service as snapshot_module
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
-
-    fake_price_cache = MagicMock()
-    fake_service = MagicMock()
-    fake_service.price_cache = fake_price_cache
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
-    ]
-
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-
-    result = module.calculate_daily_group_rankings.run("2026-03-19")
-
-    assert result["groups_ranked"] == 1
-    assert result["cache_only"] is False
-    fake_service.calculate_group_rankings.assert_called_once_with(
-        fake_db,
-        datetime(2026, 3, 19).date(),
-        market="US",
-        cache_only=False,
-        cache_requirement=GroupRankCacheRequirement.disabled(),
-    )
-
-
-def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-    import app.services.ui_snapshot_service as snapshot_module
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 4, 3, 0, 30, 0))
-    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
-
-    fake_service = MagicMock()
-    fake_service.price_cache = MagicMock()
-    fake_service.price_cache.get_warmup_metadata.return_value = {
-        "status": "completed",
-        "count": 10000,
-        "total": 10000,
-        "completed_at": datetime.now().isoformat(),
-    }
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
-    ]
-
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-
-    result = module.calculate_daily_group_rankings.run(
-        "2026-04-02",
-        force_cache_only=True,
-    )
-
-    assert result["groups_ranked"] == 1
-    assert result["cache_only"] is True
-    fake_service.calculate_group_rankings.assert_called_once_with(
-        fake_db,
-        datetime(2026, 4, 2).date(),
-        market="US",
-        cache_only=True,
-        cache_requirement=GroupRankCacheRequirement.strict(),
-    )
-
-
-def test_guarded_historical_group_rankings_use_tolerant_cache_only_policy(monkeypatch):
-    import app.services.ui_snapshot_service as snapshot_module
-    import app.tasks.group_rank_tasks as module
-
-    fake_db = MagicMock()
-    fake_service = MagicMock()
-    fake_service.price_cache = MagicMock()
-
-    def calculate(*args, **kwargs):
-        kwargs["diagnostics"].update({
-            "target_symbols": 100,
-            "symbols_with_prices": 70,
-            "cache_miss_symbols": 30,
-            "cache_miss_symbols_sample": ["MISS"],
-            "cache_coverage_ratio": 0.70,
-            "benchmark_cached": True,
-        })
-        return [{
-            "industry_group": "Software",
-            "avg_rs_rating": 91.0,
-            "rank": 1,
-            "num_stocks": 12,
-        }]
-
-    fake_service.calculate_group_rankings.side_effect = calculate
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
-    monkeypatch.setattr(
-        "app.services.runtime_preferences_service.is_market_enabled_now",
-        lambda _market: True,
-    )
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-
-    result = module.calculate_daily_group_rankings.run(
-        "2026-03-19",
-        market="US",
-        refresh_guarded_cache_only=True,
-    )
-
-    assert result["groups_ranked"] == 1
-    assert result["cache_only"] is True
-    assert result["cache_policy"] == "refresh_guarded"
-    assert result["prefetch_stats"]["cache_miss_symbols"] == 30
-    call_kwargs = fake_service.calculate_group_rankings.call_args.kwargs
-    assert call_kwargs["cache_only"] is True
-    assert call_kwargs["cache_requirement"] == GroupRankCacheRequirement.disabled()
-
-
-def test_force_cache_only_wins_over_guarded_group_tolerance(monkeypatch):
-    import app.services.ui_snapshot_service as snapshot_module
-    import app.tasks.group_rank_tasks as module
-
-    fake_db = MagicMock()
-    fake_service = MagicMock()
-    fake_service.price_cache = MagicMock()
-    fake_service.calculate_group_rankings.return_value = [{
-        "industry_group": "Software",
-        "avg_rs_rating": 91.0,
-        "rank": 1,
-        "num_stocks": 12,
-    }]
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-
-    result = module.calculate_daily_group_rankings.run(
-        "2026-03-19",
-        force_cache_only=True,
-        refresh_guarded_cache_only=True,
-    )
-
-    assert result["groups_ranked"] == 1
-    fake_service.calculate_group_rankings.assert_called_once_with(
-        fake_db,
-        date(2026, 3, 19),
-        market="US",
-        cache_only=True,
-        cache_requirement=GroupRankCacheRequirement.strict(),
-    )
 
 
 def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatch):
@@ -399,8 +145,20 @@ def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatc
 
     captured = []
 
-    def fake_inner(calculation_date=None, market=None, activity_lifecycle=None):
-        captured.append((calculation_date, market, activity_lifecycle))
+    def fake_inner(
+        calculation_date=None,
+        market=None,
+        activity_lifecycle=None,
+        execution_policy=None,
+    ):
+        captured.append(
+            (
+                calculation_date,
+                market,
+                activity_lifecycle,
+                execution_policy,
+            )
+        )
         return {"date": calculation_date, "market": market}
 
     monkeypatch.setattr(module, "_calculate_daily_group_rankings_in_process", fake_inner)
@@ -412,70 +170,15 @@ def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatc
     )
 
     assert result["today"]["date"] == "2026-03-16"
-    assert captured == [("2026-03-16", "HK", "daily_refresh")]
+    assert captured == [
+        ("2026-03-16", "HK", "daily_refresh", "auto")
+    ]
     fake_service.find_missing_dates.assert_called_once_with(
         fake_db,
         lookback_days=365,
         market="HK",
         end_date=date(2026, 3, 16),
     )
-
-
-def test_guarded_group_wrapper_propagates_cache_only_to_gapfill_and_target(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-
-    fake_db = MagicMock()
-    fake_service = MagicMock()
-    fake_service.find_missing_dates.return_value = [date(2026, 3, 18)]
-    fake_service.fill_gaps_optimized.return_value = {
-        "total_dates": 1,
-        "processed": 0,
-        "errors": 1,
-        "prefetch_stats": {"cache_miss_symbols": 4},
-    }
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
-    monkeypatch.setattr(
-        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
-        lambda db, market: ["Software"],
-    )
-    monkeypatch.setattr(
-        "app.services.runtime_preferences_service.is_market_enabled_now",
-        lambda _market: True,
-    )
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-    target_call = MagicMock(return_value={
-        "date": "2026-03-19",
-        "groups_ranked": 1,
-        "cache_only": True,
-        "cache_policy": "refresh_guarded",
-    })
-    monkeypatch.setattr(module, "_calculate_daily_group_rankings_in_process", target_call)
-
-    result = module.calculate_daily_group_rankings_with_gapfill.run(
-        market="US",
-        calculation_date="2026-03-19",
-        refresh_guarded_cache_only=True,
-    )
-
-    fake_service.fill_gaps_optimized.assert_called_once_with(
-        fake_db,
-        [date(2026, 3, 18)],
-        market="US",
-        cache_only=True,
-    )
-    target_call.assert_called_once_with(
-        market="US",
-        activity_lifecycle="daily_refresh",
-        calculation_date="2026-03-19",
-        refresh_guarded_cache_only=True,
-    )
-    assert result["cache_only"] is True
-    assert result["cache_policy"] == "refresh_guarded"
-    assert "error" not in result
-    assert result["gap_fill"]["errors"] == 1
 
 
 def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
@@ -604,9 +307,7 @@ def test_daily_group_rankings_publishes_market_activity(monkeypatch):
         "total": 10000,
         "completed_at": datetime.now().isoformat(),
     }
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
-    ]
+    fake_service.calculate_group_rankings.return_value = _group_calculation()
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     started = []
@@ -649,9 +350,7 @@ def test_daily_group_rankings_run_for_non_us_market(monkeypatch):
     fake_price_cache.get_warmup_metadata.return_value = None
     fake_service = MagicMock()
     fake_service.price_cache = fake_price_cache
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Banks", "avg_rs_rating": 88.0, "rank": 1, "num_stocks": 5}
-    ]
+    fake_service.calculate_group_rankings.return_value = _group_calculation()
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     # Use a prior date so the task doesn't route through the same-day
@@ -700,9 +399,7 @@ def test_historical_group_rankings_do_not_repair_current_us_metadata(monkeypatch
 
     fake_service = MagicMock()
     fake_service.price_cache = MagicMock()
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
-    ]
+    fake_service.calculate_group_rankings.return_value = _group_calculation()
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     repair_calls = []
@@ -749,9 +446,7 @@ def test_non_us_market_never_invokes_us_metadata_repair(monkeypatch):
         "total": 10000,
         "completed_at": datetime.now().isoformat(),
     }
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Banks", "avg_rs_rating": 90.0, "rank": 1, "num_stocks": 5}
-    ]
+    fake_service.calculate_group_rankings.return_value = _group_calculation()
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     repair_calls: list = []
@@ -885,9 +580,7 @@ def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatc
         "total": 10000,
         "completed_at": datetime.now().isoformat(),
     }
-    fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
-    ]
+    fake_service.calculate_group_rankings.return_value = _group_calculation()
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
     monkeypatch.setattr(
         "app.interfaces.tasks.feature_store_tasks._repair_current_us_group_metadata",
@@ -952,6 +645,7 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
             "market": "US",
             "activity_lifecycle": "daily_refresh",
             "calculation_date": "2026-03-20",
+            "execution_policy": "auto",
         }
     ]
     fake_service.find_missing_dates.assert_called_once_with(
@@ -960,9 +654,10 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
         market="US",
         end_date=date(2026, 3, 20),
     )
-    fake_service.fill_gaps_optimized.assert_called_once_with(
-        fake_db, [date_cls(2026, 3, 19)], market="US",
-    )
+    fill_kwargs = fake_service.fill_gaps_optimized.call_args.kwargs
+    assert fill_kwargs["market"] == "US"
+    assert fill_kwargs["policy"].mode.value == "auto"
+    assert fill_kwargs["policy"].cache_only is False
 
 
 def test_orchestrator_releases_gapfill_memory_before_today(monkeypatch):

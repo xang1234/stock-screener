@@ -915,7 +915,7 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
     assert group_kwargs["market"] == "HK"
 
 
-def test_fill_gaps_optimized_propagates_cache_only_and_returns_prefetch_stats(
+def test_fill_gaps_optimized_propagates_policy_and_returns_prefetch_stats(
     db_session,
     monkeypatch,
 ):
@@ -957,10 +957,11 @@ def test_fill_gaps_optimized_propagates_cache_only_and_returns_prefetch_stats(
         db_session,
         [date(2026, 3, 20)],
         market="US",
-        cache_only=True,
+        policy=_policy("strict_cache_only", date(2026, 3, 20)),
     )
 
-    assert captured == {"market": "US", "cache_only": True}
+    assert captured["market"] == "US"
+    assert captured["policy"].mode.value == "strict_cache_only"
     assert result["prefetch_stats"]["cache_miss_symbols"] == 1
     assert result["prefetch_stats"]["cache_miss_symbols_sample"] == ["BBB"]
 

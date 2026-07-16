@@ -28,10 +28,7 @@ from .group_rank_models import (
     GroupRankPrefetchStats,
 )
 from .group_rank_input_loader import GroupRankInputLoader
-from .derived_data_execution_policy import (
-    DerivedDataExecutionMode,
-    DerivedDataExecutionPolicy,
-)
+from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService
@@ -934,26 +931,14 @@ class IBDGroupRankService:
         db: Session,
         *,
         market: str | None = None,
-        cache_only: bool = False,
-        policy: DerivedDataExecutionPolicy | None = None,
+        policy: DerivedDataExecutionPolicy = (
+            DerivedDataExecutionPolicy.provider_allowed()
+        ),
     ) -> GroupRankPrefetchData:
-        effective_policy = policy
-        if effective_policy is None:
-            effective_policy = (
-                DerivedDataExecutionPolicy(
-                    mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
-                    cache_only=True,
-                    strict_completeness=True,
-                    requires_warmup_metadata=False,
-                    tolerates_partial_coverage=False,
-                )
-                if cache_only
-                else DerivedDataExecutionPolicy.provider_allowed()
-            )
         return self.input_loader.load(
             db,
             market=(market or "US").upper(),
-            policy=effective_policy,
+            policy=policy,
         )
 
     def _delete_rankings_for_range(
@@ -1607,7 +1592,9 @@ class IBDGroupRankService:
         missing_dates: List[date],
         *,
         market: str = "US",
-        cache_only: bool = False,
+        policy: DerivedDataExecutionPolicy = (
+            DerivedDataExecutionPolicy.provider_allowed()
+        ),
     ) -> Dict:
         """
         Fill specific missing dates using optimized approach.
@@ -1644,7 +1631,7 @@ class IBDGroupRankService:
             self._prefetch_all_data(
                 db,
                 market=normalized_market,
-                cache_only=cache_only,
+                policy=policy,
             )
         )
 

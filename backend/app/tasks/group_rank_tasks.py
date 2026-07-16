@@ -26,6 +26,11 @@ from ..services.market_activity_service import (
 )
 from ..services.group_rank_cache_policy import GroupRankCacheRequirement
 from ..services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
+from ..services.derived_data_execution_policy import (
+    DerivedDataExecutionMode,
+    DerivedDataExecutionPolicy,
+    resolve_derived_data_execution_policy,
+)
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
@@ -124,6 +129,7 @@ def calculate_daily_group_rankings(
     refresh_guarded_cache_only: bool = False,
     market: str | None = None,
     activity_lifecycle: str | None = None,
+    execution_policy: str | None = None,
 ):
     """
     Calculate and store daily IBD industry group rankings.
@@ -199,65 +205,78 @@ def calculate_daily_group_rankings(
         )
         # Initialize service
         service = get_group_rank_service()
-        guarded_cache_only = refresh_guarded_cache_only and not force_cache_only
-        cache_only = force_cache_only or refresh_guarded_cache_only or calc_date == today_local
-        cache_requirement = (
-            GroupRankCacheRequirement.strict()
-            if cache_only and not guarded_cache_only
-            else GroupRankCacheRequirement.disabled()
+        policy = resolve_derived_data_execution_policy(
+            execution_policy=execution_policy,
+            force_cache_only=force_cache_only,
+            refresh_guarded_cache_only=refresh_guarded_cache_only,
+            target_date=calc_date,
+            current_date=today_local,
+            allow_same_day_warmup_bypass=(
+                _ALLOW_SAME_DAY_WARMUP_BYPASS.get()
+            ),
         )
+        cache_requirement = GroupRankCacheRequirement.disabled()
+        if policy.strict_completeness:
+            cache_requirement = GroupRankCacheRequirement.strict()
 
-        if cache_only and not guarded_cache_only:
-            if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
-                logger.info(
-                    "Bypassing same-day group ranking warmup metadata gate for in-process static export"
+        if policy.requires_warmup_metadata:
+            warmup_decision = evaluate_same_day_group_rank_warmup(
+                service.price_cache,
+                market=market,
+            )
+            cache_requirement = warmup_decision.cache_requirement
+            if warmup_decision.error:
+                logger.error(
+                    "✗ Refusing to publish daily group rankings: %s",
+                    warmup_decision.error,
                 )
-            else:
-                warmup_decision = evaluate_same_day_group_rank_warmup(
-                    service.price_cache,
-                    market=market,
+                logger.info("=" * 60)
+                _mark_market_activity_failed_safely(
+                    db,
+                    market=effective_market,
+                    stage_key="groups",
+                    lifecycle=activity_lifecycle,
+                    task_name=getattr(
+                        self,
+                        "name",
+                        "calculate_daily_group_rankings",
+                    ),
+                    task_id=getattr(
+                        getattr(self, "request", None),
+                        "id",
+                        None,
+                    ),
+                    message=warmup_decision.error,
                 )
-                cache_requirement = warmup_decision.cache_requirement
-                if warmup_decision.error:
-                    logger.error("✗ Refusing to publish daily group rankings: %s", warmup_decision.error)
-                    logger.info("=" * 60)
-                    _mark_market_activity_failed_safely(
-                        db,
-                        market=effective_market,
-                        stage_key="groups",
-                        lifecycle=activity_lifecycle,
-                        task_name=getattr(self, "name", "calculate_daily_group_rankings"),
-                        task_id=getattr(getattr(self, "request", None), "id", None),
-                        message=warmup_decision.error,
-                    )
-                    return {
-                        'error': warmup_decision.error,
-                        'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
-                        'date': calc_date.strftime('%Y-%m-%d'),
-                        'timestamp': datetime.now().isoformat(),
-                        'cache_only': True,
-                    }
+                return {
+                    'error': warmup_decision.error,
+                    'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
+                    'date': calc_date.strftime('%Y-%m-%d'),
+                    'timestamp': datetime.now().isoformat(),
+                    'cache_only': True,
+                }
+        elif policy.strict_completeness and policy.cache_only:
+            logger.info(
+                "Bypassing same-day group ranking warmup metadata gate "
+                "for in-process static export"
+            )
 
         # Calculate rankings
         logger.info(f"Starting group ranking calculation for {calc_date}...")
-        ranking_kwargs = {
-            "market": effective_market,
-            "cache_only": cache_only,
-            "cache_requirement": cache_requirement,
-        }
-        prefetch_stats: dict = {}
-        if guarded_cache_only:
-            ranking_kwargs["diagnostics"] = prefetch_stats
-        results = service.calculate_group_rankings(
+        calculation = service.calculate_group_rankings(
             db,
             calc_date,
-            **ranking_kwargs,
+            market=effective_market,
+            policy=policy,
+            cache_requirement=cache_requirement,
         )
+        rankings = calculation.rankings
+        prefetch_stats = calculation.prefetch_stats.to_dict()
 
         # Calculate duration
         duration = time.time() - start_time
 
-        if not results:
+        if not rankings:
             no_groups_message = (
                 "No groups could be ranked (insufficient price data or all groups below 3-stock threshold)"
             )
@@ -280,17 +299,17 @@ def calculate_daily_group_rankings(
                 'calculation_duration_seconds': round(duration, 2),
                 'timestamp': datetime.now().isoformat()
             }
-            if guarded_cache_only:
+            if policy.mode is DerivedDataExecutionMode.REFRESH_GUARDED:
                 no_groups_result['cache_only'] = True
                 no_groups_result['cache_policy'] = 'refresh_guarded'
                 no_groups_result['prefetch_stats'] = prefetch_stats
             return no_groups_result
 
-        logger.info(f"Successfully ranked {len(results)} groups in {duration:.2f}s")
+        logger.info(f"Successfully ranked {len(rankings)} groups in {duration:.2f}s")
 
         # Log top 5 groups
         logger.info("Top 5 groups:")
-        for r in results[:5]:
+        for r in rankings[:5]:
             logger.info(
                 f"  #{r['rank']}: {r['industry_group']} "
                 f"(avg RS: {r['avg_rs_rating']:.1f}, {r['num_stocks']} stocks)"
@@ -326,22 +345,22 @@ def calculate_daily_group_rankings(
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "calculate_daily_group_rankings"),
             task_id=getattr(getattr(self, "request", None), "id", None),
-            current=len(results),
-            total=len(results),
+            current=len(rankings),
+            total=len(rankings),
             message="Group rankings completed",
         )
 
         task_result = {
             'date': calc_date.strftime('%Y-%m-%d'),
-            'groups_ranked': len(results),
-            'top_group': results[0]['industry_group'] if results else None,
-            'top_avg_rs': results[0]['avg_rs_rating'] if results else None,
+            'groups_ranked': len(rankings),
+            'top_group': rankings[0]['industry_group'] if rankings else None,
+            'top_avg_rs': rankings[0]['avg_rs_rating'] if rankings else None,
             'calculation_duration_seconds': round(duration, 2),
-            'cache_only': cache_only,
+            'cache_only': policy.cache_only,
             'metadata_repair': repair_stats,
             'timestamp': datetime.now().isoformat()
         }
-        if guarded_cache_only:
+        if policy.mode is DerivedDataExecutionMode.REFRESH_GUARDED:
             task_result['cache_policy'] = 'refresh_guarded'
             task_result['prefetch_stats'] = prefetch_stats
         return task_result
@@ -378,7 +397,7 @@ def calculate_daily_group_rankings(
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
             'timestamp': datetime.now().isoformat(),
             'cache_only': True,
-            'prefetch_stats': e.stats,
+            'prefetch_stats': e.stats.to_dict(),
         }
     except MissingIBDIndustryMappingsError as e:
         db.rollback()
@@ -398,7 +417,7 @@ def calculate_daily_group_rankings(
             'reason_code': GroupRankReasonCode.MISSING_IBD_MAPPINGS,
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
             'timestamp': datetime.now().isoformat(),
-            'cache_only': cache_only,
+            'cache_only': policy.cache_only,
         }
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
@@ -443,7 +462,7 @@ def _calculate_daily_group_rankings_in_process(
     calculation_date: str | None = None,
     market: str | None = None,
     activity_lifecycle: str | None = None,
-    refresh_guarded_cache_only: bool = False,
+    execution_policy: str | None = None,
 ):
     """Run the daily ranking task body without re-acquiring the market workload lease.
 
@@ -470,8 +489,8 @@ def _calculate_daily_group_rankings_in_process(
     }
     if calculation_date is not None:
         kwargs["calculation_date"] = calculation_date
-    if refresh_guarded_cache_only:
-        kwargs["refresh_guarded_cache_only"] = True
+    if execution_policy is not None:
+        kwargs["execution_policy"] = execution_policy
     transient_token = _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.set(True)
     try:
         if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
@@ -498,6 +517,7 @@ def calculate_daily_group_rankings_with_gapfill(
     activity_lifecycle: str | None = None,
     calculation_date: str | None = None,
     refresh_guarded_cache_only: bool = False,
+    execution_policy: str | None = None,
 ):
     """
     Calculate daily group rankings with automatic gap detection and filling.
@@ -552,9 +572,7 @@ def calculate_daily_group_rankings_with_gapfill(
         'market': effective_market,
         'timestamp': datetime.now().isoformat(),
     }
-    if refresh_guarded_cache_only:
-        result['cache_only'] = True
-        result['cache_policy'] = 'refresh_guarded'
+    guarded_cache_only = refresh_guarded_cache_only
 
     try:
         mark_market_activity_started(
@@ -610,6 +628,24 @@ def calculate_daily_group_rankings_with_gapfill(
             calendar_service=calendar_service,
         )
         target_date = resolved_date.target_date
+        current_date = calendar_service.market_now(effective_market).date()
+        policy = resolve_derived_data_execution_policy(
+            execution_policy=execution_policy,
+            refresh_guarded_cache_only=refresh_guarded_cache_only,
+            target_date=target_date,
+            current_date=current_date,
+        )
+        gap_policy = (
+            DerivedDataExecutionPolicy.provider_allowed()
+            if policy.mode is DerivedDataExecutionMode.AUTO
+            else policy
+        )
+        guarded_cache_only = (
+            policy.mode is DerivedDataExecutionMode.REFRESH_GUARDED
+        )
+        if guarded_cache_only:
+            result['cache_only'] = True
+            result['cache_policy'] = 'refresh_guarded'
 
         if settings.group_rank_gapfill_enabled:
             logger.info(
@@ -627,16 +663,11 @@ def calculate_daily_group_rankings_with_gapfill(
                     "Found %d missing ranking dates (range %s to %s)",
                     len(missing_dates), missing_dates[0], missing_dates[-1],
                 )
-                gapfill_kwargs = (
-                    {"cache_only": True}
-                    if refresh_guarded_cache_only
-                    else {}
-                )
                 gap_stats = service.fill_gaps_optimized(
                     db,
                     missing_dates,
                     market=effective_market,
-                    **gapfill_kwargs,
+                    policy=gap_policy,
                 )
                 result['gap_fill'] = gap_stats
                 logger.info(
@@ -666,8 +697,7 @@ def calculate_daily_group_rankings_with_gapfill(
                 "activity_lifecycle": activity_lifecycle,
                 **resolved_date.nested_daily_kwargs(),
             }
-            if refresh_guarded_cache_only:
-                inner_kwargs["refresh_guarded_cache_only"] = True
+            inner_kwargs["execution_policy"] = policy.mode.value
             today_result = _calculate_daily_group_rankings_in_process(**inner_kwargs)
             result['today'] = today_result
             today_error = None
@@ -768,7 +798,7 @@ def calculate_daily_group_rankings_with_gapfill(
             'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
-        if refresh_guarded_cache_only:
+        if guarded_cache_only:
             error_result['cache_only'] = True
             error_result['cache_policy'] = 'refresh_guarded'
         return error_result
