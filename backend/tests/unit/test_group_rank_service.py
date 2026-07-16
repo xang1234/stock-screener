@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import inspect
 from uuid import uuid4
 from unittest.mock import Mock, call
 
@@ -11,7 +12,15 @@ from app.config import settings
 from app.database import Base
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
+from app.services.derived_data_execution_policy import (
+    resolve_derived_data_execution_policy,
+)
 from app.services.group_rank_cache_policy import GroupRankCacheRequirement
+from app.services.group_rank_models import (
+    GroupRankCalculationResult,
+    GroupRankPrefetchData,
+    GroupRankPrefetchStats,
+)
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
@@ -49,6 +58,14 @@ def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: M
     return IBDGroupRankService(
         price_cache=price_cache or Mock(),
         benchmark_cache=benchmark_cache or Mock(),
+    )
+
+
+def _policy(mode: str, target: date):
+    return resolve_derived_data_execution_policy(
+        execution_policy=mode,
+        target_date=target,
+        current_date=date(2026, 3, 20),
     )
 
 
@@ -373,8 +390,8 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
     assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
     assert prefetch.active_symbols == {"AAPL"}
     assert prefetch.market_caps == {"AAPL": 1_000_000_000}
-    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
-    assert prefetch.stats == {
+    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
+    assert prefetch.stats.to_dict() == {
         "target_symbols": 1,
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
@@ -414,13 +431,13 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
             db_session,
             date(2026, 5, 1),
             market="JP",
-            cache_only=True,
+            policy=_policy("strict_cache_only", date(2026, 5, 1)),
             cache_requirement=GroupRankCacheRequirement.strict(),
         )
 
     assert str(excinfo.value) == "^N225 benchmark data is missing from cache for JP"
-    assert excinfo.value.stats["benchmark_symbol"] == "^N225"
-    assert excinfo.value.stats["market"] == "JP"
+    assert excinfo.value.stats.benchmark_symbol == "^N225"
+    assert excinfo.value.stats.market == "JP"
 
 
 def test_cache_only_prefetch_uses_cached_market_benchmark_fallback(db_session, monkeypatch):
@@ -465,8 +482,8 @@ def test_cache_only_prefetch_uses_cached_market_benchmark_fallback(db_session, m
     )
 
     assert prefetch.benchmark_prices is fallback_data
-    assert prefetch.stats["benchmark_symbol"] == "1306.T"
-    assert prefetch.stats["benchmark_role"] == "fallback"
+    assert prefetch.stats.benchmark_symbol == "1306.T"
+    assert prefetch.stats.benchmark_role == "fallback"
     assert price_cache.get_cached_only_fresh.call_args_list == [
         call("^N225", period="2y"),
         call("1306.T", period="2y"),
@@ -517,8 +534,8 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
     assert prefetch.prices_by_symbol == {"AAPL": None}
     assert prefetch.active_symbols == {"AAPL"}
     assert prefetch.market_caps == {"AAPL": 1_000_000_000}
-    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
-    assert prefetch.stats == {
+    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
+    assert prefetch.stats.to_dict() == {
         "target_symbols": 1,
         "symbols_with_prices": 0,
         "cache_miss_symbols": 1,
@@ -579,8 +596,8 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
     assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
     assert prefetch.active_symbols == {"AAPL"}
     assert prefetch.market_caps == {"AAPL": 1_000_000_000}
-    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
-    assert prefetch.stats == {
+    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
+    assert prefetch.stats.to_dict() == {
         "target_symbols": 1,
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
@@ -639,9 +656,9 @@ def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypa
 
     assert prefetch.active_symbols == {"AAPL", "MZYX-U"}
     assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
-    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
-    assert prefetch.stats["target_symbols"] == 1
-    assert prefetch.stats["skipped_unsupported_symbols"] == 1
+    assert prefetch.symbols_by_group == {"Software": ("AAPL",)}
+    assert prefetch.stats.target_symbols == 1
+    assert prefetch.stats.skipped_unsupported_symbols == 1
     price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
 
 
@@ -676,11 +693,11 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
         service.calculate_group_rankings(
             db_session,
             date(2026, 3, 20),
-            cache_only=True,
+            policy=_policy("strict_cache_only", date(2026, 3, 20)),
             cache_requirement=GroupRankCacheRequirement.strict(),
         )
 
-    assert excinfo.value.stats["cache_miss_symbols"] == 1
+    assert excinfo.value.stats.cache_miss_symbols == 1
     store_rankings.assert_not_called()
 
 
@@ -716,12 +733,12 @@ def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_sessio
             db_session,
             date(2026, 6, 10),
             market="TW",
-            cache_only=True,
+            policy=_policy("strict_cache_only", date(2026, 6, 10)),
             cache_requirement=GroupRankCacheRequirement.minimum(0.55, reason="test"),
         )
 
-    assert excinfo.value.stats["cache_coverage_ratio"] == 0.5
-    assert excinfo.value.stats["cache_coverage_min"] == 0.55
+    assert excinfo.value.stats.cache_coverage_ratio == 0.5
+    assert excinfo.value.stats.cache_coverage_min == 0.55
     store_rankings.assert_not_called()
 
 
@@ -732,21 +749,21 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
     service = _make_group_rank_service()
     price_data = _price_frame()
     symbols = ["AAA", "BBB", "CCC", "MISS"]
-    stats = {
-        "target_symbols": 4,
-        "symbols_with_prices": 3,
-        "cache_miss_symbols": 1,
-        "cache_miss_symbols_sample": ["MISS"],
-        "cache_coverage_ratio": 0.75,
-        "spy_cached": True,
-        "benchmark_cached": True,
-        "benchmark_symbol": "SPY",
-        "benchmark_role": "primary",
-        "market": "US",
-        "cache_only": True,
-        "skipped_unsupported_symbols": 0,
-    }
-    prefetch = group_rank_module.GroupRankPrefetchData(
+    stats = GroupRankPrefetchStats(
+        target_symbols=4,
+        symbols_with_prices=3,
+        cache_miss_symbols=1,
+        cache_miss_symbols_sample=("MISS",),
+        cache_coverage_ratio=0.75,
+        benchmark_available=True,
+        benchmark_cached=True,
+        benchmark_symbol="SPY",
+        benchmark_role="primary",
+        market="US",
+        cache_only=True,
+        skipped_unsupported_symbols=0,
+    )
+    prefetch = GroupRankPrefetchData(
         benchmark_prices=price_data,
         prices_by_symbol={
             "AAA": price_data,
@@ -754,10 +771,10 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
             "CCC": price_data,
             "MISS": None,
         },
-        active_symbols=set(symbols),
+        active_symbols=frozenset(symbols),
         market_caps={symbol: 1_000_000_000 for symbol in symbols},
         stats=stats,
-        symbols_by_group={"Software": symbols},
+        symbols_by_group={"Software": tuple(symbols)},
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
@@ -773,23 +790,32 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
     )
     store_rankings = Mock()
     monkeypatch.setattr(service, "_store_rankings", store_rankings)
-    diagnostics: dict = {}
-
-    results = service.calculate_group_rankings(
+    calculation = service.calculate_group_rankings(
         db_session,
         date(2026, 3, 20),
         market="US",
-        cache_only=True,
+        policy=resolve_derived_data_execution_policy(
+            execution_policy="refresh_guarded",
+            target_date=date(2026, 3, 20),
+            current_date=date(2026, 3, 20),
+        ),
         cache_requirement=GroupRankCacheRequirement.disabled(),
-        diagnostics=diagnostics,
     )
 
-    assert len(results) == 1
-    assert results[0]["industry_group"] == "Software"
-    assert results[0]["num_stocks"] == 3
-    assert diagnostics["cache_miss_symbols"] == 1
-    assert diagnostics["cache_miss_symbols_sample"] == ["MISS"]
+    assert len(calculation.rankings) == 1
+    assert calculation.rankings[0]["industry_group"] == "Software"
+    assert calculation.rankings[0]["num_stocks"] == 3
+    assert calculation.prefetch_stats.cache_miss_symbols == 1
+    assert calculation.prefetch_stats.cache_miss_symbols_sample == ("MISS",)
     store_rankings.assert_called_once()
+
+
+def test_calculate_group_rankings_has_no_diagnostics_output_parameter():
+    signature = inspect.signature(
+        IBDGroupRankService.calculate_group_rankings
+    )
+
+    assert "diagnostics" not in signature.parameters
 
 
 def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback():
@@ -1066,7 +1092,18 @@ def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatc
     monkeypatch.setattr(
         service,
         "calculate_group_rankings",
-        lambda db, calc_date, **kw: calculate_calls.append(calc_date) or [{"rank": 1}],
+        lambda db, calc_date, **kw: (
+            calculate_calls.append(calc_date)
+            or GroupRankCalculationResult(
+                rankings=({"rank": 1},),
+                prefetch_stats=GroupRankPrefetchStats.from_mapping({
+                    "target_symbols": 1,
+                    "symbols_with_prices": 1,
+                    "cache_miss_symbols": 0,
+                    "spy_cached": True,
+                }),
+            )
+        ),
     )
 
     stats = service.backfill_rankings(

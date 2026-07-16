@@ -7,7 +7,6 @@ import gc
 import logging
 import math
 import statistics
-from dataclasses import dataclass
 from typing import Any, Optional, Dict, List
 from datetime import datetime, date, timedelta
 import pandas as pd
@@ -23,6 +22,12 @@ from .group_constituent_source import GroupConstituentSource
 from .group_detail_payloads import constituent_stock_payloads_from_scan_items
 from .group_ranking_history import build_group_detail_payload_from_parts
 from .group_rank_cache_policy import GroupRankCacheRequirement
+from .group_rank_models import (
+    GroupRankCalculationResult,
+    GroupRankPrefetchData,
+    GroupRankPrefetchStats,
+)
+from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService
@@ -42,16 +47,16 @@ GROUP_RANK_CHANGE_CALENDAR_DAYS = {
 class IncompleteGroupRankingCacheError(RuntimeError):
     """Raised when a cache-only same-day group ranking run lacks required inputs."""
 
-    def __init__(self, stats: Dict[str, Any]):
+    def __init__(self, stats: GroupRankPrefetchStats):
         self.stats = stats
-        benchmark_cached = stats.get("benchmark_cached", stats.get("spy_cached"))
-        benchmark_symbol = str(stats.get("benchmark_symbol") or "SPY")
-        market = str(stats.get("market") or "").strip().upper()
-        market_suffix = f" for {market}" if market else ""
-        reason = f"{benchmark_symbol} benchmark data is missing from cache{market_suffix}"
-        if benchmark_cached:
+        market_suffix = f" for {stats.market}" if stats.market else ""
+        reason = (
+            f"{stats.benchmark_symbol} benchmark data is missing from cache"
+            f"{market_suffix}"
+        )
+        if stats.benchmark_available:
             reason = (
-                f"{stats.get('cache_miss_symbols', 0)} symbols are missing cached price data"
+                f"{stats.cache_miss_symbols} symbols are missing cached price data"
             )
         super().__init__(reason)
 
@@ -61,18 +66,6 @@ class MissingIBDIndustryMappingsError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("IBD industry mappings are not loaded")
-
-
-@dataclass(frozen=True)
-class GroupRankPrefetchData:
-    """Cached inputs shared by daily, backfill, and gap-fill group rank runs."""
-
-    benchmark_prices: Optional[pd.DataFrame]
-    prices_by_symbol: Dict[str, Optional[pd.DataFrame]]
-    active_symbols: set[str]
-    market_caps: Dict[str, float]
-    stats: Dict[str, Any]
-    symbols_by_group: Dict[str, List[str]]
 
 
 class IBDGroupRankService:
@@ -109,10 +102,11 @@ class IBDGroupRankService:
         calculation_date: date = None,
         *,
         market: str | None = None,
-        cache_only: bool = False,
+        policy: DerivedDataExecutionPolicy = (
+            DerivedDataExecutionPolicy.provider_allowed()
+        ),
         cache_requirement: GroupRankCacheRequirement = GroupRankCacheRequirement.disabled(),
-        diagnostics: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict]:
+    ) -> GroupRankCalculationResult:
         """
         Calculate and store rankings for all IBD groups for a given date.
 
@@ -148,38 +142,28 @@ class IBDGroupRankService:
             self._prefetch_all_data(
                 db,
                 market=normalized_market,
-                cache_only=cache_only,
+                cache_only=policy.cache_only,
             )
         )
-        prefetch_stats = prefetch.stats
-        if diagnostics is not None:
-            diagnostics.clear()
-            diagnostics.update(prefetch_stats)
+        prefetch_stats = prefetch.stats.with_cache_requirement(
+            cache_requirement
+        )
 
         if cache_requirement.enabled:
-            if not prefetch_stats.get("spy_cached"):
+            if not prefetch_stats.benchmark_available:
                 raise IncompleteGroupRankingCacheError(prefetch_stats)
-            cache_miss_symbols = prefetch_stats.get("cache_miss_symbols", 0)
-            target_symbols = prefetch_stats.get("target_symbols", 0)
-            coverage_ratio = prefetch_stats.get("cache_coverage_ratio")
-            if coverage_ratio is None:
-                coverage_ratio = (
-                    prefetch_stats.get("symbols_with_prices", 0) / target_symbols
-                    if target_symbols > 0
-                    else 1.0
-                )
-            prefetch_stats["cache_coverage_ratio"] = coverage_ratio
-            prefetch_stats["cache_coverage_min"] = cache_requirement.min_coverage
-            prefetch_stats["cache_requirement_reason"] = cache_requirement.reason
-            if coverage_ratio < cache_requirement.min_coverage:
+            if (
+                prefetch_stats.cache_coverage_ratio
+                < cache_requirement.min_coverage
+            ):
                 raise IncompleteGroupRankingCacheError(prefetch_stats)
-            if cache_miss_symbols > 0:
+            if prefetch_stats.cache_miss_symbols > 0:
                 logger.warning(
                     "Cache-only group ranking run has %d cache misses out of %d symbols "
                     "(coverage %.1f%% >= %.1f%%)",
-                    cache_miss_symbols,
-                    target_symbols,
-                    coverage_ratio * 100,
+                    prefetch_stats.cache_miss_symbols,
+                    prefetch_stats.target_symbols,
+                    prefetch_stats.cache_coverage_ratio * 100,
                     cache_requirement.min_coverage * 100,
                 )
 
@@ -187,7 +171,10 @@ class IBDGroupRankService:
             logger.error(
                 "Failed to get benchmark data for market %s", normalized_market,
             )
-            return []
+            return GroupRankCalculationResult(
+                rankings=(),
+                prefetch_stats=prefetch_stats,
+            )
 
         rs_by_date = self._calculate_rs_by_symbol_for_dates(
             prefetch,
@@ -221,7 +208,10 @@ class IBDGroupRankService:
 
         if not group_metrics:
             logger.error("No valid group metrics calculated")
-            return []
+            return GroupRankCalculationResult(
+                rankings=(),
+                prefetch_stats=prefetch_stats,
+            )
 
         # Sort by avg_rs (descending) and assign ranks
         group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
@@ -237,7 +227,10 @@ class IBDGroupRankService:
             f"Calculated rankings for {len(group_metrics)} groups in {duration:.1f}s"
         )
 
-        return group_metrics
+        return GroupRankCalculationResult(
+            rankings=tuple(group_metrics),
+            prefetch_stats=prefetch_stats,
+        )
 
     def _calculate_group_rs(
         self,
@@ -901,9 +894,9 @@ class IBDGroupRankService:
         return GroupRankPrefetchData(
             benchmark_prices=spy_data,
             prices_by_symbol=all_prices,
-            active_symbols=active_symbols,
+            active_symbols=frozenset(active_symbols),
             market_caps=market_caps,
-            stats=stats,
+            stats=GroupRankPrefetchStats.from_mapping(stats),
             symbols_by_group={},
         )
 
@@ -1620,15 +1613,19 @@ class IBDGroupRankService:
                     continue
 
                 # Calculate rankings for this date
-                results = self.calculate_group_rankings(
+                calculation = self.calculate_group_rankings(
                     db,
                     calc_date,
                     market=normalized_market,
                 )
 
-                if results:
+                if calculation.rankings:
                     processed += 1
-                    logger.info(f"Backfilled {calc_date}: {len(results)} groups")
+                    logger.info(
+                        "Backfilled %s: %s groups",
+                        calc_date,
+                        len(calculation.rankings),
+                    )
                 else:
                     errors += 1
                     logger.warning(f"No results for {calc_date}")
@@ -1722,15 +1719,19 @@ class IBDGroupRankService:
 
         for calc_date in missing_dates:
             try:
-                results = self.calculate_group_rankings(
+                calculation = self.calculate_group_rankings(
                     db,
                     calc_date,
                     market=normalized_market,
                 )
 
-                if results:
+                if calculation.rankings:
                     stats['processed'] += 1
-                    logger.debug(f"Filled gap for {calc_date}: {len(results)} groups")
+                    logger.debug(
+                        "Filled gap for %s: %s groups",
+                        calc_date,
+                        len(calculation.rankings),
+                    )
                 else:
                     stats['errors'] += 1
                     logger.warning(f"No results for {calc_date}")
@@ -1801,7 +1802,7 @@ class IBDGroupRankService:
                 'skipped': 0,
                 'errors': len(missing_dates),
                 'error': 'Failed to fetch SPY benchmark data',
-                'prefetch_stats': prefetch.stats,
+                'prefetch_stats': prefetch.stats.to_dict(),
             }
 
         all_groups = list(prefetch.symbols_by_group) or IBDIndustryService.get_all_groups(
@@ -1814,7 +1815,7 @@ class IBDGroupRankService:
             'processed': 0,
             'skipped': 0,
             'errors': 0,
-            'prefetch_stats': prefetch.stats,
+            'prefetch_stats': prefetch.stats.to_dict(),
         }
 
         symbols_by_group = self._symbols_by_group_for_run(
