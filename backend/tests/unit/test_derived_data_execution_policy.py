@@ -199,3 +199,14 @@ def test_legacy_policy_names_do_not_branch_below_task_boundary():
                 node.lineno,
                 referenced,
             )
+
+
+def test_group_ranking_core_has_no_arbitrary_mapping_contract():
+    for relative_path in (
+        "app/services/group_rank_models.py",
+        "app/services/group_ranking_calculator.py",
+        "app/services/group_ranking_repository.py",
+    ):
+        source = (BACKEND_ROOT / relative_path).read_text()
+        assert "rankings: tuple[Mapping[str, Any]" not in source
+        assert "rankings: Sequence[Mapping[str, Any]" not in source

@@ -264,6 +264,22 @@ breadth suites during development. Before completion, run the comprehensive
 backend unit suite, backend quality gates, frontend suite when shared contracts
 change, `git diff --check`, and confirm the pull-request checks after pushing.
 
+### Implementation verification (2026-07-17)
+
+- The complete focused derived-data suite passed: 176 tests.
+- The comprehensive backend unit suite passed: 5,035 tests.
+- The focused breadth runner/calculator/task suite passed: 49 tests.
+- The focused group runner/model/loader/calculator/repository/task suite passed:
+  100 tests.
+- Repository gates passed with the configured project interpreter: identity
+  invariants (5), detector correctness (152), temporal integrity (47),
+  integration/parity (157), performance baselines (22), and golden regression
+  (43).
+- Scan-filter contract generation and gate-assignment checks passed, and
+  `git diff --check` reported no whitespace errors.
+- No API or frontend contract changed, so a frontend rerun was not required by
+  this remediation.
+
 ## Acceptance criteria
 
 - Historical recalculation failure cannot erase previously committed rankings.
@@ -273,4 +289,3 @@ change, `git diff --check`, and confirm the pull-request checks after pushing.
 - Breadth/group gap-fill does not invoke decorated Celery daily tasks in-process.
 - Public compatibility and issue-301 provider-exclusion behavior remain intact.
 - Focused and comprehensive verification passes.
-

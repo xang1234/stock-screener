@@ -908,7 +908,7 @@ git commit --no-verify -m "refactor: extract daily breadth runner"
 - Produces: source-level guards against regression to arbitrary ranking mappings, duplicated taxonomy traversal, and nested Celery invocation.
 - Produces: final tracker closure and implementation evidence.
 
-- [ ] **Step 1: Add architecture assertions**
+- [x] **Step 1: Add architecture assertions**
 
 Add AST/source tests equivalent to:
 
@@ -936,7 +936,7 @@ def test_derived_tasks_do_not_invoke_decorated_tasks_in_process():
         assert ".run(**kwargs)" not in source
 ```
 
-- [ ] **Step 2: Run the complete focused derived-data suite**
+- [x] **Step 2: Run the complete focused derived-data suite**
 
 Run:
 
@@ -966,7 +966,7 @@ cd backend
 
 Expected: all selected tests pass.
 
-- [ ] **Step 3: Run comprehensive backend verification**
+- [x] **Step 3: Run comprehensive backend verification**
 
 Run:
 
@@ -977,7 +977,7 @@ cd backend
 
 Expected: the comprehensive unit suite passes with zero failures.
 
-- [ ] **Step 4: Run repository quality gates**
+- [x] **Step 4: Run repository quality gates**
 
 Run from the repository root:
 
@@ -995,7 +995,7 @@ git diff --check
 
 Expected: every command exits zero.
 
-- [ ] **Step 5: Record implementation evidence and close the tracker item**
+- [x] **Step 5: Record implementation evidence and close the tracker item**
 
 Update the design's implementation-verification section with exact test counts. Then run:
 
@@ -1005,7 +1005,7 @@ bd close stockscreenclaude-slh --reason="Made group historical replacement atomi
 
 Because the installed Beads version has no `bd sync`, ensure only canonical `.beads/*.jsonl` changes are staged and no root-level `issues.jsonl` is committed.
 
-- [ ] **Step 6: Commit final gates and tracker state**
+- [x] **Step 6: Commit final gates and tracker state**
 
 ```bash
 git add backend/tests/unit/test_derived_data_execution_policy.py \

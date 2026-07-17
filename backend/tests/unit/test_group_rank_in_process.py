@@ -83,11 +83,15 @@ def test_orchestrator_rolls_back_before_publishing_failure(monkeypatch):
     assert rollback_seen == [True]
 
 
-def test_group_tasks_do_not_invoke_decorated_tasks_in_process():
-    import app.tasks.group_rank_tasks as module
-
-    source = Path(module.__file__).read_text()
-    assert "_calculate_daily_group_rankings_in_process" not in source
-    assert "_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS" not in source
-    assert "unittest.mock" not in source
-    assert ".run(**kwargs)" not in source
+def test_derived_tasks_do_not_invoke_decorated_tasks_in_process():
+    backend_root = Path(__file__).resolve().parents[2]
+    for relative_path in (
+        "app/tasks/breadth_tasks.py",
+        "app/tasks/group_rank_tasks.py",
+    ):
+        source = (backend_root / relative_path).read_text()
+        assert "_calculate_daily_breadth_in_process" not in source
+        assert "_calculate_daily_group_rankings_in_process" not in source
+        assert "_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS" not in source
+        assert "unittest.mock" not in source
+        assert ".run(**kwargs)" not in source
