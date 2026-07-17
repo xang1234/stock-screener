@@ -1,7 +1,7 @@
 # Derived-data thermo-review remediation
 
 **Date:** 2026-07-16
-**Status:** Approved for implementation
+**Status:** Implemented and verified
 **Issue:** Beads `stockscreenclaude-2c1`
 **Parent:** GitHub #301 / Beads `stockscreenclaude-duw`
 **Builds on:** `2026-07-16-derived-data-execution-policy-refactor-design.md`
@@ -464,3 +464,39 @@ Source-level architecture tests assert:
 - **Oversized refactor:** changes land in independently testable commits for
   policy, breadth coverage, group input/adapter, calculator/repository,
   historical calculator, and facade cleanup.
+
+## Implementation verification
+
+Implemented on `codex/issue-301-cache-only-derived-data`:
+
+- execution policy now derives provider access, validation profile, gap-fill
+  behavior, and response metadata from a closed state;
+- breadth uses one shared price-coverage accumulator and per-date outcome
+  counters;
+- group inputs use explicit universe, taxonomy, and market-cap sources;
+- legacy prefetch conversion is isolated in
+  `LegacyGroupRankPrefetchAdapter`;
+- ranking calculation, ranking-table persistence/query, and historical
+  orchestration are separate components behind the compatible
+  `IBDGroupRankService` facade;
+- ranking-table reads, including existing-date discovery, are owned by
+  `GroupRankingRepository`;
+- retired facade-level historical test bodies were removed after their
+  behavior moved to focused historical-calculator tests.
+
+Verification on 2026-07-17:
+
+- focused derived-data gate: `169 passed`;
+- compilation check for all changed production and focused test modules:
+  passed;
+- `git diff --check`: passed;
+- full backend unit suite: `4,957 passed, 54 failed, 21 warnings`. All
+  breadth/group tests in scope passed. The 54 failures are in untouched,
+  pre-existing repository-wide areas including bootstrap-plan expectations,
+  price-refresh/routing tests, API symbol validation, theme APIs, release/env
+  documentation, and known use-case layer violations.
+
+Final thermo-nuclear review verdict: **approve**. The follow-up review moved
+the last direct ranking-table query into the repository and removed
+uncollected compatibility-test residue; no remaining structural blocker was
+found in this change set.

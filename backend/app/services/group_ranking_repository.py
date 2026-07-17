@@ -128,6 +128,32 @@ class GroupRankingRepository:
             .all()
         )
 
+    def existing_dates(
+        self,
+        db: Session,
+        *,
+        start_date: date,
+        end_date: date,
+        market: str,
+    ) -> frozenset[date]:
+        rows = (
+            db.query(IBDGroupRank.date)
+            .distinct()
+            .filter(
+                and_(
+                    IBDGroupRank.date >= start_date,
+                    IBDGroupRank.date <= end_date,
+                    IBDGroupRank.market
+                    == (market or "US").upper(),
+                )
+            )
+            .all()
+        )
+        return frozenset(
+            item_date
+            for item_date, in rows
+        )
+
     def historical_ranks_batch(
         self,
         db: Session,

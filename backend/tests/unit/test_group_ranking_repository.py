@@ -206,6 +206,30 @@ def test_current_rank_rows_select_latest_or_explicit_market_date(
     assert [row.rank for row in explicit] == [5]
 
 
+def test_existing_dates_is_market_and_range_scoped(db_session):
+    for market, calculation_date in (
+        ("US", date(2026, 3, 18)),
+        ("US", date(2026, 3, 20)),
+        ("US", date(2026, 3, 22)),
+        ("JP", date(2026, 3, 20)),
+    ):
+        _seed_rank(
+            db_session,
+            market=market,
+            calculation_date=calculation_date,
+        )
+    db_session.commit()
+
+    result = GroupRankingRepository().existing_dates(
+        db_session,
+        start_date=date(2026, 3, 19),
+        end_date=date(2026, 3, 21),
+        market="US",
+    )
+
+    assert result == frozenset({date(2026, 3, 20)})
+
+
 def test_historical_ranks_batch_picks_closest_and_prefers_earlier_tie(
     db_session,
 ):

@@ -220,6 +220,29 @@ def test_nonoptimized_backfill_checks_existing_rows_by_market():
     } == {"HK"}
 
 
+def test_find_missing_dates_reads_existing_dates_from_repository():
+    historical, _, _, repository, calendar = _historical()
+    repository.existing_dates.return_value = frozenset(
+        {date(2026, 3, 19)}
+    )
+
+    result = historical.find_missing_dates(
+        MagicMock(),
+        lookback_days=2,
+        market="US",
+        end_date=date(2026, 3, 20),
+    )
+
+    assert result == [date(2026, 3, 18)]
+    repository.existing_dates.assert_called_once()
+    assert repository.existing_dates.call_args.kwargs == {
+        "start_date": date(2026, 3, 18),
+        "end_date": date(2026, 3, 20),
+        "market": "US",
+    }
+    assert calendar.is_trading_day.call_count == 2
+
+
 def test_chunked_backfill_aggregates_delegate_results(monkeypatch):
     historical, _, _, _, _ = _historical()
     backfill = Mock(
@@ -265,3 +288,4 @@ def test_historical_calculator_does_not_locate_calendar_or_services():
     assert "wiring.bootstrap" not in source
     assert "get_market_calendar_service" not in source
     assert "IBDGroupRankService" not in source
+    assert "IBDGroupRank" not in source

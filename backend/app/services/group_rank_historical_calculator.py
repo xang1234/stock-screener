@@ -7,11 +7,9 @@ from datetime import date, datetime, timedelta
 import logging
 from typing import Any, Dict, List
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models.industry import IBDGroupRank
 from .derived_data_execution_policy import (
     DerivedDataExecutionPolicy,
 )
@@ -210,18 +208,12 @@ class GroupRankHistoricalCalculator:
             ).date()
         )
         start_date = window_end - timedelta(days=lookback_days)
-        existing_dates = (
-            db.query(func.distinct(IBDGroupRank.date))
-            .filter(
-                IBDGroupRank.date >= start_date,
-                IBDGroupRank.market == normalized_market,
-            )
-            .all()
+        existing_date_set = self.repository.existing_dates(
+            db,
+            start_date=start_date,
+            end_date=window_end,
+            market=normalized_market,
         )
-        existing_date_set = {
-            item_date
-            for item_date, in existing_dates
-        }
 
         missing_dates = []
         current_date = start_date
