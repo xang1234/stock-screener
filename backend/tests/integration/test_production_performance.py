@@ -8,6 +8,18 @@ This test will:
 3. Run the same scan again (HOT cache)
 4. Compare performance metrics
 """
+import os
+
+import pytest
+
+pytestmark = pytest.mark.live_service
+
+if os.getenv("RUN_LIVE_SERVICE_TESTS") != "1":
+    pytest.skip(
+        "requires RUN_LIVE_SERVICE_TESTS=1 and a running backend",
+        allow_module_level=True,
+    )
+
 import time
 import requests
 import redis
