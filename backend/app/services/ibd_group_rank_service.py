@@ -10,8 +10,7 @@ from typing import Any, Optional, Dict, List
 from datetime import datetime, date, timedelta
 import pandas as pd
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import and_
 
 from ..config import settings
 from ..models.industry import IBDGroupRank
@@ -29,6 +28,7 @@ from .group_rank_models import (
 from .group_rank_input_loader import GroupRankInputLoader
 from .group_rank_legacy_adapter import LegacyGroupRankPrefetchAdapter
 from .group_ranking_calculator import GroupRankingCalculator
+from .group_ranking_repository import GroupRankingRepository
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
@@ -89,6 +89,7 @@ class IBDGroupRankService:
         group_constituent_source: GroupConstituentSource | None = None,
         input_loader: GroupRankInputLoader,
         ranking_calculator: GroupRankingCalculator | None = None,
+        ranking_repository: GroupRankingRepository | None = None,
         legacy_prefetch_adapter: (
             LegacyGroupRankPrefetchAdapter | None
         ) = None,
@@ -104,6 +105,9 @@ class IBDGroupRankService:
         self.ranking_calculator = (
             ranking_calculator
             or GroupRankingCalculator(self.rs_calculator)
+        )
+        self.ranking_repository = (
+            ranking_repository or GroupRankingRepository()
         )
         self.legacy_prefetch_adapter = (
             legacy_prefetch_adapter
@@ -215,7 +219,13 @@ class IBDGroupRankService:
             )
 
         # Store in database
-        self._store_rankings(db, calculation_date, group_metrics, market=normalized_market)
+        self.ranking_repository.store_rankings(
+            db,
+            calculation_date=calculation_date,
+            rankings=group_metrics,
+            market=normalized_market,
+        )
+        db.commit()
 
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(
@@ -344,118 +354,6 @@ class IBDGroupRankService:
             'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
         }
 
-    def _store_rankings(
-        self,
-        db: Session,
-        calculation_date: date,
-        group_metrics: List[Dict],
-        *,
-        market: str = "US",
-    ) -> None:
-        """
-        Store group rankings in database.
-
-        Upserts records (updates if exists, inserts if new). Unique key is
-        ``(industry_group, date, market)``.
-        """
-        try:
-            values = [
-                self._ranking_values(calculation_date, metrics, market=market)
-                for metrics in group_metrics
-            ]
-            if not values:
-                db.commit()
-                return
-
-            bind = db.get_bind()
-            if bind is not None and bind.dialect.name == "postgresql":
-                stmt = pg_insert(IBDGroupRank).values(values)
-                db.execute(
-                    stmt.on_conflict_do_update(
-                        index_elements=["industry_group", "date", "market"],
-                        set_={
-                            "rank": stmt.excluded.rank,
-                            "avg_rs_rating": stmt.excluded.avg_rs_rating,
-                            "median_rs_rating": stmt.excluded.median_rs_rating,
-                            "weighted_avg_rs_rating": stmt.excluded.weighted_avg_rs_rating,
-                            "rs_std_dev": stmt.excluded.rs_std_dev,
-                            "num_stocks": stmt.excluded.num_stocks,
-                            "num_stocks_rs_above_80": stmt.excluded.num_stocks_rs_above_80,
-                            "top_symbol": stmt.excluded.top_symbol,
-                            "top_rs_rating": stmt.excluded.top_rs_rating,
-                        },
-                    )
-                )
-            else:
-                self._store_rankings_sqlalchemy_fallback(
-                    db,
-                    calculation_date,
-                    values,
-                    market=market,
-                )
-
-            db.commit()
-            logger.info(
-                "Stored %d group rankings for market=%s date=%s",
-                len(group_metrics), market, calculation_date,
-            )
-
-        except Exception as e:
-            logger.error(f"Error storing rankings: {e}", exc_info=True)
-            db.rollback()
-            raise
-
-    @staticmethod
-    def _ranking_values(calculation_date: date, metrics: Dict, *, market: str) -> Dict[str, Any]:
-        return {
-            "market": market,
-            "industry_group": metrics["industry_group"],
-            "date": calculation_date,
-            "rank": metrics["rank"],
-            "avg_rs_rating": metrics["avg_rs_rating"],
-            "median_rs_rating": metrics.get("median_rs_rating"),
-            "weighted_avg_rs_rating": metrics.get("weighted_avg_rs_rating"),
-            "rs_std_dev": metrics.get("rs_std_dev"),
-            "num_stocks": metrics["num_stocks"],
-            "num_stocks_rs_above_80": metrics["num_stocks_rs_above_80"],
-            "top_symbol": metrics["top_symbol"],
-            "top_rs_rating": metrics["top_rs_rating"],
-        }
-
-    def _store_rankings_sqlalchemy_fallback(
-        self,
-        db: Session,
-        calculation_date: date,
-        values: List[Dict[str, Any]],
-        *,
-        market: str,
-    ) -> None:
-        """SQLite-compatible bulk upsert fallback for tests/local tools."""
-        group_names = [value["industry_group"] for value in values]
-        existing_records = db.query(IBDGroupRank).filter(
-            and_(
-                IBDGroupRank.industry_group.in_(group_names),
-                IBDGroupRank.date == calculation_date,
-                IBDGroupRank.market == market,
-            )
-        ).all()
-        existing_by_group = {record.industry_group: record for record in existing_records}
-
-        for value in values:
-            existing = existing_by_group.get(value["industry_group"])
-            if existing:
-                existing.rank = value["rank"]
-                existing.avg_rs_rating = value["avg_rs_rating"]
-                existing.num_stocks = value["num_stocks"]
-                existing.num_stocks_rs_above_80 = value["num_stocks_rs_above_80"]
-                existing.top_symbol = value["top_symbol"]
-                existing.top_rs_rating = value["top_rs_rating"]
-                existing.median_rs_rating = value.get("median_rs_rating")
-                existing.weighted_avg_rs_rating = value.get("weighted_avg_rs_rating")
-                existing.rs_std_dev = value.get("rs_std_dev")
-            else:
-                db.add(IBDGroupRank(**value))
-
     def get_current_rankings(
         self,
         db: Session,
@@ -472,29 +370,16 @@ class IBDGroupRankService:
         must filter by market to avoid mixing them.
         """
         normalized_market = (market or "US").upper()
-        if calculation_date is not None:
-            latest_date = calculation_date
-        else:
-            # Get most recent date with rankings for THIS market
-            latest_record = db.query(IBDGroupRank).filter(
-                IBDGroupRank.market == normalized_market,
-            ).order_by(
-                desc(IBDGroupRank.date)
-            ).first()
-
-            if not latest_record:
-                return []
-
-            latest_date = latest_record.date
-
-        # Get all rankings for latest date + market
-        rankings = db.query(IBDGroupRank).filter(
-            IBDGroupRank.date == latest_date,
-            IBDGroupRank.market == normalized_market,
-        ).order_by(IBDGroupRank.rank).limit(limit).all()
+        rankings = self.ranking_repository.current_rank_rows(
+            db,
+            limit=limit,
+            market=normalized_market,
+            calculation_date=calculation_date,
+        )
 
         if not rankings:
             return []
+        latest_date = rankings[0].date
 
         # Calendar-day target offsets for rank changes. The lookup below picks
         # the closest stored ranking within a small window; these are not exact
@@ -503,8 +388,11 @@ class IBDGroupRankService:
 
         # Batch fetch all historical ranks in ONE query instead of 197*4=788 queries
         group_names = [r.industry_group for r in rankings]
-        historical_ranks = self._get_historical_ranks_batch(
-            db, group_names, latest_date, period_days,
+        historical_ranks = self.ranking_repository.historical_ranks_batch(
+            db,
+            group_names=group_names,
+            current_date=latest_date,
+            period_days=period_days,
             market=normalized_market,
         )
 
@@ -595,89 +483,14 @@ class IBDGroupRankService:
         *,
         market: str = "US",
     ) -> Dict[tuple, int]:
-        """Public alias of :meth:`_get_historical_ranks_batch`."""
-        return self._get_historical_ranks_batch(
+        """Return closest historical ranks for each group and period."""
+        return self.ranking_repository.historical_ranks_batch(
             db,
-            group_names,
-            current_date,
-            period_days,
+            group_names=group_names,
+            current_date=current_date,
+            period_days=period_days,
             market=market,
         )
-
-    def _get_historical_ranks_batch(
-        self,
-        db: Session,
-        group_names: List[str],
-        current_date: date,
-        period_days: Dict[str, int],
-        *,
-        market: str = "US",
-    ) -> Dict[tuple, int]:
-        """Batch fetch historical ranks for all groups and periods in ONE query.
-
-        Scoped by ``market`` so multi-market data doesn't cross-contaminate
-        rank-change calculations.
-        """
-        if not group_names or not period_days:
-            return {}
-
-        # Calculate calendar-date range covering all target offsets plus the
-        # closest-record match window.
-        max_days = max(period_days.values())
-        earliest_date = current_date - timedelta(days=max_days + 7)
-
-        # Single query: fetch ALL historical records within the date range
-        all_records = db.query(
-            IBDGroupRank.industry_group,
-            IBDGroupRank.date,
-            IBDGroupRank.rank
-        ).filter(
-            and_(
-                IBDGroupRank.industry_group.in_(group_names),
-                IBDGroupRank.date >= earliest_date,
-                IBDGroupRank.date < current_date,  # Exclude current date
-                IBDGroupRank.market == (market or "US").upper(),
-            )
-        ).all()
-
-        # Build lookup: group_name -> list of (date, rank)
-        group_history = {}
-        for record in all_records:
-            if record.industry_group not in group_history:
-                group_history[record.industry_group] = []
-            group_history[record.industry_group].append(
-                (record.date, record.rank)
-            )
-
-        # For each group and period, find the closest historical rank
-        result = {}
-        for group_name in group_names:
-            history = group_history.get(group_name, [])
-            if not history:
-                continue
-
-            for period_name, days in period_days.items():
-                target_date = current_date - timedelta(days=days)
-
-                # Filter to records within a 7-calendar-day window of target
-                candidates = [
-                    (d, r) for d, r in history
-                    if abs((d - target_date).days) <= 7
-                ]
-
-                if not candidates:
-                    continue
-
-                # Pick closest date (prefer earlier if tied)
-                def _distance_key(item):
-                    d, _ = item
-                    delta = d - target_date
-                    return (abs(delta.days), delta.days > 0)
-
-                closest_date, closest_rank = min(candidates, key=_distance_key)
-                result[(group_name, period_name)] = closest_rank
-
-        return result
 
     def get_group_history(
         self,
@@ -691,13 +504,12 @@ class IBDGroupRankService:
         normalized_market = (market or "US").upper()
         cutoff_date = datetime.now().date() - timedelta(days=days)
 
-        records = db.query(IBDGroupRank).filter(
-            and_(
-                IBDGroupRank.industry_group == industry_group,
-                IBDGroupRank.date >= cutoff_date,
-                IBDGroupRank.market == normalized_market,
-            )
-        ).order_by(IBDGroupRank.date.desc()).all()
+        records = self.ranking_repository.group_rank_rows(
+            db,
+            industry_group=industry_group,
+            start_date=cutoff_date,
+            market=normalized_market,
+        )
 
         if not records:
             return {'industry_group': industry_group, 'history': []}
@@ -709,8 +521,11 @@ class IBDGroupRankService:
         period_days = dict(GROUP_RANK_CHANGE_CALENDAR_DAYS)
         rank_changes = {}
 
-        historical_ranks = self._get_historical_ranks_batch(
-            db, [industry_group], current.date, period_days,
+        historical_ranks = self.ranking_repository.historical_ranks_batch(
+            db,
+            group_names=[industry_group],
+            current_date=current.date,
+            period_days=period_days,
             market=normalized_market,
         )
         for period_name in period_days:
@@ -890,35 +705,6 @@ class IBDGroupRankService:
             policy=policy,
         )
 
-    def _delete_rankings_for_range(
-        self,
-        db: Session,
-        start_date: date,
-        end_date: date,
-        *,
-        market: str = "US",
-    ) -> int:
-        """Delete existing rankings for one market in a date range.
-
-        Scoped by ``market`` — a US backfill must not wipe HK/JP/TW/IN rows
-        that share the same date range.
-        """
-        normalized_market = (market or "US").upper()
-        deleted = db.query(IBDGroupRank).filter(
-            and_(
-                IBDGroupRank.date >= start_date,
-                IBDGroupRank.date <= end_date,
-                IBDGroupRank.market == normalized_market,
-            )
-        ).delete(synchronize_session=False)
-
-        db.commit()
-        logger.info(
-            "Deleted %d existing rankings for market=%s %s to %s",
-            deleted, normalized_market, start_date, end_date,
-        )
-        return deleted
-
     def backfill_rankings_optimized(
         self,
         db: Session,
@@ -949,12 +735,13 @@ class IBDGroupRankService:
         start_time = datetime.now()
 
         # 1. Delete existing rankings in range
-        deleted = self._delete_rankings_for_range(
+        deleted = self.ranking_repository.delete_range(
             db,
-            start_date,
-            end_date,
+            start_date=start_date,
+            end_date=end_date,
             market=normalized_market,
         )
+        db.commit()
 
         # 2. Pre-fetch ALL data upfront
         prefetch = self._coerce_prefetch_data(
@@ -1027,12 +814,13 @@ class IBDGroupRankService:
                     )
                     if group_metrics:
                         # Store
-                        self._store_rankings(
+                        self.ranking_repository.store_rankings(
                             db,
-                            calc_date,
-                            group_metrics,
+                            calculation_date=calc_date,
+                            rankings=group_metrics,
                             market=normalized_market,
                         )
+                        db.commit()
                         processed += 1
 
                         if processed % 10 == 0:
@@ -1045,6 +833,7 @@ class IBDGroupRankService:
                         logger.warning(f"No valid groups for {calc_date}")
 
                 except Exception as e:
+                    db.rollback()
                     errors += 1
                     logger.error(f"Error processing {calc_date}: {e}")
 
@@ -1362,12 +1151,13 @@ class IBDGroupRankService:
                     )
                     if group_metrics:
                         # Store
-                        self._store_rankings(
+                        self.ranking_repository.store_rankings(
                             db,
-                            calc_date,
-                            group_metrics,
+                            calculation_date=calc_date,
+                            rankings=group_metrics,
                             market=normalized_market,
                         )
+                        db.commit()
                         stats['processed'] += 1
                         logger.debug(f"Filled gap for {calc_date}: {len(group_metrics)} groups")
                     else:
@@ -1375,6 +1165,7 @@ class IBDGroupRankService:
                         logger.warning(f"No results for {calc_date}")
 
                 except Exception as e:
+                    db.rollback()
                     stats['errors'] += 1
                     logger.error(f"Error filling gap for {calc_date}: {e}")
 

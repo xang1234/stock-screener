@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
@@ -146,50 +146,6 @@ def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
     assert missing == [date(2026, 3, 19)]
 
 
-def test_get_historical_rank_picks_closest_date():
-    service = _make_group_rank_service()
-    db_session = _make_session()
-    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
-    current_date = date(2024, 1, 22)
-
-    try:
-        # target_date = current_date - 7 days = Jan 15
-        # Record 2 days before target (Jan 13, rank 10) — closer
-        # Record 3 days after target (Jan 18, rank 20) — further
-        _add_rank(db_session, group, date(2024, 1, 13), 10)
-        _add_rank(db_session, group, date(2024, 1, 18), 20)
-
-        result = service._get_historical_ranks_batch(
-            db_session, [group], current_date, {'1w': 7}
-        )
-        assert result[(group, '1w')] == 10
-    finally:
-        db_session.rollback()
-        db_session.close()
-
-
-def test_get_historical_rank_prefers_earlier_on_tie():
-    service = _make_group_rank_service()
-    db_session = _make_session()
-    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
-    current_date = date(2024, 1, 22)
-
-    try:
-        # target_date = current_date - 7 days = Jan 15
-        # Record 2 days before target (Jan 13, rank 11) — equidistant, earlier
-        # Record 2 days after target (Jan 17, rank 99) — equidistant, later
-        _add_rank(db_session, group, date(2024, 1, 13), 11)
-        _add_rank(db_session, group, date(2024, 1, 17), 99)
-
-        result = service._get_historical_ranks_batch(
-            db_session, [group], current_date, {'1w': 7}
-        )
-        assert result[(group, '1w')] == 11
-    finally:
-        db_session.rollback()
-        db_session.close()
-
-
 def test_get_group_history_uses_universe_lookup_for_top_symbol_name(monkeypatch):
     service = _make_group_rank_service()
     db_session = _make_session()
@@ -226,8 +182,8 @@ def test_get_group_history_uses_universe_lookup_for_top_symbol_name(monkeypatch)
         db_session.commit()
 
         monkeypatch.setattr(
-            service,
-            "_get_historical_ranks_batch",
+            service.ranking_repository,
+            "historical_ranks_batch",
             lambda *_args, **_kwargs: {},
         )
         monkeypatch.setattr(
@@ -273,11 +229,15 @@ def test_get_group_history_uses_calendar_rank_change_offsets(monkeypatch):
 
         expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
-        def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
+        def fake_historical_batch(db, *, group_names, current_date, period_days, market):  # noqa: ANN001
             captured_period_days.append(dict(period_days))
             return {(group, "1w"): 6}
 
-        monkeypatch.setattr(service, "_get_historical_ranks_batch", fake_historical_batch)
+        monkeypatch.setattr(
+            service.ranking_repository,
+            "historical_ranks_batch",
+            fake_historical_batch,
+        )
         monkeypatch.setattr(service, "_get_constituent_stocks", lambda *_args, **_kwargs: [])
 
         result = service.get_group_history(db_session, group, days=30, market="US")
@@ -303,11 +263,15 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
 
         expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
-        def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
+        def fake_historical_batch(db, *, group_names, current_date, period_days, market):  # noqa: ANN001
             captured_period_days.append(dict(period_days))
             return {(group, "1w"): 6}
 
-        monkeypatch.setattr(service, "_get_historical_ranks_batch", fake_historical_batch)
+        monkeypatch.setattr(
+            service.ranking_repository,
+            "historical_ranks_batch",
+            fake_historical_batch,
+        )
 
         rankings = service.get_current_rankings(
             db_session,
@@ -356,8 +320,8 @@ def test_get_group_history_propagates_constituent_source_failures(monkeypatch):
         )
         db_session.commit()
         monkeypatch.setattr(
-            service,
-            "_get_historical_ranks_batch",
+            service.ranking_repository,
+            "historical_ranks_batch",
             lambda *_args, **_kwargs: {},
         )
 
@@ -439,7 +403,11 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
         ),
     )
     store_rankings = Mock()
-    monkeypatch.setattr(service, "_store_rankings", store_rankings)
+    monkeypatch.setattr(
+        service.ranking_repository,
+        "store_rankings",
+        store_rankings,
+    )
 
     with pytest.raises(IncompleteGroupRankingCacheError) as excinfo:
         service.calculate_group_rankings(
@@ -478,7 +446,11 @@ def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_sessio
         ),
     )
     store_rankings = Mock()
-    monkeypatch.setattr(service, "_store_rankings", store_rankings)
+    monkeypatch.setattr(
+        service.ranking_repository,
+        "store_rankings",
+        store_rankings,
+    )
 
     with pytest.raises(IncompleteGroupRankingCacheError) as excinfo:
         service.calculate_group_rankings(
@@ -543,7 +515,11 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
         },
     )
     store_rankings = Mock()
-    monkeypatch.setattr(service, "_store_rankings", store_rankings)
+    monkeypatch.setattr(
+        service.ranking_repository,
+        "store_rankings",
+        store_rankings,
+    )
     calculation = service.calculate_group_rankings(
         db_session,
         date(2026, 3, 20),
@@ -570,80 +546,6 @@ def test_calculate_group_rankings_has_no_diagnostics_output_parameter():
     )
 
     assert "diagnostics" not in signature.parameters
-
-
-def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback():
-    service = _make_group_rank_service()
-    db_session = _make_session()
-    engine = db_session.get_bind()
-    query_counts = {"select": 0}
-
-    def count_selects(_conn, _cursor, statement, _parameters, _context, _executemany):
-        if statement.lstrip().upper().startswith("SELECT"):
-            query_counts["select"] += 1
-
-    try:
-        db_session.add(
-            IBDGroupRank(
-                industry_group="Software",
-                date=date(2026, 3, 20),
-                rank=9,
-                avg_rs_rating=70.0,
-                num_stocks=3,
-                num_stocks_rs_above_80=1,
-                top_symbol="OLD",
-                top_rs_rating=80.0,
-            )
-        )
-        db_session.commit()
-
-        event.listen(engine, "before_cursor_execute", count_selects)
-        service._store_rankings(
-            db_session,
-            date(2026, 3, 20),
-            [
-                {
-                    "industry_group": "Software",
-                    "rank": 1,
-                    "avg_rs_rating": 91.0,
-                    "median_rs_rating": 90.0,
-                    "weighted_avg_rs_rating": 92.0,
-                    "rs_std_dev": 1.5,
-                    "num_stocks": 4,
-                    "num_stocks_rs_above_80": 3,
-                    "top_symbol": "AAPL",
-                    "top_rs_rating": 99.0,
-                },
-                {
-                    "industry_group": "Semiconductors",
-                    "rank": 2,
-                    "avg_rs_rating": 88.0,
-                    "median_rs_rating": 87.0,
-                    "weighted_avg_rs_rating": 89.0,
-                    "rs_std_dev": 2.5,
-                    "num_stocks": 5,
-                    "num_stocks_rs_above_80": 4,
-                    "top_symbol": "NVDA",
-                    "top_rs_rating": 98.0,
-                },
-            ],
-        )
-        event.remove(engine, "before_cursor_execute", count_selects)
-
-        rows = db_session.query(IBDGroupRank).order_by(IBDGroupRank.rank).all()
-
-        assert query_counts["select"] == 1
-        assert len(rows) == 2
-        assert rows[0].industry_group == "Software"
-        assert rows[0].top_symbol == "AAPL"
-        assert rows[1].industry_group == "Semiconductors"
-    finally:
-        try:
-            event.remove(engine, "before_cursor_execute", count_selects)
-        except Exception:
-            pass
-        db_session.rollback()
-        db_session.close()
 
 
 def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_session, monkeypatch):
@@ -688,9 +590,9 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
     )
 
     monkeypatch.setattr(
-        service,
-        "_delete_rankings_for_range",
-        lambda db, start_date, end_date, **kw: delete_kwargs.update(kw) or 0,
+        service.ranking_repository,
+        "delete_range",
+        lambda db, **kw: delete_kwargs.update(kw) or 0,
     )
     monkeypatch.setattr(
         service,
@@ -736,7 +638,11 @@ def test_backfill_rankings_optimized_uses_market_calendar(db_session, monkeypatc
         "app.wiring.bootstrap.get_market_calendar_service",
         lambda: _FakeCalendarService(),
     )
-    monkeypatch.setattr(service, "_delete_rankings_for_range", lambda *args, **kw: 0)
+    monkeypatch.setattr(
+        service.ranking_repository,
+        "delete_range",
+        lambda *args, **kw: 0,
+    )
     monkeypatch.setattr(
         service,
         "_prefetch_all_data",
@@ -793,7 +699,11 @@ def test_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monk
         "app.wiring.bootstrap.get_market_calendar_service",
         lambda: _FakeCalendarService(),
     )
-    monkeypatch.setattr(service, "_delete_rankings_for_range", lambda *args, **kw: 0)
+    monkeypatch.setattr(
+        service.ranking_repository,
+        "delete_range",
+        lambda *args, **kw: 0,
+    )
     monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kw: prefetch)
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
