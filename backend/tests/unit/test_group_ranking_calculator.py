@@ -95,6 +95,7 @@ def _prefetch_for_two_groups() -> GroupRankPrefetchData:
             "Software": ("AAA", "BBB", "CCC"),
             "Retail": ("DDD", "EEE", "FFF"),
         },
+        group_names=("Software", "Retail"),
     )
 
 
@@ -168,6 +169,7 @@ def test_calculate_for_date_excludes_short_history():
         market_caps=market_caps,
         stats=_stats(len(symbols)),
         symbols_by_group={"Software": symbols},
+        group_names=("Software",),
     )
 
     rankings = calculator.calculate_for_date(
@@ -237,6 +239,7 @@ def test_calculate_for_date_preserves_invalid_period_return_semantics():
         market_caps=market_caps,
         stats=_stats(len(symbols)),
         symbols_by_group={"Software": symbols},
+        group_names=("Software",),
     )
 
     rankings = calculator.calculate_for_date(

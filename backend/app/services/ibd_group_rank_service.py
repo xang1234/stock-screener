@@ -4,15 +4,12 @@ Service for calculating and managing IBD Industry Group Rankings.
 Calculates daily rankings based on average RS rating of constituent stocks.
 """
 import logging
-import statistics
-from typing import Any, Optional, Dict, List
+from typing import Any, Dict, List
 from datetime import datetime, date, timedelta
-import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
 from ..models.industry import IBDGroupRank
-from ..domain.providers.price_symbol_support import is_unsupported_yahoo_price_symbol
 from .group_constituent_source import GroupConstituentSource
 from .group_detail_payloads import constituent_stock_payloads_from_scan_items
 from .group_ranking_history import build_group_detail_payload_from_parts
@@ -30,7 +27,6 @@ from .group_rank_legacy_adapter import LegacyGroupRankPrefetchAdapter
 from .group_ranking_calculator import GroupRankingCalculator
 from .group_ranking_repository import GroupRankingRepository
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
-from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService
 from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
@@ -147,11 +143,24 @@ class IBDGroupRankService:
         )
         start_time = datetime.now()
 
-        # Get all unique industry groups for this market
-        all_groups = self.input_loader.taxonomy_source.groups(
+        raw_prefetch = self._prefetch_all_data(
             db,
-            normalized_market,
+            market=normalized_market,
+            policy=policy,
         )
+        legacy_prefetch = not isinstance(
+            raw_prefetch,
+            GroupRankPrefetchData,
+        )
+        prefetch = self._coerce_prefetch_data(raw_prefetch)
+        all_groups = prefetch.group_names
+        if legacy_prefetch:
+            all_groups = tuple(
+                self.input_loader.taxonomy_source.groups(
+                    db,
+                    normalized_market,
+                )
+            )
         if not all_groups:
             logger.error("No industry groups found for market %s", normalized_market)
             raise MissingIBDIndustryMappingsError()
@@ -160,14 +169,6 @@ class IBDGroupRankService:
             "Found %d industry groups for market %s", len(all_groups), normalized_market,
         )
 
-        # Pre-fetch all data upfront (benchmark + all stock prices).
-        prefetch = self._coerce_prefetch_data(
-            self._prefetch_all_data(
-                db,
-                market=normalized_market,
-                policy=policy,
-            )
-        )
         prefetch_stats = prefetch.stats.with_cache_requirement(
             cache_requirement
         )
@@ -199,12 +200,13 @@ class IBDGroupRankService:
                 prefetch_stats=prefetch_stats,
             )
 
-        prefetch = self.input_loader.complete_legacy_symbols(
-            db,
-            market=normalized_market,
-            group_names=all_groups,
-            prefetch=prefetch,
-        )
+        if legacy_prefetch:
+            prefetch = self.input_loader.complete_legacy_symbols(
+                db,
+                market=normalized_market,
+                group_names=all_groups,
+                prefetch=prefetch,
+            )
         group_metrics = list(
             self.ranking_calculator.calculate_for_date(
                 prefetch=prefetch,
@@ -238,123 +240,6 @@ class IBDGroupRankService:
             rankings=tuple(group_metrics),
             prefetch_stats=prefetch_stats,
         )
-
-    def _calculate_group_rs(
-        self,
-        db: Session,
-        group_name: str,
-        spy_prices: pd.Series,
-        calculation_date: date
-    ) -> Optional[Dict]:
-        """
-        Calculate average RS rating for a single industry group.
-
-        Args:
-            db: Database session
-            group_name: IBD industry group name
-            spy_prices: SPY price series (most recent first)
-            calculation_date: Date for calculation
-
-        Returns:
-            Dict with group metrics or None if insufficient data
-        """
-        # Get all symbols in this group
-        symbols = IBDIndustryService.get_group_symbols(db, group_name)
-
-        if not symbols:
-            logger.debug(f"No symbols found for group: {group_name}")
-            return None
-
-        # Fetch prices for all symbols in batch
-        prices_dict = self.price_cache.get_many(symbols, period="2y")
-
-        # Market caps for weighted RS
-        market_caps = self.input_loader.market_cap_source.market_caps(
-            db,
-            symbols,
-        )
-
-        # Calculate RS for each symbol
-        rs_ratings = []
-        top_symbol = None
-        top_rs = -1
-        rs_above_80_count = 0
-        weighted_sum = 0.0
-        weighted_total = 0.0
-
-        for symbol in symbols:
-            prices = prices_dict.get(symbol)
-            if prices is None or prices.empty:
-                continue
-
-            # Filter to calculation_date for accurate historical rankings
-            if calculation_date < datetime.now().date():
-                prices_filtered = prices[prices.index.date <= calculation_date]
-            else:
-                prices_filtered = prices
-
-            # Skip if insufficient data after filtering
-            if prices_filtered.empty:
-                continue
-
-            # Prepare stock prices (most recent first)
-            stock_prices = prices_filtered['Close'].sort_index(ascending=False)
-
-            # Need at least 252 days for full RS calculation
-            if len(stock_prices) < 252:
-                continue
-
-            try:
-                rs_result = self.rs_calculator.calculate_rs_rating(
-                    symbol, stock_prices, spy_prices
-                )
-                rs_rating = rs_result.get('rs_rating', 0)
-
-                if rs_rating > 0:
-                    rs_ratings.append(rs_rating)
-
-                    if rs_rating > top_rs:
-                        top_rs = rs_rating
-                        top_symbol = symbol
-
-                    if rs_rating >= 80:
-                        rs_above_80_count += 1
-
-                    market_cap = market_caps.get(symbol)
-                    if market_cap:
-                        weighted_sum += rs_rating * market_cap
-                        weighted_total += market_cap
-
-            except Exception as e:
-                logger.debug(f"Error calculating RS for {symbol}: {e}")
-                continue
-
-        # Need at least 3 stocks with valid RS to rank the group
-        if len(rs_ratings) < 3:
-            logger.debug(
-                f"Insufficient data for group {group_name}: "
-                f"only {len(rs_ratings)} stocks with valid RS"
-            )
-            return None
-
-        # Calculate average RS
-        avg_rs = sum(rs_ratings) / len(rs_ratings)
-        median_rs = statistics.median(rs_ratings)
-        rs_std_dev = statistics.pstdev(rs_ratings) if len(rs_ratings) > 1 else None
-        weighted_avg_rs = (weighted_sum / weighted_total) if weighted_total > 0 else None
-
-        return {
-            'industry_group': group_name,
-            'date': calculation_date,
-            'avg_rs_rating': round(avg_rs, 2),
-            'median_rs_rating': round(median_rs, 2),
-            'weighted_avg_rs_rating': round(weighted_avg_rs, 2) if weighted_avg_rs is not None else None,
-            'rs_std_dev': round(rs_std_dev, 2) if rs_std_dev is not None else None,
-            'num_stocks': len(rs_ratings),
-            'num_stocks_rs_above_80': rs_above_80_count,
-            'top_symbol': top_symbol,
-            'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
-        }
 
     def get_current_rankings(
         self,
@@ -645,49 +530,6 @@ class IBDGroupRankService:
             'gainers': gainers[:limit],
             'losers': losers[:limit],
         }
-
-    def _get_validated_group_symbols(
-        self,
-        db: Session,
-        group_name: str,
-        active_symbols: set,
-        *,
-        market: str = "US",
-    ) -> list:
-        """
-        Get symbols for a group, filtered to only active stocks in stock_universe.
-
-        This ensures group ranking uses the same universe as bulk scans.
-        """
-        group_symbols = self.input_loader.taxonomy_source.symbols_for_group(
-            db,
-            group_name,
-            market,
-        )
-        return [
-            symbol
-            for symbol in group_symbols
-            if symbol in active_symbols and not is_unsupported_yahoo_price_symbol(symbol)
-        ]
-
-    def _get_market_caps_for_symbols(
-        self,
-        db: Session,
-        symbols: List[str]
-    ) -> Dict[str, float]:
-        """
-        Fetch market caps for a set of symbols from stock_universe.
-
-        Returns:
-            Dict mapping symbol -> market cap (only positive values included)
-        """
-        if not symbols:
-            return {}
-
-        return self.input_loader.market_cap_source.market_caps(
-            db,
-            symbols,
-        )
 
     def _coerce_prefetch_data(self, prefetch: Any) -> GroupRankPrefetchData:
         """Adapt the legacy facade seam to the strict prefetch model."""

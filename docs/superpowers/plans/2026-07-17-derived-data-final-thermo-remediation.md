@@ -256,7 +256,7 @@ git commit --no-verify -m "refactor: type group ranking persistence"
 - Production invariant: `groups()` once and `symbols_for_group()` once per group per load.
 - Legacy invariant: five-item tuples adapt with `group_names=()` and complete through the explicit compatibility seam.
 
-- [ ] **Step 1: Write the failing call-count and ownership tests**
+- [x] **Step 1: Write the failing call-count and ownership tests**
 
 Use a counting taxonomy source:
 
@@ -293,7 +293,7 @@ def test_load_reads_each_taxonomy_membership_once(db_session):
 
 Add a facade test that makes `taxonomy_source.groups` raise if called after the typed loader returns a non-empty `group_names` tuple.
 
-- [ ] **Step 2: Run loader/service tests and verify RED**
+- [x] **Step 2: Run loader/service tests and verify RED**
 
 Run:
 
@@ -307,7 +307,7 @@ cd backend
 
 Expected: the new field is missing and each membership is called twice.
 
-- [ ] **Step 3: Capture and partition membership once**
+- [x] **Step 3: Capture and partition membership once**
 
 Add `group_names` to every `GroupRankPrefetchData` constructor. In `load()`, read
 the ordered group names once before loading the benchmark. If the benchmark is
@@ -351,7 +351,7 @@ universe.active_symbols() once (only when the benchmark is available)
 taxonomy.symbols_for_group() once per group (only when the benchmark is available)
 ```
 
-- [ ] **Step 4: Delete unused facade implementations**
+- [x] **Step 4: Delete unused facade implementations**
 
 Remove these unreferenced private methods and now-unused imports from `IBDGroupRankService`:
 
@@ -363,7 +363,7 @@ _get_market_caps_for_symbols
 
 Keep `_prefetch_all_data` and `_coerce_prefetch_data` as compatibility seams because existing tests and legacy callers patch/adapt them.
 
-- [ ] **Step 5: Run the focused input/legacy/historical/service suite and verify GREEN**
+- [x] **Step 5: Run the focused input/legacy/historical/service suite and verify GREEN**
 
 Run:
 
@@ -378,7 +378,7 @@ cd backend
 
 Expected: all selected tests pass and the counting taxonomy assertions prove one membership read per group.
 
-- [ ] **Step 6: Commit single ownership**
+- [x] **Step 6: Commit single ownership**
 
 ```bash
 git add backend/app/services/group_rank_models.py \

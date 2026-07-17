@@ -31,6 +31,7 @@ class LegacyGroupRankPrefetchAdapter:
             market_caps=market_caps,
             stats=self._stats(raw_stats),
             symbols_by_group={},
+            group_names=(),
         )
 
     @staticmethod

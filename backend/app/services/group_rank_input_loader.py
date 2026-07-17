@@ -54,6 +54,12 @@ class GroupRankInputLoader:
         policy: DerivedDataExecutionPolicy,
     ) -> GroupRankPrefetchData:
         normalized_market = (market or "US").upper()
+        group_names = tuple(
+            self.taxonomy_source.groups(
+                db,
+                normalized_market,
+            )
+        )
         primary_benchmark = self.benchmark_cache.get_benchmark_symbol(
             normalized_market
         )
@@ -80,41 +86,34 @@ class GroupRankInputLoader:
                 policy=policy,
                 benchmark_symbol=benchmark_symbol,
                 benchmark_role=benchmark_role,
+                group_names=group_names,
             )
 
         active_symbols = self.universe_source.active_symbols(
             db,
             normalized_market,
         )
-        groups = self.taxonomy_source.groups(
-            db,
-            normalized_market,
-        )
-        symbols_by_group = self._validated_symbols_by_group(
-            db,
-            market=normalized_market,
-            group_names=groups,
-            active_symbols=active_symbols,
-        )
+        symbols_by_group: dict[str, tuple[str, ...]] = {}
+        unsupported_symbols: set[str] = set()
+        for group_name in group_names:
+            supported_symbols: list[str] = []
+            for symbol in self.taxonomy_source.symbols_for_group(
+                db,
+                group_name,
+                normalized_market,
+            ):
+                if symbol not in active_symbols:
+                    continue
+                if is_unsupported_yahoo_price_symbol(symbol):
+                    unsupported_symbols.add(symbol)
+                    continue
+                supported_symbols.append(symbol)
+            symbols_by_group[group_name] = tuple(supported_symbols)
         symbols_to_fetch = {
             symbol
             for symbols in symbols_by_group.values()
             for symbol in symbols
         }
-        unsupported_symbols = {
-            symbol
-            for group in groups
-            for symbol in self.taxonomy_source.symbols_for_group(
-                db,
-                group,
-                normalized_market,
-            )
-            if (
-                symbol in active_symbols
-                and is_unsupported_yahoo_price_symbol(symbol)
-            )
-        }
-
         ordered_symbols = sorted(symbols_to_fetch)
         if policy.cache_only:
             prices = self.price_cache.get_many_cached_only_fresh(
@@ -164,6 +163,7 @@ class GroupRankInputLoader:
             market_caps=market_caps,
             stats=stats,
             symbols_by_group=symbols_by_group,
+            group_names=group_names,
         )
 
     def complete_legacy_symbols(
@@ -215,6 +215,7 @@ class GroupRankInputLoader:
         policy: DerivedDataExecutionPolicy,
         benchmark_symbol: str,
         benchmark_role: str,
+        group_names: tuple[str, ...],
     ) -> GroupRankPrefetchData:
         stats = GroupRankPrefetchStats(
             target_symbols=0,
@@ -237,6 +238,7 @@ class GroupRankInputLoader:
             market_caps={},
             stats=stats,
             symbols_by_group={},
+            group_names=group_names,
         )
 
     def _get_cached_benchmark(

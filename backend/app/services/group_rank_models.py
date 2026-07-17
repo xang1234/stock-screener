@@ -76,6 +76,7 @@ class GroupRankPrefetchData:
     market_caps: Mapping[str, float]
     stats: GroupRankPrefetchStats
     symbols_by_group: Mapping[str, tuple[str, ...]]
+    group_names: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.prices_by_symbol, Mapping):
@@ -88,6 +89,8 @@ class GroupRankPrefetchData:
             raise TypeError("stats must be GroupRankPrefetchStats")
         if not isinstance(self.symbols_by_group, Mapping):
             raise TypeError("symbols_by_group must be a mapping")
+        if not isinstance(self.group_names, tuple):
+            raise TypeError("group_names must be tuple[str, ...]")
         for group, symbols in self.symbols_by_group.items():
             if not isinstance(symbols, tuple):
                 raise TypeError(

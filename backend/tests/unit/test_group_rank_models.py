@@ -73,6 +73,7 @@ def test_prefetch_data_rejects_legacy_stats_mapping():
             market_caps={},
             stats={"spy_cached": True},
             symbols_by_group={},
+            group_names=(),
         )
 
 
@@ -85,6 +86,7 @@ def test_prefetch_data_rejects_mutable_group_symbol_lists():
             market_caps={},
             stats=_stats(),
             symbols_by_group={"Software": ["AAA"]},
+            group_names=("Software",),
         )
 
 

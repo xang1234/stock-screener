@@ -50,6 +50,7 @@ def _typed_prefetch() -> GroupRankPrefetchData:
         market_caps={"AAA": 1_000_000},
         stats=_adapter_stats(),
         symbols_by_group={"Software": ("AAA",)},
+        group_names=("Software",),
     )
 
 
@@ -74,6 +75,7 @@ def test_adapter_converts_legacy_five_tuple():
     assert adapted.stats.cache_coverage_ratio == 0.5
     assert adapted.stats.benchmark_available is True
     assert adapted.symbols_by_group == {}
+    assert adapted.group_names == ()
 
 
 def test_adapter_returns_typed_prefetch_unchanged():

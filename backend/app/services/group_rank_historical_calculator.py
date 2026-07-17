@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 import logging
 from typing import Any, Dict, List
@@ -454,13 +455,18 @@ class GroupRankHistoricalCalculator:
             DerivedDataExecutionPolicy.provider_allowed()
         ),
     ) -> GroupRankPrefetchData:
-        return self.legacy_adapter.adapt(
-            self.input_loader.load(
-                db,
-                market=market,
-                policy=policy,
-            )
+        raw_prefetch = self.input_loader.load(
+            db,
+            market=market,
+            policy=policy,
         )
+        prefetch = self.legacy_adapter.adapt(raw_prefetch)
+        if isinstance(raw_prefetch, GroupRankPrefetchData):
+            return prefetch
+        group_names = tuple(
+            self.input_loader.taxonomy_source.groups(db, market)
+        )
+        return replace(prefetch, group_names=group_names)
 
     def _complete_prefetch(
         self,
@@ -469,13 +475,7 @@ class GroupRankHistoricalCalculator:
         market: str,
         prefetch: GroupRankPrefetchData,
     ) -> tuple[tuple[str, ...], GroupRankPrefetchData]:
-        group_names = (
-            tuple(prefetch.symbols_by_group)
-            or self.input_loader.taxonomy_source.groups(
-                db,
-                market,
-            )
-        )
+        group_names = prefetch.group_names
         completed = self.input_loader.complete_legacy_symbols(
             db,
             market=market,

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from unittest.mock import Mock
@@ -10,6 +10,10 @@ from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
 from app.services.group_rank_input_loader import GroupRankInputLoader
+from app.services.group_rank_models import (
+    GroupRankPrefetchData,
+    GroupRankPrefetchStats,
+)
 
 
 @dataclass
@@ -28,6 +32,21 @@ class FakeTaxonomySource:
         return tuple(self.symbols_by_group)
 
     def symbols_for_group(self, db, group, market):
+        return self.symbols_by_group[group]
+
+
+@dataclass
+class CountingTaxonomySource:
+    symbols_by_group: dict[str, tuple[str, ...]]
+    groups_calls: int = 0
+    member_calls: list[str] = field(default_factory=list)
+
+    def groups(self, db, market):
+        self.groups_calls += 1
+        return tuple(self.symbols_by_group)
+
+    def symbols_for_group(self, db, group, market):
+        self.member_calls.append(group)
         return self.symbols_by_group[group]
 
 
@@ -72,12 +91,15 @@ def _loader(
     groups: dict[str, tuple[str, ...]],
     active: tuple[str, ...],
     market_caps: dict[str, float] | None = None,
+    taxonomy_source=None,
 ) -> GroupRankInputLoader:
     return GroupRankInputLoader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
         universe_source=FakeUniverseSource(active),
-        taxonomy_source=FakeTaxonomySource(groups),
+        taxonomy_source=(
+            taxonomy_source or FakeTaxonomySource(groups)
+        ),
         market_cap_source=FakeMarketCapSource(market_caps or {}),
     )
 
@@ -215,6 +237,43 @@ def test_load_skips_unsupported_symbols_before_bulk_read(db_session):
     price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
 
 
+def test_load_reads_each_taxonomy_membership_once(db_session):
+    prices = _price_frame()
+    taxonomy = CountingTaxonomySource(
+        {
+            "Software": ("AAA", "MZYX-U"),
+            "Retail": ("BBB",),
+        }
+    )
+    price_cache = Mock()
+    price_cache.get_many.return_value = {
+        "AAA": prices,
+        "BBB": prices,
+    }
+    benchmark_cache = Mock()
+    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
+    benchmark_cache.get_benchmark_data.return_value = prices
+    loader = _loader(
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+        groups={},
+        active=("AAA", "BBB", "MZYX-U"),
+        taxonomy_source=taxonomy,
+    )
+    policy = resolve_derived_data_execution_policy(
+        execution_policy="auto",
+        target_date=date(2026, 3, 19),
+        current_date=date(2026, 3, 20),
+    )
+
+    prefetch = loader.load(db_session, market="US", policy=policy)
+
+    assert prefetch.group_names == ("Software", "Retail")
+    assert taxonomy.groups_calls == 1
+    assert taxonomy.member_calls == ["Software", "Retail"]
+    assert prefetch.stats.skipped_unsupported_symbols == 1
+
+
 def test_cache_only_missing_benchmark_returns_typed_empty_prefetch(db_session):
     price_cache = Mock()
     price_cache.get_cached_only_fresh.return_value = None
@@ -224,8 +283,8 @@ def test_cache_only_missing_benchmark_returns_typed_empty_prefetch(db_session):
     loader = _loader(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
-        groups={},
-        active=(),
+        groups={"JP_Software": ("SONY",)},
+        active=("SONY",),
     )
 
     prefetch = loader.load(
@@ -238,6 +297,7 @@ def test_cache_only_missing_benchmark_returns_typed_empty_prefetch(db_session):
     assert prefetch.stats.benchmark_available is False
     assert prefetch.stats.benchmark_symbol == "^N225"
     assert prefetch.stats.market == "JP"
+    assert prefetch.group_names == ("JP_Software",)
 
 
 def test_complete_legacy_symbols_uses_typed_taxonomy_source(db_session):
@@ -248,11 +308,6 @@ def test_complete_legacy_symbols_uses_typed_taxonomy_source(db_session):
         groups={"Software": ("AAPL", "INACTIVE")},
         active=("AAPL",),
     )
-    from app.services.group_rank_models import (
-        GroupRankPrefetchData,
-        GroupRankPrefetchStats,
-    )
-
     prefetch = GroupRankPrefetchData(
         benchmark_prices=prices,
         prices_by_symbol={"AAPL": prices},
@@ -273,6 +328,7 @@ def test_complete_legacy_symbols_uses_typed_taxonomy_source(db_session):
             skipped_unsupported_symbols=0,
         ),
         symbols_by_group={},
+        group_names=(),
     )
 
     completed = loader.complete_legacy_symbols(

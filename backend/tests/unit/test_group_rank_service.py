@@ -129,6 +129,26 @@ def _policy(mode: str, target: date):
     )
 
 
+def _replace_taxonomy_source(
+    monkeypatch,
+    service,
+    *,
+    groups=(),
+    error: Exception | None = None,
+):
+    taxonomy_source = Mock()
+    if error is not None:
+        taxonomy_source.groups.side_effect = error
+    else:
+        taxonomy_source.groups.return_value = tuple(groups)
+    monkeypatch.setattr(
+        service.input_loader,
+        "taxonomy_source",
+        taxonomy_source,
+    )
+    return taxonomy_source
+
+
 def _prefetch_stats(
     target_symbols: int,
     *,
@@ -370,9 +390,10 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
         benchmark_cache=benchmark_cache,
     )
 
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["JP_Software"],
+    _replace_taxonomy_source(
+        monkeypatch,
+        service,
+        groups=("JP_Software",),
     )
 
     with pytest.raises(IncompleteGroupRankingCacheError) as excinfo:
@@ -393,9 +414,10 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
     service = _make_group_rank_service()
     price_data = _price_frame()
 
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
+    _replace_taxonomy_source(
+        monkeypatch,
+        service,
+        groups=("Software",),
     )
     monkeypatch.setattr(
         service,
@@ -436,9 +458,10 @@ def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_sessio
     service = _make_group_rank_service()
     price_data = _price_frame()
 
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
+    _replace_taxonomy_source(
+        monkeypatch,
+        service,
+        groups=("Software",),
     )
     monkeypatch.setattr(
         service,
@@ -510,10 +533,14 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
         market_caps={symbol: 1_000_000_000 for symbol in symbols},
         stats=stats,
         symbols_by_group={"Software": tuple(symbols)},
+        group_names=("Software",),
     )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kwargs: ["Software"],
+    _replace_taxonomy_source(
+        monkeypatch,
+        service,
+        error=AssertionError(
+            "typed prefetch group names must be authoritative"
+        ),
     )
     monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kwargs: prefetch)
     service.ranking_calculator = Mock()
@@ -593,10 +620,7 @@ def test_group_rank_service_is_a_compatibility_facade():
 def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_session, monkeypatch):
     service = _make_group_rank_service()
 
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: [],
-    )
+    _replace_taxonomy_source(monkeypatch, service)
 
     with pytest.raises(MissingIBDIndustryMappingsError, match="IBD industry mappings are not loaded"):
         service.calculate_group_rankings(db_session, date(2026, 3, 20), market="US")
@@ -605,9 +629,10 @@ def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_
 def test_calculate_group_rankings_propagates_group_lookup_failures(db_session, monkeypatch):
     service = _make_group_rank_service()
 
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    _replace_taxonomy_source(
+        monkeypatch,
+        service,
+        error=RuntimeError("database unavailable"),
     )
 
     with pytest.raises(RuntimeError, match="database unavailable"):

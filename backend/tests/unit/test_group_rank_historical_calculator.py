@@ -58,6 +58,7 @@ def _prefetch(
             if symbols_by_group is not None
             else {"Software": ("AAA",)}
         ),
+        group_names=("Software",),
     )
 
 
