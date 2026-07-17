@@ -54,6 +54,30 @@ jobs:
       - name: "Gate 5: Golden regression"
         run: make gate-5
 
+  backend-unit:
+    name: Backend Unit Suite
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost/ci_unused
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt -r backend/requirements-test.txt
+
+      - name: Safe test collection
+        run: cd backend && python -m pytest --collect-only -q -m "not live_service and not load"
+
+      - name: Comprehensive backend unit suite
+        run: cd backend && python -m pytest tests/unit -q
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -94,7 +118,7 @@ jobs:
 
   publish-images:
     name: Publish Docker Images
-    needs: [backend, frontend, assistant-compose-smoke]
+    needs: [backend, backend-unit, frontend, assistant-compose-smoke]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
