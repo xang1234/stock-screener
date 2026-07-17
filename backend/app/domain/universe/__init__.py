@@ -1,5 +1,7 @@
 """Universe domain helpers."""
 
+from enum import Enum
+
 from .definitions import (
     NormalizedMarketScope,
     UniverseStorageProjection,
@@ -23,6 +25,17 @@ from .ingestion import (
     UniverseSourceProvenance,
 )
 
+
+class UniverseType(str, Enum):
+    """Type of stock universe to scan."""
+
+    ALL = "all"
+    MARKET = "market"
+    EXCHANGE = "exchange"
+    INDEX = "index"
+    CUSTOM = "custom"
+    TEST = "test"
+
 __all__ = [
     "ACTIVE_UNIVERSE_STATUS",
     "CanonicalUniverseIngestionResult",
@@ -35,6 +48,7 @@ __all__ = [
     "NormalizedMarketScope",
     "RejectedUniverseRow",
     "UniverseStorageProjection",
+    "UniverseType",
     "UniverseLifecycleMetadata",
     "UniverseSourceProvenance",
     "index_registry",

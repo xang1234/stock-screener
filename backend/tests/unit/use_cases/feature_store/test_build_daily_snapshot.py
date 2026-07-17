@@ -673,6 +673,43 @@ class TestBulkDataPreparation:
         assert provider.bulk_calls == [["AAPL", "MSFT", "GOOGL", "NVDA"]]
 
     @_PATCH_TRADING_DAY
+    def test_bootstrap_gate_uses_injected_coverage_evaluator(self, _mock_td):
+        uow, scanner = _make_uow(symbols=["AAPL"])
+        session = object()
+        uow.session = session
+        calls: list[dict[str, object]] = []
+
+        def evaluate(persistence_session, **kwargs):
+            calls.append({"session": persistence_session, **kwargs})
+            return {
+                "price_coverage_ratio": 0.9,
+                "fundamentals_coverage_ratio": 1.0,
+            }
+
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            bootstrap_coverage_evaluator=evaluate,
+        )
+
+        with pytest.raises(BootstrapCacheCoverageInsufficient):
+            use_case.execute(
+                uow,
+                _make_cmd(bootstrap_cache_only_if_covered=True),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert calls == [
+            {
+                "session": session,
+                "market": "US",
+                "symbols": ["AAPL"],
+                "as_of_date": AS_OF,
+            }
+        ]
+        assert scanner.calls == []
+
+    @_PATCH_TRADING_DAY
     def test_bootstrap_gate_pass_records_coverage_and_skips_live_fallback_for_missing_bulk_symbol(self, _mock_td):
         uow, _ = _make_uow(symbols=["AAPL", "MSFT", "BAD-WT"])
 

@@ -14,21 +14,12 @@ from ..domain.markets.catalog import get_market_catalog
 from ..domain.markets.mic_aliases import mic_alias_registry
 from ..domain.universe import (
     UniverseStorageProjection,
+    UniverseType,
     normalize_market_scope,
     parse_market_key_components,
     validate_legacy_exchange_scope,
 )
 from ..domain.universe.indexes import index_registry
-
-
-class UniverseType(str, Enum):
-    """Type of stock universe to scan."""
-    ALL = "all"
-    MARKET = "market"
-    EXCHANGE = "exchange"
-    INDEX = "index"
-    CUSTOM = "custom"
-    TEST = "test"
 
 
 def _enum_member_name(value: str) -> str:

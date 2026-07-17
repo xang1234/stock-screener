@@ -11,6 +11,8 @@ from datetime import date, datetime
 from numbers import Integral, Real
 from typing import Any, Optional
 
+from app.domain.common.normalization import normalize_string_list
+
 
 def finite_float_or_none(value: Any) -> float | None:
     """Return a finite float, or ``None`` for missing/non-finite values."""
@@ -95,26 +97,6 @@ def sanitize_sparkline(value: Any) -> Optional[list[float]]:
             return None
         sanitized.append(as_float)
     return sanitized
-
-
-def normalize_string_list(value: object) -> list[str]:
-    """Normalize a scalar-or-sequence value into a clean list of strings."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
-    if isinstance(value, (list, tuple, set)):
-        normalized: list[str] = []
-        for item in value:
-            if item is None:
-                continue
-            text = item.strip() if isinstance(item, str) else str(item).strip()
-            if text:
-                normalized.append(text)
-        return normalized
-    text = str(value).strip()
-    return [text] if text else []
 
 
 def coerce_bool_or_false(value: object) -> bool:

@@ -890,6 +890,9 @@ def get_compare_feature_runs_use_case() -> CompareFeatureRunsUseCase:
 
 def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
     """Build a BuildDailyFeatureSnapshotUseCase wired with the scan orchestrator."""
+    from app.services.bootstrap_cache_coverage import (
+        evaluate_bootstrap_cache_coverage,
+    )
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailyFeatureSnapshotUseCase,
     )
@@ -898,6 +901,7 @@ def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
         scanner=get_scan_orchestrator(),
         data_provider=get_stock_data_provider(),
         market_calendar=get_market_calendar_service(),
+        bootstrap_coverage_evaluator=evaluate_bootstrap_cache_coverage,
     )
 
 
