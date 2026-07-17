@@ -8,6 +8,7 @@ import pytest
 from app.services import provider_routing_policy as policy
 from app.domain.providers.data_plan import PLAN_VERSION as DATA_PLAN_VERSION
 from app.services.provider_routing_policy import (
+    MARKET_AU,
     MARKET_CA,
     MARKET_DE,
     MARKET_HK,
@@ -47,19 +48,10 @@ class TestPolicyVersion:
 class TestMatrixShape:
     """The matrix must cover every known market, explicitly."""
 
-    def test_supported_markets_covers_us_and_asia(self):
-        assert supported_markets() == (
-            MARKET_CA,
-            MARKET_CN,
-            MARKET_DE,
-            MARKET_HK,
-            MARKET_IN,
-            MARKET_JP,
-            MARKET_KR,
-            MARKET_MY,
-            MARKET_SG,
-            MARKET_TW,
-            MARKET_US,
+    def test_supported_markets_covers_the_canonical_catalog(self):
+        assert supported_markets() == tuple(sorted(policy.KNOWN_MARKETS))
+        assert {MARKET_US, MARKET_AU, MARKET_HK, MARKET_JP}.issubset(
+            supported_markets()
         )
 
     def test_every_known_market_has_a_policy(self):

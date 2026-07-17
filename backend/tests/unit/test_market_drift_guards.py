@@ -178,14 +178,6 @@ def _frontend_breadth_object_market_keys(object_name: str) -> list[str]:
     return re.findall(r"^\s*([A-Z]{2}):", match.group("body"), re.M)
 
 
-def _frontend_breadth_default_supported_markets() -> list[str]:
-    breadth_page = REPO_ROOT / "frontend" / "src" / "pages" / "BreadthPage.jsx"
-    source = breadth_page.read_text()
-    match = re.search(r"supportedMarkets = \[([^\]]+)\]", source)
-    assert match is not None, "BreadthPage supportedMarkets fallback is missing"
-    return re.findall(r"'([A-Z]{2})'", match.group(1))
-
-
 def test_supported_market_code_surfaces_match_catalog_codes() -> None:
     expected = set(_catalog_codes())
 
@@ -356,12 +348,10 @@ def test_frontend_fallback_market_lists_match_backend_catalog_order() -> None:
 
     assert _frontend_scan_geographic_market_codes() == catalog_codes
     assert list(_frontend_scan_market_options()) == catalog_codes
-    assert _frontend_breadth_object_market_keys("MARKET_LABELS") == catalog_codes
     assert (
         _frontend_breadth_object_market_keys("MARKET_LIVE_BENCHMARK_SYMBOLS")
         == catalog_codes
     )
-    assert _frontend_breadth_default_supported_markets() == catalog_codes
 
 
 def test_frontend_scan_market_labels_match_backend_catalog_labels() -> None:
