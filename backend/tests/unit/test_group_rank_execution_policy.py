@@ -7,6 +7,7 @@ from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.group_rank_models import (
     GroupRankCalculationResult,
     GroupRankPrefetchStats,
+    GroupRanking,
 )
 
 
@@ -37,12 +38,19 @@ def _group_calculation(
 ) -> GroupRankCalculationResult:
     return GroupRankCalculationResult(
         rankings=(
-            {
-                "rank": 1,
-                "industry_group": "Software",
-                "avg_rs_rating": 90.0,
-                "num_stocks": 3,
-            },
+            GroupRanking(
+                industry_group="Software",
+                date=date(2026, 3, 20),
+                rank=1,
+                avg_rs_rating=90.0,
+                median_rs_rating=89.0,
+                weighted_avg_rs_rating=91.0,
+                rs_std_dev=2.0,
+                num_stocks=3,
+                num_stocks_rs_above_80=2,
+                top_symbol="AAA",
+                top_rs_rating=96.0,
+            ),
         ),
         prefetch_stats=_prefetch_stats(misses=misses),
     )

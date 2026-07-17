@@ -313,8 +313,8 @@ def calculate_daily_group_rankings(
         logger.info("Top 5 groups:")
         for r in rankings[:5]:
             logger.info(
-                f"  #{r['rank']}: {r['industry_group']} "
-                f"(avg RS: {r['avg_rs_rating']:.1f}, {r['num_stocks']} stocks)"
+                f"  #{r.rank}: {r.industry_group} "
+                f"(avg RS: {r.avg_rs_rating:.1f}, {r.num_stocks} stocks)"
             )
 
         logger.info("=" * 60)
@@ -355,8 +355,8 @@ def calculate_daily_group_rankings(
         task_result = {
             'date': calc_date.strftime('%Y-%m-%d'),
             'groups_ranked': len(rankings),
-            'top_group': rankings[0]['industry_group'] if rankings else None,
-            'top_avg_rs': rankings[0]['avg_rs_rating'] if rankings else None,
+            'top_group': rankings[0].industry_group if rankings else None,
+            'top_avg_rs': rankings[0].avg_rs_rating if rankings else None,
             'calculation_duration_seconds': round(duration, 2),
             'metadata_repair': repair_stats,
             'timestamp': datetime.now().isoformat()

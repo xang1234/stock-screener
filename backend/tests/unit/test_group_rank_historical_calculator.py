@@ -18,6 +18,7 @@ from app.services.group_rank_legacy_adapter import (
 from app.services.group_rank_models import (
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
+    GroupRanking,
 )
 
 
@@ -60,20 +61,20 @@ def _prefetch(
     )
 
 
-def _ranking(calculation_date: date) -> dict[str, object]:
-    return {
-        "industry_group": "Software",
-        "date": calculation_date,
-        "rank": 1,
-        "avg_rs_rating": 80.0,
-        "median_rs_rating": 80.0,
-        "weighted_avg_rs_rating": 80.0,
-        "rs_std_dev": 0.0,
-        "num_stocks": 3,
-        "num_stocks_rs_above_80": 1,
-        "top_symbol": "AAA",
-        "top_rs_rating": 90.0,
-    }
+def _ranking(calculation_date: date) -> GroupRanking:
+    return GroupRanking(
+        industry_group="Software",
+        date=calculation_date,
+        rank=1,
+        avg_rs_rating=80.0,
+        median_rs_rating=80.0,
+        weighted_avg_rs_rating=80.0,
+        rs_std_dev=0.0,
+        num_stocks=3,
+        num_stocks_rs_above_80=1,
+        top_symbol="AAA",
+        top_rs_rating=90.0,
+    )
 
 
 def _historical(*, prefetch=None):

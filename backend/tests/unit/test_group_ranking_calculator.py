@@ -110,8 +110,12 @@ def test_calculate_for_date_returns_ranked_groups_without_mutating_prefetch():
         calculation_date=date(2026, 3, 20),
     )
 
-    assert [row["rank"] for row in rankings] == [1, 2]
-    assert rankings[0]["avg_rs_rating"] >= rankings[1]["avg_rs_rating"]
+    assert [row.rank for row in rankings] == [1, 2]
+    assert [row.industry_group for row in rankings] == [
+        "Software",
+        "Retail",
+    ]
+    assert rankings[0].avg_rs_rating >= rankings[1].avg_rs_rating
     assert prefetch.symbols_by_group == {
         "Software": ("AAA", "BBB", "CCC"),
         "Retail": ("DDD", "EEE", "FFF"),
@@ -125,7 +129,7 @@ def test_calculator_performs_no_database_or_cache_reads():
     assert "db" not in signature.parameters
 
 
-def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_history():
+def test_calculate_for_date_excludes_short_history():
     calculator = GroupRankingCalculator(
         rs_calculator=RelativeStrengthCalculator()
     )
@@ -157,14 +161,6 @@ def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_histor
         "CCC": 1_000_000_000,
         "NEW": 50_000_000_000,
     }
-    legacy_metrics = calculator._calculate_group_rs_from_cache(
-        "Software",
-        symbols,
-        benchmark_prices["Close"].sort_index(ascending=False),
-        prices_by_symbol,
-        market_caps,
-        calculation_date,
-    )
     prefetch = GroupRankPrefetchData(
         benchmark_prices=benchmark_prices,
         prices_by_symbol=prices_by_symbol,
@@ -174,27 +170,19 @@ def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_histor
         symbols_by_group={"Software": symbols},
     )
 
-    rs_by_date = calculator._calculate_rs_by_symbol_for_dates(
-        prefetch,
-        [calculation_date],
-    )
-    vectorized_metrics = calculator._calculate_group_metrics_from_rs(
-        "Software",
-        symbols,
-        rs_by_date[calculation_date],
-        market_caps,
-        calculation_date,
+    rankings = calculator.calculate_for_date(
+        prefetch=prefetch,
+        group_names=("Software",),
+        calculation_date=calculation_date,
     )
 
-    assert set(rs_by_date[calculation_date]) == {
-        "AAA",
-        "BBB",
-        "CCC",
-    }
-    assert vectorized_metrics == legacy_metrics
+    assert len(rankings) == 1
+    assert rankings[0].industry_group == "Software"
+    assert rankings[0].num_stocks == 3
+    assert rankings[0].top_symbol == "AAA"
 
 
-def test_vectorized_group_rs_preserves_invalid_period_return_semantics():
+def test_calculate_for_date_preserves_invalid_period_return_semantics():
     calculator = GroupRankingCalculator(
         rs_calculator=RelativeStrengthCalculator()
     )
@@ -242,14 +230,6 @@ def test_vectorized_group_rs_preserves_invalid_period_return_semantics():
         "DDD": 7_000_000_000,
         "EEE": 2_000_000_000,
     }
-    legacy_metrics = calculator._calculate_group_rs_from_cache(
-        "Software",
-        symbols,
-        benchmark_prices["Close"].sort_index(ascending=False),
-        prices_by_symbol,
-        market_caps,
-        calculation_date,
-    )
     prefetch = GroupRankPrefetchData(
         benchmark_prices=benchmark_prices,
         prices_by_symbol=prices_by_symbol,
@@ -259,22 +239,19 @@ def test_vectorized_group_rs_preserves_invalid_period_return_semantics():
         symbols_by_group={"Software": symbols},
     )
 
-    rs_by_date = calculator._calculate_rs_by_symbol_for_dates(
-        prefetch,
-        [calculation_date],
-    )
-    vectorized_metrics = calculator._calculate_group_metrics_from_rs(
-        "Software",
-        symbols,
-        rs_by_date[calculation_date],
-        market_caps,
-        calculation_date,
+    rankings = calculator.calculate_for_date(
+        prefetch=prefetch,
+        group_names=("Software",),
+        calculation_date=calculation_date,
     )
 
-    assert set(rs_by_date[calculation_date]) == {
-        "AAA",
-        "BBB",
-        "CCC",
-        "EEE",
-    }
-    assert vectorized_metrics == legacy_metrics
+    assert len(rankings) == 1
+    assert rankings[0].num_stocks == 4
+    assert rankings[0].top_symbol == "AAA"
+
+
+def test_calculator_has_no_second_group_ranking_implementation():
+    assert not hasattr(
+        GroupRankingCalculator,
+        "_calculate_group_rs_from_cache",
+    )

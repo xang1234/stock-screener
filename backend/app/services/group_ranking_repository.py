@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from ..models.industry import IBDGroupRank
+from .group_rank_models import GroupRanking
 
 
 class GroupRankingRepository:
@@ -18,16 +19,22 @@ class GroupRankingRepository:
         db: Session,
         *,
         calculation_date: date,
-        rankings: Sequence[Mapping[str, Any]],
+        rankings: Sequence[GroupRanking],
         market: str,
     ) -> None:
+        for ranking in rankings:
+            if ranking.date != calculation_date:
+                raise ValueError(
+                    "Ranking date does not match calculation date: "
+                    f"{ranking.date} != {calculation_date}"
+                )
         values = [
             self._ranking_values(
                 calculation_date,
-                metrics,
+                ranking,
                 market=market,
             )
-            for metrics in rankings
+            for ranking in rankings
         ]
         if not values:
             return
@@ -255,29 +262,27 @@ class GroupRankingRepository:
     @staticmethod
     def _ranking_values(
         calculation_date: date,
-        metrics: Mapping[str, Any],
+        ranking: GroupRanking,
         *,
         market: str,
     ) -> dict[str, Any]:
         return {
             "market": market,
-            "industry_group": metrics["industry_group"],
+            "industry_group": ranking.industry_group,
             "date": calculation_date,
-            "rank": metrics["rank"],
-            "avg_rs_rating": metrics["avg_rs_rating"],
-            "median_rs_rating": metrics.get(
-                "median_rs_rating"
+            "rank": ranking.rank,
+            "avg_rs_rating": ranking.avg_rs_rating,
+            "median_rs_rating": ranking.median_rs_rating,
+            "weighted_avg_rs_rating": (
+                ranking.weighted_avg_rs_rating
             ),
-            "weighted_avg_rs_rating": metrics.get(
-                "weighted_avg_rs_rating"
+            "rs_std_dev": ranking.rs_std_dev,
+            "num_stocks": ranking.num_stocks,
+            "num_stocks_rs_above_80": (
+                ranking.num_stocks_rs_above_80
             ),
-            "rs_std_dev": metrics.get("rs_std_dev"),
-            "num_stocks": metrics["num_stocks"],
-            "num_stocks_rs_above_80": metrics[
-                "num_stocks_rs_above_80"
-            ],
-            "top_symbol": metrics["top_symbol"],
-            "top_rs_rating": metrics["top_rs_rating"],
+            "top_symbol": ranking.top_symbol,
+            "top_rs_rating": ranking.top_rs_rating,
         }
 
     @staticmethod

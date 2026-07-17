@@ -1,27 +1,35 @@
 from datetime import date
 from unittest.mock import Mock
 
+import pytest
 from sqlalchemy import event
 
 from app.models.industry import IBDGroupRank
+from app.services.group_rank_models import GroupRanking
 from app.services.group_ranking_repository import (
     GroupRankingRepository,
 )
 
 
-def _ranking(group: str, *, rank: int) -> dict[str, object]:
-    return {
-        "industry_group": group,
-        "rank": rank,
-        "avg_rs_rating": 80.0,
-        "median_rs_rating": 80.0,
-        "weighted_avg_rs_rating": 80.0,
-        "rs_std_dev": 0.0,
-        "num_stocks": 3,
-        "num_stocks_rs_above_80": 1,
-        "top_symbol": "AAA",
-        "top_rs_rating": 90.0,
-    }
+def _ranking(
+    group: str,
+    *,
+    rank: int,
+    calculation_date: date = date(2026, 3, 20),
+) -> GroupRanking:
+    return GroupRanking(
+        industry_group=group,
+        date=calculation_date,
+        rank=rank,
+        avg_rs_rating=80.0,
+        median_rs_rating=80.0,
+        weighted_avg_rs_rating=80.0,
+        rs_std_dev=0.0,
+        num_stocks=3,
+        num_stocks_rs_above_80=1,
+        top_symbol="AAA",
+        top_rs_rating=90.0,
+    )
 
 
 def _seed_rank(
@@ -65,6 +73,24 @@ def test_store_rankings_does_not_commit(db_session, monkeypatch):
     )
 
     commit.assert_not_called()
+
+
+def test_store_rankings_rejects_a_mismatched_ranking_date(db_session):
+    repository = GroupRankingRepository()
+
+    with pytest.raises(ValueError, match="Ranking date"):
+        repository.store_rankings(
+            db_session,
+            calculation_date=date(2026, 3, 20),
+            rankings=(
+                _ranking(
+                    "Software",
+                    rank=1,
+                    calculation_date=date(2026, 3, 19),
+                ),
+            ),
+            market="US",
+        )
 
 
 def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback(

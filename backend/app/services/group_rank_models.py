@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date
 from typing import Any, Mapping, Optional
 
 import pandas as pd
@@ -95,6 +96,36 @@ class GroupRankPrefetchData:
 
 
 @dataclass(frozen=True)
+class GroupRanking:
+    industry_group: str
+    date: date
+    rank: int
+    avg_rs_rating: float
+    median_rs_rating: float | None
+    weighted_avg_rs_rating: float | None
+    rs_std_dev: float | None
+    num_stocks: int
+    num_stocks_rs_above_80: int
+    top_symbol: str | None
+    top_rs_rating: float | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "industry_group": self.industry_group,
+            "date": self.date,
+            "rank": self.rank,
+            "avg_rs_rating": self.avg_rs_rating,
+            "median_rs_rating": self.median_rs_rating,
+            "weighted_avg_rs_rating": self.weighted_avg_rs_rating,
+            "rs_std_dev": self.rs_std_dev,
+            "num_stocks": self.num_stocks,
+            "num_stocks_rs_above_80": self.num_stocks_rs_above_80,
+            "top_symbol": self.top_symbol,
+            "top_rs_rating": self.top_rs_rating,
+        }
+
+
+@dataclass(frozen=True)
 class GroupRankCalculationResult:
-    rankings: tuple[Mapping[str, Any], ...]
+    rankings: tuple[GroupRanking, ...]
     prefetch_stats: GroupRankPrefetchStats

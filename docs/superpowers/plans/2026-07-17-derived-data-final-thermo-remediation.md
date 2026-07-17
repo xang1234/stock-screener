@@ -84,7 +84,7 @@
 - Changes: `GroupRankingCalculator.calculate_for_date(...) -> tuple[GroupRanking, ...]`.
 - Changes: `GroupRankingRepository.store_rankings(..., rankings: Sequence[GroupRanking], ...) -> None`.
 
-- [ ] **Step 1: Write failing model and calculator tests**
+- [x] **Step 1: Write failing model and calculator tests**
 
 Add a model test that describes the required public contract:
 
@@ -126,7 +126,7 @@ assert [ranking.rank for ranking in rankings] == [1, 2]
 assert [ranking.industry_group for ranking in rankings] == ["Software", "Retail"]
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -139,7 +139,7 @@ cd backend
 
 Expected: collection/import failure because `GroupRanking` does not exist, or attribute assertions fail because rankings are mappings.
 
-- [ ] **Step 3: Add the typed model and construct rankings without mutation**
+- [x] **Step 3: Add the typed model and construct rankings without mutation**
 
 Add to `group_rank_models.py`:
 
@@ -182,7 +182,7 @@ class GroupRankCalculationResult:
 
 In the calculator, introduce a private frozen candidate with every field except `rank`. Sort candidates by `avg_rs_rating`, then create `GroupRanking` values with `rank=enumerated_rank`. Delete `_calculate_group_rs_from_cache`; retain parity assertions against stable expected fixtures rather than a second production implementation.
 
-- [ ] **Step 4: Update the repository to accept attributes**
+- [x] **Step 4: Update the repository to accept attributes**
 
 Replace the mapping contract with:
 
@@ -207,7 +207,7 @@ Validate that every `ranking.date` equals the method's `calculation_date` before
 building persistence values. This prevents the redundant date fields from
 silently writing a ranking under the wrong replacement date.
 
-- [ ] **Step 5: Run typed model/calculator/repository/service tests and verify GREEN**
+- [x] **Step 5: Run typed model/calculator/repository/service tests and verify GREEN**
 
 Run:
 
@@ -222,7 +222,7 @@ cd backend
 
 Expected: all selected tests pass.
 
-- [ ] **Step 6: Commit the typed boundary**
+- [x] **Step 6: Commit the typed boundary**
 
 ```bash
 git add backend/app/services/group_rank_models.py \

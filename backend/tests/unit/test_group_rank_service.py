@@ -28,6 +28,7 @@ from app.services.group_rank_input_sources import (
 from app.services.group_rank_models import (
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
+    GroupRanking,
 )
 from app.services.group_rank_legacy_adapter import (
     LegacyGroupRankPrefetchAdapter,
@@ -517,12 +518,19 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
     monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kwargs: prefetch)
     service.ranking_calculator = Mock()
     service.ranking_calculator.calculate_for_date.return_value = (
-        {
-            "industry_group": "Software",
-            "rank": 1,
-            "avg_rs_rating": 85.0,
-            "num_stocks": 3,
-        },
+        GroupRanking(
+            industry_group="Software",
+            date=date(2026, 3, 20),
+            rank=1,
+            avg_rs_rating=85.0,
+            median_rs_rating=84.0,
+            weighted_avg_rs_rating=86.0,
+            rs_std_dev=2.0,
+            num_stocks=3,
+            num_stocks_rs_above_80=2,
+            top_symbol="AAA",
+            top_rs_rating=95.0,
+        ),
     )
     store_rankings = Mock()
     monkeypatch.setattr(
@@ -543,8 +551,8 @@ def test_calculate_group_rankings_tolerates_partial_cache_when_requirement_disab
     )
 
     assert len(calculation.rankings) == 1
-    assert calculation.rankings[0]["industry_group"] == "Software"
-    assert calculation.rankings[0]["num_stocks"] == 3
+    assert calculation.rankings[0].industry_group == "Software"
+    assert calculation.rankings[0].num_stocks == 3
     assert calculation.prefetch_stats.cache_miss_symbols == 1
     assert calculation.prefetch_stats.cache_miss_symbols_sample == ("MISS",)
     store_rankings.assert_called_once()

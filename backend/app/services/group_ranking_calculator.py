@@ -7,17 +7,31 @@ from datetime import date
 import logging
 import math
 import statistics
-from typing import Any, Mapping, Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 import pandas as pd
 
 from ..scanners.criteria.relative_strength import (
     RelativeStrengthCalculator,
 )
-from .group_rank_models import GroupRankPrefetchData
+from .group_rank_models import GroupRankPrefetchData, GroupRanking
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _GroupRankingCandidate:
+    industry_group: str
+    date: date
+    avg_rs_rating: float
+    median_rs_rating: float | None
+    weighted_avg_rs_rating: float | None
+    rs_std_dev: float | None
+    num_stocks: int
+    num_stocks_rs_above_80: int
+    top_symbol: str | None
+    top_rs_rating: float | None
 
 
 @dataclass(frozen=True)
@@ -30,7 +44,7 @@ class GroupRankingCalculator:
         prefetch: GroupRankPrefetchData,
         group_names: Sequence[str],
         calculation_date: date,
-    ) -> tuple[Mapping[str, Any], ...]:
+    ) -> tuple[GroupRanking, ...]:
         by_date = self.calculate_for_dates(
             prefetch=prefetch,
             group_names=group_names,
@@ -44,12 +58,12 @@ class GroupRankingCalculator:
         prefetch: GroupRankPrefetchData,
         group_names: Sequence[str],
         calculation_dates: Sequence[date],
-    ) -> dict[date, tuple[Mapping[str, Any], ...]]:
+    ) -> dict[date, tuple[GroupRanking, ...]]:
         rs_by_date = self._calculate_rs_by_symbol_for_dates(
             prefetch,
             list(calculation_dates),
         )
-        result: dict[date, tuple[Mapping[str, Any], ...]] = {}
+        result: dict[date, tuple[GroupRanking, ...]] = {}
         for calculation_date in calculation_dates:
             metrics = [
                 group_metrics
@@ -66,12 +80,29 @@ class GroupRankingCalculator:
                 )
             ]
             metrics.sort(
-                key=lambda item: item["avg_rs_rating"],
+                key=lambda item: item.avg_rs_rating,
                 reverse=True,
             )
-            for rank, item in enumerate(metrics, start=1):
-                item["rank"] = rank
-            result[calculation_date] = tuple(metrics)
+            result[calculation_date] = tuple(
+                GroupRanking(
+                    industry_group=item.industry_group,
+                    date=item.date,
+                    rank=rank,
+                    avg_rs_rating=item.avg_rs_rating,
+                    median_rs_rating=item.median_rs_rating,
+                    weighted_avg_rs_rating=(
+                        item.weighted_avg_rs_rating
+                    ),
+                    rs_std_dev=item.rs_std_dev,
+                    num_stocks=item.num_stocks,
+                    num_stocks_rs_above_80=(
+                        item.num_stocks_rs_above_80
+                    ),
+                    top_symbol=item.top_symbol,
+                    top_rs_rating=item.top_rs_rating,
+                )
+                for rank, item in enumerate(metrics, start=1)
+            )
         return result
 
     @staticmethod
@@ -83,89 +114,6 @@ class GroupRankingCalculator:
             return None
         count = count_above_80 or 0
         return round((count / total_count) * 100, 1)
-
-    def _calculate_group_rs_from_cache(
-        self,
-        group_name: str,
-        symbols: Sequence[str],
-        benchmark_prices: pd.Series,
-        prices_by_symbol: Mapping[str, Optional[pd.DataFrame]],
-        market_caps: Mapping[str, float],
-        calculation_date: date,
-    ) -> Optional[dict[str, Any]]:
-        """Legacy formula retained for vectorized parity characterization."""
-        if not symbols:
-            logger.debug(
-                "No validated symbols found for group: %s",
-                group_name,
-            )
-            return None
-
-        rs_ratings = []
-        top_symbol = None
-        top_rs = -1
-        rs_above_80_count = 0
-        weighted_sum = 0.0
-        weighted_total = 0.0
-
-        for symbol in symbols:
-            prices = prices_by_symbol.get(symbol)
-            if prices is None or prices.empty:
-                continue
-
-            prices_filtered = prices[
-                prices.index.date <= calculation_date
-            ]
-            if prices_filtered.empty:
-                continue
-
-            stock_prices = prices_filtered["Close"].sort_index(
-                ascending=False
-            )
-            if len(stock_prices) < 252:
-                continue
-
-            try:
-                rs_result = self.rs_calculator.calculate_rs_rating(
-                    symbol,
-                    stock_prices,
-                    benchmark_prices,
-                )
-                rs_rating = rs_result.get("rs_rating", 0)
-
-                if rs_rating > 0:
-                    rs_ratings.append(rs_rating)
-
-                    if rs_rating > top_rs:
-                        top_rs = rs_rating
-                        top_symbol = symbol
-
-                    if rs_rating >= 80:
-                        rs_above_80_count += 1
-
-                    market_cap = market_caps.get(symbol)
-                    if market_cap:
-                        weighted_sum += rs_rating * market_cap
-                        weighted_total += market_cap
-
-            except Exception as exc:
-                logger.debug(
-                    "Error calculating RS for %s: %s",
-                    symbol,
-                    exc,
-                )
-                continue
-
-        return self._build_group_metrics(
-            group_name=group_name,
-            calculation_date=calculation_date,
-            rs_ratings=rs_ratings,
-            top_symbol=top_symbol,
-            top_rs=top_rs,
-            rs_above_80_count=rs_above_80_count,
-            weighted_sum=weighted_sum,
-            weighted_total=weighted_total,
-        )
 
     def _calculate_rs_by_symbol_for_dates(
         self,
@@ -336,7 +284,7 @@ class GroupRankingCalculator:
         rs_by_symbol: Mapping[str, float],
         market_caps: Mapping[str, float],
         calculation_date: date,
-    ) -> Optional[dict[str, Any]]:
+    ) -> Optional[_GroupRankingCandidate]:
         if not symbols:
             logger.debug(
                 "No validated symbols found for group: %s",
@@ -390,7 +338,7 @@ class GroupRankingCalculator:
         rs_above_80_count: int,
         weighted_sum: float,
         weighted_total: float,
-    ) -> Optional[dict[str, Any]]:
+    ) -> Optional[_GroupRankingCandidate]:
         if len(rs_ratings) < 3:
             logger.debug(
                 "Insufficient data for group %s: only %s stocks "
@@ -413,27 +361,27 @@ class GroupRankingCalculator:
             else None
         )
 
-        return {
-            "industry_group": group_name,
-            "date": calculation_date,
-            "avg_rs_rating": round(avg_rs, 2),
-            "median_rs_rating": round(median_rs, 2),
-            "weighted_avg_rs_rating": (
+        return _GroupRankingCandidate(
+            industry_group=group_name,
+            date=calculation_date,
+            avg_rs_rating=round(avg_rs, 2),
+            median_rs_rating=round(median_rs, 2),
+            weighted_avg_rs_rating=(
                 round(weighted_avg_rs, 2)
                 if weighted_avg_rs is not None
                 else None
             ),
-            "rs_std_dev": (
+            rs_std_dev=(
                 round(rs_std_dev, 2)
                 if rs_std_dev is not None
                 else None
             ),
-            "num_stocks": len(rs_ratings),
-            "num_stocks_rs_above_80": rs_above_80_count,
-            "top_symbol": top_symbol,
-            "top_rs_rating": (
+            num_stocks=len(rs_ratings),
+            num_stocks_rs_above_80=rs_above_80_count,
+            top_symbol=top_symbol,
+            top_rs_rating=(
                 round(top_rs, 2)
                 if top_rs > 0
                 else None
             ),
-        }
+        )

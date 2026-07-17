@@ -5,8 +5,10 @@ import pytest
 
 from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.group_rank_models import (
+    GroupRankCalculationResult,
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
+    GroupRanking,
 )
 
 
@@ -84,3 +86,28 @@ def test_prefetch_data_rejects_mutable_group_symbol_lists():
             stats=_stats(),
             symbols_by_group={"Software": ["AAA"]},
         )
+
+
+def test_calculation_result_contains_immutable_group_rankings():
+    ranking = GroupRanking(
+        industry_group="Software",
+        date=pd.Timestamp("2026-03-20").date(),
+        rank=1,
+        avg_rs_rating=88.0,
+        median_rs_rating=87.0,
+        weighted_avg_rs_rating=89.0,
+        rs_std_dev=3.0,
+        num_stocks=12,
+        num_stocks_rs_above_80=8,
+        top_symbol="AAA",
+        top_rs_rating=96.0,
+    )
+
+    result = GroupRankCalculationResult(
+        rankings=(ranking,),
+        prefetch_stats=_stats(),
+    )
+
+    assert result.rankings == (ranking,)
+    with pytest.raises(FrozenInstanceError):
+        ranking.rank = 2
