@@ -62,7 +62,6 @@ class PriceRefreshWorkflowDependencies:
     market_gateway: PriceRefreshMarketGateway
     raise_if_transient_database_error: Callable[[Exception], None]
     safe_rollback: Callable[[Any], None]
-    time_window_bypass_enabled: Callable[[], bool] = lambda: False
 
 
 class PriceRefreshWorkflow:
@@ -487,11 +486,8 @@ class PriceRefreshWorkflow:
         if mode is not PriceRefreshMode.FULL or market is not None:
             return False
         is_manual = (
-            self._deps.time_window_bypass_enabled()
-            or (
-                getattr(getattr(task, "request", None), "headers", None)
-                and task.request.headers.get("origin") == "manual"
-            )
+            getattr(getattr(task, "request", None), "headers", None)
+            and task.request.headers.get("origin") == "manual"
         )
         if is_manual:
             return False

@@ -10,8 +10,6 @@ All data-fetching tasks use the @serialized_data_fetch decorator
 to ensure only one task fetches external data at a time.
 """
 import logging
-from contextlib import contextmanager
-from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
@@ -73,12 +71,6 @@ from .runtime_activity_failure_hooks import RuntimeActivityTrackedTask
 from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
-
-_SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
-    "smart_refresh_time_window_bypass",
-    default=False,
-)
-
 
 def _mark_market_activity_failed_safely(db, **kwargs) -> None:
     try:
@@ -177,16 +169,6 @@ def _benchmark_markets_for_symbols(db, symbols: List[str]) -> List[str]:
     if not markets:
         markets.append("US")
     return sorted(set(markets))
-
-
-@contextmanager
-def allow_smart_refresh_time_window_bypass():
-    """Temporarily bypass the full-refresh schedule window guard for in-process tools."""
-    token = _SMART_REFRESH_TIME_WINDOW_BYPASS.set(True)
-    try:
-        yield
-    finally:
-        _SMART_REFRESH_TIME_WINDOW_BYPASS.reset(token)
 
 
 def run_orphaned_scan_cleanup(
@@ -1728,7 +1710,6 @@ def run_smart_price_refresh(
         ),
         raise_if_transient_database_error=raise_if_transient_database_error,
         safe_rollback=safe_rollback,
-        time_window_bypass_enabled=lambda: _SMART_REFRESH_TIME_WINDOW_BYPASS.get(),
     )
     return PriceRefreshWorkflow(dependencies).run(
         task=task,

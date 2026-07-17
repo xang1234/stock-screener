@@ -16,8 +16,15 @@ def test_live_price_refresh_runner_raises_interruption_with_partial_summary():
 
     fetch_calls = []
 
-    def fetch_with_backoff(_bulk_fetcher, symbols, *, period, market):
-        del period, market
+    def fetch_with_backoff(
+        _bulk_fetcher,
+        symbols,
+        *,
+        period,
+        market,
+        progress_callback=None,
+    ):
+        del period, market, progress_callback
         fetch_calls.append(tuple(symbols))
         if len(fetch_calls) == 2:
             raise SoftTimeLimitExceeded()
