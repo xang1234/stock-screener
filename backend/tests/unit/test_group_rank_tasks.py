@@ -6,6 +6,10 @@ from unittest.mock import MagicMock
 import pytest
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 
+from app.services.daily_group_rank_runner import (
+    DailyGroupRankOutcome,
+    GroupRankWarmupIncomplete,
+)
 from app.services.group_rank_models import (
     GroupRankCalculationResult,
     GroupRankPrefetchStats,
@@ -57,6 +61,27 @@ def _group_calculation(
             ),
         ),
         prefetch_stats=_prefetch_stats(misses=misses),
+    )
+
+
+def _runner_outcome(
+    calculation_date: date = date(2026, 3, 20),
+) -> DailyGroupRankOutcome:
+    calculation = _group_calculation()
+    ranking = calculation.rankings[0]
+    if ranking.date != calculation_date:
+        ranking = type(ranking)(
+            **{
+                **ranking.to_dict(),
+                "date": calculation_date,
+            }
+        )
+    return DailyGroupRankOutcome(
+        calculation_date=calculation_date,
+        rankings=(ranking,),
+        prefetch_stats=calculation.prefetch_stats,
+        duration_seconds=0.25,
+        metadata_repair=None,
     )
 
 
@@ -153,23 +178,11 @@ def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatc
 
     captured = []
 
-    def fake_inner(
-        calculation_date=None,
-        market=None,
-        activity_lifecycle=None,
-        execution_policy=None,
-    ):
-        captured.append(
-            (
-                calculation_date,
-                market,
-                activity_lifecycle,
-                execution_policy,
-            )
-        )
-        return {"date": calculation_date, "market": market}
+    def fake_runner(db, request, dependencies):
+        captured.append(request)
+        return _runner_outcome(request.calculation_date)
 
-    monkeypatch.setattr(module, "_calculate_daily_group_rankings_in_process", fake_inner)
+    monkeypatch.setattr(module, "run_daily_group_rankings", fake_runner)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(
         market="HK",
@@ -178,9 +191,11 @@ def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatc
     )
 
     assert result["today"]["date"] == "2026-03-16"
-    assert captured == [
-        ("2026-03-16", "HK", "daily_refresh", "auto")
-    ]
+    assert len(captured) == 1
+    assert captured[0].calculation_date == date(2026, 3, 16)
+    assert captured[0].market == "HK"
+    assert captured[0].activity_lifecycle == "daily_refresh"
+    assert captured[0].policy.mode.value == "auto"
     fake_service.find_missing_dates.assert_called_once_with(
         fake_db,
         lookback_days=365,
@@ -544,25 +559,23 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
     }
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
-    daily_calls: list[dict] = []
-    monkeypatch.setattr(
-        module,
-        "_calculate_daily_group_rankings_in_process",
-        lambda **kw: daily_calls.append(kw) or {"date": "2026-03-20", "groups_ranked": 2},
-    )
+    daily_calls = []
+
+    def fake_runner(db, request, dependencies):
+        daily_calls.append(request)
+        return _runner_outcome(request.calculation_date)
+
+    monkeypatch.setattr(module, "run_daily_group_rankings", fake_runner)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
     assert result["gap_fill"]["processed"] == 1
     assert result["today"]["date"] == "2026-03-20"
-    assert daily_calls == [
-        {
-            "market": "US",
-            "activity_lifecycle": "daily_refresh",
-            "calculation_date": "2026-03-20",
-            "execution_policy": "auto",
-        }
-    ]
+    assert len(daily_calls) == 1
+    assert daily_calls[0].market == "US"
+    assert daily_calls[0].activity_lifecycle == "daily_refresh"
+    assert daily_calls[0].calculation_date == date(2026, 3, 20)
+    assert daily_calls[0].policy.mode.value == "auto"
     fake_service.find_missing_dates.assert_called_once_with(
         fake_db,
         lookback_days=365,
@@ -614,16 +627,16 @@ def test_orchestrator_releases_gapfill_memory_before_today(monkeypatch):
         raising=False,
     )
 
-    def fake_daily(**kw):
+    def fake_daily(db, request, dependencies):
         assert events == ["released"]
         events.append("daily")
-        return {"date": "2026-03-20", "groups_ranked": 2}
+        return _runner_outcome(request.calculation_date)
 
-    monkeypatch.setattr(module, "_calculate_daily_group_rankings_in_process", fake_daily)
+    monkeypatch.setattr(module, "run_daily_group_rankings", fake_daily)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
-    assert result["today"]["groups_ranked"] == 2
+    assert result["today"]["groups_ranked"] == 1
     assert events == ["released", "daily"]
 
 
@@ -657,17 +670,15 @@ def test_orchestrator_gapfills_but_skips_today_on_non_trading_day(monkeypatch):
     }
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
-    daily_helper = MagicMock()
-    monkeypatch.setattr(
-        module, "_calculate_daily_group_rankings_in_process", daily_helper,
-    )
+    daily_runner = MagicMock()
+    monkeypatch.setattr(module, "run_daily_group_rankings", daily_runner)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
     assert result["gap_fill"]["processed"] == 1
     assert result["today"]["skipped"] is True
     assert "not a trading day" in result["today"]["reason"].lower()
-    daily_helper.assert_not_called()
+    daily_runner.assert_not_called()
 
 
 def test_orchestrator_no_gaps_no_calc_when_disabled_market(monkeypatch):
@@ -837,18 +848,20 @@ def test_orchestrator_runs_for_non_us_market(monkeypatch):
     fake_service = MagicMock()
     fake_service.find_missing_dates.return_value = []
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
-    monkeypatch.setattr(
-        module,
-        "_calculate_daily_group_rankings_in_process",
-        lambda **kw: {"date": "2026-03-20", "market": kw.get("market")},
-    )
+    daily_calls = []
+
+    def fake_runner(db, request, dependencies):
+        daily_calls.append(request)
+        return _runner_outcome(request.calculation_date)
+
+    monkeypatch.setattr(module, "run_daily_group_rankings", fake_runner)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(market="HK")
 
     assert "status" not in result
     assert result["market"] == "HK"
-    assert result["today"]["market"] == "HK"
     assert result["today"]["date"] == "2026-03-20"
+    assert daily_calls[0].market == "HK"
     fake_service.find_missing_dates.assert_called_once_with(
         fake_db,
         lookback_days=365,
@@ -884,11 +897,12 @@ def test_orchestrator_marks_failed_when_inner_daily_result_has_error(monkeypatch
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
     monkeypatch.setattr(
         module,
-        "_calculate_daily_group_rankings_in_process",
-        MagicMock(return_value={
-            "error": "Cache warmup not complete",
-            "reason_code": module.GroupRankReasonCode.WARMUP_INCOMPLETE,
-        }),
+        "run_daily_group_rankings",
+        MagicMock(
+            side_effect=GroupRankWarmupIncomplete(
+                "Cache warmup not complete"
+            )
+        ),
     )
 
     completed = MagicMock()
@@ -930,11 +944,12 @@ def test_bootstrap_orchestrator_marks_failed_when_inner_daily_warmup_incomplete(
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
     monkeypatch.setattr(
         module,
-        "_calculate_daily_group_rankings_in_process",
-        MagicMock(return_value={
-            "error": "Cache warmup not complete",
-            "reason_code": module.GroupRankReasonCode.WARMUP_INCOMPLETE,
-        }),
+        "run_daily_group_rankings",
+        MagicMock(
+            side_effect=GroupRankWarmupIncomplete(
+                "Cache warmup not complete"
+            )
+        ),
     )
 
     failed = MagicMock()
@@ -950,8 +965,7 @@ def test_bootstrap_orchestrator_marks_failed_when_inner_daily_warmup_incomplete(
     failed.assert_called_once()
 
 
-def test_orchestrator_reraises_retry_from_inner_daily_call(monkeypatch):
-    """Celery Retry from the inner daily task must not become an error payload."""
+def test_orchestrator_owns_retry_for_transient_runner_failure(monkeypatch):
     import app.tasks.group_rank_tasks as module
 
     fake_db = MagicMock()
@@ -977,8 +991,14 @@ def test_orchestrator_reraises_retry_from_inner_daily_call(monkeypatch):
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
     monkeypatch.setattr(
         module,
-        "_calculate_daily_group_rankings_in_process",
-        MagicMock(side_effect=Retry("retry")),
+        "run_daily_group_rankings",
+        MagicMock(side_effect=ConnectionError("network down")),
+    )
+    retry = MagicMock(side_effect=Retry("retry"))
+    monkeypatch.setattr(
+        module.calculate_daily_group_rankings_with_gapfill,
+        "retry",
+        retry,
     )
 
     failed = MagicMock()
@@ -988,4 +1008,5 @@ def test_orchestrator_reraises_retry_from_inner_daily_call(monkeypatch):
         module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
     fake_db.rollback.assert_called_once()
-    failed.assert_not_called()
+    failed.assert_called_once()
+    retry.assert_called_once()

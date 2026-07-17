@@ -1,7 +1,6 @@
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock
-
-import pytest
 
 
 def _patch_serialized_lock(monkeypatch):
@@ -84,90 +83,11 @@ def test_orchestrator_rolls_back_before_publishing_failure(monkeypatch):
     assert rollback_seen == [True]
 
 
-def test_orchestrator_bypasses_lease_for_inner_daily_call(monkeypatch):
-    import app.tasks.group_rank_tasks as module
-    import app.tasks.workload_coordination as coordination
-
-    seen_disabled_state: list[bool] = []
-    task = MagicMock()
-    task.__module__ = "app.tasks.group_rank_tasks"
-    task.request = MagicMock()
-
-    def fake_run(market=None, activity_lifecycle=None):
-        seen_disabled_state.append(
-            coordination._SERIALIZED_MARKET_WORKLOAD_DISABLED.get()
-        )
-        return {"date": "2026-03-20", "market": market}
-
-    task.run = fake_run
-    monkeypatch.setattr(module, "calculate_daily_group_rankings", task)
-
-    result = module._calculate_daily_group_rankings_in_process(
-        market="US",
-        activity_lifecycle="daily_refresh",
-    )
-
-    assert result == {"date": "2026-03-20", "market": "US"}
-    assert seen_disabled_state == [True]
-    assert (
-        coordination._SERIALIZED_MARKET_WORKLOAD_DISABLED.get()
-        is False
-    )
-
-
-def test_in_process_daily_call_propagates_transient_without_inner_retry(
-    monkeypatch,
-):
+def test_group_tasks_do_not_invoke_decorated_tasks_in_process():
     import app.tasks.group_rank_tasks as module
 
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(
-        monkeypatch,
-        datetime(2026, 3, 20, 17, 40),
-    )
-    monkeypatch.setattr(
-        "app.services.runtime_preferences_service.is_market_enabled_now",
-        lambda _market: True,
-    )
-
-    fake_service = MagicMock()
-    fake_service.price_cache.get_warmup_metadata.return_value = {
-        "status": "completed",
-        "count": 10000,
-        "total": 10000,
-        "completed_at": datetime.now().isoformat(),
-    }
-    fake_service.calculate_group_rankings.side_effect = ConnectionError(
-        "network down"
-    )
-    monkeypatch.setattr(
-        module,
-        "get_group_rank_service",
-        lambda: fake_service,
-    )
-    inner_retry = MagicMock(
-        side_effect=AssertionError("inner retry scheduled")
-    )
-    failed = MagicMock()
-    monkeypatch.setattr(
-        module.calculate_daily_group_rankings,
-        "retry",
-        inner_retry,
-    )
-    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
-
-    with pytest.raises(ConnectionError):
-        module._calculate_daily_group_rankings_in_process(
-            market="HK",
-            activity_lifecycle="daily_refresh",
-        )
-
-    fake_db.rollback.assert_called_once()
-    inner_retry.assert_not_called()
-    failed.assert_not_called()
-    assert (
-        module._PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.get()
-        is False
-    )
+    source = Path(module.__file__).read_text()
+    assert "_calculate_daily_group_rankings_in_process" not in source
+    assert "_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS" not in source
+    assert "unittest.mock" not in source
+    assert ".run(**kwargs)" not in source

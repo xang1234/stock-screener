@@ -15,10 +15,14 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..services.group_rank_cache_policy import GroupRankCacheRequirement
-from ..services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
+from ..services.daily_group_rank_runner import (
+    DailyGroupRankDependencies,
+    DailyGroupRankRequest,
+    GroupRankWarmupIncomplete,
+    NoGroupRankingsCalculated,
+    run_daily_group_rankings,
+)
 from ..services.derived_data_execution_policy import (
-    DerivedDataValidationProfile,
     resolve_derived_data_execution_policy,
 )
 from ..services.ibd_group_rank_service import (
@@ -49,10 +53,6 @@ class GroupRankReasonCode:
 
 _ALLOW_SAME_DAY_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
     "allow_same_day_group_rank_warmup_bypass",
-    default=False,
-)
-_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS: ContextVar[bool] = ContextVar(
-    "propagate_in_process_group_rank_transient_errors",
     default=False,
 )
 
@@ -95,14 +95,88 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
         )
 
 
-def _should_repair_current_us_metadata(
-    *,
-    calc_date: date,
-    today_et: date,
-    activity_lifecycle: str,
-) -> bool:
-    """Only repair live US surfaces for same-day or bootstrap ranking runs."""
-    return activity_lifecycle == "bootstrap" or calc_date == today_et
+def _repair_current_us_group_metadata(calculation_date: date):
+    from ..interfaces.tasks.feature_store_tasks import (
+        _repair_current_us_group_metadata as repair,
+    )
+
+    return repair(ranking_date=calculation_date)
+
+
+def _daily_group_rank_dependencies(
+    service,
+) -> DailyGroupRankDependencies:
+    from ..services.group_rankings_cache import bump_group_rankings_epoch
+    from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+
+    return DailyGroupRankDependencies(
+        service=service,
+        bump_epoch=bump_group_rankings_epoch,
+        publish_snapshot=safe_publish_groups_bootstrap,
+        repair_current_us_metadata=_repair_current_us_group_metadata,
+    )
+
+
+def _run_daily_group_rankings_response(
+    db,
+    request: DailyGroupRankRequest,
+    dependencies: DailyGroupRankDependencies,
+) -> dict:
+    policy = request.policy
+    try:
+        outcome = run_daily_group_rankings(
+            db,
+            request,
+            dependencies,
+        )
+    except GroupRankWarmupIncomplete as exc:
+        result = {
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.WARMUP_INCOMPLETE,
+            "date": request.calculation_date.isoformat(),
+            "timestamp": datetime.now().isoformat(),
+            "cache_only": True,
+        }
+        return policy.annotate_response(result)
+    except IncompleteGroupRankingCacheError as exc:
+        result = {
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.WARMUP_INCOMPLETE,
+            "date": request.calculation_date.isoformat(),
+            "timestamp": datetime.now().isoformat(),
+            "cache_only": True,
+            "prefetch_stats": exc.stats.to_dict(),
+        }
+        return policy.annotate_response(result)
+    except MissingIBDIndustryMappingsError as exc:
+        result = {
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.MISSING_IBD_MAPPINGS,
+            "date": request.calculation_date.isoformat(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        return policy.annotate_response(
+            result,
+            include_cache_only=True,
+        )
+    except NoGroupRankingsCalculated as exc:
+        result = {
+            "date": request.calculation_date.isoformat(),
+            "groups_ranked": 0,
+            "warning": "No groups could be ranked",
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.NO_GROUPS_RANKED,
+            "calculation_duration_seconds": round(
+                exc.duration_seconds,
+                2,
+            ),
+            "timestamp": datetime.now().isoformat(),
+        }
+        policy.annotate_response(result)
+        if policy.response_cache_policy is not None:
+            result["prefetch_stats"] = exc.prefetch_stats.to_dict()
+        return result
+    return outcome.to_task_result(policy)
 
 
 @celery_app.task(
@@ -181,7 +255,6 @@ def calculate_daily_group_rankings(
     logger.info("=" * 60)
 
     db = SessionLocal()
-    start_time = time.time()
     policy = None
 
     try:
@@ -194,7 +267,6 @@ def calculate_daily_group_rankings(
             task_id=getattr(getattr(self, "request", None), "id", None),
             message="Calculating group rankings",
         )
-        # Initialize service
         service = get_group_rank_service()
         policy = resolve_derived_data_execution_policy(
             execution_policy=execution_policy,
@@ -206,84 +278,20 @@ def calculate_daily_group_rankings(
                 _ALLOW_SAME_DAY_WARMUP_BYPASS.get()
             ),
         )
-        validation_profile = policy.validation_profile
-        cache_requirement = GroupRankCacheRequirement.disabled()
-        if validation_profile in {
-            DerivedDataValidationProfile.STRICT_WITH_WARMUP,
-            DerivedDataValidationProfile.STRICT_WITHOUT_WARMUP,
-        }:
-            cache_requirement = GroupRankCacheRequirement.strict()
-
-        if (
-            validation_profile
-            is DerivedDataValidationProfile.STRICT_WITH_WARMUP
-        ):
-            warmup_decision = evaluate_same_day_group_rank_warmup(
-                service.price_cache,
-                market=market,
-            )
-            cache_requirement = warmup_decision.cache_requirement
-            if warmup_decision.error:
-                logger.error(
-                    "✗ Refusing to publish daily group rankings: %s",
-                    warmup_decision.error,
-                )
-                logger.info("=" * 60)
-                _mark_market_activity_failed_safely(
-                    db,
-                    market=effective_market,
-                    stage_key="groups",
-                    lifecycle=activity_lifecycle,
-                    task_name=getattr(
-                        self,
-                        "name",
-                        "calculate_daily_group_rankings",
-                    ),
-                    task_id=getattr(
-                        getattr(self, "request", None),
-                        "id",
-                        None,
-                    ),
-                    message=warmup_decision.error,
-                )
-                error_result = {
-                    'error': warmup_decision.error,
-                    'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
-                    'date': calc_date.strftime('%Y-%m-%d'),
-                    'timestamp': datetime.now().isoformat(),
-                    'cache_only': True,
-                }
-                policy.annotate_response(error_result)
-                return error_result
-        elif (
-            validation_profile
-            is DerivedDataValidationProfile.STRICT_WITHOUT_WARMUP
-        ):
-            logger.info(
-                "Bypassing same-day group ranking warmup metadata gate "
-                "for in-process static export"
-            )
-
-        # Calculate rankings
-        logger.info(f"Starting group ranking calculation for {calc_date}...")
-        calculation = service.calculate_group_rankings(
-            db,
-            calc_date,
+        request = DailyGroupRankRequest(
+            calculation_date=calc_date,
+            current_date=today_local,
             market=effective_market,
+            activity_lifecycle=activity_lifecycle,
             policy=policy,
-            cache_requirement=cache_requirement,
         )
-        rankings = calculation.rankings
-        prefetch_stats = calculation.prefetch_stats.to_dict()
-
-        # Calculate duration
-        duration = time.time() - start_time
-
-        if not rankings:
-            no_groups_message = (
-                "No groups could be ranked (insufficient price data or all groups below 3-stock threshold)"
-            )
-            logger.warning("No groups ranked for %s", calc_date)
+        task_result = _run_daily_group_rankings_response(
+            db,
+            request,
+            _daily_group_rank_dependencies(service),
+        )
+        if task_result.get("error"):
+            db.rollback()
             _mark_market_activity_failed_safely(
                 db,
                 market=effective_market,
@@ -291,55 +299,11 @@ def calculate_daily_group_rankings(
                 lifecycle=activity_lifecycle,
                 task_name=getattr(self, "name", "calculate_daily_group_rankings"),
                 task_id=getattr(getattr(self, "request", None), "id", None),
-                message=no_groups_message,
+                message=str(task_result["error"]),
             )
-            no_groups_result = {
-                'date': calc_date.strftime('%Y-%m-%d'),
-                'groups_ranked': 0,
-                'warning': 'No groups could be ranked',
-                'error': no_groups_message,
-                'reason_code': GroupRankReasonCode.NO_GROUPS_RANKED,
-                'calculation_duration_seconds': round(duration, 2),
-                'timestamp': datetime.now().isoformat()
-            }
-            policy.annotate_response(no_groups_result)
-            if policy.response_cache_policy is not None:
-                no_groups_result['prefetch_stats'] = prefetch_stats
-            return no_groups_result
+            return task_result
 
-        logger.info(f"Successfully ranked {len(rankings)} groups in {duration:.2f}s")
-
-        # Log top 5 groups
-        logger.info("Top 5 groups:")
-        for r in rankings[:5]:
-            logger.info(
-                f"  #{r.rank}: {r.industry_group} "
-                f"(avg RS: {r.avg_rs_rating:.1f}, {r.num_stocks} stocks)"
-            )
-
-        logger.info("=" * 60)
-
-        repair_stats = None
-        # US-only: the repair helper touches US-scoped feature-store metadata
-        # and has no equivalent on other markets. Non-US runs skip it.
-        if effective_market == "US" and _should_repair_current_us_metadata(
-            calc_date=calc_date,
-            today_et=today_local,
-            activity_lifecycle=activity_lifecycle,
-        ):
-            from ..interfaces.tasks.feature_store_tasks import _repair_current_us_group_metadata
-
-            repair_stats = _repair_current_us_group_metadata(ranking_date=calc_date)
-
-        from ..services.group_rankings_cache import bump_group_rankings_epoch
-
-        bump_group_rankings_epoch(effective_market)
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed: %s", snapshot_error)
+        groups_ranked = int(task_result["groups_ranked"])
         mark_market_activity_completed(
             db,
             market=effective_market,
@@ -347,23 +311,10 @@ def calculate_daily_group_rankings(
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "calculate_daily_group_rankings"),
             task_id=getattr(getattr(self, "request", None), "id", None),
-            current=len(rankings),
-            total=len(rankings),
+            current=groups_ranked,
+            total=groups_ranked,
             message="Group rankings completed",
         )
-
-        task_result = {
-            'date': calc_date.strftime('%Y-%m-%d'),
-            'groups_ranked': len(rankings),
-            'top_group': rankings[0].industry_group if rankings else None,
-            'top_avg_rs': rankings[0].avg_rs_rating if rankings else None,
-            'calculation_duration_seconds': round(duration, 2),
-            'metadata_repair': repair_stats,
-            'timestamp': datetime.now().isoformat()
-        }
-        policy.annotate_response(task_result, include_cache_only=True)
-        if policy.response_cache_policy is not None:
-            task_result['prefetch_stats'] = prefetch_stats
         return task_result
 
     except SoftTimeLimitExceeded:
@@ -379,56 +330,8 @@ def calculate_daily_group_rankings(
             message="Soft time limit exceeded",
         )
         raise
-    except IncompleteGroupRankingCacheError as e:
-        db.rollback()
-        logger.error("✗ Refusing to publish daily group rankings: %s", e)
-        logger.info("=" * 60)
-        _mark_market_activity_failed_safely(
-            db,
-            market=effective_market,
-            stage_key="groups",
-            lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
-            message=str(e),
-        )
-        error_result = {
-            'error': str(e),
-            'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
-            'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
-            'timestamp': datetime.now().isoformat(),
-            'cache_only': True,
-            'prefetch_stats': e.stats.to_dict(),
-        }
-        if policy is not None:
-            policy.annotate_response(error_result)
-        return error_result
-    except MissingIBDIndustryMappingsError as e:
-        db.rollback()
-        logger.error("✗ Refusing to publish daily group rankings: %s", e)
-        logger.info("=" * 60)
-        _mark_market_activity_failed_safely(
-            db,
-            market=effective_market,
-            stage_key="groups",
-            lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
-            message=str(e),
-        )
-        error_result = {
-            'error': str(e),
-            'reason_code': GroupRankReasonCode.MISSING_IBD_MAPPINGS,
-            'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
-            'timestamp': datetime.now().isoformat(),
-        }
-        if policy is not None:
-            policy.annotate_response(error_result, include_cache_only=True)
-        return error_result
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
-        if _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.get():
-            raise
         _mark_market_activity_failed_safely(
             db,
             market=effective_market,
@@ -464,40 +367,6 @@ def calculate_daily_group_rankings(
 
     finally:
         db.close()
-
-
-def _calculate_daily_group_rankings_in_process(
-    *,
-    calculation_date: str | None = None,
-    market: str | None = None,
-    activity_lifecycle: str | None = None,
-    execution_policy: str | None = None,
-):
-    """Run nested daily logic under the orchestrator's existing lease.
-
-    Transient errors propagate so only the outer task schedules retries.
-    """
-    from .workload_coordination import disable_serialized_market_workload
-
-    task = calculate_daily_group_rankings
-    kwargs = {
-        "market": market,
-        "activity_lifecycle": activity_lifecycle,
-    }
-    if calculation_date is not None:
-        kwargs["calculation_date"] = calculation_date
-    if execution_policy is not None:
-        kwargs["execution_policy"] = execution_policy
-    transient_token = _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.set(True)
-    try:
-        if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-            return task(**kwargs)
-        with disable_serialized_market_workload():
-            if hasattr(task, "request") and callable(getattr(task, "run", None)):
-                return task.run(**kwargs)
-            return task(**kwargs)
-    finally:
-        _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.reset(transient_token)
 
 
 @celery_app.task(
@@ -681,13 +550,17 @@ def calculate_daily_group_rankings_with_gapfill(
                 "Calculating group rankings for %s (%s)...",
                 effective_market, target_date,
             )
-            inner_kwargs = {
-                "market": market,
-                "activity_lifecycle": activity_lifecycle,
-                **resolved_date.nested_daily_kwargs(),
-            }
-            inner_kwargs["execution_policy"] = policy.mode.value
-            today_result = _calculate_daily_group_rankings_in_process(**inner_kwargs)
+            today_result = _run_daily_group_rankings_response(
+                db,
+                DailyGroupRankRequest(
+                    calculation_date=target_date,
+                    current_date=current_date,
+                    market=effective_market,
+                    activity_lifecycle=activity_lifecycle,
+                    policy=policy,
+                ),
+                _daily_group_rank_dependencies(service),
+            )
             result['today'] = today_result
             today_error = None
             if isinstance(today_result, dict) and today_result.get("error"):

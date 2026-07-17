@@ -570,7 +570,7 @@ git commit --no-verify -m "fix: replace historical group ranks atomically"
 - Adds: `run_daily_group_rankings(db, request, dependencies) -> DailyGroupRankOutcome`.
 - Removes: `_calculate_daily_group_rankings_in_process` and `_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS`.
 
-- [ ] **Step 1: Write failing runner contract tests**
+- [x] **Step 1: Write failing runner contract tests**
 
 Describe the normal callable API:
 
@@ -597,7 +597,7 @@ def test_runner_returns_compatible_success_outcome():
 
 Add tests proving strict warmup failure prevents calculation, no-groups raises a named failure carrying typed stats, and transient service errors propagate unchanged.
 
-- [ ] **Step 2: Run the runner test and verify RED**
+- [x] **Step 2: Run the runner test and verify RED**
 
 Run:
 
@@ -609,7 +609,7 @@ cd backend
 
 Expected: import failure because the runner module does not exist.
 
-- [ ] **Step 3: Implement the request, dependencies, outcome, and runner**
+- [x] **Step 3: Implement the request, dependencies, outcome, and runner**
 
 Create these core contracts:
 
@@ -656,7 +656,7 @@ class DailyGroupRankOutcome:
 
 The runner derives `GroupRankCacheRequirement` from `policy.validation_profile`, evaluates warmup when required, calls `service.calculate_group_rankings`, raises a named no-groups failure for an empty tuple, performs current-US metadata repair under the existing lifecycle/date rule, bumps the epoch, and publishes the snapshot best-effort.
 
-- [ ] **Step 4: Adapt direct and gap-fill Celery tasks**
+- [x] **Step 4: Adapt direct and gap-fill Celery tasks**
 
 Keep date parsing, policy resolution, sessions, activity lifecycle, exception-to-response mapping, and retry scheduling in the public task. Replace the calculation/finalization block with one runner call.
 
@@ -696,7 +696,7 @@ task.run() introspection
 
 Keep `allow_same_day_group_rank_warmup_bypass()` for static export compatibility.
 
-- [ ] **Step 5: Replace helper-patching tests with runner-patching tests**
+- [x] **Step 5: Replace helper-patching tests with runner-patching tests**
 
 Tests that formerly patched `_calculate_daily_group_rankings_in_process` should patch the task module's `run_daily_group_rankings` import and return `DailyGroupRankOutcome`. Replace the old in-process tests with assertions that:
 
@@ -708,7 +708,7 @@ assert ".run(**kwargs)" not in source
 
 Retain tests proving only the outer gap-fill task retries on a propagated transient exception.
 
-- [ ] **Step 6: Run group runner/task policy tests and verify GREEN**
+- [x] **Step 6: Run group runner/task policy tests and verify GREEN**
 
 Run:
 
@@ -723,7 +723,7 @@ cd backend
 
 Expected: all selected tests pass and source assertions prove no decorated task invocation remains.
 
-- [ ] **Step 7: Commit the group runner**
+- [x] **Step 7: Commit the group runner**
 
 ```bash
 git add backend/app/services/daily_group_rank_runner.py \

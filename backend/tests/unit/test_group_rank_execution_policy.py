@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from unittest.mock import MagicMock
 
+from app.services.daily_group_rank_runner import DailyGroupRankOutcome
 from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.group_rank_models import (
     GroupRankCalculationResult,
@@ -53,6 +55,22 @@ def _group_calculation(
             ),
         ),
         prefetch_stats=_prefetch_stats(misses=misses),
+    )
+
+
+def _runner_outcome(calculation_date: date) -> DailyGroupRankOutcome:
+    calculation = _group_calculation()
+    return DailyGroupRankOutcome(
+        calculation_date=calculation_date,
+        rankings=(
+            replace(
+                calculation.rankings[0],
+                date=calculation_date,
+            ),
+        ),
+        prefetch_stats=calculation.prefetch_stats,
+        duration_seconds=0.25,
+        metadata_repair=None,
     )
 
 
@@ -338,16 +356,13 @@ def test_guarded_group_wrapper_propagates_policy_to_gapfill_and_target(
         datetime(2026, 3, 20, 17, 40),
     )
     target_call = MagicMock(
-        return_value={
-            "date": "2026-03-19",
-            "groups_ranked": 1,
-            "cache_only": True,
-            "cache_policy": "refresh_guarded",
-        }
+        side_effect=lambda db, request, dependencies: (
+            _runner_outcome(request.calculation_date)
+        )
     )
     monkeypatch.setattr(
         module,
-        "_calculate_daily_group_rankings_in_process",
+        "run_daily_group_rankings",
         target_call,
     )
 
@@ -361,11 +376,11 @@ def test_guarded_group_wrapper_propagates_policy_to_gapfill_and_target(
     assert fill_kwargs["market"] == "US"
     assert fill_kwargs["policy"].mode.value == "refresh_guarded"
     assert fill_kwargs["policy"] is fill_kwargs["policy"].for_gap_fill()
-    target_call.assert_called_once_with(
-        market="US",
-        activity_lifecycle="daily_refresh",
-        calculation_date="2026-03-19",
-        execution_policy="refresh_guarded",
-    )
+    target_call.assert_called_once()
+    target_request = target_call.call_args.args[1]
+    assert target_request.market == "US"
+    assert target_request.activity_lifecycle == "daily_refresh"
+    assert target_request.calculation_date == date(2026, 3, 19)
+    assert target_request.policy.mode.value == "refresh_guarded"
     assert result["cache_only"] is True
     assert result["cache_policy"] == "refresh_guarded"
