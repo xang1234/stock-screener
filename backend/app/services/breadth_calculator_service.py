@@ -8,7 +8,7 @@ monthly/quarterly performance indicators.
 import logging
 import math
 from collections import deque
-from typing import Dict, Optional, List
+from typing import Dict, Mapping, Optional, List
 from datetime import date, datetime, timedelta
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -784,17 +784,23 @@ class BreadthCalculatorService:
 
         return stats
 
-    def _store_breadth_record(self, calc_date: date, metrics: Dict) -> None:
+    def store_daily_breadth(
+        self,
+        calculation_date: date,
+        metrics: Mapping[str, object],
+        *,
+        duration_seconds: float,
+    ) -> None:
         """
         Store or update a breadth record in the database.
 
         Args:
-            calc_date: Date of the breadth record
+            calculation_date: Date of the breadth record
             metrics: Calculated breadth metrics
         """
         # Check if record already exists for this (date, market) partition
         existing_record = self.db.query(MarketBreadth).filter(
-            MarketBreadth.date == calc_date,
+            MarketBreadth.date == calculation_date,
             MarketBreadth.market == self.market,
         ).first()
 
@@ -812,12 +818,16 @@ class BreadthCalculatorService:
             existing_record.stocks_up_13pct_34days = metrics['stocks_up_13pct_34days']
             existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
             existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
-            existing_record.calculation_duration_seconds = metrics.get('calculation_duration_seconds')
-            logger.debug(f"Updated existing breadth record for {self.market} {calc_date}")
+            existing_record.calculation_duration_seconds = duration_seconds
+            logger.debug(
+                "Updated existing breadth record for %s %s",
+                self.market,
+                calculation_date,
+            )
         else:
             breadth_record = MarketBreadth(
                 market=self.market,
-                date=calc_date,
+                date=calculation_date,
                 stocks_up_4pct=metrics['stocks_up_4pct'],
                 stocks_down_4pct=metrics['stocks_down_4pct'],
                 ratio_5day=metrics.get('ratio_5day'),
@@ -831,10 +841,14 @@ class BreadthCalculatorService:
                 stocks_up_13pct_34days=metrics['stocks_up_13pct_34days'],
                 stocks_down_13pct_34days=metrics['stocks_down_13pct_34days'],
                 total_stocks_scanned=metrics['total_stocks_scanned'],
-                calculation_duration_seconds=metrics.get('calculation_duration_seconds')
+                calculation_duration_seconds=duration_seconds,
             )
             self.db.add(breadth_record)
-            logger.debug(f"Created new breadth record for {self.market} {calc_date}")
+            logger.debug(
+                "Created new breadth record for %s %s",
+                self.market,
+                calculation_date,
+            )
 
         self.db.commit()
 

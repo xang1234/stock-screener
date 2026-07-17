@@ -755,7 +755,7 @@ git commit --no-verify -m "refactor: extract daily group ranking runner"
 - Adds: `BreadthCalculatorService.store_daily_breadth(...) -> None` as the canonical persistence method.
 - Removes: `_calculate_daily_breadth_in_process` and task-object introspection.
 
-- [ ] **Step 1: Write failing runner and canonical persistence tests**
+- [x] **Step 1: Write failing runner and canonical persistence tests**
 
 Add:
 
@@ -783,7 +783,7 @@ def test_runner_persists_and_serializes_compatible_success():
 
 Add strict, tolerant, warmup-required, and zero-usable-stock validation tests. Add a service test proving `store_daily_breadth()` updates or inserts and commits one record using the existing market partition.
 
-- [ ] **Step 2: Run breadth runner/service tests and verify RED**
+- [x] **Step 2: Run breadth runner/service tests and verify RED**
 
 Run:
 
@@ -796,7 +796,7 @@ cd backend
 
 Expected: runner import failure and missing public persistence method.
 
-- [ ] **Step 3: Implement the breadth runner**
+- [x] **Step 3: Implement the breadth runner**
 
 Create these contracts:
 
@@ -824,7 +824,7 @@ class DailyBreadthOutcome:
 
 Move `_validate_same_day_cache_only_breadth`, `_validate_strict_cache_only_breadth`, and `_validate_refresh_guarded_breadth` into the runner module. `run_daily_breadth` calculates, applies `policy.validation_profile`, raises `IncompleteDailyBreadth` before persistence on failure, persists through the canonical service method, and publishes the breadth snapshot best-effort. `to_task_result()` reproduces the existing `indicators`, counts, duration, cache policy, and diagnostics keys.
 
-- [ ] **Step 4: Expose canonical breadth persistence**
+- [x] **Step 4: Expose canonical breadth persistence**
 
 Rename/generalize the existing `_store_breadth_record` to:
 
@@ -840,7 +840,7 @@ def store_daily_breadth(
 
 Reuse its existing upsert-by-`(market, date)` behavior and commit. Delete the duplicated ORM assignment block from `calculate_daily_breadth` task.
 
-- [ ] **Step 5: Adapt direct and gap-fill breadth tasks**
+- [x] **Step 5: Adapt direct and gap-fill breadth tasks**
 
 The direct task retains serialized date parsing, policy resolution, session lifecycle, exception mapping, and response compatibility. Both direct and gap-fill paths call `run_daily_breadth` directly. Delete:
 
@@ -861,11 +861,11 @@ the gap-fill wrapper stores it in `result["today"]` and preserves its existing
 wrapper-level error behavior. All other exceptions propagate to the owning task,
 so the adapter never schedules or suppresses retries.
 
-- [ ] **Step 6: Migrate task tests to the runner seam**
+- [x] **Step 6: Migrate task tests to the runner seam**
 
 Patch `run_daily_breadth` and return `DailyBreadthOutcome` instead of patching `_calculate_daily_breadth_in_process`. Add source assertions that reject the deleted helper and `.run(**kwargs)` task invocation. Retain guarded provider-exclusion, legacy flag precedence, historical manual, and transient outer-retry tests.
 
-- [ ] **Step 7: Run breadth runner/service/task tests and verify GREEN**
+- [x] **Step 7: Run breadth runner/service/task tests and verify GREEN**
 
 Run:
 
@@ -881,7 +881,7 @@ cd backend
 
 Expected: all selected tests pass and no nested decorated-task invocation remains.
 
-- [ ] **Step 8: Commit the breadth runner**
+- [x] **Step 8: Commit the breadth runner**
 
 ```bash
 git add backend/app/services/daily_breadth_runner.py \

@@ -12,7 +12,6 @@ market workload lease to avoid same-market overlap with scans.
 from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
-from typing import Optional
 from datetime import datetime, date, timedelta
 import time
 
@@ -21,9 +20,13 @@ from celery.exceptions import SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..services.breadth_calculator_service import BreadthCalculatorService
-from ..services.breadth_coverage import BreadthCoverageReport
+from ..services.daily_breadth_runner import (
+    DailyBreadthDependencies,
+    DailyBreadthRequest,
+    IncompleteDailyBreadth,
+    run_daily_breadth,
+)
 from ..services.derived_data_execution_policy import (
-    DerivedDataValidationProfile,
     resolve_derived_data_execution_policy,
 )
 from ..services.market_activity_service import (
@@ -31,8 +34,6 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
-from ..models.market_breadth import MarketBreadth
 from ..config import settings
 from .date_resolution import resolve_task_target_date
 from .workload_coordination import serialized_market_workload
@@ -40,7 +41,6 @@ from ..wiring.bootstrap import get_market_calendar_service, get_price_cache
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
-CACHE_MISS_TOLERANCE_RATIO = 0.10  # Allow up to 10% — breadth scans the full universe including delisted tickers
 _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
     "allow_same_day_breadth_warmup_bypass",
     default=False,
@@ -85,63 +85,40 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
         )
 
 
-def _validate_same_day_cache_only_breadth(
-    price_cache,
-    coverage: BreadthCoverageReport,
-    market: Optional[str] = None,
-) -> Optional[str]:
-    """Block publishing daily breadth when the same-day warmup/cache state is incomplete."""
-    warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
-    warmup_readiness = evaluate_warmup_metadata(
-        warmup_meta,
-        context="same-day breadth run",
+def _daily_breadth_dependencies(
+    calculator: BreadthCalculatorService,
+) -> DailyBreadthDependencies:
+    from ..services.ui_snapshot_service import safe_publish_breadth_bootstrap
+
+    return DailyBreadthDependencies(
+        calculator=calculator,
+        publish_snapshot=safe_publish_breadth_bootstrap,
     )
-    if not warmup_readiness.ready:
-        return warmup_readiness.reason
-
-    return _validate_strict_cache_only_breadth(coverage)
 
 
-def _validate_strict_cache_only_breadth(
-    coverage: BreadthCoverageReport,
-) -> Optional[str]:
-    """Validate cache completeness without requiring Redis warmup metadata."""
-    cache_misses = coverage.cache_miss_stocks
-    errors = coverage.error_stocks
-    total_scanned = coverage.total_stocks_scanned
-    skipped = coverage.skipped_stocks
-    total_attempted = total_scanned + skipped
-    if errors > 0:
-        return f"Cache-only breadth run has errors (errors={errors})"
-    if total_attempted == 0:
-        return "Cache-only breadth run processed no stocks"
-    miss_ratio = cache_misses / total_attempted
-    if miss_ratio > CACHE_MISS_TOLERANCE_RATIO:
-        return (
-            f"Cache-only breadth run exceeds miss tolerance "
-            f"(cache_misses={cache_misses}, total={total_attempted}, "
-            f"ratio={miss_ratio:.1%}, limit={CACHE_MISS_TOLERANCE_RATIO:.0%})"
-        )
-    if cache_misses > 0:
-        logger.warning(
-            "Cache-only breadth run has %d cache misses out of %d stocks (%.1f%%) -- within tolerance",
-            cache_misses, total_attempted, miss_ratio * 100,
-        )
-    return None
-
-
-def _validate_refresh_guarded_breadth(
-    coverage: BreadthCoverageReport,
-) -> Optional[str]:
-    """Require meaningful output without imposing the strict miss-ratio gate."""
-    if coverage.error_stocks > 0:
-        return (
-            "Refresh-guarded breadth run has calculation errors "
-            f"(errors={coverage.error_stocks})"
-        )
-    if coverage.total_stocks_scanned == 0:
-        return "Refresh-guarded breadth run processed no usable stocks"
-    return None
+def _run_daily_breadth_response(
+    db,
+    request: DailyBreadthRequest,
+    dependencies: DailyBreadthDependencies,
+) -> dict:
+    try:
+        outcome = run_daily_breadth(db, request, dependencies)
+    except IncompleteDailyBreadth as exc:
+        logger.error("Refusing to publish daily breadth: %s", exc)
+        error_result = {
+            "error": str(exc),
+            "date": request.calculation_date.isoformat(),
+            "timestamp": datetime.now().isoformat(),
+            "cache_only": True,
+            "metrics": exc.coverage.to_daily_dict(),
+        }
+        request.policy.annotate_response(error_result)
+        if request.policy.response_cache_policy is not None:
+            error_result["cache_diagnostics"] = (
+                exc.coverage.to_daily_dict()
+            )
+        return error_result
+    return outcome.to_task_result(request.policy)
 
 
 def _generate_trading_dates(
@@ -226,11 +203,9 @@ def calculate_daily_breadth(
     logger.info("=" * 60)
 
     db = SessionLocal()
-    start_time = time.time()
     policy = None
 
     try:
-        # Initialize breadth calculator service (market-scoped for universe selection)
         calculator = BreadthCalculatorService(db, get_price_cache(), market=effective_market)
         policy = resolve_derived_data_execution_policy(
             execution_policy=execution_policy,
@@ -242,149 +217,16 @@ def calculate_daily_breadth(
                 _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS.get()
             ),
         )
-
-        # Calculate breadth indicators
-        logger.info(f"Starting breadth calculation for {calc_date}...")
-        calculation = calculator.calculate_daily_breadth(
+        request = DailyBreadthRequest(
             calculation_date=calc_date,
+            market=effective_market,
             policy=policy,
         )
-        metrics = calculation.to_metrics_dict()
-        coverage = calculation.coverage
-
-        # Calculate duration
-        duration = time.time() - start_time
-        metrics['calculation_duration_seconds'] = round(duration, 2)
-
-        validation_profile = policy.validation_profile
-        completeness_error = None
-        if (
-            validation_profile
-            is DerivedDataValidationProfile.TOLERANT_CACHE_ONLY
-        ):
-            completeness_error = _validate_refresh_guarded_breadth(coverage)
-        elif (
-            validation_profile
-            is DerivedDataValidationProfile.STRICT_WITH_WARMUP
-        ):
-            completeness_error = _validate_same_day_cache_only_breadth(
-                calculator.price_cache,
-                coverage,
-                market=effective_market,
-            )
-        elif (
-            validation_profile
-            is DerivedDataValidationProfile.STRICT_WITHOUT_WARMUP
-        ):
-            logger.info(
-                "Bypassing same-day breadth warmup metadata gate for in-process static export"
-            )
-            completeness_error = _validate_strict_cache_only_breadth(coverage)
-
-        if completeness_error:
-            logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
-            logger.info("=" * 60)
-            error_result = {
-                'error': completeness_error,
-                'date': calc_date.strftime('%Y-%m-%d'),
-                'timestamp': datetime.now().isoformat(),
-                'cache_only': True,
-                'metrics': coverage.to_daily_dict(),
-            }
-            policy.annotate_response(error_result)
-            if policy.response_cache_policy is not None:
-                error_result['cache_diagnostics'] = coverage.to_daily_dict()
-            return error_result
-
-        logger.info(f"✓ Breadth calculation completed in {duration:.2f}s")
-        logger.info(f"  Stocks scanned: {metrics['total_stocks_scanned']}")
-        logger.info(f"  Stocks skipped: {metrics.get('skipped_stocks', 0)}")
-        logger.info(f"  Up 4%+: {metrics['stocks_up_4pct']}")
-        logger.info(f"  Down 4%+: {metrics['stocks_down_4pct']}")
-        logger.info(f"  5-day ratio: {metrics['ratio_5day']}")
-        logger.info(f"  10-day ratio: {metrics['ratio_10day']}")
-
-        # Check if record already exists for this (date, market) partition
-        existing_record = db.query(MarketBreadth).filter(
-            MarketBreadth.date == calc_date,
-            MarketBreadth.market == effective_market,
-        ).first()
-
-        if existing_record:
-            # Update existing record
-            existing_record.stocks_up_4pct = metrics['stocks_up_4pct']
-            existing_record.stocks_down_4pct = metrics['stocks_down_4pct']
-            existing_record.ratio_5day = metrics['ratio_5day']
-            existing_record.ratio_10day = metrics['ratio_10day']
-            existing_record.stocks_up_25pct_quarter = metrics['stocks_up_25pct_quarter']
-            existing_record.stocks_down_25pct_quarter = metrics['stocks_down_25pct_quarter']
-            existing_record.stocks_up_25pct_month = metrics['stocks_up_25pct_month']
-            existing_record.stocks_down_25pct_month = metrics['stocks_down_25pct_month']
-            existing_record.stocks_up_50pct_month = metrics['stocks_up_50pct_month']
-            existing_record.stocks_down_50pct_month = metrics['stocks_down_50pct_month']
-            existing_record.stocks_up_13pct_34days = metrics['stocks_up_13pct_34days']
-            existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
-            existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
-            existing_record.calculation_duration_seconds = duration
-            logger.info(f"Updating existing breadth record for {calc_date}")
-        else:
-            # Create new MarketBreadth record
-            breadth_record = MarketBreadth(
-                market=effective_market,
-                date=calc_date,
-                stocks_up_4pct=metrics['stocks_up_4pct'],
-                stocks_down_4pct=metrics['stocks_down_4pct'],
-                ratio_5day=metrics['ratio_5day'],
-                ratio_10day=metrics['ratio_10day'],
-                stocks_up_25pct_quarter=metrics['stocks_up_25pct_quarter'],
-                stocks_down_25pct_quarter=metrics['stocks_down_25pct_quarter'],
-                stocks_up_25pct_month=metrics['stocks_up_25pct_month'],
-                stocks_down_25pct_month=metrics['stocks_down_25pct_month'],
-                stocks_up_50pct_month=metrics['stocks_up_50pct_month'],
-                stocks_down_50pct_month=metrics['stocks_down_50pct_month'],
-                stocks_up_13pct_34days=metrics['stocks_up_13pct_34days'],
-                stocks_down_13pct_34days=metrics['stocks_down_13pct_34days'],
-                total_stocks_scanned=metrics['total_stocks_scanned'],
-                calculation_duration_seconds=duration
-            )
-            db.add(breadth_record)
-            logger.info(f"Creating new breadth record for {calc_date}")
-
-        db.commit()
-        try:
-            from ..services.ui_snapshot_service import safe_publish_breadth_bootstrap
-
-            safe_publish_breadth_bootstrap(effective_market)
-        except Exception as snapshot_error:
-            logger.warning("Breadth snapshot publish failed: %s", snapshot_error)
-
-        logger.info(f"✓ Breadth data saved to database for {calc_date}")
-        logger.info("=" * 60)
-
-        task_result = {
-            'date': calc_date.strftime('%Y-%m-%d'),
-            'indicators': {
-                'stocks_up_4pct': metrics['stocks_up_4pct'],
-                'stocks_down_4pct': metrics['stocks_down_4pct'],
-                'ratio_5day': metrics['ratio_5day'],
-                'ratio_10day': metrics['ratio_10day'],
-                'stocks_up_25pct_quarter': metrics['stocks_up_25pct_quarter'],
-                'stocks_down_25pct_quarter': metrics['stocks_down_25pct_quarter'],
-                'stocks_up_25pct_month': metrics['stocks_up_25pct_month'],
-                'stocks_down_25pct_month': metrics['stocks_down_25pct_month'],
-                'stocks_up_50pct_month': metrics['stocks_up_50pct_month'],
-                'stocks_down_50pct_month': metrics['stocks_down_50pct_month'],
-                'stocks_up_13pct_34days': metrics['stocks_up_13pct_34days'],
-                'stocks_down_13pct_34days': metrics['stocks_down_13pct_34days'],
-            },
-            'total_stocks_scanned': metrics['total_stocks_scanned'],
-            'calculation_duration_seconds': duration,
-            'timestamp': datetime.now().isoformat()
-        }
-        policy.annotate_response(task_result, include_cache_only=True)
-        if policy.response_cache_policy is not None:
-            task_result['cache_diagnostics'] = coverage.to_daily_dict()
-        return task_result
+        return _run_daily_breadth_response(
+            db,
+            request,
+            _daily_breadth_dependencies(calculator),
+        )
 
     except Exception as e:
         db.rollback()
@@ -509,29 +351,6 @@ def backfill_market_exposure(self, start_date: str, end_date: str, market: str =
         }
     finally:
         db.close()
-
-
-def _calculate_daily_breadth_in_process(
-    *,
-    calculation_date: str | None = None,
-    market: str | None = None,
-    execution_policy: str | None = None,
-):
-    """Run breadth logic without reacquiring the market workload lease."""
-    from .workload_coordination import disable_serialized_market_workload
-
-    task = calculate_daily_breadth
-    kwargs = {"market": market}
-    if calculation_date is not None:
-        kwargs["calculation_date"] = calculation_date
-    if execution_policy is not None:
-        kwargs["execution_policy"] = execution_policy
-    if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-        return task(**kwargs)
-    with disable_serialized_market_workload():
-        if hasattr(task, "request") and callable(getattr(task, "run", None)):
-            return task.run(**kwargs)
-        return task(**kwargs)
 
 
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.backfill_breadth_data')
@@ -784,9 +603,15 @@ def calculate_daily_breadth_with_gapfill(
                 effective_market,
                 target_date,
             )
-            inner_kwargs = {"market": market, **resolved_date.nested_daily_kwargs()}
-            inner_kwargs["execution_policy"] = policy.mode.value
-            today_result = _calculate_daily_breadth_in_process(**inner_kwargs)
+            today_result = _run_daily_breadth_response(
+                db,
+                DailyBreadthRequest(
+                    calculation_date=target_date,
+                    market=effective_market,
+                    policy=policy,
+                ),
+                _daily_breadth_dependencies(calculator),
+            )
             result['today'] = today_result
             if isinstance(today_result, dict) and today_result.get("error"):
                 raise RuntimeError(

@@ -90,6 +90,56 @@ def _add_breadth_row(
     ))
 
 
+@pytest.mark.parametrize("existing", [False, True])
+def test_store_daily_breadth_upserts_in_market_partition(existing):
+    db = _make_db_session()
+    calc_date = date(2026, 3, 20)
+    if existing:
+        db.add(MarketBreadth(
+            market="HK",
+            date=calc_date,
+            stocks_up_4pct=1,
+            stocks_down_4pct=1,
+            ratio_5day=None,
+            ratio_10day=None,
+            stocks_up_25pct_quarter=0,
+            stocks_down_25pct_quarter=0,
+            stocks_up_25pct_month=0,
+            stocks_down_25pct_month=0,
+            stocks_up_50pct_month=0,
+            stocks_down_50pct_month=0,
+            stocks_up_13pct_34days=0,
+            stocks_down_13pct_34days=0,
+            total_stocks_scanned=2,
+        ))
+        db.commit()
+
+    service = BreadthCalculatorService(db, MagicMock(), market="HK")
+    metrics = {
+        **service._empty_metrics(),
+        "stocks_up_4pct": 12,
+        "stocks_down_4pct": 4,
+        "ratio_5day": 2.0,
+        "ratio_10day": 1.5,
+        "total_stocks_scanned": 100,
+    }
+
+    service.store_daily_breadth(
+        calc_date,
+        metrics,
+        duration_seconds=1.25,
+    )
+
+    rows = db.query(MarketBreadth).filter(
+        MarketBreadth.market == "HK",
+        MarketBreadth.date == calc_date,
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].stocks_up_4pct == 12
+    assert rows[0].total_stocks_scanned == 100
+    assert rows[0].calculation_duration_seconds == 1.25
+
+
 def test_calculate_daily_breadth_uses_bulk_cached_prices(monkeypatch):
     db = MagicMock()
     db.query.return_value.filter.return_value.all.return_value = [
