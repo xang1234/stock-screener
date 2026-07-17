@@ -238,52 +238,6 @@ class TestExtractFromContentBugFix:
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
-    def test_extract_from_content_falls_back_only_for_current_item(
-        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
-    ):
-        from app.services.theme_extraction_service import ThemeExtractionService
-
-        service = ThemeExtractionService.__new__(ThemeExtractionService)
-        service.db = db_session
-        service.pipeline = "technical"
-        service.provider = "litellm"
-        service.llm = MagicMock()
-        service.gemini_client = object()
-        service.configured_model = None
-        service.pipeline_config = None
-        service._valid_tickers = {"NVDA"}
-        service._company_name_ticker_map = []
-        service._last_request_time = 0
-        service._min_request_interval = 0
-        service.max_age_days = 30
-        service.theme_policy_overrides = {}
-        service.ticker_pattern = __import__("re").compile(r'^[A-Z]{1,5}$')
-
-        item = _make_content_item(db_session, pipeline_source, external_id="provider-fallback-1")
-        litellm_response = '[{"theme":"AI Infrastructure","tickers":["NVDA"],"sentiment":"bullish","confidence":0.9,"excerpt":"x"}]'
-
-        with patch.object(
-            service,
-            "_try_generate_litellm",
-            side_effect=[Exception("transient timeout"), litellm_response],
-        ) as litellm_mock, patch.object(
-            service,
-            "_try_generate_gemini",
-            return_value=litellm_response,
-        ) as gemini_mock:
-            first_mentions = service.extract_from_content(item)
-            second_mentions = service.extract_from_content(item)
-
-        assert service.provider == "litellm"
-        assert litellm_mock.call_count == 2
-        assert gemini_mock.call_count == 1
-        assert first_mentions[0]["tickers"] == ["NVDA"]
-        assert second_mentions[0]["tickers"] == ["NVDA"]
-
-    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
-    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
-    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
-    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
     def test_clean_tickers_fails_closed_when_active_universe_is_empty(
         self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
     ):

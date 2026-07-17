@@ -62,8 +62,7 @@ def _mention(
     )
 
 
-@pytest.mark.asyncio
-async def test_matching_telemetry_aggregates_method_source_and_threshold_breakdowns(db_session):
+def test_matching_telemetry_aggregates_method_source_and_threshold_breakdowns(db_session):
     db_session.add_all(
         [
             _mention(
@@ -114,7 +113,7 @@ async def test_matching_telemetry_aggregates_method_source_and_threshold_breakdo
     )
     db_session.commit()
 
-    payload = await get_matching_telemetry(
+    payload = get_matching_telemetry(
         days=30,
         pipeline="technical",
         db=db_session,
@@ -131,8 +130,7 @@ async def test_matching_telemetry_aggregates_method_source_and_threshold_breakdo
     assert any(item.reason == "none" and item.count == 2 for item in payload.decision_reason_distribution)
 
 
-@pytest.mark.asyncio
-async def test_matching_telemetry_supports_source_and_threshold_filters(db_session):
+def test_matching_telemetry_supports_source_and_threshold_filters(db_session):
     db_session.add_all(
         [
             _mention(
@@ -164,7 +162,7 @@ async def test_matching_telemetry_supports_source_and_threshold_filters(db_sessi
     )
     db_session.commit()
 
-    payload = await get_matching_telemetry(
+    payload = get_matching_telemetry(
         days=30,
         pipeline="technical",
         source_type="substack",
@@ -180,8 +178,7 @@ async def test_matching_telemetry_supports_source_and_threshold_filters(db_sessi
     assert all(item.method in {"embedding_similarity", "create_new_cluster"} for item in payload.method_distribution)
 
 
-@pytest.mark.asyncio
-async def test_matching_telemetry_unknown_threshold_filter_maps_to_null_column(db_session):
+def test_matching_telemetry_unknown_threshold_filter_maps_to_null_column(db_session):
     db_session.add_all(
         [
             _mention(
@@ -204,7 +201,7 @@ async def test_matching_telemetry_unknown_threshold_filter_maps_to_null_column(d
     )
     db_session.commit()
 
-    payload = await get_matching_telemetry(
+    payload = get_matching_telemetry(
         days=30,
         pipeline="technical",
         source_type="news",
@@ -217,8 +214,7 @@ async def test_matching_telemetry_unknown_threshold_filter_maps_to_null_column(d
     assert payload.by_threshold_version[0].key == "unknown"
 
 
-@pytest.mark.asyncio
-async def test_matching_telemetry_does_not_count_unknown_method_as_attach(db_session):
+def test_matching_telemetry_does_not_count_unknown_method_as_attach(db_session):
     db_session.add_all(
         [
             _mention(
@@ -241,7 +237,7 @@ async def test_matching_telemetry_does_not_count_unknown_method_as_attach(db_ses
     )
     db_session.commit()
 
-    payload = await get_matching_telemetry(days=30, pipeline="technical", db=db_session)
+    payload = get_matching_telemetry(days=30, pipeline="technical", db=db_session)
 
     assert payload.total_mentions == 2
     assert payload.new_cluster_count == 1
@@ -250,9 +246,8 @@ async def test_matching_telemetry_does_not_count_unknown_method_as_attach(db_ses
     assert payload.attach_rate == 0.0
 
 
-@pytest.mark.asyncio
-async def test_rankings_empty_response_preserves_requested_pipeline(db_session):
-    payload = await get_theme_rankings(
+def test_rankings_empty_response_preserves_requested_pipeline(db_session):
+    payload = get_theme_rankings(
         limit=20,
         offset=0,
         status=None,
@@ -268,8 +263,7 @@ async def test_rankings_empty_response_preserves_requested_pipeline(db_session):
     assert payload.rankings == []
 
 
-@pytest.mark.asyncio
-async def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
+def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
     now = datetime.utcnow()
     cluster = ThemeCluster(
         name="AI Infrastructure",
@@ -296,7 +290,7 @@ async def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
     )
     db_session.commit()
 
-    payload = await get_lifecycle_transitions(
+    payload = get_lifecycle_transitions(
         limit=20,
         offset=0,
         pipeline="technical",
@@ -315,8 +309,7 @@ async def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
     assert row.transition_history_path.endswith(f"theme_cluster_id={cluster.id}")
 
 
-@pytest.mark.asyncio
-async def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
+def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
     now = datetime.utcnow()
     candidate = ThemeCluster(
         name="AI Grid",
@@ -363,7 +356,7 @@ async def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
     )
     db_session.commit()
 
-    payload = await get_candidate_theme_queue(limit=20, offset=0, pipeline="technical", db=db_session)
+    payload = get_candidate_theme_queue(limit=20, offset=0, pipeline="technical", db=db_session)
 
     assert payload.total == 1
     assert len(payload.items) == 1
@@ -374,8 +367,7 @@ async def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
     assert payload.confidence_bands[0].count >= 1
 
 
-@pytest.mark.asyncio
-async def test_get_candidate_theme_queue_band_summary_is_global_not_page_scoped(db_session):
+def test_get_candidate_theme_queue_band_summary_is_global_not_page_scoped(db_session):
     now = datetime.utcnow()
     candidate_a = ThemeCluster(
         name="Grid Compute",
@@ -431,15 +423,14 @@ async def test_get_candidate_theme_queue_band_summary_is_global_not_page_scoped(
     )
     db_session.commit()
 
-    payload = await get_candidate_theme_queue(limit=1, offset=0, pipeline="technical", db=db_session)
+    payload = get_candidate_theme_queue(limit=1, offset=0, pipeline="technical", db=db_session)
 
     assert payload.total == 2
     assert len(payload.items) == 1
     assert sum(bucket.count for bucket in payload.confidence_bands) == 2
 
 
-@pytest.mark.asyncio
-async def test_review_candidate_themes_promote_transitions_to_active(db_session):
+def test_review_candidate_themes_promote_transitions_to_active(db_session):
     candidate = ThemeCluster(
         name="Grid Load",
         canonical_key="grid_load",
@@ -453,7 +444,7 @@ async def test_review_candidate_themes_promote_transitions_to_active(db_session)
     db_session.commit()
 
     payload = CandidateThemeReviewRequest(theme_cluster_ids=[candidate.id], action="promote", actor="analyst:test")
-    result = await review_candidate_themes(payload=payload, pipeline="technical", db=db_session)
+    result = review_candidate_themes(payload=payload, pipeline="technical", db=db_session)
 
     assert result.success is True
     assert result.updated == 1
@@ -467,8 +458,7 @@ async def test_review_candidate_themes_promote_transitions_to_active(db_session)
     assert transition.actor == "analyst:test"
 
 
-@pytest.mark.asyncio
-async def test_get_relationship_graph_returns_nodes_and_edges(db_session):
+def test_get_relationship_graph_returns_nodes_and_edges(db_session):
     source = ThemeCluster(
         name="Power Infrastructure",
         canonical_key="power_infra",
@@ -501,7 +491,7 @@ async def test_get_relationship_graph_returns_nodes_and_edges(db_session):
     )
     db_session.commit()
 
-    payload = await get_relationship_graph(
+    payload = get_relationship_graph(
         theme_cluster_id=source.id,
         pipeline="technical",
         limit=50,
