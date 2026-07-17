@@ -55,8 +55,13 @@ jobs:
         run: make gate-5
 
   backend-unit:
-    name: Backend Unit Suite
+    name: Backend Unit Suite (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       DATABASE_URL: postgresql://ci:ci@localhost/ci_unused
 
@@ -73,10 +78,32 @@ jobs:
         run: pip install -r backend/requirements.txt -r backend/requirements-test.txt
 
       - name: Safe test collection
+        if: matrix.shard == 1
         run: cd backend && python -m pytest --collect-only -q -m "not live_service and not load"
 
-      - name: Comprehensive backend unit suite
-        run: cd backend && python -m pytest tests/unit -q
+      - name: Comprehensive backend unit suite (shard ${{ matrix.shard }}/4)
+        shell: bash
+        run: |
+          cd backend
+          collection_file="${RUNNER_TEMP}/backend-unit-nodeids.txt"
+          python -m pytest tests/unit --collect-only -qq > "${collection_file}"
+          mapfile -t tests < <(awk '/^tests\/unit\/.*::/' "${collection_file}")
+
+          target_shard=$((${{ matrix.shard }} - 1))
+          shard_tests=()
+          for index in "${!tests[@]}"; do
+            if ((index % 4 == target_shard)); then
+              shard_tests+=("${tests[$index]}")
+            fi
+          done
+
+          if ((${#shard_tests[@]} == 0)); then
+            echo "No tests selected for shard ${{ matrix.shard }}/4" >&2
+            exit 1
+          fi
+
+          echo "Running shard ${{ matrix.shard }}/4 with ${#shard_tests[@]} of ${#tests[@]} unit tests"
+          python -m pytest -vv "${shard_tests[@]}"
 
   frontend:
     name: Frontend
