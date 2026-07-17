@@ -100,6 +100,31 @@ class GroupRankingRepository:
             .delete(synchronize_session=False)
         )
 
+    def replace_rankings_for_date(
+        self,
+        db: Session,
+        *,
+        calculation_date: date,
+        rankings: Sequence[GroupRanking],
+        market: str,
+    ) -> int:
+        normalized_market = (market or "US").upper()
+        deleted = (
+            db.query(IBDGroupRank)
+            .filter(
+                IBDGroupRank.date == calculation_date,
+                IBDGroupRank.market == normalized_market,
+            )
+            .delete(synchronize_session=False)
+        )
+        self.store_rankings(
+            db,
+            calculation_date=calculation_date,
+            rankings=rankings,
+            market=normalized_market,
+        )
+        return deleted
+
     def current_rank_rows(
         self,
         db: Session,

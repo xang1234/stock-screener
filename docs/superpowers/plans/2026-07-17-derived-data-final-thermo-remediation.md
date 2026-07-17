@@ -411,7 +411,7 @@ git commit --no-verify -m "refactor: make group input loading single pass"
 - Invariant: the historical calculator commits or rolls back one date at a time.
 - Invariant: zero successful dates do not bump epoch or publish snapshots.
 
-- [ ] **Step 1: Write failing repository atomicity tests**
+- [x] **Step 1: Write failing repository atomicity tests**
 
 Add a SQLite-backed repository test:
 
@@ -444,7 +444,7 @@ db.commit.assert_not_called()
 
 Add a store-failure test in which replacement raises, `db.rollback()` is called, the error count increments, and later dates continue.
 
-- [ ] **Step 2: Run atomicity tests and verify RED**
+- [x] **Step 2: Run atomicity tests and verify RED**
 
 Run:
 
@@ -457,7 +457,7 @@ cd backend
 
 Expected: `replace_rankings_for_date` is absent and optimized backfill still commits `delete_range()` before prefetch.
 
-- [ ] **Step 3: Implement non-committing per-date replacement**
+- [x] **Step 3: Implement non-committing per-date replacement**
 
 Add to the repository:
 
@@ -490,7 +490,7 @@ def replace_rankings_for_date(
 
 Do not commit inside the repository.
 
-- [ ] **Step 4: Calculate first, then replace and commit successful dates**
+- [x] **Step 4: Calculate first, then replace and commit successful dates**
 
 Delete the initial `delete_range()` and commit from `backfill_rankings_optimized`. For each calculated non-empty date:
 
@@ -513,7 +513,7 @@ except Exception:
 
 Dates with no rankings increment `errors` without mutation. Apply the same repository operation to optimized gap fill only where replacement semantics are intended; simple missing-date insertion may continue using `store_rankings` because no existing date should be deleted.
 
-- [ ] **Step 5: Guard task publication**
+- [x] **Step 5: Guard task publication**
 
 In each manual group backfill task, wrap epoch/snapshot publication:
 
@@ -525,7 +525,7 @@ if result.get("processed", 0) > 0:
 
 The one-year task receives the same guard. Do not publish when the service returns a benchmark error and zero processed dates.
 
-- [ ] **Step 6: Run repository/historical/task tests and verify GREEN**
+- [x] **Step 6: Run repository/historical/task tests and verify GREEN**
 
 Run:
 
@@ -539,7 +539,7 @@ cd backend
 
 Expected: all selected tests pass, including rollback preservation and zero-success publication guards.
 
-- [ ] **Step 7: Commit atomic replacement**
+- [x] **Step 7: Commit atomic replacement**
 
 ```bash
 git add backend/app/services/group_ranking_repository.py \

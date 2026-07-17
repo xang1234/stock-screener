@@ -16,6 +16,34 @@ from .workload_coordination import serialized_market_workload
 logger = logging.getLogger(__name__)
 
 
+def _publish_group_rankings_if_changed(
+    result: dict,
+    *,
+    market: str,
+    operation: str,
+) -> None:
+    if result.get("processed", 0) <= 0:
+        return
+
+    from ..services.group_rankings_cache import (
+        bump_group_rankings_epoch,
+    )
+
+    bump_group_rankings_epoch(market)
+    try:
+        from ..services.ui_snapshot_service import (
+            safe_publish_groups_bootstrap,
+        )
+
+        safe_publish_groups_bootstrap()
+    except Exception as snapshot_error:
+        logger.warning(
+            "Group rankings snapshot publish failed after %s: %s",
+            operation,
+            snapshot_error,
+        )
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.group_rank_tasks.backfill_group_rankings",
@@ -61,22 +89,11 @@ def backfill_group_rankings(
         )
         duration = time.time() - start_time
 
-        from ..services.group_rankings_cache import (
-            bump_group_rankings_epoch,
+        _publish_group_rankings_if_changed(
+            result,
+            market=market,
+            operation="backfill",
         )
-
-        bump_group_rankings_epoch(market)
-        try:
-            from ..services.ui_snapshot_service import (
-                safe_publish_groups_bootstrap,
-            )
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning(
-                "Group rankings snapshot publish failed after backfill: %s",
-                snapshot_error,
-            )
 
         return {
             "start_date": start_date,
@@ -149,22 +166,11 @@ def gapfill_group_rankings(
         )
         duration = time.time() - start_time
 
-        from ..services.group_rankings_cache import (
-            bump_group_rankings_epoch,
+        _publish_group_rankings_if_changed(
+            result,
+            market=market,
+            operation="gapfill",
         )
-
-        bump_group_rankings_epoch(market)
-        try:
-            from ..services.ui_snapshot_service import (
-                safe_publish_groups_bootstrap,
-            )
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning(
-                "Group rankings snapshot publish failed after gapfill: %s",
-                snapshot_error,
-            )
 
         return {
             "status": "complete",
@@ -225,18 +231,11 @@ def backfill_group_rankings_1year(
         )
         duration = time.time() - start_time
 
-        try:
-            from ..services.ui_snapshot_service import (
-                safe_publish_groups_bootstrap,
-            )
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning(
-                "Group rankings snapshot publish failed after "
-                "1-year backfill: %s",
-                snapshot_error,
-            )
+        _publish_group_rankings_if_changed(
+            result,
+            market=effective_market,
+            operation="1-year backfill",
+        )
 
         result["total_duration_seconds"] = round(duration, 2)
         result["timestamp"] = datetime.now().isoformat()

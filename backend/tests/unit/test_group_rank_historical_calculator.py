@@ -101,6 +101,7 @@ def _historical(*, prefetch=None):
     )
     repository = Mock()
     repository.delete_range.return_value = 0
+    repository.replace_rankings_for_date.return_value = 0
     repository.current_rank_rows.return_value = []
     calendar = Mock()
     calendar.is_trading_day.return_value = True
@@ -142,7 +143,54 @@ def test_optimized_backfill_uses_injected_calendar_and_chunks_dates(
         call.args[0] == "JP"
         for call in calendar.is_trading_day.call_args_list
     )
-    assert repository.delete_range.call_args.kwargs["market"] == "JP"
+    repository.delete_range.assert_not_called()
+    assert repository.replace_rankings_for_date.call_count == 3
+    assert all(
+        call.kwargs["market"] == "JP"
+        for call in repository.replace_rankings_for_date.call_args_list
+    )
+
+
+def test_optimized_backfill_missing_benchmark_preserves_existing_rows():
+    prefetch = replace(_prefetch(), benchmark_prices=None)
+    historical, _, _, repository, _ = _historical(prefetch=prefetch)
+    db = MagicMock()
+
+    result = historical.backfill_rankings_optimized(
+        db,
+        date(2026, 3, 20),
+        date(2026, 3, 20),
+        market="US",
+    )
+
+    assert result["processed"] == 0
+    assert result["deleted"] == 0
+    repository.replace_rankings_for_date.assert_not_called()
+    repository.delete_range.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_optimized_backfill_rolls_back_failed_date_and_continues():
+    historical, _, _, repository, _ = _historical()
+    repository.replace_rankings_for_date.side_effect = [
+        RuntimeError("store failed"),
+        2,
+    ]
+    db = MagicMock()
+
+    result = historical.backfill_rankings_optimized(
+        db,
+        date(2026, 3, 19),
+        date(2026, 3, 20),
+        market="US",
+    )
+
+    assert result["processed"] == 1
+    assert result["errors"] == 1
+    assert result["deleted"] == 2
+    assert repository.replace_rankings_for_date.call_count == 2
+    db.rollback.assert_called_once()
+    db.commit.assert_called_once()
 
 
 def test_optimized_backfill_adapts_legacy_prefetch_and_completes_symbols():

@@ -45,13 +45,7 @@ class GroupRankHistoricalCalculator:
     ) -> Dict:
         normalized_market = (market or "US").upper()
         start_time = datetime.now()
-        deleted = self.repository.delete_range(
-            db,
-            start_date=start_date,
-            end_date=end_date,
-            market=normalized_market,
-        )
-        db.commit()
+        deleted = 0
 
         prefetch = self._load_prefetch(
             db,
@@ -110,13 +104,14 @@ class GroupRankHistoricalCalculator:
                     errors += 1
                     continue
                 try:
-                    self.repository.store_rankings(
+                    replaced = self.repository.replace_rankings_for_date(
                         db,
                         calculation_date=calculation_date,
                         rankings=rankings,
                         market=normalized_market,
                     )
                     db.commit()
+                    deleted += replaced
                     processed += 1
                 except Exception:
                     db.rollback()

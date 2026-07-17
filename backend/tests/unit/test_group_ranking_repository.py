@@ -191,6 +191,52 @@ def test_delete_range_is_market_scoped(db_session):
     )
 
 
+def test_replace_rankings_for_date_rolls_back_as_one_transaction(
+    db_session,
+):
+    calculation_date = date(2026, 3, 20)
+    _seed_rank(
+        db_session,
+        market="US",
+        calculation_date=calculation_date,
+        group="Old",
+    )
+    _seed_rank(
+        db_session,
+        market="JP",
+        calculation_date=calculation_date,
+        group="Japan",
+    )
+    db_session.commit()
+
+    deleted = GroupRankingRepository().replace_rankings_for_date(
+        db_session,
+        calculation_date=calculation_date,
+        rankings=(
+            _ranking(
+                "New",
+                rank=1,
+                calculation_date=calculation_date,
+            ),
+        ),
+        market="US",
+    )
+
+    assert deleted == 1
+    assert db_session.in_transaction()
+    db_session.rollback()
+    rows = (
+        db_session.query(IBDGroupRank)
+        .filter(IBDGroupRank.date == calculation_date)
+        .order_by(IBDGroupRank.market)
+        .all()
+    )
+    assert [(row.market, row.industry_group) for row in rows] == [
+        ("JP", "Japan"),
+        ("US", "Old"),
+    ]
+
+
 def test_current_rank_rows_select_latest_or_explicit_market_date(
     db_session,
 ):
