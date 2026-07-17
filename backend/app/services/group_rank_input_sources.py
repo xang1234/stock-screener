@@ -19,6 +19,12 @@ class GroupRankUniverseSource(Protocol):
         market: str,
     ) -> frozenset[str]: ...
 
+    def symbol_names(
+        self,
+        db: Session,
+        symbols: Sequence[str],
+    ) -> dict[str, str | None]: ...
+
 
 class GroupRankTaxonomySource(Protocol):
     def groups(
@@ -54,6 +60,22 @@ class StockUniverseGroupRankSource:
     ) -> frozenset[str]:
         return frozenset(
             self.service.get_active_symbols(db, market=market)
+        )
+
+    def symbol_names(
+        self,
+        db: Session,
+        symbols: Sequence[str],
+    ) -> dict[str, str | None]:
+        if not symbols:
+            return {}
+        return dict(
+            db.query(
+                StockUniverse.symbol,
+                StockUniverse.name,
+            )
+            .filter(StockUniverse.symbol.in_(symbols))
+            .all()
         )
 
 

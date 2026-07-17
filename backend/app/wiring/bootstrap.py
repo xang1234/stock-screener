@@ -191,7 +191,22 @@ class RuntimeServices:
                         SqlGroupRankMarketCapSource,
                         StockUniverseGroupRankSource,
                     )
+                    from app.services.group_rank_historical_calculator import (
+                        GroupRankHistoricalCalculator,
+                    )
+                    from app.services.group_rank_legacy_adapter import (
+                        LegacyGroupRankPrefetchAdapter,
+                    )
+                    from app.services.group_ranking_calculator import (
+                        GroupRankingCalculator,
+                    )
+                    from app.services.group_ranking_repository import (
+                        GroupRankingRepository,
+                    )
                     from app.services.ibd_group_rank_service import IBDGroupRankService
+                    from app.scanners.criteria.relative_strength import (
+                        RelativeStrengthCalculator,
+                    )
 
                     cache_bundle = self.cache_bundle()
                     input_loader = GroupRankInputLoader(
@@ -203,10 +218,28 @@ class RuntimeServices:
                         taxonomy_source=IBDIndustryTaxonomySource(),
                         market_cap_source=SqlGroupRankMarketCapSource(),
                     )
+                    ranking_calculator = GroupRankingCalculator(
+                        RelativeStrengthCalculator()
+                    )
+                    ranking_repository = GroupRankingRepository()
+                    legacy_adapter = LegacyGroupRankPrefetchAdapter()
+                    historical_calculator = (
+                        GroupRankHistoricalCalculator(
+                            input_loader=input_loader,
+                            ranking_calculator=ranking_calculator,
+                            repository=ranking_repository,
+                            calendar_service=self.market_calendar_service(),
+                            legacy_adapter=legacy_adapter,
+                        )
+                    )
                     self._group_rank_service = IBDGroupRankService(
                         price_cache=cache_bundle.price,
                         benchmark_cache=cache_bundle.benchmark,
                         input_loader=input_loader,
+                        ranking_calculator=ranking_calculator,
+                        ranking_repository=ranking_repository,
+                        historical_calculator=historical_calculator,
+                        legacy_prefetch_adapter=legacy_adapter,
                     )
         return self._group_rank_service
 

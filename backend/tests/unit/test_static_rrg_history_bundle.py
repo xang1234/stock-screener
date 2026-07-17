@@ -14,7 +14,19 @@ from app.models.industry import IBDGroupRank
 from app.services.group_rank_history_backfill_service import (
     GroupRankHistoryBackfillService,
 )
+from app.services.group_rank_historical_calculator import (
+    GroupRankHistoricalCalculator,
+)
 from app.services.group_rank_input_loader import GroupRankInputLoader
+from app.services.group_rank_legacy_adapter import (
+    LegacyGroupRankPrefetchAdapter,
+)
+from app.services.group_ranking_calculator import (
+    GroupRankingCalculator,
+)
+from app.services.group_ranking_repository import (
+    GroupRankingRepository,
+)
 from app.services.ibd_group_rank_service import IBDGroupRankService
 from app.services.market_calendar_service import MarketCalendarService
 from app.services.rrg_service import MIN_TAIL_WEEKS, RRGService
@@ -25,6 +37,9 @@ from app.services.static_rrg_history_bundle import (
 from app.services.static_rrg_history_contract import (
     STATIC_RRG_HISTORY_SCHEMA_VERSION,
     StaticRRGHistoryBundleError,
+)
+from app.scanners.criteria.relative_strength import (
+    RelativeStrengthCalculator,
 )
 
 
@@ -142,10 +157,26 @@ def test_first_static_build_bootstraps_via_production_gap_fill(
         taxonomy_source=_TaxonomySource(),
         market_cap_source=_MarketCapSource(),
     )
+    ranking_calculator = GroupRankingCalculator(
+        RelativeStrengthCalculator()
+    )
+    ranking_repository = GroupRankingRepository()
+    legacy_adapter = LegacyGroupRankPrefetchAdapter()
+    historical_calculator = GroupRankHistoricalCalculator(
+        input_loader=input_loader,
+        ranking_calculator=ranking_calculator,
+        repository=ranking_repository,
+        calendar_service=MarketCalendarService(),
+        legacy_adapter=legacy_adapter,
+    )
     group_rank_service = IBDGroupRankService(
         price_cache=_PriceCache(),
         benchmark_cache=_BenchmarkCache(),
         input_loader=input_loader,
+        ranking_calculator=ranking_calculator,
+        ranking_repository=ranking_repository,
+        historical_calculator=historical_calculator,
+        legacy_prefetch_adapter=legacy_adapter,
     )
 
     class _Taxonomy:

@@ -1,5 +1,6 @@
 from datetime import date, datetime
 import inspect
+from pathlib import Path
 from uuid import uuid4
 from unittest.mock import Mock
 
@@ -16,6 +17,9 @@ from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
 from app.services.group_rank_cache_policy import GroupRankCacheRequirement
+from app.services.group_rank_historical_calculator import (
+    GroupRankHistoricalCalculator,
+)
 from app.services.group_rank_input_loader import GroupRankInputLoader
 from app.services.group_rank_input_sources import (
     IBDIndustryTaxonomySource,
@@ -27,7 +31,20 @@ from app.services.group_rank_models import (
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
 )
+from app.services.group_rank_legacy_adapter import (
+    LegacyGroupRankPrefetchAdapter,
+)
+from app.services.group_ranking_calculator import (
+    GroupRankingCalculator,
+)
+from app.services.group_ranking_repository import (
+    GroupRankingRepository,
+)
 from app.services.stock_universe_service import StockUniverseService
+from app.services.market_calendar_service import MarketCalendarService
+from app.scanners.criteria.relative_strength import (
+    RelativeStrengthCalculator,
+)
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
@@ -73,13 +90,35 @@ def _input_loader(price_cache, benchmark_cache):
     )
 
 
-def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: Mock | None = None):
+def _make_group_rank_service(
+    price_cache: Mock | None = None,
+    benchmark_cache: Mock | None = None,
+    group_constituent_source=None,
+):
     price_cache = price_cache or Mock()
     benchmark_cache = benchmark_cache or Mock()
+    input_loader = _input_loader(price_cache, benchmark_cache)
+    rs_calculator = RelativeStrengthCalculator()
+    ranking_calculator = GroupRankingCalculator(rs_calculator)
+    ranking_repository = GroupRankingRepository()
+    legacy_adapter = LegacyGroupRankPrefetchAdapter()
+    historical_calculator = GroupRankHistoricalCalculator(
+        input_loader=input_loader,
+        ranking_calculator=ranking_calculator,
+        repository=ranking_repository,
+        calendar_service=MarketCalendarService(),
+        legacy_adapter=legacy_adapter,
+    )
     return IBDGroupRankService(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
-        input_loader=_input_loader(price_cache, benchmark_cache),
+        rs_calculator=rs_calculator,
+        group_constituent_source=group_constituent_source,
+        input_loader=input_loader,
+        ranking_calculator=ranking_calculator,
+        ranking_repository=ranking_repository,
+        historical_calculator=historical_calculator,
+        legacy_prefetch_adapter=legacy_adapter,
     )
 
 
@@ -124,7 +163,7 @@ def _prefetch_stats(
     )
 
 
-def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
+def _ported_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
     service = _make_group_rank_service()
 
     class _FakeCalendarService:
@@ -289,12 +328,7 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
 
 
 def test_get_group_history_propagates_constituent_source_failures(monkeypatch):
-    price_cache = Mock()
-    benchmark_cache = Mock()
-    service = IBDGroupRankService(
-        price_cache=price_cache,
-        benchmark_cache=benchmark_cache,
-        input_loader=_input_loader(price_cache, benchmark_cache),
+    service = _make_group_rank_service(
         group_constituent_source=Mock(),
     )
     service.group_constituent_source.get_constituent_items.side_effect = RuntimeError(
@@ -548,6 +582,30 @@ def test_calculate_group_rankings_has_no_diagnostics_output_parameter():
     assert "diagnostics" not in signature.parameters
 
 
+def test_group_rank_service_is_a_compatibility_facade():
+    source = Path(group_rank_module.__file__).read_text()
+    assert "gc.collect" not in source
+    assert "get_market_calendar_service" not in source
+    assert "pg_insert" not in source
+    assert "StockUniverse" not in source
+    assert source.count("\n") < 900
+
+    for method_name in (
+        "calculate_group_rankings",
+        "get_current_rankings",
+        "get_historical_ranks_batch",
+        "get_group_history",
+        "get_rank_movers",
+        "backfill_rankings_optimized",
+        "backfill_rankings",
+        "find_missing_dates",
+        "fill_gaps",
+        "fill_gaps_optimized",
+        "backfill_rankings_chunked",
+    ):
+        assert hasattr(IBDGroupRankService, method_name)
+
+
 def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_session, monkeypatch):
     service = _make_group_rank_service()
 
@@ -572,7 +630,7 @@ def test_calculate_group_rankings_propagates_group_lookup_failures(db_session, m
         service.calculate_group_rankings(db_session, date(2026, 3, 20), market="US")
 
 
-def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
+def _ported_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
     delete_kwargs: dict = {}
@@ -624,7 +682,7 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
     assert group_kwargs["market"] == "HK"
 
 
-def test_backfill_rankings_optimized_uses_market_calendar(db_session, monkeypatch):
+def _ported_backfill_rankings_optimized_uses_market_calendar(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
     calendar_calls: list[tuple[str, date]] = []
@@ -675,7 +733,7 @@ def test_backfill_rankings_optimized_uses_market_calendar(db_session, monkeypatc
     ]
 
 
-def test_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monkeypatch):
+def _ported_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
     symbols = ["AAA", "BBB", "CCC"]
@@ -747,7 +805,7 @@ def test_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monk
     assert stats["processed"] == 7
 
 
-def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatch):
+def _ported_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatch):
     service = _make_group_rank_service()
 
     _add_rank(db_session, "Software", date(2026, 3, 17), 5)
@@ -788,7 +846,7 @@ def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatc
     assert calculate_calls == [date(2026, 3, 17)]
 
 
-def test_backfill_optimized_legacy_prefetch_tuple_falls_back_to_validated_group_symbols(
+def _ported_backfill_optimized_legacy_prefetch_tuple_falls_back_to_validated_group_symbols(
     db_session,
     monkeypatch,
 ):
@@ -841,7 +899,7 @@ def test_backfill_optimized_legacy_prefetch_tuple_falls_back_to_validated_group_
     assert row.num_stocks == 3
 
 
-def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
+def _ported_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
     prefetch_kwargs: dict = {}
@@ -871,7 +929,7 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
     assert group_kwargs["market"] == "HK"
 
 
-def test_fill_gaps_optimized_propagates_policy_and_returns_prefetch_stats(
+def _ported_fill_gaps_optimized_propagates_policy_and_returns_prefetch_stats(
     db_session,
     monkeypatch,
 ):
@@ -914,7 +972,7 @@ def test_fill_gaps_optimized_propagates_policy_and_returns_prefetch_stats(
     assert result["prefetch_stats"]["cache_miss_symbols_sample"] == ["BBB"]
 
 
-def test_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(db_session, monkeypatch):
+def _ported_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
     symbols = ["AAA", "BBB", "CCC"]
@@ -950,7 +1008,7 @@ def test_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(
     assert row.avg_rs_rating == 50.0
 
 
-def test_fill_gaps_optimized_chunks_rs_date_calculation(db_session, monkeypatch):
+def _ported_fill_gaps_optimized_chunks_rs_date_calculation(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
     symbols = ["AAA", "BBB", "CCC"]

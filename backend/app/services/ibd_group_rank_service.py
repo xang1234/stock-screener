@@ -3,7 +3,6 @@ Service for calculating and managing IBD Industry Group Rankings.
 
 Calculates daily rankings based on average RS rating of constituent stocks.
 """
-import gc
 import logging
 import statistics
 from typing import Any, Optional, Dict, List
@@ -12,9 +11,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from ..config import settings
 from ..models.industry import IBDGroupRank
-from ..models.stock_universe import StockUniverse
 from ..domain.providers.price_symbol_support import is_unsupported_yahoo_price_symbol
 from .group_constituent_source import GroupConstituentSource
 from .group_detail_payloads import constituent_stock_payloads_from_scan_items
@@ -26,6 +23,9 @@ from .group_rank_models import (
     GroupRankPrefetchStats,
 )
 from .group_rank_input_loader import GroupRankInputLoader
+from .group_rank_historical_calculator import (
+    GroupRankHistoricalCalculator,
+)
 from .group_rank_legacy_adapter import LegacyGroupRankPrefetchAdapter
 from .group_ranking_calculator import GroupRankingCalculator
 from .group_ranking_repository import GroupRankingRepository
@@ -90,6 +90,7 @@ class IBDGroupRankService:
         input_loader: GroupRankInputLoader,
         ranking_calculator: GroupRankingCalculator | None = None,
         ranking_repository: GroupRankingRepository | None = None,
+        historical_calculator: GroupRankHistoricalCalculator,
         legacy_prefetch_adapter: (
             LegacyGroupRankPrefetchAdapter | None
         ) = None,
@@ -109,6 +110,7 @@ class IBDGroupRankService:
         self.ranking_repository = (
             ranking_repository or GroupRankingRepository()
         )
+        self.historical_calculator = historical_calculator
         self.legacy_prefetch_adapter = (
             legacy_prefetch_adapter
             or LegacyGroupRankPrefetchAdapter()
@@ -450,17 +452,19 @@ class IBDGroupRankService:
             'rank_change_6m': None,
         }
 
-    @staticmethod
-    def _annotate_top_symbol_names(db: Session, rows: List[Dict]) -> None:
-        name_map = IBDGroupRankService._get_symbol_name_map(
+    def _annotate_top_symbol_names(self, db: Session, rows: List[Dict]) -> None:
+        name_map = self._get_symbol_name_map(
             db,
             [row.get("top_symbol") for row in rows],
         )
         for row in rows:
             row["top_symbol_name"] = name_map.get(row.get("top_symbol"))
 
-    @staticmethod
-    def _get_symbol_name_map(db: Session, symbols: List[str | None]) -> Dict[str, str | None]:
+    def _get_symbol_name_map(
+        self,
+        db: Session,
+        symbols: List[str | None],
+    ) -> Dict[str, str | None]:
         normalized_symbols = {
             str(symbol).strip()
             for symbol in symbols
@@ -468,10 +472,9 @@ class IBDGroupRankService:
         }
         if not normalized_symbols:
             return {}
-        return dict(
-            db.query(StockUniverse.symbol, StockUniverse.name)
-            .filter(StockUniverse.symbol.in_(normalized_symbols))
-            .all()
+        return self.input_loader.universe_source.symbol_names(
+            db,
+            sorted(normalized_symbols),
         )
 
     def get_historical_ranks_batch(
@@ -713,149 +716,12 @@ class IBDGroupRankService:
         *,
         market: str = "US",
     ) -> Dict:
-        """
-        Optimized backfill that:
-        1. Uses same universe as bulk scans (stock_universe intersection)
-        2. Deletes existing rankings and recalculates (no skipping)
-        3. Pre-fetches all data once for efficiency
-
-        Args:
-            db: Database session
-            start_date: Start of backfill range
-            end_date: End of backfill range
-
-        Returns:
-            Dict with backfill statistics
-        """
-        normalized_market = (market or "US").upper()
-        logger.info(
-            "Starting optimized backfill for market=%s from %s to %s",
-            normalized_market, start_date, end_date,
-        )
-        start_time = datetime.now()
-
-        # 1. Delete existing rankings in range
-        deleted = self.ranking_repository.delete_range(
+        return self.historical_calculator.backfill_rankings_optimized(
             db,
             start_date=start_date,
             end_date=end_date,
-            market=normalized_market,
+            market=market,
         )
-        db.commit()
-
-        # 2. Pre-fetch ALL data upfront
-        prefetch = self._coerce_prefetch_data(
-            self._prefetch_all_data(db, market=normalized_market)
-        )
-
-        if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
-            logger.error("Cannot proceed without SPY data")
-            return {
-                'start_date': start_date.isoformat(),
-                'end_date': end_date.isoformat(),
-                'deleted': deleted,
-                'total_dates': 0,
-                'processed': 0,
-                'skipped': 0,
-                'errors': 1,
-                'error': 'Failed to fetch SPY benchmark data',
-            }
-
-        all_groups = list(prefetch.symbols_by_group) or list(
-            self.input_loader.taxonomy_source.groups(
-                db,
-                normalized_market,
-            )
-        )
-        prefetch = self.input_loader.complete_legacy_symbols(
-            db,
-            market=normalized_market,
-            group_names=all_groups,
-            prefetch=prefetch,
-        )
-
-        # 3. Generate trading dates using the target market's calendar.
-        from ..wiring.bootstrap import get_market_calendar_service
-
-        calendar_service = get_market_calendar_service()
-        dates_to_process = []
-        current = end_date
-        while current >= start_date:
-            if calendar_service.is_trading_day(normalized_market, current):
-                dates_to_process.append(current)
-            current -= timedelta(days=1)
-
-        logger.info(
-            f"Processing {len(dates_to_process)} trading days with "
-            f"{len(prefetch.prices_by_symbol)} symbols across {len(all_groups)} groups"
-        )
-
-        processed = 0
-        errors = 0
-        chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
-        logger.info(
-            "Processing optimized group-ranking backfill in RS chunks of %d date(s)",
-            chunk_size,
-        )
-
-        # 4. Process each date using cached data
-        for chunk_start in range(0, len(dates_to_process), chunk_size):
-            date_chunk = dates_to_process[chunk_start:chunk_start + chunk_size]
-            rankings_by_date = self.ranking_calculator.calculate_for_dates(
-                prefetch=prefetch,
-                group_names=all_groups,
-                calculation_dates=date_chunk,
-            )
-
-            for calc_date in date_chunk:
-                try:
-                    group_metrics = list(
-                        rankings_by_date.get(calc_date, ())
-                    )
-                    if group_metrics:
-                        # Store
-                        self.ranking_repository.store_rankings(
-                            db,
-                            calculation_date=calc_date,
-                            rankings=group_metrics,
-                            market=normalized_market,
-                        )
-                        db.commit()
-                        processed += 1
-
-                        if processed % 10 == 0:
-                            logger.info(
-                                f"Progress: {processed}/{len(dates_to_process)} dates "
-                                f"({len(group_metrics)} groups for {calc_date})"
-                            )
-                    else:
-                        errors += 1
-                        logger.warning(f"No valid groups for {calc_date}")
-
-                except Exception as e:
-                    db.rollback()
-                    errors += 1
-                    logger.error(f"Error processing {calc_date}: {e}")
-
-            rankings_by_date.clear()
-            gc.collect()
-
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.info(
-            f"Optimized backfill complete: {processed} processed, {errors} errors "
-            f"in {duration:.1f}s"
-        )
-
-        return {
-            'start_date': start_date.isoformat(),
-            'end_date': end_date.isoformat(),
-            'deleted': deleted,
-            'total_dates': len(dates_to_process),
-            'processed': processed,
-            'skipped': 0,  # No skipping in optimized version
-            'errors': errors,
-            'duration_seconds': round(duration, 2),
-        }
 
     def backfill_rankings(
         self,
@@ -865,90 +731,12 @@ class IBDGroupRankService:
         *,
         market: str = "US",
     ) -> Dict:
-        """
-        Backfill historical rankings from existing price data.
-
-        Processes each trading day in the range.
-
-        Args:
-            db: Database session
-            start_date: Start of backfill range
-            end_date: End of backfill range
-
-        Returns:
-            Dict with backfill statistics
-        """
-        normalized_market = (market or "US").upper()
-        logger.info(
-            "Starting backfill for market=%s from %s to %s",
-            normalized_market, start_date, end_date,
+        return self.historical_calculator.backfill_rankings(
+            db,
+            start_date,
+            end_date,
+            market=market,
         )
-
-        # Generate list of dates to process using the target market's calendar.
-        from ..wiring.bootstrap import get_market_calendar_service
-
-        calendar_service = get_market_calendar_service()
-        current_date = end_date
-        dates_to_process = []
-
-        while current_date >= start_date:
-            if calendar_service.is_trading_day(normalized_market, current_date):
-                dates_to_process.append(current_date)
-            current_date -= timedelta(days=1)
-
-        logger.info(f"Processing {len(dates_to_process)} trading days")
-
-        processed = 0
-        skipped = 0
-        errors = 0
-
-        for calc_date in dates_to_process:
-            try:
-                # Check if already calculated
-                existing = db.query(IBDGroupRank).filter(
-                    IBDGroupRank.date == calc_date,
-                    IBDGroupRank.market == normalized_market,
-                ).first()
-
-                if existing:
-                    logger.debug(f"Skipping {calc_date} - already calculated")
-                    skipped += 1
-                    continue
-
-                # Calculate rankings for this date
-                calculation = self.calculate_group_rankings(
-                    db,
-                    calc_date,
-                    market=normalized_market,
-                )
-
-                if calculation.rankings:
-                    processed += 1
-                    logger.info(
-                        "Backfilled %s: %s groups",
-                        calc_date,
-                        len(calculation.rankings),
-                    )
-                else:
-                    errors += 1
-                    logger.warning(f"No results for {calc_date}")
-
-            except Exception as e:
-                errors += 1
-                logger.error(f"Error processing {calc_date}: {e}")
-
-        logger.info(
-            f"Backfill complete: {processed} processed, {skipped} skipped, {errors} errors"
-        )
-
-        return {
-            'start_date': start_date.isoformat(),
-            'end_date': end_date.isoformat(),
-            'total_dates': len(dates_to_process),
-            'processed': processed,
-            'skipped': skipped,
-            'errors': errors,
-        }
 
     def find_missing_dates(
         self,
@@ -958,37 +746,12 @@ class IBDGroupRankService:
         market: str = "US",
         end_date: date | None = None,
     ) -> List[date]:
-        """Find missing trading dates in the ranking data for one market."""
-        from sqlalchemy import func
-
-        from ..wiring.bootstrap import get_market_calendar_service
-
-        normalized_market = (market or "US").upper()
-        calendar_service = get_market_calendar_service()
-        window_end = end_date or calendar_service.market_now(normalized_market).date()
-        start_date = window_end - timedelta(days=lookback_days)
-
-        existing_dates = db.query(
-            func.distinct(IBDGroupRank.date)
-        ).filter(
-            IBDGroupRank.date >= start_date,
-            IBDGroupRank.market == normalized_market,
-        ).all()
-
-        existing_date_set = {d[0] for d in existing_dates}
-
-        # Generate all market trading days in range
-        missing_dates = []
-        current_date = start_date
-
-        while current_date < window_end:  # Exclude the target day; it is calculated separately.
-            if calendar_service.is_trading_day(normalized_market, current_date):
-                if current_date not in existing_date_set:
-                    missing_dates.append(current_date)
-            current_date += timedelta(days=1)
-
-        logger.info(f"Found {len(missing_dates)} missing dates in last {lookback_days} days")
-        return sorted(missing_dates)
+        return self.historical_calculator.find_missing_dates(
+            db,
+            lookback_days,
+            market=market,
+            end_date=end_date,
+        )
 
     def fill_gaps(
         self,
@@ -997,58 +760,11 @@ class IBDGroupRankService:
         *,
         market: str = "US",
     ) -> Dict:
-        """
-        Fill specific missing dates (used by startup gap-fill).
-
-        Args:
-            db: Database session
-            missing_dates: List of dates to calculate rankings for
-
-        Returns:
-            Statistics about the gap-fill operation
-        """
-        normalized_market = (market or "US").upper()
-        logger.info(
-            "Filling %d missing dates for market=%s",
-            len(missing_dates), normalized_market,
+        return self.historical_calculator.fill_gaps(
+            db,
+            missing_dates,
+            market=market,
         )
-
-        stats = {
-            'total_dates': len(missing_dates),
-            'processed': 0,
-            'skipped': 0,
-            'errors': 0,
-        }
-
-        for calc_date in missing_dates:
-            try:
-                calculation = self.calculate_group_rankings(
-                    db,
-                    calc_date,
-                    market=normalized_market,
-                )
-
-                if calculation.rankings:
-                    stats['processed'] += 1
-                    logger.debug(
-                        "Filled gap for %s: %s groups",
-                        calc_date,
-                        len(calculation.rankings),
-                    )
-                else:
-                    stats['errors'] += 1
-                    logger.warning(f"No results for {calc_date}")
-
-            except Exception as e:
-                stats['errors'] += 1
-                logger.error(f"Error filling gap for {calc_date}: {e}")
-
-        logger.info(
-            f"Gap-fill complete: {stats['processed']} processed, "
-            f"{stats['errors']} errors"
-        )
-
-        return stats
 
     def fill_gaps_optimized(
         self,
@@ -1060,126 +776,12 @@ class IBDGroupRankService:
             DerivedDataExecutionPolicy.provider_allowed()
         ),
     ) -> Dict:
-        """
-        Fill specific missing dates using optimized approach.
-
-        This optimized gap-fill:
-        1. Pre-fetches all data once for efficiency
-        2. Uses same universe as bulk scans (intersection of IBD groups and stock_universe)
-        3. Processes all missing dates with cached data
-
-        Args:
-            db: Database session
-            missing_dates: List of dates to calculate rankings for
-
-        Returns:
-            Statistics about the gap-fill operation
-        """
-        if not missing_dates:
-            return {
-                'total_dates': 0,
-                'processed': 0,
-                'skipped': 0,
-                'errors': 0,
-            }
-
-        normalized_market = (market or "US").upper()
-        logger.info(
-            "Filling %d missing dates (optimized) for market=%s",
-            len(missing_dates), normalized_market,
-        )
-        start_time = datetime.now()
-
-        # Pre-fetch ALL data upfront
-        prefetch = self._coerce_prefetch_data(
-            self._prefetch_all_data(
-                db,
-                market=normalized_market,
-                policy=policy,
-            )
-        )
-
-        if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
-            logger.error("Cannot proceed without SPY data")
-            return {
-                'total_dates': len(missing_dates),
-                'processed': 0,
-                'skipped': 0,
-                'errors': len(missing_dates),
-                'error': 'Failed to fetch SPY benchmark data',
-                'prefetch_stats': prefetch.stats.to_dict(),
-            }
-
-        all_groups = list(prefetch.symbols_by_group) or list(
-            self.input_loader.taxonomy_source.groups(
-                db,
-                normalized_market,
-            )
-        )
-        prefetch = self.input_loader.complete_legacy_symbols(
+        return self.historical_calculator.fill_gaps_optimized(
             db,
-            market=normalized_market,
-            group_names=all_groups,
-            prefetch=prefetch,
+            missing_dates,
+            market=market,
+            policy=policy,
         )
-
-        stats = {
-            'total_dates': len(missing_dates),
-            'processed': 0,
-            'skipped': 0,
-            'errors': 0,
-            'prefetch_stats': prefetch.stats.to_dict(),
-        }
-
-        chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
-        logger.info(
-            "Processing group-ranking gap-fill in RS chunks of %d date(s)",
-            chunk_size,
-        )
-        for chunk_start in range(0, len(missing_dates), chunk_size):
-            date_chunk = missing_dates[chunk_start:chunk_start + chunk_size]
-            rankings_by_date = self.ranking_calculator.calculate_for_dates(
-                prefetch=prefetch,
-                group_names=all_groups,
-                calculation_dates=date_chunk,
-            )
-
-            for calc_date in date_chunk:
-                try:
-                    group_metrics = list(
-                        rankings_by_date.get(calc_date, ())
-                    )
-                    if group_metrics:
-                        # Store
-                        self.ranking_repository.store_rankings(
-                            db,
-                            calculation_date=calc_date,
-                            rankings=group_metrics,
-                            market=normalized_market,
-                        )
-                        db.commit()
-                        stats['processed'] += 1
-                        logger.debug(f"Filled gap for {calc_date}: {len(group_metrics)} groups")
-                    else:
-                        stats['errors'] += 1
-                        logger.warning(f"No results for {calc_date}")
-
-                except Exception as e:
-                    db.rollback()
-                    stats['errors'] += 1
-                    logger.error(f"Error filling gap for {calc_date}: {e}")
-
-            rankings_by_date.clear()
-            gc.collect()
-
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.info(
-            f"Optimized gap-fill complete: {stats['processed']} processed, "
-            f"{stats['errors']} errors in {duration:.1f}s"
-        )
-
-        stats['duration_seconds'] = round(duration, 2)
-        return stats
 
     def backfill_rankings_chunked(
         self,
@@ -1190,67 +792,10 @@ class IBDGroupRankService:
         *,
         market: str = "US",
     ) -> Dict:
-        """
-        Backfill rankings in chunks to avoid memory issues.
-
-        Processes the date range in chunks of `chunk_size_days`.
-
-        Args:
-            db: Database session
-            start_date: Start of backfill range
-            end_date: End of backfill range
-            chunk_size_days: Days per processing chunk
-
-        Returns:
-            Aggregate statistics from all chunks
-        """
-        normalized_market = (market or "US").upper()
-        logger.info(
-            "Starting chunked backfill for market=%s from %s to %s",
-            normalized_market, start_date, end_date,
+        return self.historical_calculator.backfill_rankings_chunked(
+            db,
+            start_date,
+            end_date,
+            chunk_size_days,
+            market=market,
         )
-
-        total_stats = {
-            'start_date': start_date.isoformat(),
-            'end_date': end_date.isoformat(),
-            'total_dates': 0,
-            'processed': 0,
-            'skipped': 0,
-            'errors': 0,
-        }
-
-        # Process in reverse chronological order (most recent first)
-        chunk_end = end_date
-
-        while chunk_end >= start_date:
-            chunk_start = max(start_date, chunk_end - timedelta(days=chunk_size_days - 1))
-
-            logger.info(f"Processing chunk: {chunk_start} to {chunk_end}")
-
-            try:
-                chunk_result = self.backfill_rankings(
-                    db,
-                    chunk_start,
-                    chunk_end,
-                    market=normalized_market,
-                )
-
-                # Aggregate stats
-                total_stats['total_dates'] += chunk_result.get('total_dates', 0)
-                total_stats['processed'] += chunk_result.get('processed', 0)
-                total_stats['skipped'] += chunk_result.get('skipped', 0)
-                total_stats['errors'] += chunk_result.get('errors', 0)
-
-            except Exception as e:
-                logger.error(f"Error processing chunk {chunk_start} to {chunk_end}: {e}")
-                total_stats['errors'] += chunk_size_days  # Estimate
-
-            # Move to previous chunk
-            chunk_end = chunk_start - timedelta(days=1)
-
-        logger.info(
-            f"Chunked backfill complete: {total_stats['processed']} processed, "
-            f"{total_stats['skipped']} skipped, {total_stats['errors']} errors"
-        )
-
-        return total_stats
