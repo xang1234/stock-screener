@@ -279,13 +279,29 @@ def test_cn_market_data_service_times_out_listing_fetch():
             time.sleep(5)
             return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
 
-    service = CnMarketDataService(akshare_module=SlowAkshare(), timeout_seconds=1)
+    class UnavailableBaoStock:
+        login_calls = 0
+
+        class LoginResult:
+            error_code = "unavailable"
+
+        @classmethod
+        def login(cls):
+            cls.login_calls += 1
+            return cls.LoginResult()
+
+    service = CnMarketDataService(
+        akshare_module=SlowAkshare(),
+        baostock_module=UnavailableBaoStock(),
+        timeout_seconds=1,
+    )
     started_at = time.monotonic()
 
     with pytest.raises(requests.exceptions.Timeout, match="CN A-share listing fetch timed out"):
         service.listing_rows(as_of=date(2026, 4, 30))
 
     assert time.monotonic() - started_at < 3
+    assert UnavailableBaoStock.login_calls == 1
 
 
 class _FakeBaoLogin:
