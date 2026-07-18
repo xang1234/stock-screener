@@ -203,7 +203,14 @@ def test_price_cache_invalidate_uses_market_scoped_keys():
 def test_price_cache_batch_pipeline_fallback_preserves_market(monkeypatch):
     service = PriceCacheService(redis_client=_FailingPipelineRedis(), session_factory=lambda: None)
     data = pd.DataFrame(
-        {"Close": [100.0]},
+        {
+            "Open": [99.0],
+            "High": [101.0],
+            "Low": [98.0],
+            "Close": [100.0],
+            "Adj Close": [100.0],
+            "Volume": [1_000_000],
+        },
         index=pd.to_datetime(["2026-05-04"]),
     )
     calls = []

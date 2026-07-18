@@ -118,7 +118,7 @@ def count_distribution_days(
     """
     if ohlcv_df is None or len(ohlcv_df) < 2:
         return 0
-    pct = ohlcv_df["Close"].pct_change()
+    pct = ohlcv_df["Close"].pct_change(fill_method=None)
     vol_up = ohlcv_df["Volume"] > ohlcv_df["Volume"].shift(1)
     mask = (pct <= -down_threshold) & vol_up
     return int(mask.tail(lookback).sum())
@@ -143,7 +143,7 @@ def detect_follow_through_day(
     if ohlcv_df is None or len(ohlcv_df) < min_rally_day + 1:
         return False, None
     close = ohlcv_df["Close"]
-    pct = close.pct_change()
+    pct = close.pct_change(fill_method=None)
     vol_up = ohlcv_df["Volume"] > ohlcv_df["Volume"].shift(1)
     strong_up = (pct >= gain_pct) & vol_up
 

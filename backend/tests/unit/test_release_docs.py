@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def _documented_release_tags(content: str) -> set[str]:
+    return set(re.findall(r"APP_IMAGE_TAG=(v\d+\.\d+\.\d+)", content))
 
 
 def test_release_workflow_uses_curated_release_notes() -> None:
@@ -18,7 +23,7 @@ def test_release_workflow_uses_curated_release_notes() -> None:
 def test_readme_documents_current_release_compose_flow() -> None:
     content = (ROOT / "README.md").read_text()
 
-    assert "APP_IMAGE_TAG=v1.2.0" in content
+    assert _documented_release_tags(content) == {"v1.3.0"}
     assert (
         "scripts/docker-compose-enabled-markets.sh --env-file .env.docker "
         "-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull"
@@ -34,9 +39,9 @@ def test_install_docker_uses_current_release_example() -> None:
 
     assert "Python 3.11+" in content
     assert "STOCKSCREEN_PYTHON" in content
-    assert "APP_IMAGE_TAG=v1.2.0" in content
-    assert "Push a git tag like `v1.2.0`" in content
-    assert "**Deploy:** Set `APP_IMAGE_TAG=v1.2.0`" in content
+    assert _documented_release_tags(content) == {"v1.3.0"}
+    assert "Push a git tag like `v1.3.0`" in content
+    assert "**Deploy:** Set `APP_IMAGE_TAG=v1.3.0`" in content
     assert "--env-file .env.docker" in content
     assert "docker compose exec backend curl -f http://localhost:8000/readyz" in content
 

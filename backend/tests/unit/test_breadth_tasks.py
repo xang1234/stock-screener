@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import inspect
 from unittest.mock import MagicMock
 
 import pytest
 from celery.exceptions import Retry, SoftTimeLimitExceeded
+
+from app.services.breadth_coverage import (
+    BreadthCalculationResult,
+    BreadthCoverageReport,
+    BreadthOutcomeReport,
+    BreadthPriceCoverage,
+)
+from app.services.daily_breadth_runner import (
+    DailyBreadthOutcome,
+    IncompleteDailyBreadth,
+)
 
 
 def _patch_serialized_lock(monkeypatch):
@@ -50,26 +62,15 @@ def _patch_calendar_service(
     return fake
 
 
-def test_daily_breadth_refuses_to_publish_when_same_day_warmup_incomplete(monkeypatch):
-    import app.tasks.breadth_tasks as module
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    _patch_serialized_lock(monkeypatch)
-    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 35, 0))
-
-    fake_price_cache = MagicMock()
-    fake_price_cache.get_warmup_metadata.return_value = {
-        "status": "partial",
-        "count": 9500,
-        "total": 10000,
-        "completed_at": datetime.now().isoformat(),
-        "error": None,
-    }
-
-    fake_calculator = MagicMock()
-    fake_calculator.price_cache = fake_price_cache
-    fake_calculator.calculate_daily_breadth.return_value = {
+def _breadth_result(
+    *,
+    scanned: int,
+    skipped: int,
+    misses: int,
+    errors: int = 0,
+) -> BreadthCalculationResult:
+    candidates = scanned + skipped
+    indicators = {
         "stocks_up_4pct": 1,
         "stocks_down_4pct": 0,
         "ratio_5day": 1.0,
@@ -82,19 +83,83 @@ def test_daily_breadth_refuses_to_publish_when_same_day_warmup_incomplete(monkey
         "stocks_down_50pct_month": 0,
         "stocks_up_13pct_34days": 1,
         "stocks_down_13pct_34days": 0,
-        "total_stocks_scanned": 9500,
-        "skipped_stocks": 500,
-        "cache_miss_stocks": 25,
-        "error_stocks": 0,
     }
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:fake_calculator)
+    insufficient = max(skipped - misses - errors, 0)
+    return BreadthCalculationResult(
+        indicators=indicators,
+        coverage=BreadthCoverageReport.from_parts(
+            BreadthPriceCoverage(
+            candidate_stocks=candidates,
+            symbols_with_cached_history=candidates - misses,
+            cache_miss_stocks=misses,
+            cache_miss_symbols_sample=(
+                ("MISS",) if misses else ()
+            ),
+            cache_coverage_ratio=(
+                (candidates - misses) / candidates
+                if candidates
+                else 0.0
+            ),
+            ),
+            BreadthOutcomeReport(
+                scanned=scanned,
+                cache_misses=misses,
+                insufficient=insufficient,
+                errors=errors,
+            ),
+        ),
+    )
+
+
+def _breadth_outcome(
+    *,
+    calculation_date: date = date(2026, 3, 20),
+    scanned: int = 100,
+    skipped: int = 0,
+    misses: int = 0,
+    errors: int = 0,
+) -> DailyBreadthOutcome:
+    calculation = _breadth_result(
+        scanned=scanned,
+        skipped=skipped,
+        misses=misses,
+        errors=errors,
+    )
+    return DailyBreadthOutcome(
+        calculation_date=calculation_date,
+        indicators=calculation.indicators,
+        coverage=calculation.coverage,
+        duration_seconds=1.25,
+    )
+
+
+def test_daily_breadth_refuses_to_publish_when_same_day_warmup_incomplete(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 35, 0))
+
+    fake_calculator = MagicMock()
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw: fake_calculator)
+    coverage = _breadth_outcome(
+        scanned=9500,
+        skipped=500,
+        misses=25,
+    ).coverage
+    runner = MagicMock(side_effect=IncompleteDailyBreadth(
+        "Cache warmup not complete for same-day breadth run",
+        coverage,
+    ))
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
 
     result = module.calculate_daily_breadth.run()
 
     assert "error" in result
     assert "warmup not complete" in result["error"].lower()
-    fake_db.add.assert_not_called()
-    fake_db.commit.assert_not_called()
+    request = runner.call_args.args[1]
+    assert request.policy.requires_warmup_metadata is True
 
 
 def test_generate_trading_dates_skips_holidays_and_weekends(monkeypatch):
@@ -129,39 +194,144 @@ def test_manual_breadth_can_force_cache_only_for_static_exports(monkeypatch):
     publish_breadth = MagicMock()
     monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", publish_breadth)
 
-    fake_price_cache = MagicMock()
     fake_calculator = MagicMock()
-    fake_calculator.price_cache = fake_price_cache
-    fake_calculator.calculate_daily_breadth.return_value = {
-        "stocks_up_4pct": 1,
-        "stocks_down_4pct": 0,
-        "ratio_5day": 1.0,
-        "ratio_10day": 1.0,
-        "stocks_up_25pct_quarter": 1,
-        "stocks_down_25pct_quarter": 0,
-        "stocks_up_25pct_month": 1,
-        "stocks_down_25pct_month": 0,
-        "stocks_up_50pct_month": 0,
-        "stocks_down_50pct_month": 0,
-        "stocks_up_13pct_34days": 1,
-        "stocks_down_13pct_34days": 0,
-        "total_stocks_scanned": 10000,
-        "skipped_stocks": 0,
-        "cache_miss_stocks": 0,
-        "error_stocks": 0,
-    }
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:fake_calculator)
+    runner = MagicMock(return_value=_breadth_outcome(
+        calculation_date=date(2026, 4, 2),
+    ))
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
 
     result = module.calculate_daily_breadth.run("2026-04-02", force_cache_only=True)
 
     assert result["date"] == "2026-04-02"
     assert result["indicators"]["stocks_up_4pct"] == 1
     assert result["cache_only"] is True
-    fake_calculator.calculate_daily_breadth.assert_called_once_with(
-        calculation_date=date(2026, 4, 2),
-        cache_only=True,
+    request = runner.call_args.args[1]
+    assert request.calculation_date == date(2026, 4, 2)
+    assert request.policy.mode.value == "strict_cache_only"
+    assert runner.call_args.args[2].publish_snapshot is publish_breadth
+
+
+def test_guarded_historical_breadth_tolerates_cache_misses(monkeypatch):
+    import app.services.ui_snapshot_service as snapshot_module
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    fake_calculator = MagicMock()
+    runner = MagicMock(return_value=_breadth_outcome(
+        calculation_date=date(2026, 3, 19),
+        scanned=60,
+        skipped=40,
+        misses=35,
+    ))
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *args, **kwargs: fake_calculator)
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
+    monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", lambda _market: None)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 35, 0))
+
+    result = module.calculate_daily_breadth.run(
+        "2026-03-19",
+        refresh_guarded_cache_only=True,
     )
-    publish_breadth.assert_called_once_with("US")
+
+    assert "error" not in result
+    assert result["cache_only"] is True
+    assert result["cache_policy"] == "refresh_guarded"
+    assert result["cache_diagnostics"]["cache_miss_stocks"] == 35
+    request = runner.call_args.args[1]
+    assert request.calculation_date == date(2026, 3, 19)
+    assert request.policy.mode.value == "refresh_guarded"
+
+
+def test_guarded_historical_breadth_fails_when_no_stock_is_usable(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    fake_calculator = MagicMock()
+    coverage = _breadth_outcome(
+        scanned=0,
+        skipped=100,
+        misses=100,
+    ).coverage
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *args, **kwargs: fake_calculator)
+    monkeypatch.setattr(
+        module,
+        "run_daily_breadth",
+        MagicMock(side_effect=IncompleteDailyBreadth(
+            "Refresh-guarded breadth run processed no usable stocks",
+            coverage,
+        )),
+    )
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 35, 0))
+
+    result = module.calculate_daily_breadth.run(
+        "2026-03-19",
+        refresh_guarded_cache_only=True,
+    )
+
+    assert result["cache_policy"] == "refresh_guarded"
+    assert "processed no usable stocks" in result["error"].lower()
+
+
+def test_force_cache_only_wins_over_guarded_tolerance(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    fake_calculator = MagicMock()
+    coverage = _breadth_outcome(
+        scanned=60,
+        skipped=40,
+        misses=35,
+    ).coverage
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *args, **kwargs: fake_calculator)
+    runner = MagicMock(side_effect=IncompleteDailyBreadth(
+        "Cache-only breadth run exceeds miss tolerance",
+        coverage,
+    ))
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 35, 0))
+
+    result = module.calculate_daily_breadth.run(
+        "2026-03-19",
+        force_cache_only=True,
+        refresh_guarded_cache_only=True,
+    )
+
+    assert "exceeds miss tolerance" in result["error"].lower()
+    assert result.get("cache_policy") != "refresh_guarded"
+    assert runner.call_args.args[1].policy.mode.value == "strict_cache_only"
+
+
+def test_manual_historical_breadth_keeps_fetch_capable_behavior(monkeypatch):
+    import app.services.ui_snapshot_service as snapshot_module
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    fake_calculator = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *args, **kwargs: fake_calculator)
+    monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", lambda _market: None)
+    runner = MagicMock(return_value=_breadth_outcome(
+        calculation_date=date(2026, 4, 2),
+    ))
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 4, 3, 0, 30, 0))
+
+    result = module.calculate_daily_breadth.run("2026-04-02")
+
+    assert result["cache_only"] is False
+    assert result.get("cache_policy") is None
+    request = runner.call_args.args[1]
+    assert request.calculation_date == date(2026, 4, 2)
+    assert request.policy.mode.value == "auto"
+    assert request.policy.cache_only is False
 
 
 def test_daily_breadth_persists_non_us_record_in_market_partition(monkeypatch):
@@ -169,7 +339,6 @@ def test_daily_breadth_persists_non_us_record_in_market_partition(monkeypatch):
     import app.services.ui_snapshot_service as snapshot_module
 
     fake_db = MagicMock()
-    fake_db.query.return_value.filter.return_value.first.return_value = None
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
     _patch_calendar_service(monkeypatch, datetime(2026, 4, 3, 0, 30, 0))
@@ -177,26 +346,11 @@ def test_daily_breadth_persists_non_us_record_in_market_partition(monkeypatch):
     monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", publish_breadth)
 
     fake_calculator = MagicMock()
-    fake_calculator.price_cache = MagicMock()
-    fake_calculator.calculate_daily_breadth.return_value = {
-        "stocks_up_4pct": 1,
-        "stocks_down_4pct": 0,
-        "ratio_5day": 1.0,
-        "ratio_10day": 1.0,
-        "stocks_up_25pct_quarter": 1,
-        "stocks_down_25pct_quarter": 0,
-        "stocks_up_25pct_month": 1,
-        "stocks_down_25pct_month": 0,
-        "stocks_up_50pct_month": 0,
-        "stocks_down_50pct_month": 0,
-        "stocks_up_13pct_34days": 1,
-        "stocks_down_13pct_34days": 0,
-        "total_stocks_scanned": 100,
-        "skipped_stocks": 0,
-        "cache_miss_stocks": 0,
-        "error_stocks": 0,
-    }
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw: fake_calculator)
+    runner = MagicMock(return_value=_breadth_outcome(
+        calculation_date=date(2026, 4, 2),
+    ))
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
 
     result = module.calculate_daily_breadth.run(
         "2026-04-02",
@@ -205,13 +359,10 @@ def test_daily_breadth_persists_non_us_record_in_market_partition(monkeypatch):
     )
 
     assert result["date"] == "2026-04-02"
-    filter_args = fake_db.query.return_value.filter.call_args.args
-    assert len(filter_args) == 2
-    assert filter_args[1].right.value == "HK"
-    saved_record = fake_db.add.call_args.args[0]
-    assert saved_record.market == "HK"
-    fake_db.commit.assert_called_once()
-    publish_breadth.assert_called_once_with("HK")
+    request = runner.call_args.args[1]
+    assert request.market == "HK"
+    assert runner.call_args.args[2].calculator is fake_calculator
+    assert runner.call_args.args[2].publish_snapshot is publish_breadth
 
 
 def test_backfill_breadth_uses_service_range_with_trading_dates(monkeypatch):
@@ -257,8 +408,14 @@ def test_breadth_gapfill_retries_transient_outer_failures(monkeypatch):
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-    monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=ConnectionError("network down")))
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:MagicMock())
+    fake_calculator = MagicMock()
+    fake_calculator.find_missing_dates.return_value = []
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw: fake_calculator)
+    monkeypatch.setattr(
+        module,
+        "run_daily_breadth",
+        MagicMock(side_effect=ConnectionError("network down")),
+    )
 
     retry_calls = []
 
@@ -287,8 +444,14 @@ def test_breadth_gapfill_retry_survives_activity_publish_failure(monkeypatch):
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-    monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=ConnectionError("network down")))
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:MagicMock())
+    fake_calculator = MagicMock()
+    fake_calculator.find_missing_dates.return_value = []
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw: fake_calculator)
+    monkeypatch.setattr(
+        module,
+        "run_daily_breadth",
+        MagicMock(side_effect=ConnectionError("network down")),
+    )
     monkeypatch.setattr(
         module,
         "mark_market_activity_failed",
@@ -319,8 +482,14 @@ def test_breadth_gapfill_reraises_soft_time_limit(monkeypatch):
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
-    monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=SoftTimeLimitExceeded()))
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:MagicMock())
+    fake_calculator = MagicMock()
+    fake_calculator.find_missing_dates.return_value = []
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw: fake_calculator)
+    monkeypatch.setattr(
+        module,
+        "run_daily_breadth",
+        MagicMock(side_effect=SoftTimeLimitExceeded()),
+    )
 
     with pytest.raises(SoftTimeLimitExceeded):
         module.calculate_daily_breadth_with_gapfill.run()
@@ -339,12 +508,8 @@ def test_breadth_gapfill_publishes_market_activity(monkeypatch):
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
     monkeypatch.setattr(module, "BreadthCalculatorService", lambda *a, **kw:fake_calculator)
-    daily_calls = []
-    monkeypatch.setattr(
-        module,
-        "calculate_daily_breadth",
-        lambda **kwargs: daily_calls.append(kwargs) or {"date": "2026-03-20"},
-    )
+    runner = MagicMock(return_value=_breadth_outcome())
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
     _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     started = []
@@ -355,7 +520,10 @@ def test_breadth_gapfill_publishes_market_activity(monkeypatch):
     result = module.calculate_daily_breadth_with_gapfill.run(market="US")
 
     assert result["today"]["date"] == "2026-03-20"
-    assert daily_calls == [{"market": "US", "calculation_date": "2026-03-20"}]
+    request = runner.call_args.args[1]
+    assert request.market == "US"
+    assert request.calculation_date == date(2026, 3, 20)
+    assert request.policy.mode.value == "auto"
     assert started[0]["stage_key"] == "breadth"
     assert started[0]["lifecycle"] == "daily_refresh"
     assert completed[0]["stage_key"] == "breadth"
@@ -380,11 +548,13 @@ def test_breadth_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypa
 
     captured = []
 
-    def fake_inner(calculation_date=None, market=None):
-        captured.append((calculation_date, market))
-        return {"date": calculation_date, "market": market}
+    def fake_runner(db, request, dependencies):
+        captured.append((db, request, dependencies))
+        return _breadth_outcome(
+            calculation_date=request.calculation_date,
+        )
 
-    monkeypatch.setattr(module, "_calculate_daily_breadth_in_process", fake_inner)
+    monkeypatch.setattr(module, "run_daily_breadth", fake_runner)
 
     result = module.calculate_daily_breadth_with_gapfill.run(
         market="HK",
@@ -392,11 +562,62 @@ def test_breadth_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypa
     )
 
     assert result["today"]["date"] == "2026-03-16"
-    assert captured == [("2026-03-16", "HK")]
+    assert captured[0][0] is fake_db
+    assert captured[0][1].calculation_date == date(2026, 3, 16)
+    assert captured[0][1].market == "HK"
+    assert captured[0][1].policy.mode.value == "auto"
     fake_calculator.find_missing_dates.assert_called_once_with(
         lookback_days=30,
         end_date=date(2026, 3, 16),
     )
+
+
+def test_guarded_breadth_wrapper_propagates_cache_only_to_gapfill_and_target(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    fake_calculator = MagicMock()
+    fake_calculator.find_missing_dates.return_value = [date(2026, 3, 18)]
+    fake_calculator.fill_gaps.return_value = {
+        "total_dates": 1,
+        "processed": 0,
+        "errors": 1,
+        "error_dates": ["2026-03-18"],
+        "cache_miss_stocks": 4,
+        "cache_miss_symbols_sample": ["MISS"],
+    }
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda *args, **kwargs: fake_calculator)
+    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", True)
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _market: True,
+    )
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    target_call = MagicMock(return_value=_breadth_outcome(
+        calculation_date=date(2026, 3, 19),
+    ))
+    monkeypatch.setattr(module, "run_daily_breadth", target_call)
+
+    result = module.calculate_daily_breadth_with_gapfill.run(
+        market="US",
+        calculation_date="2026-03-19",
+        execution_policy="refresh_guarded",
+    )
+
+    fill_kwargs = fake_calculator.fill_gaps.call_args.kwargs
+    assert fill_kwargs["policy"].mode.value == "refresh_guarded"
+    assert fill_kwargs["policy"] is fill_kwargs["policy"].for_gap_fill()
+    target_request = target_call.call_args.args[1]
+    assert target_request.market == "US"
+    assert target_request.calculation_date == date(2026, 3, 19)
+    assert target_request.policy.mode.value == "refresh_guarded"
+    assert result["cache_only"] is True
+    assert result["cache_policy"] == "refresh_guarded"
+    assert "error" not in result
+    assert result["gap_fill"]["errors"] == 1
+    assert result["gap_fill"]["cache_miss_stocks"] == 4
 
 
 def test_breadth_gapfill_runs_for_non_us_market(monkeypatch):
@@ -425,11 +646,8 @@ def test_breadth_gapfill_runs_for_non_us_market(monkeypatch):
             self.fill_gaps = MagicMock(return_value={"total_dates": 0, "processed": 0, "errors": 0})
 
     monkeypatch.setattr(module, "BreadthCalculatorService", _CapturingCalculator)
-    monkeypatch.setattr(
-        module,
-        "_calculate_daily_breadth_in_process",
-        lambda market=None: {"date": "2026-03-20", "market": market},
-    )
+    runner = MagicMock(return_value=_breadth_outcome())
+    monkeypatch.setattr(module, "run_daily_breadth", runner)
 
     result = module.calculate_daily_breadth_with_gapfill.run(market="HK")
 
@@ -437,33 +655,14 @@ def test_breadth_gapfill_runs_for_non_us_market(monkeypatch):
     assert result.get("status") != "skipped"
     # The calculator was constructed with market='HK' so it queries the right universe
     assert captured_init_kwargs.get("market") == "HK"
+    assert runner.call_args.args[1].market == "HK"
 
 
-def test_breadth_orchestrator_bypasses_lease_for_inner_daily_call(monkeypatch):
-    """Nested daily breadth runs must not re-acquire the lease held by gap-fill."""
+def test_breadth_tasks_use_ordinary_runner_without_task_introspection():
     import app.tasks.breadth_tasks as module
-    import app.tasks.workload_coordination as wc
 
-    seen_disabled_state: list[bool] = []
-
-    real_task = MagicMock()
-    real_task.__module__ = "app.tasks.breadth_tasks"
-    real_task.request = MagicMock()
-
-    def fake_run(market=None):
-        seen_disabled_state.append(wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get())
-        return {"date": "2026-03-20", "market": market}
-
-    real_task.run = fake_run
-    monkeypatch.setattr(module, "calculate_daily_breadth", real_task)
-
-    assert wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get() is False
-    result = module._calculate_daily_breadth_in_process(market="US")
-
-    assert result == {"date": "2026-03-20", "market": "US"}
-    assert seen_disabled_state == [True], (
-        "The lease bypass ContextVar must be set to True while the inner task runs"
-    )
-    assert wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get() is False, (
-        "The bypass must be reset on context exit"
-    )
+    source = inspect.getsource(module)
+    assert "_calculate_daily_breadth_in_process" not in source
+    assert "disable_serialized_market_workload" not in source
+    assert "unittest.mock" not in source
+    assert ".run(**kwargs)" not in source

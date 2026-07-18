@@ -51,7 +51,8 @@ def test_iter_price_refresh_batches_returns_batch_outcomes_without_side_effect_c
 
     fetch_calls = []
 
-    def fetch_batch(symbols, *, period, market):
+    def fetch_batch(symbols, *, period, market, progress_callback=None):
+        del progress_callback
         fetch_calls.append((tuple(symbols), period, market))
         return {
             symbol: {
@@ -103,8 +104,8 @@ def test_iter_price_refresh_batches_marks_unreturned_symbols_failed():
     )
     from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
 
-    def fetch_batch(symbols, *, period, market):
-        del symbols, period, market
+    def fetch_batch(symbols, *, period, market, progress_callback=None):
+        del symbols, period, market, progress_callback
         return {
             "A": {
                 "has_error": False,
@@ -140,7 +141,8 @@ def test_iter_price_refresh_batches_can_delegate_provider_batching():
 
     fetch_calls = []
 
-    def fetch_batch(symbols, *, period, market):
+    def fetch_batch(symbols, *, period, market, progress_callback=None):
+        del progress_callback
         fetch_calls.append((tuple(symbols), period, market))
         return {
             symbol: {
@@ -173,8 +175,8 @@ def test_iter_price_refresh_batches_carries_failure_kinds():
     )
     from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
 
-    def fetch_batch(symbols, *, period, market):
-        del symbols, period, market
+    def fetch_batch(symbols, *, period, market, progress_callback=None):
+        del symbols, period, market, progress_callback
         return {
             "0143.T": {
                 "has_error": True,

@@ -20,6 +20,7 @@ from typing import Iterable, Optional, Protocol
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
+from app.domain.universe import UniverseType
 from app.domain.scanning.custom_criteria_compiler import (
     CompiledCustomCriteria,
     compile_custom_criteria,
@@ -36,7 +37,6 @@ from app.domain.scanning.models import (
     ScanFreshnessPolicy,
     ScanWarningCode,
 )
-from app.schemas.universe import UniverseType
 from app.domain.scanning.ports import TaskDispatcher
 
 logger = logging.getLogger(__name__)

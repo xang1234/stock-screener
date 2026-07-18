@@ -17,6 +17,7 @@ def test_us_bootstrap_plan_includes_us_only_industry_group_seed() -> None:
         "price_warmup",
         "fundamentals",
         "breadth",
+        "exposure",
         "groups",
         "snapshot",
     ]
@@ -35,6 +36,7 @@ def test_non_us_bootstrap_plan_uses_official_universe_without_industry_seed() ->
         BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP,
         BootstrapOperation.REFRESH_ALL_FUNDAMENTALS,
         BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL,
+        BootstrapOperation.CALCULATE_MARKET_EXPOSURE,
         BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL,
         BootstrapOperation.BUILD_DAILY_SNAPSHOT,
     ]

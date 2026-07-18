@@ -7,6 +7,18 @@ This test demonstrates Phase 3 cache warming:
 2. Run a scan with pre-warmed cache
 3. Compare with cold cache performance
 """
+import os
+
+import pytest
+
+pytestmark = pytest.mark.live_service
+
+if os.getenv("RUN_LIVE_SERVICE_TESTS") != "1":
+    pytest.skip(
+        "requires RUN_LIVE_SERVICE_TESTS=1 and a running backend",
+        allow_module_level=True,
+    )
+
 import time
 import requests
 

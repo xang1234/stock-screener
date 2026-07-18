@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from app.domain.common.uow import UnitOfWork
+from app.domain.common.normalization import normalize_string_list
 from app.domain.scanning.filter_expression_evaluator import (
     annotate_matched_groups,
     require_passing_ratings,
@@ -22,8 +23,6 @@ from app.domain.scanning.filter_expression_evaluator import (
 from app.domain.common.query import SortSpec
 from app.domain.scanning.filter_expression_model import FilterExpression
 from app.domain.scanning.models import ExportFormat, ScanResultItemDomain
-from app.infra.serialization import normalize_string_list
-
 from ._resolve import resolve_scan
 
 logger = logging.getLogger(__name__)

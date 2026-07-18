@@ -14,6 +14,19 @@ from app.models.industry import IBDGroupRank
 from app.services.group_rank_history_backfill_service import (
     GroupRankHistoryBackfillService,
 )
+from app.services.group_rank_historical_calculator import (
+    GroupRankHistoricalCalculator,
+)
+from app.services.group_rank_input_loader import GroupRankInputLoader
+from app.services.group_rank_legacy_adapter import (
+    LegacyGroupRankPrefetchAdapter,
+)
+from app.services.group_ranking_calculator import (
+    GroupRankingCalculator,
+)
+from app.services.group_ranking_repository import (
+    GroupRankingRepository,
+)
 from app.services.ibd_group_rank_service import IBDGroupRankService
 from app.services.market_calendar_service import MarketCalendarService
 from app.services.rrg_service import MIN_TAIL_WEEKS, RRGService
@@ -24,6 +37,9 @@ from app.services.static_rrg_history_bundle import (
 from app.services.static_rrg_history_contract import (
     STATIC_RRG_HISTORY_SCHEMA_VERSION,
     StaticRRGHistoryBundleError,
+)
+from app.scanners.criteria.relative_strength import (
+    RelativeStrengthCalculator,
 )
 
 
@@ -111,34 +127,56 @@ def test_first_static_build_bootstraps_via_production_gap_fill(
             assert period == "2y"
             return {symbol: prices_by_symbol[symbol] for symbol in requested_symbols}
 
-    class _Universe:
+    class _UniverseSource:
         @staticmethod
-        def get_active_symbols(_db, *, market):
+        def active_symbols(_db, market):
             assert market == "HK"
-            return symbols
+            return frozenset(symbols)
 
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: _Universe(),
+    class _TaxonomySource:
+        @staticmethod
+        def groups(_db, market):
+            return tuple(groups) if market == "HK" else ()
+
+        @staticmethod
+        def symbols_for_group(_db, group, market):
+            return tuple(groups[group]) if market == "HK" else ()
+
+    class _MarketCapSource:
+        @staticmethod
+        def market_caps(_db, requested_symbols):
+            return {
+                symbol: 1_000_000_000
+                for symbol in requested_symbols
+            }
+
+    input_loader = GroupRankInputLoader(
+        price_cache=_PriceCache(),
+        benchmark_cache=_BenchmarkCache(),
+        universe_source=_UniverseSource(),
+        taxonomy_source=_TaxonomySource(),
+        market_cap_source=_MarketCapSource(),
     )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda _db, *, market: list(groups) if market == "HK" else [],
+    ranking_calculator = GroupRankingCalculator(
+        RelativeStrengthCalculator()
     )
-    monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda _db, group, *, market: groups[group] if market == "HK" else [],
+    ranking_repository = GroupRankingRepository()
+    legacy_adapter = LegacyGroupRankPrefetchAdapter()
+    historical_calculator = GroupRankHistoricalCalculator(
+        input_loader=input_loader,
+        ranking_calculator=ranking_calculator,
+        repository=ranking_repository,
+        calendar_service=MarketCalendarService(),
+        legacy_adapter=legacy_adapter,
     )
     group_rank_service = IBDGroupRankService(
         price_cache=_PriceCache(),
         benchmark_cache=_BenchmarkCache(),
-    )
-    monkeypatch.setattr(
-        group_rank_service,
-        "_get_market_caps_for_symbols",
-        lambda _db, requested_symbols: {
-            symbol: 1_000_000_000 for symbol in requested_symbols
-        },
+        input_loader=input_loader,
+        ranking_calculator=ranking_calculator,
+        ranking_repository=ranking_repository,
+        historical_calculator=historical_calculator,
+        legacy_prefetch_adapter=legacy_adapter,
     )
 
     class _Taxonomy:

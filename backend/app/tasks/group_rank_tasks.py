@@ -1,17 +1,8 @@
-"""
-Celery tasks for IBD Industry Group ranking calculations.
-
-Provides background tasks for:
-- Daily group ranking calculation after market close
-- Historical backfill of ranking data
-
-Group ranking tasks mutate market-derived data and therefore use the
-market workload lease to avoid same-market overlap with scans.
-"""
+"""Scheduled IBD group-ranking tasks serialized by market workload."""
 from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import time
 
 from celery.exceptions import Retry, SoftTimeLimitExceeded
@@ -24,8 +15,16 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..services.group_rank_cache_policy import GroupRankCacheRequirement
-from ..services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
+from ..services.daily_group_rank_runner import (
+    DailyGroupRankDependencies,
+    DailyGroupRankRequest,
+    GroupRankWarmupIncomplete,
+    NoGroupRankingsCalculated,
+    run_daily_group_rankings,
+)
+from ..services.derived_data_execution_policy import (
+    resolve_derived_data_execution_policy,
+)
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
@@ -54,10 +53,6 @@ class GroupRankReasonCode:
 
 _ALLOW_SAME_DAY_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
     "allow_same_day_group_rank_warmup_bypass",
-    default=False,
-)
-_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS: ContextVar[bool] = ContextVar(
-    "propagate_in_process_group_rank_transient_errors",
     default=False,
 )
 
@@ -100,14 +95,88 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
         )
 
 
-def _should_repair_current_us_metadata(
-    *,
-    calc_date: date,
-    today_et: date,
-    activity_lifecycle: str,
-) -> bool:
-    """Only repair live US surfaces for same-day or bootstrap ranking runs."""
-    return activity_lifecycle == "bootstrap" or calc_date == today_et
+def _repair_current_us_group_metadata(calculation_date: date):
+    from ..interfaces.tasks.feature_store_tasks import (
+        _repair_current_us_group_metadata as repair,
+    )
+
+    return repair(ranking_date=calculation_date)
+
+
+def _daily_group_rank_dependencies(
+    service,
+) -> DailyGroupRankDependencies:
+    from ..services.group_rankings_cache import bump_group_rankings_epoch
+    from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+
+    return DailyGroupRankDependencies(
+        service=service,
+        bump_epoch=bump_group_rankings_epoch,
+        publish_snapshot=safe_publish_groups_bootstrap,
+        repair_current_us_metadata=_repair_current_us_group_metadata,
+    )
+
+
+def _run_daily_group_rankings_response(
+    db,
+    request: DailyGroupRankRequest,
+    dependencies: DailyGroupRankDependencies,
+) -> dict:
+    policy = request.policy
+    try:
+        outcome = run_daily_group_rankings(
+            db,
+            request,
+            dependencies,
+        )
+    except GroupRankWarmupIncomplete as exc:
+        result = {
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.WARMUP_INCOMPLETE,
+            "date": request.calculation_date.isoformat(),
+            "timestamp": datetime.now().isoformat(),
+            "cache_only": True,
+        }
+        return policy.annotate_response(result)
+    except IncompleteGroupRankingCacheError as exc:
+        result = {
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.WARMUP_INCOMPLETE,
+            "date": request.calculation_date.isoformat(),
+            "timestamp": datetime.now().isoformat(),
+            "cache_only": True,
+            "prefetch_stats": exc.stats.to_dict(),
+        }
+        return policy.annotate_response(result)
+    except MissingIBDIndustryMappingsError as exc:
+        result = {
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.MISSING_IBD_MAPPINGS,
+            "date": request.calculation_date.isoformat(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        return policy.annotate_response(
+            result,
+            include_cache_only=True,
+        )
+    except NoGroupRankingsCalculated as exc:
+        result = {
+            "date": request.calculation_date.isoformat(),
+            "groups_ranked": 0,
+            "warning": "No groups could be ranked",
+            "error": str(exc),
+            "reason_code": GroupRankReasonCode.NO_GROUPS_RANKED,
+            "calculation_duration_seconds": round(
+                exc.duration_seconds,
+                2,
+            ),
+            "timestamp": datetime.now().isoformat(),
+        }
+        policy.annotate_response(result, include_cache_only=True)
+        if policy.response_cache_policy is not None:
+            result["prefetch_stats"] = exc.prefetch_stats.to_dict()
+        return result
+    return outcome.to_task_result(policy)
 
 
 @celery_app.task(
@@ -121,8 +190,10 @@ def calculate_daily_group_rankings(
     self,
     calculation_date: str | None = None,
     force_cache_only: bool = False,
+    refresh_guarded_cache_only: bool = False,
     market: str | None = None,
     activity_lifecycle: str | None = None,
+    execution_policy: str | None = None,
 ):
     """
     Calculate and store daily IBD industry group rankings.
@@ -184,7 +255,7 @@ def calculate_daily_group_rankings(
     logger.info("=" * 60)
 
     db = SessionLocal()
-    start_time = time.time()
+    policy = None
 
     try:
         mark_market_activity_started(
@@ -196,67 +267,31 @@ def calculate_daily_group_rankings(
             task_id=getattr(getattr(self, "request", None), "id", None),
             message="Calculating group rankings",
         )
-        # Initialize service
         service = get_group_rank_service()
-        same_day_cache_only = force_cache_only or calc_date == today_local
-        cache_requirement = (
-            GroupRankCacheRequirement.strict()
-            if same_day_cache_only
-            else GroupRankCacheRequirement.disabled()
+        policy = resolve_derived_data_execution_policy(
+            execution_policy=execution_policy,
+            force_cache_only=force_cache_only,
+            refresh_guarded_cache_only=refresh_guarded_cache_only,
+            target_date=calc_date,
+            current_date=today_local,
+            allow_same_day_warmup_bypass=(
+                _ALLOW_SAME_DAY_WARMUP_BYPASS.get()
+            ),
         )
-
-        if same_day_cache_only:
-            if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
-                logger.info(
-                    "Bypassing same-day group ranking warmup metadata gate for in-process static export"
-                )
-            else:
-                warmup_decision = evaluate_same_day_group_rank_warmup(
-                    service.price_cache,
-                    market=market,
-                )
-                cache_requirement = warmup_decision.cache_requirement
-                if warmup_decision.error:
-                    logger.error("✗ Refusing to publish daily group rankings: %s", warmup_decision.error)
-                    logger.info("=" * 60)
-                    _mark_market_activity_failed_safely(
-                        db,
-                        market=effective_market,
-                        stage_key="groups",
-                        lifecycle=activity_lifecycle,
-                        task_name=getattr(self, "name", "calculate_daily_group_rankings"),
-                        task_id=getattr(getattr(self, "request", None), "id", None),
-                        message=warmup_decision.error,
-                    )
-                    return {
-                        'error': warmup_decision.error,
-                        'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
-                        'date': calc_date.strftime('%Y-%m-%d'),
-                        'timestamp': datetime.now().isoformat(),
-                        'cache_only': True,
-                    }
-
-        # Calculate rankings
-        logger.info(f"Starting group ranking calculation for {calc_date}...")
-        ranking_kwargs = {
-            "market": effective_market,
-            "cache_only": same_day_cache_only,
-            "cache_requirement": cache_requirement,
-        }
-        results = service.calculate_group_rankings(
+        request = DailyGroupRankRequest(
+            calculation_date=calc_date,
+            current_date=today_local,
+            market=effective_market,
+            activity_lifecycle=activity_lifecycle,
+            policy=policy,
+        )
+        task_result = _run_daily_group_rankings_response(
             db,
-            calc_date,
-            **ranking_kwargs,
+            request,
+            _daily_group_rank_dependencies(service),
         )
-
-        # Calculate duration
-        duration = time.time() - start_time
-
-        if not results:
-            no_groups_message = (
-                "No groups could be ranked (insufficient price data or all groups below 3-stock threshold)"
-            )
-            logger.warning("No groups ranked for %s", calc_date)
+        if task_result.get("error"):
+            db.rollback()
             _mark_market_activity_failed_safely(
                 db,
                 market=effective_market,
@@ -264,51 +299,11 @@ def calculate_daily_group_rankings(
                 lifecycle=activity_lifecycle,
                 task_name=getattr(self, "name", "calculate_daily_group_rankings"),
                 task_id=getattr(getattr(self, "request", None), "id", None),
-                message=no_groups_message,
+                message=str(task_result["error"]),
             )
-            return {
-                'date': calc_date.strftime('%Y-%m-%d'),
-                'groups_ranked': 0,
-                'warning': 'No groups could be ranked',
-                'error': no_groups_message,
-                'reason_code': GroupRankReasonCode.NO_GROUPS_RANKED,
-                'calculation_duration_seconds': round(duration, 2),
-                'timestamp': datetime.now().isoformat()
-            }
+            return task_result
 
-        logger.info(f"Successfully ranked {len(results)} groups in {duration:.2f}s")
-
-        # Log top 5 groups
-        logger.info("Top 5 groups:")
-        for r in results[:5]:
-            logger.info(
-                f"  #{r['rank']}: {r['industry_group']} "
-                f"(avg RS: {r['avg_rs_rating']:.1f}, {r['num_stocks']} stocks)"
-            )
-
-        logger.info("=" * 60)
-
-        repair_stats = None
-        # US-only: the repair helper touches US-scoped feature-store metadata
-        # and has no equivalent on other markets. Non-US runs skip it.
-        if effective_market == "US" and _should_repair_current_us_metadata(
-            calc_date=calc_date,
-            today_et=today_local,
-            activity_lifecycle=activity_lifecycle,
-        ):
-            from ..interfaces.tasks.feature_store_tasks import _repair_current_us_group_metadata
-
-            repair_stats = _repair_current_us_group_metadata(ranking_date=calc_date)
-
-        from ..services.group_rankings_cache import bump_group_rankings_epoch
-
-        bump_group_rankings_epoch(effective_market)
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed: %s", snapshot_error)
+        groups_ranked = int(task_result["groups_ranked"])
         mark_market_activity_completed(
             db,
             market=effective_market,
@@ -316,21 +311,11 @@ def calculate_daily_group_rankings(
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "calculate_daily_group_rankings"),
             task_id=getattr(getattr(self, "request", None), "id", None),
-            current=len(results),
-            total=len(results),
+            current=groups_ranked,
+            total=groups_ranked,
             message="Group rankings completed",
         )
-
-        return {
-            'date': calc_date.strftime('%Y-%m-%d'),
-            'groups_ranked': len(results),
-            'top_group': results[0]['industry_group'] if results else None,
-            'top_avg_rs': results[0]['avg_rs_rating'] if results else None,
-            'calculation_duration_seconds': round(duration, 2),
-            'cache_only': same_day_cache_only,
-            'metadata_repair': repair_stats,
-            'timestamp': datetime.now().isoformat()
-        }
+        return task_result
 
     except SoftTimeLimitExceeded:
         db.rollback()
@@ -345,51 +330,8 @@ def calculate_daily_group_rankings(
             message="Soft time limit exceeded",
         )
         raise
-    except IncompleteGroupRankingCacheError as e:
-        db.rollback()
-        logger.error("✗ Refusing to publish daily group rankings: %s", e)
-        logger.info("=" * 60)
-        _mark_market_activity_failed_safely(
-            db,
-            market=effective_market,
-            stage_key="groups",
-            lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
-            message=str(e),
-        )
-        return {
-            'error': str(e),
-            'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
-            'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
-            'timestamp': datetime.now().isoformat(),
-            'cache_only': True,
-            'prefetch_stats': e.stats,
-        }
-    except MissingIBDIndustryMappingsError as e:
-        db.rollback()
-        logger.error("✗ Refusing to publish daily group rankings: %s", e)
-        logger.info("=" * 60)
-        _mark_market_activity_failed_safely(
-            db,
-            market=effective_market,
-            stage_key="groups",
-            lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
-            message=str(e),
-        )
-        return {
-            'error': str(e),
-            'reason_code': GroupRankReasonCode.MISSING_IBD_MAPPINGS,
-            'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
-            'timestamp': datetime.now().isoformat(),
-            'cache_only': same_day_cache_only,
-        }
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
-        if _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.get():
-            raise
         _mark_market_activity_failed_safely(
             db,
             market=effective_market,
@@ -413,58 +355,21 @@ def calculate_daily_group_rankings(
             task_id=getattr(getattr(self, "request", None), "id", None),
             message=str(e),
         )
-        return {
+        error_result = {
             'error': str(e),
             'reason_code': GroupRankReasonCode.UNKNOWN,
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
             'timestamp': datetime.now().isoformat()
         }
+        if policy is not None:
+            policy.annotate_response(
+                error_result,
+                include_cache_only=True,
+            )
+        return error_result
 
     finally:
         db.close()
-
-
-def _calculate_daily_group_rankings_in_process(
-    *,
-    calculation_date: str | None = None,
-    market: str | None = None,
-    activity_lifecycle: str | None = None,
-):
-    """Run the daily ranking task body without re-acquiring the market workload lease.
-
-    The orchestrator already holds the per-market workload lease, but the daily
-    task's @serialized_market_workload decorator would otherwise try to re-acquire
-    it from this nested call. ``disable_serialized_market_workload()`` flips a
-    ContextVar that the decorator honors as a bypass — without it, the inner
-    call's task_id resolves to "unknown" (Celery's per-class request_stack is
-    empty for direct invocation), the reentrancy check is skipped, the SET NX
-    fails, and Retry propagates back into the orchestrator.
-
-    Transient exceptions are also propagated directly here so the outer
-    orchestrator owns retry scheduling. Calling the Celery task body via
-    ``task.run()`` does not provide a worker request context for the requested
-    market, so allowing the inner task to call ``self.retry()`` can schedule an
-    orphan retry with default arguments.
-    """
-    from .workload_coordination import disable_serialized_market_workload
-
-    task = calculate_daily_group_rankings
-    kwargs = {
-        "market": market,
-        "activity_lifecycle": activity_lifecycle,
-    }
-    if calculation_date is not None:
-        kwargs["calculation_date"] = calculation_date
-    transient_token = _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.set(True)
-    try:
-        if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-            return task(**kwargs)
-        with disable_serialized_market_workload():
-            if hasattr(task, "request") and callable(getattr(task, "run", None)):
-                return task.run(**kwargs)
-            return task(**kwargs)
-    finally:
-        _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.reset(transient_token)
 
 
 @celery_app.task(
@@ -480,6 +385,8 @@ def calculate_daily_group_rankings_with_gapfill(
     market: str | None = None,
     activity_lifecycle: str | None = None,
     calculation_date: str | None = None,
+    refresh_guarded_cache_only: bool = False,
+    execution_policy: str | None = None,
 ):
     """
     Calculate daily group rankings with automatic gap detection and filling.
@@ -534,6 +441,7 @@ def calculate_daily_group_rankings_with_gapfill(
         'market': effective_market,
         'timestamp': datetime.now().isoformat(),
     }
+    policy = None
 
     try:
         mark_market_activity_started(
@@ -544,6 +452,21 @@ def calculate_daily_group_rankings_with_gapfill(
             task_name=getattr(self, "name", "calculate_daily_group_rankings_with_gapfill"),
             task_id=getattr(getattr(self, "request", None), "id", None),
             message="Calculating group rankings (with gap-fill)",
+        )
+
+        calendar_service = get_market_calendar_service()
+        resolved_date = resolve_task_target_date(
+            calculation_date,
+            market=effective_market,
+            calendar_service=calendar_service,
+        )
+        target_date = resolved_date.target_date
+        current_date = calendar_service.market_now(effective_market).date()
+        policy = resolve_derived_data_execution_policy(
+            execution_policy=execution_policy,
+            refresh_guarded_cache_only=refresh_guarded_cache_only,
+            target_date=target_date,
+            current_date=current_date,
         )
 
         # Defensive skip: non-US markets can be enabled before their CSV is
@@ -582,13 +505,8 @@ def calculate_daily_group_rankings_with_gapfill(
             return result
 
         service = get_group_rank_service()
-        calendar_service = get_market_calendar_service()
-        resolved_date = resolve_task_target_date(
-            calculation_date,
-            market=effective_market,
-            calendar_service=calendar_service,
-        )
-        target_date = resolved_date.target_date
+        gap_policy = policy.for_gap_fill()
+        policy.annotate_response(result, include_cache_only=True)
 
         if settings.group_rank_gapfill_enabled:
             logger.info(
@@ -610,6 +528,7 @@ def calculate_daily_group_rankings_with_gapfill(
                     db,
                     missing_dates,
                     market=effective_market,
+                    policy=gap_policy,
                 )
                 result['gap_fill'] = gap_stats
                 logger.info(
@@ -634,12 +553,17 @@ def calculate_daily_group_rankings_with_gapfill(
                 "Calculating group rankings for %s (%s)...",
                 effective_market, target_date,
             )
-            inner_kwargs = {
-                "market": market,
-                "activity_lifecycle": activity_lifecycle,
-                **resolved_date.nested_daily_kwargs(),
-            }
-            today_result = _calculate_daily_group_rankings_in_process(**inner_kwargs)
+            today_result = _run_daily_group_rankings_response(
+                db,
+                DailyGroupRankRequest(
+                    calculation_date=target_date,
+                    current_date=current_date,
+                    market=effective_market,
+                    activity_lifecycle=activity_lifecycle,
+                    policy=policy,
+                ),
+                _daily_group_rank_dependencies(service),
+            )
             result['today'] = today_result
             today_error = None
             if isinstance(today_result, dict) and today_result.get("error"):
@@ -732,260 +656,25 @@ def calculate_daily_group_rankings_with_gapfill(
             task_id=getattr(getattr(self, "request", None), "id", None),
             message=str(e),
         )
-        return {
+        error_result = {
             'error': str(e),
             'gap_fill': result.get('gap_fill'),
             'today': result.get('today'),
             'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
+        if policy is not None:
+            policy.annotate_response(
+                error_result,
+                include_cache_only=True,
+            )
+        return error_result
     finally:
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings')
-@serialized_market_workload('backfill_group_rankings')
-def backfill_group_rankings(self, start_date: str, end_date: str, market: str = "US"):
-    """Backfill historical group rankings for a date range."""
-    logger.info("=" * 60)
-    logger.info("TASK: Backfill IBD Group Rankings (Optimized)")
-    logger.info(f"Date range: {start_date} to {end_date}")
-    logger.info("=" * 60)
-
-    try:
-        # Parse dates
-        start = datetime.strptime(start_date, '%Y-%m-%d').date()
-        end = datetime.strptime(end_date, '%Y-%m-%d').date()
-
-        if start > end:
-            logger.error("Start date must be before end date")
-            return {
-                'error': 'Invalid date range: start_date > end_date',
-                'timestamp': datetime.now().isoformat()
-            }
-
-    except ValueError as e:
-        logger.error(f"Invalid date format: {e}")
-        return {
-            'error': f'Invalid date format. Use YYYY-MM-DD: {e}',
-            'timestamp': datetime.now().isoformat()
-        }
-
-    db = SessionLocal()
-    start_time = time.time()
-
-    try:
-        # Initialize service
-        service = get_group_rank_service()
-
-        # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
-        result = service.backfill_rankings_optimized(db, start, end, market=market)
-
-        # Calculate total duration
-        total_duration = time.time() - start_time
-
-        logger.info("=" * 60)
-        logger.info("Backfill Complete!")
-        logger.info(f"Total days: {result['total_dates']}")
-        logger.info(f"Deleted existing: {result.get('deleted', 0)}")
-        logger.info(f"Processed: {result['processed']}")
-        logger.info(f"Skipped: {result['skipped']}")
-        logger.info(f"Errors: {result['errors']}")
-        logger.info(f"Total duration: {total_duration:.2f}s")
-        logger.info("=" * 60)
-
-        from ..services.group_rankings_cache import bump_group_rankings_epoch
-
-        bump_group_rankings_epoch(market)
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed after backfill: %s", snapshot_error)
-
-        return {
-            'start_date': start_date,
-            'end_date': end_date,
-            'total_dates': result['total_dates'],
-            'deleted': result.get('deleted', 0),
-            'processed': result['processed'],
-            'skipped': result['skipped'],
-            'errors': result['errors'],
-            'total_duration_seconds': round(total_duration, 2),
-            'avg_duration_per_day': round(
-                total_duration / max(result['processed'], 1), 2
-            ),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error in backfill_group_rankings task: {e}", exc_info=True)
-        logger.info("=" * 60)
-        return {
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    finally:
-        db.close()
-
-
-@celery_app.task(bind=True, name='app.tasks.group_rank_tasks.gapfill_group_rankings')
-@serialized_market_workload('gapfill_group_rankings')
-def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
-    """Detect and fill gaps in group ranking data."""
-    logger.info("=" * 60)
-    logger.info("TASK: Gap-Fill IBD Group Rankings (Optimized)")
-    logger.info(f"Looking back {max_days} days")
-    logger.info("=" * 60)
-
-    db = SessionLocal()
-    start_time = time.time()
-
-    try:
-        service = get_group_rank_service()
-
-        # Find missing dates
-        missing_dates = service.find_missing_dates(
-            db,
-            lookback_days=max_days,
-            market=market,
-        )
-
-        if not missing_dates:
-            logger.info("No gaps found - data is complete")
-            return {
-                'status': 'complete',
-                'gaps_found': 0,
-                'message': 'No gaps to fill',
-                'timestamp': datetime.now().isoformat()
-            }
-
-        logger.info(f"Found {len(missing_dates)} gaps to fill")
-        logger.info(f"Date range: {missing_dates[0]} to {missing_dates[-1]}")
-
-        # Fill the gaps using optimized method
-        result = service.fill_gaps_optimized(db, missing_dates, market=market)
-
-        duration = time.time() - start_time
-
-        logger.info("=" * 60)
-        logger.info("Gap-Fill Complete!")
-        logger.info(f"Gaps found: {len(missing_dates)}")
-        logger.info(f"Processed: {result['processed']}")
-        logger.info(f"Errors: {result['errors']}")
-        logger.info(f"Duration: {duration:.2f}s")
-        logger.info("=" * 60)
-
-        from ..services.group_rankings_cache import bump_group_rankings_epoch
-
-        bump_group_rankings_epoch(market)
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed after gapfill: %s", snapshot_error)
-
-        return {
-            'status': 'complete',
-            'gaps_found': len(missing_dates),
-            'processed': result['processed'],
-            'errors': result['errors'],
-            'total_duration_seconds': round(duration, 2),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error in gapfill_group_rankings task: {e}", exc_info=True)
-        return {
-            'status': 'error',
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    finally:
-        db.close()
-
-
-@celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings_1year')
-@serialized_market_workload('backfill_group_rankings_1year')
-def backfill_group_rankings_1year(self, market: str = "US"):
-    """
-    One-time task to backfill 1 year of group rankings (optimized version).
-
-    This optimized backfill:
-    1. Uses same universe as bulk scans (intersection of IBD groups and stock_universe)
-    2. Deletes existing rankings and recalculates (no skipping)
-    3. Pre-fetches all data once for efficiency
-
-    Returns:
-        Dict with backfill statistics
-    """
-    from .market_queues import normalize_market
-
-    effective_market = normalize_market(market)
-
-    logger.info("=" * 60)
-    logger.info(
-        "TASK: 1-Year Backfill IBD Group Rankings (Optimized) (%s)",
-        effective_market,
-    )
-    logger.info("=" * 60)
-
-    db = SessionLocal()
-    start_time = time.time()
-
-    try:
-        service = get_group_rank_service()
-
-        # Calculate date range in the target market's local calendar.
-        calendar_service = get_market_calendar_service()
-        end_date = calendar_service.market_now(effective_market).date()
-        start_date = end_date - timedelta(days=365)
-
-        # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
-        result = service.backfill_rankings_optimized(
-            db,
-            start_date,
-            end_date,
-            market=effective_market,
-        )
-
-        duration = time.time() - start_time
-
-        logger.info("=" * 60)
-        logger.info("1-Year Backfill Complete!")
-        logger.info(f"Total days: {result['total_dates']}")
-        logger.info(f"Deleted existing: {result.get('deleted', 0)}")
-        logger.info(f"Processed: {result['processed']}")
-        logger.info(f"Skipped: {result['skipped']}")
-        logger.info(f"Errors: {result['errors']}")
-        logger.info(f"Duration: {duration:.2f}s")
-        logger.info("=" * 60)
-
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed after 1-year backfill: %s", snapshot_error)
-
-        result['total_duration_seconds'] = round(duration, 2)
-        result['timestamp'] = datetime.now().isoformat()
-
-        return result
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error in backfill_group_rankings_1year: {e}", exc_info=True)
-        return {
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    finally:
-        db.close()
+from .group_rank_backfill_tasks import (
+    backfill_group_rankings,
+    backfill_group_rankings_1year,
+    gapfill_group_rankings,
+)

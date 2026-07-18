@@ -46,7 +46,8 @@ def test_breadth_calculation():
         print(f"\n🔄 Calculating breadth for today ({datetime.now().date()})...")
         print("   This may take 30-60 seconds for large universe...")
 
-        metrics = calculator.calculate_daily_breadth()
+        result = calculator.calculate_daily_breadth()
+        metrics = result.to_metrics_dict()
 
         # Display results
         print("\n" + "=" * 60)

@@ -24,6 +24,7 @@ import app.models.scan_result  # noqa: F401
 import app.infra.db.models.feature_store  # noqa: F401
 
 from app.database import get_db
+from app.config import settings
 # Router registration is handled transitively by importing app.main below.
 from app.main import app as fastapi_app
 from app.models.stock_universe import StockUniverse
@@ -47,7 +48,8 @@ def _sqlite_session():
 
 
 @pytest_asyncio.fixture
-async def client(_sqlite_session):
+async def client(_sqlite_session, monkeypatch):
+    monkeypatch.setattr(settings, "server_auth_enabled", False)
     # Seed a watchlist + a handful of symbols spanning US + Asia markets.
     watchlist = UserWatchlist(name="Test")
     _sqlite_session.add(watchlist)
