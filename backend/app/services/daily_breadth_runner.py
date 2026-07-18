@@ -188,6 +188,8 @@ def _validate_strict_cache_only_breadth(
         return f"Cache-only breadth run has errors (errors={errors})"
     if total_attempted == 0:
         return "Cache-only breadth run processed no stocks"
+    if coverage.total_stocks_scanned == 0:
+        return "Cache-only breadth run processed no usable stocks"
     miss_ratio = cache_misses / total_attempted
     if miss_ratio > CACHE_MISS_TOLERANCE_RATIO:
         return (

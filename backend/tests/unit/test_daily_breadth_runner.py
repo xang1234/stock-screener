@@ -194,6 +194,33 @@ def test_strict_cache_only_rejects_miss_ratio_above_tolerance():
     calculator.store_daily_breadth.assert_not_called()
 
 
+def test_strict_cache_only_rejects_zero_usable_stocks():
+    calculator = MagicMock()
+    calculator.calculate_daily_breadth.return_value = _calculation(
+        scanned=0,
+        skipped=100,
+        misses=0,
+    )
+    dependencies = _dependencies(calculator)
+
+    with pytest.raises(
+        IncompleteDailyBreadth,
+        match="processed no usable stocks",
+    ):
+        run_daily_breadth(
+            MagicMock(),
+            DailyBreadthRequest(
+                calculation_date=CALCULATION_DATE,
+                market="US",
+                policy=_policy("strict_cache_only"),
+            ),
+            dependencies,
+        )
+
+    calculator.store_daily_breadth.assert_not_called()
+    dependencies.publish_snapshot.assert_not_called()
+
+
 def test_same_day_auto_requires_complete_warmup_metadata():
     calculator = MagicMock()
     calculator.price_cache.get_warmup_metadata.return_value = {

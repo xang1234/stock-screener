@@ -173,7 +173,11 @@ def test_calculate_daily_breadth_uses_bulk_cached_prices(monkeypatch):
     assert metrics["ratio_5day"] == 1.5
     assert metrics["ratio_10day"] == 2.5
     assert metrics["cache_miss_stocks"] == 0
-    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA", "BBB"],
+        period="2y",
+        required_as_of_date=date(2026, 3, 20),
+    )
     price_cache.get_historical_data.assert_not_called()
 
 
@@ -210,6 +214,34 @@ def test_calculate_daily_breadth_counts_fresh_cache_misses(monkeypatch):
     assert metrics["cache_coverage_ratio"] == 0.5
     assert metrics["cache_miss_symbols_sample"] == ["BBB"]
     assert result.coverage.cache_miss_symbols_sample == ("BBB",)
+
+
+def test_cache_only_daily_breadth_requires_calculation_session(monkeypatch):
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAA")
+    ]
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {"AAA": None}
+    service = BreadthCalculatorService(db, price_cache)
+    monkeypatch.setattr(
+        service,
+        "_calculate_ratios",
+        lambda _date: {"ratio_5day": None, "ratio_10day": None},
+    )
+    calculation_date = date(2026, 3, 20)
+
+    result = service.calculate_daily_breadth(
+        calculation_date,
+        policy=_policy("refresh_guarded", calculation_date),
+    )
+
+    assert result.coverage.cache_miss_stocks == 1
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA"],
+        period="2y",
+        required_as_of_date=calculation_date,
+    )
 
 
 def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch):
@@ -457,6 +489,37 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback():
     assert result["processed"] == 1
     assert result["errors"] == 0
     price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_historical_data.assert_not_called()
+
+
+def test_backfill_range_accepts_legacy_cache_only_keyword():
+    db = _make_db_session()
+    db.add(
+        StockUniverse(
+            symbol="AAA",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+    target = date(2026, 3, 20)
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": _make_price_df(target)
+    }
+    price_cache.get_historical_data.side_effect = AssertionError(
+        "legacy cache-only backfill must not call a provider"
+    )
+
+    result = BreadthCalculatorService(db, price_cache).backfill_range(
+        target,
+        target,
+        trading_dates=[target],
+        cache_only=True,
+    )
+
+    assert result["processed"] == 1
+    assert result["cache_miss_stocks"] == 0
     price_cache.get_historical_data.assert_not_called()
 
 

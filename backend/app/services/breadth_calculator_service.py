@@ -22,7 +22,11 @@ from .breadth_coverage import (
     BreadthOutcomeReport,
     BreadthPriceCoverageAccumulator,
 )
-from .derived_data_execution_policy import DerivedDataExecutionPolicy
+from .derived_data_execution_policy import (
+    DerivedDataExecutionMode,
+    DerivedDataExecutionPolicy,
+    DerivedDataTargetKind,
+)
 from .price_cache_service import PriceCacheService
 
 logger = logging.getLogger(__name__)
@@ -84,22 +88,10 @@ class BreadthCalculatorService:
             calculation_date: Date to calculate breadth for (defaults to today)
 
         Returns:
-            Dict with all 13 breadth indicators and metadata:
-            {
-                'stocks_up_4pct': int,
-                'stocks_down_4pct': int,
-                'ratio_5day': float or None,
-                'ratio_10day': float or None,
-                'stocks_up_25pct_quarter': int,
-                'stocks_down_25pct_quarter': int,
-                'stocks_up_25pct_month': int,
-                'stocks_down_25pct_month': int,
-                'stocks_up_50pct_month': int,
-                'stocks_down_50pct_month': int,
-                'stocks_up_13pct_34days': int,
-                'stocks_down_13pct_34days': int,
-                'total_stocks_scanned': int
-            }
+            BreadthCalculationResult containing ``indicators`` and the
+            authoritative ``coverage`` report. Use ``to_metrics_dict()`` when
+            a merged persistence mapping is required. Task responses add
+            execution-policy metadata at their serialization boundary.
         """
         if calculation_date is None:
             from ..utils.market_hours import get_eastern_now
@@ -134,6 +126,9 @@ class BreadthCalculatorService:
             price_data_by_symbol, cache_miss_symbols = self._load_price_data_for_batch(
                 batch_symbols=batch_symbols,
                 cache_only=policy.cache_only,
+                required_as_of_date=(
+                    calculation_date if policy.cache_only else None
+                ),
             )
             price_coverage.record_batch(batch_symbols, cache_miss_symbols)
 
@@ -193,6 +188,7 @@ class BreadthCalculatorService:
         policy: DerivedDataExecutionPolicy = (
             DerivedDataExecutionPolicy.provider_allowed()
         ),
+        cache_only: bool | None = None,
     ) -> Dict:
         """
         Calculate and persist breadth for an entire historical range.
@@ -200,6 +196,16 @@ class BreadthCalculatorService:
         Price history is loaded once per symbol batch, then reused for every
         requested trading date in chronological order.
         """
+        if cache_only is not None:
+            policy = DerivedDataExecutionPolicy(
+                mode=(
+                    DerivedDataExecutionMode.STRICT_CACHE_ONLY
+                    if cache_only
+                    else DerivedDataExecutionMode.AUTO
+                ),
+                target_kind=DerivedDataTargetKind.HISTORICAL,
+            )
+
         if trading_dates is None:
             from ..wiring.bootstrap import get_market_calendar_service
 
@@ -543,11 +549,16 @@ class BreadthCalculatorService:
         self,
         batch_symbols: List[str],
         cache_only: bool,
+        *,
+        required_as_of_date: date | None = None,
     ) -> tuple[Dict[str, Optional[pd.DataFrame]], List[str]]:
         """Load batch price histories once, with optional cache misses fetched a single time."""
+        cache_kwargs = {"period": "2y"}
+        if required_as_of_date is not None:
+            cache_kwargs["required_as_of_date"] = required_as_of_date
         price_data_by_symbol = self.price_cache.get_many_cached_only_fresh(
             batch_symbols,
-            period="2y",
+            **cache_kwargs,
         )
         cache_miss_symbols: List[str] = []
 
