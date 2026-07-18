@@ -59,6 +59,15 @@ class _BoundsCalendar:
         raise ValueError("Requested date is later than the last session available")
 
 
+class _SessionCalendar:
+    def __init__(self, sessions):
+        self.sessions = tuple(pd.Timestamp(session) for session in sessions)
+        self._session_dates = {session.date() for session in self.sessions}
+
+    def is_session(self, session: pd.Timestamp) -> bool:
+        return session.date() in self._session_dates
+
+
 def test_market_calendar_service_uses_canonical_calendar_ids():
     service = MarketCalendarService(calendar_provider=lambda _: _FakeCalendar())
 
@@ -230,3 +239,42 @@ def test_last_completed_trading_day_bounds_fallback(market):
 
     assert service.last_completed_trading_day(market, now=before_close) == date(2026, 4, 9)
     assert service.last_completed_trading_day(market, now=after_close) == date(2026, 4, 10)
+
+
+def test_session_anchors_return_exact_market_session_offsets():
+    sessions = pd.date_range("2025-01-01", periods=260, freq="B")
+    service = MarketCalendarService(
+        calendar_provider=lambda _name: _SessionCalendar(sessions)
+    )
+    as_of = sessions[-1].date()
+
+    anchors = service.session_anchors(
+        "US", as_of, offsets=(21, 63, 126, 189, 252)
+    )
+
+    assert anchors[0] == as_of
+    assert anchors[21] == sessions[-22].date()
+    assert anchors[252] == sessions[-253].date()
+
+
+def test_session_anchors_reject_a_non_session_as_of_date():
+    sessions = pd.date_range("2025-01-01", periods=260, freq="B")
+    service = MarketCalendarService(
+        calendar_provider=lambda _name: _SessionCalendar(sessions)
+    )
+    non_session = sessions[-1].date()
+    while non_session.weekday() < 5:
+        non_session += pd.Timedelta(days=1)
+
+    with pytest.raises(ValueError, match="not a US trading session"):
+        service.session_anchors("US", non_session, offsets=(21,))
+
+
+def test_session_anchors_require_enough_history():
+    sessions = pd.date_range("2026-01-01", periods=100, freq="B")
+    service = MarketCalendarService(
+        calendar_provider=lambda _name: _SessionCalendar(sessions)
+    )
+
+    with pytest.raises(ValueError, match="253 required"):
+        service.session_anchors("US", sessions[-1].date(), offsets=(252,))

@@ -204,6 +204,35 @@ class MarketCalendarService:
             day += timedelta(days=1)
         return days
 
+    def session_anchors(
+        self,
+        market: str,
+        as_of_date: date,
+        *,
+        offsets: tuple[int, ...],
+        mic: str | None = None,
+    ) -> dict[int, date]:
+        """Resolve exact prior Market sessions for fixed lookback offsets."""
+        normalized = self.normalize_market(market)
+        if not offsets or min(offsets) < 1:
+            raise ValueError("session offsets must be positive")
+        if not self.is_trading_day(normalized, as_of_date, mic=mic):
+            raise ValueError(
+                f"{as_of_date.isoformat()} is not a {normalized} trading session"
+            )
+        maximum = max(offsets)
+        start = as_of_date - timedelta(days=maximum * 2 + 30)
+        sessions = self.trading_days(normalized, start, as_of_date, mic=mic)
+        if len(sessions) <= maximum:
+            raise ValueError(
+                f"{normalized} calendar has {len(sessions)} sessions; "
+                f"{maximum + 1} required"
+            )
+        return {
+            0: sessions[-1],
+            **{offset: sessions[-1 - offset] for offset in offsets},
+        }
+
     def is_market_open(
         self,
         market: str,
