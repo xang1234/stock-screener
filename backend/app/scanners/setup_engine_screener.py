@@ -43,6 +43,10 @@ from app.scanners.base_screener import (
 from app.scanners.screener_registry import register_screener
 from app.scanners.criteria.moving_averages import MovingAverageAnalyzer
 from app.scanners.criteria.relative_strength import RelativeStrengthCalculator
+from app.scanners.criteria.rs_resolution import (
+    CanonicalStockRsUnavailable,
+    resolve_stock_rs,
+)
 from app.scanners.criteria.stage_analysis import quick_stage_check
 from app.scanners.setup_engine_scanner import build_setup_engine_payload
 
@@ -83,6 +87,8 @@ class SetupEngineScanner(BaseStockScreener):
     ) -> ScreenerResult:
         try:
             return self._scan_stock_inner(symbol, data, criteria)
+        except CanonicalStockRsUnavailable as exc:
+            return self._insufficient_data_result(symbol, str(exc))
         except Exception as exc:
             logger.exception("SetupEngineScanner error for %s: %s", symbol, exc)
             return self._error_result(symbol, str(exc))
@@ -213,6 +219,7 @@ class SetupEngineScanner(BaseStockScreener):
             self._ma_analyzer, self._rs_calc,
             data.rs_universe_performances,
             precomputed_context=data.precomputed_scan_context,
+            stock_data=data,
         )
 
         # ── Phase C: readiness + payload assembly ──
@@ -315,6 +322,7 @@ class SetupEngineScanner(BaseStockScreener):
         rs_calc: RelativeStrengthCalculator,
         rs_universe_performances: Optional[Dict[int | str, list[float]]] = None,
         precomputed_context=None,
+        stock_data: StockData | None = None,
     ) -> dict:
         """Compute stage, MA alignment, and RS rating from price data."""
         prices_chrono = (
@@ -379,7 +387,7 @@ class SetupEngineScanner(BaseStockScreener):
             and precomputed_context.rs_ratings.get("rs_rating") is not None
             else None
         )
-        if rs_rating is None and spy_close is not None and not spy_close.empty:
+        if rs_rating is None and stock_data is not None:
             prices_rev = (
                 precomputed_context.close_rev
                 if precomputed_context is not None and precomputed_context.close_rev is not None
@@ -389,12 +397,33 @@ class SetupEngineScanner(BaseStockScreener):
                 precomputed_context.benchmark_close_chrono
                 if precomputed_context is not None and precomputed_context.benchmark_close_chrono is not None
                 else spy_close.reset_index(drop=True)
+                if spy_close is not None
+                else None
             )
             spy_rev = (
                 precomputed_context.benchmark_close_rev
                 if precomputed_context is not None and precomputed_context.benchmark_close_rev is not None
                 else spy_chrono[::-1].reset_index(drop=True)
+                if spy_chrono is not None
+                else None
             )
+            rs_result = resolve_stock_rs(
+                stock_data,
+                lambda: rs_calc.calculate_rs_rating(
+                    symbol,
+                    prices_rev,
+                    spy_rev,
+                    (
+                        rs_universe_performances.get("weighted")
+                        if rs_universe_performances
+                        else None
+                    ),
+                ),
+            )
+            rs_rating = float(rs_result["rs_rating"])
+        elif rs_rating is None and spy_close is not None and not spy_close.empty:
+            prices_rev = prices_chrono[::-1].reset_index(drop=True)
+            spy_rev = spy_close.reset_index(drop=True)[::-1].reset_index(drop=True)
             rs_result = rs_calc.calculate_rs_rating(
                 symbol,
                 prices_rev,

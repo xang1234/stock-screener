@@ -508,6 +508,7 @@ class RuntimeServices:
                     self._scan_orchestrator = ScanOrchestrator(
                         data_provider=self.stock_data_provider(),
                         registry=screener_registry,
+                        market_rs_reader=self.market_rs_reader(),
                     )
         return self._scan_orchestrator
 

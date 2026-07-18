@@ -10,6 +10,9 @@ Tests:
 """
 import sys
 from pathlib import Path
+import pytest
+
+pytestmark = pytest.mark.usefixtures("legacy_market_rs_runtime")
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))

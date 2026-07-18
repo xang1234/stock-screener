@@ -18,6 +18,7 @@ from .base_screener import (
     StockData,
 )
 from .criteria.relative_strength import RelativeStrengthCalculator
+from .criteria.rs_resolution import CanonicalStockRsUnavailable, resolve_stock_rs
 from .partial_history_metrics import partial_history_metrics
 from .screener_registry import ScreenerRegistry
 
@@ -28,13 +29,14 @@ from app.analysis.patterns.rs_line import (
     rs_line_leadership_snapshot,
 )
 from app.config import settings
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.models import CompositeMethod, ScreenerOutputDomain
 from app.domain.scanning.scoring import (
     apply_quality_policy,
     calculate_composite_score,
     calculate_overall_rating,
 )
-from app.domain.scanning.ports import StockDataProvider
+from app.domain.scanning.ports import MarketRsReader, MarketRsResolution, StockDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,25 @@ _SCREENER_MIN_BARS: dict[str, int] = {
     "canslim": 240,
     "volume_breakthrough": 252,
 }
+
+
+def _attach_market_rs_resolution(
+    stock_data: StockData,
+    resolution: MarketRsResolution,
+) -> None:
+    symbol = stock_data.symbol.strip().upper()
+    stock_data.canonical_rs_ratings = resolution.ratings_by_symbol.get(symbol)
+    stock_data.rs_formula_version = resolution.formula_version
+    stock_data.market_rs_run_id = resolution.run_id
+    stock_data.rs_universe_size = resolution.universe_size
+
+
+def _market_rs_audit_fields(stock_data: StockData) -> dict[str, object]:
+    return {
+        "rs_formula_version": stock_data.rs_formula_version,
+        "market_rs_run_id": stock_data.market_rs_run_id,
+        "rs_universe_size": stock_data.rs_universe_size,
+    }
 
 
 def _series_last_float(series) -> float | None:
@@ -123,12 +144,19 @@ def _build_precomputed_scan_context(
         ma_200_month_ago = _series_last_float(ma_200_series)
 
     rs_ratings = None
-    if benchmark_close_rev is not None and not benchmark_close_rev.empty:
-        rs_ratings = RelativeStrengthCalculator().calculate_all_rs_ratings(
-            stock_data.symbol,
-            close_rev,
-            benchmark_close_rev,
-            stock_data.rs_universe_performances,
+    if (
+        stock_data.canonical_rs_ratings is not None
+        or stock_data.rs_formula_version == BALANCED_RS_FORMULA_VERSION
+        or (benchmark_close_rev is not None and not benchmark_close_rev.empty)
+    ):
+        rs_ratings = resolve_stock_rs(
+            stock_data,
+            lambda: RelativeStrengthCalculator().calculate_all_rs_ratings(
+                stock_data.symbol,
+                close_rev,
+                benchmark_close_rev,
+                stock_data.rs_universe_performances,
+            ),
         )
 
     rs_leadership = RsLineLeadershipSnapshot.empty()
@@ -245,7 +273,12 @@ class ScanOrchestrator:
     5. Combining results
     """
 
-    def __init__(self, data_provider: StockDataProvider, registry: ScreenerRegistry):
+    def __init__(
+        self,
+        data_provider: StockDataProvider,
+        registry: ScreenerRegistry,
+        market_rs_reader: MarketRsReader | None = None,
+    ):
         """Initialize orchestrator with injected dependencies.
 
         Args:
@@ -254,6 +287,7 @@ class ScanOrchestrator:
         """
         self._data_provider = data_provider
         self._registry = registry
+        self._market_rs_reader = market_rs_reader
 
     def get_merged_requirements(
         self,
@@ -347,10 +381,33 @@ class ScanOrchestrator:
                 # Fetch data ONCE
                 stock_data = self._data_provider.prepare_data(symbol, requirements)
 
+            if (
+                stock_data.rs_formula_version is None
+                and self._market_rs_reader is not None
+            ):
+                resolution = self._market_rs_reader.get(
+                    market=str(stock_data.market or "US").strip().upper(),
+                    symbols=(stock_data.symbol.strip().upper(),),
+                    as_of_date=None,
+                    formula_version=None,
+                )
+                _attach_market_rs_resolution(stock_data, resolution)
+
             history_bars = _history_bar_count(stock_data)
 
             if stock_data.precomputed_scan_context is None and history_bars > 0:
-                stock_data.precomputed_scan_context = _build_precomputed_scan_context(stock_data)
+                try:
+                    stock_data.precomputed_scan_context = _build_precomputed_scan_context(stock_data)
+                except CanonicalStockRsUnavailable as exc:
+                    return self._insufficient_data_result(
+                        symbol,
+                        stock_data,
+                        composite_method=composite_method,
+                        history_bars=history_bars,
+                        applicable_screeners=[],
+                        unavailable_screeners=screener_names,
+                        reason=str(exc),
+                    )
 
             unavailable_screeners: list[str] = []
             runnable_screeners: dict[str, BaseStockScreener] = {}
@@ -621,6 +678,7 @@ class ScanOrchestrator:
             "unavailable_screeners": list(unavailable_screeners),
             "composite_reason": composite_reason,
             "ipo_bonus": ipo_bonus,
+            **_market_rs_audit_fields(stock_data),
 
             # T4 quality-aware fallback surface (top-level so API consumers
             # don't have to drill into details — mirrors how ``rating`` is
@@ -636,6 +694,7 @@ class ScanOrchestrator:
             "details": {
                 "screeners": screener_details,
                 "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
+                **_market_rs_audit_fields(stock_data),
             }
         }
 
@@ -886,9 +945,11 @@ class ScanOrchestrator:
             "unavailable_screeners": list(unavailable_screeners),
             "composite_reason": None,
             "ipo_bonus": 0.0,
+            **_market_rs_audit_fields(stock_data),
             "details": {
                 "screeners": {},
                 "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
+                **_market_rs_audit_fields(stock_data),
             },
         }
         if stock_data.fundamentals:

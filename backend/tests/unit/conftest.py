@@ -19,6 +19,28 @@ from app.scanners.data_preparation import DataPreparationLayer
 
 
 @pytest.fixture
+def legacy_market_rs_runtime(runtime_services_context):
+    """Run pre-activation scanner integration tests in explicit legacy mode."""
+    from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
+    from app.domain.scanning.ports import MarketRsResolution
+
+    class _LegacyReader:
+        def get(self, *, market, symbols, as_of_date, formula_version=None):
+            return MarketRsResolution(
+                market=market,
+                as_of_date=as_of_date,
+                formula_version=LEGACY_RS_FORMULA_VERSION,
+                mode="legacy",
+                run_id=None,
+                universe_size=None,
+                ratings_by_symbol={},
+            )
+
+    runtime_services_context._market_rs_reader = _LegacyReader()
+    return runtime_services_context
+
+
+@pytest.fixture
 def universe_session():
     """In-memory SQLite session with the full ORM metadata loaded.
 

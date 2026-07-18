@@ -22,6 +22,7 @@ from .base_screener import (
 )
 from .screener_registry import register_screener
 from .criteria.relative_strength import RelativeStrengthCalculator
+from .criteria.rs_resolution import CanonicalStockRsUnavailable, resolve_stock_rs
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,15 @@ class CANSLIMScanner(BaseStockScreener):
             rs_ratings = (
                 precomputed.rs_ratings
                 if precomputed is not None and precomputed.rs_ratings is not None
-                else None
+                else resolve_stock_rs(
+                    data,
+                    lambda: self.rs_calc.calculate_all_rs_ratings(
+                        symbol,
+                        prices,
+                        spy_prices,
+                        data.rs_universe_performances,
+                    ),
+                )
             )
 
             # Calculate all CANSLIM criteria
@@ -174,15 +183,6 @@ class CANSLIMScanner(BaseStockScreener):
                 "institutional": i_result["points"]
             }
 
-            # Calculate all RS ratings for comprehensive analysis
-            if rs_ratings is None:
-                rs_ratings = self.rs_calc.calculate_all_rs_ratings(
-                    symbol,
-                    prices,
-                    spy_prices,
-                    data.rs_universe_performances,
-                )
-
             # Build details
             details = {
                 "current_price": current_price,
@@ -218,6 +218,8 @@ class CANSLIMScanner(BaseStockScreener):
                 screener_name=self.screener_name
             )
 
+        except CanonicalStockRsUnavailable as e:
+            return self._insufficient_data_result(symbol, str(e))
         except Exception as e:
             logger.error(f"Error scanning {symbol} with CANSLIM: {e}")
             return self._error_result(symbol, str(e))

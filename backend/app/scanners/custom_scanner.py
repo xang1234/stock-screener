@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from .base_screener import BaseStockScreener, DataRequirements, ScreenerResult, StockData
 from .screener_registry import register_screener
 from .criteria.relative_strength import RelativeStrengthCalculator
+from .criteria.rs_resolution import CanonicalStockRsUnavailable, resolve_stock_rs
 from ..domain.scanning.mixed_market_policy import (
     REASON_MISSING_ADV_USD,
     REASON_MISSING_CAP_NATIVE,
@@ -196,7 +197,29 @@ class CustomScanner(BaseStockScreener):
                             if data.rs_universe_performances
                             else None
                         ),
+                        precomputed_rs_result=resolve_stock_rs(
+                            data,
+                            lambda: self.rs_calc.calculate_rs_rating(
+                                symbol,
+                                price_data['Close'],
+                                benchmark_data['Close'],
+                                universe_performances=(
+                                    data.rs_universe_performances.get("weighted")
+                                    if data.rs_universe_performances
+                                    else None
+                                ),
+                            ),
+                        ),
                     ))
+                except CanonicalStockRsUnavailable as e:
+                    return ScreenerResult(
+                        score=0.0,
+                        passes=False,
+                        rating="Insufficient Data",
+                        breakdown={},
+                        details={"reason": str(e)},
+                        screener_name=self.screener_name,
+                    )
                 except Exception as e:
                     logger.error(f"{symbol}: Error in rs_rating filter: {e}")
                     raise
@@ -430,10 +453,12 @@ class CustomScanner(BaseStockScreener):
         benchmark_data: pd.DataFrame,
         filters: Dict,
         universe_performances: Optional[list[float]] = None,
+        *,
+        precomputed_rs_result: Optional[Dict[str, float | int]] = None,
     ) -> FilterResult:
         """Check if RS rating meets minimum."""
         # calculate_rs_rating returns a dict, extract the rs_rating value
-        rs_result = self.rs_calc.calculate_rs_rating(
+        rs_result = precomputed_rs_result or self.rs_calc.calculate_rs_rating(
             symbol,
             price_data['Close'],
             benchmark_data['Close'],

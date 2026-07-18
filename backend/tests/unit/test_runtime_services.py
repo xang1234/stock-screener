@@ -73,3 +73,12 @@ def test_runtime_services_reuses_and_resets_canonical_market_rs_dependencies():
     assert runtime.market_rs_run_repository() is not repository
     assert runtime.market_rs_snapshot_service() is not snapshot_service
     assert runtime.market_rs_reader() is not reader
+
+
+def test_runtime_orchestrator_uses_process_market_rs_reader():
+    runtime = build_runtime_services()
+
+    orchestrator = runtime.scan_orchestrator()
+
+    assert orchestrator._market_rs_reader is runtime.market_rs_reader()
+    assert orchestrator._data_provider._layer._defer_market_rs_resolution is True

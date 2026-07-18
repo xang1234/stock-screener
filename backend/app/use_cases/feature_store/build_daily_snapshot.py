@@ -683,24 +683,32 @@ class BuildDailyFeatureSnapshotUseCase:
                     pre_fetched_data = {}
 
             if rs_resolution is not None:
-                for symbol, stock_data in pre_fetched_data.items():
-                    normalized_symbol = str(symbol).upper()
-                    setattr(
-                        stock_data,
-                        "canonical_rs_ratings",
-                        rs_resolution.ratings_by_symbol.get(normalized_symbol),
-                    )
-                    setattr(
-                        stock_data,
-                        "rs_formula_version",
-                        rs_resolution.formula_version,
-                    )
-                    setattr(stock_data, "market_rs_run_id", rs_resolution.run_id)
-                    setattr(
-                        stock_data,
-                        "rs_universe_size",
-                        rs_resolution.universe_size,
-                    )
+                apply_resolution = getattr(
+                    self._data_provider,
+                    "apply_market_rs_resolution",
+                    None,
+                )
+                if callable(apply_resolution):
+                    apply_resolution(pre_fetched_data, rs_resolution)
+                else:
+                    for symbol, stock_data in pre_fetched_data.items():
+                        normalized_symbol = str(symbol).upper()
+                        setattr(
+                            stock_data,
+                            "canonical_rs_ratings",
+                            rs_resolution.ratings_by_symbol.get(normalized_symbol),
+                        )
+                        setattr(
+                            stock_data,
+                            "rs_formula_version",
+                            rs_resolution.formula_version,
+                        )
+                        setattr(stock_data, "market_rs_run_id", rs_resolution.run_id)
+                        setattr(
+                            stock_data,
+                            "rs_universe_size",
+                            rs_resolution.universe_size,
+                        )
 
             chunk_rows: list[FeatureRowWrite] = []
 

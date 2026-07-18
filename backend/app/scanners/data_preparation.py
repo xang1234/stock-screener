@@ -14,6 +14,7 @@ import pandas as pd
 from .base_screener import DataRequirements, StockData
 from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.common.errors import DataFetchError
+from ..domain.scanning.ports import MarketRsResolution
 from ..services.benchmark_cache_service import BenchmarkCacheService, BenchmarkDataBundle
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
@@ -43,6 +44,7 @@ class DataPreparationLayer:
         fundamentals_cache: FundamentalsCacheService,
         max_retries: int = 0,
         retry_base_delay: float = 1.0,
+        defer_market_rs_resolution: bool = False,
     ):
         """Initialize data preparation layer."""
         self.price_cache = price_cache
@@ -50,6 +52,7 @@ class DataPreparationLayer:
         self.fundamentals_cache = fundamentals_cache
         self._max_retries = max_retries
         self._retry_base_delay = retry_base_delay
+        self._defer_market_rs_resolution = defer_market_rs_resolution
         self._yfinance_service = get_yfinance_service()
         self._rate_limiter = get_rate_limiter()
         self._security_master = security_master_resolver
@@ -137,7 +140,7 @@ class DataPreparationLayer:
         self,
         stock_data_items: list[StockData],
     ) -> dict[str, dict[int | str, list[float]]]:
-        """Build market-partitioned RS universe performance lists for percentile ranking."""
+        """Build legacy scan-local percentile inputs for rollback mode only."""
         rs_calc = self._get_rs_calc()
         by_market: dict[str, dict[int | str, list[float]]] = {}
         seen_symbols: set[tuple[str, str]] = set()
@@ -215,7 +218,7 @@ class DataPreparationLayer:
         self,
         results: dict[str, StockData],
     ) -> None:
-        """Attach per-market RS universe performance lists and set mixed-market flag.
+        """Attach legacy per-market scan-local percentile inputs.
 
         Requires benchmark data on each item (only meaningful when
         ``needs_benchmark`` is True). ``_detect_and_set_mixed_market_flag``
@@ -227,6 +230,31 @@ class DataPreparationLayer:
         for item in items:
             key = (item.market or "").strip().upper() or "US"
             item.rs_universe_performances = market_universe.get(key, {})
+
+    def apply_market_rs_resolution(
+        self,
+        results: dict[str, StockData],
+        resolution: MarketRsResolution,
+    ) -> None:
+        """Hydrate one Market resolution and build local inputs only in legacy mode."""
+        normalized_market = resolution.market.strip().upper()
+        market_results: dict[str, StockData] = {}
+        for key, item in results.items():
+            item_market = (item.market or "US").strip().upper()
+            if item_market != normalized_market:
+                continue
+            normalized_symbol = item.symbol.strip().upper()
+            item.canonical_rs_ratings = resolution.ratings_by_symbol.get(
+                normalized_symbol
+            )
+            item.rs_formula_version = resolution.formula_version
+            item.market_rs_run_id = resolution.run_id
+            item.rs_universe_size = resolution.universe_size
+            item.rs_universe_performances = None
+            market_results[key] = item
+
+        if resolution.mode == "legacy" and market_results:
+            self._attach_market_rs_universe_performances(market_results)
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
@@ -647,7 +675,11 @@ class DataPreparationLayer:
             # Always detect mixed-market so cap/volume filters use USD columns
             # even when no RS filter is requested (needs_benchmark=False).
             self._detect_and_set_mixed_market_flag(results)
-        if requirements.needs_benchmark and results:
+        if (
+            requirements.needs_benchmark
+            and results
+            and not getattr(self, "_defer_market_rs_resolution", False)
+        ):
             self._attach_market_rs_universe_performances(results)
 
         if not allow_partial and all_errors:
