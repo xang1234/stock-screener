@@ -18,22 +18,20 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from app.domain.common.errors import EntityNotFoundError
-from app.domain.common.query import FilterSpec, PageSpec, SortSpec
+from app.domain.common.errors import EntityNotFoundError, InvalidTransitionError
+from app.domain.common.query import PageSpec
 from app.domain.common.uow import UnitOfWork
 from app.domain.feature_store.models import (
     FeaturePage,
     FeatureRow,
-    FeatureRowWrite,
     FeatureRunDomain,
-    RunStats,
     RunStatus,
     RunType,
     validate_transition,
 )
 from collections.abc import Sequence
 from app.domain.feature_store.ports import FeatureRunRepository, FeatureStoreRepository
-from app.domain.feature_store.quality import DQInputs, DQResult
+from app.domain.feature_store.quality import DQInputs
 from app.domain.scanning.models import (
     FilterOptions,
     ProgressEvent,
@@ -589,6 +587,17 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         self._runs[run_id] = updated
         self._pointers[pointer_key] = run_id
         return updated
+
+    def repoint_published(
+        self,
+        run_id: int,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain:
+        run = self._get_or_raise(run_id)
+        if run.status != RunStatus.PUBLISHED:
+            raise InvalidTransitionError(run.status, RunStatus.PUBLISHED)
+        self._pointers[pointer_key] = run_id
+        return run
 
     def get_latest_published(
         self, pointer_key: str = "latest_published"
