@@ -1215,6 +1215,70 @@ def test_bulk_fallback_warms_fresh_db_hits_to_inferred_symbol_market(monkeypatch
     assert stored == [("0700.HK", "HK")]
 
 
+def test_get_cached_only_fresh_requires_requested_session(monkeypatch):
+    service = PriceCacheService(
+        redis_client=None,
+        session_factory=lambda: MagicMock(),
+    )
+    frame = _price_df(date(2026, 3, 20), 123.0)
+    monkeypatch.setattr(
+        service,
+        "_get_from_database",
+        lambda symbol, period: (frame, date(2026, 3, 20)),
+    )
+    monkeypatch.setattr(service, "_is_data_fresh", lambda _last: True)
+    monkeypatch.setattr(
+        service,
+        "_is_intraday_data_stale",
+        lambda _symbol: False,
+    )
+
+    assert service.get_cached_only_fresh(
+        "AAPL",
+        required_as_of_date=date(2026, 3, 19),
+    ) is None
+    assert service.get_cached_only_fresh(
+        "AAPL",
+        required_as_of_date=date(2026, 3, 20),
+    ) is frame
+
+
+def test_get_many_cached_only_fresh_requires_requested_session(monkeypatch):
+    service = PriceCacheService(
+        redis_client=None,
+        session_factory=lambda: MagicMock(),
+    )
+    complete = pd.concat(
+        [
+            _price_df(date(2026, 3, 19), 122.0),
+            _price_df(date(2026, 3, 20), 123.0),
+        ]
+    )
+    missing_target = _price_df(date(2026, 3, 20), 123.0)
+    monkeypatch.setattr(
+        service,
+        "_get_many_from_database",
+        lambda symbols, period: {
+            "AAPL": (complete, date(2026, 3, 20)),
+            "MSFT": (missing_target, date(2026, 3, 20)),
+        },
+    )
+    monkeypatch.setattr(service, "_is_data_fresh", lambda _last: True)
+    monkeypatch.setattr(
+        service,
+        "_is_intraday_data_stale",
+        lambda _symbol: False,
+    )
+
+    result = service.get_many_cached_only_fresh(
+        ["AAPL", "MSFT"],
+        required_as_of_date=date(2026, 3, 19),
+    )
+
+    assert result["AAPL"] is complete
+    assert result["MSFT"] is None
+
+
 def test_get_many_cached_only_fresh_filters_stale_database_rows(monkeypatch):
     service = PriceCacheService(redis_client=None, session_factory=lambda: MagicMock())
     fresh_df = _price_df(date(2026, 3, 18), 123.0)
