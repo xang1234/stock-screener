@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.services import static_groups_rrg_export as rrg_export
 from app.services.static_groups_rrg_export import (
     StaticGroupsRRGDatabasePayloadSource,
@@ -28,6 +29,7 @@ def _state(*, market: str, source_date: date) -> StaticRRGHistoryState:
     return StaticRRGHistoryState(
         schema_version=STATIC_RRG_HISTORY_SCHEMA_VERSION,
         market=market,
+        rs_formula_version=BALANCED_RS_FORMULA_VERSION,
         weeks=(
             StaticRRGWeek(
                 source_date=source_date,
@@ -65,8 +67,25 @@ def test_rolling_source_uses_export_date_for_prepare_and_persist(monkeypatch, tm
     calls = []
 
     class _HistoryService:
-        def prepare(self, db, *, market, through_date, directory):
-            calls.append(("prepare", db, market, through_date, directory))
+        def prepare(
+            self,
+            db,
+            *,
+            market,
+            through_date,
+            directory,
+            formula_version,
+        ):
+            calls.append(
+                (
+                    "prepare",
+                    db,
+                    market,
+                    through_date,
+                    directory,
+                    formula_version,
+                )
+            )
             return preparation
 
         def persist(self, prepared, *, exported_as_of_date):
@@ -91,13 +110,21 @@ def test_rolling_source_uses_export_date_for_prepare_and_persist(monkeypatch, tm
         generated_at="2026-04-18T22:00:00Z",
         expected_as_of_date=export_date,
         market="HK",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
     )
     persisted = source.persist(exported_as_of_date=export_date)
 
     assert payload == {"as_of_date": "2026-04-18"}
     assert persisted == {"weeks": 1}
     assert calls == [
-        ("prepare", db, "HK", export_date, tmp_path),
+        (
+            "prepare",
+            db,
+            "HK",
+            export_date,
+            tmp_path,
+            BALANCED_RS_FORMULA_VERSION,
+        ),
         ("persist", preparation, export_date),
     ]
     with pytest.raises(RuntimeError, match="already been built"):
@@ -106,6 +133,7 @@ def test_rolling_source_uses_export_date_for_prepare_and_persist(monkeypatch, tm
             generated_at="2026-04-18T22:00:00Z",
             expected_as_of_date=export_date,
             market="HK",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
         )
     with pytest.raises(RuntimeError, match="already been persisted"):
         source.persist(exported_as_of_date=export_date)
@@ -139,6 +167,7 @@ def test_rolling_source_does_not_retry_failed_preparation(tmp_path):
             generated_at="2026-04-18T22:00:00Z",
             expected_as_of_date=date(2026, 4, 18),
             market="HK",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
         )
 
     assert calls == ["prepare"]
@@ -164,6 +193,7 @@ def test_rolling_source_rejects_wrong_market_before_preparation(tmp_path):
             generated_at="2026-04-18T22:00:00Z",
             expected_as_of_date=date(2026, 4, 18),
             market="US",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
         )
 
 
@@ -184,8 +214,8 @@ def test_database_source_has_one_explicit_build_path(monkeypatch):
     state = _state(market="HK", source_date=export_date)
     calls = []
     history_service = SimpleNamespace(
-        build=lambda db, *, market, through_date: (
-            calls.append((db, market, through_date)) or state
+        build=lambda db, *, market, through_date, formula_version: (
+            calls.append((db, market, through_date, formula_version)) or state
         )
     )
     monkeypatch.setattr(
@@ -204,5 +234,6 @@ def test_database_source_has_one_explicit_build_path(monkeypatch):
         generated_at="2026-04-18T22:00:00Z",
         expected_as_of_date=export_date,
         market="HK",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
     ) == {"available": True}
-    assert calls == [(db, "HK", export_date)]
+    assert calls == [(db, "HK", export_date, BALANCED_RS_FORMULA_VERSION)]

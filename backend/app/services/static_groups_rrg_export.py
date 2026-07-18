@@ -41,6 +41,7 @@ class StaticGroupsRRGPayloadBuilder:
 
     schema_version: str
     rrg_service: RRGService
+    rs_formula_version: str
     market_catalog: MarketCatalog = field(default_factory=get_market_catalog)
 
     def build(
@@ -98,6 +99,7 @@ class StaticGroupsRRGPayloadBuilder:
             "generated_at": generated_at,
             "available": True,
             "market": normalized_market,
+            "rs_formula_version": self.rs_formula_version,
             "as_of_date": expected_date,
             "available_scopes": available_scopes,
             "payload": {scope: scopes[scope] for scope in requested_scopes},
@@ -139,6 +141,7 @@ class StaticGroupsRRGPayloadSource(Protocol):
         generated_at: str,
         expected_as_of_date: date,
         market: str,
+        formula_version: str,
     ) -> dict[str, Any]: ...
 
 
@@ -158,6 +161,7 @@ class StaticGroupsRRGDatabasePayloadSource:
         generated_at: str,
         expected_as_of_date: date,
         market: str,
+        formula_version: str,
     ) -> dict[str, Any]:
         normalized_market = normalize_static_rrg_market(market)
         try:
@@ -165,6 +169,7 @@ class StaticGroupsRRGDatabasePayloadSource:
                 db,
                 market=normalized_market,
                 through_date=expected_as_of_date,
+                formula_version=formula_version,
             )
         except (StaticRRGHistoryBundleError, StaticRRGHistoryUnavailableError) as exc:
             raise StaticGroupsRRGUnavailableError(
@@ -179,6 +184,7 @@ class StaticGroupsRRGDatabasePayloadSource:
             generated_at=generated_at,
             expected_as_of_date=expected_as_of_date,
             market=normalized_market,
+            formula_version=formula_version,
         )
 
 
@@ -233,6 +239,7 @@ class StaticGroupsRRGRollingHistoryExportSession:
         generated_at: str,
         expected_as_of_date: date,
         market: str,
+        formula_version: str,
     ) -> dict[str, Any]:
         if not isinstance(self._state, _NewRollingRRGExport):
             raise RuntimeError("Rolling RRG export session has already been built.")
@@ -248,6 +255,7 @@ class StaticGroupsRRGRollingHistoryExportSession:
             market=expected_market,
             through_date=expected_as_of_date,
             directory=self.directory,
+            formula_version=formula_version,
         )
         self._state = _PreparedRollingRRGExport(preparation)
         if preparation.state is None:
@@ -268,6 +276,7 @@ class StaticGroupsRRGRollingHistoryExportSession:
             generated_at=generated_at,
             expected_as_of_date=expected_as_of_date,
             market=expected_market,
+            formula_version=formula_version,
         )
 
     def persist(self, *, exported_as_of_date: date) -> dict[str, Any] | None:
@@ -292,10 +301,20 @@ def _build_payload_from_state(
     generated_at: str,
     expected_as_of_date: date,
     market: str,
+    formula_version: str,
 ) -> dict[str, Any]:
+    if state.rs_formula_version != formula_version:
+        raise StaticGroupsRRGUnavailableError(
+            section=f"{market} rrg",
+            reason=(
+                f"RRG history formula {state.rs_formula_version} does not match "
+                f"requested formula {formula_version}."
+            ),
+        )
     return StaticGroupsRRGPayloadBuilder(
         schema_version=schema_version,
         rrg_service=build_static_rrg_service(state),
+        rs_formula_version=formula_version,
     ).build(
         db=db,
         generated_at=generated_at,

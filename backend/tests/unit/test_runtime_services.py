@@ -33,10 +33,7 @@ def test_runtime_services_reuses_rrg_service_for_process_lifetime(monkeypatch):
     runtime = build_runtime_services()
 
     monkeypatch.setattr(runtime, "group_rank_service", lambda: object())
-    monkeypatch.setattr(
-        "app.services.market_group_ranking_service.get_market_group_ranking_service",
-        lambda: object(),
-    )
+    monkeypatch.setattr(runtime, "market_rs_run_repository", lambda: object())
     monkeypatch.setattr(
         "app.services.market_taxonomy_service.get_market_taxonomy_service",
         lambda: object(),

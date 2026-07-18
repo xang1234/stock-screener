@@ -27,6 +27,7 @@ from app.domain.scanning.default_filters import (
 from app.infra.serialization import json_safe
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
 from app.services.breadth_attribution_service import BreadthAttributionService
 from app.services.group_detail_payloads import scan_result_item_to_group_row
@@ -152,6 +153,7 @@ class StaticSiteExportService:
             )
         )
         self._ui_snapshot_service = UISnapshotService(session_factory)
+        self._market_rs_repository = MarketRsRunRepository()
         self._price_cache = get_price_cache()
         self._fundamentals_cache = get_fundamentals_cache()
         self._benchmark_cache = get_benchmark_cache()
@@ -300,6 +302,10 @@ class StaticSiteExportService:
 
         path_prefix = Path("markets") / market.lower()
         scan_rows, filter_options = self._load_scan_export_source(db, latest_run)
+        formula_version = self._market_rs_repository.active_formula(
+            db,
+            market=market,
+        )
         scan_manifest, serialized_rows = self._export_scan_bundle(
             db=db,
             output_dir=output_dir,
@@ -334,6 +340,7 @@ class StaticSiteExportService:
                 generated_at=generated_at,
                 expected_as_of_date=latest_run.as_of_date,
                 market=market,
+                formula_version=formula_version,
             ),
         )
         chart_manifest = self._export_chart_bundle(
@@ -539,6 +546,7 @@ class StaticSiteExportService:
         generated_at: str,
         expected_as_of_date: date,
         market: str,
+        formula_version: str,
     ) -> dict[str, Any]:
         """Pre-compute the Relative Rotation Graph payload for the static bundle.
 
@@ -560,6 +568,7 @@ class StaticSiteExportService:
                 generated_at=generated_at,
                 expected_as_of_date=expected_as_of_date,
                 market=market,
+                formula_version=formula_version,
             )
         except StaticGroupsRRGUnavailableError as exc:
             raise StaticSiteSectionUnavailableError(

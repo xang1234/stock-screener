@@ -13,9 +13,9 @@ from app.analysis.rrg_weekly import rrg_week_start
 from app.domain.markets.catalog import MarketCatalog, get_market_catalog
 
 
-StaticRRGHistorySchemaVersion = Literal["static-rrg-history-v3"]
+StaticRRGHistorySchemaVersion = Literal["static-rrg-history-v4"]
 STATIC_RRG_HISTORY_SCHEMA_VERSION: StaticRRGHistorySchemaVersion = (
-    "static-rrg-history-v3"
+    "static-rrg-history-v4"
 )
 STATIC_RRG_HISTORY_RETENTION_WEEKS = 60
 
@@ -60,12 +60,21 @@ class StaticRRGHistoryState(BaseModel):
 
     schema_version: StaticRRGHistorySchemaVersion
     market: str
+    rs_formula_version: str = Field(min_length=1)
     weeks: tuple[StaticRRGWeek, ...]
 
     @field_validator("market")
     @classmethod
     def normalize_market(cls, value: str) -> str:
         return normalize_static_rrg_market(value)
+
+    @field_validator("rs_formula_version")
+    @classmethod
+    def normalize_formula_version(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("rs_formula_version is required")
+        return normalized
 
     @model_validator(mode="after")
     def validate_history(self) -> "StaticRRGHistoryState":

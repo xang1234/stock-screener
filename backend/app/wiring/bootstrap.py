@@ -225,9 +225,6 @@ class RuntimeServices:
         if self._rrg_service is None:
             with self._init_lock:
                 if self._rrg_service is None:
-                    from app.services.market_group_ranking_service import (
-                        get_market_group_ranking_service,
-                    )
                     from app.services.market_taxonomy_service import (
                         get_market_taxonomy_service,
                     )
@@ -237,7 +234,7 @@ class RuntimeServices:
                     self._rrg_service = RRGService(
                         history_provider=build_rrg_history_provider(
                             group_rank_service=self.group_rank_service(),
-                            market_group_ranking_service=get_market_group_ranking_service(),
+                            market_rs_repository=self.market_rs_run_repository(),
                         ),
                         taxonomy_service=get_market_taxonomy_service(),
                     )

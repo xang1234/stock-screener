@@ -61,6 +61,7 @@ class StaticRRGHistoryBundleService:
         market: str,
         through_date: date,
         directory: Path,
+        formula_version: str,
     ) -> StaticRRGHistoryPreparation:
         """Load prior state when valid, then advance it from current DB rows."""
         plan = build_static_rrg_history_plan(
@@ -74,7 +75,11 @@ class StaticRRGHistoryBundleService:
         warnings: list[str] = []
         if plan.source_path.exists():
             try:
-                previous = self.load(plan.source_path, expected_market=market)
+                previous = self.load(
+                    plan.source_path,
+                    expected_market=market,
+                    expected_formula_version=formula_version,
+                )
             except StaticRRGHistoryBundleError as exc:
                 warnings.append(
                     f"Rolling RRG history was invalid and will be bootstrapped: {exc}"
@@ -85,6 +90,7 @@ class StaticRRGHistoryBundleService:
                 market=market,
                 through_date=through_date,
                 previous=previous,
+                formula_version=formula_version,
             )
         except (StaticRRGHistoryBundleError, StaticRRGHistoryUnavailableError) as exc:
             warnings.append(f"Rolling RRG history was not advanced: {exc}")
@@ -95,7 +101,13 @@ class StaticRRGHistoryBundleService:
             warnings=tuple(warnings),
         )
 
-    def load(self, input_path: Path, *, expected_market: str) -> StaticRRGHistoryState:
+    def load(
+        self,
+        input_path: Path,
+        *,
+        expected_market: str,
+        expected_formula_version: str | None = None,
+    ) -> StaticRRGHistoryState:
         try:
             payload = _read_payload(input_path)
             state = StaticRRGHistoryState.model_validate(payload)
@@ -108,6 +120,14 @@ class StaticRRGHistoryBundleService:
             raise StaticRRGHistoryBundleError(
                 f"RRG history bundle market {state.market} does not match {normalized_market}."
             )
+        if (
+            expected_formula_version is not None
+            and state.rs_formula_version != expected_formula_version
+        ):
+            raise StaticRRGHistoryBundleError(
+                "RRG history bundle formula "
+                f"{state.rs_formula_version} does not match {expected_formula_version}."
+            )
         return state
 
     def build(
@@ -117,8 +137,12 @@ class StaticRRGHistoryBundleService:
         market: str,
         through_date: date,
         previous: StaticRRGHistoryState | None = None,
+        formula_version: str,
     ) -> StaticRRGHistoryState:
         normalized_market = normalize_static_rrg_market(market)
+        normalized_formula = str(formula_version or "").strip()
+        if not normalized_formula:
+            raise StaticRRGHistoryBundleError("RRG history formula is required.")
         if not self.market_catalog.rrg_scopes_for_market(normalized_market):
             raise StaticRRGHistoryUnavailableError(
                 f"RRG is not enabled for market {normalized_market}."
@@ -126,6 +150,14 @@ class StaticRRGHistoryBundleService:
         if previous is not None and previous.market != normalized_market:
             raise StaticRRGHistoryBundleError(
                 f"RRG history bundle market {previous.market} does not match {normalized_market}."
+            )
+        if (
+            previous is not None
+            and previous.rs_formula_version != normalized_formula
+        ):
+            raise StaticRRGHistoryBundleError(
+                "RRG history bundle formula "
+                f"{previous.rs_formula_version} does not match {normalized_formula}."
             )
         if not inspect(db.get_bind()).has_table(IBDGroupRank.__tablename__):
             raise StaticRRGHistoryUnavailableError(
@@ -137,6 +169,7 @@ class StaticRRGHistoryBundleService:
             db.query(IBDGroupRank)
             .filter(
                 IBDGroupRank.market == normalized_market,
+                IBDGroupRank.rs_formula_version == normalized_formula,
                 IBDGroupRank.date >= cutoff,
                 IBDGroupRank.date <= through_date,
             )
@@ -159,6 +192,7 @@ class StaticRRGHistoryBundleService:
             return StaticRRGHistoryState(
                 schema_version=STATIC_RRG_HISTORY_SCHEMA_VERSION,
                 market=normalized_market,
+                rs_formula_version=normalized_formula,
                 weeks=ordered,
             )
         except (ValidationError, TypeError, ValueError) as exc:
@@ -188,6 +222,7 @@ class StaticRRGHistoryBundleService:
         return {
             "path": str(output_path),
             "market": state.market,
+            "rs_formula_version": state.rs_formula_version,
             "through_date": state.through_date.isoformat(),
             "weeks": len(state.weeks),
             "groups": sum(len(week.groups) for week in state.weeks),

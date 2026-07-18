@@ -15,8 +15,10 @@ from sqlalchemy.orm import sessionmaker
 
 import app.services.static_site_export_service as export_module
 from app.database import Base
+from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
 from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
+from app.infra.db.models.relative_strength import MarketRsFormulaPointer
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
 from app.services.group_ranking_history import select_market_run_series
@@ -46,6 +48,7 @@ def service_and_session_factory():
             FeatureRunPointer.__table__,
             StockPrice.__table__,
             MarketExposure.__table__,
+            MarketRsFormulaPointer.__table__,
         ],
     )
     session_factory = sessionmaker(
@@ -54,6 +57,15 @@ def service_and_session_factory():
         autoflush=False,
         expire_on_commit=False,
     )
+    with session_factory() as db:
+        db.add_all(
+            MarketRsFormulaPointer(
+                market=market,
+                formula_version=LEGACY_RS_FORMULA_VERSION,
+            )
+            for market in ("US", "HK", "IN", "JP", "TW")
+        )
+        db.commit()
     try:
         yield StaticSiteExportService(session_factory), session_factory
     finally:
@@ -1779,6 +1791,7 @@ def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_fac
     builder = StaticGroupsRRGPayloadBuilder(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
         rrg_service=_FakeRRGService(),
+        rs_formula_version=LEGACY_RS_FORMULA_VERSION,
     )
 
     with session_factory() as db:
@@ -1790,6 +1803,7 @@ def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_fac
         )
 
     assert payload["available_scopes"] == ["groups"]
+    assert payload["rs_formula_version"] == LEGACY_RS_FORMULA_VERSION
     assert payload["payload"]["groups"]["groups"][0]["industry_group"] == "Internet Services"
 
 
@@ -1836,6 +1850,7 @@ def test_build_groups_rrg_payload_rejects_date_mismatch(
     builder = StaticGroupsRRGPayloadBuilder(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
         rrg_service=_FakeRRGService(),
+        rs_formula_version=LEGACY_RS_FORMULA_VERSION,
     )
 
     with session_factory() as db, pytest.raises(
@@ -1889,6 +1904,7 @@ def test_build_groups_rrg_payload_requests_only_market_supported_scopes(
     builder = StaticGroupsRRGPayloadBuilder(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
         rrg_service=_FakeRRGService(),
+        rs_formula_version=LEGACY_RS_FORMULA_VERSION,
     )
 
     with session_factory() as db:
@@ -1908,6 +1924,7 @@ def test_static_rrg_preflight_needs_no_database_tables_for_group_only_markets(ma
     builder = StaticGroupsRRGPayloadBuilder(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
         rrg_service=object(),
+        rs_formula_version=LEGACY_RS_FORMULA_VERSION,
     )
 
     assert builder._required_table_names(market) == ()  # noqa: SLF001
@@ -1931,6 +1948,7 @@ def test_static_groups_rrg_builder_propagates_sql_errors_after_preflight(
     builder = StaticGroupsRRGPayloadBuilder(
         schema_version=STATIC_SITE_SCHEMA_VERSION,
         rrg_service=_FakeRRGService(),
+        rs_formula_version=LEGACY_RS_FORMULA_VERSION,
     )
 
     with session_factory() as db, pytest.raises(SQLAlchemyError, match="feature_runs"):
@@ -1962,6 +1980,7 @@ def test_build_groups_rrg_payload_propagates_non_missing_table_sql_errors(
             generated_at="2026-04-18T22:00:00Z",
             expected_as_of_date=date(2026, 4, 18),
             market="HK",
+            formula_version=LEGACY_RS_FORMULA_VERSION,
         )
 
 
