@@ -148,6 +148,39 @@ def _setup_daily_task(
     return module, fake_db, fake_service
 
 
+def _setup_group_wrapper(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = []
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        module,
+        "get_group_rank_service",
+        lambda: fake_service,
+    )
+    monkeypatch.setattr(
+        module.settings,
+        "group_rank_gapfill_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        lambda db, market: ["Software"],
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _market: True,
+    )
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(
+        monkeypatch,
+        datetime(2026, 3, 20, 17, 40),
+    )
+    return module, fake_db, fake_service
+
+
 def test_same_day_group_rankings_require_complete_warmup(monkeypatch):
     module, _, fake_service = _setup_daily_task(
         monkeypatch,
@@ -267,6 +300,79 @@ def test_manual_strict_cache_only_remains_supported(monkeypatch):
     assert call_kwargs["cache_requirement"] == (
         GroupRankCacheRequirement.strict()
     )
+
+
+def test_strict_no_groups_response_includes_cache_only(monkeypatch):
+    module, _, fake_service = _setup_daily_task(
+        monkeypatch,
+        now=datetime(2026, 4, 3, 0, 30),
+        warmup_metadata=None,
+    )
+    fake_service.calculate_group_rankings.return_value = (
+        GroupRankCalculationResult(
+            rankings=(),
+            prefetch_stats=_prefetch_stats(),
+        )
+    )
+
+    result = module.calculate_daily_group_rankings.run(
+        "2026-04-02",
+        force_cache_only=True,
+    )
+
+    assert result["cache_only"] is True
+
+
+def test_strict_daily_error_response_includes_cache_only(monkeypatch):
+    module, _, fake_service = _setup_daily_task(
+        monkeypatch,
+        now=datetime(2026, 4, 3, 0, 30),
+        warmup_metadata=None,
+    )
+    fake_service.calculate_group_rankings.side_effect = RuntimeError(
+        "ranking failed"
+    )
+
+    result = module.calculate_daily_group_rankings.run(
+        "2026-04-02",
+        force_cache_only=True,
+    )
+
+    assert result["cache_only"] is True
+
+
+def test_strict_group_wrapper_success_includes_cache_only(monkeypatch):
+    module, _, _ = _setup_group_wrapper(monkeypatch)
+    monkeypatch.setattr(
+        module,
+        "run_daily_group_rankings",
+        lambda db, request, dependencies: _runner_outcome(
+            request.calculation_date
+        ),
+    )
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(
+        market="US",
+        calculation_date="2026-03-19",
+        execution_policy="strict_cache_only",
+    )
+
+    assert result["cache_only"] is True
+
+
+def test_strict_group_wrapper_error_includes_cache_only(monkeypatch):
+    module, _, fake_service = _setup_group_wrapper(monkeypatch)
+    fake_service.find_missing_dates.side_effect = RuntimeError(
+        "gap lookup failed"
+    )
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(
+        market="US",
+        calculation_date="2026-03-19",
+        execution_policy="strict_cache_only",
+    )
+
+    assert result["cache_only"] is True
 
 
 def test_guarded_historical_group_rankings_use_tolerant_cache_only_policy(

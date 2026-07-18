@@ -172,7 +172,7 @@ def _run_daily_group_rankings_response(
             ),
             "timestamp": datetime.now().isoformat(),
         }
-        policy.annotate_response(result)
+        policy.annotate_response(result, include_cache_only=True)
         if policy.response_cache_policy is not None:
             result["prefetch_stats"] = exc.prefetch_stats.to_dict()
         return result
@@ -362,7 +362,10 @@ def calculate_daily_group_rankings(
             'timestamp': datetime.now().isoformat()
         }
         if policy is not None:
-            policy.annotate_response(error_result)
+            policy.annotate_response(
+                error_result,
+                include_cache_only=True,
+            )
         return error_result
 
     finally:
@@ -503,7 +506,7 @@ def calculate_daily_group_rankings_with_gapfill(
 
         service = get_group_rank_service()
         gap_policy = policy.for_gap_fill()
-        policy.annotate_response(result)
+        policy.annotate_response(result, include_cache_only=True)
 
         if settings.group_rank_gapfill_enabled:
             logger.info(
@@ -661,7 +664,10 @@ def calculate_daily_group_rankings_with_gapfill(
             'timestamp': datetime.now().isoformat(),
         }
         if policy is not None:
-            policy.annotate_response(error_result)
+            policy.annotate_response(
+                error_result,
+                include_cache_only=True,
+            )
         return error_result
     finally:
         db.close()
