@@ -180,6 +180,8 @@ class IBDGroupRank(Base):
     # Core ranking metrics
     rank = Column(Integer, nullable=False)  # 1 = best, higher = worse
     avg_rs_rating = Column(Float, nullable=False)  # Average RS of all stocks in group
+    avg_rs_rating_1m = Column(Float)
+    avg_rs_rating_3m = Column(Float)
     median_rs_rating = Column(Float)  # Median RS of stocks in group
     weighted_avg_rs_rating = Column(Float)  # Market-cap weighted average RS
     rs_std_dev = Column(Float)  # Dispersion of RS ratings (std dev)
@@ -193,11 +195,19 @@ class IBDGroupRank(Base):
     top_rs_rating = Column(Float)
 
     # Metadata
+    rs_formula_version = Column(String(64), nullable=False, default="legacy-linear-v1")
+    market_rs_run_id = Column(
+        Integer, ForeignKey("market_rs_runs.id", ondelete="SET NULL")
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint(
-            "industry_group", "date", "market", name="uix_ibd_group_rank_market_date"
+            "industry_group",
+            "date",
+            "market",
+            "rs_formula_version",
+            name="uix_ibd_group_rank_market_date_formula",
         ),
         Index("idx_ibd_group_rank_date", "industry_group", "date"),
         Index("idx_ibd_group_rank_market_date", "market", "date"),

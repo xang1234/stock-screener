@@ -45,6 +45,11 @@ from .ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
 from app.infra.db.models.feature_store import (
     FeatureRun, FeatureRunUniverseSymbol, StockFeatureDaily, FeatureRunPointer,
 )
+from app.infra.db.models.relative_strength import (
+    MarketRsFormulaPointer,
+    MarketRsRun,
+    StockRsSnapshot,
+)
 
 __all__ = [
     "StockPrice",
@@ -121,4 +126,8 @@ __all__ = [
     "FeatureRunUniverseSymbol",
     "StockFeatureDaily",
     "FeatureRunPointer",
+    # Canonical market relative strength
+    "MarketRsRun",
+    "StockRsSnapshot",
+    "MarketRsFormulaPointer",
 ]
