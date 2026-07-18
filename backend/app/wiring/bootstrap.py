@@ -49,6 +49,10 @@ if TYPE_CHECKING:
     from app.services.llm.zai_key_manager import ZAIKeyManager
     from app.services.daily_price_bundle_service import DailyPriceBundleService
     from app.services.market_calendar_service import MarketCalendarService
+    from app.services.market_rs_inputs import MarketRsInputLoader
+    from app.services.market_rs_snapshot_service import MarketRsSnapshotService
+    from app.services.point_in_time_universe_service import PointInTimeUniverseService
+    from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
     from app.services.price_cache_service import PriceCacheService
     from app.services.provider_snapshot_service import ProviderSnapshotService
     from app.services.rate_limiter import RedisRateLimiter
@@ -109,6 +113,10 @@ class RuntimeServices:
         self._zai_key_manager: ZAIKeyManager | None = None
         self._rate_limiter: RedisRateLimiter | None = None
         self._market_calendar_service: MarketCalendarService | None = None
+        self._point_in_time_universe_service: PointInTimeUniverseService | None = None
+        self._market_rs_input_loader: MarketRsInputLoader | None = None
+        self._market_rs_run_repository: MarketRsRunRepository | None = None
+        self._market_rs_snapshot_service: MarketRsSnapshotService | None = None
         self._github_release_sync_service: GitHubReleaseSyncService | None = None
         self._security_master_resolver: SecurityMasterResolver | None = None
         self._eps_rating_service: EPSRatingService | None = None
@@ -280,6 +288,56 @@ class RuntimeServices:
 
                     self._market_calendar_service = MarketCalendarService()
         return self._market_calendar_service
+
+    def point_in_time_universe_service(self) -> PointInTimeUniverseService:
+        if self._point_in_time_universe_service is None:
+            with self._init_lock:
+                if self._point_in_time_universe_service is None:
+                    from app.services.point_in_time_universe_service import (
+                        PointInTimeUniverseService,
+                    )
+
+                    self._point_in_time_universe_service = PointInTimeUniverseService(
+                        market_calendar=self.market_calendar_service()
+                    )
+        return self._point_in_time_universe_service
+
+    def market_rs_input_loader(self) -> MarketRsInputLoader:
+        if self._market_rs_input_loader is None:
+            with self._init_lock:
+                if self._market_rs_input_loader is None:
+                    from app.services.market_rs_inputs import MarketRsInputLoader
+
+                    self._market_rs_input_loader = MarketRsInputLoader(
+                        point_in_time_universe=self.point_in_time_universe_service(),
+                        market_calendar=self.market_calendar_service(),
+                    )
+        return self._market_rs_input_loader
+
+    def market_rs_run_repository(self) -> MarketRsRunRepository:
+        if self._market_rs_run_repository is None:
+            with self._init_lock:
+                if self._market_rs_run_repository is None:
+                    from app.infra.db.repositories.market_rs_repo import (
+                        MarketRsRunRepository,
+                    )
+
+                    self._market_rs_run_repository = MarketRsRunRepository()
+        return self._market_rs_run_repository
+
+    def market_rs_snapshot_service(self) -> MarketRsSnapshotService:
+        if self._market_rs_snapshot_service is None:
+            with self._init_lock:
+                if self._market_rs_snapshot_service is None:
+                    from app.services.market_rs_snapshot_service import (
+                        MarketRsSnapshotService,
+                    )
+
+                    self._market_rs_snapshot_service = MarketRsSnapshotService(
+                        input_loader=self.market_rs_input_loader(),
+                        repository=self.market_rs_run_repository(),
+                    )
+        return self._market_rs_snapshot_service
 
     def github_release_sync_service(self) -> GitHubReleaseSyncService:
         if self._github_release_sync_service is None:
@@ -454,6 +512,10 @@ class RuntimeServices:
             self._zai_key_manager = None
             self._rate_limiter = None
             self._market_calendar_service = None
+            self._point_in_time_universe_service = None
+            self._market_rs_input_loader = None
+            self._market_rs_run_repository = None
+            self._market_rs_snapshot_service = None
             self._github_release_sync_service = None
             self._security_master_resolver = None
             self._eps_rating_service = None
@@ -656,6 +718,11 @@ def get_rate_limiter() -> RedisRateLimiter:
 def get_market_calendar_service() -> MarketCalendarService:
     """Return process-scoped market calendar service."""
     return _resolve_runtime_services().market_calendar_service()
+
+
+def get_market_rs_snapshot_service() -> MarketRsSnapshotService:
+    """Return the process-scoped canonical Market RS snapshot publisher."""
+    return _resolve_runtime_services().market_rs_snapshot_service()
 
 
 def get_github_release_sync_service() -> GitHubReleaseSyncService:

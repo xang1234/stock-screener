@@ -49,3 +49,24 @@ def test_runtime_services_reuses_rrg_service_for_process_lifetime(monkeypatch):
     runtime.reset_for_tests()
 
     assert runtime.rrg_service() is not rrg_service
+
+
+def test_runtime_services_reuses_and_resets_canonical_market_rs_dependencies():
+    runtime = build_runtime_services()
+
+    point_in_time = runtime.point_in_time_universe_service()
+    input_loader = runtime.market_rs_input_loader()
+    repository = runtime.market_rs_run_repository()
+    snapshot_service = runtime.market_rs_snapshot_service()
+
+    assert runtime.point_in_time_universe_service() is point_in_time
+    assert runtime.market_rs_input_loader() is input_loader
+    assert runtime.market_rs_run_repository() is repository
+    assert runtime.market_rs_snapshot_service() is snapshot_service
+
+    runtime.reset_for_tests()
+
+    assert runtime.point_in_time_universe_service() is not point_in_time
+    assert runtime.market_rs_input_loader() is not input_loader
+    assert runtime.market_rs_run_repository() is not repository
+    assert runtime.market_rs_snapshot_service() is not snapshot_service
