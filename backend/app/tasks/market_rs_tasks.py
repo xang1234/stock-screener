@@ -56,8 +56,9 @@ def _retry_connection_failure(task, exc: Exception) -> None:
 def calculate_market_rs_snapshot(
     self,
     market: str,
-    calculation_date: str,
+    calculation_date: str | None = None,
     formula_version: str = BALANCED_RS_FORMULA_VERSION,
+    activity_lifecycle: str | None = None,
 ) -> dict[str, object]:
     """Idempotently publish one exact-date balanced Market RS snapshot.
 
@@ -78,8 +79,13 @@ def calculate_market_rs_snapshot(
             diagnostics={"error": str(exc)},
         )
 
+    calendar = get_market_calendar_service()
     try:
-        as_of_date = datetime.strptime(calculation_date, "%Y-%m-%d").date()
+        as_of_date = (
+            calendar.last_completed_trading_day(market_code)
+            if calculation_date is None
+            else datetime.strptime(calculation_date, "%Y-%m-%d").date()
+        )
     except (TypeError, ValueError) as exc:
         return _failed_result(
             market=market_code,
@@ -100,7 +106,6 @@ def calculate_market_rs_snapshot(
             },
         )
 
-    calendar = get_market_calendar_service()
     if not calendar.is_trading_day(market_code, as_of_date):
         return _failed_result(
             market=market_code,

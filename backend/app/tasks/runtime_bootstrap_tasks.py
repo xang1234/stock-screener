@@ -182,6 +182,7 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
     from app.tasks.group_rank_tasks import calculate_daily_group_rankings_with_gapfill
     from app.tasks.industry_tasks import load_tracked_ibd_industry_groups
+    from app.tasks.market_rs_tasks import calculate_market_rs_snapshot
     from app.tasks.universe_tasks import (
         refresh_official_market_universe,
         refresh_stock_universe,
@@ -194,6 +195,7 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
         BootstrapOperation.SMART_REFRESH_CACHE: smart_refresh_cache,
         BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP: wait_for_bootstrap_price_warmup,
         BootstrapOperation.REFRESH_ALL_FUNDAMENTALS: refresh_all_fundamentals,
+        BootstrapOperation.CALCULATE_MARKET_RS_SNAPSHOT: calculate_market_rs_snapshot,
         BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL: (
             calculate_daily_breadth_with_gapfill
         ),

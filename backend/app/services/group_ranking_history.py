@@ -192,7 +192,7 @@ def build_group_detail_payload_from_parts(
     history: Iterable[Mapping[str, Any]],
     stocks: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    return GroupDetailResponse(
+    response = GroupDetailResponse(
         industry_group=industry_group,
         current_rank=ranking["rank"],
         current_avg_rs=ranking["avg_rs_rating"],
@@ -219,7 +219,15 @@ def build_group_detail_payload_from_parts(
             for point in history
         ],
         stocks=list(stocks),
-    ).model_dump(mode="json", exclude_none=True)
+    )
+    payload = response.model_dump(mode="json", exclude_none=True)
+    # Rank-change keys are part of the stable detail contract even when the
+    # requested lookback is unavailable. Other optional fields retain the
+    # historical omit-when-missing behavior.
+    for key in GROUP_RANK_CHANGE_OFFSETS:
+        field = f"rank_change_{key}"
+        payload[field] = getattr(response, field)
+    return payload
 
 
 def build_group_details(

@@ -71,10 +71,12 @@ Bootstrap stages:
 1. **Universe refresh** — seeds the market symbol list. US uses S&P 500 / Russell / NDX via `refresh_stock_universe`; HK / IN / JP / KR / TW / CN / CA / DE / SG / MY / AU use official exchange feeds via `refresh_official_market_universe`.
 2. **Benchmark + price refresh** — imports the GitHub daily price bundle first, accepts recent stale bundles during bootstrap, then live-fetches missing/current-session gaps (`7d` top-up for stale symbols, `2y` for no-history symbols). Under `live_only` this stage skips the bundle and fetches live — see [Market Data Source Mode](#market-data-source-mode).
 3. **Fundamentals refresh** — loads quarterly and annual financials.
-4. **Breadth calculation** — computes StockBee-style advance/decline data with gap-fill.
-5. **Group rankings** — computes IBD-style relative strength group ranks.
-6. **Feature snapshot** — US-only daily feature rollup for the Setup Engine.
-7. **Initial autoscan** — publishes the first default-profile scan.
+4. **Market RS snapshot** — computes the canonical balanced-horizon percentile RS snapshot after prices and fundamentals are ready. During a guarded rollout, the new formula can remain in shadow mode until that market's formula pointer is activated.
+5. **Breadth calculation** — computes StockBee-style advance/decline data with gap-fill.
+6. **Market exposure** — derives the market-regime exposure state from the refreshed breadth data.
+7. **Group rankings** — averages canonical constituent RS values for each group, using the active formula for that market.
+8. **Feature snapshot** — US-only daily feature rollup for the Setup Engine.
+9. **Initial autoscan** — publishes the first default-profile scan.
 
 Selecting many enabled markets multiplies this work. On smaller hosts, start with one primary market and add markets after the workspace is ready.
 

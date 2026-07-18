@@ -57,6 +57,34 @@ def test_calculate_market_rs_snapshot_returns_stable_completed_shape(monkeypatch
     fake_db.close.assert_called_once_with()
 
 
+def test_calculate_market_rs_snapshot_resolves_bootstrap_date_when_omitted(monkeypatch):
+    module, fake_db, fake_calendar, fake_service = _patch_task_dependencies(monkeypatch)
+    fake_calendar.last_completed_trading_day.return_value = date(2026, 4, 10)
+    fake_service.calculate.return_value = SimpleNamespace(
+        id=43,
+        status="completed",
+        market="HK",
+        as_of_date=date(2026, 4, 10),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        eligible_symbol_count=800,
+    )
+
+    result = module.calculate_market_rs_snapshot.run(
+        market="HK",
+        activity_lifecycle="bootstrap",
+    )
+
+    assert result["status"] == "completed"
+    assert result["as_of_date"] == "2026-04-10"
+    fake_calendar.last_completed_trading_day.assert_called_once_with("HK")
+    fake_service.calculate.assert_called_once_with(
+        fake_db,
+        market="HK",
+        as_of_date=date(2026, 4, 10),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+
+
 def test_calculate_market_rs_snapshot_returns_input_diagnostics(monkeypatch):
     module, fake_db, _fake_calendar, fake_service = _patch_task_dependencies(monkeypatch)
     fake_service.calculate.side_effect = MarketRsInputUnavailable(

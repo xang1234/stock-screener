@@ -47,6 +47,7 @@ from app.scanners.criteria.rs_resolution import (
     CanonicalStockRsUnavailable,
     resolve_stock_rs,
 )
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.scanners.criteria.stage_analysis import quick_stage_check
 from app.scanners.setup_engine_scanner import build_setup_engine_payload
 
@@ -387,7 +388,16 @@ class SetupEngineScanner(BaseStockScreener):
             and precomputed_context.rs_ratings.get("rs_rating") is not None
             else None
         )
-        if rs_rating is None and stock_data is not None:
+        uses_canonical_rs = stock_data is not None and (
+            stock_data.canonical_rs_ratings is not None
+            or stock_data.rs_formula_version == BALANCED_RS_FORMULA_VERSION
+        )
+        has_legacy_benchmark = spy_close is not None and not spy_close.empty
+        if (
+            rs_rating is None
+            and stock_data is not None
+            and (uses_canonical_rs or has_legacy_benchmark)
+        ):
             prices_rev = (
                 precomputed_context.close_rev
                 if precomputed_context is not None and precomputed_context.close_rev is not None
