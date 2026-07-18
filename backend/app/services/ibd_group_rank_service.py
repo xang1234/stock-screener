@@ -147,6 +147,7 @@ class IBDGroupRankService:
             db,
             market=normalized_market,
             policy=policy,
+            calculation_date=calculation_date,
         )
         legacy_prefetch = not isinstance(
             raw_prefetch,
@@ -543,11 +544,13 @@ class IBDGroupRankService:
         policy: DerivedDataExecutionPolicy = (
             DerivedDataExecutionPolicy.provider_allowed()
         ),
+        calculation_date: date | None = None,
     ) -> GroupRankPrefetchData:
         return self.input_loader.load(
             db,
             market=(market or "US").upper(),
             policy=policy,
+            calculation_date=calculation_date,
         )
 
     def backfill_rankings_optimized(

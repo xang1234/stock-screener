@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 import logging
 from typing import Optional, Sequence
 
@@ -52,6 +53,7 @@ class GroupRankInputLoader:
         *,
         market: str,
         policy: DerivedDataExecutionPolicy,
+        calculation_date: date | None = None,
     ) -> GroupRankPrefetchData:
         normalized_market = (market or "US").upper()
         group_names = tuple(
@@ -72,6 +74,7 @@ class GroupRankInputLoader:
                     normalized_market,
                     primary_benchmark,
                     period="2y",
+                    required_as_of_date=calculation_date,
                 )
             )
         else:
@@ -116,9 +119,14 @@ class GroupRankInputLoader:
         }
         ordered_symbols = sorted(symbols_to_fetch)
         if policy.cache_only:
+            constituent_cache_kwargs = {"period": "2y"}
+            if calculation_date is not None:
+                constituent_cache_kwargs["required_as_of_date"] = (
+                    calculation_date
+                )
             prices = self.price_cache.get_many_cached_only_fresh(
                 ordered_symbols,
-                period="2y",
+                **constituent_cache_kwargs,
             )
         else:
             prices = self.price_cache.get_many(
@@ -247,6 +255,7 @@ class GroupRankInputLoader:
         primary_symbol: str,
         *,
         period: str,
+        required_as_of_date: date | None = None,
     ) -> tuple[Optional[pd.DataFrame], str, str]:
         resolved = [
             str(symbol)
@@ -258,9 +267,14 @@ class GroupRankInputLoader:
         candidates = resolved or [primary_symbol]
 
         for index, candidate in enumerate(candidates):
+            benchmark_cache_kwargs = {"period": period}
+            if required_as_of_date is not None:
+                benchmark_cache_kwargs["required_as_of_date"] = (
+                    required_as_of_date
+                )
             data = self.price_cache.get_cached_only_fresh(
                 candidate,
-                period=period,
+                **benchmark_cache_kwargs,
             )
             if data is not None and not data.empty:
                 role = "primary" if index == 0 else "fallback"

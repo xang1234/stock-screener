@@ -377,6 +377,38 @@ def _price_frame() -> pd.DataFrame:
     )
 
 
+def test_prefetch_for_daily_calculation_forwards_target_date():
+    service = _make_group_rank_service()
+    expected = GroupRankPrefetchData(
+        benchmark_prices=_price_frame(),
+        prices_by_symbol={},
+        active_symbols=frozenset(),
+        market_caps={},
+        stats=_prefetch_stats(0),
+        symbols_by_group={},
+        group_names=(),
+    )
+    service.input_loader.load = Mock(return_value=expected)
+    db = Mock()
+    target = date(2026, 3, 20)
+    policy = _policy("refresh_guarded", target)
+
+    result = service._prefetch_all_data(
+        db,
+        market="US",
+        policy=policy,
+        calculation_date=target,
+    )
+
+    assert result is expected
+    service.input_loader.load.assert_called_once_with(
+        db,
+        market="US",
+        policy=policy,
+        calculation_date=target,
+    )
+
+
 def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, monkeypatch):
     price_cache = Mock()
     price_cache.get_cached_only_fresh.return_value = None

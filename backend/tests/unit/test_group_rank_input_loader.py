@@ -145,6 +145,67 @@ def test_guarded_load_uses_only_cached_benchmark_and_stock_reads(db_session):
     benchmark_cache.get_benchmark_data.assert_not_called()
 
 
+def test_guarded_load_requires_target_session_for_benchmark(db_session):
+    target = date(2026, 3, 20)
+    price_cache = Mock()
+    price_cache.get_cached_only_fresh.return_value = None
+    benchmark_cache = Mock()
+    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
+    benchmark_cache.get_benchmark_candidates.return_value = ["SPY"]
+    loader = _loader(
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+        groups={"Software": ("AAPL",)},
+        active=("AAPL",),
+    )
+
+    prefetch = loader.load(
+        db_session,
+        market="US",
+        policy=_policy("refresh_guarded"),
+        calculation_date=target,
+    )
+
+    assert prefetch.stats.benchmark_available is False
+    price_cache.get_cached_only_fresh.assert_called_once_with(
+        "SPY",
+        period="2y",
+        required_as_of_date=target,
+    )
+
+
+def test_guarded_load_requires_target_session_for_constituents(db_session):
+    target = date(2026, 3, 20)
+    benchmark_prices = _price_frame()
+    price_cache = Mock()
+    price_cache.get_cached_only_fresh.return_value = benchmark_prices
+    price_cache.get_many_cached_only_fresh.return_value = {"AAPL": None}
+    benchmark_cache = Mock()
+    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
+    benchmark_cache.get_benchmark_candidates.return_value = ["SPY"]
+    loader = _loader(
+        price_cache=price_cache,
+        benchmark_cache=benchmark_cache,
+        groups={"Software": ("AAPL",)},
+        active=("AAPL",),
+    )
+
+    prefetch = loader.load(
+        db_session,
+        market="US",
+        policy=_policy("refresh_guarded"),
+        calculation_date=target,
+    )
+
+    assert prefetch.stats.cache_miss_symbols == 1
+    assert prefetch.stats.cache_miss_symbols_sample == ("AAPL",)
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAPL"],
+        period="2y",
+        required_as_of_date=target,
+    )
+
+
 def test_cache_only_load_uses_cached_fallback_benchmark(db_session):
     fallback_prices = _price_frame()
     stock_prices = _price_frame()
