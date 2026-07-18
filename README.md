@@ -29,6 +29,16 @@ See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in s
 - **Operations** -  startup data bootstrap, runtime status, and Operations console for queues/jobs/telemetry.
 - **Backtest** -  Backtest page that validates published scan picks and theme alerts against price history.
 
+## Relative strength methodology
+
+The canonical stock RS formula is `balanced-horizon-percentile-v2`. For each Market and trading date, the app uses one eligible stock set with complete adjusted-close data at the current session and the exact 21/63/126/189/252-session anchors. It calculates each stock's return in excess of that Market's benchmark at 1M, 3M, 6M, 9M, and 12M, then independently converts each horizon to a cross-sectional 1–99 percentile rating.
+
+The weighted score is `20% × P1 + 30% × P3 + 20% × P6 + 15% × P9 + 15% × P12`; that score is ranked once more across the same eligible set to produce overall RS. Because weights apply to percentile ranks rather than raw returns, a 1,000% or 10,000% historical return cannot overwhelm every other horizon merely through its magnitude. Recent performance receives 50% of the weight through 1M and 3M RS.
+
+Scan results expose overall, 1M, 3M, and 12M RS. A Group's overall, 1M, and 3M RS are equal-weight averages of those stock ratings over the same eligible constituent set, with at least three eligible stocks required; Group Rank uses only overall Group RS. Both the live and static Group tables show the 1M RS and 3M RS columns.
+
+This methodology is inspired by IBD/CANSLIM's market-relative, percentile-ranked view of leadership, but it is not IBD's undisclosed proprietary formula. Published data carries the formula version, as-of date, universe identity, and run metadata. The RRG transformation itself is unchanged and never mixes history from different RS formula versions.
+
 ![Market Health and Exposure](docs/screenshots/health-exposure.jpg)
 *Market Health and Exposure*
 
