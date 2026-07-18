@@ -5,6 +5,7 @@ No DB, no Redis, no Celery — pure domain logic testing.
 
 from __future__ import annotations
 
+from datetime import date
 import time
 from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
 from threading import Lock
@@ -12,7 +13,9 @@ from threading import Lock
 import pytest
 
 from app.domain.common.errors import EntityNotFoundError
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.models import ScanStatus
+from app.domain.scanning.ports import MarketRsResolution
 from app.use_cases.scanning.run_bulk_scan import (
     RunBulkScanCommand,
     RunBulkScanResult,
@@ -229,6 +232,74 @@ class TestRunBulkScanHappyPath:
             for call in scanner.calls
         )
         assert all(call["pre_fetched_data"] is not None for call in scanner.calls)
+
+    def test_hydrates_prefetched_rows_once_per_market_from_canonical_reader(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+        captured = {}
+
+        class _Provider(FakeStockDataProvider):
+            def _make_stock_data(self, symbol):
+                data = super()._make_stock_data(symbol)
+                data.market = "HK" if symbol.endswith(".HK") else "US"
+                return data
+
+        class _Scanner(_BulkAwareScanner):
+            def scan_stock_multi(self, symbol, screener_names, **kwargs):
+                captured[symbol] = kwargs["pre_fetched_data"]
+                return super().scan_stock_multi(symbol, screener_names, **kwargs)
+
+        class _Reader:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                rating = 87 if kwargs["market"] == "US" else 77
+                return MarketRsResolution(
+                    market=kwargs["market"],
+                    as_of_date=date(2026, 4, 10),
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    mode="canonical",
+                    run_id=42 if kwargs["market"] == "US" else 43,
+                    universe_size=5000 if kwargs["market"] == "US" else 2500,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": rating,
+                            "rs_rating_1m": rating - 2,
+                            "rs_rating_3m": rating - 1,
+                            "rs_rating_12m": rating + 1,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        result = RunBulkScanUseCase(
+            scanner=_Scanner(),
+            data_provider=_Provider(),
+            market_rs_reader=reader,
+        ).execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1", symbols=["AAPL", "0700.HK"], chunk_size=2
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert {(call["market"], call["symbols"]) for call in reader.calls} == {
+            ("US", ("AAPL",)),
+            ("HK", ("0700.HK",)),
+        }
+        assert all(call["as_of_date"] is None for call in reader.calls)
+        assert captured["AAPL"].canonical_rs_ratings["rs_rating"] == 87
+        assert captured["AAPL"].rs_formula_version == BALANCED_RS_FORMULA_VERSION
+        assert captured["AAPL"].market_rs_run_id == 42
+        assert captured["AAPL"].rs_universe_size == 5000
+        assert captured["0700.HK"].canonical_rs_ratings["rs_rating"] == 77
 
     def test_cache_only_flag_propagates_to_bulk_data_fetch(self):
         """cache_only=True on the command must disable live-fetch fallback inside

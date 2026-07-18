@@ -11,7 +11,9 @@ not through method parameters.
 from __future__ import annotations
 
 import abc
-from typing import Protocol
+from dataclasses import dataclass
+from datetime import date
+from typing import Protocol, Sequence
 
 from .filter_spec import FilterSpec, PageSpec, QuerySpec, SortSpec
 from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
@@ -262,6 +264,29 @@ class StockDataProvider(abc.ABC):
         batch_only_fundamentals: bool = False,
     ) -> dict[str, object]:
         ...
+
+
+@dataclass(frozen=True)
+class MarketRsResolution:
+    market: str
+    as_of_date: date | None
+    formula_version: str
+    mode: str
+    run_id: int | None
+    universe_size: int | None
+    ratings_by_symbol: dict[str, dict[str, int]]
+
+
+class MarketRsReader(Protocol):
+    def get(
+        self,
+        *,
+        market: str,
+        symbols: Sequence[str],
+        as_of_date: date | None,
+        formula_version: str | None = None,
+    ) -> MarketRsResolution:
+        raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------

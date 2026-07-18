@@ -677,6 +677,7 @@ def build_daily_snapshot(
     bootstrap_cache_only_if_covered: bool = False,
     bootstrap_coverage_report: dict | None = None,
     bootstrap_coverage_retry_count: int = 0,
+    rs_formula_version_override: str | None = None,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -968,6 +969,7 @@ def build_daily_snapshot(
         bootstrap_coverage_report=effective_bootstrap_coverage_report,
         publish_pointer_key=publish_pointer_key,
         market=effective_market,
+        rs_formula_version_override=rs_formula_version_override,
     )
 
     try:

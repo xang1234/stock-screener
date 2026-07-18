@@ -47,6 +47,8 @@ from app.domain.scanning.signature import (
 from app.domain.scanning.models import ProgressEvent
 from app.domain.scanning.ports import (
     CancellationToken,
+    MarketRsReader,
+    MarketRsResolution,
     ProgressSink,
     StockDataProvider,
     StockScanner,
@@ -205,6 +207,7 @@ class BuildDailySnapshotCommand:
     bootstrap_coverage_report: dict | None = None
     publish_pointer_key: str = "latest_published"
     market: str = "US"
+    rs_formula_version_override: str | None = None
 
     # DQ thresholds (overridable per-invocation)
     dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
@@ -321,10 +324,12 @@ class BuildDailyFeatureSnapshotUseCase:
         scanner: StockScanner,
         data_provider: StockDataProvider | None = None,
         market_calendar: MarketCalendarPort | None = None,
+        market_rs_reader: MarketRsReader | None = None,
     ) -> None:
         self._scanner = scanner
         self._data_provider = data_provider
         self._market_calendar = market_calendar
+        self._market_rs_reader = market_rs_reader
 
     def execute(
         self,
@@ -419,6 +424,19 @@ class BuildDailyFeatureSnapshotUseCase:
                     )
             total = len(symbols)
 
+            rs_resolution: MarketRsResolution | None = None
+            if self._market_rs_reader is not None:
+                rs_resolution = self._market_rs_reader.get(
+                    market=cmd.market,
+                    symbols=tuple(symbols),
+                    as_of_date=cmd.as_of_date,
+                    formula_version=cmd.rs_formula_version_override,
+                )
+            elif cmd.rs_formula_version_override is not None:
+                raise RuntimeError(
+                    "An RS formula override requires a canonical Market RS reader"
+                )
+
             signature_payload = build_scan_signature_payload(
                 universe_type=getattr(cmd.universe_def, "type", "all"),
                 screeners=cmd.screener_names,
@@ -434,6 +452,19 @@ class BuildDailyFeatureSnapshotUseCase:
             }
             if bootstrap_gate_report is not None:
                 run_config["bootstrap_cache_only_gate"] = bootstrap_gate_report
+            if rs_resolution is not None:
+                run_config.update(
+                    {
+                        "rs_formula_version": rs_resolution.formula_version,
+                        "market_rs_run_id": rs_resolution.run_id,
+                        "rs_as_of_date": (
+                            rs_resolution.as_of_date.isoformat()
+                            if rs_resolution.as_of_date is not None
+                            else None
+                        ),
+                        "rs_universe_size": rs_resolution.universe_size,
+                    }
+                )
 
             # Start run BEFORE the try-except so run_id is available
             # for best-effort error handling.
@@ -465,6 +496,7 @@ class BuildDailyFeatureSnapshotUseCase:
                     tuple(run_warnings),
                     len(skipped_symbols),
                     progress_state,
+                    rs_resolution,
                 )
             except Exception as exc:
                 logger.exception("Feature run %d failed", run_id)
@@ -523,6 +555,7 @@ class BuildDailyFeatureSnapshotUseCase:
         run_warnings: tuple[str, ...],
         skipped_symbols: int,
         progress_state: _SnapshotRunProgress,
+        rs_resolution: MarketRsResolution | None,
     ) -> BuildDailySnapshotResult:
         start_time = time.monotonic()
         failure_diagnostics = FailureDiagnosticsCollector()
@@ -648,6 +681,26 @@ class BuildDailyFeatureSnapshotUseCase:
                     )
                     bulk_prefetch_enabled = False
                     pre_fetched_data = {}
+
+            if rs_resolution is not None:
+                for symbol, stock_data in pre_fetched_data.items():
+                    normalized_symbol = str(symbol).upper()
+                    setattr(
+                        stock_data,
+                        "canonical_rs_ratings",
+                        rs_resolution.ratings_by_symbol.get(normalized_symbol),
+                    )
+                    setattr(
+                        stock_data,
+                        "rs_formula_version",
+                        rs_resolution.formula_version,
+                    )
+                    setattr(stock_data, "market_rs_run_id", rs_resolution.run_id)
+                    setattr(
+                        stock_data,
+                        "rs_universe_size",
+                        rs_resolution.universe_size,
+                    )
 
             chunk_rows: list[FeatureRowWrite] = []
 

@@ -28,6 +28,7 @@ from app.domain.common.uow import UnitOfWork
 from app.domain.scanning.models import ProgressEvent, ScanStatus
 from app.domain.scanning.ports import (
     CancellationToken,
+    MarketRsReader,
     ProgressSink,
     StockDataProvider,
     StockScanner,
@@ -115,9 +116,11 @@ class RunBulkScanUseCase:
         self,
         scanner: StockScanner,
         data_provider: StockDataProvider | None = None,
+        market_rs_reader: MarketRsReader | None = None,
     ) -> None:
         self._scanner = scanner
         self._data_provider = data_provider
+        self._market_rs_reader = market_rs_reader
 
     def execute(
         self,
@@ -249,6 +252,43 @@ class RunBulkScanUseCase:
                         exc_info=True,
                     )
                     pre_fetched_data = {}
+
+            if self._market_rs_reader is not None and pre_fetched_data:
+                symbols_by_market: dict[str, list[str]] = {}
+                for symbol, stock_data in pre_fetched_data.items():
+                    data_market = str(
+                        getattr(stock_data, "market", None)
+                        or getattr(scan, "universe_market", None)
+                        or "US"
+                    ).strip().upper()
+                    symbols_by_market.setdefault(data_market, []).append(
+                        str(symbol).upper()
+                    )
+                for data_market, market_symbols in symbols_by_market.items():
+                    resolution = self._market_rs_reader.get(
+                        market=data_market,
+                        symbols=tuple(market_symbols),
+                        as_of_date=None,
+                        formula_version=None,
+                    )
+                    for symbol in market_symbols:
+                        stock_data = pre_fetched_data[symbol]
+                        setattr(
+                            stock_data,
+                            "canonical_rs_ratings",
+                            resolution.ratings_by_symbol.get(symbol),
+                        )
+                        setattr(
+                            stock_data,
+                            "rs_formula_version",
+                            resolution.formula_version,
+                        )
+                        setattr(stock_data, "market_rs_run_id", resolution.run_id)
+                        setattr(
+                            stock_data,
+                            "rs_universe_size",
+                            resolution.universe_size,
+                        )
 
             # 5b — Scan each symbol in the chunk
             chunk_results: list[tuple[str, dict]] = []

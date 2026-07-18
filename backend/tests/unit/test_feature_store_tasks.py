@@ -31,6 +31,7 @@ from app.domain.scanning.defaults import (
     get_bootstrap_scan_profile,
     get_default_scan_profile,
 )
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.schemas.universe import UniverseType
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer, StockFeatureDaily
 from app.models.scan_result import Scan
@@ -108,7 +109,10 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
     ):
         mock_date.today.return_value = date(2026, 3, 16)
 
-        result = _TASK_BODY(_FakeTask())
+        result = _TASK_BODY(
+            _FakeTask(),
+            rs_formula_version_override=BALANCED_RS_FORMULA_VERSION,
+        )
 
     assert result["status"] == "published"
     assert result["row_count"] == 2
@@ -116,6 +120,10 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
     assert fake_use_case.received_cmd is not None
     assert fake_use_case.received_cmd.universe_def.type == UniverseType.MARKET
     assert fake_use_case.received_cmd.universe_def.market.value == "US"
+    assert (
+        fake_use_case.received_cmd.rs_formula_version_override
+        == BALANCED_RS_FORMULA_VERSION
+    )
 
 
 def test_build_daily_snapshot_returns_failure_diagnostics(monkeypatch):

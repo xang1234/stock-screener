@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from app.services.daily_price_bundle_service import DailyPriceBundleService
     from app.services.market_calendar_service import MarketCalendarService
     from app.services.market_rs_inputs import MarketRsInputLoader
+    from app.domain.scanning.ports import MarketRsReader
     from app.services.market_rs_snapshot_service import MarketRsSnapshotService
     from app.services.point_in_time_universe_service import PointInTimeUniverseService
     from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
@@ -117,6 +118,7 @@ class RuntimeServices:
         self._market_rs_input_loader: MarketRsInputLoader | None = None
         self._market_rs_run_repository: MarketRsRunRepository | None = None
         self._market_rs_snapshot_service: MarketRsSnapshotService | None = None
+        self._market_rs_reader: MarketRsReader | None = None
         self._github_release_sync_service: GitHubReleaseSyncService | None = None
         self._security_master_resolver: SecurityMasterResolver | None = None
         self._eps_rating_service: EPSRatingService | None = None
@@ -339,6 +341,18 @@ class RuntimeServices:
                     )
         return self._market_rs_snapshot_service
 
+    def market_rs_reader(self) -> MarketRsReader:
+        if self._market_rs_reader is None:
+            with self._init_lock:
+                if self._market_rs_reader is None:
+                    from app.services.market_rs_reader import SqlMarketRsReader
+
+                    self._market_rs_reader = SqlMarketRsReader(
+                        self._session_factory,
+                        repository=self.market_rs_run_repository(),
+                    )
+        return self._market_rs_reader
+
     def github_release_sync_service(self) -> GitHubReleaseSyncService:
         if self._github_release_sync_service is None:
             with self._init_lock:
@@ -516,6 +530,7 @@ class RuntimeServices:
             self._market_rs_input_loader = None
             self._market_rs_run_repository = None
             self._market_rs_snapshot_service = None
+            self._market_rs_reader = None
             self._github_release_sync_service = None
             self._security_master_resolver = None
             self._eps_rating_service = None
@@ -725,6 +740,11 @@ def get_market_rs_snapshot_service() -> MarketRsSnapshotService:
     return _resolve_runtime_services().market_rs_snapshot_service()
 
 
+def get_market_rs_reader() -> MarketRsReader:
+    """Return the process-scoped canonical Market RS reader."""
+    return _resolve_runtime_services().market_rs_reader()
+
+
 def get_github_release_sync_service() -> GitHubReleaseSyncService:
     """Return process-scoped GitHub release sync service."""
     return _resolve_runtime_services().github_release_sync_service()
@@ -880,6 +900,7 @@ def get_run_bulk_scan_use_case() -> RunBulkScanUseCase:
     return RunBulkScanUseCase(
         scanner=get_scan_orchestrator(),
         data_provider=get_stock_data_provider(),
+        market_rs_reader=get_market_rs_reader(),
     )
 
 
@@ -914,6 +935,7 @@ def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
         scanner=get_scan_orchestrator(),
         data_provider=get_stock_data_provider(),
         market_calendar=get_market_calendar_service(),
+        market_rs_reader=get_market_rs_reader(),
     )
 
 
