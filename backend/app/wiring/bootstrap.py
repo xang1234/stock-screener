@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from app.scanners.scan_orchestrator import ScanOrchestrator
     from app.services.alphavantage_service import AlphaVantageService
     from app.services.benchmark_cache_service import BenchmarkCacheService
+    from app.services.canonical_group_ranking_service import CanonicalGroupRankingService
     from app.services.data_source_service import DataSourceService
     from app.services.eps_rating_service import EPSRatingService
     from app.services.finviz_service import FinvizService
@@ -106,6 +107,7 @@ class RuntimeServices:
         self._ui_snapshot_service: UISnapshotService | None = None
         self._cache_bundle: CacheBundle | None = None
         self._group_rank_service: IBDGroupRankService | None = None
+        self._canonical_group_ranking_service: CanonicalGroupRankingService | None = None
         self._rrg_service: RRGService | None = None
         self._task_registry_service: TaskRegistryService | None = None
         self._data_fetch_lock: DataFetchLock | None = None
@@ -199,8 +201,25 @@ class RuntimeServices:
                     self._group_rank_service = IBDGroupRankService(
                         price_cache=cache_bundle.price,
                         benchmark_cache=cache_bundle.benchmark,
+                        canonical_group_service=self.canonical_group_ranking_service(),
+                        market_rs_repository=self.market_rs_run_repository(),
                     )
         return self._group_rank_service
+
+    def canonical_group_ranking_service(self) -> CanonicalGroupRankingService:
+        if self._canonical_group_ranking_service is None:
+            with self._init_lock:
+                if self._canonical_group_ranking_service is None:
+                    from app.services.canonical_group_ranking_service import (
+                        CanonicalGroupRankingService,
+                    )
+
+                    self._canonical_group_ranking_service = (
+                        CanonicalGroupRankingService(
+                            repository=self.market_rs_run_repository()
+                        )
+                    )
+        return self._canonical_group_ranking_service
 
     def rrg_service(self) -> RRGService:
         if self._rrg_service is None:
@@ -519,6 +538,7 @@ class RuntimeServices:
             self._ui_snapshot_service = None
             self._cache_bundle = None
             self._group_rank_service = None
+            self._canonical_group_ranking_service = None
             self._rrg_service = None
             self._task_registry_service = None
             self._data_fetch_lock = None

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 from unittest.mock import Mock, call
 
@@ -8,6 +8,10 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from app.database import Base
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
@@ -46,10 +50,116 @@ def _make_session():
 
 
 def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: Mock | None = None):
+    repository = Mock()
+    repository.active_formula.return_value = LEGACY_RS_FORMULA_VERSION
     return IBDGroupRankService(
         price_cache=price_cache or Mock(),
         benchmark_cache=benchmark_cache or Mock(),
+        canonical_group_service=Mock(),
+        market_rs_repository=repository,
     )
+
+
+def test_current_rankings_reads_only_active_formula(db_session):
+    repository = Mock()
+    repository.active_formula.return_value = BALANCED_RS_FORMULA_VERSION
+    service = IBDGroupRankService(
+        price_cache=Mock(),
+        benchmark_cache=Mock(),
+        canonical_group_service=Mock(),
+        market_rs_repository=repository,
+    )
+    for formula, avg in (
+        (LEGACY_RS_FORMULA_VERSION, 95.0),
+        (BALANCED_RS_FORMULA_VERSION, 72.0),
+    ):
+        db_session.add(
+            IBDGroupRank(
+                market="US",
+                industry_group="Software",
+                date=date(2026, 4, 10),
+                rank=1,
+                avg_rs_rating=avg,
+                num_stocks=3,
+                num_stocks_rs_above_80=1,
+                top_symbol="AAA",
+                top_rs_rating=90.0,
+                rs_formula_version=formula,
+            )
+        )
+    db_session.commit()
+
+    rows = service.get_current_rankings(db_session, market="US")
+
+    assert len(rows) == 1
+    assert rows[0]["avg_rs_rating"] == 72.0
+    assert rows[0]["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
+
+
+def test_calculate_group_rankings_dispatches_to_active_canonical_service(db_session):
+    repository = Mock()
+    repository.active_formula.return_value = BALANCED_RS_FORMULA_VERSION
+    canonical = Mock()
+    canonical.calculate_and_store.return_value = [{"industry_group": "Software"}]
+    service = IBDGroupRankService(
+        price_cache=Mock(),
+        benchmark_cache=Mock(),
+        canonical_group_service=canonical,
+        market_rs_repository=repository,
+    )
+
+    result = service.calculate_group_rankings(
+        db_session,
+        date(2026, 4, 10),
+        market="us",
+    )
+
+    assert result == [{"industry_group": "Software"}]
+    canonical.calculate_and_store.assert_called_once_with(
+        db_session,
+        market="US",
+        as_of_date=date(2026, 4, 10),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+
+
+def test_group_history_and_rank_changes_never_cross_formula_versions(db_session, monkeypatch):
+    repository = Mock()
+    repository.active_formula.return_value = BALANCED_RS_FORMULA_VERSION
+    service = IBDGroupRankService(
+        price_cache=Mock(),
+        benchmark_cache=Mock(),
+        canonical_group_service=Mock(),
+        market_rs_repository=repository,
+    )
+    current = date.today()
+    historical = current - timedelta(days=7)
+    for formula, rank_date, rank, avg in (
+        (BALANCED_RS_FORMULA_VERSION, current, 2, 80.0),
+        (BALANCED_RS_FORMULA_VERSION, historical, 5, 70.0),
+        (LEGACY_RS_FORMULA_VERSION, historical, 99, 99.0),
+    ):
+        db_session.add(
+            IBDGroupRank(
+                market="US",
+                industry_group="Software",
+                date=rank_date,
+                rank=rank,
+                avg_rs_rating=avg,
+                num_stocks=3,
+                num_stocks_rs_above_80=1,
+                top_symbol="AAA",
+                top_rs_rating=90.0,
+                rs_formula_version=formula,
+            )
+        )
+    db_session.commit()
+    monkeypatch.setattr(service, "_get_constituent_stocks", lambda *args, **kwargs: [])
+
+    result = service.get_group_history(db_session, "Software", days=30, market="US")
+
+    assert result["rank_change_1w"] == 3
+    assert [point["avg_rs_rating"] for point in result["history"]] == [80.0, 70.0]
 
 
 def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
@@ -201,7 +311,9 @@ def test_get_group_history_uses_calendar_rank_change_offsets(monkeypatch):
 
         expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
-        def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
+        def fake_historical_batch(  # noqa: ANN001
+            db, group_names, current, period_days, *, market, formula_version
+        ):
             captured_period_days.append(dict(period_days))
             return {(group, "1w"): 6}
 
@@ -231,7 +343,9 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
 
         expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
-        def fake_historical_batch(db, group_names, current, period_days, *, market):  # noqa: ANN001
+        def fake_historical_batch(  # noqa: ANN001
+            db, group_names, current, period_days, *, market, formula_version
+        ):
             captured_period_days.append(dict(period_days))
             return {(group, "1w"): 6}
 
@@ -253,10 +367,14 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
 
 
 def test_get_group_history_propagates_constituent_source_failures(monkeypatch):
+    repository = Mock()
+    repository.active_formula.return_value = LEGACY_RS_FORMULA_VERSION
     service = IBDGroupRankService(
         price_cache=Mock(),
         benchmark_cache=Mock(),
         group_constituent_source=Mock(),
+        canonical_group_service=Mock(),
+        market_rs_repository=repository,
     )
     service.group_constituent_source.get_constituent_items.side_effect = RuntimeError(
         "source failed"

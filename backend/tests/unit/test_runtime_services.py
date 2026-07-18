@@ -82,3 +82,18 @@ def test_runtime_orchestrator_uses_process_market_rs_reader():
 
     assert orchestrator._market_rs_reader is runtime.market_rs_reader()
     assert orchestrator._data_provider._layer._defer_market_rs_resolution is True
+
+
+def test_runtime_group_rank_service_uses_process_canonical_group_service():
+    runtime = build_runtime_services()
+
+    canonical = runtime.canonical_group_ranking_service()
+    group_service = runtime.group_rank_service()
+
+    assert runtime.canonical_group_ranking_service() is canonical
+    assert group_service.canonical_group_service is canonical
+
+    runtime.reset_for_tests()
+
+    assert runtime._canonical_group_ranking_service is None
+    assert runtime.canonical_group_ranking_service() is not canonical

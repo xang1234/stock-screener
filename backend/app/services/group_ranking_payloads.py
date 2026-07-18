@@ -8,6 +8,40 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
+from app.models.industry import IBDGroupRank
+
+
+def rank_record_payload(
+    ranking: IBDGroupRank,
+    *,
+    pct_rs_above_80: float | None,
+    top_symbol_name: str | None = None,
+) -> dict[str, Any]:
+    """Serialize one persisted Group row for every live/static reader."""
+    return {
+        "industry_group": ranking.industry_group,
+        "date": ranking.date.isoformat(),
+        "rank": ranking.rank,
+        "avg_rs_rating": ranking.avg_rs_rating,
+        "avg_rs_rating_1m": ranking.avg_rs_rating_1m,
+        "avg_rs_rating_3m": ranking.avg_rs_rating_3m,
+        "median_rs_rating": ranking.median_rs_rating,
+        "weighted_avg_rs_rating": ranking.weighted_avg_rs_rating,
+        "rs_std_dev": ranking.rs_std_dev,
+        "num_stocks": ranking.num_stocks,
+        "num_stocks_rs_above_80": ranking.num_stocks_rs_above_80,
+        "pct_rs_above_80": pct_rs_above_80,
+        "top_symbol": ranking.top_symbol,
+        "top_symbol_name": top_symbol_name,
+        "top_rs_rating": ranking.top_rs_rating,
+        "rs_formula_version": ranking.rs_formula_version,
+        "market_rs_run_id": ranking.market_rs_run_id,
+        "rank_change_1w": None,
+        "rank_change_1m": None,
+        "rank_change_3m": None,
+        "rank_change_6m": None,
+    }
+
 
 def compute_group_rankings_from_serialized_rows(
     rows: Iterable[Mapping[str, Any]],

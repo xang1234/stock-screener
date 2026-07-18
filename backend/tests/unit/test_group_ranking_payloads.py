@@ -2,7 +2,35 @@ from datetime import date
 
 from app.services.group_ranking_payloads import (
     compute_group_rankings_from_serialized_rows,
+    rank_record_payload,
 )
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.models.industry import IBDGroupRank
+
+
+def test_rank_record_payload_includes_canonical_components_and_audit_fields():
+    ranking = IBDGroupRank(
+        market="US",
+        industry_group="Software",
+        date=date(2026, 4, 10),
+        rank=1,
+        avg_rs_rating=87.25,
+        avg_rs_rating_1m=42.5,
+        avg_rs_rating_3m=91.5,
+        num_stocks=4,
+        num_stocks_rs_above_80=3,
+        top_symbol="AAA",
+        top_rs_rating=99,
+        rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+        market_rs_run_id=42,
+    )
+
+    payload = rank_record_payload(ranking, pct_rs_above_80=75.0)
+
+    assert payload["avg_rs_rating_1m"] == 42.5
+    assert payload["avg_rs_rating_3m"] == 91.5
+    assert payload["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
+    assert payload["market_rs_run_id"] == 42
 
 
 def test_compute_group_rankings_from_serialized_rows_ranks_groups_once():

@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 from datetime import date, timedelta
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -132,6 +133,8 @@ def test_first_static_build_bootstraps_via_production_gap_fill(
     group_rank_service = IBDGroupRankService(
         price_cache=_PriceCache(),
         benchmark_cache=_BenchmarkCache(),
+        canonical_group_service=Mock(),
+        market_rs_repository=Mock(),
     )
     monkeypatch.setattr(
         group_rank_service,
