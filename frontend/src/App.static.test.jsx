@@ -46,7 +46,7 @@ vi.mock('./components/Charts/BreadthChart', () => ({
 
 const staticPayloads = {
   'manifest.json': {
-    schema_version: 'static-site-v2',
+    schema_version: 'static-site-v3',
     generated_at: '2026-03-31T22:00:00Z',
     as_of_date: '2026-03-31',
     default_market: 'US',

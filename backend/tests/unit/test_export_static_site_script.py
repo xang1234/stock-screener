@@ -13,8 +13,13 @@ import sys
 import pytest
 
 import app.scripts.export_static_site as export_script
+import app.tasks.market_rs_tasks as market_rs_tasks
 import app.tasks.fundamentals_tasks as fundamentals_tasks
 import app.tasks.universe_tasks as universe_tasks
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from app.domain.markets import market_registry
 from app.interfaces.tasks import feature_store_tasks
 from app.services.group_rank_history_backfill_service import (
@@ -74,6 +79,184 @@ def _stub_static_market_exposure(monkeypatch):
             "exposure_score": 50.0,
         },
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_balanced_static_rs_preparation(monkeypatch):
+    """Keep legacy refresh tests focused; parity coverage restores the real helper."""
+    real_helper = getattr(export_script, "_prepare_balanced_static_rs", None)
+    monkeypatch.setattr(
+        export_script,
+        "_prepare_balanced_static_rs",
+        lambda *, market, as_of_date: {
+            "status": "completed",
+            "market": market,
+            "as_of_date": as_of_date.isoformat(),
+            "formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 1,
+        },
+        raising=False,
+    )
+    return real_helper
+
+
+def test_run_daily_refresh_activates_balanced_rs_before_static_consumers(
+    monkeypatch,
+    _stub_balanced_static_rs_preparation,
+):
+    events: list[str] = []
+
+    @contextmanager
+    def fake_session():
+        yield SimpleNamespace(commit=lambda: events.append("formula_commit"))
+
+    class FakeMarketRsRepository:
+        def activate_formula(self, _db, *, market, formula_version):
+            assert market == "US"
+            assert formula_version == BALANCED_RS_FORMULA_VERSION
+            events.append("formula_activate")
+
+    real_helper = _stub_balanced_static_rs_preparation
+    if real_helper is not None:
+        monkeypatch.setattr(export_script, "_prepare_balanced_static_rs", real_helper)
+    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
+    monkeypatch.setattr(
+        export_script,
+        "MarketRsRunRepository",
+        FakeMarketRsRepository,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_rs_tasks,
+        "calculate_market_rs_snapshot",
+        SimpleNamespace(
+            run=lambda **kwargs: events.append("market_rs_snapshot")
+            or {
+                "status": "completed",
+                "market": kwargs["market"],
+                "as_of_date": kwargs["calculation_date"],
+                "formula_version": kwargs["formula_version"],
+                "market_rs_run_id": 42,
+                "eligible_symbol_count": 500,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 7, 17),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda **_kwargs: events.append("prices") or {"status": "completed"},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_compute_static_market_exposure",
+        lambda **_kwargs: events.append("exposure") or {"exposure_score": 50.0},
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(
+            run=lambda **_kwargs: events.append("feature_snapshot")
+            or {"status": "published", "run_id": 77}
+        ),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_group_rank_history",
+        lambda *, as_of_date, market: events.append("group_history")
+        or _backfill_result(
+            status=GroupRankHistoryBackfillStatus.COMPLETED,
+            market=market,
+            as_of_date=as_of_date,
+        ),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda **_kwargs: {"status": "completed"},
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda _db, csv_path=None: 1,
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, warnings = export_script._run_daily_refresh(
+        market="US",
+        skip_universe_refresh=True,
+        skip_fundamentals_refresh=True,
+    )
+
+    assert warnings == []
+    assert events == [
+        "prices",
+        "market_rs_snapshot",
+        "formula_activate",
+        "formula_commit",
+        "exposure",
+        "feature_snapshot",
+        "group_history",
+    ]
+    assert results["market_rs"]["US"] == {
+        "status": "completed",
+        "market": "US",
+        "as_of_date": "2026-07-17",
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": 42,
+        "eligible_symbol_count": 500,
+    }
+
+
+def test_prepare_static_rs_formula_supports_explicit_legacy_rollback(monkeypatch):
+    events: list[str] = []
+
+    @contextmanager
+    def fake_session():
+        yield SimpleNamespace(commit=lambda: events.append("formula_commit"))
+
+    class FakeMarketRsRepository:
+        def activate_formula(self, _db, *, market, formula_version):
+            events.append(f"activate:{market}:{formula_version}")
+
+    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
+    monkeypatch.setattr(
+        export_script,
+        "MarketRsRunRepository",
+        FakeMarketRsRepository,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_rs_tasks,
+        "calculate_market_rs_snapshot",
+        SimpleNamespace(
+            run=lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("legacy static rollback must not calculate balanced RS")
+            )
+        ),
+    )
+
+    result = export_script._prepare_static_rs_formula(
+        market="US",
+        as_of_date=date(2026, 7, 17),
+        formula_version=LEGACY_RS_FORMULA_VERSION,
+    )
+
+    assert events == [
+        f"activate:US:{LEGACY_RS_FORMULA_VERSION}",
+        "formula_commit",
+    ]
+    assert result == {
+        "status": "selected",
+        "market": "US",
+        "as_of_date": "2026-07-17",
+        "formula_version": LEGACY_RS_FORMULA_VERSION,
+        "market_rs_run_id": None,
+    }
 
 
 def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from app.domain.markets import market_registry
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -96,6 +97,17 @@ def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
         "steps.restore-rrg-history.outputs.safe_to_publish == 'true'" in content
     )
     assert "outputs.restore_status != 'failed'" not in content
+
+
+def test_static_workflow_defaults_to_balanced_rs_with_explicit_rollback_input():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "rs_formula_version:" in content
+    assert f"default: {BALANCED_RS_FORMULA_VERSION}" in content
+    assert "legacy-linear-v1" in content
+    assert "--rs-formula-version \"$RS_FORMULA_VERSION\"" in content
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

@@ -20,6 +20,13 @@ on:
           - all
           - asia
           - us
+      rs_formula_version:
+        description: 'RS formula to publish (legacy is rollback-only)'
+        type: choice
+        default: balanced-horizon-percentile-v2
+        options:
+          - balanced-horizon-percentile-v2
+          - legacy-linear-v1
 
 concurrency:
   group: static-site-${{ github.ref }}
@@ -216,6 +223,8 @@ jobs:
 
       - name: Export market static data bundle
         id: export-market
+        env:
+          RS_FORMULA_VERSION: ${{ github.event.inputs.rs_formula_version || 'balanced-horizon-percentile-v2' }}
         run: |
           cd backend
           set +e
@@ -226,6 +235,7 @@ jobs:
             --skip-universe-refresh \
             --skip-fundamentals-refresh \
             --market "${{ matrix.market }}" \
+            --rs-formula-version "$RS_FORMULA_VERSION" \
             --rrg-history-dir "$RRG_HISTORY_DIR"
           status=$?
           set -e

@@ -10,6 +10,11 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.database import SessionLocal
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.infra.db.models.feature_store import FeatureRunPointer
 from app.models.market_breadth import MarketBreadth
 from app.domain.markets import market_registry
@@ -219,6 +224,67 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
     return service.refresh(as_of_date=as_of_date, market=market)
 
 
+def _prepare_balanced_static_rs(*, market: str, as_of_date: date) -> dict[str, Any]:
+    """Build the exact canonical snapshot and select it in this private build DB."""
+    from app.tasks.market_rs_tasks import calculate_market_rs_snapshot
+
+    normalized_market = market.upper()
+    result = calculate_market_rs_snapshot.run(
+        market=normalized_market,
+        calculation_date=as_of_date.isoformat(),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+    if (
+        not isinstance(result, dict)
+        or result.get("status") != "completed"
+        or result.get("market") != normalized_market
+        or result.get("as_of_date") != as_of_date.isoformat()
+        or result.get("formula_version") != BALANCED_RS_FORMULA_VERSION
+        or result.get("market_rs_run_id") is None
+    ):
+        raise RuntimeError(
+            f"Balanced Market RS preparation failed for {normalized_market} "
+            f"on {as_of_date.isoformat()}: {result}"
+        )
+
+    with SessionLocal() as db:
+        MarketRsRunRepository().activate_formula(
+            db,
+            market=normalized_market,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+        db.commit()
+    return result
+
+
+def _prepare_static_rs_formula(
+    *,
+    market: str,
+    as_of_date: date,
+    formula_version: str,
+) -> dict[str, Any]:
+    if formula_version == BALANCED_RS_FORMULA_VERSION:
+        return _prepare_balanced_static_rs(market=market, as_of_date=as_of_date)
+    if formula_version != LEGACY_RS_FORMULA_VERSION:
+        raise ValueError(f"Unsupported static RS formula: {formula_version}")
+
+    normalized_market = market.upper()
+    with SessionLocal() as db:
+        MarketRsRunRepository().activate_formula(
+            db,
+            market=normalized_market,
+            formula_version=LEGACY_RS_FORMULA_VERSION,
+        )
+        db.commit()
+    return {
+        "status": "selected",
+        "market": normalized_market,
+        "as_of_date": as_of_date.isoformat(),
+        "formula_version": LEGACY_RS_FORMULA_VERSION,
+        "market_rs_run_id": None,
+    }
+
+
 def _generate_trading_dates(
     start_date: date,
     end_date: date,
@@ -325,6 +391,7 @@ def _run_daily_refresh(
     skip_fundamentals_refresh: bool = False,
     build_mode: Literal["price_delta", "full"] = STATIC_BUILD_MODE_PRICE_DELTA,
     hydrate_published_snapshot: bool = False,
+    rs_formula_version: str = BALANCED_RS_FORMULA_VERSION,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
         _enrich_feature_run_with_ibd_metadata,
@@ -379,6 +446,18 @@ def _run_daily_refresh(
             if market is not None
             else price_refresh_results
         )
+
+        # Static CI uses a fresh, private database on every run. Migrations seed
+        # its formula pointer to legacy for rollback safety, so explicitly build
+        # and select balanced RS before any Feature, Group, or RRG consumer runs.
+        market_rs_results: dict[str, Any] = {}
+        for selected_market in selected_markets:
+            market_rs_results[selected_market] = _prepare_static_rs_formula(
+                market=selected_market,
+                as_of_date=as_of_by_market[selected_market],
+                formula_version=rs_formula_version,
+            )
+        results["market_rs"] = market_rs_results
 
         market_exposure: dict[str, Any] = {}
         for selected_market in selected_markets:
@@ -613,6 +692,12 @@ def main() -> int:
         "--rrg-history-dir",
         help="Optional directory holding the market's rolling RRG history state.",
     )
+    parser.add_argument(
+        "--rs-formula-version",
+        choices=(BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION),
+        default=BALANCED_RS_FORMULA_VERSION,
+        help="RS formula selected in the private refresh database (default: balanced).",
+    )
     args = parser.parse_args()
 
     if args.combine_artifacts_dir and args.refresh_daily:
@@ -649,6 +734,7 @@ def main() -> int:
                 skip_fundamentals_refresh=args.skip_fundamentals_refresh,
                 build_mode=args.build_mode,
                 hydrate_published_snapshot=args.hydrate_published_snapshot,
+                rs_formula_version=args.rs_formula_version,
             )
             refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")
