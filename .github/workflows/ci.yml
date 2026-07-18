@@ -77,16 +77,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r backend/requirements.txt -r backend/requirements-test.txt
 
-      - name: Safe test collection
-        if: matrix.shard == 1
-        run: cd backend && python -m pytest --collect-only -q -m "not live_service and not load"
-
       - name: Comprehensive backend unit suite (shard ${{ matrix.shard }}/4)
         shell: bash
         run: |
           cd backend
           collection_file="${RUNNER_TEMP}/backend-unit-nodeids.txt"
-          python -m pytest tests/unit --collect-only -qq > "${collection_file}"
+          python -m pytest tests/unit --collect-only -qq -m "not live_service and not load" > "${collection_file}"
           mapfile -t tests < <(awk '/^tests\/unit\/.*::/' "${collection_file}")
 
           target_shard=$((${{ matrix.shard }} - 1))
