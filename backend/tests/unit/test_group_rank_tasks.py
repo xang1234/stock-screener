@@ -11,6 +11,19 @@ from app.services.ibd_group_rank_service import IncompleteGroupRankingCacheError
 from app.services.ibd_group_rank_service import MissingIBDIndustryMappingsError
 
 
+@pytest.fixture(autouse=True)
+def _default_group_tasks_to_legacy_formula(monkeypatch):
+    """Keep existing task tests focused on legacy behavior unless overridden."""
+    from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
+    import app.tasks.group_rank_tasks as module
+
+    monkeypatch.setattr(
+        module,
+        "_resolve_active_group_formula",
+        lambda _db, *, market, group_service: LEGACY_RS_FORMULA_VERSION,
+    )
+
+
 def _patch_serialized_lock(monkeypatch):
     fake_lock = MagicMock()
     fake_lock.acquire.return_value = (True, False)
@@ -249,6 +262,137 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
         cache_only=False,
         cache_requirement=GroupRankCacheRequirement.disabled(),
     )
+
+
+def test_manual_balanced_group_rankings_publish_exact_market_rs_first(monkeypatch):
+    from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 4, 11, 17, 40, 0))
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+    monkeypatch.setattr(
+        module,
+        "_resolve_active_group_formula",
+        lambda _db, *, market, group_service: BALANCED_RS_FORMULA_VERSION,
+    )
+
+    events: list[str] = []
+    market_rs_service = MagicMock()
+    market_rs_service.calculate.side_effect = lambda *args, **kwargs: events.append("market_rs")
+    monkeypatch.setattr(module, "get_market_rs_snapshot_service", lambda: market_rs_service)
+
+    group_service = MagicMock()
+    group_service.price_cache = MagicMock()
+    group_service.calculate_group_rankings.side_effect = lambda *args, **kwargs: (
+        events.append("groups")
+        or [
+            {
+                "industry_group": "Software",
+                "avg_rs_rating": 95.0,
+                "rank": 1,
+                "num_stocks": 12,
+            }
+        ]
+    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: group_service)
+
+    result = module.calculate_daily_group_rankings.run(
+        calculation_date="2026-04-10",
+        market="US",
+    )
+
+    assert result["groups_ranked"] == 1
+    assert events == ["market_rs", "groups"]
+    market_rs_service.calculate.assert_called_once_with(
+        fake_db,
+        market="US",
+        as_of_date=date(2026, 4, 10),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+    group_service.calculate_group_rankings.assert_called_once_with(
+        fake_db,
+        date(2026, 4, 10),
+        market="US",
+        cache_only=False,
+        cache_requirement=GroupRankCacheRequirement.disabled(),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+
+
+def test_manual_balanced_group_rankings_stop_when_market_rs_fails(monkeypatch):
+    from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+    from app.services.market_rs_inputs import MarketRsInputUnavailable
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 4, 11, 17, 40, 0))
+    monkeypatch.setattr(
+        module,
+        "_resolve_active_group_formula",
+        lambda _db, *, market, group_service: BALANCED_RS_FORMULA_VERSION,
+    )
+    market_rs_service = MagicMock()
+    market_rs_service.calculate.side_effect = MarketRsInputUnavailable(
+        "benchmark missing",
+        reason_code="benchmark_anchor_missing",
+        diagnostics={},
+    )
+    monkeypatch.setattr(module, "get_market_rs_snapshot_service", lambda: market_rs_service)
+    group_service = MagicMock()
+    group_service.price_cache = MagicMock()
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: group_service)
+
+    result = module.calculate_daily_group_rankings.run(
+        calculation_date="2026-04-10",
+        market="US",
+    )
+
+    assert result["error"] == "benchmark missing"
+    group_service.calculate_group_rankings.assert_not_called()
+
+
+def test_manual_legacy_group_rankings_do_not_publish_market_rs(monkeypatch):
+    from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 4, 11, 17, 40, 0))
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+    monkeypatch.setattr(
+        module,
+        "_resolve_active_group_formula",
+        lambda _db, *, market, group_service: LEGACY_RS_FORMULA_VERSION,
+    )
+    market_rs_service = MagicMock()
+    monkeypatch.setattr(module, "get_market_rs_snapshot_service", lambda: market_rs_service)
+    group_service = MagicMock()
+    group_service.price_cache = MagicMock()
+    group_service.calculate_group_rankings.return_value = [
+        {
+            "industry_group": "Software",
+            "avg_rs_rating": 95.0,
+            "rank": 1,
+            "num_stocks": 12,
+        }
+    ]
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: group_service)
+
+    result = module.calculate_daily_group_rankings.run(
+        calculation_date="2026-04-10",
+        market="US",
+    )
+
+    assert result["groups_ranked"] == 1
+    market_rs_service.calculate.assert_not_called()
 
 
 def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypatch):
@@ -1062,7 +1206,6 @@ def test_orchestrator_does_not_skip_unexpected_taxonomy_value_error(monkeypatch)
 def test_orchestrator_runs_for_non_us_market(monkeypatch):
     """HK orchestrator runs end-to-end on a trading day."""
     import app.tasks.group_rank_tasks as module
-    from datetime import date as date_cls
 
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)

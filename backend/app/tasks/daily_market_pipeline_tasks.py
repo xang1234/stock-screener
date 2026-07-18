@@ -9,6 +9,11 @@ from typing import Any
 from celery import chain
 
 from app.celery_app import celery_app
+from app.database import SessionLocal
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from app.services.market_calendar_service import MarketCalendarService
 from app.tasks.market_queues import (
     data_fetch_queue_for_market,
@@ -30,6 +35,19 @@ def _normalize_pipeline_market(market: str | None) -> str:
 
 def _daily_pipeline_universe_name(market: str) -> str:
     return f"market:{market.upper()}"
+
+
+def _active_formula_for_market(market: str) -> str:
+    from app.wiring.bootstrap import get_market_rs_snapshot_service
+
+    db = SessionLocal()
+    try:
+        return get_market_rs_snapshot_service().repository.active_formula(
+            db,
+            market=_normalize_pipeline_market(market),
+        )
+    finally:
+        db.close()
 
 
 def _nonfatal_group_taxonomy_skip(result: dict) -> bool:
@@ -101,6 +119,66 @@ def guard_price_refresh(result: dict | None = None, *, market: str) -> dict:
 
 
 @celery_app.task(
+    name="app.tasks.daily_market_pipeline_tasks.guard_market_rs_result",
+    queue="celery",
+)
+def guard_market_rs_result(
+    result: dict | None = None,
+    *,
+    market: str,
+    calculation_date: str,
+) -> dict:
+    market_code = _normalize_pipeline_market(market)
+    active_formula = _active_formula_for_market(market_code)
+    exact_completed = (
+        isinstance(result, dict)
+        and result.get("status") == "completed"
+        and result.get("market") == market_code
+        and result.get("as_of_date") == calculation_date
+        and result.get("formula_version") == BALANCED_RS_FORMULA_VERSION
+        and result.get("market_rs_run_id") is not None
+    )
+
+    if active_formula == BALANCED_RS_FORMULA_VERSION:
+        if not exact_completed:
+            raise RuntimeError(
+                f"Canonical Market RS failed for {market_code} on "
+                f"{calculation_date}: {result}"
+            )
+        return {
+            "status": "ok",
+            "market": market_code,
+            "stage": "market_rs",
+            "as_of_date": calculation_date,
+            "formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": result["market_rs_run_id"],
+        }
+
+    if active_formula != LEGACY_RS_FORMULA_VERSION:
+        raise RuntimeError(
+            f"Unsupported active Market RS formula for {market_code}: {active_formula}"
+        )
+
+    if not exact_completed:
+        logger.warning(
+            "Balanced Market RS shadow failed for %s on %s; legacy pipeline continues: %s",
+            market_code,
+            calculation_date,
+            result,
+        )
+    return {
+        "status": "ok" if exact_completed else "skipped",
+        "market": market_code,
+        "stage": "market_rs_shadow",
+        "as_of_date": calculation_date,
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": (
+            result.get("market_rs_run_id") if exact_completed else None
+        ),
+    }
+
+
+@celery_app.task(
     name="app.tasks.daily_market_pipeline_tasks.guard_breadth_result",
     queue="celery",
 )
@@ -156,6 +234,7 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
     )
     from app.tasks.cache_tasks import smart_refresh_cache
     from app.tasks.group_rank_tasks import calculate_daily_group_rankings_with_gapfill
+    from app.tasks.market_rs_tasks import calculate_market_rs_snapshot
 
     market_code = _normalize_pipeline_market(market)
     as_of_date = trading_date.isoformat()
@@ -166,6 +245,15 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
         guard_price_refresh.s(market=market_code).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
+        calculate_market_rs_snapshot.si(
+            market=market_code,
+            calculation_date=as_of_date,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        ).set(queue=market_jobs_queue_for_market(market_code)),
+        guard_market_rs_result.s(
+            market=market_code,
+            calculation_date=as_of_date,
+        ).set(queue=market_jobs_queue_for_market(market_code)),
         calculate_daily_breadth_with_gapfill.si(
             market=market_code,
             calculation_date=as_of_date,

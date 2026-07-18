@@ -19,6 +19,10 @@ from celery.exceptions import Retry, SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..config import settings
 from ..database import SessionLocal
+from ..domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from ..services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
@@ -31,7 +35,11 @@ from ..services.ibd_group_rank_service import (
     MissingIBDIndustryMappingsError,
 )
 from ..services.market_taxonomy_service import TaxonomyLoadError
-from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
+from ..wiring.bootstrap import (
+    get_group_rank_service,
+    get_market_calendar_service,
+    get_market_rs_snapshot_service,
+)
 from .date_resolution import resolve_task_target_date
 from .group_rank_memory import release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory
 from .workload_coordination import serialized_market_workload
@@ -110,6 +118,82 @@ def _should_repair_current_us_metadata(
     return activity_lifecycle == "bootstrap" or calc_date == today_et
 
 
+def _resolve_active_group_formula(db, *, market: str, group_service) -> str:
+    resolved = group_service.market_rs_repository.active_formula(db, market=market)
+    if resolved not in {BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION}:
+        raise ValueError(f"Unsupported Group RS formula: {resolved}")
+    return resolved
+
+
+def _prepare_group_rs_inputs(
+    db,
+    *,
+    market: str,
+    calculation_date: date,
+    group_service,
+    formula_version: str | None = None,
+) -> str:
+    """Resolve the Group formula and publish its exact canonical input if needed."""
+    resolved_formula = formula_version or _resolve_active_group_formula(
+        db,
+        market=market,
+        group_service=group_service,
+    )
+    if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+        get_market_rs_snapshot_service().calculate(
+            db,
+            market=market,
+            as_of_date=calculation_date,
+            formula_version=resolved_formula,
+        )
+    elif resolved_formula != LEGACY_RS_FORMULA_VERSION:
+        raise ValueError(f"Unsupported Group RS formula: {resolved_formula}")
+    return resolved_formula
+
+
+def _calculate_balanced_group_dates(
+    db,
+    *,
+    group_service,
+    dates: list[date],
+    market: str,
+) -> dict:
+    """Calculate historical balanced Groups only after each stock snapshot exists."""
+    stats = {
+        "total_dates": len(dates),
+        "processed": 0,
+        "skipped": 0,
+        "errors": 0,
+    }
+    for calculation_date in dates:
+        try:
+            _prepare_group_rs_inputs(
+                db,
+                market=market,
+                calculation_date=calculation_date,
+                group_service=group_service,
+                formula_version=BALANCED_RS_FORMULA_VERSION,
+            )
+            rows = group_service.calculate_group_rankings(
+                db,
+                calculation_date,
+                market=market,
+                formula_version=BALANCED_RS_FORMULA_VERSION,
+            )
+            if rows:
+                stats["processed"] += 1
+            else:
+                stats["errors"] += 1
+        except Exception:
+            stats["errors"] += 1
+            logger.exception(
+                "Balanced Group calculation failed for market=%s date=%s",
+                market,
+                calculation_date,
+            )
+    return stats
+
+
 @celery_app.task(
     bind=True,
     name='app.tasks.group_rank_tasks.calculate_daily_group_rankings',
@@ -161,7 +245,7 @@ def calculate_daily_group_rankings(
         try:
             calc_date = datetime.strptime(calculation_date, '%Y-%m-%d').date()
             logger.info(f"Calculating group rankings for: {calc_date}")
-        except ValueError as e:
+        except ValueError:
             logger.error(f"Invalid date format: {calculation_date}. Use YYYY-MM-DD")
             return {
                 'error': 'Invalid date format',
@@ -198,6 +282,12 @@ def calculate_daily_group_rankings(
         )
         # Initialize service
         service = get_group_rank_service()
+        resolved_formula = _prepare_group_rs_inputs(
+            db,
+            market=effective_market,
+            calculation_date=calc_date,
+            group_service=service,
+        )
         same_day_cache_only = force_cache_only or calc_date == today_local
         cache_requirement = (
             GroupRankCacheRequirement.strict()
@@ -205,7 +295,7 @@ def calculate_daily_group_rankings(
             else GroupRankCacheRequirement.disabled()
         )
 
-        if same_day_cache_only:
+        if same_day_cache_only and resolved_formula == LEGACY_RS_FORMULA_VERSION:
             if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
                 logger.info(
                     "Bypassing same-day group ranking warmup metadata gate for in-process static export"
@@ -243,6 +333,8 @@ def calculate_daily_group_rankings(
             "cache_only": same_day_cache_only,
             "cache_requirement": cache_requirement,
         }
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            ranking_kwargs["formula_version"] = resolved_formula
         results = service.calculate_group_rankings(
             db,
             calc_date,
@@ -582,6 +674,11 @@ def calculate_daily_group_rankings_with_gapfill(
             return result
 
         service = get_group_rank_service()
+        resolved_formula = _resolve_active_group_formula(
+            db,
+            market=effective_market,
+            group_service=service,
+        )
         calendar_service = get_market_calendar_service()
         resolved_date = resolve_task_target_date(
             calculation_date,
@@ -595,22 +692,32 @@ def calculate_daily_group_rankings_with_gapfill(
                 "Checking for group-ranking gaps in last %s days (market=%s)...",
                 max_gap_days, effective_market,
             )
-            missing_dates = service.find_missing_dates(
-                db,
-                lookback_days=max_gap_days,
-                market=effective_market,
-                end_date=target_date,
-            )
+            find_missing_kwargs = {
+                "lookback_days": max_gap_days,
+                "market": effective_market,
+                "end_date": target_date,
+            }
+            if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+                find_missing_kwargs["formula_version"] = resolved_formula
+            missing_dates = service.find_missing_dates(db, **find_missing_kwargs)
             if missing_dates:
                 logger.info(
                     "Found %d missing ranking dates (range %s to %s)",
                     len(missing_dates), missing_dates[0], missing_dates[-1],
                 )
-                gap_stats = service.fill_gaps_optimized(
-                    db,
-                    missing_dates,
-                    market=effective_market,
-                )
+                if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+                    gap_stats = _calculate_balanced_group_dates(
+                        db,
+                        group_service=service,
+                        dates=missing_dates,
+                        market=effective_market,
+                    )
+                else:
+                    gap_stats = service.fill_gaps_optimized(
+                        db,
+                        missing_dates,
+                        market=effective_market,
+                    )
                 result['gap_fill'] = gap_stats
                 logger.info(
                     "✓ Gap-fill complete: %s processed, %s errors",
@@ -777,9 +884,40 @@ def backfill_group_rankings(self, start_date: str, end_date: str, market: str = 
     try:
         # Initialize service
         service = get_group_rank_service()
+        effective_market = str(market or "US").upper()
+        resolved_formula = _resolve_active_group_formula(
+            db,
+            market=effective_market,
+            group_service=service,
+        )
 
-        # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
-        result = service.backfill_rankings_optimized(db, start, end, market=market)
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            calendar_service = get_market_calendar_service()
+            dates = []
+            cursor = start
+            while cursor <= end:
+                if calendar_service.is_trading_day(effective_market, cursor):
+                    dates.append(cursor)
+                cursor += timedelta(days=1)
+            result = {
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "deleted": 0,
+                **_calculate_balanced_group_dates(
+                    db,
+                    group_service=service,
+                    dates=dates,
+                    market=effective_market,
+                ),
+            }
+        else:
+            # Preserve the optimized legacy backfill until balanced is activated.
+            result = service.backfill_rankings_optimized(
+                db,
+                start,
+                end,
+                market=market,
+            )
 
         # Calculate total duration
         total_duration = time.time() - start_time
@@ -846,13 +984,18 @@ def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
 
     try:
         service = get_group_rank_service()
+        effective_market = str(market or "US").upper()
+        resolved_formula = _resolve_active_group_formula(
+            db,
+            market=effective_market,
+            group_service=service,
+        )
 
         # Find missing dates
-        missing_dates = service.find_missing_dates(
-            db,
-            lookback_days=max_days,
-            market=market,
-        )
+        find_missing_kwargs = {"lookback_days": max_days, "market": market}
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            find_missing_kwargs["formula_version"] = resolved_formula
+        missing_dates = service.find_missing_dates(db, **find_missing_kwargs)
 
         if not missing_dates:
             logger.info("No gaps found - data is complete")
@@ -866,8 +1009,15 @@ def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
         logger.info(f"Found {len(missing_dates)} gaps to fill")
         logger.info(f"Date range: {missing_dates[0]} to {missing_dates[-1]}")
 
-        # Fill the gaps using optimized method
-        result = service.fill_gaps_optimized(db, missing_dates, market=market)
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            result = _calculate_balanced_group_dates(
+                db,
+                group_service=service,
+                dates=missing_dates,
+                market=effective_market,
+            )
+        else:
+            result = service.fill_gaps_optimized(db, missing_dates, market=market)
 
         duration = time.time() - start_time
 
@@ -941,19 +1091,42 @@ def backfill_group_rankings_1year(self, market: str = "US"):
 
     try:
         service = get_group_rank_service()
+        resolved_formula = _resolve_active_group_formula(
+            db,
+            market=effective_market,
+            group_service=service,
+        )
 
         # Calculate date range in the target market's local calendar.
         calendar_service = get_market_calendar_service()
         end_date = calendar_service.market_now(effective_market).date()
         start_date = end_date - timedelta(days=365)
 
-        # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
-        result = service.backfill_rankings_optimized(
-            db,
-            start_date,
-            end_date,
-            market=effective_market,
-        )
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            dates = []
+            cursor = start_date
+            while cursor <= end_date:
+                if calendar_service.is_trading_day(effective_market, cursor):
+                    dates.append(cursor)
+                cursor += timedelta(days=1)
+            result = {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "deleted": 0,
+                **_calculate_balanced_group_dates(
+                    db,
+                    group_service=service,
+                    dates=dates,
+                    market=effective_market,
+                ),
+            }
+        else:
+            result = service.backfill_rankings_optimized(
+                db,
+                start_date,
+                end_date,
+                market=effective_market,
+            )
 
         duration = time.time() - start_time
 

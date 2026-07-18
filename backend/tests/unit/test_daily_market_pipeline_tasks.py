@@ -35,6 +35,10 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
         _FakeTask("app.tasks.cache_tasks.smart_refresh_cache"),
     )
     monkeypatch.setattr(
+        "app.tasks.market_rs_tasks.calculate_market_rs_snapshot",
+        _FakeTask("app.tasks.market_rs_tasks.calculate_market_rs_snapshot"),
+    )
+    monkeypatch.setattr(
         "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
         _FakeTask("app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill"),
     )
@@ -56,6 +60,8 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
     assert [signature.task for signature in signatures] == [
         "app.tasks.cache_tasks.smart_refresh_cache",
         "app.tasks.daily_market_pipeline_tasks.guard_price_refresh",
+        "app.tasks.market_rs_tasks.calculate_market_rs_snapshot",
+        "app.tasks.daily_market_pipeline_tasks.guard_market_rs_result",
         "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
         "app.tasks.daily_market_pipeline_tasks.guard_breadth_result",
         "app.tasks.breadth_tasks.calculate_market_exposure",
@@ -69,8 +75,13 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
     assert signatures[2].kwargs == {
         "market": "HK",
         "calculation_date": "2026-03-16",
+        "formula_version": "balanced-horizon-percentile-v2",
     }
-    assert signatures[6].kwargs == {
+    assert signatures[4].kwargs == {
+        "market": "HK",
+        "calculation_date": "2026-03-16",
+    }
+    assert signatures[8].kwargs == {
         "market": "HK",
         "calculation_date": "2026-03-16",
     }
@@ -227,4 +238,92 @@ def test_guard_exposure_result_skips_without_aborting_pipeline():
         "status": "skipped",
         "market": "US",
         "stage": "exposure",
+    }
+
+
+def test_guard_market_rs_blocks_failed_result_when_balanced_is_active(monkeypatch):
+    from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    monkeypatch.setattr(
+        module,
+        "_active_formula_for_market",
+        lambda _market: BALANCED_RS_FORMULA_VERSION,
+    )
+
+    with pytest.raises(RuntimeError, match="Canonical Market RS failed for US"):
+        module.guard_market_rs_result.run(
+            {
+                "status": "failed",
+                "market": "US",
+                "as_of_date": "2026-04-10",
+                "formula_version": BALANCED_RS_FORMULA_VERSION,
+                "reason_code": "benchmark_anchor_missing",
+            },
+            market="US",
+            calculation_date="2026-04-10",
+        )
+
+
+def test_guard_market_rs_allows_failed_shadow_when_legacy_is_active(monkeypatch):
+    from app.domain.relative_strength import (
+        BALANCED_RS_FORMULA_VERSION,
+        LEGACY_RS_FORMULA_VERSION,
+    )
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    monkeypatch.setattr(
+        module,
+        "_active_formula_for_market",
+        lambda _market: LEGACY_RS_FORMULA_VERSION,
+    )
+
+    assert module.guard_market_rs_result.run(
+        {
+            "status": "failed",
+            "market": "US",
+            "as_of_date": "2026-04-10",
+            "formula_version": BALANCED_RS_FORMULA_VERSION,
+            "reason_code": "benchmark_anchor_missing",
+        },
+        market="US",
+        calculation_date="2026-04-10",
+    ) == {
+        "status": "skipped",
+        "market": "US",
+        "stage": "market_rs_shadow",
+        "as_of_date": "2026-04-10",
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": None,
+    }
+
+
+def test_guard_market_rs_accepts_exact_completed_balanced_run(monkeypatch):
+    from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    monkeypatch.setattr(
+        module,
+        "_active_formula_for_market",
+        lambda _market: BALANCED_RS_FORMULA_VERSION,
+    )
+
+    assert module.guard_market_rs_result.run(
+        {
+            "status": "completed",
+            "market": "US",
+            "as_of_date": "2026-04-10",
+            "formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+            "eligible_symbol_count": 5000,
+        },
+        market="US",
+        calculation_date="2026-04-10",
+    ) == {
+        "status": "ok",
+        "market": "US",
+        "stage": "market_rs",
+        "as_of_date": "2026-04-10",
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": 42,
     }
