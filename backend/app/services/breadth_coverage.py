@@ -31,9 +31,27 @@ class BreadthPriceCoverageAccumulator:
     ) -> None:
         candidates = set(candidate_symbols)
         misses = set(cache_miss_symbols)
+        outside_candidates = misses - candidates
+        if outside_candidates:
+            raise ValueError(
+                "Cache misses outside candidate batch: "
+                f"{sorted(outside_candidates)}"
+            )
+
+        cached = candidates - misses
+        conflicting = (
+            (misses & self._cached_symbols)
+            | (cached & self._cache_miss_symbols)
+        )
+        if conflicting:
+            raise ValueError(
+                "Repeated symbols have conflicting classification: "
+                f"{sorted(conflicting)}"
+            )
+
         self._candidate_symbols.update(candidates)
         self._cache_miss_symbols.update(misses)
-        self._cached_symbols.update(candidates - misses)
+        self._cached_symbols.update(cached)
 
     def report(self) -> BreadthPriceCoverage:
         candidate_count = len(self._candidate_symbols)

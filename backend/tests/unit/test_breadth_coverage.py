@@ -1,3 +1,5 @@
+import pytest
+
 from app.services.breadth_coverage import (
     BreadthCalculationResult,
     BreadthCoverageReport,
@@ -89,6 +91,29 @@ def test_cache_miss_sample_is_deterministic_across_batch_order():
 
     assert forward.cache_miss_symbols_sample == ("MMM", "ZZZ")
     assert reverse.cache_miss_symbols_sample == forward.cache_miss_symbols_sample
+
+
+def test_price_coverage_rejects_misses_outside_candidate_batch():
+    accumulator = BreadthPriceCoverageAccumulator()
+
+    with pytest.raises(ValueError, match="outside candidate batch"):
+        accumulator.record_batch(["AAA"], ["BBB"])
+
+    assert accumulator.report().candidate_stocks == 0
+
+
+def test_price_coverage_rejects_conflicting_repeated_classification():
+    accumulator = BreadthPriceCoverageAccumulator()
+    accumulator.record_batch(["AAA", "BBB"], ["BBB"])
+
+    with pytest.raises(ValueError, match="conflicting classification"):
+        accumulator.record_batch(["BBB"], [])
+
+    report = accumulator.report()
+    assert report.candidate_stocks == 2
+    assert report.symbols_with_cached_history == 1
+    assert report.cache_miss_stocks == 1
+    assert report.cache_coverage_ratio == 0.5
 
 
 def test_daily_and_backfill_serializers_share_one_report():
