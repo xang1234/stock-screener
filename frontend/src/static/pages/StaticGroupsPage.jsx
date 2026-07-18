@@ -29,6 +29,8 @@ import RankChangeCell from '../../components/shared/RankChangeCell';
 import TickerCell from '../../components/common/TickerCell';
 import { useStaticMarket } from '../StaticMarketContext';
 
+const formatRs = (value) => (Number.isFinite(value) ? value.toFixed(1) : '-');
+
 function MoversCard({ title, rows }) {
   return (
     <Paper elevation={0} sx={{ p: 1.5, height: '100%', border: '1px solid', borderColor: 'divider' }}>
@@ -78,12 +80,14 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
           Current Rankings
         </Typography>
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 720 }}>
+          <Table size="small" sx={{ minWidth: 860 }}>
             <TableHead>
               <TableRow>
                 <TableCell align="center">Rank</TableCell>
                 <TableCell>Group</TableCell>
                 <TableCell align="center">Avg RS</TableCell>
+                <TableCell align="center">1M RS</TableCell>
+                <TableCell align="center">3M RS</TableCell>
                 <TableCell align="center">Stocks</TableCell>
                 <TableCell align="right">1W</TableCell>
                 <TableCell align="right">1M</TableCell>
@@ -109,7 +113,9 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
                 >
                   <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{row.rank}</TableCell>
                   <TableCell>{row.industry_group}</TableCell>
-                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{row.avg_rs_rating?.toFixed?.(1) ?? '-'}</TableCell>
+                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{formatRs(row.avg_rs_rating)}</TableCell>
+                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{formatRs(row.avg_rs_rating_1m)}</TableCell>
+                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{formatRs(row.avg_rs_rating_3m)}</TableCell>
                   <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{row.num_stocks}</TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_1w} /></TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_1m} /></TableCell>

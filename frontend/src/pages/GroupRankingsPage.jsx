@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -64,6 +64,7 @@ import { rrgScopesForMarket } from '../utils/rrgScopes';
 
 const GROUP_RANKING_MARKET_FALLBACKS = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA'];
 const EMPTY_AS_OF_ARGS = [];
+const formatRs = (value) => (Number.isFinite(value) ? value.toFixed(1) : '-');
 
 const REASON_HINTS = {
   warmup_incomplete: 'Wait for the post-close cache warmup to finish, then retry.',
@@ -540,6 +541,7 @@ function GroupRankingsPage() {
     },
     enabled: snapshotEnabled,
     retry: false,
+    refetchInterval: 60_000,
     staleTime: 60_000,
   });
   const groupsBootstrapPayload = (
@@ -571,7 +573,6 @@ function GroupRankingsPage() {
     data: rankings,
     isLoading: isLoadingRankings,
     error: errorRankings,
-    refetch: refetchRankings,
   } = useQuery({
     queryKey: ['groupRankings', selectedMarket, groupsAsOfDate],
     queryFn: () => getCurrentRankings(197, selectedMarket, ...groupAsOfArgs),
@@ -621,6 +622,23 @@ function GroupRankingsPage() {
     refetchInterval: 2000,
   });
 
+  const refreshPublishedGroups = useCallback(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ['groupsBootstrap', selectedMarket],
+      refetchType: 'none',
+    });
+    await queryClient.refetchQueries({
+      queryKey: ['groupsBootstrap', selectedMarket],
+      type: 'active',
+      exact: true,
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['groupRankings', selectedMarket] }),
+      queryClient.invalidateQueries({ queryKey: ['groupMovers'] }),
+      queryClient.invalidateQueries({ queryKey: ['groupRRGBundle', selectedMarket] }),
+    ]);
+  }, [queryClient, selectedMarket]);
+
   // Handle calculation completion/failure
   useEffect(() => {
     if (calcStatus?.status === 'completed' || calcStatus?.status === 'failed') {
@@ -628,7 +646,10 @@ function GroupRankingsPage() {
       setIsCalculating(false);
       if (calcStatus.status === 'completed') {
         setCalculationError(null);
-        refetchRankings();
+        void refreshPublishedGroups().catch((error) => {
+          console.error('Failed to refresh published Group snapshot:', error);
+          setCalculationError(error?.message || 'Failed to refresh published Group snapshot.');
+        });
       } else {
         const baseMessage = calcStatus.error || 'Calculation failed. See server logs for details.';
         const hint = REASON_HINTS[calcStatus.reason_code];
@@ -637,7 +658,7 @@ function GroupRankingsPage() {
         setCalculationError(message);
       }
     }
-  }, [calcStatus, refetchRankings]);
+  }, [calcStatus, refreshPublishedGroups]);
 
   const handlePeriodChange = (event, newValue) => {
     setSelectedPeriod(newValue);
@@ -892,6 +913,24 @@ function GroupRankingsPage() {
                     </TableCell>
                     <TableCell align="right">
                       <TableSortLabel
+                        active={orderBy === 'avg_rs_rating_1m'}
+                        direction={orderBy === 'avg_rs_rating_1m' ? order : 'asc'}
+                        onClick={() => handleSort('avg_rs_rating_1m')}
+                      >
+                        1M RS
+                      </TableSortLabel>
+                    </TableCell>
+                    <TableCell align="right">
+                      <TableSortLabel
+                        active={orderBy === 'avg_rs_rating_3m'}
+                        direction={orderBy === 'avg_rs_rating_3m' ? order : 'asc'}
+                        onClick={() => handleSort('avg_rs_rating_3m')}
+                      >
+                        3M RS
+                      </TableSortLabel>
+                    </TableCell>
+                    <TableCell align="right">
+                      <TableSortLabel
                         active={orderBy === 'median_rs_rating'}
                         direction={orderBy === 'median_rs_rating' ? order : 'asc'}
                         onClick={() => handleSort('median_rs_rating')}
@@ -951,7 +990,7 @@ function GroupRankingsPage() {
                         direction={orderBy === 'rank_change_1m' ? order : 'asc'}
                         onClick={() => handleSort('rank_change_1m')}
                       >
-                        1M
+                        1M Δ
                       </TableSortLabel>
                     </TableCell>
                     <TableCell align="right">
@@ -960,7 +999,7 @@ function GroupRankingsPage() {
                         direction={orderBy === 'rank_change_3m' ? order : 'asc'}
                         onClick={() => handleSort('rank_change_3m')}
                       >
-                        3M
+                        3M Δ
                       </TableSortLabel>
                     </TableCell>
                     <TableCell align="right">
@@ -1006,7 +1045,13 @@ function GroupRankingsPage() {
                         fontWeight: 600,
                         color: row.avg_rs_rating >= 70 ? 'success.main' : row.avg_rs_rating <= 30 ? 'error.main' : 'text.primary'
                       }}>
-                        {row.avg_rs_rating?.toFixed(1)}
+                        {formatRs(row.avg_rs_rating)}
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
+                        {formatRs(row.avg_rs_rating_1m)}
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
+                        {formatRs(row.avg_rs_rating_3m)}
                       </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
                         {row.median_rs_rating != null ? row.median_rs_rating.toFixed(1) : '-'}

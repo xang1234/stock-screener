@@ -1,6 +1,6 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
 import { renderWithProviders } from '../test/renderWithProviders';
@@ -92,6 +92,8 @@ const rankingRowFor = (market) => ({
   date: '2026-04-18',
   rank: 3,
   avg_rs_rating: 82.1,
+  avg_rs_rating_1m: 38.25,
+  avg_rs_rating_3m: 61.75,
   median_rs_rating: 81.5,
   weighted_avg_rs_rating: 84.0,
   rs_std_dev: 3.2,
@@ -183,6 +185,10 @@ describe('GroupRankingsPage', () => {
     getCalculationStatus.mockResolvedValue({ status: 'queued' });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('defaults to the runtime primary market and refetches when the market filter changes', async () => {
     renderGroupRankingsPage();
 
@@ -202,6 +208,50 @@ describe('GroupRankingsPage', () => {
     expect(getRankMovers).toHaveBeenCalledWith('1w', 10, 'US');
     expect(await screen.findByText('US Internet Services')).toBeInTheDocument();
     expect(screen.getByText('US | 1 groups | 2026-04-18')).toBeInTheDocument();
+  });
+
+  it('shows sortable 1M and 3M RS columns separately from rank changes', async () => {
+    getCurrentRankings.mockResolvedValue({
+      date: '2026-04-18',
+      total_groups: 2,
+      market_scope: 'HK',
+      rankings: [
+        rankingRowFor('HK'),
+        {
+          ...rankingRowFor('HK'),
+          industry_group: 'HK Semiconductors',
+          rank: 1,
+          avg_rs_rating_1m: 88.5,
+          avg_rs_rating_3m: 90.25,
+        },
+      ],
+    });
+
+    renderGroupRankingsPage();
+
+    expect(await screen.findByText('38.3')).toBeInTheDocument();
+    expect(screen.getByText('61.8')).toBeInTheDocument();
+    const table = screen.getByRole('columnheader', { name: '1M RS' }).closest('table');
+    const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent.trim());
+    expect(headers.slice(0, 7)).toEqual([
+      'Rank',
+      'Industry Group',
+      'RS',
+      '1M RS',
+      '3M RS',
+      'Med RS',
+      'Wtd RS',
+    ]);
+    expect(headers).toContain('1M Δ');
+    expect(headers).toContain('3M Δ');
+
+    const user = userEvent.setup();
+    await user.click(within(table).getByRole('button', { name: '1M RS' }));
+    await user.click(within(table).getByRole('button', { name: '1M RS' }));
+    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('HK Semiconductors');
+
+    await user.click(within(table).getByRole('button', { name: '3M RS' }));
+    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('HK Internet Services');
   });
 
   it('keeps the market filter visible on non-US load errors and hides the US-only calculation action', async () => {
@@ -304,6 +354,107 @@ describe('GroupRankingsPage', () => {
     await waitFor(() => {
       expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'HK', '2026-03-16');
     });
+  });
+
+  it('advances the bootstrap date while the page remains open and pins RRG to it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    runtimeState.uiSnapshots = { groups: true };
+    const snapshots = ['2026-04-09', '2026-04-10'].map((snapshotDate) => {
+      const row = { ...rankingRowFor('HK'), date: snapshotDate };
+      return {
+        available: true,
+        is_stale: false,
+        payload: {
+          rankings: {
+            date: snapshotDate,
+            total_groups: 1,
+            market_scope: 'HK',
+            rankings: [row],
+          },
+          movers: {
+            period: '1w',
+            market_scope: 'HK',
+            gainers: [row],
+            losers: [],
+          },
+        },
+      };
+    });
+    getGroupsBootstrap
+      .mockResolvedValueOnce(snapshots[0])
+      .mockResolvedValueOnce(snapshots[1]);
+
+    const { unmount } = renderGroupRankingsPage();
+    expect(await screen.findByText('HK | 1 groups | 2026-04-09')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await waitFor(() => expect(getGroupsBootstrap).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('HK | 1 groups | 2026-04-10')).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole('button', { name: 'RRG' }));
+    await waitFor(() => {
+      expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'HK', '2026-04-10');
+    });
+
+    unmount();
+    vi.useRealTimers();
+  });
+
+  it('refreshes bootstrap before date-pinned queries after a calculation completes', async () => {
+    runtimeState.features = { tasks: true };
+    runtimeState.uiSnapshots = { groups: true };
+    runtimeState.primaryMarket = 'US';
+    runtimeState.enabledMarkets = ['US'];
+    const bootstrapFor = (snapshotDate) => {
+      const row = { ...rankingRowFor('US'), date: snapshotDate };
+      return {
+        available: true,
+        is_stale: false,
+        payload: {
+          rankings: {
+            date: snapshotDate,
+            total_groups: 1,
+            market_scope: 'US',
+            rankings: [row],
+          },
+          movers: {
+            period: '1w',
+            market_scope: 'US',
+            gainers: [row],
+            losers: [],
+          },
+        },
+      };
+    };
+    getGroupsBootstrap
+      .mockResolvedValueOnce(bootstrapFor('2026-04-09'))
+      .mockResolvedValueOnce(bootstrapFor('2026-04-10'));
+    triggerCalculation.mockResolvedValue({ task_id: 'group-task-1' });
+    getCalculationStatus.mockResolvedValue({ status: 'completed' });
+    getCurrentRankings.mockImplementation(async (_limit, market, asOfDate) => ({
+      date: asOfDate,
+      total_groups: 1,
+      market_scope: market,
+      rankings: [{ ...rankingRowFor(market), date: asOfDate }],
+    }));
+
+    const { queryClient } = renderGroupRankingsPage();
+    expect(await screen.findByText('US | 1 groups | 2026-04-09')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(getGroupsBootstrap).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData(['groupsBootstrap', 'US'])?.payload?.rankings?.date,
+      ).toBe('2026-04-10');
+    });
+    expect(await screen.findByText('US | 1 groups | 2026-04-10')).toBeInTheDocument();
+    expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US', '2026-04-10');
   });
 
   it('hides RRG for group-ranking markets without RRG capability', async () => {
