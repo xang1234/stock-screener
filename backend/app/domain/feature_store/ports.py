@@ -111,6 +111,15 @@ class FeatureRunRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def repoint_published(
+        self,
+        run_id: int,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain:
+        """Point a named key at an already-published run without transitioning it."""
+        ...
+
+    @abc.abstractmethod
     def get_latest_published(
         self,
         pointer_key: str = "latest_published",

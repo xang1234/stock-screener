@@ -297,6 +297,76 @@ class TestPublishAtomically:
         assert pointer is None
 
 
+class TestRepointPublished:
+    def test_moves_pointer_without_mutating_published_run(
+        self,
+        repo: SqlFeatureRunRepository,
+        session: Session,
+    ):
+        original = repo.start_run(date(2026, 2, 16), RunType.DAILY_SNAPSHOT)
+        repo.mark_completed(original.id, _make_stats())
+        repo.publish_atomically(original.id, pointer_key="latest_published_market:US")
+
+        candidate = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)
+        repo.mark_completed(candidate.id, _make_stats())
+        published = repo.publish_atomically(
+            candidate.id,
+            pointer_key="rollout_rs:balanced-horizon-percentile-v2:US",
+        )
+        status_before = published.status
+        published_at_before = published.published_at
+        completed_at_before = published.completed_at
+
+        result = repo.repoint_published(
+            candidate.id,
+            pointer_key="latest_published_market:US",
+        )
+
+        assert result.status == status_before == RunStatus.PUBLISHED
+        assert result.published_at.replace(tzinfo=None) == published_at_before.replace(
+            tzinfo=None
+        )
+        assert result.completed_at.replace(tzinfo=None) == completed_at_before.replace(
+            tzinfo=None
+        )
+        pointer = session.get(FeatureRunPointer, "latest_published_market:US")
+        assert pointer is not None
+        assert pointer.run_id == candidate.id
+
+    @pytest.mark.parametrize(
+        "candidate_status",
+        [RunStatus.RUNNING, RunStatus.COMPLETED, RunStatus.QUARANTINED],
+    )
+    def test_rejects_candidate_that_is_not_already_published(
+        self,
+        repo: SqlFeatureRunRepository,
+        candidate_status: RunStatus,
+    ):
+        run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)
+        if candidate_status != RunStatus.RUNNING:
+            repo.mark_completed(run.id, _make_stats())
+        if candidate_status == RunStatus.QUARANTINED:
+            repo.mark_quarantined(
+                run.id,
+                [
+                    DQResult(
+                        check_name="coverage",
+                        passed=False,
+                        severity=DQSeverity.CRITICAL,
+                        actual_value=0.5,
+                        threshold=0.9,
+                        message="coverage low",
+                    )
+                ],
+            )
+
+        with pytest.raises(InvalidTransitionError):
+            repo.repoint_published(
+                run.id,
+                pointer_key="latest_published_market:US",
+            )
+
+
 class TestGetLatestPublished:
     def test_returns_published_run(self, repo: SqlFeatureRunRepository):
         run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)

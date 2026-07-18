@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from app.services.market_rs_inputs import MarketRsInputLoader
     from app.domain.scanning.ports import MarketRsReader
     from app.services.market_rs_snapshot_service import MarketRsSnapshotService
+    from app.services.market_rs_rollout_service import MarketRsRolloutService
     from app.services.point_in_time_universe_service import PointInTimeUniverseService
     from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
     from app.services.price_cache_service import PriceCacheService
@@ -120,6 +121,7 @@ class RuntimeServices:
         self._market_rs_input_loader: MarketRsInputLoader | None = None
         self._market_rs_run_repository: MarketRsRunRepository | None = None
         self._market_rs_snapshot_service: MarketRsSnapshotService | None = None
+        self._market_rs_rollout_service: MarketRsRolloutService | None = None
         self._market_rs_reader: MarketRsReader | None = None
         self._github_release_sync_service: GitHubReleaseSyncService | None = None
         self._security_master_resolver: SecurityMasterResolver | None = None
@@ -357,6 +359,23 @@ class RuntimeServices:
                     )
         return self._market_rs_snapshot_service
 
+    def market_rs_rollout_service(self) -> MarketRsRolloutService:
+        if self._market_rs_rollout_service is None:
+            with self._init_lock:
+                if self._market_rs_rollout_service is None:
+                    from app.services.market_rs_rollout_service import (
+                        MarketRsRolloutService,
+                    )
+
+                    self._market_rs_rollout_service = MarketRsRolloutService(
+                        calendar_service=self.market_calendar_service(),
+                        input_loader=self.market_rs_input_loader(),
+                        market_rs_snapshot_service=self.market_rs_snapshot_service(),
+                        market_rs_repository=self.market_rs_run_repository(),
+                        canonical_group_service=self.canonical_group_ranking_service(),
+                    )
+        return self._market_rs_rollout_service
+
     def market_rs_reader(self) -> MarketRsReader:
         if self._market_rs_reader is None:
             with self._init_lock:
@@ -548,6 +567,7 @@ class RuntimeServices:
             self._market_rs_input_loader = None
             self._market_rs_run_repository = None
             self._market_rs_snapshot_service = None
+            self._market_rs_rollout_service = None
             self._market_rs_reader = None
             self._github_release_sync_service = None
             self._security_master_resolver = None
@@ -756,6 +776,11 @@ def get_market_calendar_service() -> MarketCalendarService:
 def get_market_rs_snapshot_service() -> MarketRsSnapshotService:
     """Return the process-scoped canonical Market RS snapshot publisher."""
     return _resolve_runtime_services().market_rs_snapshot_service()
+
+
+def get_market_rs_rollout_service() -> MarketRsRolloutService:
+    """Return the process-scoped balanced Market RS rollout coordinator."""
+    return _resolve_runtime_services().market_rs_rollout_service()
 
 
 def get_market_rs_reader() -> MarketRsReader:

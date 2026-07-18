@@ -55,12 +55,14 @@ def test_runtime_services_reuses_and_resets_canonical_market_rs_dependencies():
     input_loader = runtime.market_rs_input_loader()
     repository = runtime.market_rs_run_repository()
     snapshot_service = runtime.market_rs_snapshot_service()
+    rollout_service = runtime.market_rs_rollout_service()
     reader = runtime.market_rs_reader()
 
     assert runtime.point_in_time_universe_service() is point_in_time
     assert runtime.market_rs_input_loader() is input_loader
     assert runtime.market_rs_run_repository() is repository
     assert runtime.market_rs_snapshot_service() is snapshot_service
+    assert runtime.market_rs_rollout_service() is rollout_service
     assert runtime.market_rs_reader() is reader
 
     runtime.reset_for_tests()
@@ -69,6 +71,7 @@ def test_runtime_services_reuses_and_resets_canonical_market_rs_dependencies():
     assert runtime.market_rs_input_loader() is not input_loader
     assert runtime.market_rs_run_repository() is not repository
     assert runtime.market_rs_snapshot_service() is not snapshot_service
+    assert runtime.market_rs_rollout_service() is not rollout_service
     assert runtime.market_rs_reader() is not reader
 
 

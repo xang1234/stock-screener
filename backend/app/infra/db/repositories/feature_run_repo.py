@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.domain.common.errors import EntityNotFoundError
+from app.domain.common.errors import EntityNotFoundError, InvalidTransitionError
 from app.domain.feature_store.models import (
     FeatureRunDomain,
     RunStats,
@@ -22,7 +22,6 @@ from app.infra.db.models.feature_store import (
     FeatureRunPointer,
     StockFeatureDaily,
 )
-from app.domain.feature_store.quality import DQResult
 from app.infra.serialization import convert_numpy_types
 
 
@@ -147,6 +146,24 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         else:
             pointer.run_id = run_id
 
+        self._session.flush()
+        return self._to_domain(row)
+
+    def repoint_published(
+        self,
+        run_id: int,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain:
+        row = self._get_or_raise(run_id)
+        if RunStatus(row.status) != RunStatus.PUBLISHED:
+            raise InvalidTransitionError(RunStatus(row.status), RunStatus.PUBLISHED)
+
+        pointer = self._session.get(FeatureRunPointer, pointer_key)
+        if pointer is None:
+            pointer = FeatureRunPointer(key=pointer_key, run_id=run_id)
+            self._session.add(pointer)
+        else:
+            pointer.run_id = run_id
         self._session.flush()
         return self._to_domain(row)
 
