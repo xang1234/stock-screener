@@ -18,6 +18,7 @@ from app.use_cases.feature_store.build_daily_snapshot import (
     BootstrapCacheCoverageInsufficient,
     BuildDailyFeatureSnapshotUseCase,
     BuildDailySnapshotCommand,
+    _is_us_trading_day,
     _map_orchestrator_to_feature_row,
 )
 from tests.unit.use_cases.conftest import (
@@ -73,6 +74,22 @@ def _make_uow(
 # ---------------------------------------------------------------------------
 # Pure function tests
 # ---------------------------------------------------------------------------
+
+
+def test_us_trading_day_compatibility_hook_uses_market_calendar(monkeypatch):
+    calls = []
+
+    def is_trading_day(_self, market, day):
+        calls.append((market, day))
+        return True
+
+    monkeypatch.setattr(
+        "app.services.market_calendar_service.MarketCalendarService.is_trading_day",
+        is_trading_day,
+    )
+
+    assert _is_us_trading_day(AS_OF) is True
+    assert calls == [("US", AS_OF)]
 
 
 class TestMapOrchestratorToFeatureRow:

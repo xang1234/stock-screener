@@ -485,9 +485,14 @@ class PriceRefreshWorkflow:
     ) -> bool:
         if mode is not PriceRefreshMode.FULL or market is not None:
             return False
+        headers = getattr(
+            getattr(task, "request", None),
+            "headers",
+            None,
+        )
         is_manual = (
-            getattr(getattr(task, "request", None), "headers", None)
-            and task.request.headers.get("origin") == "manual"
+            isinstance(headers, Mapping)
+            and headers.get("origin") == "manual"
         )
         if is_manual:
             return False
