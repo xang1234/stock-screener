@@ -4,6 +4,7 @@ from datetime import date as Date
 from typing import Any, Dict, Optional, List
 
 from ..infra.serialization import sanitize_sparkline
+from ..domain.relative_strength import LEGACY_RS_FORMULA_VERSION
 from .scope import ScopedResponseMixin
 
 
@@ -14,6 +15,8 @@ class GroupRankResponse(BaseModel):
     date: str = Field(..., description="Ranking date (YYYY-MM-DD)")
     rank: int = Field(..., description="Current rank (1 = best)")
     avg_rs_rating: float = Field(..., description="Average RS rating of stocks in group")
+    avg_rs_rating_1m: Optional[float] = Field(None, description="Average constituent 1-month Market RS")
+    avg_rs_rating_3m: Optional[float] = Field(None, description="Average constituent 3-month Market RS")
     median_rs_rating: Optional[float] = Field(None, description="Median RS rating of stocks in group")
     weighted_avg_rs_rating: Optional[float] = Field(None, description="Market-cap weighted average RS rating")
     rs_std_dev: Optional[float] = Field(None, description="RS rating dispersion (std dev)")
@@ -25,6 +28,11 @@ class GroupRankResponse(BaseModel):
     top_symbol: Optional[str] = Field(None, description="Best performing stock in group")
     top_symbol_name: Optional[str] = Field(None, description="Company name of top stock")
     top_rs_rating: Optional[float] = Field(None, description="RS rating of top stock")
+    rs_formula_version: str = Field(
+        LEGACY_RS_FORMULA_VERSION,
+        description="Canonical RS formula version",
+    )
+    market_rs_run_id: Optional[int] = Field(None, description="Canonical Market RS run identifier")
 
     # Rank changes (positive = improved, negative = declined)
     rank_change_1w: Optional[int] = Field(None, description="Rank change vs 1 week ago")
@@ -42,6 +50,9 @@ class GroupRankingsResponse(ScopedResponseMixin):
     date: str = Field(..., description="Date of rankings")
     total_groups: int = Field(..., description="Total number of ranked groups")
     rankings: List[GroupRankResponse] = Field(..., description="List of group rankings")
+    rs_formula_version: str = Field(..., description="RS formula shared by all rows")
+    rs_as_of_date: str = Field(..., description="Market RS snapshot date")
+    rs_universe_size: Optional[int] = Field(None, description="Eligible stock universe size")
 
 
 class HistoricalDataPoint(BaseModel):
@@ -50,6 +61,8 @@ class HistoricalDataPoint(BaseModel):
     date: str = Field(..., description="Date (YYYY-MM-DD)")
     rank: int = Field(..., description="Rank on this date")
     avg_rs_rating: float = Field(..., description="Average RS rating on this date")
+    avg_rs_rating_1m: Optional[float] = Field(None, description="Average 1-month Market RS")
+    avg_rs_rating_3m: Optional[float] = Field(None, description="Average 3-month Market RS")
     num_stocks: Optional[int] = Field(None, description="Number of stocks")
 
 
@@ -87,6 +100,8 @@ class GroupDetailResponse(ScopedResponseMixin):
     industry_group: str = Field(..., description="IBD industry group name")
     current_rank: int = Field(..., description="Current rank")
     current_avg_rs: float = Field(..., description="Current average RS rating")
+    current_avg_rs_1m: Optional[float] = Field(None, description="Current average 1-month Market RS")
+    current_avg_rs_3m: Optional[float] = Field(None, description="Current average 3-month Market RS")
     current_median_rs: Optional[float] = Field(None, description="Current median RS rating")
     current_weighted_avg_rs: Optional[float] = Field(None, description="Current market-cap weighted average RS rating")
     current_rs_std_dev: Optional[float] = Field(None, description="Current RS dispersion (std dev)")
@@ -95,6 +110,11 @@ class GroupDetailResponse(ScopedResponseMixin):
     top_symbol: Optional[str] = Field(None, description="Best performing stock")
     top_symbol_name: Optional[str] = Field(None, description="Company name of top stock")
     top_rs_rating: Optional[float] = Field(None, description="RS of top stock")
+    rs_formula_version: str = Field(
+        LEGACY_RS_FORMULA_VERSION,
+        description="Canonical RS formula version",
+    )
+    market_rs_run_id: Optional[int] = Field(None, description="Canonical Market RS run identifier")
 
     # Rank changes
     rank_change_1w: Optional[int] = Field(None, description="Rank change vs 1 week ago")
@@ -115,6 +135,9 @@ class MoversResponse(ScopedResponseMixin):
     period: str = Field(..., description="Time period (1w, 1m, 3m, 6m)")
     gainers: List[GroupRankResponse] = Field(..., description="Groups with biggest rank improvements")
     losers: List[GroupRankResponse] = Field(..., description="Groups with biggest rank declines")
+    rs_formula_version: Optional[str] = Field(None, description="RS formula shared by mover rows")
+    rs_as_of_date: Optional[str] = Field(None, description="Market RS snapshot date")
+    rs_universe_size: Optional[int] = Field(None, description="Eligible stock universe size")
 
 
 class RRGPoint(BaseModel):

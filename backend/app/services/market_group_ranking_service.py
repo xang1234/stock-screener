@@ -22,11 +22,7 @@ from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.services.group_detail_payloads import scan_result_item_to_group_row
 from app.services.group_ranking_history import (
-    GROUP_RANK_CHANGE_OFFSETS,
-    apply_group_rank_changes,
-    build_group_detail_payload,
     group_rank_map,
-    select_group_history_runs,
     select_market_run_series,
 )
 from app.services.group_ranking_payloads import compute_group_rankings_from_serialized_rows
@@ -56,13 +52,23 @@ class MarketGroupRankingService:
     def __init__(
         self,
         *,
+        group_rank_service: Any | None = None,
         redis_client: Any = _REDIS_CLIENT_UNSET,
         rrg_history_cache_ttl_seconds: int = RRG_HISTORY_CACHE_TTL_SECONDS,
     ) -> None:
+        self._group_rank_service = group_rank_service
         self._redis_client = (
             get_redis_client() if redis_client is _REDIS_CLIENT_UNSET else redis_client
         )
         self._rrg_history_cache_ttl_seconds = int(rrg_history_cache_ttl_seconds)
+
+    def _stored_group_rank_service(self) -> Any:
+        if self._group_rank_service is None:
+            # Imported lazily to avoid a module cycle through runtime wiring.
+            from app.wiring.bootstrap import get_group_rank_service
+
+            self._group_rank_service = get_group_rank_service()
+        return self._group_rank_service
 
     def get_all_groups_history(
         self,
@@ -192,42 +198,13 @@ class MarketGroupRankingService:
         calculation_date: date | None = None,
         include_rank_changes: bool = True,
     ) -> list[dict[str, Any]]:
-        latest_run = self._get_latest_published_run(db, market=market, calculation_date=calculation_date)
-        if latest_run is None:
-            return []
-
-        rows = self._load_run_rows(db, latest_run.id)
-        rankings = self.compute_group_rankings_from_rows(rows, ranking_date=latest_run.as_of_date)
-        if not rankings:
-            return []
-        if not include_rank_changes:
-            return rankings[:limit]
-
-        market_runs = select_market_run_series(
+        del include_rank_changes  # Stored service owns versioned rank-change lookup.
+        return self._stored_group_rank_service().get_current_rankings(
             db,
-            market=market,
-            latest_run=latest_run,
-            min_runs=max(GROUP_RANK_CHANGE_OFFSETS.values()) + 1,
+            limit=limit,
+            calculation_date=calculation_date,
+            market=str(market or "").strip().upper(),
         )
-        history_runs = select_group_history_runs(
-            market_runs,
-            history_runs=0,
-            offsets=GROUP_RANK_CHANGE_OFFSETS,
-        )
-        historical_rankings = {
-            run.id: self.compute_group_rankings_from_rows(
-                self._load_run_rows(db, run.id, include_sparklines=False),
-                ranking_date=run.as_of_date,
-            )
-            for run in history_runs
-        }
-        apply_group_rank_changes(
-            rankings,
-            market_runs,
-            historical_rankings,
-            offsets=GROUP_RANK_CHANGE_OFFSETS,
-        )
-        return rankings[:limit]
 
     def get_current_rank_map(
         self,
@@ -278,29 +255,13 @@ class MarketGroupRankingService:
         limit: int = 20,
         calculation_date: date | None = None,
     ) -> dict[str, Any]:
-        current_rankings = self.get_current_rankings(
+        return self._stored_group_rank_service().get_rank_movers(
             db,
-            market=market,
-            limit=10_000,
+            period=period,
+            limit=limit,
             calculation_date=calculation_date,
+            market=str(market or "").strip().upper(),
         )
-        if not current_rankings:
-            return {"period": period, "gainers": [], "losers": []}
-
-        change_key = f"rank_change_{period}"
-        groups_with_change = [
-            row for row in current_rankings
-            if row.get(change_key) is not None
-        ]
-        gainers = [row for row in groups_with_change if row[change_key] > 0]
-        losers = [row for row in groups_with_change if row[change_key] < 0]
-        gainers.sort(key=lambda row: row[change_key], reverse=True)
-        losers.sort(key=lambda row: row[change_key])
-        return {
-            "period": period,
-            "gainers": gainers[:limit],
-            "losers": losers[:limit],
-        }
 
     def get_group_history(
         self,
@@ -310,51 +271,11 @@ class MarketGroupRankingService:
         industry_group: str,
         days: int = 180,
     ) -> dict[str, Any]:
-        latest_run = self._get_latest_published_run(db, market=market)
-        if latest_run is None:
-            return {"industry_group": industry_group, "history": []}
-
-        rows = self._load_run_rows(db, latest_run.id)
-        rankings = self.compute_group_rankings_from_rows(rows, ranking_date=latest_run.as_of_date)
-        current = next((row for row in rankings if row["industry_group"] == industry_group), None)
-        if current is None:
-            return {"industry_group": industry_group, "history": []}
-
-        cutoff_date = latest_run.as_of_date - timedelta(days=days)
-        market_runs = select_market_run_series(
+        return self._stored_group_rank_service().get_group_history(
             db,
-            market=market,
-            latest_run=latest_run,
-            cutoff_date=cutoff_date,
-            min_runs=max(GROUP_RANK_CHANGE_OFFSETS.values()) + 1,
-        )
-        historical_rankings = {latest_run.id: rankings}
-        for run in market_runs:
-            if run.id in historical_rankings:
-                continue
-            historical_rankings[run.id] = self.compute_group_rankings_from_rows(
-                self._load_run_rows(db, run.id, include_sparklines=False),
-                ranking_date=run.as_of_date,
-            )
-        apply_group_rank_changes(
-            [current],
-            market_runs,
-            historical_rankings,
-            offsets=GROUP_RANK_CHANGE_OFFSETS,
-        )
-
-        current_rows = []
-        for row in rows:
-            payload = scan_result_item_to_group_row(row)
-            if payload.get("ibd_industry_group") == industry_group:
-                current_rows.append(payload)
-        return build_group_detail_payload(
             industry_group,
-            ranking=current,
-            current_rows=current_rows,
-            market_runs=market_runs,
-            historical_rankings=historical_rankings,
-            history_cutoff_date=cutoff_date,
+            days=days,
+            market=str(market or "").strip().upper(),
         )
 
     def _build_rrg_history_result(

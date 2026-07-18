@@ -25,6 +25,7 @@ from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
 from app.schemas.scanning import ScanResultItem
 from app.services.key_market_history import build_key_market_entries
+from app.services.group_ranking_payloads import group_snapshot_metadata
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.redis_pool import get_redis_client
 from app.services.snapshot_date_coherence import (
@@ -285,16 +286,29 @@ def _build_top_groups(
     if not rankings:
         return [], None
     groups_date = rankings[0].get("date")
+    metadata = group_snapshot_metadata(db, market=market, rankings=rankings)
     keep = (
         "industry_group",
         "rank",
+        "avg_rs_rating",
+        "avg_rs_rating_1m",
+        "avg_rs_rating_3m",
         "rank_change_1w",
         "rank_change_1m",
         "top_symbol",
         "top_symbol_name",
         "top_rs_rating",
+        "rs_formula_version",
+        "market_rs_run_id",
     )
-    return [{key: row.get(key) for key in keep} for row in rankings], groups_date
+    return [
+        {
+            **{key: row.get(key) for key in keep},
+            "rs_as_of_date": metadata["rs_as_of_date"],
+            "rs_universe_size": metadata["rs_universe_size"],
+        }
+        for row in rankings
+    ], groups_date
 
 
 def _latest_breadth_date(

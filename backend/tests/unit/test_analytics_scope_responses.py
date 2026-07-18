@@ -21,6 +21,8 @@ class TestGroupsEndpointResponseCarriesScope:
             date="2026-04-11",
             total_groups=0,
             rankings=[],
+            rs_formula_version="legacy-linear-v1",
+            rs_as_of_date="2026-04-11",
             market_scope=scope["market_scope"],
             scope_reason=scope.get("scope_reason"),
         )
@@ -47,7 +49,11 @@ class TestGroupsEndpointResponseCarriesScope:
         from app.schemas.groups import GroupRankingsResponse
 
         resp = GroupRankingsResponse(
-            date="2026-04-11", total_groups=0, rankings=[],
+            date="2026-04-11",
+            total_groups=0,
+            rankings=[],
+            rs_formula_version="legacy-linear-v1",
+            rs_as_of_date="2026-04-11",
         )
         assert resp.market_scope is None
 

@@ -59,6 +59,7 @@ from app.schemas.theme import (
     ThemeRankingsResponse,
 )
 from app.services.theme_discovery_service import ThemeDiscoveryService
+from app.services.group_ranking_payloads import group_snapshot_metadata
 from app.services.theme_pipeline_state_service import compute_pipeline_observability
 from app.services.theme_taxonomy_service import ThemeTaxonomyService
 from app.use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
@@ -664,11 +665,13 @@ class UISnapshotService:
 
         movers = service.get_rank_movers(db, period=DEFAULT_GROUP_PERIOD, limit=10)
         ranking_date = rankings[0]["date"]
+        metadata = group_snapshot_metadata(db, market="US", rankings=rankings)
         return {
             "rankings": GroupRankingsResponse(
                 date=ranking_date,
                 total_groups=len(rankings),
                 rankings=[GroupRankResponse(**row) for row in rankings],
+                **metadata,
                 **market_scope_tag("US"),
             ).model_dump(mode="json"),
             "movers_period": DEFAULT_GROUP_PERIOD,
@@ -676,6 +679,7 @@ class UISnapshotService:
                 period=movers["period"],
                 gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
                 losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+                **metadata,
                 **market_scope_tag("US"),
             ).model_dump(mode="json"),
             "task_controls_enabled": settings.feature_tasks,

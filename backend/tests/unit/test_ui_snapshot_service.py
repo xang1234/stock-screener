@@ -11,7 +11,12 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.domain.markets import market_registry
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from app.infra.db.models.feature_store import FeatureRun
+from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan, ScanResult
@@ -234,6 +239,15 @@ def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
+    with Session() as db:
+        db.add(
+            MarketRsFormulaPointer(
+                market="US",
+                formula_version=LEGACY_RS_FORMULA_VERSION,
+            )
+        )
+        db.commit()
+
     snapshot = service.publish_groups_bootstrap()
 
     assert snapshot is None
@@ -348,12 +362,38 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
     service = UISnapshotService(Session)
 
     with Session() as db:
+        run = MarketRsRun(
+            market="US",
+            as_of_date=date(2026, 3, 28),
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            status="completed",
+            benchmark_symbol="SPY",
+            benchmark_as_of_date=date(2026, 3, 28),
+            universe_hash="ui-snapshot-test",
+            expected_symbol_count=5000,
+            eligible_symbol_count=5000,
+            excluded_symbol_count=0,
+            diagnostics_json={},
+        )
+        db.add_all(
+            [
+                MarketRsFormulaPointer(
+                    market="US",
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                ),
+                run,
+            ]
+        )
+        db.flush()
         db.add(
             IBDGroupRank(
+                market="US",
                 industry_group="Software",
                 date=date(2026, 3, 28),
                 rank=1,
                 avg_rs_rating=95.5,
+                avg_rs_rating_1m=41.5,
+                avg_rs_rating_3m=63.2,
                 median_rs_rating=95.0,
                 weighted_avg_rs_rating=95.2,
                 rs_std_dev=1.0,
@@ -361,6 +401,8 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
                 num_stocks_rs_above_80=10,
                 top_symbol="MSFT",
                 top_rs_rating=99.0,
+                rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+                market_rs_run_id=run.id,
             )
         )
         db.commit()
@@ -370,7 +412,13 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
     assert snapshot is not None
     assert snapshot.payload["rankings"]["date"] == "2026-03-28"
     assert snapshot.payload["rankings"]["total_groups"] == 1
-    assert snapshot.payload["rankings"]["rankings"][0]["industry_group"] == "Software"
+    rankings_payload = snapshot.payload["rankings"]
+    assert rankings_payload["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
+    assert rankings_payload["rs_as_of_date"] == "2026-03-28"
+    assert rankings_payload["rs_universe_size"] == 5000
+    assert rankings_payload["rankings"][0]["industry_group"] == "Software"
+    assert rankings_payload["rankings"][0]["avg_rs_rating_1m"] == 41.5
+    assert rankings_payload["rankings"][0]["avg_rs_rating_3m"] == 63.2
 
 
 def test_ui_snapshot_publish_coerces_nested_dates_to_json_safe_strings():

@@ -7,7 +7,10 @@ from datetime import date
 from typing import Any, Iterable, Mapping
 
 import pandas as pd
+from sqlalchemy.orm import Session
 
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.infra.db.models.relative_strength import MarketRsRun
 from app.models.industry import IBDGroupRank
 
 
@@ -40,6 +43,49 @@ def rank_record_payload(
         "rank_change_1m": None,
         "rank_change_3m": None,
         "rank_change_6m": None,
+    }
+
+
+def group_snapshot_metadata(
+    db: Session,
+    *,
+    market: str,
+    rankings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Validate and describe the single RS source behind a Group snapshot."""
+    if not rankings:
+        raise RuntimeError("no Group rankings are available")
+    formula_versions = {row.get("rs_formula_version") for row in rankings}
+    run_ids = {row.get("market_rs_run_id") for row in rankings}
+    dates = {row.get("date") for row in rankings}
+    if (
+        None in formula_versions
+        or None in dates
+        or len(formula_versions) != 1
+        or len(run_ids) != 1
+        or len(dates) != 1
+    ):
+        raise RuntimeError("group snapshot mixes canonical RS sources")
+    formula_version = str(next(iter(formula_versions)))
+    run_id = next(iter(run_ids))
+    if formula_version == BALANCED_RS_FORMULA_VERSION and run_id is None:
+        raise RuntimeError("balanced Group snapshot has no single Market RS run")
+
+    run = db.get(MarketRsRun, int(run_id)) if run_id is not None else None
+    normalized_market = market.strip().upper()
+    snapshot_date = str(next(iter(dates)))
+    if run_id is not None and (
+        run is None
+        or run.market != normalized_market
+        or run.formula_version != formula_version
+        or run.as_of_date.isoformat() != snapshot_date
+        or run.status != "completed"
+    ):
+        raise RuntimeError("Group snapshot metadata does not match its Market RS run")
+    return {
+        "rs_formula_version": formula_version,
+        "rs_as_of_date": snapshot_date,
+        "rs_universe_size": run.eligible_symbol_count if run is not None else None,
     }
 
 

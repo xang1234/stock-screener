@@ -24,8 +24,8 @@ from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.services.growth_cadence_service import build_row_field_availability
-from app.services.market_group_ranking_service import MarketGroupRankingService
 from app.services.market_taxonomy_service import (
     MarketTaxonomyService,
     get_market_taxonomy_service,
@@ -262,13 +262,15 @@ class SqlScanResultRepository(ScanResultRepository):
         session: Session,
         *,
         taxonomy_service: MarketTaxonomyService | None = None,
-        market_group_ranking_service: MarketGroupRankingService | None = None,
+        market_rs_repository: MarketRsRunRepository | None = None,
+        market_group_ranking_service: Any | None = None,
     ) -> None:
         self._session = session
         self._taxonomy_service = taxonomy_service or get_market_taxonomy_service()
-        self._market_group_ranking_service = (
-            market_group_ranking_service or MarketGroupRankingService()
-        )
+        self._market_rs_repository = market_rs_repository or MarketRsRunRepository()
+        # Compatibility-only constructor argument. Feature-row-derived Group
+        # snapshots are intentionally never consulted during persistence.
+        del market_group_ranking_service
 
     def bulk_insert(self, rows: list[dict]) -> int:
         objects = [ScanResult(**row) for row in rows]
@@ -371,48 +373,6 @@ class SqlScanResultRepository(ScanResultRepository):
             d = enrichment.setdefault(row.symbol, {})
             d["ibd_industry_group"] = row.industry_group
 
-        # Scan-result enrichment is US-scoped today (the joined ibd_industry_groups
-        # table only contains US symbols). Filter the rank lookup by market='US'
-        # so non-US ranking rows can't bump the latest-date or pollute the map.
-        latest_rank_date = ranking_date or self._session.query(
-            func.max(IBDGroupRank.date)
-        ).filter(IBDGroupRank.market == "US").scalar()
-        rank_by_group: dict[str, int] = {}
-        if latest_rank_date is not None:
-            rank_rows = (
-                self._session.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
-                .filter(
-                    IBDGroupRank.date == latest_rank_date,
-                    IBDGroupRank.market == "US",
-                )
-                .all()
-            )
-            rank_by_group = {g: rank for g, rank in rank_rows}
-
-        for symbol, d in enrichment.items():
-            group_name = d.get("ibd_industry_group")
-            if group_name:
-                group_rank = rank_by_group.get(group_name)
-                d["ibd_group_rank"] = group_rank
-                d["ibd_group_rank_date"] = (
-                    latest_rank_date.isoformat()
-                    if group_rank is not None and latest_rank_date is not None
-                    else None
-                )
-
-        requested_markets = {
-            str(d.get("market") or "").strip().upper()
-            for d in enrichment.values()
-            if str(d.get("market") or "").strip().upper() not in {"", "US"}
-        }
-        non_us_rank_snapshots = {
-            market: self._market_group_ranking_service.get_current_rank_snapshot(
-                self._session,
-                market=market,
-                calculation_date=ranking_date,
-            )
-            for market in requested_markets
-        }
         for symbol, d in enrichment.items():
             market = str(d.get("market") or "").strip().upper()
             if market in {"", "US"}:
@@ -429,24 +389,61 @@ class SqlScanResultRepository(ScanResultRepository):
                 continue
 
             if entry.industry_group:
-                rank_snapshot = non_us_rank_snapshots.get(market)
-                group_rank = (
-                    rank_snapshot.ranks_by_group.get(entry.industry_group)
-                    if rank_snapshot is not None
-                    else None
-                )
                 d["ibd_industry_group"] = entry.industry_group
-                d["ibd_group_rank"] = group_rank
-                d["ibd_group_rank_date"] = (
-                    rank_snapshot.date
-                    if group_rank is not None and rank_snapshot is not None
-                    else None
-                )
             if entry.sector:
                 d["sector"] = entry.sector
             if entry.industry:
                 d["industry"] = entry.industry
             d["market_themes"] = entry.themes_list()
+
+        rank_maps: dict[str, dict[str, int]] = {}
+        rank_dates: dict[str, date | None] = {}
+        requested_markets = {
+            str(d.get("market") or "US").strip().upper() or "US"
+            for d in enrichment.values()
+            if d.get("ibd_industry_group")
+        }
+        for market in requested_markets:
+            formula_version = self._market_rs_repository.active_formula(
+                self._session,
+                market=market,
+            )
+            snapshot_date = ranking_date
+            if snapshot_date is None:
+                snapshot_date = self._session.query(
+                    func.max(IBDGroupRank.date)
+                ).filter(
+                    IBDGroupRank.market == market,
+                    IBDGroupRank.rs_formula_version == formula_version,
+                ).scalar()
+            rank_dates[market] = snapshot_date
+            if snapshot_date is None:
+                rank_maps[market] = {}
+                continue
+            rank_maps[market] = dict(
+                self._session.query(
+                    IBDGroupRank.industry_group,
+                    IBDGroupRank.rank,
+                ).filter(
+                    IBDGroupRank.market == market,
+                    IBDGroupRank.date == snapshot_date,
+                    IBDGroupRank.rs_formula_version == formula_version,
+                ).all()
+            )
+
+        for d in enrichment.values():
+            group_name = d.get("ibd_industry_group")
+            if not group_name:
+                continue
+            market = str(d.get("market") or "US").strip().upper() or "US"
+            group_rank = rank_maps.get(market, {}).get(str(group_name))
+            snapshot_date = rank_dates.get(market)
+            d["ibd_group_rank"] = group_rank
+            d["ibd_group_rank_date"] = (
+                snapshot_date.isoformat()
+                if group_rank is not None and snapshot_date is not None
+                else None
+            )
 
         return enrichment
 

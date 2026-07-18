@@ -423,12 +423,17 @@ class TestDailySnapshotDateCoherence:
                     {
                         "industry_group": "Software",
                         "rank": 1,
+                        "avg_rs_rating": 88.0,
+                        "avg_rs_rating_1m": 52.0,
+                        "avg_rs_rating_3m": 74.0,
                         "rank_change_1w": 2,
                         "rank_change_1m": 3,
                         "top_symbol": "APP",
                         "top_symbol_name": "AppLovin",
                         "top_rs_rating": 98,
                         "date": "2026-06-11",
+                        "rs_formula_version": "legacy-linear-v1",
+                        "market_rs_run_id": None,
                     }
                 ]
 
@@ -503,12 +508,17 @@ class TestDailySnapshotDateCoherence:
                     {
                         "industry_group": "Software",
                         "rank": 1,
+                        "avg_rs_rating": 88.0,
+                        "avg_rs_rating_1m": 52.0,
+                        "avg_rs_rating_3m": 74.0,
                         "rank_change_1w": 2,
                         "rank_change_1m": 3,
                         "top_symbol": "APP",
                         "top_symbol_name": "AppLovin",
                         "top_rs_rating": 98,
                         "date": "2026-06-11",
+                        "rs_formula_version": "legacy-linear-v1",
+                        "market_rs_run_id": None,
                     }
                 ]
 
@@ -588,12 +598,17 @@ class TestDailySnapshotDateCoherence:
                     {
                         "industry_group": "Software",
                         "rank": 1,
+                        "avg_rs_rating": 88.0,
+                        "avg_rs_rating_1m": 52.0,
+                        "avg_rs_rating_3m": 74.0,
                         "rank_change_1w": 2,
                         "rank_change_1m": 3,
                         "top_symbol": "APP",
                         "top_symbol_name": "AppLovin",
                         "top_rs_rating": 98,
                         "date": "2026-06-12",
+                        "rs_formula_version": "legacy-linear-v1",
+                        "market_rs_run_id": None,
                     }
                 ]
 
