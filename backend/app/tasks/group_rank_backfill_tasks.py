@@ -10,6 +10,7 @@ from ..wiring.bootstrap import (
     get_group_rank_service,
     get_market_calendar_service,
 )
+from .transient_database import raise_if_transient_database_error
 from .workload_coordination import serialized_market_workload
 
 
@@ -117,6 +118,7 @@ def backfill_group_rankings(
             exc,
             exc_info=True,
         )
+        raise_if_transient_database_error(exc)
         return {
             "error": str(exc),
             "timestamp": datetime.now().isoformat(),
@@ -187,6 +189,7 @@ def gapfill_group_rankings(
             exc,
             exc_info=True,
         )
+        raise_if_transient_database_error(exc)
         return {
             "status": "error",
             "error": str(exc),
@@ -247,6 +250,7 @@ def backfill_group_rankings_1year(
             exc,
             exc_info=True,
         )
+        raise_if_transient_database_error(exc)
         return {
             "error": str(exc),
             "timestamp": datetime.now().isoformat(),

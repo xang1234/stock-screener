@@ -1,6 +1,10 @@
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+from celery.exceptions import Retry
+from sqlalchemy.exc import OperationalError
+
 
 def _patch_serialized_lock(monkeypatch):
     fake_lock = MagicMock()
@@ -27,6 +31,111 @@ def _patch_calendar_service(monkeypatch, module, now: datetime):
     fake.market_now.return_value = now
     monkeypatch.setattr(module, "get_market_calendar_service", lambda: fake)
     return fake
+
+
+def _transient_database_error():
+    return OperationalError(
+        "select 1",
+        {},
+        Exception("database system is not yet accepting connections"),
+    )
+
+
+def _configure_failing_group_backfill(
+    monkeypatch,
+    task_name,
+    exc,
+):
+    import app.tasks.group_rank_backfill_tasks as module
+
+    fake_db = MagicMock()
+    fake_service = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        module,
+        "get_group_rank_service",
+        lambda: fake_service,
+    )
+    _patch_serialized_lock(monkeypatch)
+
+    if task_name == "backfill_group_rankings":
+        fake_service.backfill_rankings_optimized.side_effect = exc
+        args = ("2026-03-20", "2026-03-20")
+        kwargs = {}
+    elif task_name == "gapfill_group_rankings":
+        fake_service.find_missing_dates.return_value = [
+            datetime(2026, 3, 20).date()
+        ]
+        fake_service.fill_gaps_optimized.side_effect = exc
+        args = ()
+        kwargs = {"max_days": 1}
+    else:
+        fake_service.backfill_rankings_optimized.side_effect = exc
+        _patch_calendar_service(
+            monkeypatch,
+            module,
+            datetime(2026, 3, 20, 17, 40),
+        )
+        args = ()
+        kwargs = {}
+
+    return getattr(module, task_name), args, kwargs, fake_db
+
+
+@pytest.mark.parametrize(
+    "task_name",
+    [
+        "backfill_group_rankings",
+        "gapfill_group_rankings",
+        "backfill_group_rankings_1year",
+    ],
+)
+def test_group_backfill_tasks_retry_transient_database_errors(
+    monkeypatch,
+    task_name,
+):
+    task, args, kwargs, fake_db = _configure_failing_group_backfill(
+        monkeypatch,
+        task_name,
+        _transient_database_error(),
+    )
+    retry = MagicMock(side_effect=Retry("retry"))
+    monkeypatch.setattr(task, "retry", retry)
+
+    with pytest.raises(Retry):
+        task.run(*args, **kwargs)
+
+    retry.assert_called_once()
+    fake_db.rollback.assert_called_once()
+    fake_db.close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "task_name",
+    [
+        "backfill_group_rankings",
+        "gapfill_group_rankings",
+        "backfill_group_rankings_1year",
+    ],
+)
+def test_group_backfill_tasks_preserve_non_transient_error_payloads(
+    monkeypatch,
+    task_name,
+):
+    task, args, kwargs, fake_db = _configure_failing_group_backfill(
+        monkeypatch,
+        task_name,
+        RuntimeError("calculation failed"),
+    )
+    retry = MagicMock()
+    monkeypatch.setattr(task, "retry", retry)
+
+    result = task.run(*args, **kwargs)
+
+    assert result["error"] == "calculation failed"
+    retry.assert_not_called()
+    fake_db.rollback.assert_called_once()
+    fake_db.close.assert_called_once()
 
 
 def test_gapfill_group_rankings_passes_market_to_service(monkeypatch):

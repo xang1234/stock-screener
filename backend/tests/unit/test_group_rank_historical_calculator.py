@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pandas as pd
+import pytest
 
 import app.services.group_rank_historical_calculator as historical_module
 from app.services.derived_data_execution_policy import (
@@ -331,6 +332,31 @@ def test_chunked_backfill_aggregates_delegate_results(monkeypatch):
     assert result["total_dates"] == 3
     assert result["processed"] == 2
     assert result["skipped"] == 1
+
+
+@pytest.mark.parametrize("chunk_size_days", [0, -1])
+def test_backfill_rankings_chunked_rejects_non_positive_size(
+    monkeypatch,
+    chunk_size_days,
+):
+    historical, _, _, _, _ = _historical()
+    monkeypatch.setattr(
+        historical_module,
+        "timedelta",
+        MagicMock(
+            side_effect=AssertionError(
+                "chunk loop entered before size validation"
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="chunk_size_days must be positive"):
+        historical.backfill_rankings_chunked(
+            MagicMock(),
+            date(2026, 3, 1),
+            date(2026, 3, 20),
+            chunk_size_days=chunk_size_days,
+        )
 
 
 def test_historical_calculator_does_not_locate_calendar_or_services():

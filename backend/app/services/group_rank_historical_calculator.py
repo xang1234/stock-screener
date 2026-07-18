@@ -364,6 +364,9 @@ class GroupRankHistoricalCalculator:
         *,
         market: str = "US",
     ) -> Dict:
+        if chunk_size_days < 1:
+            raise ValueError("chunk_size_days must be positive")
+
         normalized_market = (market or "US").upper()
         total_stats = {
             "start_date": start_date.isoformat(),
