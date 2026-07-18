@@ -68,9 +68,7 @@ MAX_FAILURE_DIAGNOSTIC_SAMPLES = 50
 
 def _is_us_trading_day(dt: date) -> bool:
     """Compatibility hook for tests that construct the use case without wiring."""
-    from app.services.market_calendar_service import MarketCalendarService
-
-    return MarketCalendarService().is_trading_day("US", dt)
+    raise ValidationError(f"No market calendar configured for US on {dt}")
 
 
 def _chunked(seq: Sequence[str], size: int) -> Iterator[list[str]]:
