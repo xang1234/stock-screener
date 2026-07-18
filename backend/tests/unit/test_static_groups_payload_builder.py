@@ -22,6 +22,8 @@ def test_build_static_groups_payload_emits_the_response_envelope_once():
                 "date": "2026-04-04",
                 "rank": 1,
                 "avg_rs_rating": 91.0,
+                "avg_rs_rating_1m": 72.5,
+                "avg_rs_rating_3m": 84.25,
                 "median_rs_rating": 90.0,
                 "weighted_avg_rs_rating": 92.0,
                 "rs_std_dev": 2.0,
@@ -31,6 +33,8 @@ def test_build_static_groups_payload_emits_the_response_envelope_once():
                 "top_symbol": "AAA",
                 "top_symbol_name": "AAA Corp",
                 "top_rs_rating": 98,
+                "rs_formula_version": "balanced-horizon-percentile-v2",
+                "market_rs_run_id": 42,
                 "rank_change_1w": 2,
                 "rank_change_1m": None,
                 "rank_change_3m": None,
@@ -44,18 +48,32 @@ def test_build_static_groups_payload_emits_the_response_envelope_once():
         },
         group_details={"Semiconductors": {"industry_group": "Semiconductors"}},
         market="HK",
+        rs_formula_version="balanced-horizon-percentile-v2",
+        market_rs_run_id=42,
+        rs_as_of_date="2026-04-04",
+        rs_universe_size=5000,
     )
 
     payload = build_static_groups_payload(
         snapshot,
         generated_at="2026-04-04T22:00:00Z",
-        schema_version="static-site-v2",
+        schema_version="static-site-v3",
     )
 
-    assert payload["schema_version"] == "static-site-v2"
+    assert payload["schema_version"] == "static-site-v3"
     assert payload["generated_at"] == "2026-04-04T22:00:00Z"
     assert payload["market"] == "HK"
+    assert payload["rs_formula_version"] == "balanced-horizon-percentile-v2"
+    assert payload["market_rs_run_id"] == 42
+    assert payload["rs_as_of_date"] == "2026-04-04"
+    assert payload["rs_universe_size"] == 5000
     assert payload["payload"]["rankings"]["date"] == "2026-04-04"
+    assert (
+        payload["payload"]["rankings"]["rs_formula_version"]
+        == "balanced-horizon-percentile-v2"
+    )
+    assert payload["payload"]["rankings"]["rs_as_of_date"] == "2026-04-04"
+    assert payload["payload"]["rankings"]["rs_universe_size"] == 5000
     assert payload["payload"]["rankings"]["total_groups"] == 1
     assert payload["payload"]["movers_period"] == "1m"
     assert payload["payload"]["movers"]["period"] == "1m"
@@ -75,3 +93,32 @@ def test_static_groups_snapshot_requires_market():
             movers={"period": "1w", "gainers": [], "losers": []},
             group_details={},
         )
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "rs_formula_version",
+        "market_rs_run_id",
+        "rs_as_of_date",
+        "rs_universe_size",
+    ),
+)
+def test_static_groups_snapshot_requires_canonical_source_metadata(missing_field):
+    module = import_module("app.services.static_groups_payload_builder")
+    StaticGroupsSnapshot = module.StaticGroupsSnapshot
+    values = {
+        "date": "2026-04-04",
+        "rankings": [],
+        "movers": {"period": "1w", "gainers": [], "losers": []},
+        "group_details": {},
+        "market": "HK",
+        "rs_formula_version": "balanced-horizon-percentile-v2",
+        "market_rs_run_id": 42,
+        "rs_as_of_date": "2026-04-04",
+        "rs_universe_size": 5000,
+    }
+    values.pop(missing_field)
+
+    with pytest.raises(TypeError):
+        StaticGroupsSnapshot(**values)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
@@ -9,7 +10,7 @@ import logging
 import math
 from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import quote
 
 import pandas as pd
@@ -19,6 +20,7 @@ from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.markets.catalog import get_market_catalog
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.default_filters import (
     DEFAULT_SCAN_FILTERS_BY_MARKET,
     DEFAULT_SCAN_FILTERS_FALLBACK,
@@ -28,19 +30,14 @@ from app.infra.serialization import json_safe
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
+from app.models.industry import IBDGroupRank
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
 from app.services.breadth_attribution_service import BreadthAttributionService
-from app.services.group_detail_payloads import scan_result_item_to_group_row
-from app.services.group_ranking_history import (
-    GROUP_RANK_CHANGE_OFFSETS,
-    apply_group_rank_changes,
-    build_group_details,
-    select_group_history_runs,
-    select_market_run_series,
+from app.services.group_detail_payloads import (
+    constituent_stock_payloads_from_group_rows,
 )
-from app.services.group_ranking_payloads import (
-    compute_group_rankings_from_serialized_rows,
-)
+from app.services.group_ranking_history import build_group_detail_payload_from_parts
+from app.services.group_ranking_payloads import group_snapshot_metadata
 from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.preset_screens import (
@@ -72,7 +69,7 @@ from app.wiring.bootstrap import (
 
 logger = logging.getLogger(__name__)
 
-STATIC_SITE_SCHEMA_VERSION = "static-site-v2"
+STATIC_SITE_SCHEMA_VERSION = "static-site-v3"
 SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v1"
 CHART_BUNDLE_SCHEMA_VERSION = "static-charts-v1"
 SCAN_CHUNK_SIZE = 1000
@@ -99,14 +96,6 @@ STATIC_MARKET_DISPLAY = {
     market: _MARKET_CATALOG.get(market).label for market in STATIC_SUPPORTED_MARKETS
 }
 STATIC_GROUP_HISTORY_RUNS = 40
-STATIC_GROUP_RUN_SERIES_LIMIT = max(
-    STATIC_GROUP_HISTORY_RUNS,
-    max(GROUP_RANK_CHANGE_OFFSETS.values()) + 1,
-)
-STATIC_GROUP_TABLE_FALLBACK_OFFSETS = {
-    period: GROUP_RANK_CHANGE_OFFSETS[period]
-    for period in ("1w", "1m", "3m")
-}
 @dataclass(frozen=True)
 class StaticSiteExportResult:
     """Summary of one static-site export run."""
@@ -165,6 +154,8 @@ class StaticSiteExportService:
         clean: bool = True,
         markets: tuple[str, ...] | None = None,
         write_manifest: bool = True,
+        rs_formula_version_overrides: Mapping[str, str] | None = None,
+        feature_run_ids_by_market: Mapping[str, int] | None = None,
     ) -> StaticSiteExportResult:
         output_dir = Path(output_dir)
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
@@ -176,11 +167,27 @@ class StaticSiteExportService:
 
         with self._session_factory() as db:
             market_entries: dict[str, dict[str, Any]] = {}
-            selected_markets = tuple(markets or STATIC_SUPPORTED_MARKETS)
+            selected_markets = tuple(
+                str(market).strip().upper()
+                for market in (markets or STATIC_SUPPORTED_MARKETS)
+            )
+            formula_overrides = {
+                str(market).strip().upper(): str(formula).strip()
+                for market, formula in (rs_formula_version_overrides or {}).items()
+            }
+            run_overrides = {
+                str(market).strip().upper(): int(run_id)
+                for market, run_id in (feature_run_ids_by_market or {}).items()
+            }
             available_markets = [
                 market
                 for market in selected_markets
-                if self._get_latest_published_run(db, market=market) is not None
+                if self._resolve_static_feature_run(
+                    db,
+                    market=market,
+                    feature_run_id=run_overrides.get(market),
+                )
+                is not None
             ]
             if not available_markets:
                 latest_run = self._get_latest_published_run(db)
@@ -202,6 +209,8 @@ class StaticSiteExportService:
                     market=market,
                     generated_at=generated_at,
                     warnings=warnings,
+                    formula_version_override=formula_overrides.get(market),
+                    feature_run_id=run_overrides.get(market),
                 )
                 self._write_market_metadata(
                     output_dir=output_dir,
@@ -235,11 +244,16 @@ class StaticSiteExportService:
         *,
         fallback_artifacts_dir: Path | None = None,
         clean: bool = True,
+        rs_formula_version_overrides: Mapping[str, str] | None = None,
     ) -> StaticSiteExportResult:
         artifacts_dir = Path(artifacts_dir)
         output_dir = Path(output_dir)
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         warnings: list[str] = []
+        formula_overrides = {
+            str(market).strip().upper(): str(formula).strip()
+            for market, formula in (rs_formula_version_overrides or {}).items()
+        }
 
         if clean and output_dir.exists():
             shutil.rmtree(output_dir)
@@ -250,6 +264,7 @@ class StaticSiteExportService:
             output_dir=output_dir,
             warnings=warnings,
             allow_empty=True,
+            expected_formula_by_market=formula_overrides,
         )
         if fallback_artifacts_dir is not None:
             fallback_entries, warnings = cls._collect_market_artifacts(
@@ -259,6 +274,7 @@ class StaticSiteExportService:
                 skip_markets=set(market_entries),
                 allow_empty=True,
                 fallback_source=True,
+                expected_formula_by_market=formula_overrides,
             )
             market_entries.update(fallback_entries)
         if not market_entries:
@@ -292,8 +308,14 @@ class StaticSiteExportService:
         market: str,
         generated_at: str,
         warnings: list[str],
+        formula_version_override: str | None = None,
+        feature_run_id: int | None = None,
     ) -> dict[str, Any]:
-        latest_run = self._get_latest_published_run(db, market=market)
+        latest_run = self._resolve_static_feature_run(
+            db,
+            market=market,
+            feature_run_id=feature_run_id,
+        )
         if latest_run is None:
             raise NoPublishedStaticMarketArtifact(
                 f"No published feature run is available for static-site export market {market}",
@@ -302,9 +324,10 @@ class StaticSiteExportService:
 
         path_prefix = Path("markets") / market.lower()
         scan_rows, filter_options = self._load_scan_export_source(db, latest_run)
-        formula_version = self._market_rs_repository.active_formula(
-            db,
-            market=market,
+        formula_version = (
+            str(formula_version_override).strip()
+            if formula_version_override is not None
+            else self._market_rs_repository.active_formula(db, market=market)
         )
         scan_manifest, serialized_rows = self._export_scan_bundle(
             db=db,
@@ -327,6 +350,7 @@ class StaticSiteExportService:
                 expected_as_of_date=latest_run.as_of_date,
                 market=market,
                 latest_run=latest_run,
+                formula_version=formula_version,
                 serialized_rows=serialized_rows,
             ),
         )
@@ -418,6 +442,12 @@ class StaticSiteExportService:
             "market": market,
             "display_name": STATIC_MARKET_DISPLAY.get(market, market),
             "as_of_date": latest_run.as_of_date.isoformat(),
+            "rs_formula_version": formula_version,
+            "market_rs_run_id": groups_payload.get("market_rs_run_id"),
+            "rs_as_of_date": groups_payload.get(
+                "rs_as_of_date", latest_run.as_of_date.isoformat()
+            ),
+            "rs_universe_size": groups_payload.get("rs_universe_size"),
             "features": {
                 "scan": True,
                 "breadth": bool(breadth_payload.get("available", True)),
@@ -500,6 +530,7 @@ class StaticSiteExportService:
         skip_markets: set[str] | None = None,
         allow_empty: bool = False,
         fallback_source: bool = False,
+        expected_formula_by_market: Mapping[str, str] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], list[str]]:
         market_entries: dict[str, dict[str, Any]] = {}
         skipped = skip_markets or set()
@@ -525,6 +556,19 @@ class StaticSiteExportService:
             entry = payload.get("entry")
             if not isinstance(entry, dict):
                 raise RuntimeError(f"Invalid market metadata payload at {metadata_path}")
+            expected_formula = (expected_formula_by_market or {}).get(market)
+            actual_formula = entry.get("rs_formula_version")
+            if expected_formula is not None and actual_formula != expected_formula:
+                message = (
+                    f"{market} artifact uses RS formula {actual_formula!r}; "
+                    f"expected {expected_formula!r}."
+                )
+                if fallback_source:
+                    warnings.append(f"{message} Skipping fallback artifact.")
+                    continue
+                raise RuntimeError(
+                    f"Invalid market metadata payload at {metadata_path}: {message}"
+                )
             source_market_dir = metadata_path.parent
             target_market_dir = output_dir / "markets" / market.lower()
             shutil.copytree(source_market_dir, target_market_dir, dirs_exist_ok=True)
@@ -645,6 +689,34 @@ class StaticSiteExportService:
             if feature_run_market(run) == normalized_market:
                 return run
         return None
+
+    def _resolve_static_feature_run(
+        self,
+        db: Session,
+        *,
+        market: str,
+        feature_run_id: int | None,
+    ) -> FeatureRun | None:
+        normalized_market = str(market or "").strip().upper()
+        if feature_run_id is None:
+            return self._get_latest_published_run(db, market=normalized_market)
+        run = db.get(FeatureRun, int(feature_run_id))
+        if run is None:
+            raise NoPublishedStaticMarketArtifact(
+                f"Feature run {feature_run_id} does not exist for static market {normalized_market}",
+                markets=(normalized_market,),
+            )
+        if run.status != "published":
+            raise NoPublishedStaticMarketArtifact(
+                f"Feature run {feature_run_id} is not published for static market {normalized_market}",
+                markets=(normalized_market,),
+            )
+        if feature_run_market(run) != normalized_market:
+            raise NoPublishedStaticMarketArtifact(
+                f"Feature run {feature_run_id} is not scoped to static market {normalized_market}",
+                markets=(normalized_market,),
+            )
+        return run
 
     def _load_scan_export_rows(
         self,
@@ -1135,58 +1207,61 @@ class StaticSiteExportService:
         expected_as_of_date: date,
         market: str,
         latest_run: FeatureRun,
+        formula_version: str,
         serialized_rows: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        rankings = compute_group_rankings_from_serialized_rows(
-            serialized_rows,
-            ranking_date=expected_as_of_date,
+        normalized_market = str(market or "").strip().upper()
+        group_service = get_group_rank_service()
+        rankings = group_service.get_current_rankings(
+            db,
+            limit=197,
+            calculation_date=expected_as_of_date,
+            market=normalized_market,
+            formula_version=formula_version,
         )
         if not rankings:
             raise StaticSiteSectionUnavailableError(
                 section="groups",
                 reason=(
-                    "No group rankings are available for static-site export date "
-                    f"{expected_as_of_date.isoformat()}."
+                    "No exact stored Group snapshot is available for "
+                    f"{normalized_market} on {expected_as_of_date.isoformat()} "
+                    f"with formula {formula_version}."
                 ),
             )
-        market_runs = select_market_run_series(
-            db,
-            market=market,
-            latest_run=latest_run,
-            min_runs=STATIC_GROUP_RUN_SERIES_LIMIT,
-            max_runs=STATIC_GROUP_RUN_SERIES_LIMIT,
-        )
-        history_runs = select_group_history_runs(
-            market_runs,
-            history_runs=STATIC_GROUP_HISTORY_RUNS,
-            offsets=GROUP_RANK_CHANGE_OFFSETS,
-        )
-        historical_rankings = {latest_run.id: rankings}
-        for run in history_runs:
-            if run.id in historical_rankings:
-                continue
-            historical_rankings[run.id] = self._compute_group_rankings_from_rows(
-                self._load_scan_export_rows(db, run, include_sparklines=False),
-                ranking_date=run.as_of_date,
+        try:
+            rs_metadata = group_snapshot_metadata(
+                db,
+                market=normalized_market,
+                rankings=rankings,
             )
-        apply_group_rank_changes(
-            rankings,
-            market_runs,
-            historical_rankings,
-            offsets=GROUP_RANK_CHANGE_OFFSETS,
+        except RuntimeError as exc:
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=str(exc),
+            ) from exc
+
+        market_rs_run_id = rankings[0].get("market_rs_run_id")
+        self._validate_feature_run_group_source(
+            latest_run=latest_run,
+            market=normalized_market,
+            expected_as_of_date=expected_as_of_date,
+            formula_version=formula_version,
+            market_rs_run_id=market_rs_run_id,
+            rs_universe_size=rs_metadata["rs_universe_size"],
+            serialized_rows=serialized_rows,
         )
-        self._apply_group_rank_changes_from_table(
+        historical_rankings = self._load_stored_group_history(
             db,
-            rankings,
-            market=market,
-            calculation_date=expected_as_of_date,
+            group_service=group_service,
+            market=normalized_market,
+            formula_version=formula_version,
+            through_date=expected_as_of_date,
+            current_rankings=rankings,
         )
-        group_details = build_group_details(
+        group_details = self._build_stored_group_details(
             rankings=rankings,
             serialized_rows=serialized_rows,
-            market_runs=market_runs,
             historical_rankings=historical_rankings,
-            history_limit=STATIC_GROUP_HISTORY_RUNS,
         )
         movers = self._build_group_movers(rankings)
 
@@ -1196,11 +1271,194 @@ class StaticSiteExportService:
                 rankings=rankings,
                 movers=movers,
                 group_details=group_details,
-                market=market,
+                market=normalized_market,
+                rs_formula_version=rs_metadata["rs_formula_version"],
+                market_rs_run_id=market_rs_run_id,
+                rs_as_of_date=rs_metadata["rs_as_of_date"],
+                rs_universe_size=rs_metadata["rs_universe_size"],
             ),
             generated_at=generated_at,
             schema_version=STATIC_SITE_SCHEMA_VERSION,
         )
+
+    @staticmethod
+    def _validate_feature_run_group_source(
+        *,
+        latest_run: FeatureRun,
+        market: str,
+        expected_as_of_date: date,
+        formula_version: str,
+        market_rs_run_id: int | None,
+        rs_universe_size: int | None,
+        serialized_rows: list[dict[str, Any]],
+    ) -> None:
+        config = latest_run.config_json or {}
+        if (
+            latest_run.status != "published"
+            or latest_run.as_of_date != expected_as_of_date
+            or feature_run_market(latest_run) != market
+        ):
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=(
+                    f"Feature run {latest_run.id} does not match published "
+                    f"{market} snapshot date {expected_as_of_date.isoformat()}."
+                ),
+            )
+
+        configured_formula = config.get("rs_formula_version")
+        configured_run_id = config.get("market_rs_run_id")
+        configured_as_of = config.get("rs_as_of_date")
+        configured_universe = config.get("rs_universe_size")
+        if configured_formula is not None and configured_formula != formula_version:
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=(
+                    f"Feature run {latest_run.id} formula {configured_formula} does not "
+                    f"match Group formula {formula_version}."
+                ),
+            )
+        if formula_version == BALANCED_RS_FORMULA_VERSION:
+            required = {
+                "rs_formula_version": configured_formula,
+                "market_rs_run_id": configured_run_id,
+                "rs_as_of_date": configured_as_of,
+                "rs_universe_size": configured_universe,
+            }
+            missing = sorted(key for key, value in required.items() if value is None)
+            if missing:
+                raise StaticSiteSectionUnavailableError(
+                    section="groups",
+                    reason=(
+                        f"Feature run {latest_run.id} is missing canonical RS metadata: "
+                        f"{', '.join(missing)}."
+                    ),
+                )
+        if configured_run_id is not None and int(configured_run_id) != market_rs_run_id:
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=(
+                    f"Feature run {latest_run.id} Market RS run {configured_run_id} does not "
+                    f"match Group Market RS run {market_rs_run_id}."
+                ),
+            )
+        if configured_as_of is not None and str(configured_as_of) != expected_as_of_date.isoformat():
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=(
+                    f"Feature run {latest_run.id} RS date {configured_as_of} does not match "
+                    f"Group date {expected_as_of_date.isoformat()}."
+                ),
+            )
+        if configured_universe is not None and int(configured_universe) != rs_universe_size:
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=(
+                    f"Feature run {latest_run.id} RS universe {configured_universe} does not "
+                    f"match Group RS universe {rs_universe_size}."
+                ),
+            )
+        for row in serialized_rows:
+            row_formula = row.get("rs_formula_version")
+            row_run_id = row.get("market_rs_run_id")
+            if row_formula is not None and row_formula != formula_version:
+                raise StaticSiteSectionUnavailableError(
+                    section="groups",
+                    reason=f"Stock row {row.get('symbol')} uses a different RS formula.",
+                )
+            if row_run_id is not None and int(row_run_id) != market_rs_run_id:
+                raise StaticSiteSectionUnavailableError(
+                    section="groups",
+                    reason=f"Stock row {row.get('symbol')} uses a different Market RS run.",
+                )
+
+    @staticmethod
+    def _load_stored_group_history(
+        db: Session,
+        *,
+        group_service: Any,
+        market: str,
+        formula_version: str,
+        through_date: date,
+        current_rankings: list[dict[str, Any]],
+    ) -> list[tuple[date, list[dict[str, Any]]]]:
+        dates = [
+            row[0]
+            for row in (
+                db.query(IBDGroupRank.date)
+                .filter(
+                    IBDGroupRank.market == market,
+                    IBDGroupRank.rs_formula_version == formula_version,
+                    IBDGroupRank.date <= through_date,
+                )
+                .distinct()
+                .order_by(IBDGroupRank.date.desc())
+                .limit(STATIC_GROUP_HISTORY_RUNS)
+                .all()
+            )
+        ]
+        history: list[tuple[date, list[dict[str, Any]]]] = []
+        for ranking_date in dates:
+            rows = (
+                current_rankings
+                if ranking_date == through_date
+                else group_service.get_current_rankings(
+                    db,
+                    limit=197,
+                    calculation_date=ranking_date,
+                    market=market,
+                    formula_version=formula_version,
+                )
+            )
+            history.append((ranking_date, rows))
+        return history
+
+    @staticmethod
+    def _build_stored_group_details(
+        *,
+        rankings: list[dict[str, Any]],
+        serialized_rows: list[dict[str, Any]],
+        historical_rankings: list[tuple[date, list[dict[str, Any]]]],
+    ) -> dict[str, Any]:
+        current_rows_by_group: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in serialized_rows:
+            group = row.get("ibd_industry_group")
+            if group:
+                current_rows_by_group[str(group)].append(row)
+        historical_maps = [
+            (
+                ranking_date,
+                {str(row["industry_group"]): row for row in rows},
+            )
+            for ranking_date, rows in historical_rankings
+        ]
+        details: dict[str, Any] = {}
+        for ranking in rankings:
+            group = str(ranking["industry_group"])
+            history = []
+            for _ranking_date, rows_by_group in historical_maps:
+                row = rows_by_group.get(group)
+                if row is None:
+                    continue
+                history.append(
+                    {
+                        "date": row["date"],
+                        "rank": row["rank"],
+                        "avg_rs_rating": row["avg_rs_rating"],
+                        "avg_rs_rating_1m": row.get("avg_rs_rating_1m"),
+                        "avg_rs_rating_3m": row.get("avg_rs_rating_3m"),
+                        "num_stocks": row["num_stocks"],
+                    }
+                )
+            details[group] = build_group_detail_payload_from_parts(
+                group,
+                ranking=ranking,
+                history=history,
+                stocks=constituent_stock_payloads_from_group_rows(
+                    current_rows_by_group.get(group, [])
+                ),
+            )
+        return details
 
     def _build_home_payload(
         self,
@@ -1265,66 +1523,6 @@ class StaticSiteExportService:
             },
             "top_groups": top_groups,
         }
-
-    def _compute_group_rankings_from_rows(
-        self,
-        rows: list[Any],
-        *,
-        ranking_date: date,
-    ) -> list[dict[str, Any]]:
-        normalized_rows = [scan_result_item_to_group_row(row) for row in rows]
-        return compute_group_rankings_from_serialized_rows(
-            normalized_rows,
-            ranking_date=ranking_date,
-        )
-
-    def _apply_group_rank_changes_from_table(
-        self,
-        db: Session,
-        rankings: list[dict[str, Any]],
-        *,
-        market: str,
-        calculation_date: date,
-    ) -> None:
-        """Backfill rank-change deltas from the ``IBDGroupRank`` history table.
-
-        Runs after the FeatureRun-based path so it only fills periods that the
-        historical-FeatureRun lookup couldn't supply (typical in CI, where
-        Postgres is ephemeral and only one FeatureRun per market exists).
-        Existing non-null deltas are preserved.
-        """
-        if not rankings:
-            return
-        period_days = dict(STATIC_GROUP_TABLE_FALLBACK_OFFSETS)
-        group_names = [ranking["industry_group"] for ranking in rankings]
-        normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
-        try:
-            historical = get_group_rank_service().get_historical_ranks_batch(
-                db,
-                group_names,
-                calculation_date,
-                period_days,
-                market=normalized_market,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to load IBDGroupRank history for market %s on %s",
-                normalized_market,
-                calculation_date,
-                exc_info=True,
-            )
-            return
-        if not historical:
-            return
-        for ranking in rankings:
-            for period in period_days:
-                key = f"rank_change_{period}"
-                if ranking.get(key) is not None:
-                    continue
-                historical_rank = historical.get((ranking["industry_group"], period))
-                if historical_rank is None:
-                    continue
-                ranking[key] = historical_rank - ranking["rank"]
 
     @staticmethod
     def _build_group_movers(rankings: list[dict[str, Any]]) -> dict[str, Any]:

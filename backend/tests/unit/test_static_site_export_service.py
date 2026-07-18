@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from inspect import Parameter, signature
+from inspect import Parameter, getsource, signature
 import json
 from types import SimpleNamespace
 
@@ -15,12 +15,17 @@ from sqlalchemy.orm import sessionmaker
 
 import app.services.static_site_export_service as export_module
 from app.database import Base
-from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
-from app.infra.db.models.relative_strength import MarketRsFormulaPointer
+from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
+from app.models.industry import IBDGroupRank
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
+from app.models.stock_universe import StockUniverse
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
 from app.services.static_groups_rrg_export import (
@@ -49,6 +54,9 @@ def service_and_session_factory():
             StockPrice.__table__,
             MarketExposure.__table__,
             MarketRsFormulaPointer.__table__,
+            MarketRsRun.__table__,
+            IBDGroupRank.__table__,
+            StockUniverse.__table__,
         ],
     )
     session_factory = sessionmaker(
@@ -277,6 +285,10 @@ def test_export_writes_serializable_manifest_and_page_bundles(
         "schema_version": STATIC_SITE_SCHEMA_VERSION,
         "generated_at": "2026-03-31T22:00:00Z",
         "available": True,
+        "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": 42,
+        "rs_as_of_date": "2026-03-31",
+        "rs_universe_size": 5000,
         "payload": {
             "rankings": {
                 "date": "2026-03-31",
@@ -305,12 +317,26 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: (scan_manifest, []))
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
-    monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
-    monkeypatch.setattr(service, "_build_groups_rrg_payload", lambda **_kwargs: _static_rrg_payload("US", "2026-03-31"))
+    source_calls: dict[str, str] = {}
+
+    def fake_groups(**kwargs):
+        source_calls["groups"] = kwargs["formula_version"]
+        return groups_payload
+
+    def fake_rrg(**kwargs):
+        source_calls["rrg"] = kwargs["formula_version"]
+        return _static_rrg_payload("US", "2026-03-31")
+
+    monkeypatch.setattr(service, "_build_groups_payload", fake_groups)
+    monkeypatch.setattr(service, "_build_groups_rrg_payload", fake_rrg)
     monkeypatch.setattr(service, "_build_home_payload", lambda **_kwargs: home_payload)
 
     output_dir = tmp_path / "static-data"
-    result = service.export(output_dir)
+    result = service.export(
+        output_dir,
+        rs_formula_version_overrides={"US": BALANCED_RS_FORMULA_VERSION},
+        feature_run_ids_by_market={"US": 7},
+    )
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     scan = json.loads((output_dir / "markets" / "us" / "scan" / "manifest.json").read_text(encoding="utf-8"))
@@ -328,6 +354,14 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["markets"]["US"]["assets"]["charts"]["path"] == "charts/index.json"
     assert manifest["markets"]["US"]["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
+    assert manifest["markets"]["US"]["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
+    assert manifest["markets"]["US"]["market_rs_run_id"] == 42
+    assert manifest["markets"]["US"]["rs_as_of_date"] == "2026-03-31"
+    assert manifest["markets"]["US"]["rs_universe_size"] == 5000
+    assert source_calls == {
+        "groups": BALANCED_RS_FORMULA_VERSION,
+        "rrg": BALANCED_RS_FORMULA_VERSION,
+    }
     assert "themes" not in manifest["features"]
     assert "themes" not in manifest["pages"]
     assert manifest["warnings"] == []
@@ -1222,9 +1256,46 @@ def test_combine_market_artifacts_rejects_fallback_with_mismatched_schema(tmp_pa
     )
 
     assert result.manifest["supported_markets"] == ["US"]
-    assert "JP fallback artifact uses schema_version 'static-site-v1'; expected 'static-site-v2'. Skipping." in result.warnings
+    assert "JP fallback artifact uses schema_version 'static-site-v1'; expected 'static-site-v3'. Skipping." in result.warnings
     assert (output_dir / "markets" / "us" / "scan" / "manifest.json").exists()
     assert not (output_dir / "markets" / "jp").exists()
+
+
+def test_collect_market_artifacts_rejects_cross_formula_fallback(tmp_path):
+    artifacts_dir = tmp_path / "fallback"
+    market_dir = artifacts_dir / "static-market-JP" / "markets" / "jp"
+    market_dir.mkdir(parents=True)
+    (market_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-04-03T22:00:00Z",
+                "market": "JP",
+                "entry": {
+                    "market": "JP",
+                    "as_of_date": "2026-04-03",
+                    "rs_formula_version": LEGACY_RS_FORMULA_VERSION,
+                },
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    entries, warnings = StaticSiteExportService._collect_market_artifacts(  # noqa: SLF001
+        artifacts_dir=artifacts_dir,
+        output_dir=tmp_path / "combined",
+        warnings=[],
+        allow_empty=True,
+        fallback_source=True,
+        expected_formula_by_market={"JP": BALANCED_RS_FORMULA_VERSION},
+    )
+
+    assert entries == {}
+    assert warnings == [
+        "JP artifact uses RS formula 'legacy-linear-v1'; expected "
+        "'balanced-horizon-percentile-v2'. Skipping fallback artifact."
+    ]
 
 
 def test_build_manifest_orders_india_between_hk_and_jp():
@@ -1746,7 +1817,11 @@ def test_build_groups_payload_has_explicit_feature_run_contract(service_and_sess
     assert "current_rows" not in params
     assert params["market"].default is Parameter.empty
     assert params["latest_run"].default is Parameter.empty
+    assert params["formula_version"].default is Parameter.empty
     assert params["serialized_rows"].default is Parameter.empty
+    assert "compute_group_rankings_from_serialized_rows" not in getsource(
+        StaticSiteExportService
+    )
 
 
 def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_factory, monkeypatch):
@@ -2620,230 +2695,244 @@ def test_key_market_entries_include_singapore_defaults(service_and_session_facto
     assert all(item["currency"] == "SGD" for item in markets)
 
 
-def test_apply_group_rank_changes_from_table_fills_missing_periods(
-    service_and_session_factory, monkeypatch
-):
-    service, session_factory = service_and_session_factory
-
-    rankings = [
-        {
-            "industry_group": "Semiconductors",
-            "rank": 3,
-            "rank_change_1w": 5,
-            "rank_change_1m": None,
-            "rank_change_3m": None,
-            "rank_change_6m": None,
+def _balanced_feature_run(
+    *,
+    run_id: int = 3,
+    as_of_date: date = date(2026, 4, 10),
+    market_rs_run_id: int = 42,
+) -> FeatureRun:
+    return FeatureRun(
+        id=run_id,
+        as_of_date=as_of_date,
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime.combine(as_of_date, datetime.min.time()),
+        config_json={
+            "universe": {"market": "US"},
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": market_rs_run_id,
+            "rs_as_of_date": as_of_date.isoformat(),
+            "rs_universe_size": 5000,
         },
-        {
-            "industry_group": "Software",
-            "rank": 7,
-            "rank_change_1w": None,
-            "rank_change_1m": None,
-            "rank_change_3m": None,
-            "rank_change_6m": None,
-        },
-    ]
-
-    captured: dict[str, object] = {}
-
-    def fake_batch(db, group_names, current_date, period_days, *, market):
-        captured["group_names"] = list(group_names)
-        captured["current_date"] = current_date
-        captured["market"] = market
-        captured["period_days"] = dict(period_days)
-        return {
-            ("Semiconductors", "1w"): 99,
-            ("Semiconductors", "1m"): 6,
-            ("Semiconductors", "3m"): 12,
-            ("Software", "1w"): 10,
-            ("Software", "3m"): 4,
-        }
-
-    fake_service = SimpleNamespace(get_historical_ranks_batch=fake_batch)
-    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: fake_service)
-
-    with session_factory() as db:
-        service._apply_group_rank_changes_from_table(  # noqa: SLF001 - intentional unit coverage
-            db,
-            rankings,
-            market="hk",
-            calculation_date=date(2026, 4, 28),
-        )
-
-    assert captured["market"] == "HK"
-    assert captured["current_date"] == date(2026, 4, 28)
-    assert captured["group_names"] == ["Semiconductors", "Software"]
-    assert captured["period_days"] == {
-        period: export_module.GROUP_RANK_CHANGE_OFFSETS[period]
-        for period in ("1w", "1m", "3m")
-    }
-
-    semis, software = rankings
-    assert semis["rank_change_1w"] == 5
-    assert semis["rank_change_1m"] == 6 - 3
-    assert semis["rank_change_3m"] == 12 - 3
-    assert semis["rank_change_6m"] is None
-    assert software["rank_change_1w"] == 10 - 7
-    assert software["rank_change_1m"] is None
-    assert software["rank_change_3m"] == 4 - 7
-    assert software["rank_change_6m"] is None
+    )
 
 
-def test_apply_group_rank_changes_from_table_swallows_lookup_errors(
-    service_and_session_factory, monkeypatch
-):
-    service, session_factory = service_and_session_factory
-
-    rankings = [
-        {
-            "industry_group": "Semiconductors",
-            "rank": 1,
-            "rank_change_1w": None,
-            "rank_change_1m": None,
-            "rank_change_3m": None,
-            "rank_change_6m": None,
-        }
-    ]
-
-    def fake_batch(*_args, **_kwargs):
-        raise RuntimeError("boom")
-
-    fake_service = SimpleNamespace(get_historical_ranks_batch=fake_batch)
-    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: fake_service)
-
-    with session_factory() as db:
-        service._apply_group_rank_changes_from_table(  # noqa: SLF001 - intentional unit coverage
-            db,
-            rankings,
-            market="US",
-            calculation_date=date(2026, 4, 28),
-        )
-
-    assert all(rankings[0][f"rank_change_{period}"] is None for period in ("1w", "1m", "3m", "6m"))
+def _market_rs_run(*, run_id: int, as_of_date: date) -> MarketRsRun:
+    return MarketRsRun(
+        id=run_id,
+        market="US",
+        as_of_date=as_of_date,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        status="completed",
+        benchmark_symbol="SPY",
+        benchmark_as_of_date=as_of_date,
+        universe_hash=f"universe-{run_id}",
+        expected_symbol_count=5000,
+        eligible_symbol_count=5000,
+        excluded_symbol_count=0,
+        diagnostics_json={},
+    )
 
 
-def test_build_groups_payload_loads_static_history_rows_without_sparklines(
+def _group_rank(
+    *,
+    group: str,
+    ranking_date: date,
+    rank: int,
+    avg_rs: float,
+    run_id: int,
+    avg_rs_1m: float = 34.5,
+    avg_rs_3m: float = 57.75,
+) -> IBDGroupRank:
+    return IBDGroupRank(
+        market="US",
+        industry_group=group,
+        date=ranking_date,
+        rank=rank,
+        avg_rs_rating=avg_rs,
+        avg_rs_rating_1m=avg_rs_1m,
+        avg_rs_rating_3m=avg_rs_3m,
+        median_rs_rating=avg_rs,
+        weighted_avg_rs_rating=avg_rs,
+        rs_std_dev=1.5,
+        num_stocks=4,
+        num_stocks_rs_above_80=2,
+        top_symbol="AAA",
+        top_rs_rating=98,
+        rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+        market_rs_run_id=run_id,
+    )
+
+
+def _build_balanced_groups_payload(service, db, latest_run):
+    return service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage
+        db=db,
+        generated_at="2026-04-10T22:00:00Z",
+        expected_as_of_date=latest_run.as_of_date,
+        market="US",
+        latest_run=latest_run,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        serialized_rows=[
+            {
+                "symbol": "AAA",
+                "company_name": "AAA Corp",
+                "ibd_industry_group": "Semiconductors",
+                "rs_rating": 3.0,
+                "rs_rating_1m": 2.0,
+                "rs_rating_3m": 1.0,
+                "composite_score": 90.0,
+            }
+        ],
+    )
+
+
+def test_build_groups_payload_uses_exact_stored_snapshot_and_matches_live(
     service_and_session_factory,
-    monkeypatch,
 ):
     service, session_factory = service_and_session_factory
-    latest_run = FeatureRun(
-        id=3,
-        as_of_date=date(2026, 4, 4),
-        run_type="daily_snapshot",
-        status="published",
-        published_at=datetime(2026, 4, 4, 21, 30, 0),
-    )
-    prior_run = FeatureRun(
-        id=2,
-        as_of_date=date(2026, 4, 3),
-        run_type="daily_snapshot",
-        status="published",
-        published_at=datetime(2026, 4, 3, 21, 30, 0),
-    )
-    query_calls: list[tuple[int, bool]] = []
-    filter_options_calls: list[int] = []
-    apply_rank_change_calls: list[tuple[list[str], list[int]]] = []
-    table_fallback_calls: list[tuple[list[str], str, date]] = []
-
-    monkeypatch.setattr(
-        export_module,
-        "select_market_run_series",
-        lambda db, *, market, latest_run, cutoff_date=None, min_runs=0, max_runs=None: [latest_run, prior_run],  # noqa: ARG005
-    )
-    monkeypatch.setattr(
-        export_module,
-        "select_group_history_runs",
-        lambda runs, *, history_runs, offsets: runs,  # noqa: ARG005
-    )
-
-    def fake_apply_rank_changes(rankings, market_runs, historical_rankings, *, offsets):  # noqa: ANN001
-        apply_rank_change_calls.append(
-            (
-                [row["industry_group"] for row in rankings],
-                [run.id for run in market_runs],
-            )
-        )
-
-    monkeypatch.setattr(
-        export_module,
-        "apply_group_rank_changes",
-        fake_apply_rank_changes,
-    )
-
-    def fake_table_fallback(db, rankings, *, market, calculation_date):  # noqa: ANN001, ARG001
-        table_fallback_calls.append(
-            (
-                [row["industry_group"] for row in rankings],
-                market,
-                calculation_date,
-            )
-        )
-
-    monkeypatch.setattr(
-        service,
-        "_apply_group_rank_changes_from_table",
-        fake_table_fallback,
-    )
-
-    def _history_row(run_id: int) -> ScanResultItemDomain:
-        return ScanResultItemDomain(
-            symbol=f"HK{run_id}",
-            composite_score=90.0,
-            rating="Buy",
-            current_price=100.0,
-            screener_outputs={},
-            screeners_run=[],
-            composite_method="weighted_average",
-            screeners_passed=0,
-            screeners_total=0,
-            extended_fields={
-                "ibd_industry_group": "Internet Services",
-                "rs_rating": 88.0,
-            },
-        )
-
-    def fake_query(self, run_id, *_args, include_sparklines=True, **_kwargs):  # noqa: ANN001
-        query_calls.append((run_id, include_sparklines))
-        return [_history_row(run_id)]
-
-    def fake_filter_options(self, run_id):  # noqa: ANN001
-        filter_options_calls.append(run_id)
-        return SimpleNamespace()
-
-    monkeypatch.setattr(
-        export_module.SqlFeatureStoreRepository,
-        "query_all_as_scan_results",
-        fake_query,
-    )
-    monkeypatch.setattr(
-        export_module.SqlFeatureStoreRepository,
-        "get_filter_options_for_run",
-        fake_filter_options,
-    )
-
+    latest_run = _balanced_feature_run()
     with session_factory() as db:
-        payload = service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage
-            db=db,
-            generated_at="2026-04-04T22:00:00Z",
-            expected_as_of_date=date(2026, 4, 4),
-            market="HK",
-            latest_run=latest_run,
-            serialized_rows=[
-                {
-                    "symbol": "HK3",
-                    "company_name": "HK3 Corp",
-                    "ibd_industry_group": "Internet Services",
-                    "rs_rating": 88.0,
-                    "composite_score": 90.0,
-                }
-            ],
+        db.add_all(
+            [
+                _market_rs_run(run_id=41, as_of_date=date(2026, 4, 9)),
+                _market_rs_run(run_id=42, as_of_date=date(2026, 4, 10)),
+                _group_rank(
+                    group="Semiconductors",
+                    ranking_date=date(2026, 4, 9),
+                    rank=2,
+                    avg_rs=70.0,
+                    run_id=41,
+                ),
+                _group_rank(
+                    group="Semiconductors",
+                    ranking_date=date(2026, 4, 10),
+                    rank=1,
+                    avg_rs=81.25,
+                    run_id=42,
+                ),
+                StockUniverse(symbol="AAA", name="AAA Corp", market="US"),
+            ]
         )
+        db.commit()
 
-    assert payload["available"] is True
-    assert query_calls == [(2, False)]
-    assert filter_options_calls == []
-    assert apply_rank_change_calls == [(["Internet Services"], [3, 2])]
-    assert table_fallback_calls == [
-        (["Internet Services"], "HK", date(2026, 4, 4))
+        live = export_module.get_group_rank_service().get_current_rankings(
+            db,
+            market="US",
+            calculation_date=date(2026, 4, 10),
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+        artifact = _build_balanced_groups_payload(service, db, latest_run)
+
+    assert artifact["schema_version"] == "static-site-v3"
+    assert artifact["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
+    assert artifact["market_rs_run_id"] == 42
+    assert artifact["rs_as_of_date"] == "2026-04-10"
+    assert artifact["rs_universe_size"] == 5000
+    static = artifact["payload"]["rankings"]["rankings"]
+    parity_fields = (
+        "industry_group",
+        "rank",
+        "avg_rs_rating",
+        "avg_rs_rating_1m",
+        "avg_rs_rating_3m",
+        "num_stocks",
+        "top_symbol",
+        "rs_formula_version",
+        "market_rs_run_id",
+    )
+    assert [tuple(row[field] for field in parity_fields) for row in static] == [
+        tuple(row[field] for field in parity_fields) for row in live
     ]
+    assert static[0]["avg_rs_rating"] == 81.25
+    assert static[0]["avg_rs_rating_1m"] == 34.5
+    assert static[0]["avg_rs_rating_3m"] == 57.75
+    assert artifact["payload"]["group_details"]["Semiconductors"]["history"] == [
+        {
+            "date": "2026-04-10",
+            "rank": 1,
+            "avg_rs_rating": 81.25,
+            "avg_rs_rating_1m": 34.5,
+            "avg_rs_rating_3m": 57.75,
+            "num_stocks": 4,
+        },
+        {
+            "date": "2026-04-09",
+            "rank": 2,
+            "avg_rs_rating": 70.0,
+            "avg_rs_rating_1m": 34.5,
+            "avg_rs_rating_3m": 57.75,
+            "num_stocks": 4,
+        },
+    ]
+
+
+def test_build_groups_payload_rejects_missing_exact_snapshot(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    latest_run = _balanced_feature_run()
+    with session_factory() as db:
+        db.add(_market_rs_run(run_id=42, as_of_date=date(2026, 4, 10)))
+        db.commit()
+        with pytest.raises(StaticSiteSectionUnavailableError, match="exact.*2026-04-10") as exc_info:
+            _build_balanced_groups_payload(service, db, latest_run)
+
+    assert exc_info.value.section == "groups"
+
+
+def test_build_groups_payload_rejects_mixed_market_rs_runs(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    latest_run = _balanced_feature_run()
+    with session_factory() as db:
+        db.add_all(
+            [
+                _market_rs_run(run_id=42, as_of_date=date(2026, 4, 10)),
+                _market_rs_run(run_id=43, as_of_date=date(2026, 4, 9)),
+                _group_rank(
+                    group="Semiconductors",
+                    ranking_date=date(2026, 4, 10),
+                    rank=1,
+                    avg_rs=81.25,
+                    run_id=42,
+                ),
+                _group_rank(
+                    group="Software",
+                    ranking_date=date(2026, 4, 10),
+                    rank=2,
+                    avg_rs=75.0,
+                    run_id=43,
+                ),
+            ]
+        )
+        db.commit()
+        with pytest.raises(StaticSiteSectionUnavailableError, match="mixes canonical RS sources") as exc_info:
+            _build_balanced_groups_payload(service, db, latest_run)
+
+    assert exc_info.value.section == "groups"
+
+
+def test_build_groups_payload_rejects_market_rs_run_date_mismatch(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    latest_run = _balanced_feature_run()
+    with session_factory() as db:
+        db.add_all(
+            [
+                _market_rs_run(run_id=42, as_of_date=date(2026, 4, 9)),
+                _group_rank(
+                    group="Semiconductors",
+                    ranking_date=date(2026, 4, 10),
+                    rank=1,
+                    avg_rs=81.25,
+                    run_id=42,
+                ),
+            ]
+        )
+        db.commit()
+        with pytest.raises(StaticSiteSectionUnavailableError, match="does not match its Market RS run") as exc_info:
+            _build_balanced_groups_payload(service, db, latest_run)
+
+    assert exc_info.value.section == "groups"

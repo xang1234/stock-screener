@@ -98,7 +98,7 @@ def test_rolling_source_uses_export_date_for_prepare_and_persist(monkeypatch, tm
         lambda **kwargs: {"as_of_date": kwargs["expected_as_of_date"].isoformat()},
     )
     source = StaticGroupsRRGRollingHistoryExportSession(
-        schema_version="static-site-v2",
+        schema_version="static-site-v3",
         market="HK",
         directory=tmp_path,
         history_service=_HistoryService(),
@@ -155,7 +155,7 @@ def test_rolling_source_does_not_retry_failed_preparation(tmp_path):
             raise AssertionError("failed preparation must not fall back to a DB rebuild")
 
     source = StaticGroupsRRGRollingHistoryExportSession(
-        schema_version="static-site-v2",
+        schema_version="static-site-v3",
         market="HK",
         directory=tmp_path,
         history_service=_HistoryService(),
@@ -181,7 +181,7 @@ def test_rolling_source_rejects_wrong_market_before_preparation(tmp_path):
         )
     )
     source = StaticGroupsRRGRollingHistoryExportSession(
-        schema_version="static-site-v2",
+        schema_version="static-site-v3",
         market="HK",
         directory=tmp_path,
         history_service=history_service,
@@ -199,7 +199,7 @@ def test_rolling_source_rejects_wrong_market_before_preparation(tmp_path):
 
 def test_rolling_export_session_rejects_persist_before_build(tmp_path):
     source = StaticGroupsRRGRollingHistoryExportSession(
-        schema_version="static-site-v2",
+        schema_version="static-site-v3",
         market="HK",
         directory=tmp_path,
         history_service=SimpleNamespace(),
@@ -224,7 +224,7 @@ def test_database_source_has_one_explicit_build_path(monkeypatch):
         lambda **_kwargs: {"available": True},
     )
     source = StaticGroupsRRGDatabasePayloadSource(
-        schema_version="static-site-v2",
+        schema_version="static-site-v3",
         history_service=history_service,
     )
     db = object()
