@@ -335,15 +335,10 @@ celery_app.conf.result_expires = 86400  # Results expire after 24 hours
 # Celery Beat Schedule - Periodic Tasks
 if settings.cache_warmup_enabled:
 
-    # Build the list of enabled markets from the runtime configuration.
-    # The setting is stored as a comma-separated string. Converting it
-    # to a list ensures the scheduler iterates over market codes
-    # (["US", "AU"]) rather than individual characters ("U", "S").
-    _enabled_markets = [
-        m.strip()
-        for m in settings.enabled_markets.split(",")
-        if m.strip()
-    ]
+    # Use the canonical list of enabled markets from the runtime configuration.
+    # The settings property handles parsing and validation.
+    _enabled_markets = settings.enabled_markets_list
+
     beat_schedule: dict = {}
 
     for _market in _enabled_markets:
