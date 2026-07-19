@@ -20,7 +20,9 @@ from app.domain.relative_strength import (
     LEGACY_RS_FORMULA_VERSION,
 )
 
-from .filter_spec import FilterSpec, PageSpec, QuerySpec, SortSpec
+from app.domain.common.query import PageSpec, SortSpec
+
+from .filter_expression_model import FilterExpression, QuerySpec
 from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
 
 
@@ -109,7 +111,7 @@ class ScanResultRepository(abc.ABC):
 
         Args:
             scan_id: Scan identifier (must exist — caller validates).
-            spec: Domain-level query specification (filters, sort, pagination).
+            spec: Domain-level query specification (expression, sort, pagination).
             include_sparklines: Whether to populate sparkline arrays in results.
             include_setup_payload: Whether to include heavy setup-engine explain
                 payload fields (se_explain, se_candidates).
@@ -123,7 +125,7 @@ class ScanResultRepository(abc.ABC):
     def query_symbols(
         self,
         scan_id: str,
-        filters: FilterSpec,
+        expression: FilterExpression,
         sort: SortSpec,
         *,
         page: PageSpec | None = None,
@@ -132,7 +134,7 @@ class ScanResultRepository(abc.ABC):
 
         Args:
             scan_id: Scan identifier (must exist — caller validates).
-            filters: Filter specification.
+            expression: Canonical filter expression.
             sort: Sort specification.
             page: Optional pagination for symbol lists.
         """
@@ -142,7 +144,7 @@ class ScanResultRepository(abc.ABC):
     def query_all(
         self,
         scan_id: str,
-        filters: FilterSpec,
+        expression: FilterExpression,
         sort: SortSpec,
         *,
         include_sparklines: bool = False,

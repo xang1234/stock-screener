@@ -491,6 +491,7 @@ function GroupRankingsPage() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculationTaskId, setCalculationTaskId] = useState(null);
   const [calculationError, setCalculationError] = useState(null);
+  const [liveRankingMarket, setLiveRankingMarket] = useState(null);
   const [showHistoricalRanks, setShowHistoricalRanks] = useState(false); // Toggle between change vs actual rank
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.groups);
 
@@ -530,7 +531,9 @@ function GroupRankingsPage() {
       ? (groupsBootstrapQuery.data.payload ?? {})
       : null
   );
-  const groupsAsOfDate = groupsBootstrapPayload?.rankings?.date ?? null;
+  const groupsAsOfDate = liveRankingMarket === selectedMarket
+    ? null
+    : (groupsBootstrapPayload?.rankings?.date ?? null);
   const groupAsOfArgs = groupsAsOfDate ? [groupsAsOfDate] : EMPTY_AS_OF_ARGS;
   // Live queries wait for the bootstrap to resolve either way: on success
   // their caches are freshly seeded (no fetch); on error or a stale

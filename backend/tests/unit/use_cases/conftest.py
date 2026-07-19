@@ -241,10 +241,10 @@ class FakeScanResultRepository(ScanResultRepository):
             per_page=spec.page.per_page,
         )
 
-    def query_symbols(self, scan_id, filters, sort, *, page=None):
+    def query_symbols(self, scan_id, expression, sort, *, page=None):
         self.last_query_symbols_args = {
             "scan_id": scan_id,
-            "filters": filters,
+            "expression": expression,
             "sort": sort,
             "page": page,
         }
@@ -253,7 +253,7 @@ class FakeScanResultRepository(ScanResultRepository):
             symbols = symbols[page.offset : page.offset + page.limit]
         return symbols, len(self._items)
 
-    def query_all(self, scan_id, filters, sort, *, include_sparklines=False):
+    def query_all(self, scan_id, expression, sort, *, include_sparklines=False):
         return tuple(self._items)
 
     def get_filter_options(self, scan_id):
@@ -912,7 +912,7 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
             if (r.details or {}).get("gics_sector") == gics_sector
         )
 
-    def query_all_as_scan_results(self, run_id, filters, sort, *, include_sparklines=False):
+    def query_all_as_scan_results(self, run_id, expression, sort, *, include_sparklines=False):
         """Bridge method: return all rows as ScanResultItemDomain (no pagination)."""
         if run_id not in self._rows:
             raise EntityNotFoundError("FeatureRun", run_id)
@@ -921,10 +921,10 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
             for r in self._rows[run_id]
         )
 
-    def query_run_symbols(self, run_id, filters, sort, page=None):
+    def query_run_symbols(self, run_id, expression, sort, page=None):
         self.last_query_run_symbols_args = {
             "run_id": run_id,
-            "filters": filters,
+            "expression": expression,
             "sort": sort,
             "page": page,
         }
@@ -970,7 +970,11 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
             if field == "symbol":
                 return row.symbol
             details = row.details or {}
-            return details.get(field) if isinstance(details, dict) else None
+            if not isinstance(details, dict):
+                return None
+            if field == "price":
+                return details.get("price", details.get("current_price"))
+            return details.get(field)
 
         if filters is not None:
             from app.domain.common.query import FilterMode

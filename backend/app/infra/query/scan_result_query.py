@@ -2,32 +2,35 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Query
 
-from app.domain.scanning.filter_spec import (
-    BooleanFilter,
-    CategoricalFilter,
-    FilterMode,
+from app.domain.common.query import (
     FilterSpec,
     PageSpec,
-    RangeFilter,
     SortOrder,
     SortSpec,
-    TextSearchFilter,
 )
-from app.infra.db.portability import is_postgres, json_number, json_text, lean_count
+from app.domain.scanning.filter_expression_model import (
+    FilterExpression,
+    filter_spec_to_expression,
+)
+from app.infra.db.portability import lean_count
+from app.infra.query.sql_filter_compiler import (
+    SqlFilterFieldResolver,
+    apply_sql_sort,
+    column_bindings,
+    compile_sql_expression,
+    json_bindings,
+    listing_aware_volume_predicate,
+)
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
 
 # ── Column resolution ───────────────────────────────────────────────────
 
-# Maps domain filter/sort field names to ScanResult column attributes.
-# Fields NOT in this map are treated as JSON details fields.
-_COLUMN_MAP: dict[str, Any] = {
+# One adapter-owned registry maps each logical field to its physical source.
+_FIELD_BINDINGS = column_bindings({
     "symbol": ScanResult.symbol,
     "composite_score": ScanResult.composite_score,
     "minervini_score": ScanResult.minervini_score,
@@ -89,11 +92,7 @@ _COLUMN_MAP: dict[str, Any] = {
     "currency": StockUniverse.currency,
     "market_cap_usd": StockFundamental.market_cap_usd,
     "adv_usd": StockFundamental.adv_usd,
-}
-
-# JSON details paths for fields stored in the details blob.
-# Maps domain field name to nested path segments.
-_JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
+}) | json_bindings({
     # VCP
     "vcp_score": ("vcp_score",),
     "vcp_pivot": ("vcp_pivot",),
@@ -103,6 +102,7 @@ _JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
     # Pocket Pivot / Power Trend
     "pocket_pivot": ("pocket_pivot",),
     "power_trend": ("power_trend",),
+    "passes_template": ("passes_template",),
     # Setup Engine (numeric)
     "se_setup_score": ("setup_engine", "setup_score"),
     "se_quality_score": ("setup_engine", "quality_score"),
@@ -134,20 +134,16 @@ _JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
     # Setup Engine (string)
     "se_pattern_primary": ("setup_engine", "pattern_primary"),
     "se_pivot_type": ("setup_engine", "pivot_type"),
-}
-
-# JSON fields requiring CAST(... AS FLOAT) for correct numeric sorting.
-_JSON_SORT_NUMERIC: frozenset[str] = frozenset({
-    "vcp_score", "vcp_pivot",
-    "se_setup_score", "se_quality_score", "se_readiness_score",
-    "se_pattern_confidence", "se_pivot_price", "se_distance_to_pivot_pct",
-    "se_base_length_weeks", "se_base_depth_pct", "se_support_tests_count",
-    "se_tight_closes_count",
-    "se_atr14_pct", "se_atr14_pct_trend", "se_bb_width_pct",
-    "se_bb_width_pctile_252", "se_volume_vs_50d",
-    "se_up_down_volume_ratio_10d", "se_quiet_days_10d", "se_rs",
-    "se_rs_vs_spy_65d", "se_rs_vs_spy_trend_20d",
 })
+
+_FILTER_FIELD_RESOLVER = SqlFilterFieldResolver(
+    source_name="scan-result",
+    bindings=_FIELD_BINDINGS,
+    json_column=ScanResult.details,
+    symbol_column=ScanResult.symbol,
+    company_name_column=StockUniverse.name,
+    range_predicates={"listing_aware_volume": listing_aware_volume_predicate},
+)
 
 # Sort fields that must be fetched and sorted in Python (not in SQL).
 _PYTHON_SORT_FIELDS = frozenset({
@@ -161,17 +157,6 @@ _PYTHON_SORT_FIELDS = frozenset({
 _PYTHON_SORT_LIMIT = 1000
 
 
-def _json_sort_expr(query: Query, field: str, column, json_path: tuple[str, ...], order: SortOrder):
-    """ORDER BY expression for a JSON field: numeric cast + nulls-last."""
-    expr = (
-        json_number(column, json_path, bind_or_session=query)
-        if field in _JSON_SORT_NUMERIC
-        else json_text(column, json_path, bind_or_session=query)
-    )
-    order_fn = asc if order == SortOrder.ASC else desc
-    return order_fn(expr).nullslast()
-
-
 def requires_python_sort(field: str) -> bool:
     """Return True when a sort field needs in-Python sorting."""
     return field in _PYTHON_SORT_FIELDS
@@ -181,16 +166,27 @@ def requires_python_sort(field: str) -> bool:
 
 
 def apply_filters(query: Query, filters: FilterSpec) -> Query:
-    """Apply all FilterSpec constraints as SQLAlchemy WHERE clauses."""
-    for rf in filters.range_filters:
-        query = _apply_range_filter(query, rf)
-    for cf in filters.categorical_filters:
-        query = _apply_categorical_filter(query, cf)
-    for bf in filters.boolean_filters:
-        query = _apply_boolean_filter(query, bf)
-    for ts in filters.text_searches:
-        query = _apply_text_search(query, ts)
-    return query
+    """Backward-compatible adapter for existing flat-filter callers."""
+
+    return apply_filter_expression(query, filter_spec_to_expression(filters))
+
+
+def apply_filter_expression(query: Query, expression: FilterExpression) -> Query:
+    """Apply one bounded grouped expression as a single WHERE predicate."""
+
+    return query.filter(compile_filter_expression(query, expression))
+
+
+def compile_filter_expression(query: Query, expression: FilterExpression):
+    return compile_sql_expression(query, expression, _FILTER_FIELD_RESOLVER)
+
+
+def supported_filter_fields() -> frozenset[str]:
+    return _FILTER_FIELD_RESOLVER.supported_filter_fields
+
+
+def supported_sort_fields() -> frozenset[str]:
+    return _FILTER_FIELD_RESOLVER.supported_sort_fields | _PYTHON_SORT_FIELDS
 
 
 def apply_sort_and_paginate(
@@ -212,19 +208,7 @@ def apply_sort_and_paginate(
         rows = _sort_in_python(rows, sort)
         rows = rows[page.offset : page.offset + page.limit]
     else:
-        col = _COLUMN_MAP.get(sort.field)
-        if col is not None:
-            order_fn = asc if sort.order == SortOrder.ASC else desc
-            ordered_col = order_fn(col)
-            if sort.field == "composite_score":
-                ordered_col = ordered_col.nullslast()
-            query = query.order_by(ordered_col)
-        elif sort.field in _JSON_FIELD_MAP:
-            json_path = _JSON_FIELD_MAP[sort.field]
-            query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
-        else:
-            # Unknown sort field — fall back to composite_score desc
-            query = query.order_by(desc(ScanResult.composite_score).nullslast())
+        query = apply_sql_sort(query, sort, _FILTER_FIELD_RESOLVER)
         query = query.offset(page.offset).limit(page.limit)
         rows = query.all()
 
@@ -240,97 +224,7 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
         rows = query.all()
         return _sort_in_python(rows, sort)
 
-    col = _COLUMN_MAP.get(sort.field)
-    if col is not None:
-        order_fn = asc if sort.order == SortOrder.ASC else desc
-        ordered_col = order_fn(col)
-        if sort.field == "composite_score":
-            ordered_col = ordered_col.nullslast()
-        query = query.order_by(ordered_col)
-    elif sort.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[sort.field]
-        query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
-    else:
-        query = query.order_by(desc(ScanResult.composite_score).nullslast())
-    return query.all()
-
-
-# ── Private helpers ─────────────────────────────────────────────────────
-
-
-def _apply_range_filter(query: Query, rf: RangeFilter) -> Query:
-    """Apply a numeric range filter — SQL column or dialect-aware JSON."""
-    col = _COLUMN_MAP.get(rf.field)
-    if col is not None:
-        # Regular SQL column
-        if rf.min_value is not None:
-            query = query.filter(col >= rf.min_value)
-        if rf.max_value is not None:
-            query = query.filter(col <= rf.max_value)
-    elif rf.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[rf.field]
-        json_val = json_number(ScanResult.details, json_path, bind_or_session=query)
-        if rf.min_value is not None:
-            query = query.filter(and_(
-                json_val.isnot(None),
-                json_val >= rf.min_value,
-            ))
-        if rf.max_value is not None:
-            query = query.filter(and_(
-                json_val.isnot(None),
-                json_val <= rf.max_value,
-            ))
-    return query
-
-
-def _apply_categorical_filter(query: Query, cf: CategoricalFilter) -> Query:
-    """Apply an include/exclude categorical filter on a SQL column or JSON field."""
-    col = _COLUMN_MAP.get(cf.field)
-    if col is not None:
-        if cf.mode == FilterMode.EXCLUDE:
-            query = query.filter(or_(col.is_(None), ~col.in_(cf.values)))
-        else:
-            query = query.filter(col.in_(cf.values))
-    elif cf.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[cf.field]
-        json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
-        if cf.mode == FilterMode.EXCLUDE:
-            query = query.filter(or_(json_val.is_(None), ~json_val.in_(cf.values)))
-        else:
-            query = query.filter(json_val.in_(cf.values))
-    return query
-
-
-def _apply_boolean_filter(query: Query, bf: BooleanFilter) -> Query:
-    """Apply a boolean filter — SQL column or dialect-aware JSON."""
-    col = _COLUMN_MAP.get(bf.field)
-    if col is not None:
-        query = query.filter(col == bf.value)
-    elif bf.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[bf.field]
-        if is_postgres(query):
-            json_val = func.lower(json_text(ScanResult.details, json_path, bind_or_session=query))
-            expected = "true" if bf.value else "false"
-        else:
-            json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
-            expected = 1 if bf.value else 0
-        query = query.filter(and_(
-            json_val.isnot(None),
-            json_val == expected,
-        ))
-    return query
-
-
-def _apply_text_search(query: Query, ts: TextSearchFilter) -> Query:
-    """Apply a LIKE text search on a SQL column or JSON field."""
-    col = _COLUMN_MAP.get(ts.field)
-    if col is not None:
-        query = query.filter(col.ilike(f"%{ts.pattern}%"))
-    elif ts.field in _JSON_FIELD_MAP:
-        json_path = _JSON_FIELD_MAP[ts.field]
-        json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
-        query = query.filter(json_val.ilike(f"%{ts.pattern}%"))
-    return query
+    return apply_sql_sort(query, sort, _FILTER_FIELD_RESOLVER).all()
 
 
 def _sort_in_python(

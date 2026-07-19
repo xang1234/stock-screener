@@ -471,11 +471,6 @@ def _create_auto_scan_for_published_run(
 
 
 def _is_market_trading_day(as_of: date, *, market: str | None) -> bool:
-    if (market or "US").upper() == "US":
-        from app.use_cases.feature_store.build_daily_snapshot import _is_us_trading_day
-
-        return _is_us_trading_day(as_of)
-
     from app.services.market_calendar_service import MarketCalendarService
 
     return MarketCalendarService().is_trading_day((market or "US").upper(), as_of)

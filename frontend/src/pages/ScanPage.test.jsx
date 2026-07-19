@@ -14,6 +14,7 @@ const runtimeState = {
   },
   scanDefaults: DEFAULT_SCAN_DEFAULTS,
   universeOptions: null,
+  features: {},
 };
 const useRuntimeActivityMock = vi.hoisted(() => vi.fn());
 const STALE_TAIL_WARNING = {
@@ -53,7 +54,7 @@ vi.mock('../api/scans', () => ({
   createScan: vi.fn(),
   getScanBootstrap: vi.fn(),
   getScanStatus: vi.fn(),
-  getScanResults: vi.fn(),
+  queryScanResults: vi.fn(),
   getUniverseStats: vi.fn().mockResolvedValue({
     active: 321,
     sp500: 500,
@@ -63,7 +64,7 @@ vi.mock('../api/scans', () => ({
       AMEX: 21,
     },
   }),
-  exportScanResults: vi.fn(),
+  exportScanResultsQuery: vi.fn(),
   getScans: vi.fn().mockResolvedValue({ scans: [] }),
   cancelScan: vi.fn(),
   getFilterOptions: vi.fn(),
@@ -76,6 +77,7 @@ beforeEach(() => {
   runtimeState.uiSnapshots = { scan: false };
   runtimeState.scanDefaults = DEFAULT_SCAN_DEFAULTS;
   runtimeState.universeOptions = null;
+  runtimeState.features = {};
   useRuntimeActivityMock.mockReset();
   useRuntimeActivityMock.mockReturnValue({
     data: {
@@ -86,7 +88,7 @@ beforeEach(() => {
   });
   scanApi.getScanBootstrap.mockResolvedValue(null);
   scanApi.getScanStatus.mockResolvedValue({ status: 'completed' });
-  scanApi.getScanResults.mockResolvedValue({ total: 0, results: [] });
+  scanApi.queryScanResults.mockResolvedValue({ total: 0, results: [] });
   scanApi.getFilterOptions.mockResolvedValue({
     ibd_industries: [],
     gics_sectors: [],
@@ -193,6 +195,66 @@ describe('ScanPage', () => {
     expect(screen.getByText('Filters')).toBeInTheDocument();
   });
 
+  it('keeps the applied rows and sort indicator atomic when a grouped query fails', async () => {
+    runtimeState.runtimeReady = true;
+    runtimeState.uiSnapshots = { scan: true };
+    runtimeState.features = { grouped_scan_filters: true };
+    scanApi.getScanBootstrap.mockResolvedValue({
+      is_stale: false,
+      payload: {
+        recent_scans: { scans: [] },
+        selected_scan: { scan_id: 'scan-atomic', status: 'completed' },
+        selected_scan_status: { status: 'completed' },
+        filter_options: {
+          ibd_industries: [],
+          gics_sectors: [],
+          ratings: [],
+        },
+      },
+    });
+    scanApi.queryScanResults.mockImplementation((_scanId, request) => {
+      if (request.sort.field !== 'composite_score') {
+        return Promise.reject(new Error('Sort request failed'));
+      }
+      return Promise.resolve({
+        total: 1,
+        unfiltered_total: 1,
+        results: [{
+          symbol: 'NVDA',
+          company_name: 'NVIDIA',
+          composite_score: 98,
+          current_price: 900,
+        }],
+      });
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    await waitFor(() => {
+      expect(scanApi.queryScanResults).toHaveBeenCalled();
+    });
+    expect(scanApi.queryScanResults.mock.calls[0][1].sort).toEqual({
+      field: 'composite_score',
+      order: 'desc',
+    });
+    expect(await screen.findByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
+    expect(screen.getByText('Comp')).toHaveClass('Mui-active');
+
+    fireEvent.click(screen.getByText('SE'));
+
+    expect(await screen.findByText('Sort request failed')).toBeInTheDocument();
+    expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
+    expect(screen.getByText('Comp')).toHaveClass('Mui-active');
+    expect(screen.getByText('SE')).not.toHaveClass('Mui-active');
+    expect(scanApi.queryScanResults).toHaveBeenCalledWith(
+      'scan-atomic',
+      expect.objectContaining({
+        sort: { field: 'se_setup_score', order: 'asc' },
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('renders stale-tail warning returned by scan creation', async () => {
     runtimeState.runtimeReady = true;
     runtimeState.scanDefaults = {
@@ -291,7 +353,7 @@ describe('ScanPage', () => {
         ],
       });
     scanApi.getScanStatus.mockResolvedValue({ status: 'completed' });
-    scanApi.getScanResults.mockResolvedValue({
+    scanApi.queryScanResults.mockResolvedValue({
       total: 1,
       results: [
         {

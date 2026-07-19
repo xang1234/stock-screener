@@ -28,11 +28,11 @@ from app.domain.common.query import (
     CategoricalFilter,
     FilterMode,
     FilterSpec,
-    QuerySpec,
     RangeFilter,
     SortOrder,
     SortSpec,
 )
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.scan_result_repo import (
@@ -401,8 +401,8 @@ class TestScanResultSEQueryIntegration:
     def test_range_filter_se_setup_score_min_max(self, seeded_scan_session):
         """Range filter on se_setup_score min=40, max=90 → AAPL(82.5), NVDA(50)."""
         repo = SqlScanResultRepository(seeded_scan_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[
                     RangeFilter(field="se_setup_score", min_value=40, max_value=90)
                 ]
@@ -415,8 +415,8 @@ class TestScanResultSEQueryIntegration:
     def test_range_filter_se_readiness_score_min(self, seeded_scan_session):
         """Range filter on se_readiness_score min=80 → AAPL(90), GOOGL(95)."""
         repo = SqlScanResultRepository(seeded_scan_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[
                     RangeFilter(field="se_readiness_score", min_value=80)
                 ]
@@ -429,8 +429,8 @@ class TestScanResultSEQueryIntegration:
     def test_boolean_filter_se_setup_ready_true(self, seeded_scan_session):
         """Boolean filter se_setup_ready=True → AAPL, GOOGL, NVDA."""
         repo = SqlScanResultRepository(seeded_scan_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 boolean_filters=[BooleanFilter(field="se_setup_ready", value=True)]
             )
         )
@@ -442,8 +442,8 @@ class TestScanResultSEQueryIntegration:
     def test_boolean_filter_se_setup_ready_false(self, seeded_scan_session):
         """Boolean filter se_setup_ready=False → MSFT only."""
         repo = SqlScanResultRepository(seeded_scan_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 boolean_filters=[BooleanFilter(field="se_setup_ready", value=False)]
             )
         )
@@ -454,8 +454,8 @@ class TestScanResultSEQueryIntegration:
     def test_categorical_filter_se_pattern_primary(self, seeded_scan_session):
         """Categorical filter se_pattern_primary in ('VCP') → AAPL, NVDA."""
         repo = SqlScanResultRepository(seeded_scan_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(field="se_pattern_primary", values=("VCP",))
                 ]
@@ -484,8 +484,8 @@ class TestScanResultSEQueryIntegration:
         seeded_scan_session.commit()
 
         repo = SqlScanResultRepository(seeded_scan_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(
                         field="gics_industry",
@@ -534,8 +534,8 @@ class TestScanResultSEQueryIntegration:
     def test_filter_setup_ready_true_sort_score_desc(self, seeded_scan_session):
         """Filter se_setup_ready=True + sort se_setup_score DESC → GOOGL, AAPL, NVDA."""
         repo = SqlScanResultRepository(seeded_scan_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 boolean_filters=[BooleanFilter(field="se_setup_ready", value=True)]
             ),
             sort=SortSpec(field="se_setup_score", order=SortOrder.DESC),
@@ -597,8 +597,8 @@ class TestFeatureStoreSEQueryIntegration:
     def test_range_filter_se_setup_score(self, seeded_feature_session):
         """Range filter on se_setup_score min=40, max=90 → AAPL, NVDA."""
         repo = SqlFeatureStoreRepository(seeded_feature_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[
                     RangeFilter(field="se_setup_score", min_value=40, max_value=90)
                 ]
@@ -611,8 +611,8 @@ class TestFeatureStoreSEQueryIntegration:
     def test_boolean_filter_se_setup_ready_true(self, seeded_feature_session):
         """Boolean filter se_setup_ready=True → AAPL, GOOGL, NVDA."""
         repo = SqlFeatureStoreRepository(seeded_feature_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 boolean_filters=[BooleanFilter(field="se_setup_ready", value=True)]
             )
         )
@@ -623,8 +623,8 @@ class TestFeatureStoreSEQueryIntegration:
     def test_categorical_filter_se_pattern_primary(self, seeded_feature_session):
         """Categorical filter se_pattern_primary in ('VCP') → AAPL, NVDA."""
         repo = SqlFeatureStoreRepository(seeded_feature_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(field="se_pattern_primary", values=("VCP",))
                 ]
@@ -658,8 +658,8 @@ class TestFeatureStoreSEQueryIntegration:
         seeded_feature_session.commit()
 
         repo = SqlFeatureStoreRepository(seeded_feature_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(
                         field="gics_industry",
@@ -697,8 +697,8 @@ class TestFeatureStoreSEQueryIntegration:
     def test_filter_setup_ready_sort_score_desc(self, seeded_feature_session):
         """Filter se_setup_ready=True + sort se_setup_score DESC → GOOGL, AAPL, NVDA."""
         repo = SqlFeatureStoreRepository(seeded_feature_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 boolean_filters=[BooleanFilter(field="se_setup_ready", value=True)]
             ),
             sort=SortSpec(field="se_setup_score", order=SortOrder.DESC),

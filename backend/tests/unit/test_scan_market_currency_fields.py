@@ -164,7 +164,7 @@ class TestScanFilterParamsUSDPlumbing:
         )
         assert resp.status_code == 200
         spec = wired_repo.last_query_args["spec"]
-        ranges = {rf.field: rf for rf in spec.filters.range_filters}
+        ranges = {rf.field: rf for rf in spec.expression.required_conditions if hasattr(rf, "min_value")}
         assert ranges["market_cap_usd"].min_value == 1_000_000_000
         assert ranges["market_cap_usd"].max_value == 50_000_000_000
 
@@ -175,7 +175,7 @@ class TestScanFilterParamsUSDPlumbing:
         )
         assert resp.status_code == 200
         spec = wired_repo.last_query_args["spec"]
-        ranges = {rf.field: rf for rf in spec.filters.range_filters}
+        ranges = {rf.field: rf for rf in spec.expression.required_conditions if hasattr(rf, "min_value")}
         assert ranges["adv_usd"].min_value == 2_500_000
         assert ranges["adv_usd"].max_value == 100_000_000
 
@@ -186,7 +186,7 @@ class TestScanFilterParamsUSDPlumbing:
         )
         assert resp.status_code == 200
         spec = wired_repo.last_query_args["spec"]
-        ranges = {rf.field: rf for rf in spec.filters.range_filters}
+        ranges = {rf.field: rf for rf in spec.expression.required_conditions if hasattr(rf, "min_value")}
         assert ranges["market_cap"].min_value == 2_000_000_000
 
     async def test_markets_param_becomes_categorical_filter_uppercased(self, client, wired_repo):
@@ -196,7 +196,7 @@ class TestScanFilterParamsUSDPlumbing:
         )
         assert resp.status_code == 200
         spec = wired_repo.last_query_args["spec"]
-        cats = {cf.field: cf for cf in spec.filters.categorical_filters}
+        cats = {cf.field: cf for cf in spec.expression.required_conditions if hasattr(cf, "values")}
         assert cats["market"].values == ("US", "HK", "JP")
 
     async def test_markets_param_ignores_blank_entries(self, client, wired_repo):
@@ -206,13 +206,13 @@ class TestScanFilterParamsUSDPlumbing:
         )
         assert resp.status_code == 200
         spec = wired_repo.last_query_args["spec"]
-        cats = {cf.field: cf for cf in spec.filters.categorical_filters}
+        cats = {cf.field: cf for cf in spec.expression.required_conditions if hasattr(cf, "values")}
         assert cats["market"].values == ("US", "HK")
 
     async def test_no_usd_filters_means_no_usd_range_added(self, client, wired_repo):
         resp = await client.get("/api/v1/scans/scan-1/results")
         assert resp.status_code == 200
         spec = wired_repo.last_query_args["spec"]
-        fields = {rf.field for rf in spec.filters.range_filters}
+        fields = {condition.field for condition in spec.expression.required_conditions}
         assert "market_cap_usd" not in fields
         assert "adv_usd" not in fields

@@ -19,6 +19,7 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
+from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
 from app.models.industry import IBDGroupRank
@@ -136,6 +137,40 @@ def _service_with_static_caches(
 def _empty_key_market_entries(session_factory, market: str) -> list[dict]:
     with session_factory() as db:
         return build_key_market_entries(db, market, as_of_date=date(2026, 6, 9))
+
+
+def test_load_scan_export_rows_uses_empty_filter_expression(
+    service_and_session_factory, monkeypatch
+):
+    service, session_factory = service_and_session_factory
+    observed = {}
+
+    def query_all(_repo, run_id, expression, sort, *, include_sparklines=False):
+        observed.update(
+            run_id=run_id,
+            expression=expression,
+            sort=sort,
+            include_sparklines=include_sparklines,
+        )
+        return ()
+
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "query_all_as_scan_results",
+        query_all,
+    )
+
+    with session_factory() as db:
+        rows = service._load_scan_export_rows(  # noqa: SLF001
+            db,
+            SimpleNamespace(id=17),
+            include_sparklines=True,
+        )
+
+    assert rows == ()
+    assert observed["run_id"] == 17
+    assert observed["expression"] == FilterExpression()
+    assert observed["include_sparklines"] is True
 
 
 def _static_rrg_payload(market: str, as_of_date: str) -> dict:

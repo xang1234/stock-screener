@@ -18,10 +18,10 @@ import pytest
 from app.domain.common.query import (
     FilterSpec,
     PageSpec,
-    QuerySpec,
     SortOrder,
     SortSpec,
 )
+from app.domain.scanning.filter_expression_model import QuerySpec
 from tests.helpers.query_counter import count_queries
 
 from .conftest import PERF_FEATURE_RUN_ID, PERF_SCAN_ID
@@ -66,7 +66,7 @@ class TestFeatureStoreQueryCount:
         """Range filter on composite_score (indexed SQL column)."""
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=60.0)
-        spec = QuerySpec(filters=filters, page=PageSpec(page=1, per_page=50))
+        spec = QuerySpec.from_filter_spec(filters, page=PageSpec(page=1, per_page=50))
         with count_queries(perf_engine) as counter:
             fs_repo.query_run_as_scan_results(PERF_FEATURE_RUN_ID, spec)
         assert counter["count"] <= FS_QUERY_BUDGET
@@ -86,8 +86,8 @@ class TestFeatureStoreQueryCount:
         """Score range filter + sort by rs_rating (JSON field)."""
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=40.0, max_value=80.0)
-        spec = QuerySpec(
-            filters=filters,
+        spec = QuerySpec.from_filter_spec(
+            filters,
             sort=SortSpec(field="rs_rating", order=SortOrder.DESC),
             page=PageSpec(page=1, per_page=50),
         )
@@ -99,7 +99,7 @@ class TestFeatureStoreQueryCount:
         """Categorical filter on gics_sector (JSON field)."""
         filters = FilterSpec()
         filters.add_categorical("gics_sector", ("Technology",))
-        spec = QuerySpec(filters=filters, page=PageSpec(page=1, per_page=50))
+        spec = QuerySpec.from_filter_spec(filters, page=PageSpec(page=1, per_page=50))
         with count_queries(perf_engine) as counter:
             result = fs_repo.query_run_as_scan_results(PERF_FEATURE_RUN_ID, spec)
         assert result.total > 0
@@ -109,7 +109,7 @@ class TestFeatureStoreQueryCount:
         """Text search on symbol — LIKE '%PERF1%'."""
         filters = FilterSpec()
         filters.add_text_search("symbol", "PERF1")
-        spec = QuerySpec(filters=filters, page=PageSpec(page=1, per_page=50))
+        spec = QuerySpec.from_filter_spec(filters, page=PageSpec(page=1, per_page=50))
         with count_queries(perf_engine) as counter:
             result = fs_repo.query_run_as_scan_results(PERF_FEATURE_RUN_ID, spec)
         assert result.total > 0
@@ -119,7 +119,7 @@ class TestFeatureStoreQueryCount:
         """Range filter on rs_rating via json_extract()."""
         filters = FilterSpec()
         filters.add_range("rs_rating", min_value=70.0)
-        spec = QuerySpec(filters=filters, page=PageSpec(page=1, per_page=50))
+        spec = QuerySpec.from_filter_spec(filters, page=PageSpec(page=1, per_page=50))
         with count_queries(perf_engine) as counter:
             result = fs_repo.query_run_as_scan_results(PERF_FEATURE_RUN_ID, spec)
         assert result.total > 0
@@ -159,7 +159,7 @@ class TestLegacyQueryCount:
     def test_filtered_by_score_range(self, legacy_repo, perf_engine):
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=60.0)
-        spec = QuerySpec(filters=filters, page=PageSpec(page=1, per_page=50))
+        spec = QuerySpec.from_filter_spec(filters, page=PageSpec(page=1, per_page=50))
         with count_queries(perf_engine) as counter:
             legacy_repo.query(PERF_SCAN_ID, spec)
         assert counter["count"] <= LEGACY_QUERY_BUDGET
@@ -177,8 +177,8 @@ class TestLegacyQueryCount:
     def test_filter_and_sort_combined(self, legacy_repo, perf_engine):
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=40.0, max_value=80.0)
-        spec = QuerySpec(
-            filters=filters,
+        spec = QuerySpec.from_filter_spec(
+            filters,
             sort=SortSpec(field="rs_rating", order=SortOrder.DESC),
             page=PageSpec(page=1, per_page=50),
         )
@@ -267,7 +267,7 @@ class TestFeatureStoreQueryTiming:
     def test_filtered_query_under_budget(self, fs_repo):
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=60.0)
-        spec = QuerySpec(filters=filters, page=PageSpec(page=1, per_page=50))
+        spec = QuerySpec.from_filter_spec(filters, page=PageSpec(page=1, per_page=50))
         fs_repo.query_run_as_scan_results(PERF_FEATURE_RUN_ID, spec)
 
         t0 = time.perf_counter()
@@ -282,8 +282,8 @@ class TestFeatureStoreQueryTiming:
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=40.0, max_value=80.0)
         filters.add_categorical("gics_sector", ("Technology",))
-        spec = QuerySpec(
-            filters=filters,
+        spec = QuerySpec.from_filter_spec(
+            filters,
             sort=SortSpec(field="rs_rating", order=SortOrder.DESC),
             page=PageSpec(page=1, per_page=50),
         )
@@ -322,7 +322,7 @@ class TestLegacyQueryTiming:
     def test_filtered_query_under_budget(self, legacy_repo):
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=60.0)
-        spec = QuerySpec(filters=filters, page=PageSpec(page=1, per_page=50))
+        spec = QuerySpec.from_filter_spec(filters, page=PageSpec(page=1, per_page=50))
         legacy_repo.query(PERF_SCAN_ID, spec)
 
         t0 = time.perf_counter()
@@ -336,8 +336,8 @@ class TestLegacyQueryTiming:
     def test_combined_query_under_budget(self, legacy_repo):
         filters = FilterSpec()
         filters.add_range("composite_score", min_value=40.0, max_value=80.0)
-        spec = QuerySpec(
-            filters=filters,
+        spec = QuerySpec.from_filter_spec(
+            filters,
             sort=SortSpec(field="rs_rating", order=SortOrder.DESC),
             page=PageSpec(page=1, per_page=50),
         )

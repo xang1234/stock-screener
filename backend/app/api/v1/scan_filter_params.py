@@ -11,9 +11,10 @@ from datetime import datetime
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta
-from fastapi import Query
+from fastapi import HTTPException, Query
 
-from app.domain.scanning.filter_spec import (
+from app.domain.scanning.filter_capabilities import SORT_FIELDS
+from app.domain.common.query import (
     FilterMode,
     FilterSpec,
     PageSpec,
@@ -214,7 +215,7 @@ def parse_scan_filters(
     if symbol_search:
         f.add_text_search("symbol", symbol_search)
 
-    # Range filters — using domain field names matching _COLUMN_MAP
+    # Range filters — using canonical logical scan-field names
     f.add_range("minervini_score", min_score, max_score)
     f.add_range("composite_score", min_composite, max_composite)
     f.add_range("canslim_score", min_canslim, max_canslim)
@@ -348,7 +349,18 @@ def parse_scan_sort(
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
 ) -> SortSpec:
     """Build a SortSpec from HTTP query parameters."""
-    order = SortOrder.ASC if sort_order.lower() == "asc" else SortOrder.DESC
+    if sort_by not in SORT_FIELDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported sort field: {sort_by}",
+        )
+    normalized_order = sort_order.lower()
+    if normalized_order not in {"asc", "desc"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported sort order: {sort_order}",
+        )
+    order = SortOrder(normalized_order)
     return SortSpec(field=sort_by, order=order)
 
 

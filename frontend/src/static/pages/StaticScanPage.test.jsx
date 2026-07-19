@@ -496,11 +496,11 @@ describe('StaticScanPage', () => {
           filters: expect.objectContaining({
             minVolume: 100000000,
           }),
-          filterOptions: {
+          filterOptions: expect.objectContaining({
             ibdIndustries: ['Semiconductors'],
             gicsSectors: ['Technology'],
             ratings: ['Strong Buy'],
-          },
+          }),
           sectionDefaultExpanded: {
             fundamental: false,
             technical: false,

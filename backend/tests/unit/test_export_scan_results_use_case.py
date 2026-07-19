@@ -8,7 +8,15 @@ import pytest
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.feature_store.models import FeatureRow
-from app.domain.scanning.filter_spec import FilterSpec, SortOrder, SortSpec
+from app.domain.scanning.filter_spec import (
+    FilterExpression,
+    FilterGroup,
+    FilterSpec,
+    RangeFilter,
+    SortOrder,
+    SortSpec,
+    filter_spec_to_expression,
+)
 from app.domain.scanning.models import ExportFormat
 from app.use_cases.scanning.export_scan_results import (
     ExportScanResultsQuery,
@@ -41,15 +49,15 @@ class TrackingFeatureStoreRepo(FakeFeatureStoreRepository):
         super().__init__()
         self.last_query_all_args: dict | None = None
 
-    def query_all_as_scan_results(self, run_id, filters, sort, *, include_sparklines=False):
+    def query_all_as_scan_results(self, run_id, expression, sort, *, include_sparklines=False):
         self.last_query_all_args = {
             "run_id": run_id,
-            "filters": filters,
+            "expression": expression,
             "sort": sort,
             "include_sparklines": include_sparklines,
         }
         return super().query_all_as_scan_results(
-            run_id, filters, sort, include_sparklines=include_sparklines
+            run_id, expression, sort, include_sparklines=include_sparklines
         )
 
 
@@ -175,6 +183,32 @@ class TestHappyPath:
         name_idx = header.index("Company Name")
         assert data_row[name_idx] == "Apple Inc."
 
+    def test_csv_contains_typed_matched_group_names(self):
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        _setup_bound_scan(
+            uow,
+            feature_store,
+            rows=[_make_feature_row("AAPL", rs_rating=95)],
+        )
+        expression = FilterExpression(
+            groups=(
+                FilterGroup(
+                    id="leadership",
+                    name="Leadership",
+                    conditions=(RangeFilter("rs_rating", min_value=90),),
+                ),
+            )
+        )
+
+        rows = _parse_csv_bytes(
+            ExportScanResultsUseCase()
+            .execute(uow, _make_query(expression=expression))
+            .content
+        )
+
+        assert rows[1][rows[0].index("Matched Groups")] == "Leadership"
+
     def test_csv_coerces_scalar_market_themes_without_character_splitting(self):
         feature_store = FakeFeatureStoreRepository()
         uow = FakeUnitOfWork(feature_store=feature_store)
@@ -268,11 +302,11 @@ class TestFilterAndSortPassthrough:
 
         filters = FilterSpec()
         filters.add_range("rs_rating", 70, None)
-        uc.execute(uow, _make_query(filters=filters))
+        uc.execute(uow, _make_query(expression=filter_spec_to_expression(filters)))
 
         # Use equality check (not identity) because use case copies filters
-        passed_filters = feature_store.last_query_all_args["filters"]
-        assert passed_filters.range_filters == filters.range_filters
+        expression = feature_store.last_query_all_args["expression"]
+        assert expression.required_conditions == filter_spec_to_expression(filters).required_conditions
 
     def test_passes_sort_to_repository(self):
         feature_store = TrackingFeatureStoreRepo()
@@ -307,11 +341,11 @@ class TestPassesOnlyFilter:
 
         uc.execute(uow, _make_query(passes_only=True))
 
-        filters = feature_store.last_query_all_args["filters"]
-        cat_filters = filters.categorical_filters
-        assert len(cat_filters) == 1
-        assert cat_filters[0].field == "rating"
-        assert set(cat_filters[0].values) == {"Strong Buy", "Buy"}
+        expression = feature_store.last_query_all_args["expression"]
+        conditions = expression.required_conditions
+        assert len(conditions) == 1
+        assert conditions[0].field == "rating"
+        assert set(conditions[0].values) == {"Strong Buy", "Buy"}
 
 
 class TestUTF8BOM:

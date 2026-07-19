@@ -9,6 +9,7 @@ field-for-field identical.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -18,14 +19,26 @@ from app.domain.common.query import (
     CategoricalFilter,
     FilterSpec,
     PageSpec,
-    QuerySpec,
     RangeFilter,
     SortOrder,
     SortSpec,
+    TextSearchFilter,
 )
-from app.domain.scanning.models import ResultPage, ScanResultItemDomain
+from app.domain.scanning.filter_expression_model import (
+    FilterExpression,
+    FilterGroup,
+    MatchOperator,
+    QuerySpec,
+)
+from app.domain.scanning.filter_expression_evaluator import annotate_matched_groups
+from app.domain.scanning.models import (
+    MatchedGroupDomain,
+    ResultPage,
+    ScanResultItemDomain,
+)
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
+from app.models.stock_universe import StockUniverse
 
 from .conftest import FEATURE_RUN_ID, LEGACY_SCAN_ID
 from .golden_fixtures import GOLDEN_TICKERS
@@ -36,13 +49,23 @@ from .golden_fixtures import GOLDEN_TICKERS
 # ---------------------------------------------------------------------------
 
 def _query_legacy(session: Session, spec: QuerySpec | None = None) -> ResultPage:
+    query_spec = spec or QuerySpec()
     repo = SqlScanResultRepository(session)
-    return repo.query(LEGACY_SCAN_ID, spec or QuerySpec())
+    page = repo.query(LEGACY_SCAN_ID, query_spec)
+    return replace(
+        page,
+        items=annotate_matched_groups(page.items, query_spec.expression),
+    )
 
 
 def _query_feature(session: Session, spec: QuerySpec | None = None) -> ResultPage:
+    query_spec = spec or QuerySpec()
     repo = SqlFeatureStoreRepository(session)
-    return repo.query_run_as_scan_results(FEATURE_RUN_ID, spec or QuerySpec())
+    page = repo.query_run_as_scan_results(FEATURE_RUN_ID, query_spec)
+    return replace(
+        page,
+        items=annotate_matched_groups(page.items, query_spec.expression),
+    )
 
 
 def _find(page: ResultPage, symbol: str) -> ScanResultItemDomain:
@@ -92,6 +115,7 @@ def assert_scan_result_parity(
     _compare(mismatches, "composite_method", legacy.composite_method, feature_store.composite_method)
     _compare(mismatches, "screeners_passed", legacy.screeners_passed, feature_store.screeners_passed)
     _compare(mismatches, "screeners_total", legacy.screeners_total, feature_store.screeners_total)
+    _compare(mismatches, "matched_groups", legacy.matched_groups, feature_store.matched_groups)
 
     # Extended fields — compare every key present in either side
     all_keys = set(legacy.extended_fields) | set(feature_store.extended_fields)
@@ -150,18 +174,27 @@ class TestFieldByFieldParity:
 
     @pytest.mark.parametrize("ticker", GOLDEN_TICKERS)
     def test_parity(self, seeded_session: Session, ticker: str):
-        legacy_page = _query_legacy(
-            seeded_session,
-            QuerySpec(page=PageSpec(page=1, per_page=100)),
+        spec = QuerySpec(
+            expression=FilterExpression(
+                groups=(
+                    FilterGroup(
+                        id="scored",
+                        name="Scored",
+                        conditions=(RangeFilter("composite_score", min_value=0),),
+                    ),
+                )
+            ),
+            page=PageSpec(page=1, per_page=100),
         )
-        feature_page = _query_feature(
-            seeded_session,
-            QuerySpec(page=PageSpec(page=1, per_page=100)),
-        )
+        legacy_page = _query_legacy(seeded_session, spec)
+        feature_page = _query_feature(seeded_session, spec)
 
         legacy_item = _find(legacy_page, ticker)
         feature_item = _find(feature_page, ticker)
 
+        assert legacy_item.matched_groups == (
+            MatchedGroupDomain(id="scored", name="Scored"),
+        )
         assert_scan_result_parity(legacy_item, feature_item)
 
 
@@ -173,8 +206,8 @@ class TestFieldByFieldParity:
 _FILTER_SORT_SPECS: list[tuple[str, QuerySpec]] = [
     (
         "range_rs_rating_min_80",
-        QuerySpec(
-            filters=FilterSpec(
+        QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[RangeFilter(field="rs_rating", min_value=80.0)]
             ),
             page=PageSpec(page=1, per_page=100),
@@ -182,8 +215,8 @@ _FILTER_SORT_SPECS: list[tuple[str, QuerySpec]] = [
     ),
     (
         "range_stage_2",
-        QuerySpec(
-            filters=FilterSpec(
+        QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[RangeFilter(field="stage", min_value=2, max_value=2)]
             ),
             page=PageSpec(page=1, per_page=100),
@@ -191,11 +224,41 @@ _FILTER_SORT_SPECS: list[tuple[str, QuerySpec]] = [
     ),
     (
         "categorical_gics_technology",
-        QuerySpec(
-            filters=FilterSpec(
+        QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(field="gics_sector", values=("Technology",))
                 ]
+            ),
+            page=PageSpec(page=1, per_page=100),
+        ),
+    ),
+    (
+        "listing_search_company_name",
+        QuerySpec(
+            expression=FilterExpression(
+                required_conditions=(TextSearchFilter("listing_search", "Apple"),)
+            ),
+            page=PageSpec(page=1, per_page=100),
+        ),
+    ),
+    (
+        "grouped_any_expression",
+        QuerySpec(
+            expression=FilterExpression(
+                group_join=MatchOperator.ANY,
+                groups=(
+                    FilterGroup(
+                        id="leadership",
+                        name="Leadership",
+                        conditions=(RangeFilter("rs_rating", min_value=90),),
+                    ),
+                    FilterGroup(
+                        id="stage-two",
+                        name="Stage two",
+                        conditions=(RangeFilter("stage", min_value=2, max_value=2),),
+                    ),
+                ),
             ),
             page=PageSpec(page=1, per_page=100),
         ),
@@ -237,6 +300,29 @@ class TestFilterSortParity:
             f"  legacy:  {legacy_symbols}\n"
             f"  feature: {feature_symbols}"
         )
+
+    def test_listing_search_treats_like_metacharacters_as_literal(
+        self, seeded_session: Session
+    ):
+        seeded_session.query(StockUniverse).filter_by(symbol="AAPL").one().name = (
+            "Fund_100% Labs"
+        )
+        seeded_session.query(StockUniverse).filter_by(symbol="MSFT").one().name = (
+            "FundA100Z Labs"
+        )
+        seeded_session.flush()
+        spec = QuerySpec(
+            expression=FilterExpression(
+                required_conditions=(TextSearchFilter("listing_search", "_100%"),)
+            ),
+            page=PageSpec(page=1, per_page=100),
+        )
+
+        legacy_symbols = [item.symbol for item in _query_legacy(seeded_session, spec).items]
+        feature_symbols = [item.symbol for item in _query_feature(seeded_session, spec).items]
+
+        assert legacy_symbols == ["AAPL"]
+        assert feature_symbols == legacy_symbols
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -32,6 +32,27 @@ def _session():
     return sessionmaker(bind=engine)()
 
 
+def test_domain_helpers_preserve_service_and_infra_compatibility_imports():
+    from app.domain.common.normalization import normalize_string_list as domain_normalize
+    from app.domain.feature_store.bootstrap_coverage import (
+        normalize_bootstrap_gate_report as domain_gate_normalize,
+    )
+    from app.domain.markets.price_coverage import (
+        price_coverage_policy_for_market as domain_price_policy,
+    )
+    from app.infra.serialization import normalize_string_list as infra_normalize
+    from app.services.bootstrap_cache_coverage import (
+        normalize_bootstrap_gate_report as service_gate_normalize,
+    )
+    from app.services.price_coverage_policy import (
+        price_coverage_policy_for_market as service_price_policy,
+    )
+
+    assert domain_normalize([" A ", None, 2]) == infra_normalize([" A ", None, 2])
+    assert domain_gate_normalize is service_gate_normalize
+    assert domain_price_policy is service_price_policy
+
+
 def _price(symbol: str, day: date) -> StockPrice:
     return StockPrice(
         symbol=symbol,

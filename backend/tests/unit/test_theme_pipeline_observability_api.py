@@ -77,8 +77,7 @@ def _seed_cluster_pair(db_session, *, base: int) -> tuple[ThemeCluster, ThemeClu
     return left, right
 
 
-@pytest.mark.asyncio
-async def test_pipeline_observability_returns_metrics_without_alerts_for_healthy_state(db_session):
+def test_pipeline_observability_returns_metrics_without_alerts_for_healthy_state(db_session):
     item = _seed_source_and_item(db_session, idx=1)
     db_session.add(
         ContentItemPipelineState(
@@ -111,7 +110,7 @@ async def test_pipeline_observability_returns_metrics_without_alerts_for_healthy
     )
     db_session.commit()
 
-    payload = await get_pipeline_observability(
+    payload = get_pipeline_observability(
         pipeline="technical",
         window_days=30,
         db=db_session,
@@ -124,8 +123,7 @@ async def test_pipeline_observability_returns_metrics_without_alerts_for_healthy
     assert payload["alerts"] == []
 
 
-@pytest.mark.asyncio
-async def test_pipeline_observability_emits_actionable_alerts_with_runbook_links(db_session):
+def test_pipeline_observability_emits_actionable_alerts_with_runbook_links(db_session):
     parse_failures = 8
     terminals = 2
     processed_without_mentions = 5
@@ -201,7 +199,7 @@ async def test_pipeline_observability_emits_actionable_alerts_with_runbook_links
 
     db_session.commit()
 
-    payload = await get_pipeline_observability(
+    payload = get_pipeline_observability(
         pipeline="technical",
         window_days=30,
         db=db_session,

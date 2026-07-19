@@ -21,11 +21,16 @@ from app.domain.common.query import (
     CategoricalFilter,
     FilterSpec,
     PageSpec,
-    QuerySpec,
     RangeFilter,
     SortOrder,
     SortSpec,
     TextSearchFilter,
+)
+from app.domain.scanning.filter_expression_model import (
+    FilterExpression,
+    FilterGroup,
+    MatchOperator,
+    QuerySpec,
 )
 from app.domain.scanning.models import ResultPage, ScanResultItemDomain
 from app.infra.db.models.feature_store import (
@@ -164,6 +169,41 @@ class TestQueryRunAsScanResults:
         for item in page.items:
             assert isinstance(item, ScanResultItemDomain)
 
+    @pytest.mark.parametrize(
+        ("group_join", "expected"),
+        [
+            (MatchOperator.ANY, {"AAPL", "MSFT"}),
+            (MatchOperator.ALL, {"AAPL"}),
+        ],
+    )
+    def test_grouped_expression_compiles_across_json_and_columns(
+        self, seeded_session, group_join, expected
+    ):
+        repo = SqlFeatureStoreRepository(seeded_session)
+        expression = FilterExpression(
+            required_conditions=(RangeFilter("stage", min_value=2, max_value=2),),
+            group_join=group_join,
+            groups=(
+                FilterGroup(
+                    id="leadership",
+                    name="Leadership",
+                    conditions=(RangeFilter("rs_rating", min_value=90),),
+                ),
+                FilterGroup(
+                    id="score",
+                    name="Score",
+                    conditions=(RangeFilter("composite_score", min_value=75),),
+                ),
+            ),
+        )
+
+        page = repo.query_run_as_scan_results(
+            1,
+            QuerySpec(expression=expression),
+        )
+
+        assert {str(item.symbol) for item in page.items} == expected
+
     def test_company_name_resolved_via_join(self, seeded_session):
         repo = SqlFeatureStoreRepository(seeded_session)
 
@@ -176,6 +216,67 @@ class TestQueryRunAsScanResults:
         assert names["AAPL"] == "Apple Inc"
         assert names["MSFT"] == "Microsoft Corp"
         assert names["GOOGL"] == "Alphabet Inc"
+
+    def test_listing_aware_volume_bypasses_volume_only_for_listing_rows(
+        self, seeded_session
+    ):
+        seeded_session.add_all(
+            [StockFeatureDaily(
+                run_id=1,
+                symbol="NEWCO",
+                as_of_date=AS_OF,
+                composite_score=60,
+                overall_rating=3,
+                passes_count=0,
+                details_json={
+                    "rating": "Watch",
+                    "current_price": 20,
+                    "scan_mode": "listing_only",
+                },
+            ),
+            StockFeatureDaily(
+                run_id=1,
+                symbol="NEWCOLOW",
+                as_of_date=AS_OF,
+                composite_score=60,
+                overall_rating=3,
+                passes_count=0,
+                details_json={
+                    "rating": "Watch",
+                    "current_price": 20,
+                    "scan_mode": "full",
+                    "avg_dollar_volume": 100,
+                },
+            ),
+            StockFeatureDaily(
+                run_id=1,
+                symbol="NEWCOHIGH",
+                as_of_date=AS_OF,
+                composite_score=60,
+                overall_rating=3,
+                passes_count=0,
+                details_json={
+                    "rating": "Watch",
+                    "current_price": 20,
+                    "scan_mode": "full",
+                    "avg_dollar_volume": 2_000_000,
+                },
+            )]
+        )
+        seeded_session.commit()
+        expression = FilterExpression(
+            required_conditions=(
+                TextSearchFilter("listing_search", "newco"),
+                RangeFilter("listing_aware_volume", min_value=1_000_000),
+            )
+        )
+
+        page = SqlFeatureStoreRepository(seeded_session).query_run_as_scan_results(
+            1,
+            QuerySpec(expression=expression),
+        )
+
+        assert {str(item.symbol) for item in page.items} == {"NEWCO", "NEWCOHIGH"}
 
     def test_int_to_rating_mapping(self, seeded_session):
         repo = SqlFeatureStoreRepository(seeded_session)
@@ -216,8 +317,8 @@ class TestQueryRunAsScanResults:
         """Range filter on rs_rating (JSON field) works correctly."""
         repo = SqlFeatureStoreRepository(seeded_session)
 
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 range_filters=[RangeFilter(field="rs_rating", min_value=75.0)]
             )
         )
@@ -230,8 +331,8 @@ class TestQueryRunAsScanResults:
         """Categorical filter on gics_sector (JSON field) works correctly."""
         repo = SqlFeatureStoreRepository(seeded_session)
 
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 categorical_filters=[
                     CategoricalFilter(
                         field="gics_sector",
@@ -249,8 +350,8 @@ class TestQueryRunAsScanResults:
         """Text search on ibd_industry_group (JSON field) works correctly."""
         repo = SqlFeatureStoreRepository(seeded_session)
 
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 text_searches=[
                     TextSearchFilter(field="ibd_industry_group", pattern="Comp")
                 ]
@@ -341,8 +442,8 @@ class TestQueryRunAsScanResults:
         seeded_session.commit()
 
         repo = SqlFeatureStoreRepository(seeded_session)
-        spec = QuerySpec(
-            filters=FilterSpec(
+        spec = QuerySpec.from_filter_spec(
+            FilterSpec(
                 text_searches=[TextSearchFilter(field="symbol", pattern="NEWCO")]
             )
         )

@@ -7,10 +7,8 @@ during bulk scans. Uses Redis for hot cache with database persistence.
 import logging
 import pickle
 import time
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Optional, Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import pandas as pd
 from sqlalchemy.orm import Session
 
@@ -25,31 +23,21 @@ from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
 from .market_calendar_service import MarketCalendarService
 from .benchmark_registry_service import benchmark_registry
+from .benchmark_resolution import (
+    BenchmarkCandidateOutcome,
+    BenchmarkCandidateSource,
+    BenchmarkCandidateStatus,
+    BenchmarkDataBundle,
+    BenchmarkFallbackPolicy,
+    BenchmarkResolution,
+    BenchmarkResolver,
+    benchmark_data_meets_required_date,
+)
 from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 from .price_row_normalization import normalize_price_frame, stock_price_row_from_ohlcv
 from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open, is_trading_day
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class BenchmarkDataBundle:
-    """Resolved benchmark payload with selection metadata and OHLCV data."""
-
-    market: str
-    period: str
-    benchmark_symbol: str
-    benchmark_role: str
-    benchmark_kind: str | None
-    candidate_symbols: tuple[str, ...]
-    data: pd.DataFrame
-
-
-class BenchmarkFallbackPolicy(str, Enum):
-    """Controls whether benchmark fallback symbols are eligible for a lookup."""
-
-    ALLOW = "allow"
-    PRIMARY_ONLY = "primary_only"
 
 
 class BenchmarkCacheService:
@@ -139,6 +127,7 @@ class BenchmarkCacheService:
         market: str = "US",
         period: str = "2y",
         force_refresh: bool = False,
+        required_as_of_date: date | None = None,
     ) -> Optional[pd.DataFrame]:
         """
         Get benchmark data with market-aware caching.
@@ -162,6 +151,7 @@ class BenchmarkCacheService:
             market=market,
             period=period,
             force_refresh=force_refresh,
+            required_as_of_date=required_as_of_date,
         )
         return bundle.data if bundle is not None else None
 
@@ -171,153 +161,105 @@ class BenchmarkCacheService:
         period: str = "2y",
         force_refresh: bool = False,
         fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
+        required_as_of_date: date | None = None,
     ) -> Optional[BenchmarkDataBundle]:
         """Resolve benchmark data plus the selected candidate metadata."""
-        normalized_market = self._normalize_market(market)
-        all_candidates = self.get_benchmark_candidates(normalized_market)
-        normalized_policy = BenchmarkFallbackPolicy(fallback_policy)
-        candidates = (
-            all_candidates
-            if normalized_policy == BenchmarkFallbackPolicy.ALLOW
-            else all_candidates[:1]
+        return self.resolve_benchmark_bundle(
+            market=market,
+            period=period,
+            force_refresh=force_refresh,
+            fallback_policy=fallback_policy,
+            required_as_of_date=required_as_of_date,
+        ).bundle
+
+    def resolve_benchmark_bundle(
+        self,
+        market: str = "US",
+        period: str = "2y",
+        force_refresh: bool = False,
+        fallback_policy: BenchmarkFallbackPolicy = BenchmarkFallbackPolicy.ALLOW,
+        required_as_of_date: date | None = None,
+    ) -> BenchmarkResolution:
+        """Resolve benchmark data and return selection diagnostics explicitly."""
+        return BenchmarkResolver(
+            adapter=self,
+            registry=self._benchmark_registry,
+        ).resolve(
+            market=market,
+            period=period,
+            force_refresh=force_refresh,
+            fallback_policy=fallback_policy,
+            required_as_of_date=required_as_of_date,
         )
-        candidate_tuple = tuple(candidates)
-        registry_entry = self._benchmark_registry.get_entry(normalized_market)
 
-        # Pass 1: Prefer any cached candidate before triggering network fetches.
-        if not force_refresh:
-            for idx, benchmark_symbol in enumerate(candidates):
-                role = "primary" if idx == 0 else "fallback"
-                cached_data = self._get_from_redis(
-                    benchmark_symbol=benchmark_symbol,
-                    period=period,
-                    market=normalized_market,
-                )
-                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
-                    logger.info(
-                        "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
-                        normalized_market,
-                        benchmark_symbol,
-                        period,
-                        role,
-                    )
-                    return BenchmarkDataBundle(
-                        market=normalized_market,
-                        period=period,
-                        benchmark_symbol=benchmark_symbol,
-                        benchmark_role=role,
-                        benchmark_kind=(
-                            registry_entry.primary_kind
-                            if role == "primary"
-                            else registry_entry.fallback_kind
-                        ),
-                        candidate_symbols=candidate_tuple,
-                        data=cached_data,
-                    )
-                if cached_data is not None:
-                    logger.info(
-                        "Cache STALE for %s benchmark %s (%s, %s) (Redis)",
-                        normalized_market,
-                        benchmark_symbol,
-                        period,
-                        role,
-                    )
+    def load_benchmark_from_redis(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str,
+    ) -> Optional[pd.DataFrame]:
+        """Resolver-facing Redis cache lookup."""
+        return self._get_from_redis(
+            benchmark_symbol=benchmark_symbol,
+            period=period,
+            market=market,
+        )
 
-                cached_data = self._get_from_database(
-                    benchmark_symbol=benchmark_symbol,
-                    period=period,
-                    market=normalized_market,
-                )
-                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
-                    logger.info(
-                        "Cache HIT for %s benchmark %s (%s, %s) (Database)",
-                        normalized_market,
-                        benchmark_symbol,
-                        period,
-                        role,
-                    )
-                    self._store_in_redis(
-                        benchmark_symbol=benchmark_symbol,
-                        period=period,
-                        data=cached_data,
-                        market=normalized_market,
-                    )
-                    return BenchmarkDataBundle(
-                        market=normalized_market,
-                        period=period,
-                        benchmark_symbol=benchmark_symbol,
-                        benchmark_role=role,
-                        benchmark_kind=(
-                            registry_entry.primary_kind
-                            if role == "primary"
-                            else registry_entry.fallback_kind
-                        ),
-                        candidate_symbols=candidate_tuple,
-                        data=cached_data,
-                    )
+    def load_benchmark_from_database(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str = "US",
+    ) -> Optional[pd.DataFrame]:
+        """Resolver-facing database cache lookup."""
+        return self._get_from_database(
+            benchmark_symbol=benchmark_symbol,
+            period=period,
+            market=market,
+        )
 
-        # Pass 2: Fetch candidates in deterministic order.
-        for idx, benchmark_symbol in enumerate(candidates):
-            role = "primary" if idx == 0 else "fallback"
-            if force_refresh:
-                logger.info(
-                    "Force refresh requested for %s benchmark %s (%s, %s)",
-                    normalized_market,
-                    benchmark_symbol,
-                    period,
-                    role,
-                )
-                fetched = self._fetch_and_cache_benchmark(
-                    benchmark_symbol=benchmark_symbol,
-                    market=normalized_market,
-                    period=period,
-                )
-                if fetched is not None and not fetched.empty:
-                    return BenchmarkDataBundle(
-                        market=normalized_market,
-                        period=period,
-                        benchmark_symbol=benchmark_symbol,
-                        benchmark_role=role,
-                        benchmark_kind=(
-                            registry_entry.primary_kind
-                            if role == "primary"
-                            else registry_entry.fallback_kind
-                        ),
-                        candidate_symbols=candidate_tuple,
-                        data=fetched,
-                    )
-                continue
+    def benchmark_data_is_fresh(
+        self,
+        data: pd.DataFrame,
+        market: str = "US",
+        max_age_hours: int = 24,
+    ) -> bool:
+        """Resolver-facing freshness check."""
+        return self._is_data_fresh(
+            data=data,
+            market=market,
+            max_age_hours=max_age_hours,
+        )
 
-            # Cache MISS - attempt fetch for this candidate
-            logger.info(
-                "Cache MISS for %s benchmark %s (%s, %s) - fetching from yfinance",
-                normalized_market,
-                benchmark_symbol,
-                period,
-                role,
-            )
-            fetched = self._fetch_and_cache_benchmark(
-                benchmark_symbol=benchmark_symbol,
-                market=normalized_market,
-                period=period,
-            )
-            if fetched is not None and not fetched.empty:
-                return BenchmarkDataBundle(
-                    market=normalized_market,
-                    period=period,
-                    benchmark_symbol=benchmark_symbol,
-                    benchmark_role=role,
-                    benchmark_kind=(
-                        registry_entry.primary_kind
-                        if role == "primary"
-                        else registry_entry.fallback_kind
-                    ),
-                    candidate_symbols=candidate_tuple,
-                    data=fetched,
-                )
+    def store_benchmark_in_redis(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        data: pd.DataFrame,
+        market: str = "US",
+    ) -> None:
+        """Resolver-facing Redis cache write."""
+        self._store_in_redis(
+            benchmark_symbol=benchmark_symbol,
+            period=period,
+            data=data,
+            market=market,
+        )
 
-        logger.warning("No benchmark candidate produced data for market=%s period=%s", normalized_market, period)
-        return None
+    def fetch_and_cache_benchmark(
+        self,
+        benchmark_symbol: str,
+        market: str,
+        period: str,
+        required_as_of_date: date | None = None,
+    ) -> Optional[pd.DataFrame]:
+        """Resolver-facing benchmark fetch path."""
+        return self._fetch_and_cache_benchmark(
+            benchmark_symbol=benchmark_symbol,
+            market=market,
+            period=period,
+            required_as_of_date=required_as_of_date,
+        )
 
     def _get_from_redis(
         self,
@@ -421,7 +363,77 @@ class BenchmarkCacheService:
             logger.error("Failed to fetch finite benchmark %s data from yfinance", benchmark_symbol)
         return data
 
-    def _fetch_and_cache_benchmark(self, benchmark_symbol: str, market: str, period: str) -> Optional[pd.DataFrame]:
+    def _fetch_from_cn_index_provider(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        required_as_of_date: date | None = None,
+    ) -> Optional[pd.DataFrame]:
+        from .cn_market_data_service import CnMarketDataService
+
+        return CnMarketDataService().index_ohlcv_dataframe(
+            benchmark_symbol,
+            period=period,
+            end=required_as_of_date,
+            required_as_of_date=required_as_of_date,
+        )
+
+    def _fetch_normalized_benchmark(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str,
+        required_as_of_date: date | None = None,
+    ) -> Optional[pd.DataFrame]:
+        normalized_market = self._normalize_market(market)
+        if normalized_market == "CN":
+            try:
+                data = normalize_price_frame(
+                    self._fetch_from_cn_index_provider(
+                        benchmark_symbol,
+                        period,
+                        required_as_of_date=required_as_of_date,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - provider/network variability
+                logger.warning(
+                    "CN index provider fetch failed for benchmark %s (%s): %s",
+                    benchmark_symbol,
+                    period,
+                    exc,
+                )
+            else:
+                if data is not None:
+                    if not benchmark_data_meets_required_date(
+                        data,
+                        required_as_of_date=required_as_of_date,
+                    ):
+                        logger.warning(
+                            "CN index provider benchmark %s is stale for %s; falling back to yfinance",
+                            benchmark_symbol,
+                            required_as_of_date.isoformat() if required_as_of_date else None,
+                        )
+                    else:
+                        logger.info(
+                            "Fetched CN benchmark %s %s from CN index provider",
+                            benchmark_symbol,
+                            period,
+                        )
+                        return data
+                else:
+                    logger.info(
+                        "CN index provider returned no finite benchmark %s data; falling back to yfinance",
+                        benchmark_symbol,
+                    )
+        return self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+
+    def _fetch_and_cache_benchmark(
+        self,
+        benchmark_symbol: str,
+        market: str,
+        period: str,
+        required_as_of_date: date | None = None,
+    ) -> Optional[pd.DataFrame]:
         """
         Fetch benchmark from yfinance and cache it.
 
@@ -430,7 +442,12 @@ class BenchmarkCacheService:
         # No Redis means no distributed coordination is possible; fetch directly
         # and persist to DB so subsequent calls can still hit local cache.
         if not self._redis_client:
-            benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+            benchmark_data = self._fetch_normalized_benchmark(
+                benchmark_symbol,
+                period,
+                market,
+                required_as_of_date=required_as_of_date,
+            )
             if benchmark_data is None:
                 return None
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
@@ -457,13 +474,19 @@ class BenchmarkCacheService:
                 benchmark_symbol=benchmark_symbol,
                 period=period,
                 market=market,
+                required_as_of_date=required_as_of_date,
             )
 
         try:
-            # We have the lock - fetch from yfinance
-            logger.info("Fetching benchmark %s for market %s (%s) from yfinance", benchmark_symbol, market, period)
+            # We have the lock - fetch from the market-specific benchmark provider.
+            logger.info("Fetching benchmark %s for market %s (%s)", benchmark_symbol, market, period)
 
-            benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+            benchmark_data = self._fetch_normalized_benchmark(
+                benchmark_symbol,
+                period,
+                market,
+                required_as_of_date=required_as_of_date,
+            )
             if benchmark_data is None:
                 return None
 
@@ -496,6 +519,7 @@ class BenchmarkCacheService:
         period: str,
         market: str,
         max_wait_seconds: int = None,
+        required_as_of_date: date | None = None,
     ) -> Optional[pd.DataFrame]:
         """
         Wait for another worker to cache benchmark data.
@@ -522,7 +546,12 @@ class BenchmarkCacheService:
 
         # Timeout - fetch directly as fallback
         logger.warning("Timeout waiting for benchmark %s %s cache - fetching directly", benchmark_symbol, period)
-        benchmark_data = self._fetch_normalized_from_yfinance(benchmark_symbol, period)
+        benchmark_data = self._fetch_normalized_benchmark(
+            benchmark_symbol,
+            period,
+            market,
+            required_as_of_date=required_as_of_date,
+        )
         if benchmark_data is not None:
             # Persist fallback fetch so future calls can use DB cache even when
             # lock-holder failed to populate Redis.

@@ -7,6 +7,7 @@ and helper functions.
 """
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.domain.scanning.filter_spec import (
     FilterMode,
@@ -16,10 +17,26 @@ from app.domain.scanning.filter_spec import (
     SortSpec,
 )
 from app.infra.query.scan_result_query import (
-    _COLUMN_MAP,
-    _JSON_FIELD_MAP,
-    _JSON_SORT_NUMERIC,
+    _FIELD_BINDINGS,
+    _FILTER_FIELD_RESOLVER,
     _PYTHON_SORT_FIELDS,
+    apply_filters,
+)
+from app.infra.query.sql_filter_compiler import apply_sql_sort
+from app.models.scan_result import ScanResult
+
+_COLUMN_MAP = {
+    field: binding.column
+    for field, binding in _FIELD_BINDINGS.items()
+    if binding.column is not None
+}
+_JSON_FIELD_MAP = {
+    field: binding.json_path
+    for field, binding in _FIELD_BINDINGS.items()
+    if binding.json_path is not None
+}
+_JSON_SORT_NUMERIC = frozenset(
+    field for field, binding in _FIELD_BINDINGS.items() if binding.numeric_sort
 )
 
 
@@ -225,6 +242,24 @@ class TestPageSpec:
             PageSpec(page=1, per_page=0)
 
 
+class TestRangeCompilation:
+    def test_ipo_date_range_keeps_iso_string_bounds_for_string_column(self):
+        filters = FilterSpec()
+        filters.add_range(
+            "ipo_date",
+            min_value="2024-01-02",
+            max_value="2025-03-04",
+        )
+
+        with Session() as session:
+            query = apply_filters(session.query(ScanResult), filters)
+
+        assert set(query.statement.compile().params.values()) == {
+            "2024-01-02",
+            "2025-03-04",
+        }
+
+
 class TestSortSpec:
     """Test SortSpec defaults."""
 
@@ -237,6 +272,32 @@ class TestSortSpec:
         s = SortSpec(field="rs_rating", order=SortOrder.ASC)
         assert s.field == "rs_rating"
         assert s.order == SortOrder.ASC
+
+    def test_sql_sort_appends_symbol_tie_breaker(self):
+        with Session() as session:
+            query = apply_sql_sort(
+                session.query(ScanResult),
+                SortSpec(field="composite_score", order=SortOrder.DESC),
+                _FILTER_FIELD_RESOLVER,
+            )
+
+        sql = " ".join(str(query.statement).split())
+        assert (
+            "ORDER BY scan_results.composite_score DESC NULLS LAST, "
+            "scan_results.symbol ASC"
+        ) in sql
+
+    def test_symbol_sort_does_not_add_conflicting_tie_breaker(self):
+        with Session() as session:
+            query = apply_sql_sort(
+                session.query(ScanResult),
+                SortSpec(field="symbol", order=SortOrder.DESC),
+                _FILTER_FIELD_RESOLVER,
+            )
+
+        sql = " ".join(str(query.statement).split())
+        assert "ORDER BY scan_results.symbol DESC" in sql
+        assert "scan_results.symbol ASC" not in sql
 
 
 class TestAliases:

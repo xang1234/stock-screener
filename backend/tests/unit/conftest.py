@@ -32,11 +32,11 @@ def legacy_market_rs_runtime(runtime_services_context):
                 formula_version=LEGACY_RS_FORMULA_VERSION,
             )
 
-    runtime_services_context._market_rs_services = type(
-        "_LegacyMarketRsServices",
-        (),
-        {"reader": _LegacyReader()},
-    )()
+    # The runtime container now owns Market RS through CanonicalRsRuntime.
+    # These legacy scanner tests predate formula activation, so replace the
+    # reader on their process-scoped orchestrator explicitly instead of
+    # populating the removed ``_market_rs_services`` cache attribute.
+    runtime_services_context.scan_orchestrator()._market_rs_reader = _LegacyReader()
     return runtime_services_context
 
 

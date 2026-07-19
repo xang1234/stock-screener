@@ -132,17 +132,3 @@ class TestScanNotFound:
 
         assert exc_info.value.entity == "Scan"
         assert exc_info.value.identifier == "missing"
-
-
-class TestUnboundScanRaises:
-    """Scan exists but has no feature_run_id — raises EntityNotFoundError."""
-
-    def test_unbound_scan_raises_feature_run_not_found(self):
-        uow = FakeUnitOfWork()
-        uow.scans.create(scan_id="scan-123", status="completed")  # no feature_run_id
-        uc = GetFilterOptionsUseCase()
-
-        with pytest.raises(EntityNotFoundError) as exc_info:
-            uc.execute(uow, _make_query())
-
-        assert exc_info.value.entity == "FeatureRun"

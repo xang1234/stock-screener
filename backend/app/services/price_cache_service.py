@@ -24,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
     redis = Any  # type: ignore
 
 from ..database import SessionLocal
+from ..domain.markets.cn_symbols import cn_price_symbol_for_native_provider
 from ..models.stock import StockPrice
 from ..models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 from ..config import settings
@@ -214,10 +215,26 @@ class PriceCacheService:
         logger.debug(f"Cache-only MISS for {symbol}")
         return None
 
+    @staticmethod
+    def _contains_required_as_of_date(
+        data: Optional[pd.DataFrame],
+        required_as_of_date: date | None,
+    ) -> bool:
+        if required_as_of_date is None:
+            return True
+        if data is None or data.empty:
+            return False
+        return any(
+            pd.Timestamp(index_value).date() == required_as_of_date
+            for index_value in data.index
+        )
+
     def get_cached_only_fresh(
         self,
         symbol: str,
-        period: str = "2y"
+        period: str = "2y",
+        *,
+        required_as_of_date: date | None = None,
     ) -> Optional[pd.DataFrame]:
         """
         Get cache-only price data when the cached row is still fresh enough.
@@ -236,6 +253,17 @@ class PriceCacheService:
 
         if self._is_intraday_data_stale(symbol):
             logger.debug(f"Fresh cache-only INTRADAY_STALE for {symbol}")
+            return None
+
+        if not self._contains_required_as_of_date(
+            cached_data,
+            required_as_of_date,
+        ):
+            logger.debug(
+                "Fresh cache-only TARGET_DATE_MISS for %s (required: %s)",
+                symbol,
+                required_as_of_date,
+            )
             return None
 
         logger.debug(f"Fresh cache-only HIT for {symbol} (last: {last_date})")
@@ -264,7 +292,9 @@ class PriceCacheService:
     def get_many_cached_only_fresh(
         self,
         symbols: List[str],
-        period: str = "2y"
+        period: str = "2y",
+        *,
+        required_as_of_date: date | None = None,
     ) -> Dict[str, Optional[pd.DataFrame]]:
         """
         Get fresh-enough cached price data for multiple symbols without Yahoo fetches.
@@ -282,6 +312,10 @@ class PriceCacheService:
                 and not data.empty
                 and self._is_data_fresh(last_date)
                 and not self._is_intraday_data_stale(symbol)
+                and self._contains_required_as_of_date(
+                    data,
+                    required_as_of_date,
+                )
             ):
                 fresh_results[symbol] = data
             else:
@@ -550,10 +584,17 @@ class PriceCacheService:
             from .security_master_service import security_master_resolver
 
             identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
-            local_code = str(identity.local_code or "").strip()
-            if not local_code.isdigit():
+            provider_symbol = cn_price_symbol_for_native_provider(
+                symbol,
+                local_code=identity.local_code,
+                canonical_symbol=identity.canonical_symbol,
+            )
+            if provider_symbol is None:
                 return None
-            return CnMarketDataService().daily_ohlcv_dataframe(local_code, period=period)
+            return CnMarketDataService().daily_ohlcv_dataframe(
+                provider_symbol,
+                period=period,
+            )
         except Exception as exc:  # pragma: no cover - provider/network variability
             logger.warning("CN historical fetch failed for %s: %s", symbol, exc)
             return None

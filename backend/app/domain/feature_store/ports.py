@@ -11,8 +11,9 @@ import abc
 from collections.abc import Sequence
 from datetime import date
 
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortSpec
+from app.domain.common.query import FilterSpec, PageSpec, SortSpec
 from app.domain.feature_store.quality import DQInputs, DQResult
+from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 
 from .models import (
@@ -354,8 +355,8 @@ class FeatureStoreRepository(abc.ABC):
     def query_all_as_scan_results(
         self,
         run_id: int,
-        filters: FilterSpec | None = None,
-        sort: SortSpec | None = None,
+        expression: FilterExpression,
+        sort: SortSpec,
         include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
         """Return all rows from a feature run (no pagination; for export).
@@ -369,7 +370,7 @@ class FeatureStoreRepository(abc.ABC):
     def query_run_symbols(
         self,
         run_id: int,
-        filters: FilterSpec,
+        expression: FilterExpression,
         sort: SortSpec,
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:

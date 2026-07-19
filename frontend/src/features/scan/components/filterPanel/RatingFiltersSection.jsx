@@ -5,6 +5,7 @@ import {
   CompactMultiSelect,
   FilterSection,
 } from '../../../../components/Scan/filters';
+import { EXPRESSION_LIMITS } from '../../scanFilterFields';
 import { SE_PATTERN_OPTIONS } from './constants';
 
 function RatingFiltersSection({
@@ -176,6 +177,7 @@ function RatingFiltersSection({
             values={filters.sePatternPrimary || []}
             options={SE_PATTERN_OPTIONS}
             onChange={(values) => updateFilter('sePatternPrimary', values)}
+            maxValues={EXPRESSION_LIMITS.maxCategoricalValues}
           />
         </Grid>
         <Grid item xs={6} sm={4} md={1.2}>

@@ -12,6 +12,8 @@ export const groupRequestParams = (params, asOfDate = null) => ({
  * Get current IBD group rankings.
  *
  * @param {number} limit - Maximum number of groups to return (default: 50)
+ * @param {string} market - Market code (default: 'US')
+ * @param {string|null} asOfDate - Optional YYYY-MM-DD snapshot date; null uses the latest ranking
  * @returns {Promise<Object>} Rankings response with date, total_groups, and rankings array
  */
 export const getCurrentRankings = async (limit = 50, market = 'US', asOfDate = null) => {

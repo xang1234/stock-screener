@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -8,11 +9,19 @@ def test_backend_app_pct_change_calls_specify_fill_method():
     offenders: list[str] = []
 
     for path in sorted(backend_app.rglob("*.py")):
-        for line_no, line in enumerate(path.read_text().splitlines(), start=1):
-            if ".pct_change(" not in line:
+        source = path.read_text()
+        tree = ast.parse(source, filename=str(path))
+        lines = source.splitlines()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
                 continue
-            if "fill_method=" in line:
+            if not isinstance(node.func, ast.Attribute) or node.func.attr != "pct_change":
                 continue
-            offenders.append(f"{path.relative_to(backend_app.parent)}:{line_no}:{line.strip()}")
+            if any(keyword.arg == "fill_method" for keyword in node.keywords):
+                continue
+            line = lines[node.lineno - 1].strip()
+            offenders.append(
+                f"{path.relative_to(backend_app.parent)}:{node.lineno}:{line}"
+            )
 
     assert offenders == []

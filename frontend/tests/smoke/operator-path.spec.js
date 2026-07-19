@@ -426,10 +426,26 @@ test('single-tenant operator smoke path (assistant -> scan -> themes review -> a
       });
     }
 
-    if (/^\/v1\/scans\/[^/]+\/results$/.test(path) && method === 'GET') {
+    const isLegacyResultsRequest = /^\/v1\/scans\/[^/]+\/results$/.test(path)
+      && method === 'GET';
+    const isExpressionResultsRequest = /^\/v1\/scans\/[^/]+\/results\/query$/.test(path)
+      && method === 'POST';
+    if (isLegacyResultsRequest || isExpressionResultsRequest) {
+      if (isExpressionResultsRequest) {
+        expect(request.postDataJSON()).toMatchObject({
+          expression_version: 1,
+          page: { number: 1, size: 50 },
+          sort: { field: 'composite_score', order: 'desc' },
+        });
+      }
       return jsonResponse(route, {
         scan_id: latestScanId,
         total: 1,
+        unfiltered_total: 1,
+        page: 1,
+        per_page: 50,
+        pages: 1,
+        query_fingerprint: 'smoke-query',
         results: [
           {
             symbol: 'NVDA',
@@ -449,6 +465,7 @@ test('single-tenant operator smoke path (assistant -> scan -> themes review -> a
             vcp_detected: true,
             passes_template: true,
             rating: 'Buy',
+            matched_groups: [],
           },
         ],
       });

@@ -129,15 +129,21 @@ def coherence_status(
     anchor: date | None,
     section_dates: SnapshotSectionDates,
     key_market_summary: KeyMarketDateSummary | None = None,
+    groups_applicable: bool = True,
 ) -> str:
     if anchor is None:
         return "unanchored"
     mismatches = tuple(key_market_summary.mismatched_symbols) if key_market_summary else ()
     if any(match.status == "future" for match in mismatches):
         return "future_section_data"
-    if any(value is not None and value > anchor for value in section_dates.values()):
+    applicable_dates = (
+        section_dates.values()
+        if groups_applicable
+        else (section_dates.breadth, section_dates.exposure, section_dates.key_markets)
+    )
+    if any(value is not None and value > anchor for value in applicable_dates):
         return "future_section_data"
-    if all(value == anchor for value in section_dates.values()) and not mismatches:
+    if all(value == anchor for value in applicable_dates) and not mismatches:
         return "coherent"
     return "partial"
 
@@ -149,6 +155,7 @@ def build_snapshot_freshness(
     market_timezone: str | None,
     section_dates: SnapshotSectionDates,
     key_markets: list[dict[str, Any]],
+    groups_applicable: bool = True,
 ) -> dict[str, Any]:
     key_summary = key_market_date_summary(key_markets, anchor=anchor)
     all_section_dates = SnapshotSectionDates(
@@ -176,5 +183,6 @@ def build_snapshot_freshness(
             anchor=anchor,
             section_dates=all_section_dates,
             key_market_summary=key_summary,
+            groups_applicable=groups_applicable,
         ),
     }

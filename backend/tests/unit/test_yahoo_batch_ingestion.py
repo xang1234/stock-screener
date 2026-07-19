@@ -596,7 +596,15 @@ def test_fetch_prices_in_batches_falls_back_to_yahoo_for_krx_misses(monkeypatch)
     krx_service.daily_ohlcv_dataframe.side_effect = [price_frame, None]
     fetcher = BulkDataFetcher(krx_price_service=krx_service)
 
-    def fake_yahoo(symbols, *, period, start_batch_size=None, market=None):
+    def fake_yahoo(
+        symbols,
+        *,
+        period,
+        start_batch_size=None,
+        market=None,
+        progress_callback=None,
+    ):
+        del start_batch_size, progress_callback
         assert symbols == ["091990.KQ"]
         assert period == "7d"
         assert market == "KR"
@@ -643,7 +651,15 @@ def test_fetch_prices_in_batches_uses_price_plan_registry_for_routing(monkeypatc
 
     calls = []
 
-    def fake_yahoo(symbols, *, period, start_batch_size=None, market=None):
+    def fake_yahoo(
+        symbols,
+        *,
+        period,
+        start_batch_size=None,
+        market=None,
+        progress_callback=None,
+    ):
+        del progress_callback
         calls.append(
             {
                 "symbols": list(symbols),
@@ -672,7 +688,15 @@ def test_fetch_prices_in_batches_uses_price_plan_registry_for_routing(monkeypatc
 def test_fetch_prices_in_batches_attaches_price_plan_provenance(monkeypatch):
     fetcher = BulkDataFetcher()
 
-    def fake_yahoo(symbols, *, period, start_batch_size=None, market=None):
+    def fake_yahoo(
+        symbols,
+        *,
+        period,
+        start_batch_size=None,
+        market=None,
+        progress_callback=None,
+    ):
+        del start_batch_size, market, progress_callback
         return {symbol: _success_result(symbol) for symbol in symbols}
 
     monkeypatch.setattr(fetcher, "_fetch_yfinance_prices_in_batches", fake_yahoo)
@@ -1066,8 +1090,16 @@ def test_get_many_without_redis_uses_bulk_database_fallback(monkeypatch):
 def test_get_many_reads_market_scoped_redis_keys(monkeypatch):
     import app.services.price_cache_service as module
 
+    closes = list(range(200))
     data = pd.DataFrame(
-        {"Close": list(range(200))},
+        {
+            "Open": closes,
+            "High": [value + 1 for value in closes],
+            "Low": [value - 1 for value in closes],
+            "Close": closes,
+            "Adj Close": closes,
+            "Volume": [1_000_000] * len(closes),
+        },
         index=pd.date_range(end="2026-03-18", periods=200),
     )
     fake_redis = _FakeRedis([pickle.dumps(data), json.dumps({"needs_refresh_after_close": False})])
@@ -1181,6 +1213,70 @@ def test_bulk_fallback_warms_fresh_db_hits_to_inferred_symbol_market(monkeypatch
 
     assert result["0700.HK"] is fresh_df
     assert stored == [("0700.HK", "HK")]
+
+
+def test_get_cached_only_fresh_requires_requested_session(monkeypatch):
+    service = PriceCacheService(
+        redis_client=None,
+        session_factory=lambda: MagicMock(),
+    )
+    frame = _price_df(date(2026, 3, 20), 123.0)
+    monkeypatch.setattr(
+        service,
+        "_get_from_database",
+        lambda symbol, period: (frame, date(2026, 3, 20)),
+    )
+    monkeypatch.setattr(service, "_is_data_fresh", lambda _last: True)
+    monkeypatch.setattr(
+        service,
+        "_is_intraday_data_stale",
+        lambda _symbol: False,
+    )
+
+    assert service.get_cached_only_fresh(
+        "AAPL",
+        required_as_of_date=date(2026, 3, 19),
+    ) is None
+    assert service.get_cached_only_fresh(
+        "AAPL",
+        required_as_of_date=date(2026, 3, 20),
+    ) is frame
+
+
+def test_get_many_cached_only_fresh_requires_requested_session(monkeypatch):
+    service = PriceCacheService(
+        redis_client=None,
+        session_factory=lambda: MagicMock(),
+    )
+    complete = pd.concat(
+        [
+            _price_df(date(2026, 3, 19), 122.0),
+            _price_df(date(2026, 3, 20), 123.0),
+        ]
+    )
+    missing_target = _price_df(date(2026, 3, 20), 123.0)
+    monkeypatch.setattr(
+        service,
+        "_get_many_from_database",
+        lambda symbols, period: {
+            "AAPL": (complete, date(2026, 3, 20)),
+            "MSFT": (missing_target, date(2026, 3, 20)),
+        },
+    )
+    monkeypatch.setattr(service, "_is_data_fresh", lambda _last: True)
+    monkeypatch.setattr(
+        service,
+        "_is_intraday_data_stale",
+        lambda _symbol: False,
+    )
+
+    result = service.get_many_cached_only_fresh(
+        ["AAPL", "MSFT"],
+        required_as_of_date=date(2026, 3, 19),
+    )
+
+    assert result["AAPL"] is complete
+    assert result["MSFT"] is None
 
 
 def test_get_many_cached_only_fresh_filters_stale_database_rows(monkeypatch):
@@ -1393,7 +1489,15 @@ def test_force_refresh_stale_intraday_skips_inactive_symbols(monkeypatch):
 
     fetched_batches = []
 
-    def fake_fetch(self, symbols, period="2y", start_batch_size=None):
+    def fake_fetch(
+        self,
+        symbols,
+        period="2y",
+        start_batch_size=None,
+        market=None,
+        progress_callback=None,
+    ):
+        del self, period, start_batch_size, market, progress_callback
         fetched_batches.append(list(symbols))
         return {symbol: _success_result(symbol) for symbol in symbols}
 

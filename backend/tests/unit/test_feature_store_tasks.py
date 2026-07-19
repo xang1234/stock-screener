@@ -23,6 +23,7 @@ from app.interfaces.tasks.feature_store_tasks import (
     _create_auto_scan_for_published_run,
     _enrich_feature_run_with_ibd_metadata,
     _fail_stale_feature_runs,
+    _is_market_trading_day,
     _repair_current_us_group_metadata,
     _upsert_feature_run_pointer,
     build_daily_snapshot,
@@ -98,13 +99,30 @@ class _NonSkippingUoW:
         return False
 
 
+def test_task_trading_day_guard_uses_market_calendar(monkeypatch):
+    calls = []
+
+    def is_trading_day(_self, market, day):
+        calls.append((market, day))
+        return True
+
+    monkeypatch.setattr(
+        "app.services.market_calendar_service.MarketCalendarService.is_trading_day",
+        is_trading_day,
+    )
+
+    target = date(2026, 2, 17)
+    assert _is_market_trading_day(target, market="US") is True
+    assert calls == [("US", target)]
+
+
 def test_build_daily_snapshot_normalizes_default_active_universe():
     fake_use_case = _FakeUseCase()
 
     with patch(
         "app.interfaces.tasks.feature_store_tasks.date"
     ) as mock_date, patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -169,7 +187,7 @@ def test_build_daily_snapshot_returns_failure_diagnostics(monkeypatch):
         lambda: _FakeUseCase(),
     )
     monkeypatch.setattr(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         lambda *_args, **_kwargs: True,
     )
 
@@ -210,7 +228,7 @@ def test_build_daily_snapshot_never_passes_legacy_dict_shape():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -240,7 +258,7 @@ def test_build_daily_snapshot_uses_default_scan_profile_when_not_provided():
     defaults = get_default_scan_profile("US")
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -272,7 +290,7 @@ def test_build_daily_snapshot_bootstrap_uses_lightweight_scan_profile():
     bootstrap_defaults = get_bootstrap_scan_profile("US")
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -311,7 +329,7 @@ def test_build_daily_snapshot_bootstrap_lifecycle_without_cache_gate_uses_full_p
     defaults = get_default_scan_profile("US")
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -346,7 +364,7 @@ def test_build_daily_snapshot_bootstrap_preserves_explicit_screener_names():
     explicit_screeners = ["setup_engine"]
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -447,7 +465,7 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.interfaces.tasks.feature_store_tasks.hash_scan_signature",
@@ -523,7 +541,7 @@ def test_build_daily_snapshot_bootstrap_skip_if_published_uses_cache_only_suppor
         return ",".join(symbols)
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.interfaces.tasks.feature_store_tasks.hash_scan_signature",
@@ -591,7 +609,7 @@ def test_build_daily_snapshot_skip_if_published_repairs_requested_pointer():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -688,7 +706,7 @@ def test_build_daily_snapshot_reraises_soft_time_limit():
             raise SoftTimeLimitExceeded()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -720,7 +738,7 @@ def test_build_daily_snapshot_reraises_soft_time_limit_when_failure_activity_pub
             raise SoftTimeLimitExceeded()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -751,7 +769,7 @@ def test_build_daily_snapshot_creates_auto_scan_after_publish():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -789,7 +807,7 @@ def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
         "app.utils.parallelism.os.cpu_count",
         return_value=4,
     ), patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -837,7 +855,7 @@ def test_build_daily_snapshot_static_daily_mode_keeps_setting_as_upper_bound_on_
         "app.utils.parallelism.os.cpu_count",
         return_value=16,
     ), patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -873,7 +891,7 @@ def test_build_daily_snapshot_static_daily_mode_uses_null_progress_sink():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -914,7 +932,7 @@ def test_build_daily_snapshot_bootstrap_gate_pass_wires_cache_only_without_null_
         "app.utils.parallelism.os.cpu_count",
         return_value=4,
     ), patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -992,7 +1010,7 @@ def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback(
             raise Retry(message=str(exc))
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -1045,7 +1063,7 @@ def test_build_daily_snapshot_bootstrap_gate_exhaustion_fails_with_coverage_repo
             raise AssertionError("retry must not be called after retry budget is exhausted")
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -1644,7 +1662,7 @@ def test_build_daily_snapshot_includes_cleaned_stale_runs_metadata():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -1676,7 +1694,7 @@ def test_build_daily_snapshot_enriches_published_run_metadata_after_publish():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -1805,7 +1823,7 @@ def test_build_daily_snapshot_publishes_market_activity():
     completed = []
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -1848,7 +1866,7 @@ def test_build_daily_snapshot_skips_disabled_market_by_default():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -1885,7 +1903,7 @@ def test_build_daily_snapshot_allows_disabled_market_when_runtime_gate_is_ignore
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
@@ -1925,7 +1943,7 @@ def test_build_daily_snapshot_does_not_ignore_market_gate_outside_static_mode():
     fake_use_case = _FakeUseCase()
 
     with patch(
-        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
         return_value=True,
     ), patch(
         "app.wiring.bootstrap.get_build_daily_snapshot_use_case",

@@ -195,7 +195,10 @@ class TestLookupChain:
         stale_row.from_currency = "HKD"
         stale_row.to_currency = "USD"
         stale_row.rate = 0.12
-        stale_row.as_of_date = date.today() - timedelta(days=1)
+        stale_row.as_of_date = (
+            FXService._latest_trading_close(date.today())
+            - timedelta(days=1)
+        )
         stale_row.source = "yfinance"
         calls = []
 
@@ -216,7 +219,10 @@ class TestLookupChain:
         stale_row.from_currency = "HKD"
         stale_row.to_currency = "USD"
         stale_row.rate = 0.12
-        stale_row.as_of_date = date.today() - timedelta(days=1)
+        stale_row.as_of_date = (
+            FXService._latest_trading_close(date.today())
+            - timedelta(days=1)
+        )
         stale_row.source = "yfinance"
         svc = _make_service(rate_fetcher=lambda c: None, db_rows=stale_row)
         quote = svc.get_usd_rate("HKD")
@@ -229,7 +235,10 @@ class TestLookupChain:
         stale_row.from_currency = "JPY"
         stale_row.to_currency = "USD"
         stale_row.rate = 0.0064
-        stale_row.as_of_date = date.today() - timedelta(days=1)
+        stale_row.as_of_date = (
+            FXService._latest_trading_close(date.today())
+            - timedelta(days=1)
+        )
         stale_row.source = "yfinance"
         calls = []
 
@@ -284,7 +293,10 @@ class TestLookupChain:
             from_currency="JPY",
             to_currency="USD",
             rate=0.0064,
-            as_of_date=date.today() - timedelta(days=1),
+            as_of_date=(
+                FXService._latest_trading_close(date.today())
+                - timedelta(days=1)
+            ),
             source="yfinance",
         )
         fresh_quote = FXQuote(

@@ -154,11 +154,12 @@ def compile_custom_criteria(
     mixed_market = _is_mixed_market(universe_market)
     market_cap_compatible = _is_market_cap_usd_compatible(universe_market)
 
-    # Price range -> JSON current_price
+    # ``price`` is the canonical logical field; persistence adapters map it
+    # to their physical current-price representation.
     p_min = flat.get("price_min")
     p_max = flat.get("price_max")
     if p_min is not None or p_max is not None:
-        spec.add_range("current_price", min_value=p_min, max_value=p_max)
+        spec.add_range("price", min_value=p_min, max_value=p_max)
         hard_gate_filters.append("price_range")
         if p_min is not None:
             representable.append("price_min")

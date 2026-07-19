@@ -60,7 +60,7 @@ It is read once at startup, so changing it means editing `.env` and recreating t
 | Route | Page | What it does |
 |-------|------|--------------|
 | `/` | Daily | Daily Snapshot, Key Markets, Themes, Watchlists, Stockbee MM tabs |
-| `/scan` | Scan | Multi-market screener: strategy defaults, 80+ filters, composite scoring, CSV export, chart drill-ins |
+| `/scan` | Scan | Multi-market screener: strategy defaults, 80+ filters, named AND/OR setups, composite scoring, CSV export, chart drill-ins |
 | `/breadth` | Breadth | StockBee-style breadth indicators, benchmark overlay, movers, trend windows |
 | `/groups` | Groups | IBD-style group/sector rankings, movers, constituents, history, and the RRG |
 | `/validation` | Backtest | Deterministic follow-through validation of published scan picks and theme alerts |
@@ -219,6 +219,39 @@ Benchmark freshness matters. Missing benchmark sessions count as `false` in the 
 - **Rating & classification** — RS rating, EPS rating, sector (GICS), IBD industry, theme membership, market.
 
 *Enhanced (Finviz-sourced) fields are US-centric and may be blank for non-US markets.*
+
+#### Grouped AND/OR logic builder
+
+The **Logic builder** turns flat result filters into explainable screening setups. It appears in the filter-panel header after a scan has completed (or been cancelled with results) when `FEATURE_GROUPED_SCAN_FILTERS=true` is enabled on the backend.
+
+![Completed scan with the Logic builder entry point in the filter-panel header](screenshots/scan-logic-builder-entry.jpg)
+*Open Logic builder from the filter-panel header on an existing scan — no scan migration or rerun is required*
+
+Use two layers to express the screen:
+
+- **Always require** — non-negotiable rules managed by the regular quick filters. Every matching stock must pass them.
+- **Named setups** — alternative, recognizable routes into the result set, such as *Breakout ready* or *Pullback candidate*. A setup can match **all** or **any** of its own rules and can be temporarily disabled without deleting it.
+
+Across named setups, choose:
+
+- **Match any setup (broader)** — `Always require AND (Setup A OR Setup B)`.
+- **Match all setups (narrower)** — `Always require AND Setup A AND Setup B`.
+
+![Build scan logic dialog with a named Breakout ready setup](screenshots/scan-logic-builder.jpg)
+*A named setup reads back as plain language while you build it; duplicate, disable, or delete setups without editing raw boolean syntax*
+
+**Workflow:**
+
+1. Apply ordinary quick filters for rules that must always hold.
+2. Open **Logic builder** and choose how named setups combine.
+3. Add a named setup, choose whether its rules match all/any, and add field rules.
+4. Select **Apply logic**. The results query, pagination, sorting, symbol navigation, and CSV export all use the same applied expression.
+5. Check the **Applied** summary and the named-setup chips on matching rows to understand why each stock qualified.
+
+![Applied grouped scan logic with result count, summary, and matched-setup chips](screenshots/scan-logic-builder-applied.jpg)
+*Applied logic shows the matching count, active setup count, combination rule, and the setup matched by each row*
+
+Saved filter presets preserve the grouped expression. Existing flat presets remain loadable and are converted when opened; saving or updating them writes the grouped format. Existing completed scans can be filtered immediately as long as their stored result rows contain the selected fields.
 
 ### Strategy presets
 

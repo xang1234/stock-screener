@@ -17,8 +17,9 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
-from app.domain.common.query import FilterSpec, PageSpec, QuerySpec, SortOrder, SortSpec
+from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.markets.catalog import get_market_catalog
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.default_filters import resolve_default_scan_filters
 from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth
@@ -252,8 +253,8 @@ def _query_scan_rows(
 ) -> list[dict[str, Any]]:
     query = GetScanResultsQuery(
         scan_id=scan_id,
-        query_spec=QuerySpec(
-            filters=filters,
+        query_spec=QuerySpec.from_filter_spec(
+            filters,
             sort=SortSpec(field="composite_score", order=SortOrder.DESC),
             page=PageSpec(page=1, per_page=DAILY_SNAPSHOT_TOP_RESULTS),
         ),
@@ -368,6 +369,7 @@ def build_daily_snapshot_payload(
         )
 
     anchor_date = _snapshot_anchor_date(scan)
+    market_entry = get_market_catalog().get(normalized)
     top_groups, groups_date = _build_top_groups(db, normalized, as_of_date=anchor_date)
     breadth_date = _latest_breadth_date(db, normalized, as_of_date=anchor_date)
     key_markets = build_key_market_entries(db, normalized, as_of_date=anchor_date)
@@ -380,13 +382,14 @@ def build_daily_snapshot_payload(
     freshness = build_snapshot_freshness(
         base_freshness=_scan_freshness(scan),
         anchor=anchor_date,
-        market_timezone=get_market_catalog().get(normalized).display_timezone,
+        market_timezone=market_entry.display_timezone,
         section_dates=SnapshotSectionDates.from_raw(
             breadth=breadth_date,
             groups=groups_date,
             exposure=exposure_date,
         ),
         key_markets=key_markets,
+        groups_applicable=market_entry.capabilities.group_rankings,
     )
 
     return {

@@ -2,6 +2,18 @@
 """
 Test the scan API to verify multi-screener functionality.
 """
+import os
+
+import pytest
+
+pytestmark = pytest.mark.live_service
+
+if os.getenv("RUN_LIVE_SERVICE_TESTS") != "1":
+    pytest.skip(
+        "requires RUN_LIVE_SERVICE_TESTS=1 and a running backend",
+        allow_module_level=True,
+    )
+
 import requests
 import time
 import json

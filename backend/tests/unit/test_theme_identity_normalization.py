@@ -93,6 +93,7 @@ def test_extract_from_content_filters_empty_and_unknown_themes():
         content="body",
         source_name="src",
         source_type="news",
+        source_language=None,
         published_at=datetime.utcnow(),
         title="title",
     )

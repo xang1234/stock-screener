@@ -17,6 +17,11 @@ from app.schemas.universe import (
 class TestUniverseDefinitionConstruction:
     """Test valid construction for each UniverseType."""
 
+    def test_schema_reexports_domain_universe_type(self):
+        from app.domain.universe import UniverseType as DomainUniverseType
+
+        assert UniverseType is DomainUniverseType
+
     def test_market_values_come_from_market_catalog(self):
         assert [market.value for market in Market] == get_market_catalog().supported_market_codes()
 

@@ -5,6 +5,39 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
+def test_full_refresh_header_detection_requires_mapping():
+    from app.services.price_refresh_planning import PriceRefreshMode
+    from app.services.price_refresh_workflow import PriceRefreshWorkflow
+
+    workflow = object.__new__(PriceRefreshWorkflow)
+    workflow._deps = SimpleNamespace(
+        market_gateway=SimpleNamespace(
+            get_eastern_now=lambda: SimpleNamespace(
+                weekday=lambda: 0,
+                hour=10,
+            )
+        )
+    )
+
+    malformed = SimpleNamespace(
+        request=SimpleNamespace(headers=object())
+    )
+    manual = SimpleNamespace(
+        request=SimpleNamespace(headers={"origin": "manual"})
+    )
+
+    assert workflow._should_reject_full_refresh(
+        PriceRefreshMode.FULL,
+        malformed,
+        None,
+    ) is True
+    assert workflow._should_reject_full_refresh(
+        PriceRefreshMode.FULL,
+        manual,
+        None,
+    ) is False
+
+
 def test_price_refresh_outcome_serializes_typed_github_metadata():
     from app.services.price_refresh_planning import (
         GitHubSeedOutcome,

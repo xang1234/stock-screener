@@ -257,6 +257,7 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
         calculate_daily_breadth_with_gapfill.si(
             market=market_code,
             calculation_date=as_of_date,
+            execution_policy="refresh_guarded",
         ).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
@@ -274,6 +275,7 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
         calculate_daily_group_rankings_with_gapfill.si(
             market=market_code,
             calculation_date=as_of_date,
+            execution_policy="refresh_guarded",
         ).set(
             queue=market_jobs_queue_for_market(market_code)
         ),

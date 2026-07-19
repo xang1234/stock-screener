@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import textwrap
 
 
@@ -40,7 +41,7 @@ def _fallback_download_script() -> str:
 def test_static_site_market_build_failures_are_not_marked_continue_on_error() -> None:
     build_market_job = _build_market_job()
     export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
-        "\n      - name: Upload market diagnostics",
+        "\n      - name: Upload market status",
         1,
     )[0]
 
@@ -89,7 +90,7 @@ def test_static_site_market_export_skips_artifact_steps_for_closed_market() -> N
 def test_static_site_market_export_soft_skips_no_current_artifact_exit_code() -> None:
     build_market_job = _build_market_job()
     export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
-        "\n      - name: Upload market diagnostics",
+        "\n      - name: Upload market status",
         1,
     )[0]
 
@@ -97,6 +98,28 @@ def test_static_site_market_export_soft_skips_no_current_artifact_exit_code() ->
     assert "has_artifact=false" in export_step
     assert "fallback artifacts" in export_step
     assert "no current market artifact will be uploaded" in export_step
+
+
+def test_static_site_uploads_canonical_market_status_after_export() -> None:
+    build_market_job = _build_market_job()
+    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+        "\n      - name: Upload market status",
+        1,
+    )[0]
+    status_step = build_market_job.split("      - name: Upload market status\n", 1)[1].split(
+        "\n      - name: Upload market diagnostics",
+        1,
+    )[0]
+
+    assert "python -m app.scripts.export_static_market_artifact" in export_step
+    assert "write_market_status" not in export_step
+    assert "json_reason" not in export_step
+    assert "cat >" not in export_step
+    assert "if: ${{ always() }}" in status_step
+    assert "uses: actions/upload-artifact@v4" in status_step
+    assert "name: static-market-status-${{ matrix.market }}" in status_step
+    assert "path: /tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json" in status_step
+    assert "if-no-files-found: error" in status_step
 
 
 def test_static_site_uploads_market_diagnostics_after_export() -> None:
@@ -116,6 +139,8 @@ def test_static_site_uploads_market_diagnostics_after_export() -> None:
 def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:
     combine_job = _combine_and_build_job()
 
+    assert "needs: [select-markets, build-market]" in combine_job
+    assert "needs.select-markets.outputs.markets" in combine_job
     assert "Download per-market fallback artifacts" in combine_job
     assert "Download current market artifacts" in combine_job
     assert "/tmp/static-market-artifacts-current" in combine_job
@@ -140,6 +165,21 @@ def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts
     assert "isinstance(payload, dict)" in combine_job
     assert "isinstance(page, dict)" in combine_job
     assert "Unexpected GitHub API response shape" in combine_job
+
+
+def test_static_site_validation_uses_python_module_not_inline_control_plane() -> None:
+    combine_job = _combine_and_build_job()
+    validation_step = combine_job.split("      - name: Validate market artifacts\n", 1)[1].split(
+        "\n      - name: Combine static data bundle",
+        1,
+    )[0]
+
+    assert "python -m app.scripts.validate_static_market_artifacts" in validation_step
+    assert "--current-dir /tmp/static-market-artifacts-current" in validation_step
+    assert "--fallback-dir /tmp/static-market-artifacts-fallback" in validation_step
+    assert '--selected-markets "${SELECTED_MARKETS}"' in validation_step
+    assert "python - <<'PY'" not in validation_step
+    assert "snapshot-failure.json" not in validation_step
 
 
 def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tmp_path) -> None:
@@ -175,7 +215,9 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
                 ]}}]))
             elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
                 print(json.dumps([{{"artifacts": [
+                    {{"name": "static-market-diagnostics-CN", "expired": False}},
                     {{"name": "static-market-HK", "expired": False}},
+                    {{"name": "static-market-status-CN", "expired": False}},
                     {{"name": "static-market-US", "expired": False}},
                     {{"name": "static-market-TW", "expired": False}}
                 ]}}]))
@@ -210,7 +252,7 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
 
     try:
         result = subprocess.run(
-            ["python", "-c", _fallback_download_script()],
+            [sys.executable, "-c", _fallback_download_script()],
             check=True,
             capture_output=True,
             text=True,
@@ -222,6 +264,8 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
             for line in downloads_log.read_text(encoding="utf-8").splitlines()
         ]
         assert downloads == [{"artifact": "static-market-TW"}]
+        assert not (fallback_dir / "static-market-diagnostics-CN").exists()
+        assert not (fallback_dir / "static-market-status-CN").exists()
         assert not (fallback_dir / "static-market-US").exists()
         assert not (fallback_dir / "static-market-HK").exists()
         assert (fallback_dir / "static-market-TW" / "manifest.market.json").exists()

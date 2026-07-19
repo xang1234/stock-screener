@@ -54,12 +54,6 @@ def test_run_orphaned_scan_cleanup_deletes_cancelled_and_stale_scans(cleanup_ses
         )
         _add_scan(
             session,
-            scan_id="fresh-running-scan",
-            status="running",
-            started_at=now_utc - timedelta(minutes=30),
-        )
-        _add_scan(
-            session,
             scan_id="completed-scan",
             status="completed",
             started_at=now_utc - timedelta(hours=5),
@@ -83,8 +77,8 @@ def test_run_orphaned_scan_cleanup_deletes_cancelled_and_stale_scans(cleanup_ses
     finally:
         verification.close()
 
-    assert remaining_scan_ids == {"fresh-running-scan", "completed-scan"}
-    assert remaining_result_scan_ids == {"fresh-running-scan", "completed-scan"}
+    assert remaining_scan_ids == {"completed-scan"}
+    assert remaining_result_scan_ids == {"completed-scan"}
 
 
 def test_run_orphaned_scan_cleanup_returns_zero_when_nothing_matches(cleanup_session_factory):

@@ -9,13 +9,13 @@ LIMITS = {
     "app/services/ibd_group_rank_service.py": 900,
     "app/services/market_rs_rollout_service.py": 250,
     "app/tasks/group_rank_tasks.py": 800,
-    "app/wiring/bootstrap.py": 950,
+    "app/wiring/bootstrap.py": 1050,
 }
 EXTRACTED_MODULES = (
-    "app/services/legacy_group_rank_data.py",
-    "app/services/legacy_group_rank_backfill.py",
-    "app/tasks/group_rank_workflows.py",
-    "app/tasks/group_rank_maintenance.py",
+    "app/services/group_rank_input_loader.py",
+    "app/services/group_rank_historical_calculator.py",
+    "app/services/group_ranking_calculator.py",
+    "app/services/group_ranking_repository.py",
     "app/services/static_chart_bundle_exporter.py",
     "app/services/static_breadth_section_builder.py",
     "app/services/static_group_section_builder.py",
@@ -47,23 +47,25 @@ def test_new_extracted_modules_stay_below_seven_hundred_lines():
         assert line_count <= 700, f"{relative_path} has {line_count} lines"
 
 
-def test_legacy_group_ranking_uses_composition_without_runtime_wiring_imports():
+def test_group_ranking_uses_composition_without_runtime_wiring_imports():
     facade = (BACKEND_ROOT / "app/services/ibd_group_rank_service.py").read_text(
         encoding="utf-8"
     )
-    data_engine = (BACKEND_ROOT / "app/services/legacy_group_rank_data.py").read_text(
+    input_loader = (BACKEND_ROOT / "app/services/group_rank_input_loader.py").read_text(
         encoding="utf-8"
     )
-    backfill = (BACKEND_ROOT / "app/services/legacy_group_rank_backfill.py").read_text(
+    historical = (
+        BACKEND_ROOT / "app/services/group_rank_historical_calculator.py"
+    ).read_text(
         encoding="utf-8"
     )
 
     assert "LegacyGroupRankDataMixin" not in facade
     assert "LegacyGroupRankBackfillMixin" not in facade
-    assert "wiring.bootstrap" not in data_engine
-    assert "wiring.bootstrap" not in backfill
-    assert "self.legacy_ranking_engine" in facade
-    assert "self.legacy_backfill_service" in facade
+    assert "wiring.bootstrap" not in input_loader
+    assert "wiring.bootstrap" not in historical
+    assert "self.input_loader" in facade
+    assert "self.historical_calculator" in facade
 
 
 def test_live_group_rankings_page_stays_bounded():

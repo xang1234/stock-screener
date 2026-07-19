@@ -394,6 +394,27 @@ class TestDailySnapshotDateCoherence:
 
         assert status == "future_section_data"
 
+    def test_fresh_market_without_group_rankings_is_coherent(self):
+        anchor = date(2026, 6, 11)
+        market = daily_snapshot_service.get_market_catalog().get("DE")
+
+        freshness = snapshot_date_coherence.build_snapshot_freshness(
+            base_freshness={},
+            anchor=anchor,
+            market_timezone=market.display_timezone,
+            section_dates=snapshot_date_coherence.SnapshotSectionDates(
+                breadth=anchor,
+                groups=None,
+                exposure=anchor,
+            ),
+            key_markets=[{"symbol": "^GDAXI", "latest_date": anchor}],
+            groups_applicable=market.capabilities.group_rankings,
+        )
+
+        assert market.capabilities.group_rankings is False
+        assert freshness["groups_latest_date"] is None
+        assert freshness["date_coherence_status"] == "coherent"
+
     def test_payload_pins_latest_sections_to_scan_as_of_date(self, monkeypatch):
         class FakeBreadthQuery:
             def __init__(self):

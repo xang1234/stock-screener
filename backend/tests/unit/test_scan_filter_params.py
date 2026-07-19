@@ -1,6 +1,10 @@
 from inspect import signature
 
-from app.api.v1.scan_filter_params import parse_scan_filters
+import pytest
+from fastapi import HTTPException
+
+from app.api.v1.scan_filter_params import parse_scan_filters, parse_scan_sort
+from app.domain.common.query import SortOrder
 
 
 def test_parse_scan_filters_maps_ibd_group_rank_range():
@@ -35,3 +39,20 @@ def test_parse_scan_filters_maps_rs_line_leadership_booleans():
     assert by_field["rs_line_new_high"] is True
     assert by_field["rs_line_new_high_before_price"] is False
     assert by_field["rs_line_blue_dot_recent"] is True
+
+
+def test_parse_scan_sort_rejects_unknown_fields_and_orders():
+    with pytest.raises(HTTPException) as field_error:
+        parse_scan_sort("not_a_field", "desc")
+    assert field_error.value.status_code == 422
+
+    with pytest.raises(HTTPException) as order_error:
+        parse_scan_sort("composite_score", "sideways")
+    assert order_error.value.status_code == 422
+
+
+def test_parse_scan_sort_normalizes_supported_order():
+    sort = parse_scan_sort("rs_rating", "ASC")
+
+    assert sort.field == "rs_rating"
+    assert sort.order == SortOrder.ASC

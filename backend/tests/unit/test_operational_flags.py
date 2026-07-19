@@ -280,8 +280,14 @@ class TestMultipleFlags:
 class TestToPayload:
     """Verify InvalidationFlag.to_payload() integration."""
 
-    def test_flag_serializes_to_code_string(self):
+    def test_flag_serializes_to_structured_payload(self):
         inputs = OperationalFlagInputs(distance_to_pivot_pct=15.0)
         flags = compute_operational_flags(inputs, DEFAULT_PARAMS)
         payloads = [f.to_payload() for f in flags]
-        assert "too_extended" in payloads
+        assert payloads == [
+            {
+                "code": "too_extended",
+                "message": "too extended",
+                "severity": "medium",
+            }
+        ]

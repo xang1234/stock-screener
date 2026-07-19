@@ -25,12 +25,11 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import date
-from typing import Iterator, Protocol, Sequence
-
-import pandas_market_calendars as mcal
+from typing import Callable, Iterator, Mapping, Protocol, Sequence
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
+from app.domain.feature_store.bootstrap_coverage import normalize_bootstrap_gate_report
 from app.domain.feature_store.models import (
     RATING_TO_INT,
     FeatureRowWrite,
@@ -53,10 +52,6 @@ from app.domain.scanning.ports import (
     StockDataProvider,
     StockScanner,
 )
-from app.services.bootstrap_cache_coverage import (
-    evaluate_bootstrap_cache_coverage,
-    normalize_bootstrap_gate_report,
-)
 from app.domain.providers.price_symbol_support import split_supported_price_symbols
 from app.use_cases.feature_store.publish_run import (
     PublishFeatureRunUseCase,
@@ -64,9 +59,6 @@ from app.use_cases.feature_store.publish_run import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Singleton calendar instance (thread-safe, immutable schedule data).
-_nyse_calendar = mcal.get_calendar("NYSE")
 
 MAX_FAILURE_DIAGNOSTIC_SAMPLES = 50
 
@@ -77,9 +69,8 @@ MAX_FAILURE_DIAGNOSTIC_SAMPLES = 50
 
 
 def _is_us_trading_day(dt: date) -> bool:
-    """Check if *dt* is a valid US trading day using the NYSE calendar."""
-    schedule = _nyse_calendar.schedule(start_date=dt, end_date=dt)
-    return len(schedule) > 0
+    """Compatibility hook for tests that construct the use case without wiring."""
+    raise ValidationError(f"No market calendar configured for US on {dt}")
 
 
 def _chunked(seq: Sequence[str], size: int) -> Iterator[list[str]]:
@@ -309,6 +300,9 @@ class MarketCalendarPort(Protocol):
         ...
 
 
+BootstrapCoverageEvaluator = Callable[..., Mapping[str, object]]
+
+
 # ── Use Case ─────────────────────────────────────────────────────────────
 
 
@@ -325,11 +319,13 @@ class BuildDailyFeatureSnapshotUseCase:
         data_provider: StockDataProvider | None = None,
         market_calendar: MarketCalendarPort | None = None,
         market_rs_reader: MarketRsReader | None = None,
+        bootstrap_coverage_evaluator: BootstrapCoverageEvaluator | None = None,
     ) -> None:
         self._scanner = scanner
         self._data_provider = data_provider
         self._market_calendar = market_calendar
         self._market_rs_reader = market_rs_reader
+        self._bootstrap_coverage_evaluator = bootstrap_coverage_evaluator
 
     def execute(
         self,
@@ -362,17 +358,24 @@ class BuildDailyFeatureSnapshotUseCase:
                 supported_symbols, unsupported_symbols = split_supported_price_symbols(symbols)
                 bootstrap_gate_report = dict(cmd.bootstrap_coverage_report or {})
                 if not bootstrap_gate_report and supported_symbols:
+                    if self._bootstrap_coverage_evaluator is None:
+                        raise RuntimeError(
+                            "Bootstrap cache-only coverage gate requires an evaluator "
+                            "or bootstrap_coverage_report"
+                        )
                     session = getattr(uow, "session", None)
                     if session is None:
                         raise RuntimeError(
-                            "Bootstrap cache-only coverage gate requires a SQLAlchemy session "
+                            "Bootstrap cache-only coverage gate requires a persistence session "
                             "or bootstrap_coverage_report"
                         )
-                    bootstrap_gate_report = evaluate_bootstrap_cache_coverage(
-                        session,
-                        market=cmd.market,
-                        symbols=supported_symbols,
-                        as_of_date=cmd.as_of_date,
+                    bootstrap_gate_report = dict(
+                        self._bootstrap_coverage_evaluator(
+                            session,
+                            market=cmd.market,
+                            symbols=supported_symbols,
+                            as_of_date=cmd.as_of_date,
+                        )
                     )
                 elif not bootstrap_gate_report:
                     bootstrap_gate_report = {"eligible": False}

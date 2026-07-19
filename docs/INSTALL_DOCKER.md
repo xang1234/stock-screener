@@ -77,8 +77,8 @@ ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .e
 ### Release and Rollback
 
 - Push to `main` to publish rolling `main`, `sha-*`, and `latest` image tags to GHCR
-- Push a git tag like `v1.2.0` to publish immutable release tags
-- **Deploy:** Set `APP_IMAGE_TAG=v1.2.0` in `.env.docker`, run `pull` + `up -d --no-build`
+- Push a git tag like `v1.3.0` to publish immutable release tags
+- **Deploy:** Set `APP_IMAGE_TAG=v1.3.0` in `.env.docker`, run `pull` + `up -d --no-build`
 - **Roll back:** Change `APP_IMAGE_TAG` to the previous tag and redeploy
 
 If the repository or package is private, authenticate first:

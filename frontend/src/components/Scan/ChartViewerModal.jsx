@@ -13,7 +13,12 @@ import CloseIcon from '@mui/icons-material/Close';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import PeopleIcon from '@mui/icons-material/People';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAllFilteredSymbols, getSetupDetails, getSingleResult } from '../../api/scans';
+import {
+  getAllFilteredSymbols,
+  getSetupDetails,
+  getSingleResult,
+  queryScanSymbols,
+} from '../../api/scans';
 import { prefetchPriceHistoryBatch } from '../../api/priceHistory';
 import { getStockFundamentals, prefetchFundamentalsBatch } from '../../api/stocks';
 import { getGroupDetail } from '../../api/groups';
@@ -26,6 +31,10 @@ import SetupEngineDrawer from './SetupEngineDrawer';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import MarketThemesList from '../Stock/MarketThemesList';
 import { getGroupRankColor } from '../../utils/colorUtils';
+import {
+  buildScanQueryRequest,
+  stableExpressionKey,
+} from '../../features/scan/filterExpressionModel';
 
 const inferMarketFromSymbol = (symbol) => {
   const normalized = String(symbol || '').toUpperCase();
@@ -48,6 +57,7 @@ const inferMarketFromSymbol = (symbol) => {
  * @param {string} props.initialSymbol - Symbol to start with
  * @param {string} props.scanId - Scan ID for fetching results
  * @param {Object} props.filters - Current filter state object (from ScanPage)
+ * @param {Object|null} props.expression - Exact applied grouped expression
  * @param {string} props.sortBy - Current sort field
  * @param {string} props.sortOrder - Current sort order
  * @param {Array<string>} props.navigationSymbolsOverride - Explicit navigation set
@@ -59,6 +69,7 @@ function ChartViewerModal({
   initialSymbol,
   scanId,
   filters = {},
+  expression = null,
   sortBy = 'composite_score',
   sortOrder = 'desc',
   navigationSymbolsOverride = null,
@@ -77,6 +88,14 @@ function ChartViewerModal({
 
   // Generate stable cache key for filters
   const filterCacheKey = useMemo(() => getStableFilterKey(filters), [filters]);
+  const expressionCacheKey = useMemo(
+    () => (expression ? stableExpressionKey(expression) : null),
+    [expression],
+  );
+  const symbolQueryRequest = useMemo(
+    () => (expression ? buildScanQueryRequest(expression, { sortBy, sortOrder }) : null),
+    [expression, sortBy, sortOrder],
+  );
 
   // Invalidate cached symbol list when sort changes so navigation always
   // reflects the current table order — even if the modal is currently closed.
@@ -91,8 +110,20 @@ function ChartViewerModal({
 
   // Fetch all filtered symbols for navigation (sort-aware)
   const { data: allSymbols, isLoading: symbolsLoading } = useQuery({
-    queryKey: ['allFilteredSymbols', scanId, filterCacheKey, sortBy, sortOrder],
-    queryFn: () => getAllFilteredSymbols(scanId, filterParams),
+    queryKey: [
+      'allFilteredSymbols',
+      scanId,
+      expressionCacheKey ?? filterCacheKey,
+      sortBy,
+      sortOrder,
+    ],
+    queryFn: async ({ signal }) => {
+      if (symbolQueryRequest) {
+        const response = await queryScanSymbols(scanId, symbolQueryRequest, { signal });
+        return response.symbols;
+      }
+      return getAllFilteredSymbols(scanId, filterParams);
+    },
     enabled: open && !!scanId && !Array.isArray(navigationSymbolsOverride),
     staleTime: 5000, // 5 seconds — short enough to catch mid-session sort changes
     refetchOnMount: 'always', // Always refetch when modal opens to pick up sort changes

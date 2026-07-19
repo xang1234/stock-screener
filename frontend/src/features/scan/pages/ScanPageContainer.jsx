@@ -4,10 +4,9 @@ import { Box, CircularProgress, Container, Paper, Typography } from '@mui/materi
 import {
   cancelScan,
   createScan,
-  exportScanResults,
+  exportScanResultsQuery,
   getFilterOptions,
   getScanBootstrap,
-  getScanResults,
   getScans,
   getScanStatus,
   getUniverseStats,
@@ -15,7 +14,6 @@ import {
 } from '../../../api/scans';
 import FilterPanel from '../components/FilterPanelContainer';
 import ChartViewerModal from '../../../components/Scan/ChartViewerModalLazy';
-import { buildFilterParams, getStableFilterKey } from '../../../utils/filterUtils';
 import {
   fetchPriceHistory,
   prefetchPriceHistoryBatch,
@@ -33,7 +31,19 @@ import { normalizeScanFilterOptions } from '../filterOptions';
 import { DEFAULT_FILTER_KEY } from '../constants';
 import ScanControlBar from '../components/ScanControlBar';
 import ScanResultsSection from '../components/ScanResultsSection';
+import GuidedFilterBuilderDialog from '../components/GuidedFilterBuilderDialog';
+import {
+  buildScanQueryRequest,
+} from '../filterExpressionModel';
+import {
+  legacyFiltersToExpression,
+} from '../legacyFilterExpression';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
+import {
+  createScanFilterQuery,
+  stableScanFilterQueryKey,
+} from '../hooks/useScanFilterQueryState';
+import { useScanResultsController } from '../hooks/useScanResultsController';
 import {
   buildUniverseDef,
   parseLegacyUniverseDefault,
@@ -45,6 +55,10 @@ import {
 } from '../runtimeUniverseSelections';
 
 const INITIAL_UNIVERSE_SELECTION = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
+const DEFAULT_SCAN_FILTERS = buildDefaultScanFilters();
+const DEFAULT_SCAN_EXPRESSION = legacyFiltersToExpression(DEFAULT_SCAN_FILTERS);
+const DEFAULT_SCAN_QUERY = createScanFilterQuery(DEFAULT_SCAN_EXPRESSION);
+const DEFAULT_SCAN_QUERY_KEY = stableScanFilterQueryKey(DEFAULT_SCAN_QUERY);
 
 // "No market auto-loaded yet" marker for the scan auto-load ref.
 const NO_MARKET_AUTOLOADED = Symbol('no-market-autoloaded');
@@ -69,7 +83,7 @@ function normalizeScanWarnings(warnings) {
 }
 
 function ScanPage() {
-  const { runtimeReady, uiSnapshots, scanDefaults, universeOptions } = useRuntime();
+  const { runtimeReady, uiSnapshots, scanDefaults, universeOptions, features } = useRuntime();
   const { selectedMarket: globalMarket } = useMarket();
   const { activeProfileDetail } = useStrategyProfileData();
   const scanDefaultsAppliedRef = useRef(null);
@@ -92,12 +106,33 @@ function ScanPage() {
   const [selectedScreeners, setSelectedScreeners] = useState(DEFAULT_SCAN_DEFAULTS.screeners);
   const [compositeMethod, setCompositeMethod] = useState(DEFAULT_SCAN_DEFAULTS.composite_method);
   const [customFilters, setCustomFilters] = useState(DEFAULT_SCAN_DEFAULTS.criteria.custom_filters);
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(50);
-  const [sortBy, setSortBy] = useState('composite_score');
-  const [sortOrder, setSortOrder] = useState('desc');
-  const [filters, setFilters] = useState(buildDefaultScanFilters);
-  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  const groupedFilteringEnabled = features?.grouped_scan_filters === true;
+  const {
+    filters,
+    draftExpression,
+    sortBy,
+    sortOrder,
+    requestExpression,
+    editQuickFilter,
+    resetFilters,
+    requestPage,
+    requestPerPage,
+    requestSort,
+    requestQuery,
+    displayedQuery,
+    displayedResultsData,
+    stableFilterKey,
+    resultsLoading,
+    resultsFetching,
+    resultsError,
+    refetchResults,
+  } = useScanResultsController({
+    currentScanId,
+    scanStatus,
+    initialFilters: DEFAULT_SCAN_FILTERS,
+    initialExpression: DEFAULT_SCAN_EXPRESSION,
+  });
+  const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -157,10 +192,17 @@ function ScanPage() {
       }
 
       queryClient.setQueryData(['filterOptions', selectedScanId], payload.filter_options ?? null);
-      queryClient.setQueryData(
-        ['scanResults', selectedScanId, 1, 50, 'composite_score', 'desc', DEFAULT_FILTER_KEY],
-        payload.results_page ?? null
-      );
+      if (payload.results_page != null) {
+        queryClient.setQueryData(
+          ['scanResultsQuery', selectedScanId, DEFAULT_SCAN_QUERY_KEY],
+          {
+            data: payload.results_page,
+            request: DEFAULT_SCAN_QUERY,
+            requestKey: DEFAULT_SCAN_QUERY_KEY,
+            scanId: selectedScanId,
+          }
+        );
+      }
       if (payload.selected_scan_status) {
         queryClient.setQueryData(['scanStatus', selectedScanId], payload.selected_scan_status);
       } else if (payload.selected_scan) {
@@ -188,13 +230,10 @@ function ScanPage() {
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
-    filters,
     sortBy,
     sortOrder,
-    setFilters,
-    setSortBy,
-    setSortOrder,
-    setPage,
+    applyQuery: requestQuery,
+    expression: draftExpression,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -230,20 +269,13 @@ function ScanPage() {
     snapshotEnabled,
   ]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedFilters(filters);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [filters]);
-
   const handleLoadScan = useCallback(
     async (scanId) => {
       if (!scanId) {
         setCurrentScanId(null);
         setBootstrappedScanId(null);
         setScanStatus(null);
-        setPage(1);
+        requestPage(1);
         autoLoadedMarketRef.current = globalMarketRef.current;
         return;
       }
@@ -253,7 +285,7 @@ function ScanPage() {
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
       setScanStatus(knownStatus);
-      setPage(1);
+      requestPage(1);
 
       if (snapshotEnabled) {
         try {
@@ -276,7 +308,7 @@ function ScanPage() {
         setScanStatus(knownStatus);
       }
     },
-    [applyScanBootstrapSnapshot, queryClient, snapshotEnabled]
+    [applyScanBootstrapSnapshot, queryClient, requestPage, snapshotEnabled]
   );
 
   const { data: universeStats, isLoading: statsLoading } = useQuery({
@@ -335,7 +367,7 @@ function ScanPage() {
       setCurrentScanId(data.scan_id);
       setBootstrappedScanId(null);
       setScanStatus(data.status);
-      setPage(1);
+      requestPage(1);
       refetchScans();
     },
   });
@@ -369,31 +401,6 @@ function ScanPage() {
     refetchIntervalInBackground: false,
     staleTime: 0,
     gcTime: 0,
-  });
-
-  const getApiFilterParams = useCallback(
-    () => buildFilterParams(debouncedFilters, { page, perPage, sortBy, sortOrder }),
-    [debouncedFilters, page, perPage, sortBy, sortOrder]
-  );
-
-  const stableFilterKey = useMemo(() => getStableFilterKey(debouncedFilters), [debouncedFilters]);
-
-  const {
-    data: resultsData,
-    isLoading: resultsLoading,
-    refetch: refetchResults,
-  } = useQuery({
-    queryKey: ['scanResults', currentScanId, page, perPage, sortBy, sortOrder, stableFilterKey],
-    queryFn: () => getScanResults(currentScanId, getApiFilterParams()),
-    enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
-    staleTime: 10 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    // Keep the previous page visible across page/sort/filter changes, but
-    // only within the same scan — a scan switch (e.g. via the global market
-    // selector) must not show another scan's rows while loading.
-    placeholderData: (previousData, previousQuery) => (
-      previousQuery?.queryKey?.[1] === currentScanId ? previousData : undefined
-    ),
   });
 
   useEffect(() => {
@@ -498,24 +505,19 @@ function ScanPage() {
   };
 
   const handleSortChange = (field, nextOrder) => {
-    setSortBy(field);
-    setSortOrder(nextOrder);
-    setPage(1);
+    requestSort(field, nextOrder);
   };
 
   const handlePerPageChange = (nextPerPage) => {
-    setPerPage(nextPerPage);
-    setPage(1);
+    requestPerPage(nextPerPage);
   };
 
-  const handleFilterChange = (newFilters) => {
-    setFilters(newFilters);
-    setPage(1);
+  const handleFilterChange = (key, value) => {
+    editQuickFilter(key, value);
   };
 
   const handleResetFilters = () => {
-    setFilters(buildDefaultScanFilters());
-    setPage(1);
+    resetFilters(DEFAULT_SCAN_FILTERS);
     presetState.clearActivePreset();
   };
 
@@ -527,8 +529,13 @@ function ScanPage() {
 
   const handleExport = async () => {
     try {
-      const exportParams = buildFilterParams(debouncedFilters, { sortBy, sortOrder });
-      const blob = await exportScanResults(currentScanId, exportParams);
+      const blob = await exportScanResultsQuery(
+        currentScanId,
+        buildScanQueryRequest(displayedQuery.expression, {
+          sortBy: displayedQuery.sortBy,
+          sortOrder: displayedQuery.sortOrder,
+        }),
+      );
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -560,21 +567,21 @@ function ScanPage() {
   );
 
   useEffect(() => {
-    if (!resultsData?.results || resultsData.results.length === 0) {
+    if (!displayedResultsData?.results || displayedResultsData.results.length === 0) {
       return;
     }
     if (
       bootstrappedScanId === currentScanId &&
-      page === 1 &&
-      perPage === 50 &&
-      sortBy === 'composite_score' &&
-      sortOrder === 'desc' &&
+      displayedQuery.page === 1 &&
+      displayedQuery.perPage === 50 &&
+      displayedQuery.sortBy === 'composite_score' &&
+      displayedQuery.sortOrder === 'desc' &&
       stableFilterKey === DEFAULT_FILTER_KEY
     ) {
       return;
     }
 
-    const visibleSymbols = resultsData.results
+    const visibleSymbols = displayedResultsData.results
       .slice(0, 20)
       .map((result) => result.symbol)
       .filter(Boolean);
@@ -603,12 +610,12 @@ function ScanPage() {
   }, [
     bootstrappedScanId,
     currentScanId,
-    page,
-    perPage,
     queryClient,
-    resultsData?.results,
-    sortBy,
-    sortOrder,
+    displayedResultsData?.results,
+    displayedQuery.page,
+    displayedQuery.perPage,
+    displayedQuery.sortBy,
+    displayedQuery.sortOrder,
     stableFilterKey,
   ]);
 
@@ -683,20 +690,25 @@ function ScanPage() {
           saveDialogError={presetState.saveDialogError}
           onSaveDialogClose={presetState.handleSaveDialogClose}
           onSaveDialogSave={presetState.handleSaveDialogSave}
+          groupedFilteringEnabled={groupedFilteringEnabled}
+          expression={draftExpression}
+          onOpenLogicBuilder={() => setLogicBuilderOpen(true)}
         />
       )}
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (
         <ScanResultsSection
           resultsLoading={resultsLoading}
-          resultsData={resultsData}
-          filters={filters}
+          resultsData={displayedResultsData}
+          expression={displayedQuery.expression}
+          resultsFetching={resultsFetching}
+          resultsError={resultsError}
           onExport={handleExport}
-          page={page}
-          perPage={perPage}
-          sortBy={sortBy}
-          sortOrder={sortOrder}
-          onPageChange={setPage}
+          page={displayedQuery.page}
+          perPage={displayedQuery.perPage}
+          sortBy={displayedQuery.sortBy}
+          sortOrder={displayedQuery.sortOrder}
+          onPageChange={requestPage}
           onPerPageChange={handlePerPageChange}
           onSortChange={handleSortChange}
           onOpenChart={handleOpenChart}
@@ -718,11 +730,26 @@ function ScanPage() {
         onClose={() => setChartModalOpen(false)}
         initialSymbol={selectedSymbol}
         scanId={currentScanId}
-        filters={debouncedFilters}
-        sortBy={sortBy}
-        sortOrder={sortOrder}
-        currentPageResults={resultsData?.results || []}
+        filters={filters}
+        expression={displayedQuery.expression}
+        sortBy={displayedQuery.sortBy}
+        sortOrder={displayedQuery.sortOrder}
+        currentPageResults={displayedResultsData?.results || []}
       />
+
+      {groupedFilteringEnabled && (
+        <GuidedFilterBuilderDialog
+          open={logicBuilderOpen}
+          expression={draftExpression}
+          onClose={() => setLogicBuilderOpen(false)}
+          onApply={(nextExpression) => {
+            requestExpression(nextExpression);
+            setLogicBuilderOpen(false);
+            presetState.clearActivePreset();
+          }}
+          filterOptions={normalizedFilterOptions}
+        />
+      )}
     </Container>
   );
 }

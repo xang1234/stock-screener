@@ -41,7 +41,9 @@ class _FakeFetcher:
         period,
         start_batch_size=None,
         market=None,
+        progress_callback=None,
     ):
+        del progress_callback
         self.yfinance_calls.append(
             {
                 "symbols": list(symbols),
@@ -120,3 +122,23 @@ def test_executor_uses_security_master_mic_override_for_cn_bjse_fallback() -> No
         "akshare",
         "baostock",
     ]
+
+
+def test_executor_falls_back_to_yfinance_for_cn_sse_index_symbol() -> None:
+    fetcher = _FakeFetcher()
+    executor = PriceProviderPlanExecutor(fetcher)
+
+    results = executor.fetch(["000001.SS"], period="7d", market="CN")
+
+    assert fetcher.cn_calls == [{"symbols": ["000001.SS"], "period": "7d"}]
+    assert fetcher.yfinance_calls == [
+        {
+            "symbols": ["000001.SS"],
+            "period": "7d",
+            "start_batch_size": 25,
+            "market": "CN",
+        }
+    ]
+    assert results["000001.SS"]["has_error"] is False
+    assert results["000001.SS"]["provider"] == "yfinance"
+    assert results["000001.SS"]["fallback_from"] == "akshare_baostock"

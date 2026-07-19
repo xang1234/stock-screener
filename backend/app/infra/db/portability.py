@@ -157,7 +157,7 @@ def _json_key_literal(segment: str) -> ColumnElement:
     match — the index would silently go unused and the filter would fall back to
     a full scan (psycopg2 happens to mogrify params client-side, but
     psycopg3/asyncpg and server-side prepared statements would not). Keys come
-    from the static ``_JSON_FIELD_MAP``, never user input; the quote-doubling is
+    from the adapter's static field bindings, never user input; the quote-doubling is
     defensive.
     """
     return literal_column("'" + str(segment).replace("'", "''") + "'")

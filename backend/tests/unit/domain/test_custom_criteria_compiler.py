@@ -54,13 +54,13 @@ class TestEmptyCriteria:
 
 
 class TestRangeFilters:
-    def test_price_range_compiles_to_current_price(self):
+    def test_price_range_compiles_to_supported_price_field(self):
         result = compile_custom_criteria(
             {"custom_filters": {"price_min": 20, "price_max": 500}},
             screeners=["custom"],
         )
 
-        rf = _range(result.filter_spec, "current_price")
+        rf = _range(result.filter_spec, "price")
         assert rf is not None
         assert rf.min_value == 20
         assert rf.max_value == 500
@@ -162,7 +162,7 @@ class TestUsdUnitCompatibility:
 
         assert "volume_min" not in result.unrepresentable_keys
         assert _range(result.filter_spec, "adv_usd") is None
-        assert _range(result.filter_spec, "current_price") is not None
+        assert _range(result.filter_spec, "price") is not None
         assert result.hard_gate_equivalent is False
 
     def test_market_cap_compiles_for_us_single_market(self):
@@ -345,7 +345,7 @@ class TestBooleanAndCategorical:
 
         assert _categorical(result.filter_spec, "gics_industry") is None
         assert "exclude_industries" not in result.unrepresentable_keys
-        assert _range(result.filter_spec, "current_price") is not None
+        assert _range(result.filter_spec, "price") is not None
         assert result.hard_gate_equivalent is False
 
 
@@ -429,7 +429,7 @@ class TestTopLevelLegacyForm:
             screeners=["custom"],
         )
 
-        assert _range(result.filter_spec, "current_price") is not None
+        assert _range(result.filter_spec, "price") is not None
         assert _range(result.filter_spec, "rs_rating") is not None
         assert result.min_score == 75.0
 
@@ -443,5 +443,5 @@ class TestTopLevelLegacyForm:
             screeners=["custom"],
         )
 
-        rf = _range(result.filter_spec, "current_price")
+        rf = _range(result.filter_spec, "price")
         assert rf.min_value == 50

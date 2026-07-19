@@ -8,7 +8,12 @@ import pytest
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.feature_store.models import FeatureRow
-from app.domain.scanning.filter_spec import FilterSpec, PageSpec, SortSpec
+from app.domain.scanning.filter_spec import (
+    FilterSpec,
+    PageSpec,
+    SortSpec,
+    filter_spec_to_expression,
+)
 from app.use_cases.scanning.get_scan_symbols import (
     GetScanSymbolsQuery,
     GetScanSymbolsUseCase,
@@ -72,15 +77,16 @@ class TestUnboundScanRouting:
             uow,
             GetScanSymbolsQuery(
                 scan_id="scan-legacy",
-                filters=original_filters,
+                expression=filter_spec_to_expression(original_filters),
                 passes_only=True,
             ),
         )
 
-        forwarded = scan_results.last_query_symbols_args["filters"]
+        forwarded = scan_results.last_query_symbols_args["expression"]
         assert any(
-            cf.field == "rating" and tuple(cf.values) == ("Strong Buy", "Buy")
-            for cf in forwarded.categorical_filters
+            condition.field == "rating"
+            and tuple(condition.values) == ("Strong Buy", "Buy")
+            for condition in forwarded.required_conditions
         )
         assert not any(
             cf.field == "rating" for cf in original_filters.categorical_filters
