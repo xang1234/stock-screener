@@ -6,7 +6,7 @@ import math
 
 import pandas as pd
 
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.scanning.ports import CanonicalStockRsSource
 from app.analysis.patterns.rs_line import (
     DEFAULT_BLUE_DOT_RECENT_DAYS,
     DEFAULT_LOOKBACK,
@@ -141,7 +141,7 @@ def partial_history_metrics(stock_data: StockData) -> dict[str, object]:
 
     if (
         not resolved_rs
-        and stock_data.rs_formula_version != BALANCED_RS_FORMULA_VERSION
+        and not isinstance(stock_data.rs_source, CanonicalStockRsSource)
         and close_rev is not None
         and benchmark_close_rev is not None
         and len(close_rev) >= 21

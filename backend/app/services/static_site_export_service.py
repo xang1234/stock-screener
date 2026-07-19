@@ -27,6 +27,7 @@ from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreReposito
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
 from app.services.key_market_history import build_key_market_entries
+from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.preset_screens import (
     PRESET_SCREENS,
@@ -711,6 +712,18 @@ class StaticSiteExportService:
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
         serialized_rows = [self._serialize_scan_row(row) for row in rows]
+        publication = resolve_feature_run_rs_identity(
+            run,
+            ranking_date=run.as_of_date,
+        ).publication
+        rs_metadata = {
+            "rs_formula_version": publication.snapshot.formula_version,
+            "market_rs_run_id": publication.market_rs_run_id,
+            "rs_as_of_date": publication.snapshot.as_of_date.isoformat(),
+            "rs_universe_size": publication.universe_size,
+        }
+        for serialized_row in serialized_rows:
+            serialized_row.update(rs_metadata)
         self._annotate_percentile_ranks(serialized_rows)
         serialized_rows = self._sort_static_scan_rows(serialized_rows)
         resolved_default_filters = self.resolve_static_default_filters(market)
@@ -732,6 +745,7 @@ class StaticSiteExportService:
                 "as_of_date": run.as_of_date.isoformat(),
                 "run_id": run.id,
                 "chunk_index": chunk_num,
+                **rs_metadata,
                 "rows": chunk_rows,
             }
             self._write_json(output_dir / rel_path, payload)
@@ -747,6 +761,7 @@ class StaticSiteExportService:
             "generated_at": generated_at,
             "as_of_date": run.as_of_date.isoformat(),
             "run_id": run.id,
+            **rs_metadata,
             "sort": {"field": "composite_score", "order": "desc"},
             "default_page_size": 50,
             "chunk_size": SCAN_CHUNK_SIZE,

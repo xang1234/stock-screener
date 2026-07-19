@@ -179,8 +179,6 @@ class TestBuildDailySnapshotCommand:
 
 class TestHappyPath:
     def test_execute_uses_market_calendar_for_requested_market(self, monkeypatch):
-        from app.use_cases.feature_store import build_daily_snapshot as module
-
         calls = []
 
         class _Calendar:
@@ -309,11 +307,10 @@ class TestHappyPath:
 
             def get(self, **kwargs):
                 self.calls.append(kwargs)
-                return MarketRsResolution(
+                return MarketRsResolution.canonical(
                     market="US",
                     as_of_date=AS_OF,
                     formula_version=BALANCED_RS_FORMULA_VERSION,
-                    mode="canonical",
                     run_id=42,
                     universe_size=5000,
                     ratings_by_symbol={
@@ -353,13 +350,16 @@ class TestHappyPath:
             }
         ]
         assert len(captured_data) == 2
-        assert all(data.canonical_rs_ratings["rs_rating"] == 87 for data in captured_data)
+        assert all(data.rs_source.ratings["rs_rating"] == 87 for data in captured_data)
         assert all(
-            data.rs_formula_version == BALANCED_RS_FORMULA_VERSION
+            data.rs_source.audit_fields()
+            == {
+                "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                "market_rs_run_id": 42,
+                "rs_universe_size": 5000,
+            }
             for data in captured_data
         )
-        assert all(data.market_rs_run_id == 42 for data in captured_data)
-        assert all(data.rs_universe_size == 5000 for data in captured_data)
         run = uow.feature_runs.get_run(result.run_id)
         assert run.config["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
         assert run.config["market_rs_run_id"] == 42

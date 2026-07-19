@@ -9,6 +9,10 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
+from app.domain.scanning.ports import (
+    CanonicalMarketRsSource,
+    LegacyMarketRsSource,
+)
 from app.infra.db.models.relative_strength import (
     MarketRsFormulaPointer,
     MarketRsRun,
@@ -95,7 +99,7 @@ def test_reader_returns_exact_market_snapshot_without_repercentiling_requested_s
     )
 
     assert resolution.formula_version == BALANCED_RS_FORMULA_VERSION
-    assert resolution.mode == "canonical"
+    assert isinstance(resolution.source, CanonicalMarketRsSource)
     assert resolution.run_id == run.id
     assert resolution.universe_size == 3
     assert resolution.ratings_by_symbol["AAA"] == {
@@ -151,7 +155,7 @@ def test_reader_legacy_mode_does_not_query_stock_snapshot_rows(db_session):
     finally:
         event.remove(db_session.get_bind(), "before_cursor_execute", _capture)
 
-    assert resolution.mode == "legacy"
+    assert isinstance(resolution.source, LegacyMarketRsSource)
     assert resolution.ratings_by_symbol == {}
     assert not any("stock_rs_snapshots" in statement for statement in statements)
 
@@ -173,4 +177,4 @@ def test_explicit_balanced_override_bypasses_legacy_pointer(db_session):
     )
 
     assert resolution.run_id == run.id
-    assert resolution.mode == "canonical"
+    assert isinstance(resolution.source, CanonicalMarketRsSource)

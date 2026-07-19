@@ -14,7 +14,7 @@ import pandas as pd
 from .base_screener import DataRequirements, StockData
 from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.common.errors import DataFetchError
-from ..domain.scanning.ports import MarketRsResolution
+from ..domain.scanning.ports import LegacyMarketRsSource, MarketRsResolution
 from ..services.benchmark_cache_service import BenchmarkCacheService, BenchmarkDataBundle
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
@@ -244,16 +244,11 @@ class DataPreparationLayer:
             if item_market != normalized_market:
                 continue
             normalized_symbol = item.symbol.strip().upper()
-            item.canonical_rs_ratings = resolution.ratings_by_symbol.get(
-                normalized_symbol
-            )
-            item.rs_formula_version = resolution.formula_version
-            item.market_rs_run_id = resolution.run_id
-            item.rs_universe_size = resolution.universe_size
+            item.rs_source = resolution.stock_source(normalized_symbol)
             item.rs_universe_performances = None
             market_results[key] = item
 
-        if resolution.mode == "legacy" and market_results:
+        if isinstance(resolution.source, LegacyMarketRsSource) and market_results:
             self._attach_market_rs_universe_performances(market_results)
 
     def _is_transient(self, exc: Exception) -> bool:

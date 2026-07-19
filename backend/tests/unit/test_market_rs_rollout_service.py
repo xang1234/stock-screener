@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date
-import hashlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,6 +10,9 @@ import pytest
 
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.services.market_rs_inputs import MarketRsInputUnavailable
+from app.services.market_rs_static_artifact_validator import (
+    MarketRsStaticArtifactValidator,
+)
 from app.services.market_rs_rollout_service import (
     ActivationValidationReport,
     MarketRsActivationRejected,
@@ -151,7 +153,7 @@ def test_rejected_activation_rolls_back_without_moving_either_pointer(tmp_path):
         latest_universe_hash="universe-a",
         feature_run_id=99,
         feature_universe_hash="feature-a",
-        static_manifest_sha256="manifest-a",
+        static_bundle_sha256="bundle-a",
         errors=("candidate trading-date gap",),
     )
 
@@ -175,7 +177,10 @@ def test_activation_rejects_manifest_changed_after_validation(tmp_path):
     service = _service(repository=repository)
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
-    validated_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    validated_hash = MarketRsStaticArtifactValidator.bundle_fingerprint(
+        tmp_path,
+        market="US",
+    ).sha256
     manifest_path.write_text('{"schema_version":"changed"}', encoding="utf-8")
     validation = ActivationValidationReport(
         market="US",
@@ -187,11 +192,55 @@ def test_activation_rejects_manifest_changed_after_validation(tmp_path):
         latest_universe_hash="universe-a",
         feature_run_id=99,
         feature_universe_hash="feature-a",
-        static_manifest_sha256=validated_hash,
+        static_bundle_sha256=validated_hash,
         errors=(),
     )
 
     with pytest.raises(MarketRsActivationRejected, match="changed after validation"):
+        service.activate(
+            MagicMock(),
+            market="US",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            feature_run_id=99,
+            validation=validation,
+            static_staging_dir=tmp_path,
+        )
+
+    repository.activate_formula.assert_not_called()
+
+
+def test_activation_rejects_market_bundle_file_changed_after_validation(
+    tmp_path,
+    monkeypatch,
+):
+    repository = MagicMock()
+    service = _service(repository=repository)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
+    groups_path = tmp_path / "markets" / "us" / "groups.json"
+    groups_path.parent.mkdir(parents=True)
+    groups_path.write_text('{"rankings":[]}', encoding="utf-8")
+    bundle_hash = MarketRsStaticArtifactValidator.bundle_fingerprint(
+        tmp_path,
+        market="US",
+    ).sha256
+    validation = ActivationValidationReport(
+        market="US",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        through_date=date(2026, 4, 10),
+        first_valid_date=date(2026, 4, 8),
+        candidate_count=3,
+        latest_market_rs_run_id=42,
+        latest_universe_hash="universe-a",
+        feature_run_id=99,
+        feature_universe_hash="feature-a",
+        static_bundle_sha256=bundle_hash,
+        errors=(),
+    )
+    monkeypatch.setattr(service.validator, "revalidate_static", lambda *a, **k: ())
+    groups_path.write_text('{"rankings":[{"rank":1}]}', encoding="utf-8")
+
+    with pytest.raises(MarketRsActivationRejected, match="bundle changed"):
         service.activate(
             MagicMock(),
             market="US",
@@ -290,7 +339,10 @@ def test_successful_activation_revalidates_then_commits_both_pointers(
     db.commit.side_effect = lambda: events.append("commit")
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
-    manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    bundle_hash = MarketRsStaticArtifactValidator.bundle_fingerprint(
+        tmp_path,
+        market="US",
+    ).sha256
     revalidate = MagicMock(return_value=())
     monkeypatch.setattr(service.validator, "revalidate_static", revalidate)
     validation = ActivationValidationReport(
@@ -303,7 +355,7 @@ def test_successful_activation_revalidates_then_commits_both_pointers(
         latest_universe_hash="universe-a",
         feature_run_id=99,
         feature_universe_hash="feature-a",
-        static_manifest_sha256=manifest_hash,
+        static_bundle_sha256=bundle_hash,
         errors=(),
     )
 

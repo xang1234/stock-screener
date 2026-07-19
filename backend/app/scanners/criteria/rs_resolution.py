@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.scanning.ports import CanonicalStockRsSource
 from app.scanners.base_screener import StockData
 
 
@@ -30,9 +31,9 @@ def resolve_stock_rs(
     eligible universe. This prevents an ineligible stock from being calculated
     against a different, scan-local comparison set.
     """
-    if stock_data.canonical_rs_ratings is not None:
-        return dict(stock_data.canonical_rs_ratings)
-    if stock_data.rs_formula_version == BALANCED_RS_FORMULA_VERSION:
+    if isinstance(stock_data.rs_source, CanonicalStockRsSource):
+        if stock_data.rs_source.ratings is not None:
+            return dict(stock_data.rs_source.ratings)
         raise CanonicalStockRsUnavailable(
             f"Canonical RS is unavailable for {stock_data.symbol} in the active "
             f"{BALANCED_RS_FORMULA_VERSION} eligible universe"

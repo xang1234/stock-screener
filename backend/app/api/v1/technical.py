@@ -8,7 +8,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from ...database import get_db
-from ...domain.scanning.ports import MarketRsReader
+from ...domain.scanning.ports import CanonicalStockRsSource, MarketRsReader
 from ...wiring.bootstrap import get_market_rs_reader, get_yfinance_service
 from ._price_history import resolve_symbol_market
 
@@ -105,18 +105,17 @@ async def get_rs_rating(
         as_of_date=None,
         formula_version=None,
     )
+    rs_source = resolution.stock_source(normalized_symbol)
     audit_fields = {
-        "rs_formula_version": resolution.formula_version,
-        "market_rs_run_id": resolution.run_id,
+        **rs_source.audit_fields(),
         "rs_as_of_date": (
             resolution.as_of_date.isoformat()
             if resolution.as_of_date is not None
             else None
         ),
-        "rs_universe_size": resolution.universe_size,
     }
-    if resolution.mode == "canonical":
-        ratings = resolution.ratings_by_symbol.get(normalized_symbol)
+    if isinstance(rs_source, CanonicalStockRsSource):
+        ratings = rs_source.ratings
         if ratings is None:
             return {
                 "symbol": normalized_symbol,

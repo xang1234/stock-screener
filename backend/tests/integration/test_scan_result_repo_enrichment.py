@@ -44,11 +44,6 @@ def session():
         yield sess
 
 
-class _UnexpectedFeatureGroupRankingService:
-    def get_current_rank_snapshot(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        raise AssertionError("scan enrichment must use stored active-formula Group ranks")
-
-
 def _base_raw_result() -> dict:
     """Return a minimal orchestrator-like result dict."""
     return {
@@ -235,7 +230,6 @@ def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: S
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_UnexpectedFeatureGroupRankingService(),
     )
     repo.persist_orchestrator_results("scan-hk-1", [("0700.HK", _base_raw_result())])
 
@@ -286,7 +280,6 @@ def test_non_us_rank_enrichment_honors_explicit_ranking_date(session: Session):
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_UnexpectedFeatureGroupRankingService(),
     )
     session.add(
         ScanResult(
@@ -364,7 +357,6 @@ def test_persist_orchestrator_results_overrides_non_us_sector_and_industry_with_
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_UnexpectedFeatureGroupRankingService(),
     )
     repo.persist_orchestrator_results("scan-jp-1", [("7203.T", raw)])
 
@@ -486,7 +478,6 @@ def test_persist_orchestrator_results_strips_market_before_rank_map_lookup(sessi
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_UnexpectedFeatureGroupRankingService(),
     )
     repo.persist_orchestrator_results("scan-hk-whitespace", [("0700.HK", _base_raw_result())])
 

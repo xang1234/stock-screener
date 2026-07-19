@@ -18,7 +18,6 @@ from app.domain.scanning.models import ScanStatus
 from app.domain.scanning.ports import MarketRsResolution
 from app.use_cases.scanning.run_bulk_scan import (
     RunBulkScanCommand,
-    RunBulkScanResult,
     RunBulkScanUseCase,
 )
 
@@ -257,11 +256,10 @@ class TestRunBulkScanHappyPath:
             def get(self, **kwargs):
                 self.calls.append(kwargs)
                 rating = 87 if kwargs["market"] == "US" else 77
-                return MarketRsResolution(
+                return MarketRsResolution.canonical(
                     market=kwargs["market"],
                     as_of_date=date(2026, 4, 10),
                     formula_version=BALANCED_RS_FORMULA_VERSION,
-                    mode="canonical",
                     run_id=42 if kwargs["market"] == "US" else 43,
                     universe_size=5000 if kwargs["market"] == "US" else 2500,
                     ratings_by_symbol={
@@ -295,11 +293,13 @@ class TestRunBulkScanHappyPath:
             ("HK", ("0700.HK",)),
         }
         assert all(call["as_of_date"] is None for call in reader.calls)
-        assert captured["AAPL"].canonical_rs_ratings["rs_rating"] == 87
-        assert captured["AAPL"].rs_formula_version == BALANCED_RS_FORMULA_VERSION
-        assert captured["AAPL"].market_rs_run_id == 42
-        assert captured["AAPL"].rs_universe_size == 5000
-        assert captured["0700.HK"].canonical_rs_ratings["rs_rating"] == 77
+        assert captured["AAPL"].rs_source.ratings["rs_rating"] == 87
+        assert captured["AAPL"].rs_source.audit_fields() == {
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+            "rs_universe_size": 5000,
+        }
+        assert captured["0700.HK"].rs_source.ratings["rs_rating"] == 77
 
     def test_cache_only_flag_propagates_to_bulk_data_fetch(self):
         """cache_only=True on the command must disable live-fetch fallback inside

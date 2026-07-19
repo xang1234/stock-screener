@@ -26,14 +26,10 @@ def legacy_market_rs_runtime(runtime_services_context):
 
     class _LegacyReader:
         def get(self, *, market, symbols, as_of_date, formula_version=None):
-            return MarketRsResolution(
+            return MarketRsResolution.legacy(
                 market=market,
                 as_of_date=as_of_date,
                 formula_version=LEGACY_RS_FORMULA_VERSION,
-                mode="legacy",
-                run_id=None,
-                universe_size=None,
-                ratings_by_symbol={},
             )
 
     runtime_services_context._market_rs_services = type(

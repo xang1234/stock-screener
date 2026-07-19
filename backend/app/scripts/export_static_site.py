@@ -6,7 +6,7 @@ import argparse
 import json
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from app.config import settings
 from app.database import SessionLocal
@@ -59,6 +59,38 @@ STATIC_DEFAULT_MARKET = "US"
 STATIC_EXPOSURE_PRIMARY_ONLY_BENCHMARK_MARKETS = frozenset({"US"})
 STATIC_EXPORT_SKIPPED_EXIT_CODE = 78
 STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE = 79
+SUPPORTED_RS_FORMULA_VERSIONS = frozenset(
+    {BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION}
+)
+
+
+def _default_rs_formula_policy() -> dict[str, str]:
+    """Return the independently overridable publication policy per market."""
+    return {
+        market: BALANCED_RS_FORMULA_VERSION for market in STATIC_EXPORT_MARKETS
+    }
+
+
+def _parse_rs_formula_overrides_json(raw: str) -> dict[str, str]:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object keyed by market")
+
+    overrides: dict[str, str] = {}
+    for raw_market, raw_formula in parsed.items():
+        market = str(raw_market).strip().upper()
+        formula = str(raw_formula).strip()
+        if market not in STATIC_EXPORT_MARKETS:
+            raise argparse.ArgumentTypeError(f"unsupported market {market!r}")
+        if formula not in SUPPORTED_RS_FORMULA_VERSIONS:
+            raise argparse.ArgumentTypeError(
+                f"unsupported RS formula {formula!r} for market {market}"
+            )
+        overrides[market] = formula
+    return overrides
 
 
 def _default_output_dir() -> Path:
@@ -398,6 +430,7 @@ def _run_daily_refresh(
     build_mode: Literal["price_delta", "full"] = STATIC_BUILD_MODE_PRICE_DELTA,
     hydrate_published_snapshot: bool = False,
     rs_formula_version: str = BALANCED_RS_FORMULA_VERSION,
+    rs_formula_version_by_market: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
         _enrich_feature_run_with_ibd_metadata,
@@ -409,6 +442,14 @@ def _run_daily_refresh(
     warnings: list[str] = []
 
     selected_markets = (market,) if market is not None else STATIC_EXPORT_MARKETS
+    formula_by_market = {
+        selected_market: (
+            rs_formula_version_by_market.get(selected_market, rs_formula_version)
+            if rs_formula_version_by_market is not None
+            else rs_formula_version
+        )
+        for selected_market in selected_markets
+    }
     as_of_by_market: dict[str, date] = {
         selected_market: _resolve_latest_completed_trading_date(selected_market)
         for selected_market in selected_markets
@@ -461,7 +502,7 @@ def _run_daily_refresh(
             market_rs_results[selected_market] = _prepare_static_rs_formula(
                 market=selected_market,
                 as_of_date=as_of_by_market[selected_market],
-                formula_version=rs_formula_version,
+                formula_version=formula_by_market[selected_market],
             )
         results["market_rs"] = market_rs_results
 
@@ -471,7 +512,7 @@ def _run_daily_refresh(
             backfill = _ensure_group_rank_history(
                 as_of_date=as_of_by_market[selected_market],
                 market=selected_market,
-                formula_version=rs_formula_version,
+                formula_version=formula_by_market[selected_market],
             )
             group_rank_history[selected_market] = backfill
             group_rank_history_report[selected_market] = backfill.as_dict()
@@ -537,7 +578,7 @@ def _run_daily_refresh(
                 market=selected_market,
                 publish_pointer_key=_market_pointer_key(selected_market),
                 ignore_runtime_market_gate=True,
-                rs_formula_version_override=rs_formula_version,
+                rs_formula_version_override=formula_by_market[selected_market],
             )
             feature_snapshots[selected_market] = market_result
 
@@ -695,8 +736,17 @@ def main() -> int:
     parser.add_argument(
         "--rs-formula-version",
         choices=(BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION),
-        default=BALANCED_RS_FORMULA_VERSION,
-        help="RS formula selected in the private refresh database (default: balanced).",
+        help="RS formula override for a single --market export.",
+    )
+    parser.add_argument(
+        "--rs-formula-overrides-json",
+        type=_parse_rs_formula_overrides_json,
+        default={},
+        metavar="JSON",
+        help=(
+            "Per-market formula overrides, for example "
+            "'{\"HK\":\"legacy-linear-v1\"}'."
+        ),
     )
     args = parser.parse_args()
 
@@ -710,6 +760,13 @@ def main() -> int:
         raise SystemExit("--rrg-history-dir requires --market")
     if args.combine_artifacts_dir and args.rrg_history_dir:
         raise SystemExit("--rrg-history-dir cannot be used while combining artifacts")
+    if args.rs_formula_version and (args.combine_artifacts_dir or not args.market):
+        raise SystemExit("--rs-formula-version is limited to single-market exports")
+
+    rs_formula_policy = _default_rs_formula_policy()
+    rs_formula_policy.update(args.rs_formula_overrides_json)
+    if args.rs_formula_version:
+        rs_formula_policy[args.market] = args.rs_formula_version
 
     refresh_warnings: list[str] = []
     selected_market_non_publishable_snapshot: dict[str, Any] | None = None
@@ -723,9 +780,7 @@ def main() -> int:
                 else None
             ),
             clean=not args.no_clean,
-            rs_formula_version_overrides={
-                market: args.rs_formula_version for market in STATIC_EXPORT_MARKETS
-            },
+            rs_formula_version_overrides=rs_formula_policy,
         )
     else:
         prepare_runtime()
@@ -737,7 +792,7 @@ def main() -> int:
                 skip_fundamentals_refresh=args.skip_fundamentals_refresh,
                 build_mode=args.build_mode,
                 hydrate_published_snapshot=args.hydrate_published_snapshot,
-                rs_formula_version=args.rs_formula_version,
+                rs_formula_version_by_market=rs_formula_policy,
             )
             refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")

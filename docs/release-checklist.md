@@ -89,4 +89,4 @@ Complete this section once per Market when activating `balanced-horizon-percenti
 - [ ] Verify live Scan overall/1M/3M/12M RS and live Group overall/**Group 1M RS**/3M RS against the staged artifacts; verify the live table has 1M RS and 3M RS columns.
 - [ ] Trigger `.github/workflows/static-site.yml` through the existing release procedure; confirm compatible fallback handling, Pages deployment, and static Group 1M/3M columns.
 - [ ] Review expected rank changes, particularly former 6–12M leaders with weak 1M/3M performance; do not compare movers or RRG points across formula versions.
-- [ ] Retain legacy rows and the saved legacy Feature run until acceptance. Rehearse rollback by restoring both pointers together, invalidating/rebuilding live Groups bootstrap, then running the Static Site workflow with `rs_formula_version=legacy-linear-v1`.
+- [ ] Retain legacy rows and the saved legacy Feature run until acceptance. Rehearse rollback by restoring both pointers together, invalidating/rebuilding live Groups bootstrap, then running the Static Site workflow with a per-Market JSON override such as `rs_formula_overrides={"US":"legacy-linear-v1"}`.

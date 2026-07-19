@@ -29,14 +29,17 @@ from app.analysis.patterns.rs_line import (
     rs_line_leadership_snapshot,
 )
 from app.config import settings
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.models import CompositeMethod, ScreenerOutputDomain
 from app.domain.scanning.scoring import (
     apply_quality_policy,
     calculate_composite_score,
     calculate_overall_rating,
 )
-from app.domain.scanning.ports import MarketRsReader, StockDataProvider
+from app.domain.scanning.ports import (
+    CanonicalStockRsSource,
+    MarketRsReader,
+    StockDataProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +59,13 @@ _SCREENER_MIN_BARS: dict[str, int] = {
 
 
 def _market_rs_audit_fields(stock_data: StockData) -> dict[str, object]:
-    return {
-        "rs_formula_version": stock_data.rs_formula_version,
-        "market_rs_run_id": stock_data.market_rs_run_id,
-        "rs_universe_size": stock_data.rs_universe_size,
-    }
+    if stock_data.rs_source is None:
+        return {
+            "rs_formula_version": None,
+            "market_rs_run_id": None,
+            "rs_universe_size": None,
+        }
+    return stock_data.rs_source.audit_fields()
 
 
 def _series_last_float(series) -> float | None:
@@ -133,10 +138,8 @@ def _build_precomputed_scan_context(
         ma_200_month_ago = _series_last_float(ma_200_series)
 
     rs_ratings = None
-    if (
-        stock_data.canonical_rs_ratings is not None
-        or stock_data.rs_formula_version == BALANCED_RS_FORMULA_VERSION
-        or (benchmark_close_rev is not None and not benchmark_close_rev.empty)
+    if isinstance(stock_data.rs_source, CanonicalStockRsSource) or (
+        benchmark_close_rev is not None and not benchmark_close_rev.empty
     ):
         rs_ratings = resolve_stock_rs(
             stock_data,
@@ -370,10 +373,7 @@ class ScanOrchestrator:
                 # Fetch data ONCE
                 stock_data = self._data_provider.prepare_data(symbol, requirements)
 
-            if (
-                stock_data.rs_formula_version is None
-                and self._market_rs_reader is not None
-            ):
+            if stock_data.rs_source is None and self._market_rs_reader is not None:
                 resolution = self._market_rs_reader.get(
                     market=str(stock_data.market or "US").strip().upper(),
                     symbols=(stock_data.symbol.strip().upper(),),

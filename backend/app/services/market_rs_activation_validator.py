@@ -259,7 +259,7 @@ class MarketRsActivationValidator:
                 errors=errors,
             )
 
-        manifest_hash = None
+        bundle_hash = None
         rrg_status = None
         if latest_run is not None:
             try:
@@ -271,7 +271,11 @@ class MarketRsActivationValidator:
                     feature_run_id=feature_run_id,
                     static_staging_dir=Path(static_staging_dir),
                 )
-                manifest_hash = static_result.manifest_sha256
+                bundle_hash = (
+                    static_result.bundle_fingerprint.sha256
+                    if static_result.bundle_fingerprint is not None
+                    else None
+                )
                 rrg_status = static_result.rrg_status
                 errors.extend(static_result.errors)
             except Exception as exc:
@@ -291,7 +295,7 @@ class MarketRsActivationValidator:
             latest_universe_hash=getattr(latest_run, "universe_hash", None),
             feature_run_id=getattr(feature, "id", feature_run_id),
             feature_universe_hash=getattr(feature, "universe_hash", None),
-            static_manifest_sha256=manifest_hash,
+            static_bundle_sha256=bundle_hash,
             errors=tuple(dict.fromkeys(errors)),
             rrg_status=rrg_status,
         )

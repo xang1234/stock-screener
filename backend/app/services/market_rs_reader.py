@@ -49,14 +49,10 @@ class SqlMarketRsReader:
                 db, market=normalized_market
             )
             if resolved_formula == LEGACY_RS_FORMULA_VERSION:
-                return MarketRsResolution(
+                return MarketRsResolution.legacy(
                     market=normalized_market,
                     as_of_date=as_of_date,
                     formula_version=resolved_formula,
-                    mode="legacy",
-                    run_id=None,
-                    universe_size=None,
-                    ratings_by_symbol={},
                 )
             if resolved_formula != BALANCED_RS_FORMULA_VERSION:
                 raise CanonicalMarketRsUnavailable(
@@ -107,11 +103,10 @@ class SqlMarketRsReader:
                 }
                 for row in rows
             }
-            return MarketRsResolution(
+            return MarketRsResolution.canonical(
                 market=normalized_market,
                 as_of_date=run.as_of_date,
                 formula_version=resolved_formula,
-                mode="canonical",
                 run_id=run.id,
                 universe_size=run.eligible_symbol_count,
                 ratings_by_symbol=ratings,

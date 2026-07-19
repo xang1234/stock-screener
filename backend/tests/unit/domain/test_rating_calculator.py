@@ -284,12 +284,7 @@ class TestParityWithOrchestrator:
 
             def apply_market_rs_resolution(self, results, resolution):
                 for symbol, item in results.items():
-                    item.canonical_rs_ratings = resolution.ratings_by_symbol.get(
-                        symbol.upper()
-                    )
-                    item.rs_formula_version = resolution.formula_version
-                    item.market_rs_run_id = resolution.run_id
-                    item.rs_universe_size = resolution.universe_size
+                    item.rs_source = resolution.stock_source(symbol)
 
         provider = LocalFakeProvider()
         registry = ScreenerRegistry()

@@ -13,7 +13,12 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass
 from datetime import date
-from typing import Protocol, Sequence
+from typing import Mapping, Protocol, Sequence
+
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 
 from .filter_spec import FilterSpec, PageSpec, QuerySpec, SortSpec
 from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
@@ -245,14 +250,166 @@ class TaskDispatcher(abc.ABC):
 
 
 @dataclass(frozen=True)
+class LegacyStockRsSource:
+    formula_version: str = LEGACY_RS_FORMULA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.formula_version != LEGACY_RS_FORMULA_VERSION:
+            raise ValueError("legacy stock RS source requires the legacy formula")
+
+    def audit_fields(self) -> dict[str, object]:
+        return {
+            "rs_formula_version": self.formula_version,
+            "market_rs_run_id": None,
+            "rs_universe_size": None,
+        }
+
+
+@dataclass(frozen=True)
+class CanonicalStockRsSource:
+    formula_version: str
+    run_id: int
+    universe_size: int
+    ratings: Mapping[str, int] | None
+
+    def __post_init__(self) -> None:
+        if self.formula_version != BALANCED_RS_FORMULA_VERSION:
+            raise ValueError("canonical stock RS source requires the balanced formula")
+        if self.run_id <= 0:
+            raise ValueError("canonical stock RS run_id must be positive")
+        if self.universe_size <= 0:
+            raise ValueError("canonical stock RS universe_size must be positive")
+        if self.ratings is not None:
+            object.__setattr__(self, "ratings", dict(self.ratings))
+
+    def audit_fields(self) -> dict[str, object]:
+        return {
+            "rs_formula_version": self.formula_version,
+            "market_rs_run_id": self.run_id,
+            "rs_universe_size": self.universe_size,
+        }
+
+
+StockRsSource = LegacyStockRsSource | CanonicalStockRsSource
+
+
+@dataclass(frozen=True)
+class LegacyMarketRsSource:
+    formula_version: str = LEGACY_RS_FORMULA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.formula_version != LEGACY_RS_FORMULA_VERSION:
+            raise ValueError("legacy Market RS source requires the legacy formula")
+
+
+@dataclass(frozen=True)
+class CanonicalMarketRsSource:
+    formula_version: str
+    run_id: int
+    universe_size: int
+    ratings_by_symbol: Mapping[str, Mapping[str, int]]
+
+    def __post_init__(self) -> None:
+        if self.formula_version != BALANCED_RS_FORMULA_VERSION:
+            raise ValueError("canonical Market RS source requires the balanced formula")
+        if self.run_id <= 0:
+            raise ValueError("canonical Market RS run_id must be positive")
+        if self.universe_size <= 0:
+            raise ValueError("canonical Market RS universe_size must be positive")
+        object.__setattr__(
+            self,
+            "ratings_by_symbol",
+            {
+                str(symbol).strip().upper(): dict(ratings)
+                for symbol, ratings in self.ratings_by_symbol.items()
+            },
+        )
+
+
+MarketRsSource = LegacyMarketRsSource | CanonicalMarketRsSource
+
+
+@dataclass(frozen=True)
 class MarketRsResolution:
     market: str
     as_of_date: date | None
-    formula_version: str
-    mode: str
-    run_id: int | None
-    universe_size: int | None
-    ratings_by_symbol: dict[str, dict[str, int]]
+    source: MarketRsSource
+
+    def __post_init__(self) -> None:
+        normalized_market = self.market.strip().upper()
+        if not normalized_market:
+            raise ValueError("Market RS market is required")
+        object.__setattr__(self, "market", normalized_market)
+
+    @classmethod
+    def legacy(
+        cls,
+        *,
+        market: str,
+        as_of_date: date | None,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
+    ) -> "MarketRsResolution":
+        return cls(
+            market=market,
+            as_of_date=as_of_date,
+            source=LegacyMarketRsSource(formula_version=formula_version),
+        )
+
+    @classmethod
+    def canonical(
+        cls,
+        *,
+        market: str,
+        as_of_date: date,
+        formula_version: str,
+        run_id: int,
+        universe_size: int,
+        ratings_by_symbol: Mapping[str, Mapping[str, int]],
+    ) -> "MarketRsResolution":
+        return cls(
+            market=market,
+            as_of_date=as_of_date,
+            source=CanonicalMarketRsSource(
+                formula_version=formula_version,
+                run_id=run_id,
+                universe_size=universe_size,
+                ratings_by_symbol=ratings_by_symbol,
+            ),
+        )
+
+    @property
+    def formula_version(self) -> str:
+        return self.source.formula_version
+
+    @property
+    def run_id(self) -> int | None:
+        return self.source.run_id if isinstance(self.source, CanonicalMarketRsSource) else None
+
+    @property
+    def universe_size(self) -> int | None:
+        return (
+            self.source.universe_size
+            if isinstance(self.source, CanonicalMarketRsSource)
+            else None
+        )
+
+    @property
+    def ratings_by_symbol(self) -> Mapping[str, Mapping[str, int]]:
+        return (
+            self.source.ratings_by_symbol
+            if isinstance(self.source, CanonicalMarketRsSource)
+            else {}
+        )
+
+    def stock_source(self, symbol: str) -> StockRsSource:
+        if isinstance(self.source, LegacyMarketRsSource):
+            return LegacyStockRsSource(formula_version=self.source.formula_version)
+        return CanonicalStockRsSource(
+            formula_version=self.source.formula_version,
+            run_id=self.source.run_id,
+            universe_size=self.source.universe_size,
+            ratings=self.source.ratings_by_symbol.get(symbol.strip().upper()),
+        )
 
 
 class StockDataProvider(abc.ABC):

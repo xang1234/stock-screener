@@ -8,7 +8,11 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
-from app.domain.scanning.ports import MarketRsResolution
+from app.domain.scanning.ports import (
+    CanonicalStockRsSource,
+    LegacyStockRsSource,
+    MarketRsResolution,
+)
 from app.scanners.base_screener import StockData
 from app.scanners.canslim_scanner import CANSLIMScanner
 from app.scanners.custom_scanner import CustomScanner
@@ -57,14 +61,44 @@ def _stock_data() -> StockData:
 
 def _canonical_stock_data() -> StockData:
     data = _stock_data()
-    data.rs_formula_version = BALANCED_RS_FORMULA_VERSION
-    data.canonical_rs_ratings = {
-        "rs_rating": 87,
-        "rs_rating_1m": 42,
-        "rs_rating_3m": 91,
-        "rs_rating_12m": 98,
-    }
+    data.rs_source = CanonicalStockRsSource(
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        run_id=42,
+        universe_size=5000,
+        ratings={
+            "rs_rating": 87,
+            "rs_rating_1m": 42,
+            "rs_rating_3m": 91,
+            "rs_rating_12m": 98,
+        },
+    )
     return data
+
+
+def test_market_rs_resolution_creates_one_discriminated_stock_source():
+    canonical = MarketRsResolution.canonical(
+        market="US",
+        as_of_date=pd.Timestamp("2026-07-17").date(),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        run_id=42,
+        universe_size=5000,
+        ratings_by_symbol={"TEST": {"rs_rating": 87}},
+    )
+    legacy = MarketRsResolution.legacy(
+        market="US",
+        as_of_date=None,
+        formula_version=LEGACY_RS_FORMULA_VERSION,
+    )
+
+    canonical_stock = canonical.stock_source("TEST")
+    assert isinstance(canonical_stock, CanonicalStockRsSource)
+    assert canonical_stock.ratings == {"rs_rating": 87}
+    assert canonical_stock.audit_fields() == {
+        "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": 42,
+        "rs_universe_size": 5000,
+    }
+    assert isinstance(legacy.stock_source("TEST"), LegacyStockRsSource)
 
 
 def test_balanced_mode_returns_canonical_ratings_without_calling_legacy():
@@ -73,12 +107,17 @@ def test_balanced_mode_returns_canonical_ratings_without_calling_legacy():
     def legacy_factory():
         raise AssertionError("balanced mode must not call the legacy calculator")
 
-    assert resolve_stock_rs(data, legacy_factory) == data.canonical_rs_ratings
+    assert resolve_stock_rs(data, legacy_factory) == data.rs_source.ratings
 
 
 def test_balanced_mode_fails_closed_for_stock_outside_eligible_set():
     data = _stock_data()
-    data.rs_formula_version = BALANCED_RS_FORMULA_VERSION
+    data.rs_source = CanonicalStockRsSource(
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        run_id=42,
+        universe_size=5000,
+        ratings=None,
+    )
 
     with pytest.raises(CanonicalStockRsUnavailable, match="TEST"):
         resolve_stock_rs(data, lambda: {"rs_rating": 99})
@@ -86,7 +125,7 @@ def test_balanced_mode_fails_closed_for_stock_outside_eligible_set():
 
 def test_legacy_mode_calls_legacy_factory():
     data = _stock_data()
-    data.rs_formula_version = LEGACY_RS_FORMULA_VERSION
+    data.rs_source = LegacyStockRsSource()
     expected = {
         "rs_rating": 73,
         "rs_rating_1m": 80,
@@ -111,12 +150,17 @@ def test_precomputed_context_uses_canonical_balanced_values(monkeypatch):
     context = _build_precomputed_scan_context(data)
 
     assert context is not None
-    assert context.rs_ratings == data.canonical_rs_ratings
+    assert context.rs_ratings == data.rs_source.ratings
 
 
 def test_precomputed_context_rejects_balanced_ineligible_stock(monkeypatch):
     data = _stock_data()
-    data.rs_formula_version = BALANCED_RS_FORMULA_VERSION
+    data.rs_source = CanonicalStockRsSource(
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        run_id=42,
+        universe_size=5000,
+        ratings=None,
+    )
 
     def legacy_calculation(*args, **kwargs):
         raise AssertionError("balanced precomputation must not invoke legacy RS")
@@ -213,7 +257,7 @@ def test_custom_canonical_rs_does_not_require_benchmark_history():
 
 def test_custom_legacy_rs_still_requires_benchmark_history():
     data = _stock_data()
-    data.rs_formula_version = LEGACY_RS_FORMULA_VERSION
+    data.rs_source = LegacyStockRsSource()
     data.benchmark_data = pd.DataFrame()
 
     result = CustomScanner().scan_stock(
@@ -272,10 +316,7 @@ class _DirectProvider:
 
     def apply_market_rs_resolution(self, results, resolution) -> None:
         for item in results.values():
-            item.canonical_rs_ratings = resolution.ratings_by_symbol.get(item.symbol)
-            item.rs_formula_version = resolution.formula_version
-            item.market_rs_run_id = resolution.run_id
-            item.rs_universe_size = resolution.universe_size
+            item.rs_source = resolution.stock_source(item.symbol)
 
 
 class _CanonicalReader:
@@ -297,11 +338,10 @@ class _CanonicalReader:
             if self.include_symbol
             else {}
         )
-        return MarketRsResolution(
+        return MarketRsResolution.canonical(
             market="US",
             as_of_date=pd.Timestamp("2026-07-17").date(),
             formula_version=BALANCED_RS_FORMULA_VERSION,
-            mode="canonical",
             run_id=42,
             universe_size=5000,
             ratings_by_symbol=ratings,
@@ -393,8 +433,8 @@ def test_balanced_resolution_bypasses_scan_local_percentile_universe(monkeypatch
     layer.apply_market_rs_resolution({"TEST": data}, resolution)
 
     assert calls == []
-    assert data.canonical_rs_ratings["rs_rating"] == 87
-    assert data.rs_formula_version == BALANCED_RS_FORMULA_VERSION
+    assert isinstance(data.rs_source, CanonicalStockRsSource)
+    assert data.rs_source.ratings["rs_rating"] == 87
 
 
 def test_legacy_resolution_retains_scan_local_percentile_universe(monkeypatch):
@@ -406,18 +446,13 @@ def test_legacy_resolution_retains_scan_local_percentile_universe(monkeypatch):
         "_attach_market_rs_universe_performances",
         lambda results: calls.append(results),
     )
-    resolution = MarketRsResolution(
+    resolution = MarketRsResolution.legacy(
         market="US",
         as_of_date=None,
         formula_version=LEGACY_RS_FORMULA_VERSION,
-        mode="legacy",
-        run_id=None,
-        universe_size=None,
-        ratings_by_symbol={},
     )
 
     layer.apply_market_rs_resolution({"TEST": data}, resolution)
 
     assert calls == [{"TEST": data}]
-    assert data.canonical_rs_ratings is None
-    assert data.rs_formula_version == LEGACY_RS_FORMULA_VERSION
+    assert isinstance(data.rs_source, LegacyStockRsSource)

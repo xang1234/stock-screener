@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-import hashlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,6 +19,9 @@ from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.services.market_rs_rollout_service import (
     ActivationValidationReport,
     MarketRsRolloutService,
+)
+from app.services.market_rs_static_artifact_validator import (
+    MarketRsStaticArtifactValidator,
 )
 
 
@@ -39,8 +41,8 @@ def _seed_activation_candidates(db_session):
         benchmark_symbol="SPY",
         benchmark_as_of_date=through_date,
         universe_hash="universe-a",
-        expected_symbol_count=0,
-        eligible_symbol_count=0,
+        expected_symbol_count=1,
+        eligible_symbol_count=1,
         excluded_symbol_count=0,
         diagnostics_json={"price_basis": "adj_close_only"},
         completed_at=datetime.now(timezone.utc),
@@ -65,6 +67,7 @@ def _seed_activation_candidates(db_session):
             "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
             "market_rs_run_id": rs_run.id,
             "rs_as_of_date": through_date.isoformat(),
+            "rs_universe_size": 1,
         },
         published_at=datetime.now(timezone.utc),
     )
@@ -95,7 +98,7 @@ def _validation(
         latest_universe_hash="universe-a",
         feature_run_id=feature_run_id,
         feature_universe_hash="feature-a",
-        static_manifest_sha256=manifest_hash,
+        static_bundle_sha256=manifest_hash,
         errors=(),
     )
 
@@ -118,8 +121,11 @@ def test_activation_switches_market_and_feature_pointers_in_one_commit(
     service = _service(MarketRsRunRepository(), SqlFeatureRunRepository)
     manifest = tmp_path / "manifest.json"
     manifest.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
-    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
-    monkeypatch.setattr(service, "revalidate_static", lambda *args, **kwargs: ())
+    manifest_hash = MarketRsStaticArtifactValidator.bundle_fingerprint(
+        tmp_path,
+        market="US",
+    ).sha256
+    monkeypatch.setattr(service.validator, "revalidate_static", lambda *args, **kwargs: ())
 
     service.activate(
         db_session,
@@ -152,8 +158,11 @@ def test_failure_after_market_pointer_flush_rolls_back_both_pointers(
     service = _service(MarketRsRunRepository(), _FailingFeatureRepository)
     manifest = tmp_path / "manifest.json"
     manifest.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
-    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
-    monkeypatch.setattr(service, "revalidate_static", lambda *args, **kwargs: ())
+    manifest_hash = MarketRsStaticArtifactValidator.bundle_fingerprint(
+        tmp_path,
+        market="US",
+    ).sha256
+    monkeypatch.setattr(service.validator, "revalidate_static", lambda *args, **kwargs: ())
 
     with pytest.raises(RuntimeError, match="pointer write failed"):
         service.activate(

@@ -20,13 +20,10 @@ on:
           - all
           - asia
           - us
-      rs_formula_version:
-        description: 'RS formula to publish (legacy is rollback-only)'
-        type: choice
-        default: balanced-horizon-percentile-v2
-        options:
-          - balanced-horizon-percentile-v2
-          - legacy-linear-v1
+      rs_formula_overrides:
+        description: 'Optional per-market RS rollback JSON, e.g. {"HK":"legacy-linear-v1"}; all others use balanced-horizon-percentile-v2'
+        type: string
+        default: '{}'
 
 concurrency:
   group: static-site-${{ github.ref }}
@@ -224,7 +221,7 @@ jobs:
       - name: Export market static data bundle
         id: export-market
         env:
-          RS_FORMULA_VERSION: ${{ github.event.inputs.rs_formula_version || 'balanced-horizon-percentile-v2' }}
+          RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
         run: |
           cd backend
           set +e
@@ -235,7 +232,7 @@ jobs:
             --skip-universe-refresh \
             --skip-fundamentals-refresh \
             --market "${{ matrix.market }}" \
-            --rs-formula-version "$RS_FORMULA_VERSION" \
+            --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES" \
             --rrg-history-dir "$RRG_HISTORY_DIR"
           status=$?
           set -e
@@ -662,14 +659,14 @@ jobs:
 
       - name: Combine static data bundle
         env:
-          RS_FORMULA_VERSION: ${{ github.event.inputs.rs_formula_version || 'balanced-horizon-percentile-v2' }}
+          RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
         run: |
           cd backend
           python -m app.scripts.export_static_site \
             --output-dir ../frontend/public/static-data \
             --combine-artifacts-dir /tmp/static-market-artifacts-current \
             --fallback-artifacts-dir /tmp/static-market-artifacts-fallback \
-            --rs-formula-version "$RS_FORMULA_VERSION"
+            --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
 
       - name: Build static frontend
         env:

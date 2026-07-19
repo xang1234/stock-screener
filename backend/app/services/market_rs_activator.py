@@ -125,10 +125,13 @@ class MarketRsActivator:
             raise MarketRsActivationRejected(
                 ("Validated static manifest disappeared before activation.",)
             )
-        current_hash = MarketRsStaticArtifactValidator.manifest_hash(manifest_path)
-        if current_hash != validation.static_manifest_sha256:
+        current_fingerprint = MarketRsStaticArtifactValidator.bundle_fingerprint(
+            Path(static_staging_dir),
+            market=normalized,
+        )
+        if current_fingerprint.sha256 != validation.static_bundle_sha256:
             raise MarketRsActivationRejected(
-                ("Validated static manifest changed after validation.",)
+                ("Validated static bundle changed after validation.",)
             )
         static_errors = self.validator.revalidate_static(
             db,
@@ -137,14 +140,21 @@ class MarketRsActivator:
             feature_run_id=feature_run_id,
             static_staging_dir=Path(static_staging_dir),
         )
-        post_validation_hash = MarketRsStaticArtifactValidator.manifest_hash(
-            manifest_path
+        post_validation_fingerprint = (
+            MarketRsStaticArtifactValidator.bundle_fingerprint(
+                Path(static_staging_dir),
+                market=normalized,
+            )
         )
-        if static_errors or post_validation_hash != current_hash:
+        if (
+            static_errors
+            or post_validation_fingerprint.sha256
+            != current_fingerprint.sha256
+        ):
             raise MarketRsActivationRejected(
                 static_errors
                 or (
-                    "Validated static manifest changed during activation "
+                    "Validated static bundle changed during activation "
                     "revalidation.",
                 )
             )

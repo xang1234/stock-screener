@@ -1,14 +1,39 @@
 from datetime import date, datetime
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+    GroupSnapshotIdentity,
+    RsPublicationIdentity,
+)
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
-from app.services.group_constituent_source import GroupConstituentSource
+from app.services.group_constituent_source import (
+    GroupConstituentPublicationUnavailable,
+    GroupConstituentSource,
+)
+
+
+def _publication(
+    as_of_date: date,
+    *,
+    market: str = "US",
+    formula_version: str = LEGACY_RS_FORMULA_VERSION,
+    market_rs_run_id: int | None = None,
+    universe_size: int | None = None,
+) -> RsPublicationIdentity:
+    return RsPublicationIdentity(
+        snapshot=GroupSnapshotIdentity(market, as_of_date, formula_version),
+        market_rs_run_id=market_rs_run_id,
+        universe_size=universe_size,
+    )
 
 
 def _make_session():
@@ -46,7 +71,25 @@ def _add_scan(
     )
 
 
-def _add_feature_run(session, *, run_id: int, as_of_date: date, market: str = "US"):
+def _add_feature_run(
+    session,
+    *,
+    run_id: int,
+    as_of_date: date,
+    market: str = "US",
+    market_rs_run_id: int | None = None,
+    universe_size: int | None = None,
+):
+    config = {"universe": {"market": market}}
+    if market_rs_run_id is not None:
+        config.update(
+            {
+                "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                "market_rs_run_id": market_rs_run_id,
+                "rs_as_of_date": as_of_date.isoformat(),
+                "rs_universe_size": universe_size,
+            }
+        )
     session.add(
         FeatureRun(
             id=run_id,
@@ -54,7 +97,7 @@ def _add_feature_run(session, *, run_id: int, as_of_date: date, market: str = "U
             run_type="daily_snapshot",
             status="published",
             published_at=datetime.combine(as_of_date, datetime.min.time()),
-            config_json={"universe": {"market": market}},
+            config_json=config,
         )
     )
 
@@ -134,8 +177,7 @@ def test_feature_run_with_empty_group_does_not_fallback_to_legacy():
         items = GroupConstituentSource().get_constituent_items(
             db,
             group,
-            market="US",
-            as_of_date=as_of_date,
+            publication=_publication(as_of_date),
         )
 
         assert items == ()
@@ -181,8 +223,7 @@ def test_feature_run_market_metadata_controls_feature_constituent_source():
         items = GroupConstituentSource().get_constituent_items(
             db,
             group,
-            market="US",
-            as_of_date=as_of_date,
+            publication=_publication(as_of_date),
         )
 
         assert [item.symbol for item in items] == ["LEGACY"]
@@ -230,8 +271,7 @@ def test_legacy_scan_constituents_are_market_scoped_and_include_sparklines():
         items = GroupConstituentSource().get_constituent_items(
             db,
             group,
-            market="US",
-            as_of_date=date(2026, 6, 24),
+            publication=_publication(date(2026, 6, 24)),
         )
 
         assert [item.symbol for item in items] == ["USWIN"]
@@ -282,11 +322,89 @@ def test_legacy_scan_selection_honors_as_of_date():
         items = GroupConstituentSource().get_constituent_items(
             db,
             group,
-            market="US",
-            as_of_date=date(2026, 6, 24),
+            publication=_publication(date(2026, 6, 24)),
         )
 
         assert [item.symbol for item in items] == ["PAST"]
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_balanced_constituents_use_exact_publication_not_latest_market_run():
+    db = _make_session()
+    group = "Software"
+    as_of_date = date(2026, 6, 24)
+    try:
+        _add_feature_run(
+            db,
+            run_id=88,
+            as_of_date=as_of_date,
+            market_rs_run_id=42,
+            universe_size=100,
+        )
+        _add_feature_row(
+            db,
+            run_id=88,
+            symbol="EXACT",
+            as_of_date=as_of_date,
+            industry_group=group,
+        )
+        _add_feature_run(
+            db,
+            run_id=89,
+            as_of_date=as_of_date,
+            market_rs_run_id=43,
+            universe_size=101,
+        )
+        _add_feature_row(
+            db,
+            run_id=89,
+            symbol="NEWER_WRONG_RUN",
+            as_of_date=as_of_date,
+            industry_group=group,
+        )
+        db.commit()
+
+        items = GroupConstituentSource().get_constituent_items(
+            db,
+            group,
+            publication=_publication(
+                as_of_date,
+                formula_version=BALANCED_RS_FORMULA_VERSION,
+                market_rs_run_id=42,
+                universe_size=100,
+            ),
+        )
+
+        assert [item.symbol for item in items] == ["EXACT"]
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_balanced_constituents_fail_closed_without_exact_feature_publication():
+    db = _make_session()
+    as_of_date = date(2026, 6, 24)
+    try:
+        _add_scan(
+            db,
+            scan_id="legacy-us-scan",
+            completed_at=datetime(2026, 6, 24, 22, 0, 0),
+        )
+        db.commit()
+
+        with pytest.raises(GroupConstituentPublicationUnavailable):
+            GroupConstituentSource().get_constituent_items(
+                db,
+                "Software",
+                publication=_publication(
+                    as_of_date,
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    market_rs_run_id=42,
+                    universe_size=100,
+                ),
+            )
     finally:
         db.rollback()
         db.close()

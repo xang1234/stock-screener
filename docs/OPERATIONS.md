@@ -243,7 +243,7 @@ python -m app.scripts.backfill_market_rs \
   --activate
 ```
 
-The command resumes the backfill, builds a balanced Feature snapshot, stages `static-site-v3`, and checks stock/Group coverage, 1–99 ranges, contiguous deterministic Group ranks, formula/run/universe metadata, live/static stock and Group parity, and formula-isolated RRG state. Any failed gate exits nonzero without changing either active pointer. A successful validation updates the Market formula pointer and `latest_published_market:<MARKET>` Feature pointer in one database transaction, then invalidates Group caches and republishes the US bootstrap snapshot when applicable.
+The command resumes the backfill, builds a balanced Feature snapshot, stages `static-site-v3`, and checks stock/Group coverage, 1–99 ranges, contiguous deterministic Group ranks, exact formula/run/universe metadata on every Scan shard and row, live/static stock and Group parity, and formula-isolated RRG state. Approval records a fingerprint of the root manifest plus the complete staged Market tree, so any file change invalidates activation. Any failed gate exits nonzero without changing either active pointer. A successful validation updates the Market formula pointer and `latest_published_market:<MARKET>` Feature pointer in one database transaction, then invalidates Group caches and republishes the US bootstrap snapshot when applicable.
 
 After success, verify the JSON has `activated: true`, the expected formula/run IDs, and no validation errors. In the live app, refresh Groups and a Scan and confirm:
 
@@ -287,10 +287,10 @@ If either row was not updated, roll back the transaction and investigate rather 
 ```bash
 gh workflow run static-site.yml \
   -f market_group=us \
-  -f rs_formula_version=legacy-linear-v1
+  -f 'rs_formula_overrides={"US":"legacy-linear-v1"}'
 ```
 
-Verify live/static metadata says `legacy-linear-v1`. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and the workflow's default `balanced-horizon-percentile-v2` input.
+The JSON map is per Market; omitted Markets remain on `balanced-horizon-percentile-v2`, allowing an isolated rollback without changing other current or fallback artifacts. Verify live/static metadata says `legacy-linear-v1` for the restored Market. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and omit that Market from `rs_formula_overrides`.
 
 ## Common Recovery Paths
 

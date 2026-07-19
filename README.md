@@ -39,6 +39,8 @@ Scan results expose overall, 1M, 3M, and 12M RS. A Group's overall, 1M, and 3M R
 
 This methodology is inspired by IBD/CANSLIM's market-relative, percentile-ranked view of leadership, but it is not IBD's undisclosed proprietary formula. Published data carries the formula version, as-of date, universe identity, adjusted-close-only price basis, and run metadata. Live Groups, static Groups, feature enrichment, and RRG all consume the same exact Market/date/formula snapshot instead of recalculating RS independently. The RRG transformation itself is unchanged and never mixes history from different RS formula versions. `legacy-linear-v1` remains available only as an explicit rollback mode; incompatible or incomplete runs are rebuilt rather than silently reused.
 
+Formula activation and static rollback are independent per Market. The Static Site workflow accepts a JSON map of Market overrides, so one Market can use `legacy-linear-v1` while the others remain balanced. Canonical activation validates every exported Scan shard and exact formula/run/universe identity, then binds approval to a SHA-256 fingerprint of the root manifest and the complete Market artifact tree; changing any staged Market file invalidates approval.
+
 ![Market Health and Exposure](docs/screenshots/health-exposure.jpg)
 *Market Health and Exposure*
 

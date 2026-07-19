@@ -3,7 +3,7 @@
 import gc
 import logging
 from datetime import date, datetime, timedelta
-from typing import Callable, Dict, List
+from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,8 @@ from ..config import settings
 from ..infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from ..models.industry import IBDGroupRank
 from .ibd_industry_service import IBDIndustryService
+from .group_ranking_calculation_service import GroupRankingCalculationService
+from .legacy_group_rank_contracts import GroupRankPrefetchData
 from .legacy_group_rank_data import LegacyGroupRankingEngine
 from .market_calendar_service import MarketCalendarService
 
@@ -26,14 +28,64 @@ class LegacyGroupBackfillService:
         ranking_engine: LegacyGroupRankingEngine,
         market_calendar: MarketCalendarService,
         market_rs_repository: MarketRsRunRepository,
-        calculate_group_rankings: Callable[..., List[Dict]],
-        store_rankings: Callable[..., None],
+        calculation_service: GroupRankingCalculationService,
     ) -> None:
         self.ranking_engine = ranking_engine
         self.market_calendar = market_calendar
         self.market_rs_repository = market_rs_repository
-        self.calculate_group_rankings = calculate_group_rankings
-        self.store_rankings = store_rankings
+        self.calculation_service = calculation_service
+
+    def _process_optimized_dates(
+        self,
+        db: Session,
+        *,
+        dates: List[date],
+        market: str,
+        groups: List[str],
+        prefetch: GroupRankPrefetchData,
+    ) -> tuple[int, int]:
+        """Calculate/store optimized legacy dates through one shared loop."""
+        processed = 0
+        errors = 0
+        symbols_by_group = self.ranking_engine.symbols_by_group_for_run(
+            db,
+            groups,
+            prefetch,
+            market=market,
+        )
+        chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
+        for chunk_start in range(0, len(dates), chunk_size):
+            date_chunk = dates[chunk_start:chunk_start + chunk_size]
+            rs_by_date = self.ranking_engine.calculate_rs_by_symbol_for_dates(
+                prefetch,
+                date_chunk,
+            )
+            for calculation_date in date_chunk:
+                try:
+                    rankings = self.calculation_service.rank_legacy_metrics(
+                        groups=groups,
+                        symbols_by_group=symbols_by_group,
+                        prefetch=prefetch,
+                        rs_by_symbol=rs_by_date.get(calculation_date, {}),
+                        calculation_date=calculation_date,
+                    )
+                    if not rankings:
+                        errors += 1
+                        logger.warning("No valid Groups for %s", calculation_date)
+                        continue
+                    self.calculation_service.store_legacy_rankings(
+                        db,
+                        calculation_date,
+                        rankings,
+                        market=market,
+                    )
+                    processed += 1
+                except Exception as exc:
+                    errors += 1
+                    logger.error("Error processing %s: %s", calculation_date, exc)
+            rs_by_date.clear()
+            gc.collect()
+        return processed, errors
 
     def backfill_rankings_optimized(
         self,
@@ -73,8 +125,9 @@ class LegacyGroupBackfillService:
         )
 
         # 2. Pre-fetch ALL data upfront
-        prefetch = self.ranking_engine.coerce_prefetch_data(
-            self.ranking_engine.prefetch_all_data(db, market=normalized_market)
+        prefetch = self.ranking_engine.prefetch_all_data(
+            db,
+            market=normalized_market,
         )
 
         if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
@@ -108,74 +161,13 @@ class LegacyGroupBackfillService:
             f"{len(prefetch.prices_by_symbol)} symbols across {len(all_groups)} groups"
         )
 
-        processed = 0
-        errors = 0
-        symbols_by_group = self.ranking_engine.symbols_by_group_for_run(
+        processed, errors = self._process_optimized_dates(
             db,
-            all_groups,
-            prefetch,
+            dates=dates_to_process,
             market=normalized_market,
+            groups=all_groups,
+            prefetch=prefetch,
         )
-        chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
-        logger.info(
-            "Processing optimized group-ranking backfill in RS chunks of %d date(s)",
-            chunk_size,
-        )
-
-        # 4. Process each date using cached data
-        for chunk_start in range(0, len(dates_to_process), chunk_size):
-            date_chunk = dates_to_process[chunk_start:chunk_start + chunk_size]
-            rs_by_date = self.ranking_engine.calculate_rs_by_symbol_for_dates(
-                prefetch,
-                date_chunk,
-            )
-
-            for calc_date in date_chunk:
-                try:
-                    # Calculate RS for each group from cache
-                    group_metrics = []
-                    rs_by_symbol = rs_by_date.get(calc_date, {})
-                    for group_name in all_groups:
-                        metrics = self.ranking_engine.calculate_group_metrics_from_rs(
-                            group_name,
-                            symbols_by_group.get(group_name, []),
-                            rs_by_symbol,
-                            prefetch.market_caps,
-                            calc_date,
-                        )
-                        if metrics:
-                            group_metrics.append(metrics)
-
-                    if group_metrics:
-                        # Sort and rank
-                        group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
-                        for rank, metrics in enumerate(group_metrics, start=1):
-                            metrics['rank'] = rank
-
-                        # Store
-                        self.store_rankings(
-                            db,
-                            calc_date,
-                            group_metrics,
-                            market=normalized_market,
-                        )
-                        processed += 1
-
-                        if processed % 10 == 0:
-                            logger.info(
-                                f"Progress: {processed}/{len(dates_to_process)} dates "
-                                f"({len(group_metrics)} groups for {calc_date})"
-                            )
-                    else:
-                        errors += 1
-                        logger.warning(f"No valid groups for {calc_date}")
-
-                except Exception as e:
-                    errors += 1
-                    logger.error(f"Error processing {calc_date}: {e}")
-
-            rs_by_date.clear()
-            gc.collect()
 
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(
@@ -256,7 +248,7 @@ class LegacyGroupBackfillService:
                     continue
 
                 # Calculate rankings for this date
-                results = self.calculate_group_rankings(
+                results = self.calculation_service.calculate_and_store(
                     db,
                     calc_date,
                     market=normalized_market,
@@ -363,7 +355,7 @@ class LegacyGroupBackfillService:
 
         for calc_date in missing_dates:
             try:
-                results = self.calculate_group_rankings(
+                results = self.calculation_service.calculate_and_store(
                     db,
                     calc_date,
                     market=normalized_market,
@@ -426,8 +418,9 @@ class LegacyGroupBackfillService:
         start_time = datetime.now()
 
         # Pre-fetch ALL data upfront
-        prefetch = self.ranking_engine.coerce_prefetch_data(
-            self.ranking_engine.prefetch_all_data(db, market=normalized_market)
+        prefetch = self.ranking_engine.prefetch_all_data(
+            db,
+            market=normalized_market,
         )
 
         if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
@@ -452,65 +445,13 @@ class LegacyGroupBackfillService:
             'errors': 0,
         }
 
-        symbols_by_group = self.ranking_engine.symbols_by_group_for_run(
+        stats['processed'], stats['errors'] = self._process_optimized_dates(
             db,
-            all_groups,
-            prefetch,
+            dates=missing_dates,
             market=normalized_market,
+            groups=all_groups,
+            prefetch=prefetch,
         )
-        chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
-        logger.info(
-            "Processing group-ranking gap-fill in RS chunks of %d date(s)",
-            chunk_size,
-        )
-        for chunk_start in range(0, len(missing_dates), chunk_size):
-            date_chunk = missing_dates[chunk_start:chunk_start + chunk_size]
-            rs_by_date = self.ranking_engine.calculate_rs_by_symbol_for_dates(
-                prefetch,
-                date_chunk,
-            )
-
-            for calc_date in date_chunk:
-                try:
-                    # Calculate RS for each group from cache
-                    group_metrics = []
-                    rs_by_symbol = rs_by_date.get(calc_date, {})
-                    for group_name in all_groups:
-                        metrics = self.ranking_engine.calculate_group_metrics_from_rs(
-                            group_name,
-                            symbols_by_group.get(group_name, []),
-                            rs_by_symbol,
-                            prefetch.market_caps,
-                            calc_date,
-                        )
-                        if metrics:
-                            group_metrics.append(metrics)
-
-                    if group_metrics:
-                        # Sort and rank
-                        group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
-                        for rank, metrics in enumerate(group_metrics, start=1):
-                            metrics['rank'] = rank
-
-                        # Store
-                        self.store_rankings(
-                            db,
-                            calc_date,
-                            group_metrics,
-                            market=normalized_market,
-                        )
-                        stats['processed'] += 1
-                        logger.debug(f"Filled gap for {calc_date}: {len(group_metrics)} groups")
-                    else:
-                        stats['errors'] += 1
-                        logger.warning(f"No results for {calc_date}")
-
-                except Exception as e:
-                    stats['errors'] += 1
-                    logger.error(f"Error filling gap for {calc_date}: {e}")
-
-            rs_by_date.clear()
-            gc.collect()
 
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(

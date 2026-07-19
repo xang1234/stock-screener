@@ -1431,6 +1431,68 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
     )]
 
 
+def test_main_combines_with_independent_per_market_rs_formula_policy(
+    monkeypatch,
+    tmp_path,
+):
+    captured: list[dict[str, str]] = []
+    output_dir = tmp_path / "out"
+
+    monkeypatch.setattr(
+        export_script.StaticSiteExportService,
+        "combine_market_artifacts",
+        lambda _artifacts_dir, _output_dir, **kwargs: captured.append(
+            kwargs["rs_formula_version_overrides"]
+        )
+        or SimpleNamespace(
+            output_dir=output_dir,
+            generated_at="2026-04-05T22:00:00Z",
+            as_of_date="2026-04-05",
+            warnings=(),
+            manifest={},
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(output_dir),
+            "--combine-artifacts-dir",
+            str(tmp_path / "artifacts"),
+            "--rs-formula-overrides-json",
+            '{"HK":"legacy-linear-v1"}',
+        ],
+    )
+
+    assert export_script.main() == 0
+    assert captured[0]["HK"] == LEGACY_RS_FORMULA_VERSION
+    assert captured[0]["US"] == BALANCED_RS_FORMULA_VERSION
+
+
+def test_main_rejects_global_rs_formula_override_when_combining(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--combine-artifacts-dir",
+            str(tmp_path / "artifacts"),
+            "--rs-formula-version",
+            LEGACY_RS_FORMULA_VERSION,
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="single-market exports"):
+        export_script.main()
+
+
 def test_main_returns_skip_code_for_market_not_trading_day(monkeypatch, tmp_path, capsys):
     export_calls: list[object] = []
     output_dir = tmp_path / "out"

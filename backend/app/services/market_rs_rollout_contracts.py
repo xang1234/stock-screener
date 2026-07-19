@@ -97,7 +97,7 @@ class ActivationValidationReport:
     latest_universe_hash: str | None
     feature_run_id: int | None
     feature_universe_hash: str | None
-    static_manifest_sha256: str | None
+    static_bundle_sha256: str | None
     errors: tuple[str, ...]
     rrg_status: str | None = None
     rrg_history_schema_version: str = STATIC_RRG_HISTORY_SCHEMA_VERSION

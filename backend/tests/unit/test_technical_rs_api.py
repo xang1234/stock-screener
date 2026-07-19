@@ -17,11 +17,10 @@ class _Reader:
 
     def get(self, **kwargs):
         self.calls.append(kwargs)
-        return MarketRsResolution(
+        return MarketRsResolution.canonical(
             market="US",
             as_of_date=date(2026, 7, 17),
             formula_version=BALANCED_RS_FORMULA_VERSION,
-            mode="canonical",
             run_id=42,
             universe_size=5000,
             ratings_by_symbol=self.ratings_by_symbol,

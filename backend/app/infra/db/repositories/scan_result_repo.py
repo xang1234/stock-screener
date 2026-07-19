@@ -263,14 +263,10 @@ class SqlScanResultRepository(ScanResultRepository):
         *,
         taxonomy_service: MarketTaxonomyService | None = None,
         market_rs_repository: MarketRsRunRepository | None = None,
-        market_group_ranking_service: Any | None = None,
     ) -> None:
         self._session = session
         self._taxonomy_service = taxonomy_service or get_market_taxonomy_service()
         self._market_rs_repository = market_rs_repository or MarketRsRunRepository()
-        # Compatibility-only constructor argument. Feature-row-derived Group
-        # snapshots are intentionally never consulted during persistence.
-        del market_group_ranking_service
 
     def bulk_insert(self, rows: list[dict]) -> int:
         objects = [ScanResult(**row) for row in rows]

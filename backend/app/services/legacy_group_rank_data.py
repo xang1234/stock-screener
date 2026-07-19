@@ -4,7 +4,7 @@ import logging
 import math
 import statistics
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Dict, List, Optional, Protocol
 
 import pandas as pd
 from sqlalchemy import and_
@@ -114,21 +114,6 @@ class LegacyGroupRankingEngine:
         count = count_above_80 or 0
         return round((count / total_count) * 100, 1)
 
-    @staticmethod
-    def coerce_prefetch_data(prefetch: Any) -> GroupRankPrefetchData:
-        """Accept legacy test tuples while the service uses a named prefetch object."""
-        if isinstance(prefetch, GroupRankPrefetchData):
-            return prefetch
-        spy_data, all_prices, active_symbols, market_caps, stats = prefetch
-        return GroupRankPrefetchData(
-            benchmark_prices=spy_data,
-            prices_by_symbol=all_prices,
-            active_symbols=active_symbols,
-            market_caps=market_caps,
-            stats=stats,
-            symbols_by_group={},
-        )
-
     def symbols_by_group_for_run(
         self,
         db: Session,
@@ -137,7 +122,7 @@ class LegacyGroupRankingEngine:
         *,
         market: str,
     ) -> Dict[str, List[str]]:
-        """Return prefetched group symbols, or build them once for legacy prefetch tuples."""
+        """Return prefetched group symbols, or build missing memberships once."""
         symbols_by_group: Dict[str, List[str]] = {}
         for group_name in group_names:
             if group_name in prefetch.symbols_by_group:
@@ -167,7 +152,7 @@ class LegacyGroupRankingEngine:
         3. All prices for all symbols across all groups in a single batch
 
         Returns:
-            Tuple of (spy_prices_df, {symbol: prices_df}, active_symbols_set, {symbol: market_cap})
+            One named prefetch object containing prices, memberships, and stats.
         """
         normalized_market = (market or "US").upper()
         benchmark_symbol = self.benchmark_cache.get_benchmark_symbol(normalized_market)
