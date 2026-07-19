@@ -281,23 +281,23 @@ def test_manual_balanced_group_rankings_publish_exact_market_rs_first(monkeypatc
     )
 
     events: list[str] = []
-    market_rs_service = MagicMock()
-    market_rs_service.calculate.side_effect = lambda *args, **kwargs: events.append("market_rs")
-    monkeypatch.setattr(module, "get_market_rs_snapshot_service", lambda: market_rs_service)
+    coordinator = MagicMock()
+    coordinator.ensure_snapshot.side_effect = lambda *args, **kwargs: events.append("market_rs")
+    reader = MagicMock()
+    reader.load_exact.side_effect = lambda *args, **kwargs: (
+        events.append("groups")
+        or [{
+            "industry_group": "Software",
+            "avg_rs_rating": 95.0,
+            "rank": 1,
+            "num_stocks": 12,
+        }]
+    )
+    monkeypatch.setattr(module, "get_group_rank_snapshot_coordinator", lambda: coordinator)
+    monkeypatch.setattr(module, "get_group_rank_snapshot_reader", lambda: reader)
 
     group_service = MagicMock()
     group_service.price_cache = MagicMock()
-    group_service.calculate_group_rankings.side_effect = lambda *args, **kwargs: (
-        events.append("groups")
-        or [
-            {
-                "industry_group": "Software",
-                "avg_rs_rating": 95.0,
-                "rank": 1,
-                "num_stocks": 12,
-            }
-        ]
-    )
     monkeypatch.setattr(module, "get_group_rank_service", lambda: group_service)
 
     result = module.calculate_daily_group_rankings.run(
@@ -307,20 +307,19 @@ def test_manual_balanced_group_rankings_publish_exact_market_rs_first(monkeypatc
 
     assert result["groups_ranked"] == 1
     assert events == ["market_rs", "groups"]
-    market_rs_service.calculate.assert_called_once_with(
+    coordinator.ensure_snapshot.assert_called_once_with(
         fake_db,
-        market="US",
-        as_of_date=date(2026, 4, 10),
-        formula_version=BALANCED_RS_FORMULA_VERSION,
+        identity=module.GroupSnapshotIdentity(
+            "US", date(2026, 4, 10), BALANCED_RS_FORMULA_VERSION
+        ),
     )
-    group_service.calculate_group_rankings.assert_called_once_with(
+    reader.load_exact.assert_called_once_with(
         fake_db,
-        date(2026, 4, 10),
-        market="US",
-        cache_only=False,
-        cache_requirement=GroupRankCacheRequirement.disabled(),
-        formula_version=BALANCED_RS_FORMULA_VERSION,
+        identity=module.GroupSnapshotIdentity(
+            "US", date(2026, 4, 10), BALANCED_RS_FORMULA_VERSION
+        ),
     )
+    group_service.calculate_group_rankings.assert_not_called()
 
 
 def test_manual_balanced_group_rankings_stop_when_market_rs_fails(monkeypatch):
@@ -337,13 +336,13 @@ def test_manual_balanced_group_rankings_stop_when_market_rs_fails(monkeypatch):
         "_resolve_active_group_formula",
         lambda _db, *, market, group_service: BALANCED_RS_FORMULA_VERSION,
     )
-    market_rs_service = MagicMock()
-    market_rs_service.calculate.side_effect = MarketRsInputUnavailable(
+    coordinator = MagicMock()
+    coordinator.ensure_snapshot.side_effect = MarketRsInputUnavailable(
         "benchmark missing",
         reason_code="benchmark_anchor_missing",
         diagnostics={},
     )
-    monkeypatch.setattr(module, "get_market_rs_snapshot_service", lambda: market_rs_service)
+    monkeypatch.setattr(module, "get_group_rank_snapshot_coordinator", lambda: coordinator)
     group_service = MagicMock()
     group_service.price_cache = MagicMock()
     monkeypatch.setattr(module, "get_group_rank_service", lambda: group_service)
@@ -372,8 +371,6 @@ def test_manual_legacy_group_rankings_do_not_publish_market_rs(monkeypatch):
         "_resolve_active_group_formula",
         lambda _db, *, market, group_service: LEGACY_RS_FORMULA_VERSION,
     )
-    market_rs_service = MagicMock()
-    monkeypatch.setattr(module, "get_market_rs_snapshot_service", lambda: market_rs_service)
     group_service = MagicMock()
     group_service.price_cache = MagicMock()
     group_service.calculate_group_rankings.return_value = [
@@ -392,7 +389,7 @@ def test_manual_legacy_group_rankings_do_not_publish_market_rs(monkeypatch):
     )
 
     assert result["groups_ranked"] == 1
-    market_rs_service.calculate.assert_not_called()
+    group_service.calculate_group_rankings.assert_called_once()
 
 
 def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypatch):
@@ -477,6 +474,7 @@ def test_group_gapfill_uses_requested_calculation_date_for_daily_calc(monkeypatc
         lookback_days=365,
         market="HK",
         end_date=date(2026, 3, 16),
+        formula_version="legacy-linear-v1",
     )
 
 
@@ -540,8 +538,7 @@ def test_daily_group_rankings_retry_survives_activity_publish_failure(monkeypatc
 
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
     monkeypatch.setattr(
-        module,
-        "mark_market_activity_failed",
+        "app.tasks.group_rank_workflows.mark_market_activity_failed",
         MagicMock(side_effect=RuntimeError("activity store unavailable")),
     )
 
@@ -793,6 +790,11 @@ def test_gapfill_group_rankings_passes_market_to_service(monkeypatch):
         "errors": 0,
     }
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        module,
+        "_coordinate_group_dates",
+        MagicMock(return_value={"total_dates": 1, "processed": 1, "skipped": 0, "errors": 0}),
+    )
 
     result = module.gapfill_group_rankings.run(max_days=30, market="HK")
 
@@ -801,11 +803,7 @@ def test_gapfill_group_rankings_passes_market_to_service(monkeypatch):
         fake_db,
         lookback_days=30,
         market="HK",
-    )
-    fake_service.fill_gaps_optimized.assert_called_once_with(
-        fake_db,
-        [datetime(2026, 3, 19).date()],
-        market="HK",
+        formula_version="legacy-linear-v1",
     )
 
 
@@ -819,23 +817,23 @@ def test_backfill_group_rankings_passes_market_to_service(monkeypatch):
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
 
     fake_service = MagicMock()
-    fake_service.backfill_rankings_optimized.return_value = {
+    coordinate = MagicMock(return_value={
         "total_dates": 1,
-        "deleted": 0,
         "processed": 1,
         "skipped": 0,
         "errors": 0,
-    }
+    })
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(module, "_coordinate_group_dates", coordinate)
 
     result = module.backfill_group_rankings.run("2026-03-17", "2026-03-17", market="HK")
 
     assert result["processed"] == 1
-    fake_service.backfill_rankings_optimized.assert_called_once_with(
+    coordinate.assert_called_once_with(
         fake_db,
-        datetime(2026, 3, 17).date(),
-        datetime(2026, 3, 17).date(),
+        dates=[datetime(2026, 3, 17).date()],
         market="HK",
+        formula_version="legacy-linear-v1",
     )
 
 
@@ -850,24 +848,24 @@ def test_backfill_group_rankings_1year_passes_market_to_service(monkeypatch):
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
 
     fake_service = MagicMock()
-    fake_service.backfill_rankings_optimized.return_value = {
+    coordinate = MagicMock(return_value={
         "total_dates": 1,
-        "deleted": 0,
         "processed": 1,
         "skipped": 0,
         "errors": 0,
-    }
+    })
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(module, "_coordinate_group_dates", coordinate)
 
     result = module.backfill_group_rankings_1year.run(market="HK")
 
     assert result["processed"] == 1
-    fake_service.backfill_rankings_optimized.assert_called_once_with(
-        fake_db,
-        datetime(2025, 3, 20).date(),
-        datetime(2026, 3, 20).date(),
-        market="HK",
-    )
+    assert coordinate.call_count == 1
+    coordinate_kwargs = coordinate.call_args.kwargs
+    assert coordinate_kwargs["market"] == "HK"
+    assert coordinate_kwargs["formula_version"] == "legacy-linear-v1"
+    assert coordinate_kwargs["dates"][0] == datetime(2025, 3, 20).date()
+    assert coordinate_kwargs["dates"][-1] == datetime(2026, 3, 20).date()
 
 
 def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatch):
@@ -937,6 +935,11 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
         "total_dates": 1, "processed": 1, "errors": 0,
     }
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        module,
+        "_coordinate_group_dates",
+        MagicMock(return_value={"total_dates": 1, "processed": 1, "skipped": 0, "errors": 0}),
+    )
 
     daily_calls: list[dict] = []
     monkeypatch.setattr(
@@ -961,9 +964,7 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
         lookback_days=365,
         market="US",
         end_date=date(2026, 3, 20),
-    )
-    fake_service.fill_gaps_optimized.assert_called_once_with(
-        fake_db, [date_cls(2026, 3, 19)], market="US",
+        formula_version="legacy-linear-v1",
     )
 
 
@@ -997,6 +998,11 @@ def test_orchestrator_releases_gapfill_memory_before_today(monkeypatch):
         "errors": 0,
     }
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        module,
+        "_coordinate_group_dates",
+        MagicMock(return_value={"total_dates": 1, "processed": 1, "skipped": 0, "errors": 0}),
+    )
 
     events: list[str] = []
     monkeypatch.setattr(
@@ -1048,6 +1054,11 @@ def test_orchestrator_gapfills_but_skips_today_on_non_trading_day(monkeypatch):
         "total_dates": 1, "processed": 1, "errors": 0,
     }
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        module,
+        "_coordinate_group_dates",
+        MagicMock(return_value={"total_dates": 1, "processed": 1, "skipped": 0, "errors": 0}),
+    )
 
     daily_helper = MagicMock()
     monkeypatch.setattr(
@@ -1136,7 +1147,7 @@ def test_orchestrator_fails_when_us_taxonomy_is_empty(monkeypatch):
     completed = MagicMock()
     failed = MagicMock()
     monkeypatch.setattr(module, "mark_market_activity_completed", completed)
-    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+    monkeypatch.setattr("app.tasks.group_rank_workflows.mark_market_activity_failed", failed)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
@@ -1245,6 +1256,7 @@ def test_orchestrator_runs_for_non_us_market(monkeypatch):
         lookback_days=365,
         market="HK",
         end_date=date(2026, 3, 20),
+        formula_version="legacy-linear-v1",
     )
 
 
@@ -1285,7 +1297,7 @@ def test_orchestrator_marks_failed_when_inner_daily_result_has_error(monkeypatch
     completed = MagicMock()
     failed = MagicMock()
     monkeypatch.setattr(module, "mark_market_activity_completed", completed)
-    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+    monkeypatch.setattr("app.tasks.group_rank_workflows.mark_market_activity_failed", failed)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
@@ -1329,7 +1341,7 @@ def test_bootstrap_orchestrator_marks_failed_when_inner_daily_warmup_incomplete(
     )
 
     failed = MagicMock()
-    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+    monkeypatch.setattr("app.tasks.group_rank_workflows.mark_market_activity_failed", failed)
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(
         market="US",
@@ -1373,7 +1385,7 @@ def test_orchestrator_reraises_retry_from_inner_daily_call(monkeypatch):
     )
 
     failed = MagicMock()
-    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+    monkeypatch.setattr("app.tasks.group_rank_workflows.mark_market_activity_failed", failed)
 
     with pytest.raises(Retry):
         module.calculate_daily_group_rankings_with_gapfill.run(market="US")
@@ -1409,7 +1421,10 @@ def test_orchestrator_rolls_back_before_publishing_failure(monkeypatch):
     def fake_mark_failed(db, **_kwargs):
         rollback_seen_by_failure_publish.append(db.rollback.called)
 
-    monkeypatch.setattr(module, "mark_market_activity_failed", fake_mark_failed)
+    monkeypatch.setattr(
+        "app.tasks.group_rank_workflows.mark_market_activity_failed",
+        fake_mark_failed,
+    )
 
     result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
@@ -1480,7 +1495,7 @@ def test_in_process_daily_call_propagates_transient_without_inner_retry(monkeypa
     inner_retry = MagicMock(side_effect=AssertionError("inner retry scheduled"))
     failed = MagicMock()
     monkeypatch.setattr(module.calculate_daily_group_rankings, "retry", inner_retry)
-    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+    monkeypatch.setattr("app.tasks.group_rank_workflows.mark_market_activity_failed", failed)
 
     with pytest.raises(ConnectionError):
         module._calculate_daily_group_rankings_in_process(

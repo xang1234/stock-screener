@@ -52,7 +52,7 @@ def _stub_ready_group_rank_history(monkeypatch) -> None:
     monkeypatch.setattr(
         export_script,
         "_ensure_group_rank_history",
-        lambda *, as_of_date, market: _backfill_result(
+        lambda *, as_of_date, market, formula_version: _backfill_result(
             status=GroupRankHistoryBackfillStatus.SKIPPED,
             market=market,
             as_of_date=as_of_date,
@@ -96,6 +96,20 @@ def _stub_balanced_static_rs_preparation(monkeypatch):
             "market_rs_run_id": 1,
         },
         raising=False,
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_group_rank_history",
+        lambda *, as_of_date, market, formula_version: _backfill_result(
+            status=GroupRankHistoryBackfillStatus.SKIPPED,
+            market=market,
+            as_of_date=as_of_date,
+        ),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda **_kwargs: {"status": "skipped"},
     )
     return real_helper
 
@@ -167,7 +181,7 @@ def test_run_daily_refresh_activates_balanced_rs_before_static_consumers(
     monkeypatch.setattr(
         export_script,
         "_ensure_group_rank_history",
-        lambda *, as_of_date, market: events.append("group_history")
+        lambda *, as_of_date, market, formula_version: events.append("group_history")
         or _backfill_result(
             status=GroupRankHistoryBackfillStatus.COMPLETED,
             market=market,
@@ -198,9 +212,9 @@ def test_run_daily_refresh_activates_balanced_rs_before_static_consumers(
         "market_rs_snapshot",
         "formula_activate",
         "formula_commit",
+        "group_history",
         "exposure",
         "feature_snapshot",
-        "group_history",
     ]
     assert results["market_rs"]["US"] == {
         "status": "completed",
@@ -323,6 +337,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
             "market": market,
             "publish_pointer_key": f"latest_published_market:{market}",
             "ignore_runtime_market_gate": True,
+            "rs_formula_version_override": BALANCED_RS_FORMULA_VERSION,
         }
     assert set(results["price_refresh"]) == set(expected_markets)
     assert results["default_market_pointer"] == {
@@ -486,8 +501,12 @@ def test_run_daily_refresh_skips_snapshot_when_market_exposure_errors(monkeypatc
     monkeypatch.setattr(
         export_script,
         "_ensure_group_rank_history",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("group rank backfill should not run without a snapshot")
+        lambda **kwargs: calls.append(
+            f"group:{kwargs['market']}:{kwargs['as_of_date'].isoformat()}"
+        ) or _backfill_result(
+            status=GroupRankHistoryBackfillStatus.COMPLETED,
+            market=kwargs["market"],
+            as_of_date=kwargs["as_of_date"],
         ),
     )
     monkeypatch.setattr(
@@ -513,6 +532,7 @@ def test_run_daily_refresh_skips_snapshot_when_market_exposure_errors(monkeypatc
 
     assert calls == [
         "price:US:2026-06-25",
+        "group:US:2026-06-25",
         "exposure:US:2026-06-25",
     ]
     assert results["feature_snapshots"] == {
@@ -530,7 +550,7 @@ def test_run_daily_refresh_skips_snapshot_when_market_exposure_errors(monkeypatc
             ],
         }
     }
-    assert results["group_rank_history_backfill"]["US"]["reason"] == "snapshot_not_ready"
+    assert results["group_rank_history_backfill"]["US"]["status"] == "completed"
     assert results["ibd_metadata_refresh"]["US"]["reason"] == "snapshot_not_ready"
     assert "Static export market US exposure not stored for 2026-06-25: no_benchmark_data." in warnings
 
@@ -880,6 +900,7 @@ def test_run_daily_refresh_limits_work_to_selected_market(monkeypatch):
                 "market": "HK",
                 "publish_pointer_key": "latest_published_market:HK",
                 "ignore_runtime_market_gate": True,
+                "rs_formula_version_override": BALANCED_RS_FORMULA_VERSION,
             },
         ),
     ]
@@ -950,6 +971,7 @@ def test_run_daily_refresh_uses_per_market_trading_date_for_in(monkeypatch):
             "market": "IN",
             "publish_pointer_key": "latest_published_market:IN",
             "ignore_runtime_market_gate": True,
+            "rs_formula_version_override": BALANCED_RS_FORMULA_VERSION,
         }
     ]
 
@@ -996,6 +1018,7 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
         "market": "US",
         "publish_pointer_key": "latest_published_market:US",
         "ignore_runtime_market_gate": True,
+        "rs_formula_version_override": BALANCED_RS_FORMULA_VERSION,
     }
 
 
@@ -1024,9 +1047,13 @@ def test_run_daily_refresh_reenriches_ibd_metadata_after_group_rank_backfill(mon
 
     group_rank_calls: list[dict] = []
 
-    def fake_ensure_group_rank_history(*, as_of_date, market):
+    def fake_ensure_group_rank_history(*, as_of_date, market, formula_version):
         events.append(f"group_rank:{market}")
-        group_rank_calls.append({"as_of_date": as_of_date, "market": market})
+        group_rank_calls.append({
+            "as_of_date": as_of_date,
+            "market": market,
+            "formula_version": formula_version,
+        })
         return _backfill_result(
             status=GroupRankHistoryBackfillStatus.COMPLETED,
             market=market,
@@ -1069,11 +1096,15 @@ def test_run_daily_refresh_reenriches_ibd_metadata_after_group_rank_backfill(mon
     assert events == [
         "universe_refresh",
         "fundamentals_refresh",
-        "feature_snapshot",
         "group_rank:US",
+        "feature_snapshot",
         "enrich:77",
     ]
-    assert group_rank_calls == [{"as_of_date": date(2026, 4, 2), "market": "US"}]
+    assert group_rank_calls == [{
+        "as_of_date": date(2026, 4, 2),
+        "market": "US",
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+    }]
     assert enrich_calls == [{"feature_run_id": 77, "ranking_date": date(2026, 4, 2)}]
     assert results["ibd_metadata_refresh"]["US"] == {
         "run_id": 77,
@@ -1113,7 +1144,7 @@ def test_run_daily_refresh_skips_reenrich_when_group_rank_backfill_errored(monke
     monkeypatch.setattr(
         export_script,
         "_ensure_group_rank_history",
-        lambda *, as_of_date, market: _backfill_result(
+        lambda *, as_of_date, market, formula_version: _backfill_result(
             status=GroupRankHistoryBackfillStatus.ERRORED,
             market=market,
             as_of_date=as_of_date,
@@ -1173,7 +1204,7 @@ def test_run_daily_refresh_skips_reenrich_when_snapshot_not_ready(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_ensure_group_rank_history",
-        lambda *, as_of_date, market: _backfill_result(
+        lambda *, as_of_date, market, formula_version: _backfill_result(
             status=GroupRankHistoryBackfillStatus.COMPLETED,
             market=market,
             as_of_date=as_of_date,
@@ -1345,7 +1376,7 @@ def test_main_rejects_fallback_artifacts_without_combine_mode(monkeypatch, tmp_p
 
 
 def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
-    combine_calls: list[tuple[object, object, object, bool]] = []
+    combine_calls: list[tuple[object, object, object, bool, object]] = []
     output_dir = tmp_path / "out"
     artifacts_dir = tmp_path / "artifacts"
     fallback_dir = tmp_path / "fallback"
@@ -1353,8 +1384,15 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
     monkeypatch.setattr(
         export_script.StaticSiteExportService,
         "combine_market_artifacts",
-        lambda artifacts_dir, output_dir, *, fallback_artifacts_dir=None, clean=True: combine_calls.append(
-            (artifacts_dir, output_dir, fallback_artifacts_dir, clean)
+        lambda artifacts_dir, output_dir, *, fallback_artifacts_dir=None, clean=True,
+        rs_formula_version_overrides=None: combine_calls.append(
+            (
+                artifacts_dir,
+                output_dir,
+                fallback_artifacts_dir,
+                clean,
+                rs_formula_version_overrides,
+            )
         )
         or SimpleNamespace(
             output_dir=output_dir,
@@ -1381,7 +1419,16 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
 
     assert export_script.main() == 0
 
-    assert combine_calls == [(artifacts_dir, output_dir, fallback_dir, False)]
+    assert combine_calls == [(
+        artifacts_dir,
+        output_dir,
+        fallback_dir,
+        False,
+        {
+            market: BALANCED_RS_FORMULA_VERSION
+            for market in export_script.STATIC_EXPORT_MARKETS
+        },
+    )]
 
 
 def test_main_returns_skip_code_for_market_not_trading_day(monkeypatch, tmp_path, capsys):

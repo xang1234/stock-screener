@@ -8,8 +8,16 @@ from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.scanners.base_screener import StockData
 
 
-class CanonicalStockRsUnavailable(RuntimeError):
+class StockRsUnavailable(RuntimeError):
+    """The active RS mode cannot produce a rating for this stock."""
+
+
+class CanonicalStockRsUnavailable(StockRsUnavailable):
     """The active canonical formula has no eligible rating for this stock."""
+
+
+class LegacyStockRsUnavailable(StockRsUnavailable):
+    """The legacy calculation lacks required local inputs."""
 
 
 def resolve_stock_rs(

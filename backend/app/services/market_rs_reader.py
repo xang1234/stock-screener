@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
+    balanced_run_has_required_price_basis,
 )
 from app.domain.scanning.ports import MarketRsResolution
 from app.infra.db.models.relative_strength import StockRsSnapshot
@@ -81,6 +82,10 @@ class SqlMarketRsReader:
                 raise CanonicalMarketRsUnavailable(
                     f"Canonical Market RS is unavailable for {normalized_market} "
                     f"at {requested_date} ({resolved_formula})"
+                )
+            if not balanced_run_has_required_price_basis(run):
+                raise CanonicalMarketRsUnavailable(
+                    f"Canonical Market RS run {run.id} has an incompatible price basis"
                 )
 
             rows = []

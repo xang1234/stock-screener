@@ -36,7 +36,7 @@ from app.domain.scanning.scoring import (
     calculate_composite_score,
     calculate_overall_rating,
 )
-from app.domain.scanning.ports import MarketRsReader, MarketRsResolution, StockDataProvider
+from app.domain.scanning.ports import MarketRsReader, StockDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +53,6 @@ _SCREENER_MIN_BARS: dict[str, int] = {
     "canslim": 240,
     "volume_breakthrough": 252,
 }
-
-
-def _attach_market_rs_resolution(
-    stock_data: StockData,
-    resolution: MarketRsResolution,
-) -> None:
-    symbol = stock_data.symbol.strip().upper()
-    stock_data.canonical_rs_ratings = resolution.ratings_by_symbol.get(symbol)
-    stock_data.rs_formula_version = resolution.formula_version
-    stock_data.market_rs_run_id = resolution.run_id
-    stock_data.rs_universe_size = resolution.universe_size
 
 
 def _market_rs_audit_fields(stock_data: StockData) -> dict[str, object]:
@@ -391,7 +380,10 @@ class ScanOrchestrator:
                     as_of_date=None,
                     formula_version=None,
                 )
-                _attach_market_rs_resolution(stock_data, resolution)
+                self._data_provider.apply_market_rs_resolution(
+                    {stock_data.symbol.strip().upper(): stock_data},
+                    resolution,
+                )
 
             history_bars = _history_bar_count(stock_data)
 

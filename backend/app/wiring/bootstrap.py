@@ -1,21 +1,4 @@
-"""Dependency injection bootstrap — the single place that binds ports to adapters.
-
-Every factory function here can be used as a FastAPI ``Depends()`` target.
-Routers never import concrete implementations directly; they depend on
-the abstractions returned by these factories.
-
-Example usage in a router::
-
-    from app.wiring.bootstrap import get_uow, get_create_scan_use_case
-
-    @router.post("/scans")
-    async def create_scan(
-        request: ScanCreateRequest,
-        uow: SqlUnitOfWork = Depends(get_uow),
-        use_case: CreateScanUseCase = Depends(get_create_scan_use_case),
-    ):
-        result = use_case.execute(uow, command)
-"""
+"""Dependency-injection bootstrap binding application ports to adapters."""
 
 from __future__ import annotations
 
@@ -54,6 +37,9 @@ if TYPE_CHECKING:
     from app.domain.scanning.ports import MarketRsReader
     from app.services.market_rs_snapshot_service import MarketRsSnapshotService
     from app.services.market_rs_rollout_service import MarketRsRolloutService
+    from app.services.group_rank_snapshot_coordinator import GroupRankSnapshotCoordinator
+    from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
+    from app.wiring.market_rs_services import MarketRsServices
     from app.services.point_in_time_universe_service import PointInTimeUniverseService
     from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
     from app.services.price_cache_service import PriceCacheService
@@ -118,11 +104,10 @@ class RuntimeServices:
         self._rate_limiter: RedisRateLimiter | None = None
         self._market_calendar_service: MarketCalendarService | None = None
         self._point_in_time_universe_service: PointInTimeUniverseService | None = None
-        self._market_rs_input_loader: MarketRsInputLoader | None = None
-        self._market_rs_run_repository: MarketRsRunRepository | None = None
-        self._market_rs_snapshot_service: MarketRsSnapshotService | None = None
+        self._market_rs_services: MarketRsServices | None = None
         self._market_rs_rollout_service: MarketRsRolloutService | None = None
-        self._market_rs_reader: MarketRsReader | None = None
+        self._group_rank_snapshot_reader: GroupRankSnapshotReader | None = None
+        self._group_rank_snapshot_coordinator: GroupRankSnapshotCoordinator | None = None
         self._github_release_sync_service: GitHubReleaseSyncService | None = None
         self._security_master_resolver: SecurityMasterResolver | None = None
         self._eps_rating_service: EPSRatingService | None = None
@@ -323,41 +308,26 @@ class RuntimeServices:
         return self._point_in_time_universe_service
 
     def market_rs_input_loader(self) -> MarketRsInputLoader:
-        if self._market_rs_input_loader is None:
-            with self._init_lock:
-                if self._market_rs_input_loader is None:
-                    from app.services.market_rs_inputs import MarketRsInputLoader
+        return self.market_rs_services().input_loader
 
-                    self._market_rs_input_loader = MarketRsInputLoader(
+    def market_rs_services(self) -> MarketRsServices:
+        if self._market_rs_services is None:
+            with self._init_lock:
+                if self._market_rs_services is None:
+                    from app.wiring.market_rs_services import build_market_rs_services
+
+                    self._market_rs_services = build_market_rs_services(
+                        session_factory=self._session_factory,
                         point_in_time_universe=self.point_in_time_universe_service(),
                         market_calendar=self.market_calendar_service(),
                     )
-        return self._market_rs_input_loader
+        return self._market_rs_services
 
     def market_rs_run_repository(self) -> MarketRsRunRepository:
-        if self._market_rs_run_repository is None:
-            with self._init_lock:
-                if self._market_rs_run_repository is None:
-                    from app.infra.db.repositories.market_rs_repo import (
-                        MarketRsRunRepository,
-                    )
-
-                    self._market_rs_run_repository = MarketRsRunRepository()
-        return self._market_rs_run_repository
+        return self.market_rs_services().repository
 
     def market_rs_snapshot_service(self) -> MarketRsSnapshotService:
-        if self._market_rs_snapshot_service is None:
-            with self._init_lock:
-                if self._market_rs_snapshot_service is None:
-                    from app.services.market_rs_snapshot_service import (
-                        MarketRsSnapshotService,
-                    )
-
-                    self._market_rs_snapshot_service = MarketRsSnapshotService(
-                        input_loader=self.market_rs_input_loader(),
-                        repository=self.market_rs_run_repository(),
-                    )
-        return self._market_rs_snapshot_service
+        return self.market_rs_services().snapshot_service
 
     def market_rs_rollout_service(self) -> MarketRsRolloutService:
         if self._market_rs_rollout_service is None:
@@ -377,16 +347,34 @@ class RuntimeServices:
         return self._market_rs_rollout_service
 
     def market_rs_reader(self) -> MarketRsReader:
-        if self._market_rs_reader is None:
-            with self._init_lock:
-                if self._market_rs_reader is None:
-                    from app.services.market_rs_reader import SqlMarketRsReader
+        return self.market_rs_services().reader
 
-                    self._market_rs_reader = SqlMarketRsReader(
-                        self._session_factory,
-                        repository=self.market_rs_run_repository(),
+    def group_rank_snapshot_reader(self) -> GroupRankSnapshotReader:
+        if self._group_rank_snapshot_reader is None:
+            with self._init_lock:
+                if self._group_rank_snapshot_reader is None:
+                    from app.services.group_rank_snapshot_reader import (
+                        GroupRankSnapshotReader,
                     )
-        return self._market_rs_reader
+
+                    self._group_rank_snapshot_reader = GroupRankSnapshotReader()
+        return self._group_rank_snapshot_reader
+
+    def group_rank_snapshot_coordinator(self) -> GroupRankSnapshotCoordinator:
+        if self._group_rank_snapshot_coordinator is None:
+            with self._init_lock:
+                if self._group_rank_snapshot_coordinator is None:
+                    from app.services.group_rank_snapshot_coordinator import (
+                        GroupRankSnapshotCoordinator,
+                    )
+
+                    self._group_rank_snapshot_coordinator = GroupRankSnapshotCoordinator(
+                        reader=self.group_rank_snapshot_reader(),
+                        market_rs_snapshot_service=self.market_rs_snapshot_service(),
+                        canonical_group_service=self.canonical_group_ranking_service(),
+                        legacy_group_service=self.group_rank_service(),
+                    )
+        return self._group_rank_snapshot_coordinator
 
     def github_release_sync_service(self) -> GitHubReleaseSyncService:
         if self._github_release_sync_service is None:
@@ -564,11 +552,10 @@ class RuntimeServices:
             self._rate_limiter = None
             self._market_calendar_service = None
             self._point_in_time_universe_service = None
-            self._market_rs_input_loader = None
-            self._market_rs_run_repository = None
-            self._market_rs_snapshot_service = None
+            self._market_rs_services = None
             self._market_rs_rollout_service = None
-            self._market_rs_reader = None
+            self._group_rank_snapshot_reader = None
+            self._group_rank_snapshot_coordinator = None
             self._github_release_sync_service = None
             self._security_master_resolver = None
             self._eps_rating_service = None
@@ -672,7 +659,6 @@ def _resolve_runtime_services(request: Request | None = None) -> RuntimeServices
     )
 
 
-# ── Unit of Work ─────────────────────────────────────────────────────────
 
 
 def get_uow() -> Iterator[SqlUnitOfWork]:
@@ -688,7 +674,6 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
     yield uow
 
 
-# ── Task Dispatchers ────────────────────────────────────────────────────
 
 
 def get_job_backend() -> JobBackend:
@@ -788,6 +773,16 @@ def get_market_rs_reader() -> MarketRsReader:
     return _resolve_runtime_services().market_rs_reader()
 
 
+def get_group_rank_snapshot_reader() -> GroupRankSnapshotReader:
+    """Return the exact persisted Group snapshot reader."""
+    return _resolve_runtime_services().group_rank_snapshot_reader()
+
+
+def get_group_rank_snapshot_coordinator() -> GroupRankSnapshotCoordinator:
+    """Return the formula-aware Group snapshot coordinator."""
+    return _resolve_runtime_services().group_rank_snapshot_coordinator()
+
+
 def get_github_release_sync_service() -> GitHubReleaseSyncService:
     """Return process-scoped GitHub release sync service."""
     return _resolve_runtime_services().github_release_sync_service()
@@ -848,7 +843,6 @@ def get_hybrid_fundamentals_service() -> HybridFundamentalsService:
     return _resolve_runtime_services().hybrid_fundamentals_service()
 
 
-# ── Use Cases ────────────────────────────────────────────────────────────
 
 
 def get_create_scan_use_case() -> CreateScanUseCase:

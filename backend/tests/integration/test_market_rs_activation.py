@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import hashlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,7 +42,7 @@ def _seed_activation_candidates(db_session):
         expected_symbol_count=0,
         eligible_symbol_count=0,
         excluded_symbol_count=0,
-        diagnostics_json={},
+        diagnostics_json={"price_basis": "adj_close_only"},
         completed_at=datetime.now(timezone.utc),
     )
     db_session.add(rs_run)
@@ -79,7 +80,11 @@ def _seed_activation_candidates(db_session):
     return rs_run.id, candidate.id, old_feature.id
 
 
-def _validation(rs_run_id: int, feature_run_id: int) -> ActivationValidationReport:
+def _validation(
+    rs_run_id: int,
+    feature_run_id: int,
+    manifest_hash: str,
+) -> ActivationValidationReport:
     return ActivationValidationReport(
         market="US",
         formula_version=BALANCED_RS_FORMULA_VERSION,
@@ -90,7 +95,7 @@ def _validation(rs_run_id: int, feature_run_id: int) -> ActivationValidationRepo
         latest_universe_hash="universe-a",
         feature_run_id=feature_run_id,
         feature_universe_hash="feature-a",
-        static_manifest_sha256="manifest-a",
+        static_manifest_sha256=manifest_hash,
         errors=(),
     )
 
@@ -106,16 +111,23 @@ def _service(repository, feature_factory):
     )
 
 
-def test_activation_switches_market_and_feature_pointers_in_one_commit(db_session):
+def test_activation_switches_market_and_feature_pointers_in_one_commit(
+    db_session, tmp_path, monkeypatch
+):
     rs_run_id, candidate_id, _old_id = _seed_activation_candidates(db_session)
     service = _service(MarketRsRunRepository(), SqlFeatureRunRepository)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
+    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setattr(service, "revalidate_static", lambda *args, **kwargs: ())
 
     service.activate(
         db_session,
         market="US",
         formula_version=BALANCED_RS_FORMULA_VERSION,
         feature_run_id=candidate_id,
-        validation=_validation(rs_run_id, candidate_id),
+        validation=_validation(rs_run_id, candidate_id, manifest_hash),
+        static_staging_dir=tmp_path,
     )
 
     db_session.expire_all()
@@ -128,7 +140,9 @@ def test_activation_switches_market_and_feature_pointers_in_one_commit(db_sessio
     ).run_id == candidate_id
 
 
-def test_failure_after_market_pointer_flush_rolls_back_both_pointers(db_session):
+def test_failure_after_market_pointer_flush_rolls_back_both_pointers(
+    db_session, tmp_path, monkeypatch
+):
     rs_run_id, candidate_id, old_id = _seed_activation_candidates(db_session)
 
     class _FailingFeatureRepository(SqlFeatureRunRepository):
@@ -136,6 +150,10 @@ def test_failure_after_market_pointer_flush_rolls_back_both_pointers(db_session)
             raise RuntimeError("pointer write failed")
 
     service = _service(MarketRsRunRepository(), _FailingFeatureRepository)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
+    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setattr(service, "revalidate_static", lambda *args, **kwargs: ())
 
     with pytest.raises(RuntimeError, match="pointer write failed"):
         service.activate(
@@ -143,7 +161,8 @@ def test_failure_after_market_pointer_flush_rolls_back_both_pointers(db_session)
             market="US",
             formula_version=BALANCED_RS_FORMULA_VERSION,
             feature_run_id=candidate_id,
-            validation=_validation(rs_run_id, candidate_id),
+            validation=_validation(rs_run_id, candidate_id, manifest_hash),
+            static_staging_dir=tmp_path,
         )
 
     db_session.expire_all()

@@ -116,7 +116,9 @@ def test_load_uses_adjusted_prices_and_excludes_only_insufficient_history(db_ses
     assert inputs.benchmark_symbol == "SPY"
     assert inputs.expected_symbols == ("AAA", "BBB", "YOUNG")
     assert set(inputs.excess_returns_by_symbol) == {"AAA", "BBB"}
-    assert inputs.exclusions == {"YOUNG": "missing_252_session_anchor"}
+    assert inputs.exclusions == {
+        "YOUNG": "missing_adjusted_252_session_anchor"
+    }
     assert inputs.current_price_coverage == pytest.approx(1.0)
     assert inputs.excess_returns_by_symbol["AAA"]["1m"] == pytest.approx(
         (120.0 / 100.0 - 1.0) - (110.0 / 100.0 - 1.0)
@@ -162,7 +164,7 @@ def test_load_fails_when_no_benchmark_has_every_exact_anchor(db_session):
             db_session, market="US", as_of_date=ANCHORS[0]
         )
 
-    assert exc_info.value.reason_code == "benchmark_anchor_missing"
+    assert exc_info.value.reason_code == "benchmark_adjusted_anchor_missing"
     assert exc_info.value.benchmark_symbol == "SPY"
     assert exc_info.value.expected_symbol_count == 1
 
@@ -185,5 +187,8 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
             db_session, market="US", as_of_date=ANCHORS[0]
         )
 
-    assert exc_info.value.reason_code == "current_price_coverage_below_threshold"
+    assert (
+        exc_info.value.reason_code
+        == "current_adjusted_price_coverage_below_threshold"
+    )
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.8)

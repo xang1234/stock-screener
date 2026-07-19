@@ -16,6 +16,9 @@ from app.domain.relative_strength import (
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.models.industry import IBDGroupRank
+from app.infra.db.models.relative_strength import MarketRsRun
+from app.services.group_rank_snapshot_coordinator import GroupRankSnapshotCoordinator
+from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.group_rank_history_backfill_service import (
     GroupRankHistoryBackfillService,
 )
@@ -34,7 +37,10 @@ from app.services.static_rrg_history_contract import (
 
 def _session_factory():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[IBDGroupRank.__table__, MarketRsRun.__table__],
+    )
     return engine, sessionmaker(bind=engine, expire_on_commit=False)
 
 
@@ -46,6 +52,7 @@ def _rank(
     rank: int,
     avg_rs: float,
     formula_version: str = LEGACY_RS_FORMULA_VERSION,
+    market_rs_run_id: int | None = None,
 ):
     return IBDGroupRank(
         market=market,
@@ -59,6 +66,7 @@ def _rank(
         top_symbol="AAA",
         top_rs_rating=95,
         rs_formula_version=formula_version,
+        market_rs_run_id=market_rs_run_id,
     )
 
 
@@ -177,10 +185,16 @@ def test_first_static_build_bootstraps_via_production_gap_fill(
         backfill = GroupRankHistoryBackfillService(
             session_factory=factory,
             calendar_service=MarketCalendarService(),
-            group_rank_service=group_rank_service,
+            group_snapshot_coordinator=GroupRankSnapshotCoordinator(
+                reader=GroupRankSnapshotReader(),
+                market_rs_snapshot_service=Mock(),
+                canonical_group_service=Mock(),
+                legacy_group_service=group_rank_service,
+            ),
         ).backfill(
             as_of_date=latest,
             market="HK",
+            formula_version=LEGACY_RS_FORMULA_VERSION,
         )
         with factory() as db:
             preparation = StaticRRGHistoryBundleService().prepare(
@@ -385,6 +399,23 @@ def test_prepare_rebuilds_when_prior_bundle_uses_another_formula(tmp_path):
         with target_factory() as db:
             for week in range(14):
                 row_date = latest - timedelta(weeks=13 - week)
+                run_id = 100 + week
+                db.add(
+                    MarketRsRun(
+                        id=run_id,
+                        market="HK",
+                        as_of_date=row_date,
+                        formula_version=BALANCED_RS_FORMULA_VERSION,
+                        status="completed",
+                        benchmark_symbol="^HSI",
+                        benchmark_as_of_date=row_date,
+                        universe_hash=f"balanced-{week}",
+                        expected_symbol_count=12,
+                        eligible_symbol_count=12,
+                        excluded_symbol_count=0,
+                        diagnostics_json={"price_basis": "adj_close_only"},
+                    )
+                )
                 db.add(
                     _rank(
                         market="HK",
@@ -393,6 +424,7 @@ def test_prepare_rebuilds_when_prior_bundle_uses_another_formula(tmp_path):
                         rank=1,
                         avg_rs=70 + week,
                         formula_version=BALANCED_RS_FORMULA_VERSION,
+                        market_rs_run_id=run_id,
                     )
                 )
             db.commit()

@@ -162,6 +162,7 @@ def execute_rollout(options: argparse.Namespace) -> dict[str, Any]:
             formula_version=BALANCED_RS_FORMULA_VERSION,
             feature_run_id=feature_run_id,
             validation=validation,
+            static_staging_dir=staging_dir,
         )
         _publish_live_groups(market)
         payload.update(

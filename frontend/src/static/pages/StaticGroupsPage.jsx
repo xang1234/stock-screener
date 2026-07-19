@@ -28,8 +28,7 @@ import { useRRGScopeSelection } from '../../components/Charts/useRRGScopeSelecti
 import RankChangeCell from '../../components/shared/RankChangeCell';
 import TickerCell from '../../components/common/TickerCell';
 import { useStaticMarket } from '../StaticMarketContext';
-
-const formatRs = (value) => (Number.isFinite(value) ? value.toFixed(1) : '-');
+import { GROUP_RS_FIELDS, formatGroupRs } from '../../features/groups/groupRankingFields';
 
 function MoversCard({ title, rows }) {
   return (
@@ -85,9 +84,9 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
               <TableRow>
                 <TableCell align="center">Rank</TableCell>
                 <TableCell>Group</TableCell>
-                <TableCell align="center">Avg RS</TableCell>
-                <TableCell align="center">1M RS</TableCell>
-                <TableCell align="center">3M RS</TableCell>
+                {GROUP_RS_FIELDS.map(({ field, staticLabel }) => (
+                  <TableCell key={field} align="center">{staticLabel}</TableCell>
+                ))}
                 <TableCell align="center">Stocks</TableCell>
                 <TableCell align="right">1W</TableCell>
                 <TableCell align="right">1M</TableCell>
@@ -113,9 +112,11 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
                 >
                   <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{row.rank}</TableCell>
                   <TableCell>{row.industry_group}</TableCell>
-                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{formatRs(row.avg_rs_rating)}</TableCell>
-                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{formatRs(row.avg_rs_rating_1m)}</TableCell>
-                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{formatRs(row.avg_rs_rating_3m)}</TableCell>
+                  {GROUP_RS_FIELDS.map(({ field }) => (
+                    <TableCell key={field} align="center" sx={{ fontFamily: 'monospace' }}>
+                      {formatGroupRs(row[field])}
+                    </TableCell>
+                  ))}
                   <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{row.num_stocks}</TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_1w} /></TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_1m} /></TableCell>

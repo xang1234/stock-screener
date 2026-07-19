@@ -53,6 +53,7 @@ def test_calculate_market_rs_snapshot_returns_stable_completed_shape(monkeypatch
         market="US",
         as_of_date=date(2026, 4, 10),
         formula_version=BALANCED_RS_FORMULA_VERSION,
+        rebuild_incompatible=False,
     )
     fake_db.close.assert_called_once_with()
 
@@ -82,6 +83,7 @@ def test_calculate_market_rs_snapshot_resolves_bootstrap_date_when_omitted(monke
         market="HK",
         as_of_date=date(2026, 4, 10),
         formula_version=BALANCED_RS_FORMULA_VERSION,
+        rebuild_incompatible=False,
     )
 
 

@@ -36,7 +36,11 @@ def legacy_market_rs_runtime(runtime_services_context):
                 ratings_by_symbol={},
             )
 
-    runtime_services_context._market_rs_reader = _LegacyReader()
+    runtime_services_context._market_rs_services = type(
+        "_LegacyMarketRsServices",
+        (),
+        {"reader": _LegacyReader()},
+    )()
     return runtime_services_context
 
 

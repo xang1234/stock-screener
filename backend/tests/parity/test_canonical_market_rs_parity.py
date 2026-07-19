@@ -65,7 +65,11 @@ def _seed_canonical_snapshot(db_session):
         expected_symbol_count=len(scores),
     )
     repository.replace_rows(db_session, run, scores)
-    repository.mark_completed(run, excluded_symbol_count=0, diagnostics={})
+    repository.mark_completed(
+        run,
+        excluded_symbol_count=0,
+        diagnostics={"price_basis": "adj_close_only"},
+    )
     db_session.commit()
 
     for index, symbol in enumerate(SYMBOLS):

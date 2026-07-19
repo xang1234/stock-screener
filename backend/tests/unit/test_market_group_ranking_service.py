@@ -180,32 +180,32 @@ def test_group_history_delegates_to_stored_versioned_service():
     assert stored.calls == [("history", db, "HK", "Internet Services", 90)]
 
 
-def test_rrg_history_builder_uses_stored_group_service_for_non_us():
+def test_rrg_history_builder_uses_active_formula_exact_reader_for_non_us():
     calls: list[tuple] = []
-
-    class _GroupRankService:
-        def get_current_rankings(
-            self,
-            db,
-            limit=197,
-            calculation_date=None,
-            *,
-            market,
-            formula_version,
-        ):  # noqa: ANN001
-            calls.append(
-                ("current", db, market, limit, calculation_date, formula_version)
-            )
-            return []
 
     class _MarketRsRepository:
         def active_formula(self, db, *, market):  # noqa: ANN001
             calls.append(("formula", db, market))
             return "balanced-horizon-percentile-v2"
 
+    class _SnapshotReader:
+        def available_dates(
+            self,
+            db,
+            *,
+            market,
+            formula_version,
+            through_date,
+        ):  # noqa: ANN001
+            calls.append(
+                ("dates", db, market, formula_version, through_date)
+            )
+            return ()
+
     provider = build_rrg_history_provider(
-        group_rank_service=_GroupRankService(),
+        group_rank_service=object(),
         market_rs_repository=_MarketRsRepository(),
+        snapshot_reader=_SnapshotReader(),
     )
 
     db = Session()
@@ -222,5 +222,5 @@ def test_rrg_history_builder_uses_stored_group_service_for_non_us():
     )
     assert calls == [
         ("formula", db, "HK"),
-        ("current", db, "HK", 197, as_of, "balanced-horizon-percentile-v2"),
+        ("dates", db, "HK", "balanced-horizon-percentile-v2", as_of),
     ]

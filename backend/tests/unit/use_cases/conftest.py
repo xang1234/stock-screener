@@ -392,6 +392,13 @@ class FakeStockDataProvider(StockDataProvider):
     ) -> dict[str, StockData]:
         return {s: self.prepare_data(s, requirements) for s in symbols}
 
+    def apply_market_rs_resolution(self, results, resolution) -> None:
+        for symbol, item in results.items():
+            item.canonical_rs_ratings = resolution.ratings_by_symbol.get(symbol.upper())
+            item.rs_formula_version = resolution.formula_version
+            item.market_rs_run_id = resolution.run_id
+            item.rs_universe_size = resolution.universe_size
+
     def _make_stock_data(self, symbol: str) -> StockData:
         dates = pd.date_range(
             end=datetime.now(), periods=self._price_days, freq="B"

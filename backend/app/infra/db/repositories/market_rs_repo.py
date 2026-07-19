@@ -19,6 +19,7 @@ from app.infra.db.models.relative_strength import (
     MarketRsRun,
     StockRsSnapshot,
 )
+from app.models.industry import IBDGroupRank
 
 
 SUPPORTED_FORMULAS = frozenset(
@@ -60,6 +61,7 @@ class MarketRsRunRepository:
         benchmark_as_of_date: date,
         universe_hash: str,
         expected_symbol_count: int,
+        rebuild_completed: bool = False,
     ) -> MarketRsRun:
         normalized = market.upper()
         run = (
@@ -103,7 +105,32 @@ class MarketRsRunRepository:
                 )
 
         if run.status == "completed":
-            return run
+            if not rebuild_completed:
+                return run
+            old_run = run
+            temporary_formula = f"__rebuild__{old_run.id}__{formula_version}"[:64]
+            old_run.formula_version = temporary_formula
+            db.flush()
+            run = MarketRsRun(
+                market=normalized,
+                as_of_date=as_of_date,
+                formula_version=formula_version,
+                status="running",
+                benchmark_symbol=benchmark_symbol,
+                benchmark_as_of_date=benchmark_as_of_date,
+                universe_hash=universe_hash,
+                expected_symbol_count=expected_symbol_count,
+                eligible_symbol_count=0,
+                excluded_symbol_count=0,
+                diagnostics_json={},
+            )
+            db.add(run)
+            db.flush()
+            db.query(IBDGroupRank).filter(
+                IBDGroupRank.market_rs_run_id == old_run.id
+            ).delete(synchronize_session=False)
+            db.delete(old_run)
+            db.flush()
 
         run.rows.clear()
         run.status = "running"

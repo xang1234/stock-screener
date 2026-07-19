@@ -1,15 +1,4 @@
-"""
-Celery tasks for IBD Industry Group ranking calculations.
-
-Provides background tasks for:
-- Daily group ranking calculation after market close
-- Historical backfill of ranking data
-
-Group ranking tasks mutate market-derived data and therefore use the
-market workload lease to avoid same-market overlap with scans.
-"""
-from contextlib import contextmanager
-from contextvars import ContextVar
+"""Celery tasks for formula-aware Industry Group ranking workflows."""
 import logging
 from datetime import datetime, date, timedelta
 import time
@@ -22,10 +11,10 @@ from ..database import SessionLocal
 from ..domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
+    GroupSnapshotIdentity,
 )
 from ..services.market_activity_service import (
     mark_market_activity_completed,
-    mark_market_activity_failed,
     mark_market_activity_started,
 )
 from ..services.group_rank_cache_policy import GroupRankCacheRequirement
@@ -36,13 +25,26 @@ from ..services.ibd_group_rank_service import (
 )
 from ..services.market_taxonomy_service import TaxonomyLoadError
 from ..wiring.bootstrap import (
+    get_group_rank_snapshot_coordinator,
+    get_group_rank_snapshot_reader,
     get_group_rank_service,
     get_market_calendar_service,
-    get_market_rs_snapshot_service,
 )
 from .date_resolution import resolve_task_target_date
 from .group_rank_memory import release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory
 from .workload_coordination import serialized_market_workload
+from .group_rank_workflows import (
+    GroupRankReasonCode,
+    _ALLOW_SAME_DAY_WARMUP_BYPASS,
+    _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS,
+    allow_same_day_group_rank_warmup_bypass as allow_same_day_group_rank_warmup_bypass,
+    coordinate_group_dates,
+    mark_market_activity_failed_safely as _mark_market_activity_failed_safely,
+    resolve_active_group_formula as _resolve_active_group_formula,
+    retry_transient_failure as _retry_transient_failure,
+    run_daily_in_process,
+    should_repair_current_us_metadata as _should_repair_current_us_metadata,
+)
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
@@ -52,146 +54,20 @@ TAXONOMY_UNAVAILABLE_EXCEPTIONS = (
 )
 
 
-class GroupRankReasonCode:
-    INVALID_DATE = "invalid_date"
-    WARMUP_INCOMPLETE = "warmup_incomplete"
-    MISSING_IBD_MAPPINGS = "missing_ibd_mappings"
-    NO_GROUPS_RANKED = "no_groups_ranked"
-    UNKNOWN = "unknown"
-
-
-_ALLOW_SAME_DAY_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
-    "allow_same_day_group_rank_warmup_bypass",
-    default=False,
-)
-_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS: ContextVar[bool] = ContextVar(
-    "propagate_in_process_group_rank_transient_errors",
-    default=False,
-)
-
-
-@contextmanager
-def allow_same_day_group_rank_warmup_bypass():
-    """Allow same-day cache-only rankings without warmup metadata in-process."""
-    token = _ALLOW_SAME_DAY_WARMUP_BYPASS.set(True)
-    try:
-        yield
-    finally:
-        _ALLOW_SAME_DAY_WARMUP_BYPASS.reset(token)
-
-
-def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
-    retries = getattr(getattr(task, "request", None), "retries", 0) or 0
-    countdown = min(60 * (2 ** retries), 600)
-    logger.warning(
-        "Transient error in %s: %s. Retrying in %ss (attempt %s/2).",
-        task_name,
-        exc,
-        countdown,
-        retries + 1,
-    )
-    raise task.retry(exc=exc, countdown=countdown, max_retries=2)
-
-
-def _mark_market_activity_failed_safely(db, **kwargs) -> None:
-    try:
-        mark_market_activity_failed(db, **kwargs)
-    except Exception:
-        logger.warning(
-            "Failed to publish market activity failure for group ranking task",
-            extra={
-                "market": kwargs.get("market"),
-                "stage_key": kwargs.get("stage_key"),
-                "task_id": kwargs.get("task_id"),
-            },
-            exc_info=True,
-        )
-
-
-def _should_repair_current_us_metadata(
-    *,
-    calc_date: date,
-    today_et: date,
-    activity_lifecycle: str,
-) -> bool:
-    """Only repair live US surfaces for same-day or bootstrap ranking runs."""
-    return activity_lifecycle == "bootstrap" or calc_date == today_et
-
-
-def _resolve_active_group_formula(db, *, market: str, group_service) -> str:
-    resolved = group_service.market_rs_repository.active_formula(db, market=market)
-    if resolved not in {BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION}:
-        raise ValueError(f"Unsupported Group RS formula: {resolved}")
-    return resolved
-
-
-def _prepare_group_rs_inputs(
+def _coordinate_group_dates(
     db,
     *,
-    market: str,
-    calculation_date: date,
-    group_service,
-    formula_version: str | None = None,
-) -> str:
-    """Resolve the Group formula and publish its exact canonical input if needed."""
-    resolved_formula = formula_version or _resolve_active_group_formula(
-        db,
-        market=market,
-        group_service=group_service,
-    )
-    if resolved_formula == BALANCED_RS_FORMULA_VERSION:
-        get_market_rs_snapshot_service().calculate(
-            db,
-            market=market,
-            as_of_date=calculation_date,
-            formula_version=resolved_formula,
-        )
-    elif resolved_formula != LEGACY_RS_FORMULA_VERSION:
-        raise ValueError(f"Unsupported Group RS formula: {resolved_formula}")
-    return resolved_formula
-
-
-def _calculate_balanced_group_dates(
-    db,
-    *,
-    group_service,
     dates: list[date],
     market: str,
+    formula_version: str,
 ) -> dict:
-    """Calculate historical balanced Groups only after each stock snapshot exists."""
-    stats = {
-        "total_dates": len(dates),
-        "processed": 0,
-        "skipped": 0,
-        "errors": 0,
-    }
-    for calculation_date in dates:
-        try:
-            _prepare_group_rs_inputs(
-                db,
-                market=market,
-                calculation_date=calculation_date,
-                group_service=group_service,
-                formula_version=BALANCED_RS_FORMULA_VERSION,
-            )
-            rows = group_service.calculate_group_rankings(
-                db,
-                calculation_date,
-                market=market,
-                formula_version=BALANCED_RS_FORMULA_VERSION,
-            )
-            if rows:
-                stats["processed"] += 1
-            else:
-                stats["errors"] += 1
-        except Exception:
-            stats["errors"] += 1
-            logger.exception(
-                "Balanced Group calculation failed for market=%s date=%s",
-                market,
-                calculation_date,
-            )
-    return stats
+    return coordinate_group_dates(
+        db,
+        dates=dates,
+        market=market,
+        formula_version=formula_version,
+        coordinator=get_group_rank_snapshot_coordinator(),
+    )
 
 
 @celery_app.task(
@@ -282,10 +158,9 @@ def calculate_daily_group_rankings(
         )
         # Initialize service
         service = get_group_rank_service()
-        resolved_formula = _prepare_group_rs_inputs(
+        resolved_formula = _resolve_active_group_formula(
             db,
             market=effective_market,
-            calculation_date=calc_date,
             group_service=service,
         )
         same_day_cache_only = force_cache_only or calc_date == today_local
@@ -335,11 +210,26 @@ def calculate_daily_group_rankings(
         }
         if resolved_formula == BALANCED_RS_FORMULA_VERSION:
             ranking_kwargs["formula_version"] = resolved_formula
-        results = service.calculate_group_rankings(
-            db,
-            calc_date,
-            **ranking_kwargs,
-        )
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            identity = GroupSnapshotIdentity(
+                effective_market,
+                calc_date,
+                resolved_formula,
+            )
+            get_group_rank_snapshot_coordinator().ensure_snapshot(
+                db,
+                identity=identity,
+            )
+            results = get_group_rank_snapshot_reader().load_exact(
+                db,
+                identity=identity,
+            )
+        else:
+            results = service.calculate_group_rankings(
+                db,
+                calc_date,
+                **ranking_kwargs,
+            )
 
         # Calculate duration
         duration = time.time() - start_time
@@ -522,41 +412,12 @@ def _calculate_daily_group_rankings_in_process(
     market: str | None = None,
     activity_lifecycle: str | None = None,
 ):
-    """Run the daily ranking task body without re-acquiring the market workload lease.
-
-    The orchestrator already holds the per-market workload lease, but the daily
-    task's @serialized_market_workload decorator would otherwise try to re-acquire
-    it from this nested call. ``disable_serialized_market_workload()`` flips a
-    ContextVar that the decorator honors as a bypass — without it, the inner
-    call's task_id resolves to "unknown" (Celery's per-class request_stack is
-    empty for direct invocation), the reentrancy check is skipped, the SET NX
-    fails, and Retry propagates back into the orchestrator.
-
-    Transient exceptions are also propagated directly here so the outer
-    orchestrator owns retry scheduling. Calling the Celery task body via
-    ``task.run()`` does not provide a worker request context for the requested
-    market, so allowing the inner task to call ``self.retry()`` can schedule an
-    orphan retry with default arguments.
-    """
-    from .workload_coordination import disable_serialized_market_workload
-
-    task = calculate_daily_group_rankings
-    kwargs = {
-        "market": market,
-        "activity_lifecycle": activity_lifecycle,
-    }
-    if calculation_date is not None:
-        kwargs["calculation_date"] = calculation_date
-    transient_token = _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.set(True)
-    try:
-        if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-            return task(**kwargs)
-        with disable_serialized_market_workload():
-            if hasattr(task, "request") and callable(getattr(task, "run", None)):
-                return task.run(**kwargs)
-            return task(**kwargs)
-    finally:
-        _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.reset(transient_token)
+    return run_daily_in_process(
+        calculate_daily_group_rankings,
+        calculation_date=calculation_date,
+        market=market,
+        activity_lifecycle=activity_lifecycle,
+    )
 
 
 @celery_app.task(
@@ -697,27 +558,19 @@ def calculate_daily_group_rankings_with_gapfill(
                 "market": effective_market,
                 "end_date": target_date,
             }
-            if resolved_formula == BALANCED_RS_FORMULA_VERSION:
-                find_missing_kwargs["formula_version"] = resolved_formula
+            find_missing_kwargs["formula_version"] = resolved_formula
             missing_dates = service.find_missing_dates(db, **find_missing_kwargs)
             if missing_dates:
                 logger.info(
                     "Found %d missing ranking dates (range %s to %s)",
                     len(missing_dates), missing_dates[0], missing_dates[-1],
                 )
-                if resolved_formula == BALANCED_RS_FORMULA_VERSION:
-                    gap_stats = _calculate_balanced_group_dates(
-                        db,
-                        group_service=service,
-                        dates=missing_dates,
-                        market=effective_market,
-                    )
-                else:
-                    gap_stats = service.fill_gaps_optimized(
-                        db,
-                        missing_dates,
-                        market=effective_market,
-                    )
+                gap_stats = _coordinate_group_dates(
+                    db,
+                    dates=missing_dates,
+                    market=effective_market,
+                    formula_version=resolved_formula,
+                )
                 result['gap_fill'] = gap_stats
                 logger.info(
                     "✓ Gap-fill complete: %s processed, %s errors",
@@ -891,33 +744,24 @@ def backfill_group_rankings(self, start_date: str, end_date: str, market: str = 
             group_service=service,
         )
 
-        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
-            calendar_service = get_market_calendar_service()
-            dates = []
-            cursor = start
-            while cursor <= end:
-                if calendar_service.is_trading_day(effective_market, cursor):
-                    dates.append(cursor)
-                cursor += timedelta(days=1)
-            result = {
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
-                "deleted": 0,
-                **_calculate_balanced_group_dates(
-                    db,
-                    group_service=service,
-                    dates=dates,
-                    market=effective_market,
-                ),
-            }
-        else:
-            # Preserve the optimized legacy backfill until balanced is activated.
-            result = service.backfill_rankings_optimized(
+        calendar_service = get_market_calendar_service()
+        dates = []
+        cursor = start
+        while cursor <= end:
+            if calendar_service.is_trading_day(effective_market, cursor):
+                dates.append(cursor)
+            cursor += timedelta(days=1)
+        result = {
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "deleted": 0,
+            **_coordinate_group_dates(
                 db,
-                start,
-                end,
-                market=market,
-            )
+                dates=dates,
+                market=effective_market,
+                formula_version=resolved_formula,
+            ),
+        }
 
         # Calculate total duration
         total_duration = time.time() - start_time
@@ -992,9 +836,11 @@ def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
         )
 
         # Find missing dates
-        find_missing_kwargs = {"lookback_days": max_days, "market": market}
-        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
-            find_missing_kwargs["formula_version"] = resolved_formula
+        find_missing_kwargs = {
+            "lookback_days": max_days,
+            "market": market,
+            "formula_version": resolved_formula,
+        }
         missing_dates = service.find_missing_dates(db, **find_missing_kwargs)
 
         if not missing_dates:
@@ -1009,15 +855,12 @@ def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
         logger.info(f"Found {len(missing_dates)} gaps to fill")
         logger.info(f"Date range: {missing_dates[0]} to {missing_dates[-1]}")
 
-        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
-            result = _calculate_balanced_group_dates(
-                db,
-                group_service=service,
-                dates=missing_dates,
-                market=effective_market,
-            )
-        else:
-            result = service.fill_gaps_optimized(db, missing_dates, market=market)
+        result = _coordinate_group_dates(
+            db,
+            dates=missing_dates,
+            market=effective_market,
+            formula_version=resolved_formula,
+        )
 
         duration = time.time() - start_time
 
@@ -1102,31 +945,23 @@ def backfill_group_rankings_1year(self, market: str = "US"):
         end_date = calendar_service.market_now(effective_market).date()
         start_date = end_date - timedelta(days=365)
 
-        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
-            dates = []
-            cursor = start_date
-            while cursor <= end_date:
-                if calendar_service.is_trading_day(effective_market, cursor):
-                    dates.append(cursor)
-                cursor += timedelta(days=1)
-            result = {
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "deleted": 0,
-                **_calculate_balanced_group_dates(
-                    db,
-                    group_service=service,
-                    dates=dates,
-                    market=effective_market,
-                ),
-            }
-        else:
-            result = service.backfill_rankings_optimized(
+        dates = []
+        cursor = start_date
+        while cursor <= end_date:
+            if calendar_service.is_trading_day(effective_market, cursor):
+                dates.append(cursor)
+            cursor += timedelta(days=1)
+        result = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "deleted": 0,
+            **_coordinate_group_dates(
                 db,
-                start_date,
-                end_date,
+                dates=dates,
                 market=effective_market,
-            )
+                formula_version=resolved_formula,
+            ),
+        }
 
         duration = time.time() - start_time
 

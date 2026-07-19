@@ -245,188 +245,18 @@ def _enrich_feature_run_with_ibd_metadata(
 ) -> dict[str, int | str]:
     """Backfill IBD industry/rank metadata into persisted feature-row details."""
     from app.database import SessionLocal
-    from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
-    from app.models.industry import IBDGroupRank, IBDIndustryGroup
-    from app.domain.feature_store.run_metadata import feature_run_market
-    from app.services.group_ranking_payloads import compute_group_rankings_from_serialized_rows
+    from app.services.feature_run_group_enrichment import (
+        FeatureRunGroupEnrichmentService,
+    )
+    from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
     from app.services.market_taxonomy_service import get_market_taxonomy_service
-    from sqlalchemy import func
 
-    session_factory = session_factory or SessionLocal
-    db = session_factory()
-    taxonomy_service = taxonomy_service or get_market_taxonomy_service()
-    try:
-        feature_run = (
-            db.query(FeatureRun)
-            .filter(FeatureRun.id == feature_run_id)
-            .first()
-        )
-        config = (feature_run.config_json or {}) if feature_run is not None else {}
-        universe = config.get("universe") if isinstance(config, dict) else {}
-        if not isinstance(universe, dict):
-            universe = {}
-        market = str((universe or {}).get("market") or "US").strip().upper()
-
-        batch_size = max(1, int(settings.feature_metadata_repair_batch_size or 500))
-        raw_total_rows = (
-            db.query(func.count(StockFeatureDaily.symbol))
-            .filter(StockFeatureDaily.run_id == feature_run_id)
-            .scalar()
-            or 0
-        )
-        total_rows = int(raw_total_rows) if isinstance(raw_total_rows, (int, float)) else 0
-        if total_rows == 0:
-            return {
-                "run_id": feature_run_id,
-                "ranking_date": ranking_date.isoformat(),
-                "total_rows": 0,
-                "updated_rows": 0,
-                "missing_industry_rows": 0,
-                "missing_rank_rows": 0,
-            }
-
-        def iter_feature_rows():
-            last_symbol: str | None = None
-            while True:
-                query = (
-                    db.query(StockFeatureDaily)
-                    .filter(StockFeatureDaily.run_id == feature_run_id)
-                )
-                if last_symbol is not None:
-                    query = query.filter(StockFeatureDaily.symbol > last_symbol)
-                query = query.order_by(StockFeatureDaily.symbol).limit(batch_size)
-                batch = query.all()
-                if not batch:
-                    break
-                last_symbol = str(batch[-1].symbol)
-                yield batch
-
-        industries_by_symbol: dict[str, str | None] = {}
-        ranks_by_group: dict[str, int] = {}
-        market_themes_by_symbol: dict[str, list[str]] = {}
-        sector_by_symbol: dict[str, str | None] = {}
-        industry_by_symbol: dict[str, str | None] = {}
-
-        if market == "US":
-            industries_by_symbol = {
-                symbol: industry_group
-                for symbol, industry_group in (
-                    db.query(StockFeatureDaily.symbol, IBDIndustryGroup.industry_group)
-                    .join(
-                        IBDIndustryGroup,
-                        IBDIndustryGroup.symbol == StockFeatureDaily.symbol,
-                    )
-                    .filter(StockFeatureDaily.run_id == feature_run_id)
-                    .all()
-                )
-            }
-            ranks_by_group = {
-                industry_group: rank
-                for industry_group, rank in (
-                    db.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
-                    .filter(
-                        IBDGroupRank.date == ranking_date,
-                        IBDGroupRank.market == "US",
-                    )
-                    .all()
-                )
-            }
-        else:
-            serialized_rows: list[dict[str, object]] = []
-            for batch in iter_feature_rows():
-                for row in batch:
-                    details = dict(row.details_json or {})
-                    entry = taxonomy_service.get(row.symbol, market=market)
-                    industries_by_symbol[row.symbol] = entry.industry_group if entry else None
-                    sector_by_symbol[row.symbol] = entry.sector if entry else None
-                    industry_by_symbol[row.symbol] = entry.industry if entry else None
-                    market_themes_by_symbol[row.symbol] = entry.themes_list() if entry else []
-                    serialized_rows.append(
-                        {
-                            "symbol": row.symbol,
-                            "composite_score": row.composite_score,
-                            "rs_rating": details.get("rs_rating"),
-                            "market_cap": details.get("market_cap"),
-                            "market_cap_usd": details.get("market_cap_usd"),
-                            "ibd_industry_group": industries_by_symbol[row.symbol],
-                        }
-                    )
-                db.expunge_all()
-            ranks_by_group = {
-                str(row["industry_group"]): int(row["rank"])
-                for row in compute_group_rankings_from_serialized_rows(
-                    serialized_rows,
-                    ranking_date=ranking_date,
-                )
-                if row.get("industry_group") and row.get("rank") is not None
-            }
-
-        updated_rows = 0
-        missing_industry_rows = 0
-        missing_rank_rows = 0
-
-        for batch in iter_feature_rows():
-            batch_updated = False
-            for row in batch:
-                details = dict(row.details_json or {})
-                industry_group = industries_by_symbol.get(row.symbol)
-                group_rank = ranks_by_group.get(industry_group) if industry_group else None
-                group_rank_date = ranking_date.isoformat() if group_rank is not None else None
-                market_themes = [] if market == "US" else list(market_themes_by_symbol.get(row.symbol) or [])
-                sector = sector_by_symbol.get(row.symbol)
-                industry = industry_by_symbol.get(row.symbol)
-                sector_changed = bool(
-                    market != "US"
-                    and sector
-                    and details.get("gics_sector") != sector
-                )
-                industry_changed = bool(
-                    market != "US"
-                    and industry
-                    and details.get("gics_industry") != industry
-                )
-                if industry_group is None:
-                    missing_industry_rows += 1
-                elif group_rank is None:
-                    missing_rank_rows += 1
-
-                if (
-                    details.get("ibd_industry_group") != industry_group
-                    or details.get("ibd_group_rank") != group_rank
-                    or details.get("ibd_group_rank_date") != group_rank_date
-                    or list(details.get("market_themes") or []) != market_themes
-                    or sector_changed
-                    or industry_changed
-                ):
-                    details["ibd_industry_group"] = industry_group
-                    details["ibd_group_rank"] = group_rank
-                    details["ibd_group_rank_date"] = group_rank_date
-                    details["market_themes"] = market_themes
-                    if sector_changed:
-                        details["gics_sector"] = sector
-                    if industry_changed:
-                        details["gics_industry"] = industry
-                    row.details_json = details
-                    updated_rows += 1
-                    batch_updated = True
-            if batch_updated:
-                db.flush()
-            db.expunge_all()
-
-        db.commit()
-        return {
-            "run_id": feature_run_id,
-            "ranking_date": ranking_date.isoformat(),
-            "total_rows": total_rows,
-            "updated_rows": updated_rows,
-            "missing_industry_rows": missing_industry_rows,
-            "missing_rank_rows": missing_rank_rows,
-        }
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    return FeatureRunGroupEnrichmentService(
+        session_factory=session_factory or SessionLocal,
+        taxonomy_service=taxonomy_service or get_market_taxonomy_service(),
+        snapshot_reader=GroupRankSnapshotReader(),
+        batch_size=max(1, int(settings.feature_metadata_repair_batch_size or 500)),
+    ).enrich(feature_run_id=feature_run_id, ranking_date=ranking_date)
 
 def _resolve_latest_published_run_for_market(*, db, market: str) -> int | None:
     from app.domain.feature_store.run_metadata import feature_run_market
@@ -840,6 +670,50 @@ def build_daily_snapshot(
                 universe_hash=universe_hash,
                 as_of_date=as_of,
             )
+            if matching_run is not None:
+                from app.domain.relative_strength import (
+                    BALANCED_RS_FORMULA_VERSION,
+                    GroupSnapshotIdentity,
+                    balanced_run_has_required_price_basis,
+                )
+                from app.infra.db.repositories.market_rs_repo import (
+                    MarketRsRunRepository,
+                )
+                from app.services.feature_run_rs_identity import (
+                    feature_run_matches_rs_source,
+                )
+
+                session = getattr(uow_check, "session", None)
+                repository = MarketRsRunRepository()
+                formula = rs_formula_version_override or repository.active_formula(
+                    session,
+                    market=effective_market,
+                )
+                market_rs_run_id = None
+                source_compatible = True
+                if formula == BALANCED_RS_FORMULA_VERSION:
+                    exact_run = repository.get_completed_exact(
+                        session,
+                        market=effective_market,
+                        as_of_date=as_of,
+                        formula_version=formula,
+                    )
+                    source_compatible = bool(
+                        exact_run is not None
+                        and balanced_run_has_required_price_basis(exact_run)
+                    )
+                    market_rs_run_id = getattr(exact_run, "id", None)
+                identity = GroupSnapshotIdentity(
+                    effective_market,
+                    as_of,
+                    formula,
+                )
+                if not source_compatible or not feature_run_matches_rs_source(
+                    matching_run,
+                    identity=identity,
+                    market_rs_run_id=market_rs_run_id,
+                ):
+                    matching_run = None
             if matching_run is not None:
                 _upsert_feature_run_pointer(
                     session_factory=SessionLocal,

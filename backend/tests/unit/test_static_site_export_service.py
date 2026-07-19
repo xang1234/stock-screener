@@ -19,7 +19,6 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
-from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
 from app.models.industry import IBDGroupRank
@@ -32,6 +31,7 @@ from app.services.static_groups_rrg_export import (
     StaticGroupsRRGUnavailableError,
     StaticGroupsRRGPayloadBuilder,
 )
+from app.services.static_artifact_combiner import StaticArtifactFormulaError
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
@@ -342,7 +342,6 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     scan = json.loads((output_dir / "markets" / "us" / "scan" / "manifest.json").read_text(encoding="utf-8"))
     breadth = json.loads((output_dir / "markets" / "us" / "breadth.json").read_text(encoding="utf-8"))
     groups = json.loads((output_dir / "markets" / "us" / "groups.json").read_text(encoding="utf-8"))
-    home = json.loads((output_dir / "markets" / "us" / "home.json").read_text(encoding="utf-8"))
 
     assert manifest["schema_version"] == STATIC_SITE_SCHEMA_VERSION
     assert manifest["default_market"] == "US"
@@ -1022,7 +1021,7 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-04-04",
-        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
         "pages": {"home": {"path": "markets/us/home.json"}, "scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
         "freshness": {"scan_run_id": 11},
@@ -1097,7 +1096,7 @@ def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_pat
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-04-05",
-        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1105,7 +1104,7 @@ def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_pat
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-04-04",
-        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1212,7 +1211,7 @@ def test_combine_market_artifacts_rejects_fallback_with_mismatched_schema(tmp_pa
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-04-05",
-        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1249,16 +1248,14 @@ def test_combine_market_artifacts_rejects_fallback_with_mismatched_schema(tmp_pa
         encoding="utf-8",
     )
 
-    result = StaticSiteExportService.combine_market_artifacts(
-        current_dir,
-        output_dir,
-        fallback_artifacts_dir=fallback_dir,
-    )
+    with pytest.raises(RuntimeError, match="schema_version"):
+        StaticSiteExportService.combine_market_artifacts(
+            current_dir,
+            output_dir,
+            fallback_artifacts_dir=fallback_dir,
+        )
 
-    assert result.manifest["supported_markets"] == ["US"]
-    assert "JP fallback artifact uses schema_version 'static-site-v1'; expected 'static-site-v3'. Skipping." in result.warnings
-    assert (output_dir / "markets" / "us" / "scan" / "manifest.json").exists()
-    assert not (output_dir / "markets" / "jp").exists()
+    assert not output_dir.exists()
 
 
 def test_collect_market_artifacts_rejects_cross_formula_fallback(tmp_path):
@@ -1282,20 +1279,12 @@ def test_collect_market_artifacts_rejects_cross_formula_fallback(tmp_path):
         encoding="utf-8",
     )
 
-    entries, warnings = StaticSiteExportService._collect_market_artifacts(  # noqa: SLF001
-        artifacts_dir=artifacts_dir,
-        output_dir=tmp_path / "combined",
-        warnings=[],
-        allow_empty=True,
-        fallback_source=True,
-        expected_formula_by_market={"JP": BALANCED_RS_FORMULA_VERSION},
-    )
-
-    assert entries == {}
-    assert warnings == [
-        "JP artifact uses RS formula 'legacy-linear-v1'; expected "
-        "'balanced-horizon-percentile-v2'. Skipping fallback artifact."
-    ]
+    with pytest.raises(StaticArtifactFormulaError, match="incompatible RS formula"):
+        StaticSiteExportService.combine_market_artifacts(
+            artifacts_dir,
+            tmp_path / "combined",
+            rs_formula_version_overrides={"JP": BALANCED_RS_FORMULA_VERSION},
+        )
 
 
 def test_build_manifest_orders_india_between_hk_and_jp():
@@ -2730,7 +2719,7 @@ def _market_rs_run(*, run_id: int, as_of_date: date) -> MarketRsRun:
         expected_symbol_count=5000,
         eligible_symbol_count=5000,
         excluded_symbol_count=0,
-        diagnostics_json={},
+        diagnostics_json={"price_basis": "adj_close_only"},
     )
 
 
@@ -2799,7 +2788,7 @@ def test_build_groups_payload_uses_exact_stored_snapshot_and_matches_live(
                 _group_rank(
                     group="Semiconductors",
                     ranking_date=date(2026, 4, 9),
-                    rank=2,
+                    rank=1,
                     avg_rs=70.0,
                     run_id=41,
                 ),
@@ -2857,7 +2846,7 @@ def test_build_groups_payload_uses_exact_stored_snapshot_and_matches_live(
         },
         {
             "date": "2026-04-09",
-            "rank": 2,
+            "rank": 1,
             "avg_rs_rating": 70.0,
             "avg_rs_rating_1m": 34.5,
             "avg_rs_rating_3m": 57.75,
@@ -2907,7 +2896,7 @@ def test_build_groups_payload_rejects_mixed_market_rs_runs(
             ]
         )
         db.commit()
-        with pytest.raises(StaticSiteSectionUnavailableError, match="mixes canonical RS sources") as exc_info:
+        with pytest.raises(StaticSiteSectionUnavailableError, match="mix Market RS run IDs") as exc_info:
             _build_balanced_groups_payload(service, db, latest_run)
 
     assert exc_info.value.section == "groups"
@@ -2932,7 +2921,7 @@ def test_build_groups_payload_rejects_market_rs_run_date_mismatch(
             ]
         )
         db.commit()
-        with pytest.raises(StaticSiteSectionUnavailableError, match="does not match its Market RS run") as exc_info:
+        with pytest.raises(StaticSiteSectionUnavailableError, match="wrong Market RS run") as exc_info:
             _build_balanced_groups_payload(service, db, latest_run)
 
     assert exc_info.value.section == "groups"

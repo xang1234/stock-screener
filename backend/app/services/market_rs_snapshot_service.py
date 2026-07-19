@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    balanced_run_has_required_price_basis,
     calculate_balanced_rs,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
@@ -35,11 +37,25 @@ class MarketRsSnapshotService:
         market: str,
         as_of_date: date,
         formula_version: str = BALANCED_RS_FORMULA_VERSION,
+        rebuild_incompatible: bool = False,
     ) -> MarketRsRun:
         if formula_version != BALANCED_RS_FORMULA_VERSION:
             raise ValueError(
-                "Canonical snapshot publication supports only "
-                f"{BALANCED_RS_FORMULA_VERSION}"
+                "Unsupported Market RS formula for snapshot calculation: "
+                f"{formula_version}"
+            )
+
+        existing = self.repository.get_completed_exact(
+            db,
+            market=market,
+            as_of_date=as_of_date,
+            formula_version=formula_version,
+        )
+        if existing is not None and balanced_run_has_required_price_basis(existing):
+            return existing
+        if existing is not None and not rebuild_incompatible:
+            raise MarketRsSnapshotIncompatible(
+                f"Completed Market RS run {existing.id} has an incompatible price basis"
             )
 
         try:
@@ -79,6 +95,7 @@ class MarketRsSnapshotService:
             benchmark_as_of_date=inputs.benchmark_as_of_date,
             universe_hash=inputs.universe_hash,
             expected_symbol_count=len(inputs.expected_symbols),
+            rebuild_completed=rebuild_incompatible,
         )
         if run.status == "completed":
             return run
@@ -92,6 +109,7 @@ class MarketRsSnapshotService:
                 diagnostics={
                     "current_price_coverage": inputs.current_price_coverage,
                     "exclusions": inputs.exclusions,
+                    "price_basis": BALANCED_RS_PRICE_BASIS,
                 },
             )
             db.commit()
@@ -121,3 +139,7 @@ class MarketRsSnapshotService:
             else:
                 db.rollback()
             raise
+
+
+class MarketRsSnapshotIncompatible(RuntimeError):
+    """A completed run predates the required canonical input policy."""

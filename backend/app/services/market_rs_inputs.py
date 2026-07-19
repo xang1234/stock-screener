@@ -119,7 +119,6 @@ class MarketRsInputLoader:
                 StockPrice.symbol,
                 StockPrice.date,
                 StockPrice.adj_close,
-                StockPrice.close,
             )
             .filter(
                 StockPrice.symbol.in_(query_symbols),
@@ -129,9 +128,8 @@ class MarketRsInputLoader:
         )
         prices: dict[tuple[str, date], float] = {}
         for row in rows:
-            value = row.adj_close if row.adj_close is not None else row.close
-            if self._valid_price(value):
-                prices[(row.symbol, row.date)] = float(value)
+            if self._valid_price(row.adj_close):
+                prices[(row.symbol, row.date)] = float(row.adj_close)
 
         benchmark_symbol = next(
             (
@@ -152,7 +150,7 @@ class MarketRsInputLoader:
             }
             raise MarketRsInputUnavailable(
                 f"No {normalized} benchmark has every exact RS session anchor",
-                reason_code="benchmark_anchor_missing",
+                reason_code="benchmark_adjusted_anchor_missing",
                 diagnostics={"missing_anchor_dates": missing_by_candidate},
                 **context,
             )
@@ -169,7 +167,7 @@ class MarketRsInputLoader:
             raise MarketRsInputUnavailable(
                 f"{normalized} current price coverage is "
                 f"{current_price_coverage:.1%}; 90.0% required",
-                reason_code="current_price_coverage_below_threshold",
+                reason_code="current_adjusted_price_coverage_below_threshold",
                 diagnostics={
                     "current_price_coverage": current_price_coverage,
                     "current_prices_available": current_available,
@@ -198,7 +196,7 @@ class MarketRsInputLoader:
             )
             if missing_offset is not None:
                 label = "current" if missing_offset == 0 else str(missing_offset)
-                exclusions[symbol] = f"missing_{label}_session_anchor"
+                exclusions[symbol] = f"missing_adjusted_{label}_session_anchor"
                 continue
 
             current_stock = prices[(symbol, current_date)]

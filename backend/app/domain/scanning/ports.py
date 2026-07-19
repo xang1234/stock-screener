@@ -244,6 +244,17 @@ class TaskDispatcher(abc.ABC):
         ...
 
 
+@dataclass(frozen=True)
+class MarketRsResolution:
+    market: str
+    as_of_date: date | None
+    formula_version: str
+    mode: str
+    run_id: int | None
+    universe_size: int | None
+    ratings_by_symbol: dict[str, dict[str, int]]
+
+
 class StockDataProvider(abc.ABC):
     """Fetch market/fundamental data for scoring."""
 
@@ -265,16 +276,13 @@ class StockDataProvider(abc.ABC):
     ) -> dict[str, object]:
         ...
 
-
-@dataclass(frozen=True)
-class MarketRsResolution:
-    market: str
-    as_of_date: date | None
-    formula_version: str
-    mode: str
-    run_id: int | None
-    universe_size: int | None
-    ratings_by_symbol: dict[str, dict[str, int]]
+    @abc.abstractmethod
+    def apply_market_rs_resolution(
+        self,
+        results: dict[str, object],
+        resolution: MarketRsResolution,
+    ) -> None:
+        raise NotImplementedError
 
 
 class MarketRsReader(Protocol):

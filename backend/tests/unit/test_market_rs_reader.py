@@ -5,6 +5,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
 from app.domain.relative_strength import (
+    BALANCED_RS_PRICE_BASIS,
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
@@ -52,7 +53,7 @@ def _seed_balanced_run(db_session):
         expected_symbol_count=3,
         eligible_symbol_count=3,
         excluded_symbol_count=0,
-        diagnostics_json={},
+        diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
         completed_at=datetime.now(timezone.utc),
         rows=[
             _snapshot(

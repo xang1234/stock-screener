@@ -21,7 +21,7 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
-from app.infra.db.models.relative_strength import MarketRsFormulaPointer
+from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
@@ -59,6 +59,34 @@ def _seed_group(
     formula_version=LEGACY_RS_FORMULA_VERSION,
 ):
     for i, d in enumerate(dates):
+        market_rs_run_id = None
+        if formula_version == BALANCED_RS_FORMULA_VERSION:
+            run = (
+                session.query(MarketRsRun)
+                .filter(
+                    MarketRsRun.market == market,
+                    MarketRsRun.as_of_date == d,
+                    MarketRsRun.formula_version == formula_version,
+                )
+                .one_or_none()
+            )
+            if run is None:
+                run = MarketRsRun(
+                    market=market,
+                    as_of_date=d,
+                    formula_version=formula_version,
+                    status="completed",
+                    benchmark_symbol="SPY",
+                    benchmark_as_of_date=d,
+                    universe_hash=f"rrg-{market}-{d.isoformat()}",
+                    expected_symbol_count=10,
+                    eligible_symbol_count=10,
+                    excluded_symbol_count=0,
+                    diagnostics_json={"price_basis": "adj_close_only"},
+                )
+                session.add(run)
+                session.flush()
+            market_rs_run_id = run.id
         session.add(
             IBDGroupRank(
                 market=market,
@@ -69,6 +97,7 @@ def _seed_group(
                 num_stocks=num_stocks,
                 num_stocks_rs_above_80=0,
                 rs_formula_version=formula_version,
+                market_rs_run_id=market_rs_run_id,
             )
         )
     session.commit()
@@ -328,7 +357,7 @@ def test_get_rrg_omits_groups_with_too_little_history():
                 rs_fn=lambda i: 40 + 0.6 * i)
     # Only 5 weekly points -> below MIN_TAIL_WEEKS -> omitted.
     _seed_group(session, market="US", group="TinyNew", dates=_weekly_fridays(5),
-                rs_fn=lambda i: 50.0)
+                rs_fn=lambda i: 50.0, rank=2)
 
     latest = dates[-1].isoformat()
     stub = _StubRankService([
@@ -347,11 +376,11 @@ def test_get_rrg_sectors_scope_rolls_groups_into_gics_sectors():
     session = _session()
     dates = _weekly_fridays(40)
     _seed_group(session, market="US", group="AlphaTech", dates=dates,
-                rs_fn=lambda i: 40 + 0.6 * i, num_stocks=12)
+                rs_fn=lambda i: 40 + 0.6 * i, num_stocks=12, rank=1)
     _seed_group(session, market="US", group="GammaChips", dates=dates,
-                rs_fn=lambda i: 42 + 0.5 * i, num_stocks=8)
+                rs_fn=lambda i: 42 + 0.5 * i, num_stocks=8, rank=2)
     _seed_group(session, market="US", group="BetaMetals", dates=dates,
-                rs_fn=lambda i: 60 - 0.6 * i, num_stocks=10)
+                rs_fn=lambda i: 60 - 0.6 * i, num_stocks=10, rank=3)
 
     # Group -> dominant GICS sector via constituents.
     for sym, grp, sector in [

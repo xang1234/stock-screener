@@ -275,31 +275,10 @@ class RunBulkScanUseCase:
                         symbol: pre_fetched_data[symbol]
                         for symbol in market_symbols
                     }
-                    apply_resolution = getattr(
-                        self._data_provider,
-                        "apply_market_rs_resolution",
-                        None,
+                    self._data_provider.apply_market_rs_resolution(
+                        market_data,
+                        resolution,
                     )
-                    if callable(apply_resolution):
-                        apply_resolution(market_data, resolution)
-                    else:
-                        for symbol, stock_data in market_data.items():
-                            setattr(
-                                stock_data,
-                                "canonical_rs_ratings",
-                                resolution.ratings_by_symbol.get(symbol),
-                            )
-                            setattr(
-                                stock_data,
-                                "rs_formula_version",
-                                resolution.formula_version,
-                            )
-                            setattr(stock_data, "market_rs_run_id", resolution.run_id)
-                            setattr(
-                                stock_data,
-                                "rs_universe_size",
-                                resolution.universe_size,
-                            )
 
             # 5b — Scan each symbol in the chunk
             chunk_results: list[tuple[str, dict]] = []

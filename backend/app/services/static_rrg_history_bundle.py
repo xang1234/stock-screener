@@ -8,6 +8,7 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,12 @@ from sqlalchemy.orm import Session
 
 from app.analysis.rrg_weekly import rrg_week_start
 from app.domain.markets.catalog import MarketCatalog, get_market_catalog
+from app.domain.relative_strength import GroupSnapshotIdentity
 from app.models.industry import IBDGroupRank
+from app.services.group_rank_snapshot_reader import (
+    GroupRankSnapshotReader,
+    GroupSnapshotIntegrityError,
+)
 from app.services.market_taxonomy_service import get_market_taxonomy_service
 from app.services.rrg_history_provider import RRGHistoryResult
 from app.services.rrg_service import RRGService
@@ -34,8 +40,24 @@ from app.services.static_rrg_history_contract import (
 )
 
 
+class StaticRRGHistoryUnavailableReason(StrEnum):
+    NOT_ENABLED = "not_enabled"
+    CURRENT_SNAPSHOT_MISSING = "current_snapshot_missing"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+
+
 class StaticRRGHistoryUnavailableError(RuntimeError):
     """Raised when current weekly RRG state cannot be built."""
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        reason_code: StaticRRGHistoryUnavailableReason,
+    ) -> None:
+        self.reason = reason
+        self.reason_code = reason_code
+        super().__init__(reason)
 
 
 @dataclass(frozen=True)
@@ -45,6 +67,7 @@ class StaticRRGHistoryPreparation:
     plan: StaticRRGHistoryPlan
     state: StaticRRGHistoryState | None
     warnings: tuple[str, ...] = ()
+    unavailable_reason: StaticRRGHistoryUnavailableReason | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +76,9 @@ class StaticRRGHistoryBundleService:
 
     retention_weeks: int = STATIC_RRG_HISTORY_RETENTION_WEEKS
     market_catalog: MarketCatalog = field(default_factory=get_market_catalog)
+    snapshot_reader: GroupRankSnapshotReader = field(
+        default_factory=GroupRankSnapshotReader
+    )
 
     def prepare(
         self,
@@ -70,7 +96,11 @@ class StaticRRGHistoryBundleService:
             market_catalog=self.market_catalog,
         )
         if not plan.enabled:
-            return StaticRRGHistoryPreparation(plan=plan, state=None)
+            return StaticRRGHistoryPreparation(
+                plan=plan,
+                state=None,
+                unavailable_reason=StaticRRGHistoryUnavailableReason.NOT_ENABLED,
+            )
         previous = None
         warnings: list[str] = []
         if plan.source_path.exists():
@@ -95,10 +125,18 @@ class StaticRRGHistoryBundleService:
         except (StaticRRGHistoryBundleError, StaticRRGHistoryUnavailableError) as exc:
             warnings.append(f"Rolling RRG history was not advanced: {exc}")
             state = None
+            unavailable_reason = (
+                exc.reason_code
+                if isinstance(exc, StaticRRGHistoryUnavailableError)
+                else StaticRRGHistoryUnavailableReason.SOURCE_UNAVAILABLE
+            )
+        else:
+            unavailable_reason = None
         return StaticRRGHistoryPreparation(
             plan=plan,
             state=state,
             warnings=tuple(warnings),
+            unavailable_reason=unavailable_reason,
         )
 
     def load(
@@ -145,7 +183,8 @@ class StaticRRGHistoryBundleService:
             raise StaticRRGHistoryBundleError("RRG history formula is required.")
         if not self.market_catalog.rrg_scopes_for_market(normalized_market):
             raise StaticRRGHistoryUnavailableError(
-                f"RRG is not enabled for market {normalized_market}."
+                f"RRG is not enabled for market {normalized_market}.",
+                reason_code=StaticRRGHistoryUnavailableReason.NOT_ENABLED,
             )
         if previous is not None and previous.market != normalized_market:
             raise StaticRRGHistoryBundleError(
@@ -161,33 +200,57 @@ class StaticRRGHistoryBundleService:
             )
         if not inspect(db.get_bind()).has_table(IBDGroupRank.__tablename__):
             raise StaticRRGHistoryUnavailableError(
-                f"RRG source table {IBDGroupRank.__tablename__} is unavailable."
+                f"RRG source table {IBDGroupRank.__tablename__} is unavailable.",
+                reason_code=StaticRRGHistoryUnavailableReason.SOURCE_UNAVAILABLE,
             )
 
         cutoff = through_date - timedelta(weeks=max(1, int(self.retention_weeks)))
-        rows = (
-            db.query(IBDGroupRank)
-            .filter(
-                IBDGroupRank.market == normalized_market,
-                IBDGroupRank.rs_formula_version == normalized_formula,
-                IBDGroupRank.date >= cutoff,
-                IBDGroupRank.date <= through_date,
+        try:
+            dates = tuple(
+                item
+                for item in self.snapshot_reader.available_dates(
+                    db,
+                    market=normalized_market,
+                    formula_version=normalized_formula,
+                    through_date=through_date,
+                )
+                if cutoff <= item <= through_date
             )
-            .order_by(IBDGroupRank.date.asc(), IBDGroupRank.rank.asc())
-            .all()
-        )
+            snapshot_rows = [
+                (
+                    snapshot_date,
+                    self.snapshot_reader.load_exact(
+                        db,
+                        identity=GroupSnapshotIdentity(
+                            normalized_market,
+                            snapshot_date,
+                            normalized_formula,
+                        ),
+                        include_top_symbol_names=False,
+                    ),
+                )
+                for snapshot_date in dates
+            ]
+        except GroupSnapshotIntegrityError as exc:
+            raise StaticRRGHistoryUnavailableError(
+                str(exc),
+                reason_code=StaticRRGHistoryUnavailableReason.SOURCE_UNAVAILABLE,
+            ) from exc
         weeks = {
             rrg_week_start(week.source_date): week
             for week in (previous.weeks if previous is not None else ())
             if cutoff <= week.source_date <= through_date
         }
         try:
-            weeks.update(_weekly_snapshots(rows))
+            weeks.update(_weekly_snapshots(snapshot_rows))
             ordered = tuple(weeks[key] for key in sorted(weeks))
             if not ordered or ordered[-1].source_date != through_date:
                 raise StaticRRGHistoryUnavailableError(
                     f"No current group-rank history is available for {normalized_market} "
-                    f"on {through_date.isoformat()}."
+                    f"on {through_date.isoformat()}.",
+                    reason_code=(
+                        StaticRRGHistoryUnavailableReason.CURRENT_SNAPSHOT_MISSING
+                    ),
                 )
             return StaticRRGHistoryState(
                 schema_version=STATIC_RRG_HISTORY_SCHEMA_VERSION,
@@ -294,10 +357,10 @@ def build_static_rrg_service(state: StaticRRGHistoryState) -> RRGService:
     )
 
 
-def _weekly_snapshots(rows: list[IBDGroupRank]) -> dict[date, StaticRRGWeek]:
-    rows_by_date: dict[date, list[IBDGroupRank]] = defaultdict(list)
-    for row in rows:
-        rows_by_date[row.date].append(row)
+def _weekly_snapshots(
+    snapshots: list[tuple[date, list[dict[str, Any]]]],
+) -> dict[date, StaticRRGWeek]:
+    rows_by_date = {snapshot_date: rows for snapshot_date, rows in snapshots}
     latest_date_by_week: dict[date, date] = {}
     for row_date in rows_by_date:
         week_start = rrg_week_start(row_date)
@@ -310,12 +373,14 @@ def _weekly_snapshots(rows: list[IBDGroupRank]) -> dict[date, StaticRRGWeek]:
             source_date=source_date,
             groups=tuple(
                 StaticRRGGroupPoint(
-                    industry_group=row.industry_group,
-                    rank=row.rank,
-                    avg_rs_rating=row.avg_rs_rating,
-                    num_stocks=int(row.num_stocks or 0),
+                    industry_group=str(row["industry_group"]),
+                    rank=int(row["rank"]),
+                    avg_rs_rating=float(row["avg_rs_rating"]),
+                    num_stocks=int(row.get("num_stocks") or 0),
                 )
-                for row in sorted(rows_by_date[source_date], key=lambda item: item.rank)
+                for row in sorted(
+                    rows_by_date[source_date], key=lambda item: int(item["rank"])
+                )
             ),
         )
         for week_start, source_date in latest_date_by_week.items()
@@ -339,5 +404,6 @@ __all__ = [
     "StaticRRGHistoryProvider",
     "StaticRRGHistoryPreparation",
     "StaticRRGHistoryUnavailableError",
+    "StaticRRGHistoryUnavailableReason",
     "build_static_rrg_service",
 ]

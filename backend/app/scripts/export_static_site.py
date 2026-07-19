@@ -43,7 +43,7 @@ from app.services.static_rrg_history_contract import StaticRRGHistoryBundleError
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
 from app.wiring.bootstrap import (
-    get_group_rank_service,
+    get_group_rank_snapshot_coordinator,
     get_market_calendar_service,
     get_price_cache,
     get_provider_snapshot_service,
@@ -233,6 +233,7 @@ def _prepare_balanced_static_rs(*, market: str, as_of_date: date) -> dict[str, A
         market=normalized_market,
         calculation_date=as_of_date.isoformat(),
         formula_version=BALANCED_RS_FORMULA_VERSION,
+        rebuild_incompatible=True,
     )
     if (
         not isinstance(result, dict)
@@ -303,13 +304,18 @@ def _ensure_group_rank_history(
     *,
     as_of_date: date,
     market: str = "US",
+    formula_version: str,
 ) -> GroupRankHistoryBackfillResult:
     """Backfill recent group-rank history so 1W/1M/3M deltas can be rendered."""
     return GroupRankHistoryBackfillService(
         session_factory=SessionLocal,
         calendar_service=get_market_calendar_service(),
-        group_rank_service=get_group_rank_service(),
-    ).backfill(as_of_date=as_of_date, market=market)
+        group_snapshot_coordinator=get_group_rank_snapshot_coordinator(),
+    ).backfill(
+        as_of_date=as_of_date,
+        market=market,
+        formula_version=formula_version,
+    )
 
 
 def _ensure_breadth_history(
@@ -459,6 +465,18 @@ def _run_daily_refresh(
             )
         results["market_rs"] = market_rs_results
 
+        group_rank_history: dict[str, GroupRankHistoryBackfillResult] = {}
+        group_rank_history_report: dict[str, dict[str, Any]] = {}
+        for selected_market in selected_markets:
+            backfill = _ensure_group_rank_history(
+                as_of_date=as_of_by_market[selected_market],
+                market=selected_market,
+                formula_version=rs_formula_version,
+            )
+            group_rank_history[selected_market] = backfill
+            group_rank_history_report[selected_market] = backfill.as_dict()
+        results["group_rank_history_backfill"] = group_rank_history_report
+
         market_exposure: dict[str, Any] = {}
         for selected_market in selected_markets:
             market_as_of = as_of_by_market[selected_market]
@@ -519,29 +537,11 @@ def _run_daily_refresh(
                 market=selected_market,
                 publish_pointer_key=_market_pointer_key(selected_market),
                 ignore_runtime_market_gate=True,
+                rs_formula_version_override=rs_formula_version,
             )
             feature_snapshots[selected_market] = market_result
 
         results["feature_snapshots"] = feature_snapshots
-
-        group_rank_history: dict[str, GroupRankHistoryBackfillResult] = {}
-        group_rank_history_report: dict[str, dict[str, Any]] = {}
-        for selected_market in selected_markets:
-            snapshot = feature_snapshots.get(selected_market, {})
-            if not _snapshot_publishable(snapshot):
-                group_rank_history_report[selected_market] = {
-                    "status": "skipped",
-                    "market": selected_market,
-                    "reason": "snapshot_not_ready",
-                }
-                continue
-            backfill = _ensure_group_rank_history(
-                as_of_date=as_of_by_market[selected_market],
-                market=selected_market,
-            )
-            group_rank_history[selected_market] = backfill
-            group_rank_history_report[selected_market] = backfill.as_dict()
-        results["group_rank_history_backfill"] = group_rank_history_report
 
         # Re-enrich feature runs after the IBDGroupRank backfill above.
         # build_daily_snapshot's inner enrichment runs *before* group ranks
@@ -723,6 +723,9 @@ def main() -> int:
                 else None
             ),
             clean=not args.no_clean,
+            rs_formula_version_overrides={
+                market: args.rs_formula_version for market in STATIC_EXPORT_MARKETS
+            },
         )
     else:
         prepare_runtime()

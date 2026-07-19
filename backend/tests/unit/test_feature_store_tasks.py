@@ -31,7 +31,10 @@ from app.domain.scanning.defaults import (
     get_bootstrap_scan_profile,
     get_default_scan_profile,
 )
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from app.schemas.universe import UniverseType
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer, StockFeatureDaily
 from app.models.scan_result import Scan
@@ -65,6 +68,20 @@ class _FakeUseCase:
 
 
 _TASK_BODY = inspect.unwrap(build_daily_snapshot.run)
+
+
+@pytest.fixture(autouse=True)
+def _default_task_rs_dependencies(request, monkeypatch):
+    """Keep unrelated task tests on the explicit legacy compatibility path."""
+    monkeypatch.setattr(
+        "app.infra.db.repositories.market_rs_repo.MarketRsRunRepository.active_formula",
+        lambda self, db, *, market: LEGACY_RS_FORMULA_VERSION,
+    )
+    if request.node.name.startswith("test_build_daily_snapshot"):
+        monkeypatch.setattr(
+            "app.interfaces.tasks.feature_store_tasks._enrich_feature_run_with_ibd_metadata",
+            lambda **_kwargs: {"updated_rows": 0},
+        )
 
 
 class _NonSkippingUoW:
@@ -416,6 +433,7 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
                     SimpleNamespace(
                         id=41,
                         as_of_date=date(2026, 3, 16),
+                        config_json={"market": "US"},
                     ),
                 )[1]
             )
@@ -487,6 +505,7 @@ def test_build_daily_snapshot_bootstrap_skip_if_published_uses_cache_only_suppor
                     SimpleNamespace(
                         id=51,
                         as_of_date=date(2026, 3, 16),
+                        config_json={"market": "US"},
                     ),
                 )[1] if kwargs["universe_hash"] == "AAPL,MSFT" else None
             )
@@ -559,6 +578,7 @@ def test_build_daily_snapshot_skip_if_published_repairs_requested_pointer():
                 find_latest_published_exact=lambda **_kwargs: SimpleNamespace(
                     id=84,
                     as_of_date=date(2026, 3, 16),
+                    config_json={"market": "HK"},
                 )
             )
 
@@ -1093,6 +1113,7 @@ def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
                 as_of_date=date(2026, 4, 2),
                 run_type="daily_snapshot",
                 status="published",
+                config_json={"universe": {"market": "US"}},
             )
         )
         db.add_all(
@@ -1121,7 +1142,14 @@ def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
             [
                 IBDIndustryGroup(symbol="NVDA", industry_group="Semiconductors"),
                 IBDIndustryGroup(symbol="MSFT", industry_group="Software"),
-                IBDGroupRank(industry_group="Semiconductors", date=date(2026, 4, 2), rank=1, avg_rs_rating=95.0),
+                IBDGroupRank(
+                    market="US",
+                    industry_group="Semiconductors",
+                    date=date(2026, 4, 2),
+                    rank=1,
+                    avg_rs_rating=95.0,
+                    rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+                ),
             ]
         )
         db.commit()
@@ -1169,6 +1197,7 @@ def test_enrich_feature_run_with_ibd_metadata_batches_feature_rows():
                 as_of_date=date(2026, 4, 2),
                 run_type="daily_snapshot",
                 status="published",
+                config_json={"universe": {"market": "US"}},
             )
         )
         feature_rows = [
@@ -1190,10 +1219,12 @@ def test_enrich_feature_run_with_ibd_metadata_batches_feature_rows():
         )
         db.add(
             IBDGroupRank(
+                market="US",
                 industry_group="Software",
                 date=date(2026, 4, 2),
-                rank=3,
+                rank=1,
                 avg_rs_rating=90.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
             )
         )
         db.commit()
@@ -1237,6 +1268,7 @@ def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_ru
         tables=[
             FeatureRun.__table__,
             StockFeatureDaily.__table__,
+            IBDGroupRank.__table__,
         ],
     )
     session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
@@ -1262,6 +1294,24 @@ def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_ru
                 details_json={"symbol": "0700.HK", "rs_rating": 98.0},
             )
         )
+        db.add_all([
+            IBDGroupRank(
+                market="HK",
+                industry_group="Other Services",
+                date=date(2026, 4, 2),
+                rank=1,
+                avg_rs_rating=91.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+            IBDGroupRank(
+                market="HK",
+                industry_group="Internet Services",
+                date=date(2026, 4, 2),
+                rank=2,
+                avg_rs_rating=88.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ])
         db.commit()
 
     class _FakeTaxonomyService:
@@ -1289,7 +1339,7 @@ def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_ru
     assert stats["missing_industry_rows"] == 0
     assert stats["missing_rank_rows"] == 0
     assert row.details_json["ibd_industry_group"] == "Internet Services"
-    assert row.details_json["ibd_group_rank"] == 1
+    assert row.details_json["ibd_group_rank"] == 2
     assert row.details_json["market_themes"] == ["AI Infrastructure", "Cloud"]
 
     engine.dispose()
@@ -1322,6 +1372,16 @@ def test_enrich_feature_run_with_ibd_metadata_overrides_non_us_sector():
                     "symbol": "7203.T",
                     "gics_sector": "Consumer Discretionary",
                 },
+            )
+        )
+        db.add(
+            IBDGroupRank(
+                market="JP",
+                industry_group="Transportation Equipment",
+                date=date(2026, 4, 2),
+                rank=1,
+                avg_rs_rating=90.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
             )
         )
         db.commit()

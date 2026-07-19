@@ -12,6 +12,30 @@ from sqlalchemy.orm import Session
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.infra.db.models.relative_strength import MarketRsRun
 from app.models.industry import IBDGroupRank
+from app.models.stock_universe import StockUniverse
+
+
+def annotate_top_symbol_names(
+    db: Session,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Resolve all top-symbol company names with one universe query."""
+    symbols = {
+        str(row.get("top_symbol")).strip()
+        for row in rows
+        if str(row.get("top_symbol") or "").strip()
+    }
+    name_map = (
+        dict(
+            db.query(StockUniverse.symbol, StockUniverse.name)
+            .filter(StockUniverse.symbol.in_(symbols))
+            .all()
+        )
+        if symbols
+        else {}
+    )
+    for row in rows:
+        row["top_symbol_name"] = name_map.get(row.get("top_symbol"))
 
 
 def rank_record_payload(

@@ -4,12 +4,16 @@ import pytest
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.services.market_rs_inputs import MarketRsInputs, MarketRsInputUnavailable
-from app.services.market_rs_snapshot_service import MarketRsSnapshotService
+from app.services.market_rs_snapshot_service import (
+    MarketRsSnapshotIncompatible,
+    MarketRsSnapshotService,
+)
 
 
 AS_OF = date(2026, 4, 10)
@@ -57,6 +61,7 @@ def test_snapshot_service_publishes_all_rows_and_run_atomically(db_session):
     assert run.status == "completed"
     assert run.eligible_symbol_count == 3
     assert len(run.rows) == 3
+    assert run.diagnostics_json["price_basis"] == BALANCED_RS_PRICE_BASIS
     assert all(1 <= row.overall_rs <= 99 for row in run.rows)
     assert (
         db_session.query(MarketRsRun)
@@ -113,7 +118,7 @@ def test_snapshot_service_rejects_legacy_without_loading_or_writing(db_session):
         repository=MarketRsRunRepository(),
     )
 
-    with pytest.raises(ValueError, match="balanced-horizon-percentile-v2"):
+    with pytest.raises(ValueError, match="legacy-linear-v1"):
         service.calculate(
             db_session,
             market="US",
@@ -123,3 +128,38 @@ def test_snapshot_service_rejects_legacy_without_loading_or_writing(db_session):
 
     assert loader.calls == []
     assert db_session.query(MarketRsRun).count() == 0
+
+
+def test_explicit_rebuild_replaces_incompatible_completed_run(db_session):
+    old = MarketRsRun(
+        market="US",
+        as_of_date=AS_OF,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        status="completed",
+        benchmark_symbol="SPY",
+        benchmark_as_of_date=AS_OF,
+        universe_hash="old",
+        expected_symbol_count=0,
+        eligible_symbol_count=0,
+        excluded_symbol_count=0,
+        diagnostics_json={},
+    )
+    db_session.add(old)
+    db_session.commit()
+    old_id = old.id
+    service = MarketRsSnapshotService(
+        input_loader=_FakeInputLoader(_complete_inputs()),
+        repository=MarketRsRunRepository(),
+    )
+
+    with pytest.raises(MarketRsSnapshotIncompatible):
+        service.calculate(db_session, market="US", as_of_date=AS_OF)
+
+    rebuilt = service.calculate(
+        db_session,
+        market="US",
+        as_of_date=AS_OF,
+        rebuild_incompatible=True,
+    )
+    assert rebuilt.id != old_id
+    assert rebuilt.diagnostics_json["price_basis"] == BALANCED_RS_PRICE_BASIS

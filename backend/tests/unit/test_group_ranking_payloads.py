@@ -4,12 +4,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.group_ranking_payloads import (
+    annotate_top_symbol_names,
     compute_group_rankings_from_serialized_rows,
     group_snapshot_metadata,
     rank_record_payload,
 )
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.models.industry import IBDGroupRank
+from app.models.stock_universe import StockUniverse
 
 
 class _MetadataDb:
@@ -18,6 +20,22 @@ class _MetadataDb:
 
     def get(self, model, run_id):  # noqa: ANN001, ARG002
         return self.run
+
+
+def test_annotate_top_symbol_names_batches_known_and_unknown_symbols(db_session):
+    db_session.add(StockUniverse(symbol="AAA", name="A Corp", market="US"))
+    db_session.commit()
+    rows = [
+        {"top_symbol": "AAA", "top_symbol_name": None},
+        {"top_symbol": "MISSING", "top_symbol_name": "stale"},
+    ]
+
+    annotate_top_symbol_names(db_session, rows)
+
+    assert rows == [
+        {"top_symbol": "AAA", "top_symbol_name": "A Corp"},
+        {"top_symbol": "MISSING", "top_symbol_name": None},
+    ]
 
 
 def test_group_snapshot_metadata_rejects_rows_missing_audit_fields():

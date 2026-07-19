@@ -1,0 +1,119 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
+from app.services.static_artifact_combiner import (
+    StaticArtifactCombiner,
+    StaticArtifactFormulaError,
+)
+from app.services.static_site_errors import NoPublishedStaticMarketArtifact
+from app.services.static_site_export_service import (
+    STATIC_DEFAULT_MARKET,
+    STATIC_MARKET_METADATA_FILENAME,
+    STATIC_SITE_SCHEMA_VERSION,
+    STATIC_SUPPORTED_MARKETS,
+)
+
+
+def write_market_artifact(root: Path, *, market: str, formula: str) -> Path:
+    market_dir = root / f"static-market-{market}" / "markets" / market.lower()
+    (market_dir / "scan").mkdir(parents=True)
+    (market_dir / "scan" / "manifest.json").write_text(
+        '{"ok": true}\n', encoding="utf-8"
+    )
+    entry = {
+        "market": market,
+        "display_name": market,
+        "as_of_date": "2026-04-10",
+        "rs_formula_version": formula,
+        "features": {
+            "scan": True,
+            "breadth": False,
+            "groups": False,
+            "charts": False,
+        },
+        "pages": {
+            "scan": {"path": f"markets/{market.lower()}/scan/manifest.json"}
+        },
+        "assets": {},
+    }
+    (market_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-04-10T22:00:00Z",
+                "market": market,
+                "entry": entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def combiner() -> StaticArtifactCombiner:
+    return StaticArtifactCombiner(
+        schema_version=STATIC_SITE_SCHEMA_VERSION,
+        supported_markets=STATIC_SUPPORTED_MARKETS,
+        default_market=STATIC_DEFAULT_MARKET,
+    )
+
+
+def test_combiner_rejects_wrong_formula_current_without_using_fallback(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current", market="US", formula=LEGACY_RS_FORMULA_VERSION
+    )
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    output = tmp_path / "out"
+    output.mkdir()
+    sentinel = output / "sentinel"
+    sentinel.write_text("last-good", encoding="utf-8")
+    with pytest.raises(StaticArtifactFormulaError, match="US current"):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=fallback,
+            output_dir=output,
+            required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )
+    assert sentinel.read_text(encoding="utf-8") == "last-good"
+
+
+def test_combiner_rejects_wrong_formula_fallback(tmp_path):
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=LEGACY_RS_FORMULA_VERSION
+    )
+    with pytest.raises(StaticArtifactFormulaError, match="HK fallback"):
+        combiner().combine(
+            artifacts_dir=tmp_path / "empty-current",
+            fallback_artifacts_dir=fallback,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"HK": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )
+
+
+def test_combiner_requires_every_market_named_by_formula_map(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    with pytest.raises(NoPublishedStaticMarketArtifact) as exc_info:
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={
+                "US": BALANCED_RS_FORMULA_VERSION,
+                "HK": BALANCED_RS_FORMULA_VERSION,
+            },
+            clean=True,
+        )
+    assert exc_info.value.markets == ("HK",)

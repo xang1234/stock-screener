@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -17,6 +18,7 @@ from app.services.static_rrg_history_bundle import (
     StaticRRGHistoryBundleService,
     StaticRRGHistoryPreparation,
     StaticRRGHistoryUnavailableError,
+    StaticRRGHistoryUnavailableReason,
     build_static_rrg_service,
 )
 from app.services.static_rrg_history_contract import (
@@ -26,11 +28,26 @@ from app.services.static_rrg_history_contract import (
 )
 
 
+class StaticGroupsRRGUnavailableReason(StrEnum):
+    NOT_ENABLED = "not_enabled"
+    INSUFFICIENT_HISTORY = "insufficient_history"
+    FORMULA_MISMATCH = "formula_mismatch"
+    DATE_MISMATCH = "date_mismatch"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+
+
 class StaticGroupsRRGUnavailableError(RuntimeError):
     """Raised when static RRG cannot be exported for the requested snapshot."""
 
-    def __init__(self, *, section: str, reason: str) -> None:
+    def __init__(
+        self,
+        *,
+        section: str,
+        reason_code: StaticGroupsRRGUnavailableReason,
+        reason: str,
+    ) -> None:
         self.section = section
+        self.reason_code = reason_code
         self.reason = reason
         super().__init__(reason)
 
@@ -58,6 +75,7 @@ class StaticGroupsRRGPayloadBuilder:
         if not requested_scopes:
             raise StaticGroupsRRGUnavailableError(
                 section=f"{normalized_market} rrg",
+                reason_code=StaticGroupsRRGUnavailableReason.NOT_ENABLED,
                 reason=f"RRG is not enabled for market {normalized_market}.",
             )
 
@@ -77,6 +95,7 @@ class StaticGroupsRRGPayloadBuilder:
         if not groups_rrg.get("groups"):
             raise StaticGroupsRRGUnavailableError(
                 section=f"{normalized_market} rrg",
+                reason_code=StaticGroupsRRGUnavailableReason.INSUFFICIENT_HISTORY,
                 reason=(
                     "No RRG data could be computed (group-rank history is too "
                     "short or absent for this market)."
@@ -88,6 +107,7 @@ class StaticGroupsRRGPayloadBuilder:
         if rrg_date != expected_date:
             raise StaticGroupsRRGUnavailableError(
                 section=f"{normalized_market} rrg",
+                reason_code=StaticGroupsRRGUnavailableReason.DATE_MISMATCH,
                 reason=(
                     f"RRG data date {rrg_date or 'none'} does not match static "
                     f"export date {expected_date}."
@@ -113,6 +133,7 @@ class StaticGroupsRRGPayloadBuilder:
         if missing_tables:
             raise StaticGroupsRRGUnavailableError(
                 section=f"{market} rrg",
+                reason_code=StaticGroupsRRGUnavailableReason.SOURCE_UNAVAILABLE,
                 reason=(
                     "RRG source tables are unavailable for this export database: "
                     f"{', '.join(missing_tables)}."
@@ -171,9 +192,16 @@ class StaticGroupsRRGDatabasePayloadSource:
                 through_date=expected_as_of_date,
                 formula_version=formula_version,
             )
-        except (StaticRRGHistoryBundleError, StaticRRGHistoryUnavailableError) as exc:
+        except StaticRRGHistoryUnavailableError as exc:
             raise StaticGroupsRRGUnavailableError(
                 section=f"{normalized_market} rrg",
+                reason_code=_HISTORY_REASON_MAP[exc.reason_code],
+                reason=str(exc),
+            ) from exc
+        except StaticRRGHistoryBundleError as exc:
+            raise StaticGroupsRRGUnavailableError(
+                section=f"{normalized_market} rrg",
+                reason_code=StaticGroupsRRGUnavailableReason.SOURCE_UNAVAILABLE,
                 reason=str(exc),
             ) from exc
 
@@ -266,6 +294,10 @@ class StaticGroupsRRGRollingHistoryExportSession:
             )
             raise StaticGroupsRRGUnavailableError(
                 section=f"{expected_market} rrg",
+                reason_code=_HISTORY_REASON_MAP[
+                    preparation.unavailable_reason
+                    or StaticRRGHistoryUnavailableReason.SOURCE_UNAVAILABLE
+                ],
                 reason=reason,
             )
 
@@ -306,6 +338,7 @@ def _build_payload_from_state(
     if state.rs_formula_version != formula_version:
         raise StaticGroupsRRGUnavailableError(
             section=f"{market} rrg",
+            reason_code=StaticGroupsRRGUnavailableReason.FORMULA_MISMATCH,
             reason=(
                 f"RRG history formula {state.rs_formula_version} does not match "
                 f"requested formula {formula_version}."
@@ -332,9 +365,20 @@ def _missing_required_tables(db: Any, table_names: tuple[str, ...]) -> list[str]
     ]
 
 
+_HISTORY_REASON_MAP = {
+    StaticRRGHistoryUnavailableReason.NOT_ENABLED:
+        StaticGroupsRRGUnavailableReason.NOT_ENABLED,
+    StaticRRGHistoryUnavailableReason.CURRENT_SNAPSHOT_MISSING:
+        StaticGroupsRRGUnavailableReason.INSUFFICIENT_HISTORY,
+    StaticRRGHistoryUnavailableReason.SOURCE_UNAVAILABLE:
+        StaticGroupsRRGUnavailableReason.SOURCE_UNAVAILABLE,
+}
+
+
 __all__ = [
     "StaticGroupsRRGDatabasePayloadSource",
     "StaticGroupsRRGUnavailableError",
+    "StaticGroupsRRGUnavailableReason",
     "StaticGroupsRRGPayloadBuilder",
     "StaticGroupsRRGPayloadSource",
     "StaticGroupsRRGRollingHistoryExportSession",

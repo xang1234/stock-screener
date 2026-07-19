@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -64,7 +65,7 @@ def test_backfill_resumes_completed_stock_run_and_reports_all_failures(monkeypat
     repository = MagicMock()
     repository.get_completed_exact.side_effect = [completed_run, None, None]
     snapshot = MagicMock()
-    snapshot.calculate.side_effect = [retried_run, absent_run]
+    snapshot.calculate.side_effect = [completed_run, retried_run, absent_run]
     groups = MagicMock()
     groups.calculate_and_store.side_effect = [
         [{"market_rs_run_id": 10}],
@@ -84,12 +85,17 @@ def test_backfill_resumes_completed_stock_run_and_reports_all_failures(monkeypat
     assert [item.as_of_date for item in report.results] == list(dates)
     assert report.results[1].reason_code == "group_calculation_failed"
     assert [call.kwargs["as_of_date"] for call in snapshot.calculate.call_args_list] == [
+        dates[0],
         dates[1],
         dates[2],
     ]
+    assert all(
+        call.kwargs["rebuild_incompatible"] is True
+        for call in snapshot.calculate.call_args_list
+    )
 
 
-def test_rejected_activation_rolls_back_without_moving_either_pointer():
+def test_rejected_activation_rolls_back_without_moving_either_pointer(tmp_path):
     repository = MagicMock()
     feature_repository = MagicMock()
     service = _service(repository=repository)
@@ -116,11 +122,46 @@ def test_rejected_activation_rolls_back_without_moving_either_pointer():
             formula_version=BALANCED_RS_FORMULA_VERSION,
             feature_run_id=99,
             validation=validation,
+            static_staging_dir=tmp_path,
         )
 
     repository.activate_formula.assert_not_called()
     feature_repository.repoint_published.assert_not_called()
     db.commit.assert_not_called()
+
+
+def test_activation_rejects_manifest_changed_after_validation(tmp_path):
+    repository = MagicMock()
+    service = _service(repository=repository)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
+    validated_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    manifest_path.write_text('{"schema_version":"changed"}', encoding="utf-8")
+    validation = ActivationValidationReport(
+        market="US",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        through_date=date(2026, 4, 10),
+        first_valid_date=date(2026, 4, 8),
+        candidate_count=3,
+        latest_market_rs_run_id=42,
+        latest_universe_hash="universe-a",
+        feature_run_id=99,
+        feature_universe_hash="feature-a",
+        static_manifest_sha256=validated_hash,
+        errors=(),
+    )
+
+    with pytest.raises(MarketRsActivationRejected, match="changed after validation"):
+        service.activate(
+            MagicMock(),
+            market="US",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            feature_run_id=99,
+            validation=validation,
+            static_staging_dir=tmp_path,
+        )
+
+    repository.activate_formula.assert_not_called()
 
 
 def test_validation_collects_feature_and_static_errors_without_short_circuiting(
@@ -174,7 +215,9 @@ def test_validation_collects_feature_and_static_errors_without_short_circuiting(
     assert any("Missing staged static-site-v3 manifest" in error for error in validation.errors)
 
 
-def test_successful_activation_revalidates_then_commits_both_pointers(monkeypatch):
+def test_successful_activation_revalidates_then_commits_both_pointers(
+    monkeypatch, tmp_path
+):
     events: list[str] = []
     repository = MagicMock()
     repository.get_completed_exact.return_value = SimpleNamespace(
@@ -202,6 +245,11 @@ def test_successful_activation_revalidates_then_commits_both_pointers(monkeypatc
     service._feature_run_repository_factory = lambda _db: feature_repository
     db = MagicMock()
     db.commit.side_effect = lambda: events.append("commit")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
+    manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    revalidate = MagicMock(return_value=())
+    monkeypatch.setattr(service, "revalidate_static", revalidate)
     validation = ActivationValidationReport(
         market="US",
         formula_version=BALANCED_RS_FORMULA_VERSION,
@@ -212,7 +260,7 @@ def test_successful_activation_revalidates_then_commits_both_pointers(monkeypatc
         latest_universe_hash="universe-a",
         feature_run_id=99,
         feature_universe_hash="feature-a",
-        static_manifest_sha256="manifest-a",
+        static_manifest_sha256=manifest_hash,
         errors=(),
     )
 
@@ -222,6 +270,7 @@ def test_successful_activation_revalidates_then_commits_both_pointers(monkeypatc
         formula_version=BALANCED_RS_FORMULA_VERSION,
         feature_run_id=99,
         validation=validation,
+        static_staging_dir=tmp_path,
     )
 
     assert events == ["market", "feature", "commit"]
@@ -229,3 +278,4 @@ def test_successful_activation_revalidates_then_commits_both_pointers(monkeypatc
         99,
         pointer_key="latest_published_market:US",
     )
+    revalidate.assert_called_once()

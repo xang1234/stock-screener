@@ -12,7 +12,6 @@ Verifies:
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from app.domain.scanning.ports import StockDataProvider
 from app.scanners.base_screener import (
@@ -51,6 +50,13 @@ class FakeDataProvider(StockDataProvider):
         batch_only_fundamentals: bool = False,
     ) -> dict[str, object]:
         return {s: self._map[s] for s in symbols if s in self._map}
+
+    def apply_market_rs_resolution(self, results, resolution) -> None:
+        for symbol, item in results.items():
+            item.canonical_rs_ratings = resolution.ratings_by_symbol.get(symbol.upper())
+            item.rs_formula_version = resolution.formula_version
+            item.market_rs_run_id = resolution.run_id
+            item.rs_universe_size = resolution.universe_size
 
 
 def _make_stock_data(symbol: str = "TEST", n_days: int = 200) -> StockData:

@@ -7,7 +7,6 @@ result, surfacing the reason and the score for downstream consumers.
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from app.domain.scanning.ports import StockDataProvider
 from app.scanners.base_screener import (
@@ -37,6 +36,13 @@ class _FakeProvider(StockDataProvider):
         batch_only_fundamentals: bool = False,
     ):
         return {s: self._stock_data for s in symbols}
+
+    def apply_market_rs_resolution(self, results, resolution):
+        for symbol, item in results.items():
+            item.canonical_rs_ratings = resolution.ratings_by_symbol.get(symbol.upper())
+            item.rs_formula_version = resolution.formula_version
+            item.market_rs_run_id = resolution.run_id
+            item.rs_universe_size = resolution.universe_size
 
 
 def _make_stock_data_with_completeness(completeness):

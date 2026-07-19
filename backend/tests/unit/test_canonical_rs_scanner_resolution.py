@@ -197,6 +197,35 @@ def test_custom_direct_path_uses_canonical_rating(monkeypatch):
     assert result.details["filter_results"]["rs_rating"]["rs_rating"] == 87
 
 
+def test_custom_canonical_rs_does_not_require_benchmark_history():
+    data = _canonical_stock_data()
+    data.benchmark_data = pd.DataFrame()
+
+    result = CustomScanner().scan_stock(
+        "TEST",
+        data,
+        criteria={"custom_filters": {"rs_rating_min": 80}},
+    )
+
+    assert result.rating != "Insufficient Data"
+    assert result.details["filter_results"]["rs_rating"]["rs_rating"] == 87
+
+
+def test_custom_legacy_rs_still_requires_benchmark_history():
+    data = _stock_data()
+    data.rs_formula_version = LEGACY_RS_FORMULA_VERSION
+    data.benchmark_data = pd.DataFrame()
+
+    result = CustomScanner().scan_stock(
+        "TEST",
+        data,
+        criteria={"custom_filters": {"rs_rating_min": 80}},
+    )
+
+    assert result.rating == "Insufficient Data"
+    assert "benchmark Close history" in result.details["reason"]
+
+
 def test_setup_engine_direct_path_uses_canonical_rating(monkeypatch):
     data = _canonical_stock_data()
     scanner = SetupEngineScanner()
@@ -240,6 +269,13 @@ class _DirectProvider:
 
     def prepare_data_bulk(self, symbols, requirements, **kwargs):
         return {symbol: self.data for symbol in symbols}
+
+    def apply_market_rs_resolution(self, results, resolution) -> None:
+        for item in results.values():
+            item.canonical_rs_ratings = resolution.ratings_by_symbol.get(item.symbol)
+            item.rs_formula_version = resolution.formula_version
+            item.market_rs_run_id = resolution.run_id
+            item.rs_universe_size = resolution.universe_size
 
 
 class _CanonicalReader:

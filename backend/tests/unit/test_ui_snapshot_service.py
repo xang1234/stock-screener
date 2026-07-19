@@ -373,7 +373,7 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
             expected_symbol_count=5000,
             eligible_symbol_count=5000,
             excluded_symbol_count=0,
-            diagnostics_json={},
+            diagnostics_json={"price_basis": "adj_close_only"},
         )
         db.add_all(
             [

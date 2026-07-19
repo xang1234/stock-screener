@@ -37,7 +37,7 @@ The weighted score is `20% × P1 + 30% × P3 + 20% × P6 + 15% × P9 + 15% × P1
 
 Scan results expose overall, 1M, 3M, and 12M RS. A Group's overall, 1M, and 3M RS are equal-weight averages of those stock ratings over the same eligible constituent set, with at least three eligible stocks required; Group Rank uses only overall Group RS. Both the live and static Group tables show the 1M RS and 3M RS columns.
 
-This methodology is inspired by IBD/CANSLIM's market-relative, percentile-ranked view of leadership, but it is not IBD's undisclosed proprietary formula. Published data carries the formula version, as-of date, universe identity, and run metadata. The RRG transformation itself is unchanged and never mixes history from different RS formula versions.
+This methodology is inspired by IBD/CANSLIM's market-relative, percentile-ranked view of leadership, but it is not IBD's undisclosed proprietary formula. Published data carries the formula version, as-of date, universe identity, adjusted-close-only price basis, and run metadata. Live Groups, static Groups, feature enrichment, and RRG all consume the same exact Market/date/formula snapshot instead of recalculating RS independently. The RRG transformation itself is unchanged and never mixes history from different RS formula versions. `legacy-linear-v1` remains available only as an explicit rollback mode; incompatible or incomplete runs are rebuilt rather than silently reused.
 
 ![Market Health and Exposure](docs/screenshots/health-exposure.jpg)
 *Market Health and Exposure*

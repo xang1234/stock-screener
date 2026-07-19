@@ -15,6 +15,7 @@ from app.domain.relative_strength import (
 from app.database import Base
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
+from app.infra.db.models.relative_strength import MarketRsRun
 from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
@@ -69,6 +70,21 @@ def test_current_rankings_reads_only_active_formula(db_session):
         canonical_group_service=Mock(),
         market_rs_repository=repository,
     )
+    market_run = MarketRsRun(
+        market="US",
+        as_of_date=date(2026, 4, 10),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        status="completed",
+        benchmark_symbol="SPY",
+        benchmark_as_of_date=date(2026, 4, 10),
+        universe_hash="live-group-test",
+        expected_symbol_count=3,
+        eligible_symbol_count=3,
+        excluded_symbol_count=0,
+        diagnostics_json={"price_basis": "adj_close_only"},
+    )
+    db_session.add(market_run)
+    db_session.flush()
     for formula, avg in (
         (LEGACY_RS_FORMULA_VERSION, 95.0),
         (BALANCED_RS_FORMULA_VERSION, 72.0),
@@ -85,6 +101,11 @@ def test_current_rankings_reads_only_active_formula(db_session):
                 top_symbol="AAA",
                 top_rs_rating=90.0,
                 rs_formula_version=formula,
+                market_rs_run_id=(
+                    market_run.id
+                    if formula == BALANCED_RS_FORMULA_VERSION
+                    else None
+                ),
             )
         )
     db_session.commit()
@@ -338,7 +359,7 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
     captured_period_days: list[dict[str, int]] = []
 
     try:
-        _add_rank(db_session, group, current_date, 4)
+        _add_rank(db_session, group, current_date, 1)
         db_session.commit()
 
         expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
@@ -347,7 +368,7 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
             db, group_names, current, period_days, *, market, formula_version
         ):
             captured_period_days.append(dict(period_days))
-            return {(group, "1w"): 6}
+            return {(group, "1w"): 3}
 
         monkeypatch.setattr(service, "_get_historical_ranks_batch", fake_historical_batch)
 
@@ -1405,8 +1426,8 @@ def test_get_current_rankings_can_target_explicit_date():
     group = f"TEST_GROUP_UNIT_{uuid4().hex}"
 
     try:
-        _add_rank(db_session, group, date(2024, 1, 10), 5)
-        _add_rank(db_session, group, date(2024, 1, 17), 3)
+        _add_rank(db_session, group, date(2024, 1, 10), 1)
+        _add_rank(db_session, group, date(2024, 1, 17), 1)
         db_session.commit()
 
         rankings = service.get_current_rankings(
@@ -1417,7 +1438,7 @@ def test_get_current_rankings_can_target_explicit_date():
 
         assert len(rankings) == 1
         assert rankings[0]["date"] == "2024-01-10"
-        assert rankings[0]["rank"] == 5
+        assert rankings[0]["rank"] == 1
     finally:
         db_session.rollback()
         db_session.close()
@@ -1441,7 +1462,7 @@ def test_get_rank_movers_filters_gainers_and_losers_by_sign(monkeypatch):
     movers = service.get_rank_movers(Mock(), period="1w", limit=10, market="HK")
 
     assert [g["industry_group"] for g in movers["gainers"]] == ["Up Big", "Up Small"]
-    assert [l["industry_group"] for l in movers["losers"]] == ["Down Big", "Down Small"]
+    assert [item["industry_group"] for item in movers["losers"]] == ["Down Big", "Down Small"]
 
 
 def test_get_rank_movers_omits_losers_when_only_gainers_exist(monkeypatch):

@@ -14,7 +14,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import RunStatus
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    balanced_run_has_required_price_basis,
+)
 from app.infra.db.repositories.feature_run_repo import SqlFeatureRunRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.industry import IBDGroupRank
@@ -28,6 +31,7 @@ from app.services.market_rs_snapshot_service import MarketRsSnapshotService
 from app.services.static_groups_rrg_export import (
     StaticGroupsRRGDatabasePayloadSource,
     StaticGroupsRRGUnavailableError,
+    StaticGroupsRRGUnavailableReason,
 )
 from app.services.static_rrg_history_contract import (
     STATIC_RRG_HISTORY_SCHEMA_VERSION,
@@ -309,13 +313,13 @@ class MarketRsRolloutService:
                 )
                 continue
             try:
-                if run is None:
-                    run = self.market_rs_snapshot_service.calculate(
-                        db,
-                        market=normalized,
-                        as_of_date=calculation_date,
-                        formula_version=BALANCED_RS_FORMULA_VERSION,
-                    )
+                run = self.market_rs_snapshot_service.calculate(
+                    db,
+                    market=normalized,
+                    as_of_date=calculation_date,
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    rebuild_incompatible=True,
+                )
                 groups = self.canonical_group_service.calculate_and_store(
                     db,
                     market=normalized,
@@ -414,6 +418,10 @@ class MarketRsRolloutService:
         if run is None:
             errors.append(f"Missing completed stock RS snapshot for {calculation_date}.")
             return None
+        if not balanced_run_has_required_price_basis(run):
+            errors.append(
+                f"Market RS run for {calculation_date} has an incompatible price basis."
+            )
         if len(run.rows) != int(run.eligible_symbol_count):
             errors.append(
                 f"Stock row count mismatch for {calculation_date}: "
@@ -631,15 +639,20 @@ class MarketRsRolloutService:
                 formula_version=BALANCED_RS_FORMULA_VERSION,
             )
         except StaticGroupsRRGUnavailableError as exc:
-            reason = str(exc).lower()
-            if "too short" in reason or "absent" in reason or "could be computed" in reason:
+            if (
+                exc.reason_code
+                is StaticGroupsRRGUnavailableReason.INSUFFICIENT_HISTORY
+            ):
                 rrg_status = "insufficient_balanced_history"
                 if rrg_path.is_file():
                     payload = self._json_file(rrg_path)
                     if payload.get("available") or payload.get("payload"):
                         errors.append("Static RRG contains coordinates despite insufficient balanced history.")
             else:
-                errors.append(f"Balanced RRG validation failed: {exc}")
+                errors.append(
+                    "Balanced RRG validation failed "
+                    f"({exc.reason_code.value}): {exc.reason}"
+                )
         else:
             rrg_status = "available"
             if not rrg_path.is_file():
@@ -745,6 +758,34 @@ class MarketRsRolloutService:
             rrg_status=rrg_status,
         )
 
+    def revalidate_static(
+        self,
+        db: Session,
+        *,
+        market: str,
+        through_date: date,
+        feature_run_id: int,
+        static_staging_dir: Path,
+    ) -> tuple[str, ...]:
+        errors: list[str] = []
+        latest_run = self._validate_run_and_groups(
+            db,
+            market=market,
+            calculation_date=through_date,
+            errors=errors,
+        )
+        if latest_run is not None:
+            self._validate_static_artifacts(
+                db,
+                market=market,
+                through_date=through_date,
+                latest_run=latest_run,
+                feature_run_id=feature_run_id,
+                static_staging_dir=static_staging_dir,
+                errors=errors,
+            )
+        return tuple(dict.fromkeys(errors))
+
     @staticmethod
     def _validate_feature_candidate(
         feature: Any,
@@ -776,6 +817,7 @@ class MarketRsRolloutService:
         formula_version: str,
         feature_run_id: int,
         validation: ActivationValidationReport,
+        static_staging_dir: Path,
     ) -> None:
         normalized = self._normalize_market(market)
         if not validation.ok:
@@ -788,6 +830,30 @@ class MarketRsRolloutService:
             or validation.latest_market_rs_run_id is None
         ):
             raise MarketRsActivationRejected(("Activation request does not match its validation report.",))
+
+        manifest_path = Path(static_staging_dir) / "manifest.json"
+        if not manifest_path.is_file():
+            raise MarketRsActivationRejected(
+                ("Validated static manifest disappeared before activation.",)
+            )
+        current_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        if current_hash != validation.static_manifest_sha256:
+            raise MarketRsActivationRejected(
+                ("Validated static manifest changed after validation.",)
+            )
+        static_errors = self.revalidate_static(
+            db,
+            market=normalized,
+            through_date=validation.through_date,
+            feature_run_id=feature_run_id,
+            static_staging_dir=Path(static_staging_dir),
+        )
+        post_validation_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        if static_errors or post_validation_hash != current_hash:
+            raise MarketRsActivationRejected(
+                static_errors
+                or ("Validated static manifest changed during activation revalidation.",)
+            )
 
         try:
             current_run = self.market_rs_repository.get_completed_exact(

@@ -22,13 +22,16 @@ Each enabled filter contributes to the final score. Filters can be weighted.
 import logging
 from typing import Dict, Optional, List, Any
 import pandas as pd
-import numpy as np
 from dataclasses import dataclass
 
 from .base_screener import BaseStockScreener, DataRequirements, ScreenerResult, StockData
 from .screener_registry import register_screener
 from .criteria.relative_strength import RelativeStrengthCalculator
-from .criteria.rs_resolution import CanonicalStockRsUnavailable, resolve_stock_rs
+from .criteria.rs_resolution import (
+    LegacyStockRsUnavailable,
+    StockRsUnavailable,
+    resolve_stock_rs,
+)
 from ..domain.scanning.mixed_market_policy import (
     REASON_MISSING_ADV_USD,
     REASON_MISSING_CAP_NATIVE,
@@ -185,46 +188,45 @@ class CustomScanner(BaseStockScreener):
 
         # RS Rating filter
         if filters.get("rs_rating_min") is not None:
-            if not benchmark_data.empty:
-                try:
-                    filter_results.append(self._check_rs_rating(
+            try:
+                def legacy_rs():
+                    if benchmark_data.empty or "Close" not in benchmark_data.columns:
+                        raise LegacyStockRsUnavailable(
+                            f"{symbol}: legacy RS requires benchmark Close history"
+                        )
+                    return self.rs_calc.calculate_rs_rating(
                         symbol,
-                        price_data,
-                        benchmark_data,
-                        filters,
-                        (
+                        price_data["Close"],
+                        benchmark_data["Close"],
+                        universe_performances=(
                             data.rs_universe_performances.get("weighted")
                             if data.rs_universe_performances
                             else None
                         ),
-                        precomputed_rs_result=resolve_stock_rs(
-                            data,
-                            lambda: self.rs_calc.calculate_rs_rating(
-                                symbol,
-                                price_data['Close'],
-                                benchmark_data['Close'],
-                                universe_performances=(
-                                    data.rs_universe_performances.get("weighted")
-                                    if data.rs_universe_performances
-                                    else None
-                                ),
-                            ),
-                        ),
-                    ))
-                except CanonicalStockRsUnavailable as e:
-                    return ScreenerResult(
-                        score=0.0,
-                        passes=False,
-                        rating="Insufficient Data",
-                        breakdown={},
-                        details={"reason": str(e)},
-                        screener_name=self.screener_name,
                     )
-                except Exception as e:
-                    logger.error(f"{symbol}: Error in rs_rating filter: {e}")
-                    raise
-            else:
-                logger.warning(f"{symbol}: RS rating filter enabled but no benchmark data")
+
+                rs_result = resolve_stock_rs(data, legacy_rs)
+                filter_results.append(
+                    self._check_rs_rating(
+                        symbol,
+                        price_data,
+                        benchmark_data,
+                        filters,
+                        precomputed_rs_result=rs_result,
+                    )
+                )
+            except StockRsUnavailable as exc:
+                return ScreenerResult(
+                    score=0.0,
+                    passes=False,
+                    rating="Insufficient Data",
+                    breakdown={},
+                    details={"reason": str(exc)},
+                    screener_name=self.screener_name,
+                )
+            except Exception as exc:
+                logger.error(f"{symbol}: Error in rs_rating filter: {exc}")
+                raise
 
         # Market cap filter (USD-normalized in mixed-market mode — see
         # app.domain.scanning.mixed_market_policy).
