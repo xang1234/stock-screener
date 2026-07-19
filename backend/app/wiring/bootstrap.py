@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from app.wiring.market_rs_services import MarketRsServices
     from app.services.point_in_time_universe_service import PointInTimeUniverseService
     from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
+    from app.wiring.canonical_rs_runtime import CanonicalRsRuntime
     from app.services.price_cache_service import PriceCacheService
     from app.services.provider_snapshot_service import ProviderSnapshotService
     from app.services.rate_limiter import RedisRateLimiter
@@ -94,7 +95,7 @@ class RuntimeServices:
         self._ui_snapshot_service: UISnapshotService | None = None
         self._cache_bundle: CacheBundle | None = None
         self._group_rank_service: IBDGroupRankService | None = None
-        self._canonical_group_ranking_service: CanonicalGroupRankingService | None = None
+        self._canonical_rs_runtime: CanonicalRsRuntime | None = None
         self._rrg_service: RRGService | None = None
         self._task_registry_service: TaskRegistryService | None = None
         self._data_fetch_lock: DataFetchLock | None = None
@@ -103,11 +104,6 @@ class RuntimeServices:
         self._zai_key_manager: ZAIKeyManager | None = None
         self._rate_limiter: RedisRateLimiter | None = None
         self._market_calendar_service: MarketCalendarService | None = None
-        self._point_in_time_universe_service: PointInTimeUniverseService | None = None
-        self._market_rs_services: MarketRsServices | None = None
-        self._market_rs_rollout_service: MarketRsRolloutService | None = None
-        self._group_rank_snapshot_reader: GroupRankSnapshotReader | None = None
-        self._group_rank_snapshot_coordinator: GroupRankSnapshotCoordinator | None = None
         self._github_release_sync_service: GitHubReleaseSyncService | None = None
         self._security_master_resolver: SecurityMasterResolver | None = None
         self._eps_rating_service: EPSRatingService | None = None
@@ -190,23 +186,28 @@ class RuntimeServices:
                         benchmark_cache=cache_bundle.benchmark,
                         canonical_group_service=self.canonical_group_ranking_service(),
                         market_rs_repository=self.market_rs_run_repository(),
+                        market_calendar=self.market_calendar_service(),
+                        active_symbols_provider=(
+                            self.stock_universe_service().get_active_symbols
+                        ),
                     )
         return self._group_rank_service
 
     def canonical_group_ranking_service(self) -> CanonicalGroupRankingService:
-        if self._canonical_group_ranking_service is None:
-            with self._init_lock:
-                if self._canonical_group_ranking_service is None:
-                    from app.services.canonical_group_ranking_service import (
-                        CanonicalGroupRankingService,
-                    )
+        return self.canonical_rs_runtime().canonical_group_service()
 
-                    self._canonical_group_ranking_service = (
-                        CanonicalGroupRankingService(
-                            repository=self.market_rs_run_repository()
-                        )
+    def canonical_rs_runtime(self) -> CanonicalRsRuntime:
+        if self._canonical_rs_runtime is None:
+            with self._init_lock:
+                if self._canonical_rs_runtime is None:
+                    from app.wiring.canonical_rs_runtime import CanonicalRsRuntime
+
+                    self._canonical_rs_runtime = CanonicalRsRuntime(
+                        session_factory=self._session_factory,
+                        market_calendar=self.market_calendar_service(),
+                        legacy_group_service_provider=self.group_rank_service,
                     )
-        return self._canonical_group_ranking_service
+        return self._canonical_rs_runtime
 
     def rrg_service(self) -> RRGService:
         if self._rrg_service is None:
@@ -295,33 +296,13 @@ class RuntimeServices:
         return self._market_calendar_service
 
     def point_in_time_universe_service(self) -> PointInTimeUniverseService:
-        if self._point_in_time_universe_service is None:
-            with self._init_lock:
-                if self._point_in_time_universe_service is None:
-                    from app.services.point_in_time_universe_service import (
-                        PointInTimeUniverseService,
-                    )
-
-                    self._point_in_time_universe_service = PointInTimeUniverseService(
-                        market_calendar=self.market_calendar_service()
-                    )
-        return self._point_in_time_universe_service
+        return self.canonical_rs_runtime().point_in_time_universe_service()
 
     def market_rs_input_loader(self) -> MarketRsInputLoader:
         return self.market_rs_services().input_loader
 
     def market_rs_services(self) -> MarketRsServices:
-        if self._market_rs_services is None:
-            with self._init_lock:
-                if self._market_rs_services is None:
-                    from app.wiring.market_rs_services import build_market_rs_services
-
-                    self._market_rs_services = build_market_rs_services(
-                        session_factory=self._session_factory,
-                        point_in_time_universe=self.point_in_time_universe_service(),
-                        market_calendar=self.market_calendar_service(),
-                    )
-        return self._market_rs_services
+        return self.canonical_rs_runtime().market_rs_services()
 
     def market_rs_run_repository(self) -> MarketRsRunRepository:
         return self.market_rs_services().repository
@@ -330,51 +311,16 @@ class RuntimeServices:
         return self.market_rs_services().snapshot_service
 
     def market_rs_rollout_service(self) -> MarketRsRolloutService:
-        if self._market_rs_rollout_service is None:
-            with self._init_lock:
-                if self._market_rs_rollout_service is None:
-                    from app.services.market_rs_rollout_service import (
-                        MarketRsRolloutService,
-                    )
-
-                    self._market_rs_rollout_service = MarketRsRolloutService(
-                        calendar_service=self.market_calendar_service(),
-                        input_loader=self.market_rs_input_loader(),
-                        market_rs_snapshot_service=self.market_rs_snapshot_service(),
-                        market_rs_repository=self.market_rs_run_repository(),
-                        canonical_group_service=self.canonical_group_ranking_service(),
-                    )
-        return self._market_rs_rollout_service
+        return self.canonical_rs_runtime().rollout_service()
 
     def market_rs_reader(self) -> MarketRsReader:
         return self.market_rs_services().reader
 
     def group_rank_snapshot_reader(self) -> GroupRankSnapshotReader:
-        if self._group_rank_snapshot_reader is None:
-            with self._init_lock:
-                if self._group_rank_snapshot_reader is None:
-                    from app.services.group_rank_snapshot_reader import (
-                        GroupRankSnapshotReader,
-                    )
-
-                    self._group_rank_snapshot_reader = GroupRankSnapshotReader()
-        return self._group_rank_snapshot_reader
+        return self.canonical_rs_runtime().group_rank_snapshot_reader()
 
     def group_rank_snapshot_coordinator(self) -> GroupRankSnapshotCoordinator:
-        if self._group_rank_snapshot_coordinator is None:
-            with self._init_lock:
-                if self._group_rank_snapshot_coordinator is None:
-                    from app.services.group_rank_snapshot_coordinator import (
-                        GroupRankSnapshotCoordinator,
-                    )
-
-                    self._group_rank_snapshot_coordinator = GroupRankSnapshotCoordinator(
-                        reader=self.group_rank_snapshot_reader(),
-                        market_rs_snapshot_service=self.market_rs_snapshot_service(),
-                        canonical_group_service=self.canonical_group_ranking_service(),
-                        legacy_group_service=self.group_rank_service(),
-                    )
-        return self._group_rank_snapshot_coordinator
+        return self.canonical_rs_runtime().group_rank_snapshot_coordinator()
 
     def github_release_sync_service(self) -> GitHubReleaseSyncService:
         if self._github_release_sync_service is None:
@@ -542,7 +488,7 @@ class RuntimeServices:
             self._ui_snapshot_service = None
             self._cache_bundle = None
             self._group_rank_service = None
-            self._canonical_group_ranking_service = None
+            self._canonical_rs_runtime = None
             self._rrg_service = None
             self._task_registry_service = None
             self._data_fetch_lock = None
@@ -551,11 +497,6 @@ class RuntimeServices:
             self._zai_key_manager = None
             self._rate_limiter = None
             self._market_calendar_service = None
-            self._point_in_time_universe_service = None
-            self._market_rs_services = None
-            self._market_rs_rollout_service = None
-            self._group_rank_snapshot_reader = None
-            self._group_rank_snapshot_coordinator = None
             self._github_release_sync_service = None
             self._security_master_resolver = None
             self._eps_rating_service = None

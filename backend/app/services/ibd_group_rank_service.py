@@ -4,10 +4,8 @@ Service for calculating and managing IBD Industry Group Rankings.
 Calculates daily rankings based on average RS rating of constituent stocks.
 """
 import logging
-import statistics
 from typing import Any, Optional, Dict, List
 from datetime import datetime, date, timedelta
-import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -28,13 +26,14 @@ from .group_rank_cache_policy import GroupRankCacheRequirement
 from .group_ranking_payloads import rank_record_payload
 from .group_rank_snapshot_reader import GroupRankSnapshotReader
 from .ibd_industry_service import IBDIndustryService
-from .legacy_group_rank_backfill import LegacyGroupRankBackfillMixin
+from .legacy_group_rank_backfill import LegacyGroupBackfillService
 from .legacy_group_rank_contracts import (
     CACHE_MISS_TOLERANCE_RATIO as CACHE_MISS_TOLERANCE_RATIO,
     GroupRankPrefetchData as GroupRankPrefetchData,
     IncompleteGroupRankingCacheError,
 )
-from .legacy_group_rank_data import LegacyGroupRankDataMixin
+from .legacy_group_rank_data import ActiveSymbolsProvider, LegacyGroupRankingEngine
+from .market_calendar_service import MarketCalendarService
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService
 from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
@@ -55,10 +54,7 @@ class MissingIBDIndustryMappingsError(RuntimeError):
         super().__init__("IBD industry mappings are not loaded")
 
 
-class IBDGroupRankService(
-    LegacyGroupRankBackfillMixin,
-    LegacyGroupRankDataMixin,
-):
+class IBDGroupRankService:
     """
     Service for calculating and managing IBD Industry Group Rankings.
 
@@ -79,6 +75,8 @@ class IBDGroupRankService(
         group_constituent_source: GroupConstituentSource | None = None,
         canonical_group_service: CanonicalGroupRankingService,
         market_rs_repository: MarketRsRunRepository,
+        market_calendar: MarketCalendarService | None = None,
+        active_symbols_provider: ActiveSymbolsProvider | None = None,
     ):
         """Initialize the service."""
         self.price_cache = price_cache
@@ -89,6 +87,113 @@ class IBDGroupRankService(
         )
         self.canonical_group_service = canonical_group_service
         self.market_rs_repository = market_rs_repository
+        self.legacy_ranking_engine = LegacyGroupRankingEngine(
+            price_cache=price_cache,
+            benchmark_cache=benchmark_cache,
+            rs_calculator=self.rs_calculator,
+            active_symbols_provider=active_symbols_provider,
+        )
+        self.legacy_backfill_service = LegacyGroupBackfillService(
+            ranking_engine=self.legacy_ranking_engine,
+            market_calendar=market_calendar or MarketCalendarService(),
+            market_rs_repository=market_rs_repository,
+            calculate_group_rankings=self.calculate_group_rankings,
+            store_rankings=self._store_rankings,
+        )
+
+    def backfill_rankings_optimized(
+        self,
+        db: Session,
+        start_date: date,
+        end_date: date,
+        *,
+        market: str = "US",
+    ) -> Dict:
+        return self.legacy_backfill_service.backfill_rankings_optimized(
+            db,
+            start_date,
+            end_date,
+            market=market,
+        )
+
+    def backfill_rankings(
+        self,
+        db: Session,
+        start_date: date,
+        end_date: date,
+        *,
+        market: str = "US",
+        formula_version: str | None = None,
+    ) -> Dict:
+        return self.legacy_backfill_service.backfill_rankings(
+            db,
+            start_date,
+            end_date,
+            market=market,
+            formula_version=formula_version,
+        )
+
+    def find_missing_dates(
+        self,
+        db: Session,
+        lookback_days: int = 365,
+        *,
+        market: str = "US",
+        end_date: date | None = None,
+        formula_version: str | None = None,
+    ) -> List[date]:
+        return self.legacy_backfill_service.find_missing_dates(
+            db,
+            lookback_days,
+            market=market,
+            end_date=end_date,
+            formula_version=formula_version,
+        )
+
+    def fill_gaps(
+        self,
+        db: Session,
+        missing_dates: List[date],
+        *,
+        market: str = "US",
+        formula_version: str | None = None,
+    ) -> Dict:
+        return self.legacy_backfill_service.fill_gaps(
+            db,
+            missing_dates,
+            market=market,
+            formula_version=formula_version,
+        )
+
+    def fill_gaps_optimized(
+        self,
+        db: Session,
+        missing_dates: List[date],
+        *,
+        market: str = "US",
+    ) -> Dict:
+        return self.legacy_backfill_service.fill_gaps_optimized(
+            db,
+            missing_dates,
+            market=market,
+        )
+
+    def backfill_rankings_chunked(
+        self,
+        db: Session,
+        start_date: date,
+        end_date: date,
+        chunk_size_days: int = 30,
+        *,
+        market: str = "US",
+    ) -> Dict:
+        return self.legacy_backfill_service.backfill_rankings_chunked(
+            db,
+            start_date,
+            end_date,
+            chunk_size_days,
+            market=market,
+        )
 
     def calculate_group_rankings(
         self,
@@ -144,8 +249,8 @@ class IBDGroupRankService(
         )
 
         # Pre-fetch all data upfront (benchmark + all stock prices).
-        prefetch = self._coerce_prefetch_data(
-            self._prefetch_all_data(
+        prefetch = self.legacy_ranking_engine.coerce_prefetch_data(
+            self.legacy_ranking_engine.prefetch_all_data(
                 db,
                 market=normalized_market,
                 cache_only=cache_only,
@@ -184,7 +289,7 @@ class IBDGroupRankService(
             )
             return []
 
-        rs_by_date = self._calculate_rs_by_symbol_for_dates(
+        rs_by_date = self.legacy_ranking_engine.calculate_rs_by_symbol_for_dates(
             prefetch,
             [calculation_date],
         )
@@ -192,7 +297,7 @@ class IBDGroupRankService(
 
         # Calculate RS for each group using pre-fetched cached data
         group_metrics = []
-        symbols_by_group = self._symbols_by_group_for_run(
+        symbols_by_group = self.legacy_ranking_engine.symbols_by_group_for_run(
             db,
             all_groups,
             prefetch,
@@ -201,7 +306,7 @@ class IBDGroupRankService(
 
         for group_name in all_groups:
             try:
-                metrics = self._calculate_group_metrics_from_rs(
+                metrics = self.legacy_ranking_engine.calculate_group_metrics_from_rs(
                     group_name,
                     symbols_by_group.get(group_name, []),
                     rs_by_symbol,
@@ -247,120 +352,6 @@ class IBDGroupRankService(
         )
 
         return group_metrics
-
-    def _calculate_group_rs(
-        self,
-        db: Session,
-        group_name: str,
-        spy_prices: pd.Series,
-        calculation_date: date
-    ) -> Optional[Dict]:
-        """
-        Calculate average RS rating for a single industry group.
-
-        Args:
-            db: Database session
-            group_name: IBD industry group name
-            spy_prices: SPY price series (most recent first)
-            calculation_date: Date for calculation
-
-        Returns:
-            Dict with group metrics or None if insufficient data
-        """
-        # Get all symbols in this group
-        symbols = IBDIndustryService.get_group_symbols(db, group_name)
-
-        if not symbols:
-            logger.debug(f"No symbols found for group: {group_name}")
-            return None
-
-        # Fetch prices for all symbols in batch
-        prices_dict = self.price_cache.get_many(symbols, period="2y")
-
-        # Market caps for weighted RS
-        market_caps = self._get_market_caps_for_symbols(db, symbols)
-
-        # Calculate RS for each symbol
-        rs_ratings = []
-        top_symbol = None
-        top_rs = -1
-        rs_above_80_count = 0
-        weighted_sum = 0.0
-        weighted_total = 0.0
-
-        for symbol in symbols:
-            prices = prices_dict.get(symbol)
-            if prices is None or prices.empty:
-                continue
-
-            # Filter to calculation_date for accurate historical rankings
-            if calculation_date < datetime.now().date():
-                prices_filtered = prices[prices.index.date <= calculation_date]
-            else:
-                prices_filtered = prices
-
-            # Skip if insufficient data after filtering
-            if prices_filtered.empty:
-                continue
-
-            # Prepare stock prices (most recent first)
-            stock_prices = prices_filtered['Close'].sort_index(ascending=False)
-
-            # Need at least 252 days for full RS calculation
-            if len(stock_prices) < 252:
-                continue
-
-            try:
-                rs_result = self.rs_calculator.calculate_rs_rating(
-                    symbol, stock_prices, spy_prices
-                )
-                rs_rating = rs_result.get('rs_rating', 0)
-
-                if rs_rating > 0:
-                    rs_ratings.append(rs_rating)
-
-                    if rs_rating > top_rs:
-                        top_rs = rs_rating
-                        top_symbol = symbol
-
-                    if rs_rating >= 80:
-                        rs_above_80_count += 1
-
-                    market_cap = market_caps.get(symbol)
-                    if market_cap:
-                        weighted_sum += rs_rating * market_cap
-                        weighted_total += market_cap
-
-            except Exception as e:
-                logger.debug(f"Error calculating RS for {symbol}: {e}")
-                continue
-
-        # Need at least 3 stocks with valid RS to rank the group
-        if len(rs_ratings) < 3:
-            logger.debug(
-                f"Insufficient data for group {group_name}: "
-                f"only {len(rs_ratings)} stocks with valid RS"
-            )
-            return None
-
-        # Calculate average RS
-        avg_rs = sum(rs_ratings) / len(rs_ratings)
-        median_rs = statistics.median(rs_ratings)
-        rs_std_dev = statistics.pstdev(rs_ratings) if len(rs_ratings) > 1 else None
-        weighted_avg_rs = (weighted_sum / weighted_total) if weighted_total > 0 else None
-
-        return {
-            'industry_group': group_name,
-            'date': calculation_date,
-            'avg_rs_rating': round(avg_rs, 2),
-            'median_rs_rating': round(median_rs, 2),
-            'weighted_avg_rs_rating': round(weighted_avg_rs, 2) if weighted_avg_rs is not None else None,
-            'rs_std_dev': round(rs_std_dev, 2) if rs_std_dev is not None else None,
-            'num_stocks': len(rs_ratings),
-            'num_stocks_rs_above_80': rs_above_80_count,
-            'top_symbol': top_symbol,
-            'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
-        }
 
     def _store_rankings(
         self,
@@ -783,7 +774,7 @@ class IBDGroupRankService(
             as_of_date=current.date,
         )
 
-        pct_above_80 = self._calculate_pct_above_80(
+        pct_above_80 = self.legacy_ranking_engine.calculate_pct_above_80(
             current.num_stocks_rs_above_80, current.num_stocks
         )
 

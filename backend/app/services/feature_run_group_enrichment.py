@@ -43,9 +43,9 @@ class FeatureRunGroupEnrichmentService:
                 ranking_date=ranking_date,
             )
             identity = resolution.identity
-            snapshot_rows = self._snapshot_reader.load_exact(
+            snapshot_rows = self._snapshot_reader.load_publication(
                 db,
-                identity=identity,
+                publication=resolution.publication,
                 include_top_symbol_names=False,
             )
             if not snapshot_rows:

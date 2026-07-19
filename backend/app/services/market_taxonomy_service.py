@@ -205,6 +205,19 @@ class MarketTaxonomyService:
             if entry.industry_group == group
         )
 
+    def group_symbols_for_market(self, market: str) -> dict[str, list[str]]:
+        """Return every group membership in one pass over the market taxonomy."""
+        self._ensure_loaded()
+        normalized = security_master_resolver.normalize_market(market) or market.upper()
+        grouped: dict[str, list[str]] = defaultdict(list)
+        for entry in self._entries.get(normalized, {}).values():
+            if entry.industry_group:
+                grouped[entry.industry_group].append(entry.symbol)
+        return {
+            group: sorted(symbols)
+            for group, symbols in sorted(grouped.items())
+        }
+
     def sector_map_for_market(self, market: str) -> dict[str, str]:
         """Return industry_group -> dominant native sector for one market."""
         self._ensure_loaded()

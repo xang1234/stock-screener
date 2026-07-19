@@ -12,6 +12,7 @@ from app.infra.db.models.relative_strength import MarketRsRun, StockRsSnapshot
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
 from app.services.canonical_group_ranking_service import CanonicalGroupRankingService
+from app.services.ibd_industry_service import IBDIndustryService
 
 
 AS_OF = date(2026, 4, 10)
@@ -170,6 +171,39 @@ def test_canonical_top_stock_ties_use_1m_then_cap_then_symbol(db_session):
     )
 
     assert ranking["top_symbol"] == "AAA"
+
+
+def test_canonical_group_aggregation_does_not_query_membership_per_group(
+    db_session,
+    monkeypatch,
+):
+    _seed_run(
+        db_session,
+        [
+            ("AAA", 90, 50, 50, 100.0),
+            ("BBB", 80, 50, 50, 100.0),
+            ("CCC", 70, 50, 50, 100.0),
+        ],
+    )
+    _map(db_session, "Bulk", "AAA", "BBB", "CCC")
+
+    def reject_per_group_lookup(*args, **kwargs):
+        raise AssertionError("canonical aggregation must bulk-load memberships")
+
+    monkeypatch.setattr(
+        IBDIndustryService,
+        "get_group_symbols",
+        reject_per_group_lookup,
+    )
+
+    [ranking] = CanonicalGroupRankingService().calculate_and_store(
+        db_session,
+        market="US",
+        as_of_date=AS_OF,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+
+    assert ranking["industry_group"] == "Bulk"
 
 
 def test_canonical_and_legacy_group_rows_coexist(db_session):

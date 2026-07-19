@@ -32,6 +32,8 @@ from app.services.static_groups_rrg_export import (
     StaticGroupsRRGPayloadBuilder,
 )
 from app.services.static_artifact_combiner import StaticArtifactFormulaError
+from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
+from app.services.static_chart_bundle_exporter import StaticChartBundleConfig
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
@@ -104,6 +106,33 @@ class _FakePriceCache:
         return self.get_many_cached_only([symbol], period=period).get(symbol.upper())
 
 
+class _FakeBenchmarkCache:
+    def __init__(self, symbol: str = "SPY") -> None:
+        self._symbol = symbol
+
+    def get_benchmark_candidates(self, market):
+        return (self._symbol,)
+
+    def get_benchmark_symbol(self, market):
+        return self._symbol
+
+
+def _service_with_static_caches(
+    session_factory,
+    *,
+    price_cache,
+    fundamentals_cache,
+    chart_config: StaticChartBundleConfig | None = None,
+) -> StaticSiteExportService:
+    return StaticSiteExportService(
+        session_factory,
+        price_cache=price_cache,
+        fundamentals_cache=fundamentals_cache,
+        benchmark_cache=_FakeBenchmarkCache(),
+        chart_config=chart_config,
+    )
+
+
 def _empty_key_market_entries(session_factory, market: str) -> list[dict]:
     with session_factory() as db:
         return build_key_market_entries(db, market, as_of_date=date(2026, 6, 9))
@@ -143,6 +172,29 @@ def _static_rrg_payload(market: str, as_of_date: str) -> dict:
             },
         },
     }
+
+
+def test_export_chart_bundle_does_not_rewire_exporter_dependencies(
+    service_and_session_factory,
+):
+    service, _session_factory = service_and_session_factory
+
+    class _RecordingExporter:
+        def __init__(self):
+            self.calls = []
+
+        def export(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"available": True}
+
+    exporter = _RecordingExporter()
+    service._chart_exporter = exporter
+
+    result = service._export_chart_bundle(output_dir="unused")
+
+    assert result == {"available": True}
+    assert exporter.calls == [{"output_dir": "unused"}]
+    assert set(vars(exporter)) == {"calls"}
 
 
 def test_get_latest_published_run_prefers_latest_published_pointer(service_and_session_factory):
@@ -1438,9 +1490,8 @@ def test_build_breadth_payload_requires_target_date(service_and_session_factory,
 
 def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
     service_and_session_factory,
-    monkeypatch,
 ):
-    service, _session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
 
     def history_frame(start_price: float) -> pd.DataFrame:
@@ -1456,15 +1507,19 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
             index=idx,
         )
 
-    monkeypatch.setattr(
-        service,
-        "_get_market_benchmark_history",
-        lambda market, *, period: ("^HSI", history_frame(18000.0)),
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_cached_price_histories",
-        lambda symbols, *, period: {symbol: history_frame(100.0) for symbol in symbols},
+    histories = {
+        "^HSI": history_frame(18000.0),
+        "0700.HK": history_frame(100.0),
+    }
+    service = StaticSiteExportService(
+        session_factory,
+        price_cache=_FakePriceCache(
+            lambda symbols, *, period: {
+                symbol: histories.get(symbol) for symbol in symbols
+            }
+        ),
+        fundamentals_cache=object(),
+        benchmark_cache=_FakeBenchmarkCache("^HSI"),
     )
 
     payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
@@ -1484,11 +1539,56 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
     assert breadth_payload["group_attribution"]["available"] is False
 
 
-def test_build_breadth_payload_includes_us_group_attribution(
+def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding(
     service_and_session_factory,
-    monkeypatch,
 ):
     service, _session_factory = service_and_session_factory
+    idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
+
+    def history_frame(start_price: float) -> pd.DataFrame:
+        closes = [start_price + index for index in range(len(idx))]
+        return pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [value + 1 for value in closes],
+                "Low": [value - 1 for value in closes],
+                "Close": closes,
+                "Volume": [1000] * len(idx),
+            },
+            index=idx,
+        )
+
+    histories = {
+        "^HSI": history_frame(18000.0),
+        "0700.HK": history_frame(100.0),
+    }
+    service._breadth_builder = StaticBreadthSectionBuilder(
+        ui_snapshot_service=service._ui_snapshot_service,
+        price_cache=_FakePriceCache(
+            lambda symbols, *, period: {
+                symbol: histories.get(symbol) for symbol in symbols
+            }
+        ),
+        benchmark_cache=SimpleNamespace(
+            get_benchmark_candidates=lambda market: ("^HSI",),
+            get_benchmark_symbol=lambda market: "^HSI",
+        ),
+    )
+
+    payload = service._build_breadth_payload(  # noqa: SLF001 - regression coverage
+        generated_at="2026-04-24T22:00:00Z",
+        expected_as_of_date=date(2026, 4, 24),
+        market="HK",
+        serialized_rows=[{"symbol": "0700.HK"}],
+    )
+
+    assert payload["payload"]["benchmark_symbol"] == "^HSI"
+
+
+def test_build_breadth_payload_includes_us_group_attribution(
+    service_and_session_factory,
+):
+    _service, session_factory = service_and_session_factory
     idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
 
     def flat_frame(price: float) -> pd.DataFrame:
@@ -1527,15 +1627,16 @@ def test_build_breadth_payload_includes_us_group_attribution(
         "FLAT": flat_frame(100.0),  # No 4% move at all
         "NOGRP": gapping_frame("up"),
     }
-    monkeypatch.setattr(
-        service,
-        "_get_market_benchmark_history",
-        lambda market, *, period: ("SPY", flat_frame(400.0)),
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_cached_price_histories",
-        lambda symbols, *, period: {sym: histories.get(sym) for sym in symbols},
+    price_histories = {"SPY": flat_frame(400.0), **histories}
+    service = StaticSiteExportService(
+        session_factory,
+        price_cache=_FakePriceCache(
+            lambda symbols, *, period: {
+                symbol: price_histories.get(symbol) for symbol in symbols
+            }
+        ),
+        fundamentals_cache=object(),
+        benchmark_cache=_FakeBenchmarkCache(),
     )
 
     serialized_rows = [
@@ -1601,10 +1702,9 @@ def test_build_breadth_payload_includes_us_group_attribution(
 
 def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(
     service_and_session_factory,
-    monkeypatch,
 ):
     """History rows can be present yet all-zero — that must still flag unavailable."""
-    service, _session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
 
     def flat_frame(price: float) -> pd.DataFrame:
@@ -1620,15 +1720,16 @@ def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(
             index=idx,
         )
 
-    monkeypatch.setattr(
-        service,
-        "_get_market_benchmark_history",
-        lambda market, *, period: ("SPY", flat_frame(400.0)),
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_cached_price_histories",
-        lambda symbols, *, period: {sym: flat_frame(100.0) for sym in symbols},
+    service = StaticSiteExportService(
+        session_factory,
+        price_cache=_FakePriceCache(
+            lambda symbols, *, period: {
+                symbol: flat_frame(400.0 if symbol == "SPY" else 100.0)
+                for symbol in symbols
+            }
+        ),
+        fundamentals_cache=object(),
+        benchmark_cache=_FakeBenchmarkCache(),
     )
 
     payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
@@ -1671,7 +1772,7 @@ def test_export_rejects_legacy_unscoped_run_for_market_bundle(
 
 
 def test_serialize_history_bars_clamps_to_end_date_and_skips_nan_rows(service_and_session_factory):
-    service, _session_factory = service_and_session_factory
+    _service, _session_factory = service_and_session_factory
     frame = pd.DataFrame(
         {
             "Open": [100.0, 101.0, float("nan"), 104.0],
@@ -1683,7 +1784,7 @@ def test_serialize_history_bars_clamps_to_end_date_and_skips_nan_rows(service_an
         index=pd.to_datetime(["2026-03-01", "2026-04-01", "2026-04-02", "2026-04-03"]),
     )
 
-    payload = service._serialize_history_bars(  # noqa: SLF001 - intentional unit test coverage
+    payload = StaticBreadthSectionBuilder._serialize_history_bars(  # noqa: SLF001
         frame,
         period_days=10,
         end_date=date(2026, 4, 2),
@@ -1780,7 +1881,7 @@ def test_select_market_run_series_deduplicates_same_day_reruns(service_and_sessi
 
 
 def test_compute_breadth_metrics_uses_full_history_for_shifted_ranges(service_and_session_factory):
-    service, _session_factory = service_and_session_factory
+    _service, _session_factory = service_and_session_factory
     all_dates = pd.date_range("2025-10-01", periods=200, freq="D")
     canonical_dates = [ts.date() for ts in all_dates[-120:]]
     closes = [100.0 * (1.02 ** index) for index, _ in enumerate(all_dates)]
@@ -1788,7 +1889,12 @@ def test_compute_breadth_metrics_uses_full_history_for_shifted_ranges(service_an
         "AAA": pd.DataFrame({"Close": closes}, index=all_dates),
     }
 
-    metrics = service._compute_breadth_metrics_by_date(  # noqa: SLF001 - intentional unit test coverage
+    builder = StaticBreadthSectionBuilder(
+        ui_snapshot_service=object(),
+        price_cache=object(),
+        benchmark_cache=object(),
+    )
+    metrics = builder._compute_breadth_metrics_by_date(  # noqa: SLF001
         canonical_dates,
         price_data,
     )
@@ -2052,7 +2158,7 @@ def test_export_chart_bundle_writes_top_ranked_payloads_with_sidebar_metadata(
     service_and_session_factory,
     tmp_path,
 ):
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     _insert_runs(
         session_factory,
         FeatureRun(
@@ -2078,17 +2184,22 @@ def test_export_chart_bundle_writes_top_ranked_payloads_with_sidebar_metadata(
             index=dates,
         )
 
-    service._price_cache = _FakePriceCache(
+    price_cache = _FakePriceCache(
         get_many_cached_only=lambda symbols, period="2y": {
             "NVDA": make_price_frame([101.0, 102.5, 103.0]),
             "MSFT": make_price_frame([201.0, 202.0, 204.0]),
         }
     )
-    service._fundamentals_cache = SimpleNamespace(
+    fundamentals_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols: {
             "NVDA": {"symbol": "NVDA", "description": "AI chip leader", "pe_ratio": 45.2},
             "MSFT": {"symbol": "MSFT", "description": "Enterprise software", "pe_ratio": 31.4},
         }
+    )
+    service = _service_with_static_caches(
+        session_factory,
+        price_cache=price_cache,
+        fundamentals_cache=fundamentals_cache,
     )
 
     rows = [
@@ -2172,10 +2283,9 @@ def test_export_chart_bundle_writes_top_ranked_payloads_with_sidebar_metadata(
 
 def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
     service_and_session_factory,
-    monkeypatch,
     tmp_path,
 ):
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     _insert_runs(
         session_factory,
         FeatureRun(
@@ -2187,9 +2297,6 @@ def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
         ),
         pointer_run_id=18,
     )
-
-    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 2)
-    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 2)
 
     def make_price_frame(close: float) -> pd.DataFrame:
         dates = pd.date_range("2026-03-28", periods=2, freq="D")
@@ -2204,15 +2311,21 @@ def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
             index=dates,
         )
 
-    service._price_cache = _FakePriceCache(
+    price_cache = _FakePriceCache(
         get_many_cached_only=lambda symbols, period="2y": {
             "NVDA": None,
             "MSFT": make_price_frame(204.0),
             "AAPL": make_price_frame(175.0),
         }
     )
-    service._fundamentals_cache = SimpleNamespace(
+    fundamentals_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols: {symbol: {"symbol": symbol} for symbol in symbols}
+    )
+    service = _service_with_static_caches(
+        session_factory,
+        price_cache=price_cache,
+        fundamentals_cache=fundamentals_cache,
+        chart_config=StaticChartBundleConfig(chart_limit=2, lookup_batch_size=2),
     )
 
     rows = [
@@ -2240,10 +2353,9 @@ def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
 
 def test_export_chart_bundle_uses_sorted_scan_order_for_primary_chart_selection(
     service_and_session_factory,
-    monkeypatch,
     tmp_path,
 ):
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     _insert_runs(
         session_factory,
         FeatureRun(
@@ -2256,17 +2368,20 @@ def test_export_chart_bundle_uses_sorted_scan_order_for_primary_chart_selection(
         pointer_run_id=21,
     )
 
-    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
-    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 2)
-
-    service._price_cache = _FakePriceCache(
+    price_cache = _FakePriceCache(
         get_many_cached_only=lambda symbols, period="2y": {
             symbol: _make_chart_price_frame(100.0 + index)
             for index, symbol in enumerate(symbols)
         }
     )
-    service._fundamentals_cache = SimpleNamespace(
+    fundamentals_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+    service = _service_with_static_caches(
+        session_factory,
+        price_cache=price_cache,
+        fundamentals_cache=fundamentals_cache,
+        chart_config=StaticChartBundleConfig(chart_limit=1, lookup_batch_size=2),
     )
 
     rows = [
@@ -2325,14 +2440,13 @@ def _make_chart_price_frame(close: float = 100.0) -> pd.DataFrame:
 
 def test_export_chart_bundle_expands_coverage_for_preset_screens(
     service_and_session_factory,
-    monkeypatch,
     tmp_path,
 ):
     """Pass 2 should export charts for preset top-N matches that fall
     outside the composite-score top-N covered by Pass 1, so selective or
     orthogonally-ranked presets (e.g. 97 Club) get full chart coverage.
     """
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     _insert_runs(
         session_factory,
         FeatureRun(
@@ -2346,18 +2460,24 @@ def test_export_chart_bundle_expands_coverage_for_preset_screens(
     )
 
     # Tight Pass 1 limit forces the GAIN* rows to rely on Pass 2 expansion.
-    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
-    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
-    monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 5)
-
-    service._price_cache = _FakePriceCache(
+    price_cache = _FakePriceCache(
         get_many_cached_only=lambda symbols, period="2y": {
             symbol: _make_chart_price_frame(100.0 + i)
             for i, symbol in enumerate(symbols)
         }
     )
-    service._fundamentals_cache = SimpleNamespace(
+    fundamentals_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+    service = _service_with_static_caches(
+        session_factory,
+        price_cache=price_cache,
+        fundamentals_cache=fundamentals_cache,
+        chart_config=StaticChartBundleConfig(
+            chart_limit=1,
+            lookup_batch_size=5,
+            preset_top_n=5,
+        ),
     )
 
     # NVDA has the highest composite score but a small perfDay (won't match
@@ -2432,13 +2552,12 @@ def test_export_chart_bundle_expands_coverage_for_preset_screens(
 
 def test_export_chart_bundle_skips_preset_symbols_without_cached_prices(
     service_and_session_factory,
-    monkeypatch,
     tmp_path,
 ):
     """Symbols skipped in Pass 1 for lack of cached prices should not be
     re-attempted in Pass 2 (they're already tracked in skipped_symbols).
     """
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     _insert_runs(
         session_factory,
         FeatureRun(
@@ -2451,20 +2570,26 @@ def test_export_chart_bundle_skips_preset_symbols_without_cached_prices(
         pointer_run_id=20,
     )
 
-    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 5)
-    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
-    monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 5)
-
     # NOCACHE has no cached prices but matches the 4% Gainers preset —
     # Pass 2 must honor the skipped_symbols exclusion and not re-attempt.
-    service._price_cache = _FakePriceCache(
+    price_cache = _FakePriceCache(
         get_many_cached_only=lambda symbols, period="2y": {
             "NVDA": _make_chart_price_frame(),
             "NOCACHE": None,
         }
     )
-    service._fundamentals_cache = SimpleNamespace(
+    fundamentals_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+    service = _service_with_static_caches(
+        session_factory,
+        price_cache=price_cache,
+        fundamentals_cache=fundamentals_cache,
+        chart_config=StaticChartBundleConfig(
+            chart_limit=5,
+            lookup_batch_size=5,
+            preset_top_n=5,
+        ),
     )
 
     rows = [
@@ -2510,14 +2635,13 @@ def test_export_chart_bundle_skips_preset_symbols_without_cached_prices(
 
 def test_export_chart_bundle_expands_coverage_for_top_groups_constituents(
     service_and_session_factory,
-    monkeypatch,
     tmp_path,
 ):
     """Pass 3 should export charts for every constituent of the top-N IBD
     industry groups even when those symbols fall outside the composite-score
     top-N from Pass 1 and the preset-screen expansion from Pass 2.
     """
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
     _insert_runs(
         session_factory,
         FeatureRun(
@@ -2530,19 +2654,25 @@ def test_export_chart_bundle_expands_coverage_for_top_groups_constituents(
         pointer_run_id=21,
     )
 
-    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
-    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
-    monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 0)
-    monkeypatch.setattr(export_module, "STATIC_CHART_TOP_N_GROUPS", 2)
-
-    service._price_cache = _FakePriceCache(
+    price_cache = _FakePriceCache(
         get_many_cached_only=lambda symbols, period="2y": {
             symbol: _make_chart_price_frame(100.0 + i)
             for i, symbol in enumerate(symbols)
         }
     )
-    service._fundamentals_cache = SimpleNamespace(
+    fundamentals_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+    service = _service_with_static_caches(
+        session_factory,
+        price_cache=price_cache,
+        fundamentals_cache=fundamentals_cache,
+        chart_config=StaticChartBundleConfig(
+            chart_limit=1,
+            lookup_batch_size=5,
+            preset_top_n=0,
+            top_group_count=2,
+        ),
     )
 
     rows = [

@@ -5,10 +5,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.relative_strength import (
-    BALANCED_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
+    RsPublicationIdentity,
 )
 from app.infra.db.models.feature_store import FeatureRun
 from app.services.group_detail_payloads import (
@@ -18,6 +17,10 @@ from app.services.ibd_group_rank_service import GROUP_RANK_CHANGE_CALENDAR_DAYS
 from app.services.group_ranking_history import build_group_detail_payload_from_parts
 from app.services.group_ranking_payloads import group_snapshot_metadata
 from app.services.group_rank_snapshot_reader import GroupSnapshotIntegrityError
+from app.services.feature_run_rs_identity import (
+    FeatureRunRsIdentityError,
+    resolve_feature_run_rs_identity,
+)
 from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
@@ -131,11 +134,9 @@ class StaticGroupSectionBuilder:
         rs_universe_size: int | None,
         serialized_rows: list[dict[str, Any]],
     ) -> None:
-        config = latest_run.config_json or {}
         if (
             latest_run.status != "published"
             or latest_run.as_of_date != identity.as_of_date
-            or feature_run_market(latest_run) != identity.market
         ):
             raise StaticSiteSectionUnavailableError(
                 section="groups",
@@ -144,66 +145,27 @@ class StaticGroupSectionBuilder:
                     f"{identity.market} snapshot date {identity.as_of_date.isoformat()}."
                 ),
             )
-
-        configured_formula = config.get("rs_formula_version")
-        configured_run_id = config.get("market_rs_run_id")
-        configured_as_of = config.get("rs_as_of_date")
-        configured_universe = config.get("rs_universe_size")
-        if (
-            configured_formula is not None
-            and configured_formula != identity.formula_version
-        ):
-            raise StaticSiteSectionUnavailableError(
-                section="groups",
-                reason=(
-                    f"Feature run {latest_run.id} formula {configured_formula} does not "
-                    f"match Group formula {identity.formula_version}."
-                ),
+        try:
+            resolved = resolve_feature_run_rs_identity(
+                latest_run,
+                ranking_date=identity.as_of_date,
             )
-        if identity.formula_version == BALANCED_RS_FORMULA_VERSION:
-            required = {
-                "rs_formula_version": configured_formula,
-                "market_rs_run_id": configured_run_id,
-                "rs_as_of_date": configured_as_of,
-                "rs_universe_size": configured_universe,
-            }
-            missing = sorted(key for key, value in required.items() if value is None)
-            if missing:
-                raise StaticSiteSectionUnavailableError(
-                    section="groups",
-                    reason=(
-                        f"Feature run {latest_run.id} is missing canonical RS metadata: "
-                        f"{', '.join(missing)}."
-                    ),
-                )
-        if configured_run_id is not None and int(configured_run_id) != market_rs_run_id:
-            raise StaticSiteSectionUnavailableError(
-                section="groups",
-                reason=(
-                    f"Feature run {latest_run.id} Market RS run {configured_run_id} does not "
-                    f"match Group Market RS run {market_rs_run_id}."
-                ),
+            expected = RsPublicationIdentity(
+                snapshot=identity,
+                market_rs_run_id=market_rs_run_id,
+                universe_size=rs_universe_size,
             )
-        if (
-            configured_as_of is not None
-            and str(configured_as_of) != identity.as_of_date.isoformat()
-        ):
+        except (FeatureRunRsIdentityError, ValueError) as exc:
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=f"Feature run {latest_run.id} has invalid RS identity: {exc}",
+            ) from exc
+        if resolved.publication != expected:
             raise StaticSiteSectionUnavailableError(
                 section="groups",
                 reason=(
-                    f"Feature run {latest_run.id} RS date {configured_as_of} does not match "
-                    f"Group date {identity.as_of_date.isoformat()}."
-                ),
-            )
-        if (
-            configured_universe is not None
-            and int(configured_universe) != rs_universe_size
-        ):
-            raise StaticSiteSectionUnavailableError(
-                section="groups",
-                reason=(
-                    f"Feature run {latest_run.id} RS universe {configured_universe} does not "
-                    f"match Group RS universe {rs_universe_size}."
+                    f"Feature run {latest_run.id} RS identity does not match the "
+                    "stored Group publication."
                 ),
             )
         for row in serialized_rows:

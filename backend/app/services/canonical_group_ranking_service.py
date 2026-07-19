@@ -62,14 +62,11 @@ class CanonicalGroupRankingService:
         )
 
         metrics_by_group: list[dict[str, Any]] = []
-        for group_name in IBDIndustryService.get_all_groups(
-            db, market=normalized_market
-        ):
-            symbols = IBDIndustryService.get_group_symbols(
-                db,
-                group_name,
-                market=normalized_market,
-            )
+        memberships = IBDIndustryService.get_group_memberships(
+            db,
+            market=normalized_market,
+        )
+        for group_name, symbols in memberships.items():
             eligible_rows = [
                 stock_rows[symbol]
                 for symbol in dict.fromkeys(symbols)

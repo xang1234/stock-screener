@@ -3,18 +3,38 @@
 import gc
 import logging
 from datetime import date, datetime, timedelta
-from typing import Dict, List
+from typing import Callable, Dict, List
 
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from ..models.industry import IBDGroupRank
 from .ibd_industry_service import IBDIndustryService
+from .legacy_group_rank_data import LegacyGroupRankingEngine
+from .market_calendar_service import MarketCalendarService
 
 logger = logging.getLogger(__name__)
 
 
-class LegacyGroupRankBackfillMixin:
+class LegacyGroupBackfillService:
+    """Legacy history/gap-fill workflow with explicit collaborators."""
+
+    def __init__(
+        self,
+        *,
+        ranking_engine: LegacyGroupRankingEngine,
+        market_calendar: MarketCalendarService,
+        market_rs_repository: MarketRsRunRepository,
+        calculate_group_rankings: Callable[..., List[Dict]],
+        store_rankings: Callable[..., None],
+    ) -> None:
+        self.ranking_engine = ranking_engine
+        self.market_calendar = market_calendar
+        self.market_rs_repository = market_rs_repository
+        self.calculate_group_rankings = calculate_group_rankings
+        self.store_rankings = store_rankings
+
     def backfill_rankings_optimized(
         self,
         db: Session,
@@ -45,7 +65,7 @@ class LegacyGroupRankBackfillMixin:
         start_time = datetime.now()
 
         # 1. Delete existing rankings in range
-        deleted = self._delete_rankings_for_range(
+        deleted = self.ranking_engine.delete_rankings_for_range(
             db,
             start_date,
             end_date,
@@ -53,8 +73,8 @@ class LegacyGroupRankBackfillMixin:
         )
 
         # 2. Pre-fetch ALL data upfront
-        prefetch = self._coerce_prefetch_data(
-            self._prefetch_all_data(db, market=normalized_market)
+        prefetch = self.ranking_engine.coerce_prefetch_data(
+            self.ranking_engine.prefetch_all_data(db, market=normalized_market)
         )
 
         if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
@@ -76,13 +96,10 @@ class LegacyGroupRankBackfillMixin:
         )
 
         # 3. Generate trading dates using the target market's calendar.
-        from ..wiring.bootstrap import get_market_calendar_service
-
-        calendar_service = get_market_calendar_service()
         dates_to_process = []
         current = end_date
         while current >= start_date:
-            if calendar_service.is_trading_day(normalized_market, current):
+            if self.market_calendar.is_trading_day(normalized_market, current):
                 dates_to_process.append(current)
             current -= timedelta(days=1)
 
@@ -93,7 +110,7 @@ class LegacyGroupRankBackfillMixin:
 
         processed = 0
         errors = 0
-        symbols_by_group = self._symbols_by_group_for_run(
+        symbols_by_group = self.ranking_engine.symbols_by_group_for_run(
             db,
             all_groups,
             prefetch,
@@ -108,7 +125,10 @@ class LegacyGroupRankBackfillMixin:
         # 4. Process each date using cached data
         for chunk_start in range(0, len(dates_to_process), chunk_size):
             date_chunk = dates_to_process[chunk_start:chunk_start + chunk_size]
-            rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, date_chunk)
+            rs_by_date = self.ranking_engine.calculate_rs_by_symbol_for_dates(
+                prefetch,
+                date_chunk,
+            )
 
             for calc_date in date_chunk:
                 try:
@@ -116,7 +136,7 @@ class LegacyGroupRankBackfillMixin:
                     group_metrics = []
                     rs_by_symbol = rs_by_date.get(calc_date, {})
                     for group_name in all_groups:
-                        metrics = self._calculate_group_metrics_from_rs(
+                        metrics = self.ranking_engine.calculate_group_metrics_from_rs(
                             group_name,
                             symbols_by_group.get(group_name, []),
                             rs_by_symbol,
@@ -133,7 +153,7 @@ class LegacyGroupRankBackfillMixin:
                             metrics['rank'] = rank
 
                         # Store
-                        self._store_rankings(
+                        self.store_rankings(
                             db,
                             calc_date,
                             group_metrics,
@@ -207,14 +227,11 @@ class LegacyGroupRankBackfillMixin:
         )
 
         # Generate list of dates to process using the target market's calendar.
-        from ..wiring.bootstrap import get_market_calendar_service
-
-        calendar_service = get_market_calendar_service()
         current_date = end_date
         dates_to_process = []
 
         while current_date >= start_date:
-            if calendar_service.is_trading_day(normalized_market, current_date):
+            if self.market_calendar.is_trading_day(normalized_market, current_date):
                 dates_to_process.append(current_date)
             current_date -= timedelta(days=1)
 
@@ -282,15 +299,12 @@ class LegacyGroupRankBackfillMixin:
         """Find missing trading dates in the ranking data for one market."""
         from sqlalchemy import func
 
-        from ..wiring.bootstrap import get_market_calendar_service
-
         normalized_market = (market or "US").upper()
         resolved_formula = formula_version or self.market_rs_repository.active_formula(
             db,
             market=normalized_market,
         )
-        calendar_service = get_market_calendar_service()
-        window_end = end_date or calendar_service.market_now(normalized_market).date()
+        window_end = end_date or self.market_calendar.market_now(normalized_market).date()
         start_date = window_end - timedelta(days=lookback_days)
 
         existing_dates = db.query(
@@ -308,7 +322,7 @@ class LegacyGroupRankBackfillMixin:
         current_date = start_date
 
         while current_date < window_end:  # Exclude the target day; it is calculated separately.
-            if calendar_service.is_trading_day(normalized_market, current_date):
+            if self.market_calendar.is_trading_day(normalized_market, current_date):
                 if current_date not in existing_date_set:
                     missing_dates.append(current_date)
             current_date += timedelta(days=1)
@@ -412,8 +426,8 @@ class LegacyGroupRankBackfillMixin:
         start_time = datetime.now()
 
         # Pre-fetch ALL data upfront
-        prefetch = self._coerce_prefetch_data(
-            self._prefetch_all_data(db, market=normalized_market)
+        prefetch = self.ranking_engine.coerce_prefetch_data(
+            self.ranking_engine.prefetch_all_data(db, market=normalized_market)
         )
 
         if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
@@ -438,7 +452,7 @@ class LegacyGroupRankBackfillMixin:
             'errors': 0,
         }
 
-        symbols_by_group = self._symbols_by_group_for_run(
+        symbols_by_group = self.ranking_engine.symbols_by_group_for_run(
             db,
             all_groups,
             prefetch,
@@ -451,7 +465,10 @@ class LegacyGroupRankBackfillMixin:
         )
         for chunk_start in range(0, len(missing_dates), chunk_size):
             date_chunk = missing_dates[chunk_start:chunk_start + chunk_size]
-            rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, date_chunk)
+            rs_by_date = self.ranking_engine.calculate_rs_by_symbol_for_dates(
+                prefetch,
+                date_chunk,
+            )
 
             for calc_date in date_chunk:
                 try:
@@ -459,7 +476,7 @@ class LegacyGroupRankBackfillMixin:
                     group_metrics = []
                     rs_by_symbol = rs_by_date.get(calc_date, {})
                     for group_name in all_groups:
-                        metrics = self._calculate_group_metrics_from_rs(
+                        metrics = self.ranking_engine.calculate_group_metrics_from_rs(
                             group_name,
                             symbols_by_group.get(group_name, []),
                             rs_by_symbol,
@@ -476,7 +493,7 @@ class LegacyGroupRankBackfillMixin:
                             metrics['rank'] = rank
 
                         # Store
-                        self._store_rankings(
+                        self.store_rankings(
                             db,
                             calc_date,
                             group_metrics,

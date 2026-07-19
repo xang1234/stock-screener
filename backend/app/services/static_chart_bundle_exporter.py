@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 import logging
 from pathlib import Path
@@ -27,6 +28,16 @@ STATIC_CHART_TOP_N_GROUPS = 50
 STATIC_DEFAULT_MARKET = "US"
 
 
+@dataclass(frozen=True)
+class StaticChartBundleConfig:
+    chart_limit: int = STATIC_CHART_LIMIT
+    lookup_batch_size: int = STATIC_CHART_LOOKUP_BATCH_SIZE
+    preset_top_n: int = STATIC_CHART_PRESET_TOP_N
+    top_group_count: int = STATIC_CHART_TOP_N_GROUPS
+    period: str = STATIC_CHART_PERIOD
+    period_days: int = STATIC_CHART_PERIOD_DAYS
+
+
 class StaticChartBundleExporter:
     def __init__(
         self,
@@ -36,12 +47,14 @@ class StaticChartBundleExporter:
         benchmark_cache,
         json_writer,
         scan_row_serializer,
+        config: StaticChartBundleConfig | None = None,
     ) -> None:
         self._price_cache = price_cache
         self._fundamentals_cache = fundamentals_cache
         self._benchmark_cache = benchmark_cache
         self._write_json = json_writer
         self._serialize_scan_row = scan_row_serializer
+        self._config = config or StaticChartBundleConfig()
 
     def export(
         self,
@@ -83,7 +96,7 @@ class StaticChartBundleExporter:
                     "as_of_date": run.as_of_date.isoformat(),
                     "symbol": symbol,
                     "rank": rank,
-                    "period": STATIC_CHART_PERIOD,
+                    "period": self._config.period,
                     "bars": bars,
                     "rs_line": rs_line,
                     "blue_dots": blue_dots,
@@ -114,8 +127,8 @@ class StaticChartBundleExporter:
                 symbol = getattr(row, "symbol", None)
                 if symbol and symbol not in row_by_symbol:
                     row_by_symbol[symbol] = row
-            for offset in range(0, len(extra), STATIC_CHART_LOOKUP_BATCH_SIZE):
-                batch = extra[offset : offset + STATIC_CHART_LOOKUP_BATCH_SIZE]
+            for offset in range(0, len(extra), self._config.lookup_batch_size):
+                batch = extra[offset : offset + self._config.lookup_batch_size]
                 price_data = self._price_cache.get_many_cached_only(batch, period="2y")
                 fundamentals = self._fundamentals_cache.get_many_cached_only(batch)
                 for symbol in batch:
@@ -151,17 +164,17 @@ class StaticChartBundleExporter:
                 row for row in rows if getattr(row, "symbol", None) not in seen
             )
 
-        for start in range(0, len(ordered_rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
-            if len(entries) >= STATIC_CHART_LIMIT:
+        for start in range(0, len(ordered_rows), self._config.lookup_batch_size):
+            if len(entries) >= self._config.chart_limit:
                 break
             batch_rows = list(
-                ordered_rows[start : start + STATIC_CHART_LOOKUP_BATCH_SIZE]
+                ordered_rows[start : start + self._config.lookup_batch_size]
             )
             symbols = [row.symbol for row in batch_rows if getattr(row, "symbol", None)]
             price_data = self._price_cache.get_many_cached_only(symbols, period="2y")
             fundamentals = self._fundamentals_cache.get_many_cached_only(symbols)
             for rank, row in enumerate(batch_rows, start=start + 1):
-                if len(entries) >= STATIC_CHART_LIMIT:
+                if len(entries) >= self._config.chart_limit:
                     break
                 symbol = getattr(row, "symbol", None)
                 if not symbol:
@@ -180,18 +193,18 @@ class StaticChartBundleExporter:
                 get_preset_chart_symbols(
                     serialized_rows,
                     PRESET_SCREENS if preset_screens is None else preset_screens,
-                    STATIC_CHART_PRESET_TOP_N,
+                    self._config.preset_top_n,
                 ),
                 log_label="Preset screen expansion",
             )
         group_symbols = self._top_group_symbols(
             groups_payload=groups_payload,
-            top_n=STATIC_CHART_TOP_N_GROUPS,
+            top_n=self._config.top_group_count,
         )
         if group_symbols:
             expand(
                 group_symbols,
-                log_label=f"Top-{STATIC_CHART_TOP_N_GROUPS} groups expansion",
+                log_label=f"Top-{self._config.top_group_count} groups expansion",
             )
 
         index_path = normalized_prefix / "charts" / "index.json"
@@ -201,7 +214,7 @@ class StaticChartBundleExporter:
                 "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
                 "generated_at": generated_at,
                 "as_of_date": run.as_of_date.isoformat(),
-                "limit": STATIC_CHART_LIMIT,
+                "limit": self._config.chart_limit,
                 "symbols_total": len(entries),
                 "skipped_symbols": skipped_symbols,
                 "symbols": entries,
@@ -209,7 +222,7 @@ class StaticChartBundleExporter:
         )
         return {
             "path": index_path.as_posix(),
-            "limit": STATIC_CHART_LIMIT,
+            "limit": self._config.chart_limit,
             "symbols_total": len(entries),
             "available": bool(entries),
             "skipped_symbols": skipped_symbols,
@@ -237,9 +250,10 @@ class StaticChartBundleExporter:
                 return candidate, history
         return self._benchmark_cache.get_benchmark_symbol(market), pd.DataFrame()
 
-    @staticmethod
-    def _cutoff(index) -> datetime:
-        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=STATIC_CHART_PERIOD_DAYS)
+    def _cutoff(self, index) -> datetime:
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(
+            days=self._config.period_days
+        )
         index_tz = getattr(index, "tz", None)
         if index_tz is not None:
             return cutoff.tz_convert(index_tz).to_pydatetime()

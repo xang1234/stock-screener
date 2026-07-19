@@ -195,10 +195,7 @@ def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
             assert market == "HK"
             return day == date(2026, 3, 19)
 
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_market_calendar_service",
-        lambda: _FakeCalendarService(),
-    )
+    service.legacy_backfill_service.market_calendar = _FakeCalendarService()
 
     missing = service.find_missing_dates(db_session, lookback_days=2, market="HK")
 
@@ -476,34 +473,29 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
     price_cache.get_cached_only_fresh.return_value = spy_data
     price_cache.get_many_cached_only_fresh.return_value = {"AAPL": aapl_data}
     price_cache.get_many.side_effect = AssertionError("fetch-capable path should not be used")
-    service.price_cache = price_cache
+    service.legacy_ranking_engine.price_cache = price_cache
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "SPY"
     benchmark_cache.get_benchmark_data.side_effect = AssertionError("benchmark fetch should not be used")
-    service.benchmark_cache = benchmark_cache
+    service.legacy_ranking_engine.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
     stock_universe_service.get_active_symbols.return_value = ["AAPL"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
+    service.legacy_ranking_engine.active_symbols_provider = (
+        stock_universe_service.get_active_symbols
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
+        "app.services.legacy_group_rank_data.IBDIndustryService.get_group_memberships",
+        lambda db, **kw: {"Software": ["AAPL"]},
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
+        service.legacy_ranking_engine,
+        "market_caps_for_symbols",
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    prefetch = service._prefetch_all_data(
+    prefetch = service.legacy_ranking_engine.prefetch_all_data(
         db_session,
         cache_only=True,
     )
@@ -530,11 +522,11 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
     price_cache = Mock()
     price_cache.get_cached_only_fresh.return_value = None
     price_cache.get_many_cached_only_fresh.return_value = {}
-    service.price_cache = price_cache
+    service.legacy_ranking_engine.price_cache = price_cache
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "^N225"
-    service.benchmark_cache = benchmark_cache
+    service.legacy_ranking_engine.benchmark_cache = benchmark_cache
 
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
@@ -563,34 +555,29 @@ def test_cache_only_prefetch_uses_cached_market_benchmark_fallback(db_session, m
     price_cache = Mock()
     price_cache.get_cached_only_fresh.side_effect = [None, fallback_data]
     price_cache.get_many_cached_only_fresh.return_value = {"6758.T": sony_data}
-    service.price_cache = price_cache
+    service.legacy_ranking_engine.price_cache = price_cache
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "^N225"
     benchmark_cache.get_benchmark_candidates.return_value = ["^N225", "1306.T"]
-    service.benchmark_cache = benchmark_cache
+    service.legacy_ranking_engine.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
     stock_universe_service.get_active_symbols.return_value = ["6758.T"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
+    service.legacy_ranking_engine.active_symbols_provider = (
+        stock_universe_service.get_active_symbols
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["JP_Technology"],
+        "app.services.legacy_group_rank_data.IBDIndustryService.get_group_memberships",
+        lambda db, **kw: {"JP_Technology": ["6758.T"]},
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["6758.T"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
+        service.legacy_ranking_engine,
+        "market_caps_for_symbols",
         lambda db, symbols: {"6758.T": 1_000_000_000},
     )
 
-    prefetch = service._prefetch_all_data(
+    prefetch = service.legacy_ranking_engine.prefetch_all_data(
         db_session,
         market="JP",
         cache_only=True,
@@ -613,34 +600,29 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
     price_cache.get_cached_only_fresh.return_value = spy_data
     price_cache.get_many_cached_only_fresh.return_value = {"AAPL": None}
     price_cache.get_many.side_effect = AssertionError("fetch-capable path should not be used")
-    service.price_cache = price_cache
+    service.legacy_ranking_engine.price_cache = price_cache
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "SPY"
     benchmark_cache.get_benchmark_data.side_effect = AssertionError("benchmark fetch should not be used")
-    service.benchmark_cache = benchmark_cache
+    service.legacy_ranking_engine.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
     stock_universe_service.get_active_symbols.return_value = ["AAPL"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
+    service.legacy_ranking_engine.active_symbols_provider = (
+        stock_universe_service.get_active_symbols
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
+        "app.services.legacy_group_rank_data.IBDIndustryService.get_group_memberships",
+        lambda db, **kw: {"Software": ["AAPL"]},
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
+        service.legacy_ranking_engine,
+        "market_caps_for_symbols",
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    prefetch = service._prefetch_all_data(
+    prefetch = service.legacy_ranking_engine.prefetch_all_data(
         db_session,
         cache_only=True,
     )
@@ -668,34 +650,29 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
     price_cache = Mock()
     price_cache.get_many.return_value = {"AAPL": aapl_data}
     price_cache.get_many_cached_only.side_effect = AssertionError("cache-only path should not be used")
-    service.price_cache = price_cache
+    service.legacy_ranking_engine.price_cache = price_cache
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "SPY"
     benchmark_cache.get_benchmark_data.return_value = spy_data
-    service.benchmark_cache = benchmark_cache
+    service.legacy_ranking_engine.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
     stock_universe_service.get_active_symbols.return_value = ["AAPL"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
+    service.legacy_ranking_engine.active_symbols_provider = (
+        stock_universe_service.get_active_symbols
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
+        "app.services.legacy_group_rank_data.IBDIndustryService.get_group_memberships",
+        lambda db, **kw: {"Software": ["AAPL"]},
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
+        service.legacy_ranking_engine,
+        "market_caps_for_symbols",
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    prefetch = service._prefetch_all_data(
+    prefetch = service.legacy_ranking_engine.prefetch_all_data(
         db_session,
         cache_only=False,
     )
@@ -723,34 +700,29 @@ def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypa
 
     price_cache = Mock()
     price_cache.get_many.return_value = {"AAPL": aapl_data}
-    service.price_cache = price_cache
+    service.legacy_ranking_engine.price_cache = price_cache
 
     benchmark_cache = Mock()
     benchmark_cache.get_benchmark_symbol.return_value = "SPY"
     benchmark_cache.get_benchmark_data.return_value = spy_data
-    service.benchmark_cache = benchmark_cache
+    service.legacy_ranking_engine.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
     stock_universe_service.get_active_symbols.return_value = ["AAPL", "MZYX-U"]
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: stock_universe_service,
+    service.legacy_ranking_engine.active_symbols_provider = (
+        stock_universe_service.get_active_symbols
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: ["Software"],
+        "app.services.legacy_group_rank_data.IBDIndustryService.get_group_memberships",
+        lambda db, **kw: {"Software": ["AAPL", "MZYX-U"]},
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group, **kw: ["AAPL", "MZYX-U"],
-    )
-    monkeypatch.setattr(
-        service,
-        "_get_market_caps_for_symbols",
+        service.legacy_ranking_engine,
+        "market_caps_for_symbols",
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    prefetch = service._prefetch_all_data(
+    prefetch = service.legacy_ranking_engine.prefetch_all_data(
         db_session,
         cache_only=False,
     )
@@ -772,8 +744,8 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
         lambda db, **kw: ["Software"],
     )
     monkeypatch.setattr(
-        service,
-        "_prefetch_all_data",
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
         lambda db, cache_only=False, **kw: (
             price_data,
             {"AAPL": price_data},
@@ -811,8 +783,8 @@ def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_sessio
         lambda db, **kw: ["Software"],
     )
     monkeypatch.setattr(
-        service,
-        "_prefetch_all_data",
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
         lambda db, cache_only=False, **kw: (
             price_data,
             {"AAPL": price_data, "MSFT": None},
@@ -953,19 +925,16 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
             assert market == "HK"
             return day == date(2026, 3, 17)
 
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_market_calendar_service",
-        lambda: _FakeCalendarService(),
-    )
+    service.legacy_backfill_service.market_calendar = _FakeCalendarService()
 
     monkeypatch.setattr(
-        service,
-        "_delete_rankings_for_range",
+        service.legacy_ranking_engine,
+        "delete_rankings_for_range",
         lambda db, start_date, end_date, **kw: delete_kwargs.update(kw) or 0,
     )
     monkeypatch.setattr(
-        service,
-        "_prefetch_all_data",
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
         lambda db, **kw: prefetch_kwargs.update(kw) or (
             price_data,
             {"AAPL": price_data},
@@ -1003,14 +972,15 @@ def test_backfill_rankings_optimized_uses_market_calendar(db_session, monkeypatc
             calendar_calls.append((market, day))
             return market == "HK" and day == date(2026, 3, 18)
 
+    service.legacy_backfill_service.market_calendar = _FakeCalendarService()
     monkeypatch.setattr(
-        "app.wiring.bootstrap.get_market_calendar_service",
-        lambda: _FakeCalendarService(),
+        service.legacy_ranking_engine,
+        "delete_rankings_for_range",
+        lambda *args, **kw: 0,
     )
-    monkeypatch.setattr(service, "_delete_rankings_for_range", lambda *args, **kw: 0)
     monkeypatch.setattr(
-        service,
-        "_prefetch_all_data",
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
         lambda db, **kw: (
             price_data,
             {"0700.HK": price_data},
@@ -1066,12 +1036,17 @@ def test_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monk
             return True
 
     monkeypatch.setattr(settings, "group_rank_gapfill_chunk_size", 3)
+    service.legacy_backfill_service.market_calendar = _FakeCalendarService()
     monkeypatch.setattr(
-        "app.wiring.bootstrap.get_market_calendar_service",
-        lambda: _FakeCalendarService(),
+        service.legacy_ranking_engine,
+        "delete_rankings_for_range",
+        lambda *args, **kw: 0,
     )
-    monkeypatch.setattr(service, "_delete_rankings_for_range", lambda *args, **kw: 0)
-    monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kw: prefetch)
+    monkeypatch.setattr(
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
+        lambda db, **kw: prefetch,
+    )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
         lambda db, **kw: ["Software"],
@@ -1084,7 +1059,11 @@ def test_backfill_rankings_optimized_chunks_rs_date_calculation(db_session, monk
             for calc_date in dates
         }
 
-    monkeypatch.setattr(service, "_calculate_rs_by_symbol_for_dates", fake_rs_for_dates)
+    monkeypatch.setattr(
+        service.legacy_ranking_engine,
+        "calculate_rs_by_symbol_for_dates",
+        fake_rs_for_dates,
+    )
 
     stats = service.backfill_rankings_optimized(
         db_session,
@@ -1108,14 +1087,11 @@ def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatc
             assert market == "HK"
             return day == date(2026, 3, 17)
 
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_market_calendar_service",
-        lambda: _FakeCalendarService(),
-    )
+    service.legacy_backfill_service.market_calendar = _FakeCalendarService()
 
     calculate_calls: list[date] = []
     monkeypatch.setattr(
-        service,
+        service.legacy_backfill_service,
         "calculate_group_rankings",
         lambda db, calc_date, **kw: calculate_calls.append(calc_date) or [{"rank": 1}],
     )
@@ -1145,13 +1121,10 @@ def test_backfill_optimized_legacy_prefetch_tuple_falls_back_to_validated_group_
             assert market == "US"
             return day == date(2026, 3, 20)
 
+    service.legacy_backfill_service.market_calendar = _FakeCalendarService()
     monkeypatch.setattr(
-        "app.wiring.bootstrap.get_market_calendar_service",
-        lambda: _FakeCalendarService(),
-    )
-    monkeypatch.setattr(
-        service,
-        "_prefetch_all_data",
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
         lambda db, **kw: (
             price_data,
             {symbol: price_data for symbol in symbols},
@@ -1192,8 +1165,8 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
     group_kwargs: dict = {}
 
     monkeypatch.setattr(
-        service,
-        "_prefetch_all_data",
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
         lambda db, **kw: prefetch_kwargs.update(kw) or (
             price_data,
             {"AAPL": price_data},
@@ -1233,7 +1206,11 @@ def test_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(
         },
         symbols_by_group={"Software": symbols},
     )
-    monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kw: prefetch)
+    monkeypatch.setattr(
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
+        lambda db, **kw: prefetch,
+    )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
         lambda db, **kw: ["Software"],
@@ -1279,7 +1256,11 @@ def test_fill_gaps_optimized_chunks_rs_date_calculation(db_session, monkeypatch)
     chunked_dates: list[list[date]] = []
 
     monkeypatch.setattr(settings, "group_rank_gapfill_chunk_size", 3)
-    monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kw: prefetch)
+    monkeypatch.setattr(
+        service.legacy_ranking_engine,
+        "prefetch_all_data",
+        lambda db, **kw: prefetch,
+    )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
         lambda db, **kw: ["Software"],
@@ -1292,7 +1273,11 @@ def test_fill_gaps_optimized_chunks_rs_date_calculation(db_session, monkeypatch)
             for calc_date in dates
         }
 
-    monkeypatch.setattr(service, "_calculate_rs_by_symbol_for_dates", fake_rs_for_dates)
+    monkeypatch.setattr(
+        service.legacy_ranking_engine,
+        "calculate_rs_by_symbol_for_dates",
+        fake_rs_for_dates,
+    )
 
     stats = service.fill_gaps_optimized(db_session, missing_dates, market="US")
 
@@ -1323,11 +1308,11 @@ def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_histor
     }
     active_symbols = set(symbols)
     monkeypatch.setattr(
-        service,
-        "_get_validated_group_symbols",
+        service.legacy_ranking_engine,
+        "validated_group_symbols",
         lambda *_args, **_kwargs: symbols,
     )
-    legacy_metrics = service._calculate_group_rs_from_cache(
+    legacy_metrics = service.legacy_ranking_engine.calculate_group_rs_from_cache(
         db_session,
         "Software",
         benchmark_prices["Close"].sort_index(ascending=False),
@@ -1345,8 +1330,11 @@ def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_histor
         symbols_by_group={"Software": symbols},
     )
 
-    rs_by_date = service._calculate_rs_by_symbol_for_dates(prefetch, [calculation_date])
-    vectorized_metrics = service._calculate_group_metrics_from_rs(
+    rs_by_date = service.legacy_ranking_engine.calculate_rs_by_symbol_for_dates(
+        prefetch,
+        [calculation_date],
+    )
+    vectorized_metrics = service.legacy_ranking_engine.calculate_group_metrics_from_rs(
         "Software",
         symbols,
         rs_by_date[calculation_date],
@@ -1385,11 +1373,11 @@ def test_vectorized_group_rs_preserves_invalid_period_return_semantics(
     }
     active_symbols = set(symbols)
     monkeypatch.setattr(
-        service,
-        "_get_validated_group_symbols",
+        service.legacy_ranking_engine,
+        "validated_group_symbols",
         lambda *_args, **_kwargs: symbols,
     )
-    legacy_metrics = service._calculate_group_rs_from_cache(
+    legacy_metrics = service.legacy_ranking_engine.calculate_group_rs_from_cache(
         db_session,
         "Software",
         benchmark_prices["Close"].sort_index(ascending=False),
@@ -1407,8 +1395,11 @@ def test_vectorized_group_rs_preserves_invalid_period_return_semantics(
         symbols_by_group={"Software": symbols},
     )
 
-    rs_by_date = service._calculate_rs_by_symbol_for_dates(prefetch, [calculation_date])
-    vectorized_metrics = service._calculate_group_metrics_from_rs(
+    rs_by_date = service.legacy_ranking_engine.calculate_rs_by_symbol_for_dates(
+        prefetch,
+        [calculation_date],
+    )
+    vectorized_metrics = service.legacy_ranking_engine.calculate_group_metrics_from_rs(
         "Software",
         symbols,
         rs_by_date[calculation_date],

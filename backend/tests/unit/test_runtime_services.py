@@ -95,5 +95,5 @@ def test_runtime_group_rank_service_uses_process_canonical_group_service():
 
     runtime.reset_for_tests()
 
-    assert runtime._canonical_group_ranking_service is None
+    assert runtime._canonical_rs_runtime is None
     assert runtime.canonical_group_ranking_service() is not canonical

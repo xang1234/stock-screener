@@ -1,6 +1,6 @@
 """Celery tasks for formula-aware Industry Group ranking workflows."""
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import time
 
 from celery.exceptions import Retry, SoftTimeLimitExceeded
@@ -32,6 +32,11 @@ from ..wiring.bootstrap import (
 )
 from .date_resolution import resolve_task_target_date
 from .group_rank_memory import release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory
+from .group_rank_maintenance import (
+    run_group_rank_backfill,
+    run_group_rank_gapfill,
+    run_one_year_group_rank_backfill,
+)
 from .workload_coordination import serialized_market_workload
 from .group_rank_workflows import (
     GroupRankReasonCode,
@@ -707,293 +712,43 @@ def calculate_daily_group_rankings_with_gapfill(
 @serialized_market_workload('backfill_group_rankings')
 def backfill_group_rankings(self, start_date: str, end_date: str, market: str = "US"):
     """Backfill historical group rankings for a date range."""
-    logger.info("=" * 60)
-    logger.info("TASK: Backfill IBD Group Rankings (Optimized)")
-    logger.info(f"Date range: {start_date} to {end_date}")
-    logger.info("=" * 60)
-
-    try:
-        # Parse dates
-        start = datetime.strptime(start_date, '%Y-%m-%d').date()
-        end = datetime.strptime(end_date, '%Y-%m-%d').date()
-
-        if start > end:
-            logger.error("Start date must be before end date")
-            return {
-                'error': 'Invalid date range: start_date > end_date',
-                'timestamp': datetime.now().isoformat()
-            }
-
-    except ValueError as e:
-        logger.error(f"Invalid date format: {e}")
-        return {
-            'error': f'Invalid date format. Use YYYY-MM-DD: {e}',
-            'timestamp': datetime.now().isoformat()
-        }
-
-    db = SessionLocal()
-    start_time = time.time()
-
-    try:
-        # Initialize service
-        service = get_group_rank_service()
-        effective_market = str(market or "US").upper()
-        resolved_formula = _resolve_active_group_formula(
-            db,
-            market=effective_market,
-            group_service=service,
-        )
-
-        calendar_service = get_market_calendar_service()
-        dates = []
-        cursor = start
-        while cursor <= end:
-            if calendar_service.is_trading_day(effective_market, cursor):
-                dates.append(cursor)
-            cursor += timedelta(days=1)
-        result = {
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-            "deleted": 0,
-            **_coordinate_group_dates(
-                db,
-                dates=dates,
-                market=effective_market,
-                formula_version=resolved_formula,
-            ),
-        }
-
-        # Calculate total duration
-        total_duration = time.time() - start_time
-
-        logger.info("=" * 60)
-        logger.info("Backfill Complete!")
-        logger.info(f"Total days: {result['total_dates']}")
-        logger.info(f"Deleted existing: {result.get('deleted', 0)}")
-        logger.info(f"Processed: {result['processed']}")
-        logger.info(f"Skipped: {result['skipped']}")
-        logger.info(f"Errors: {result['errors']}")
-        logger.info(f"Total duration: {total_duration:.2f}s")
-        logger.info("=" * 60)
-
-        from ..services.group_rankings_cache import bump_group_rankings_epoch
-
-        bump_group_rankings_epoch(market)
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed after backfill: %s", snapshot_error)
-
-        return {
-            'start_date': start_date,
-            'end_date': end_date,
-            'total_dates': result['total_dates'],
-            'deleted': result.get('deleted', 0),
-            'processed': result['processed'],
-            'skipped': result['skipped'],
-            'errors': result['errors'],
-            'total_duration_seconds': round(total_duration, 2),
-            'avg_duration_per_day': round(
-                total_duration / max(result['processed'], 1), 2
-            ),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error in backfill_group_rankings task: {e}", exc_info=True)
-        logger.info("=" * 60)
-        return {
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    finally:
-        db.close()
+    return run_group_rank_backfill(
+        start_date=start_date,
+        end_date=end_date,
+        market=market,
+        session_factory=SessionLocal,
+        group_service_provider=get_group_rank_service,
+        calendar_service_provider=get_market_calendar_service,
+        coordinate_group_dates=_coordinate_group_dates,
+        resolve_active_formula=_resolve_active_group_formula,
+    )
 
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.gapfill_group_rankings')
 @serialized_market_workload('gapfill_group_rankings')
 def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
     """Detect and fill gaps in group ranking data."""
-    logger.info("=" * 60)
-    logger.info("TASK: Gap-Fill IBD Group Rankings (Optimized)")
-    logger.info(f"Looking back {max_days} days")
-    logger.info("=" * 60)
-
-    db = SessionLocal()
-    start_time = time.time()
-
-    try:
-        service = get_group_rank_service()
-        effective_market = str(market or "US").upper()
-        resolved_formula = _resolve_active_group_formula(
-            db,
-            market=effective_market,
-            group_service=service,
-        )
-
-        # Find missing dates
-        find_missing_kwargs = {
-            "lookback_days": max_days,
-            "market": market,
-            "formula_version": resolved_formula,
-        }
-        missing_dates = service.find_missing_dates(db, **find_missing_kwargs)
-
-        if not missing_dates:
-            logger.info("No gaps found - data is complete")
-            return {
-                'status': 'complete',
-                'gaps_found': 0,
-                'message': 'No gaps to fill',
-                'timestamp': datetime.now().isoformat()
-            }
-
-        logger.info(f"Found {len(missing_dates)} gaps to fill")
-        logger.info(f"Date range: {missing_dates[0]} to {missing_dates[-1]}")
-
-        result = _coordinate_group_dates(
-            db,
-            dates=missing_dates,
-            market=effective_market,
-            formula_version=resolved_formula,
-        )
-
-        duration = time.time() - start_time
-
-        logger.info("=" * 60)
-        logger.info("Gap-Fill Complete!")
-        logger.info(f"Gaps found: {len(missing_dates)}")
-        logger.info(f"Processed: {result['processed']}")
-        logger.info(f"Errors: {result['errors']}")
-        logger.info(f"Duration: {duration:.2f}s")
-        logger.info("=" * 60)
-
-        from ..services.group_rankings_cache import bump_group_rankings_epoch
-
-        bump_group_rankings_epoch(market)
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed after gapfill: %s", snapshot_error)
-
-        return {
-            'status': 'complete',
-            'gaps_found': len(missing_dates),
-            'processed': result['processed'],
-            'errors': result['errors'],
-            'total_duration_seconds': round(duration, 2),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error in gapfill_group_rankings task: {e}", exc_info=True)
-        return {
-            'status': 'error',
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    finally:
-        db.close()
+    return run_group_rank_gapfill(
+        max_days=max_days,
+        market=market,
+        session_factory=SessionLocal,
+        group_service_provider=get_group_rank_service,
+        coordinate_group_dates=_coordinate_group_dates,
+        resolve_active_formula=_resolve_active_group_formula,
+    )
 
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings_1year')
 @serialized_market_workload('backfill_group_rankings_1year')
 def backfill_group_rankings_1year(self, market: str = "US"):
-    """
-    One-time task to backfill 1 year of group rankings (optimized version).
-
-    This optimized backfill:
-    1. Uses same universe as bulk scans (intersection of IBD groups and stock_universe)
-    2. Deletes existing rankings and recalculates (no skipping)
-    3. Pre-fetches all data once for efficiency
-
-    Returns:
-        Dict with backfill statistics
-    """
+    """Backfill one year of formula-aware Group ranking snapshots."""
     from .market_queues import normalize_market
-
-    effective_market = normalize_market(market)
-
-    logger.info("=" * 60)
-    logger.info(
-        "TASK: 1-Year Backfill IBD Group Rankings (Optimized) (%s)",
-        effective_market,
+    return run_one_year_group_rank_backfill(
+        market=market,
+        session_factory=SessionLocal,
+        group_service_provider=get_group_rank_service,
+        calendar_service_provider=get_market_calendar_service,
+        coordinate_group_dates=_coordinate_group_dates,
+        resolve_active_formula=_resolve_active_group_formula,
+        normalize_market=normalize_market,
     )
-    logger.info("=" * 60)
-
-    db = SessionLocal()
-    start_time = time.time()
-
-    try:
-        service = get_group_rank_service()
-        resolved_formula = _resolve_active_group_formula(
-            db,
-            market=effective_market,
-            group_service=service,
-        )
-
-        # Calculate date range in the target market's local calendar.
-        calendar_service = get_market_calendar_service()
-        end_date = calendar_service.market_now(effective_market).date()
-        start_date = end_date - timedelta(days=365)
-
-        dates = []
-        cursor = start_date
-        while cursor <= end_date:
-            if calendar_service.is_trading_day(effective_market, cursor):
-                dates.append(cursor)
-            cursor += timedelta(days=1)
-        result = {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "deleted": 0,
-            **_coordinate_group_dates(
-                db,
-                dates=dates,
-                market=effective_market,
-                formula_version=resolved_formula,
-            ),
-        }
-
-        duration = time.time() - start_time
-
-        logger.info("=" * 60)
-        logger.info("1-Year Backfill Complete!")
-        logger.info(f"Total days: {result['total_dates']}")
-        logger.info(f"Deleted existing: {result.get('deleted', 0)}")
-        logger.info(f"Processed: {result['processed']}")
-        logger.info(f"Skipped: {result['skipped']}")
-        logger.info(f"Errors: {result['errors']}")
-        logger.info(f"Duration: {duration:.2f}s")
-        logger.info("=" * 60)
-
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
-
-            safe_publish_groups_bootstrap()
-        except Exception as snapshot_error:
-            logger.warning("Group rankings snapshot publish failed after 1-year backfill: %s", snapshot_error)
-
-        result['total_duration_seconds'] = round(duration, 2)
-        result['timestamp'] = datetime.now().isoformat()
-
-        return result
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error in backfill_group_rankings_1year: {e}", exc_info=True)
-        return {
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    finally:
-        db.close()

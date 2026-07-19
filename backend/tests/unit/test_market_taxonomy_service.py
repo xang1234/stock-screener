@@ -176,6 +176,11 @@ def test_groups_for_market_and_symbols_for_group(tmp_path):
 
     banks_symbols = service.symbols_for_group("HK", "Banks")
     assert banks_symbols == ["0005.HK", "0011.HK"]
+    assert service.group_symbols_for_market("HK") == {
+        "Banks": ["0005.HK", "0011.HK"],
+        "Conglomerates": ["0001.HK"],
+        "Internet Services": ["0700.HK"],
+    }
 
     assert service.symbols_for_group("HK", "Nonexistent Group") == []
     # Unknown market yields no groups (falls through the normalization path)

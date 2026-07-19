@@ -690,6 +690,7 @@ def build_daily_snapshot(
                     market=effective_market,
                 )
                 market_rs_run_id = None
+                market_rs_universe_size = None
                 source_compatible = True
                 if formula == BALANCED_RS_FORMULA_VERSION:
                     exact_run = repository.get_completed_exact(
@@ -703,6 +704,11 @@ def build_daily_snapshot(
                         and balanced_run_has_required_price_basis(exact_run)
                     )
                     market_rs_run_id = getattr(exact_run, "id", None)
+                    market_rs_universe_size = getattr(
+                        exact_run,
+                        "eligible_symbol_count",
+                        None,
+                    )
                 identity = GroupSnapshotIdentity(
                     effective_market,
                     as_of,
@@ -712,6 +718,7 @@ def build_daily_snapshot(
                     matching_run,
                     identity=identity,
                     market_rs_run_id=market_rs_run_id,
+                    universe_size=market_rs_universe_size,
                 ):
                     matching_run = None
             if matching_run is not None:

@@ -6,6 +6,7 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
+    RsPublicationIdentity,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
 from app.models.industry import IBDGroupRank
@@ -97,6 +98,28 @@ def test_balanced_rows_must_share_the_exact_completed_run(db_session):
             identity=GroupSnapshotIdentity(
                 "US", AS_OF, BALANCED_RS_FORMULA_VERSION
             ),
+        )
+
+
+def test_load_publication_rejects_a_different_market_rs_run(db_session):
+    run = _run(db_session, run_id=41)
+    _rank(db_session, formula=BALANCED_RS_FORMULA_VERSION, rank=1, run_id=run.id)
+    db_session.commit()
+
+    expected = RsPublicationIdentity(
+        snapshot=GroupSnapshotIdentity(
+            "US",
+            AS_OF,
+            BALANCED_RS_FORMULA_VERSION,
+        ),
+        market_rs_run_id=42,
+        universe_size=3,
+    )
+
+    with pytest.raises(GroupSnapshotIntegrityError, match="expected Market RS run"):
+        GroupRankSnapshotReader().load_publication(
+            db_session,
+            publication=expected,
         )
 
 

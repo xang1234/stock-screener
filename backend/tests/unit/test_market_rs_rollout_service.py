@@ -18,13 +18,25 @@ from app.services.market_rs_rollout_service import (
 )
 
 
-def _service(*, calendar=None, loader=None, repository=None, snapshot=None, groups=None):
+def _service(
+    *,
+    calendar=None,
+    loader=None,
+    repository=None,
+    snapshot=None,
+    groups=None,
+    feature_factory=None,
+):
+    kwargs = {}
+    if feature_factory is not None:
+        kwargs["feature_run_repository_factory"] = feature_factory
     return MarketRsRolloutService(
         calendar_service=calendar or MagicMock(),
         input_loader=loader or MagicMock(),
         market_rs_snapshot_service=snapshot or MagicMock(),
         market_rs_repository=repository or MagicMock(),
         canonical_group_service=groups or MagicMock(),
+        **kwargs,
     )
 
 
@@ -42,7 +54,9 @@ def test_candidate_dates_start_at_first_probe_with_two_eligible_stocks():
         SimpleNamespace(excess_returns_by_symbol={"AAA": {}, "BBB": {}}),
     ]
     service = _service(calendar=calendar, loader=loader)
-    service._earliest_available_price_date = lambda _db, _market: sessions[0]  # type: ignore[method-assign]
+    service.backfill_service._earliest_available_price_date = (  # type: ignore[method-assign]
+        lambda _db, _market: sessions[0]
+    )
 
     assert service.earliest_backfillable_date(
         MagicMock(),
@@ -55,6 +69,25 @@ def test_candidate_dates_start_at_first_probe_with_two_eligible_stocks():
         through_date=sessions[-1],
         first_valid_date=sessions[1],
     ) == (sessions[1], sessions[2])
+
+
+def test_earliest_backfillable_date_does_not_hide_unexpected_loader_errors():
+    session = date(2026, 4, 10)
+    calendar = MagicMock()
+    calendar.trading_days.return_value = [session]
+    loader = MagicMock()
+    loader.load.side_effect = RuntimeError("database connection lost")
+    service = _service(calendar=calendar, loader=loader)
+    service.backfill_service._earliest_available_price_date = (  # type: ignore[method-assign]
+        lambda _db, _market: session
+    )
+
+    with pytest.raises(RuntimeError, match="database connection lost"):
+        service.earliest_backfillable_date(
+            MagicMock(),
+            market="US",
+            through_date=session,
+        )
 
 
 def test_backfill_resumes_completed_stock_run_and_reports_all_failures(monkeypatch):
@@ -73,8 +106,16 @@ def test_backfill_resumes_completed_stock_run_and_reports_all_failures(monkeypat
         [{"market_rs_run_id": 12}, {"market_rs_run_id": 12}],
     ]
     service = _service(repository=repository, snapshot=snapshot, groups=groups)
-    monkeypatch.setattr(service, "earliest_backfillable_date", lambda *a, **k: dates[0])
-    monkeypatch.setattr(service, "candidate_dates", lambda *a, **k: dates)
+    monkeypatch.setattr(
+        service.backfill_service,
+        "earliest_backfillable_date",
+        lambda *a, **k: dates[0],
+    )
+    monkeypatch.setattr(
+        service.backfill_service,
+        "candidate_dates",
+        lambda *a, **k: dates,
+    )
 
     report = service.backfill(MagicMock(), market="US", through_date=dates[-1])
 
@@ -99,7 +140,6 @@ def test_rejected_activation_rolls_back_without_moving_either_pointer(tmp_path):
     repository = MagicMock()
     feature_repository = MagicMock()
     service = _service(repository=repository)
-    service._feature_run_repository_factory = lambda _db: feature_repository
     db = MagicMock()
     validation = ActivationValidationReport(
         market="US",
@@ -175,22 +215,6 @@ def test_validation_collects_feature_and_static_errors_without_short_circuiting(
         eligible_symbol_count=2,
         rows=[],
     )
-    service = _service()
-    monkeypatch.setattr(
-        service,
-        "earliest_backfillable_date",
-        lambda *args, **kwargs: through_date,
-    )
-    monkeypatch.setattr(
-        service,
-        "candidate_dates",
-        lambda *args, **kwargs: (through_date,),
-    )
-    monkeypatch.setattr(
-        service,
-        "_validate_run_and_groups",
-        lambda *args, **kwargs: run,
-    )
     feature_repository = MagicMock()
     feature_repository.get_run.return_value = SimpleNamespace(
         id=99,
@@ -199,7 +223,22 @@ def test_validation_collects_feature_and_static_errors_without_short_circuiting(
         universe_hash="feature-a",
         config={},
     )
-    service._feature_run_repository_factory = lambda _db: feature_repository
+    service = _service(feature_factory=lambda _db: feature_repository)
+    monkeypatch.setattr(
+        service.backfill_service,
+        "earliest_backfillable_date",
+        lambda *args, **kwargs: through_date,
+    )
+    monkeypatch.setattr(
+        service.backfill_service,
+        "candidate_dates",
+        lambda *args, **kwargs: (through_date,),
+    )
+    monkeypatch.setattr(
+        service.validator,
+        "_validate_run_and_groups",
+        lambda *args, **kwargs: run,
+    )
 
     validation = service.validate_activation(
         MagicMock(),
@@ -223,6 +262,7 @@ def test_successful_activation_revalidates_then_commits_both_pointers(
     repository.get_completed_exact.return_value = SimpleNamespace(
         id=42,
         universe_hash="universe-a",
+        eligible_symbol_count=2,
     )
     repository.activate_formula.side_effect = lambda *a, **k: events.append("market")
     feature_repository = MagicMock()
@@ -236,20 +276,23 @@ def test_successful_activation_revalidates_then_commits_both_pointers(
             "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
             "market_rs_run_id": 42,
             "rs_as_of_date": "2026-04-10",
+            "rs_universe_size": 2,
         },
     )
     feature_repository.repoint_published.side_effect = (
         lambda *a, **k: events.append("feature")
     )
-    service = _service(repository=repository)
-    service._feature_run_repository_factory = lambda _db: feature_repository
+    service = _service(
+        repository=repository,
+        feature_factory=lambda _db: feature_repository,
+    )
     db = MagicMock()
     db.commit.side_effect = lambda: events.append("commit")
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
     manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     revalidate = MagicMock(return_value=())
-    monkeypatch.setattr(service, "revalidate_static", revalidate)
+    monkeypatch.setattr(service.validator, "revalidate_static", revalidate)
     validation = ActivationValidationReport(
         market="US",
         formula_version=BALANCED_RS_FORMULA_VERSION,

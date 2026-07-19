@@ -72,11 +72,11 @@ def test_enrichment_reads_the_feature_runs_exact_formula_snapshot():
         ])
         db.commit()
 
-    identities = []
+    publications = []
 
     class _Reader:
-        def load_exact(self, db, *, identity, include_top_symbol_names):
-            identities.append(identity)
+        def load_publication(self, db, *, publication, include_top_symbol_names):
+            publications.append(publication)
             return [{"industry_group": "Software", "rank": 7}]
 
     stats = FeatureRunGroupEnrichmentService(
@@ -88,7 +88,9 @@ def test_enrichment_reads_the_feature_runs_exact_formula_snapshot():
 
     with factory() as db:
         stored = db.query(StockFeatureDaily).filter_by(run_id=31, symbol="AAA").one()
-    assert identities[0].formula_version == BALANCED_RS_FORMULA_VERSION
+    assert publications[0].snapshot.formula_version == BALANCED_RS_FORMULA_VERSION
+    assert publications[0].market_rs_run_id == 42
+    assert publications[0].universe_size == 1
     assert stored.details_json["ibd_group_rank"] == 7
     assert stats["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
     engine.dispose()
@@ -127,9 +129,9 @@ def test_missing_exact_snapshot_rolls_back_without_erasing_previous_rank():
         db.commit()
 
     class _MissingReader:
-        def load_exact(self, db, *, identity, include_top_symbol_names):
-            assert identity.formula_version == LEGACY_RS_FORMULA_VERSION
-            raise GroupSnapshotUnavailable(identity)
+        def load_publication(self, db, *, publication, include_top_symbol_names):
+            assert publication.snapshot.formula_version == LEGACY_RS_FORMULA_VERSION
+            raise GroupSnapshotUnavailable(publication.snapshot)
 
     service = FeatureRunGroupEnrichmentService(
         session_factory=factory,

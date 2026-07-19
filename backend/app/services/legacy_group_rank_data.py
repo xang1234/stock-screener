@@ -4,7 +4,7 @@ import logging
 import math
 import statistics
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 
 import pandas as pd
 from sqlalchemy import and_
@@ -20,8 +20,46 @@ from .legacy_group_rank_contracts import GroupRankPrefetchData
 logger = logging.getLogger(__name__)
 
 
-class LegacyGroupRankDataMixin:
-    def _get_validated_group_symbols(
+class ActiveSymbolsProvider(Protocol):
+    def __call__(
+        self,
+        db: Session,
+        *,
+        market: str,
+    ) -> List[str]: ...
+
+
+class LegacyGroupRankingEngine:
+    """Legacy RS data loader and calculator with explicit dependencies."""
+
+    def __init__(
+        self,
+        *,
+        price_cache,
+        benchmark_cache,
+        rs_calculator,
+        active_symbols_provider: ActiveSymbolsProvider | None = None,
+    ) -> None:
+        self.price_cache = price_cache
+        self.benchmark_cache = benchmark_cache
+        self.rs_calculator = rs_calculator
+        self.active_symbols_provider = (
+            active_symbols_provider or self._load_active_symbols_from_database
+        )
+
+    @staticmethod
+    def _load_active_symbols_from_database(
+        db: Session,
+        *,
+        market: str,
+    ) -> List[str]:
+        rows = db.query(StockUniverse.symbol).filter(
+            StockUniverse.active_filter(),
+            StockUniverse.market == market,
+        ).all()
+        return [row[0] for row in rows]
+
+    def validated_group_symbols(
         self,
         db: Session,
         group_name: str,
@@ -43,7 +81,7 @@ class LegacyGroupRankDataMixin:
             if symbol in active_symbols and not is_unsupported_yahoo_price_symbol(symbol)
         ]
 
-    def _get_market_caps_for_symbols(
+    def market_caps_for_symbols(
         self,
         db: Session,
         symbols: List[str]
@@ -63,7 +101,7 @@ class LegacyGroupRankDataMixin:
 
         return {symbol: cap for symbol, cap in rows if cap and cap > 0}
 
-    def _calculate_pct_above_80(
+    def calculate_pct_above_80(
         self,
         count_above_80: Optional[int],
         total_count: Optional[int]
@@ -77,7 +115,7 @@ class LegacyGroupRankDataMixin:
         return round((count / total_count) * 100, 1)
 
     @staticmethod
-    def _coerce_prefetch_data(prefetch: Any) -> GroupRankPrefetchData:
+    def coerce_prefetch_data(prefetch: Any) -> GroupRankPrefetchData:
         """Accept legacy test tuples while the service uses a named prefetch object."""
         if isinstance(prefetch, GroupRankPrefetchData):
             return prefetch
@@ -91,7 +129,7 @@ class LegacyGroupRankDataMixin:
             symbols_by_group={},
         )
 
-    def _symbols_by_group_for_run(
+    def symbols_by_group_for_run(
         self,
         db: Session,
         group_names: List[str],
@@ -105,7 +143,7 @@ class LegacyGroupRankDataMixin:
             if group_name in prefetch.symbols_by_group:
                 symbols_by_group[group_name] = prefetch.symbols_by_group[group_name]
             else:
-                symbols_by_group[group_name] = self._get_validated_group_symbols(
+                symbols_by_group[group_name] = self.validated_group_symbols(
                     db,
                     group_name,
                     prefetch.active_symbols,
@@ -113,7 +151,7 @@ class LegacyGroupRankDataMixin:
                 )
         return symbols_by_group
 
-    def _prefetch_all_data(
+    def prefetch_all_data(
         self,
         db: Session,
         *,
@@ -131,8 +169,6 @@ class LegacyGroupRankDataMixin:
         Returns:
             Tuple of (spy_prices_df, {symbol: prices_df}, active_symbols_set, {symbol: market_cap})
         """
-        from ..wiring.bootstrap import get_stock_universe_service
-
         normalized_market = (market or "US").upper()
         benchmark_symbol = self.benchmark_cache.get_benchmark_symbol(normalized_market)
         logger.info(
@@ -177,7 +213,7 @@ class LegacyGroupRankDataMixin:
         logger.info(f"Fetched benchmark {benchmark_symbol}: {len(spy_data)} days")
 
         # 2. Get active symbols from stock_universe (same as bulk scans)
-        active_symbols_list = get_stock_universe_service().get_active_symbols(
+        active_symbols_list = self.active_symbols_provider(
             db,
             market=normalized_market,
         )
@@ -185,13 +221,17 @@ class LegacyGroupRankDataMixin:
         logger.info(f"Found {len(active_symbols)} active symbols in stock_universe")
 
         # 3. Collect ALL unique symbols across ALL groups for this market
-        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
+        memberships = IBDIndustryService.get_group_memberships(
+            db,
+            market=normalized_market,
+        )
+        all_groups = list(memberships)
         symbols_to_fetch = set()
         symbols_by_group: Dict[str, List[str]] = {}
         skipped_unsupported_symbols = set()
 
         for group in all_groups:
-            group_symbols = IBDIndustryService.get_group_symbols(db, group, market=normalized_market)
+            group_symbols = memberships[group]
             validated = []
             for symbol in group_symbols:
                 if symbol not in active_symbols:
@@ -218,7 +258,7 @@ class LegacyGroupRankDataMixin:
             all_prices = self.price_cache.get_many(list(symbols_to_fetch), period="2y")
 
         # 5. Fetch market caps for weighting
-        market_caps = self._get_market_caps_for_symbols(db, list(symbols_to_fetch))
+        market_caps = self.market_caps_for_symbols(db, list(symbols_to_fetch))
 
         valid_count = sum(
             1 for v in all_prices.values() if v is not None and not v.empty
@@ -276,7 +316,7 @@ class LegacyGroupRankDataMixin:
 
         return None, primary_symbol, "primary"
 
-    def _delete_rankings_for_range(
+    def delete_rankings_for_range(
         self,
         db: Session,
         start_date: date,
@@ -307,7 +347,7 @@ class LegacyGroupRankDataMixin:
         )
         return deleted
 
-    def _calculate_group_rs_from_cache(
+    def calculate_group_rs_from_cache(
         self,
         db: Session,
         group_name: str,
@@ -325,7 +365,7 @@ class LegacyGroupRankDataMixin:
         Only uses symbols that are active in stock_universe (intersection approach).
         ``spy_prices`` is the per-market benchmark series (SPY for US, HSI for HK, etc).
         """
-        symbols = self._get_validated_group_symbols(
+        symbols = self.validated_group_symbols(
             db, group_name, active_symbols, market=market,
         )
 
@@ -415,7 +455,7 @@ class LegacyGroupRankDataMixin:
             'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
         }
 
-    def _calculate_rs_by_symbol_for_dates(
+    def calculate_rs_by_symbol_for_dates(
         self,
         prefetch: GroupRankPrefetchData,
         calculation_dates: List[date],
@@ -509,7 +549,7 @@ class LegacyGroupRankDataMixin:
             rs_rating = max(0, 50 + (relative_performance * 100))
         return round(rs_rating, 2)
 
-    def _calculate_group_metrics_from_rs(
+    def calculate_group_metrics_from_rs(
         self,
         group_name: str,
         symbols: List[str],

@@ -149,16 +149,12 @@ def test_first_static_build_bootstraps_via_production_gap_fill(
             return symbols
 
     monkeypatch.setattr(
-        "app.wiring.bootstrap.get_stock_universe_service",
-        lambda: _Universe(),
-    )
-    monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
         lambda _db, *, market: list(groups) if market == "HK" else [],
     )
     monkeypatch.setattr(
-        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda _db, group, *, market: groups[group] if market == "HK" else [],
+        "app.services.legacy_group_rank_data.IBDIndustryService.get_group_memberships",
+        lambda _db, *, market: groups if market == "HK" else {},
     )
     market_rs_repository = Mock()
     market_rs_repository.active_formula.return_value = LEGACY_RS_FORMULA_VERSION
@@ -167,10 +163,11 @@ def test_first_static_build_bootstraps_via_production_gap_fill(
         benchmark_cache=_BenchmarkCache(),
         canonical_group_service=Mock(),
         market_rs_repository=market_rs_repository,
+        active_symbols_provider=_Universe.get_active_symbols,
     )
     monkeypatch.setattr(
-        group_rank_service,
-        "_get_market_caps_for_symbols",
+        group_rank_service.legacy_ranking_engine,
+        "market_caps_for_symbols",
         lambda _db, requested_symbols: {
             symbol: 1_000_000_000 for symbol in requested_symbols
         },

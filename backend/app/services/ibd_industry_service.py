@@ -269,6 +269,44 @@ class IBDIndustryService:
             return []
 
     @staticmethod
+    def get_group_memberships(
+        db: Session,
+        *,
+        market: str | None = None,
+    ) -> dict[str, list[str]]:
+        """Load all symbol memberships for one market without per-group queries."""
+        normalized = (market or "US").upper()
+        if normalized != "US" and _market_has_curated_taxonomy(normalized):
+            try:
+                return _market_taxonomy_service().group_symbols_for_market(
+                    normalized
+                )
+            except Exception as exc:
+                logger.error(
+                    "Error loading bulk group memberships for market %s: %s",
+                    normalized,
+                    exc,
+                    exc_info=True,
+                )
+                raise
+        rows = (
+            db.query(
+                IBDIndustryGroup.industry_group,
+                IBDIndustryGroup.symbol,
+            )
+            .filter(IBDIndustryGroup.market == normalized)
+            .order_by(
+                IBDIndustryGroup.industry_group,
+                IBDIndustryGroup.symbol,
+            )
+            .all()
+        )
+        memberships: dict[str, list[str]] = {}
+        for industry_group, symbol in rows:
+            memberships.setdefault(industry_group, []).append(symbol)
+        return memberships
+
+    @staticmethod
     def get_all_groups(db: Session, *, market: str | None = None) -> list:
         """Get list of all unique industry groups for a market.
 

@@ -49,7 +49,10 @@ from app.services.static_site_errors import (
     StaticSiteSectionUnavailableError,
 )
 from app.services.static_artifact_combiner import StaticArtifactCombiner
-from app.services.static_chart_bundle_exporter import StaticChartBundleExporter
+from app.services.static_chart_bundle_exporter import (
+    StaticChartBundleConfig,
+    StaticChartBundleExporter,
+)
 from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
 from app.wiring.bootstrap import (
     get_benchmark_cache,
@@ -108,6 +111,10 @@ class StaticSiteExportService:
         *,
         rrg_payload_source: StaticGroupsRRGPayloadSource | None = None,
         group_section_builder: StaticGroupSectionBuilder | None = None,
+        price_cache=None,
+        fundamentals_cache=None,
+        benchmark_cache=None,
+        chart_config: StaticChartBundleConfig | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._rrg_payload_source = (
@@ -119,9 +126,15 @@ class StaticSiteExportService:
         )
         self._ui_snapshot_service = UISnapshotService(session_factory)
         self._market_rs_repository = MarketRsRunRepository()
-        self._price_cache = get_price_cache()
-        self._fundamentals_cache = get_fundamentals_cache()
-        self._benchmark_cache = get_benchmark_cache()
+        self._price_cache = price_cache if price_cache is not None else get_price_cache()
+        self._fundamentals_cache = (
+            fundamentals_cache
+            if fundamentals_cache is not None
+            else get_fundamentals_cache()
+        )
+        self._benchmark_cache = (
+            benchmark_cache if benchmark_cache is not None else get_benchmark_cache()
+        )
         self._group_section_builder = group_section_builder or StaticGroupSectionBuilder(
             snapshot_reader=GroupRankSnapshotReader(),
             rank_history_reader=get_group_rank_service(),
@@ -132,6 +145,7 @@ class StaticSiteExportService:
             benchmark_cache=self._benchmark_cache,
             json_writer=self._write_json,
             scan_row_serializer=self._serialize_scan_row,
+            config=chart_config,
         )
         self._breadth_builder = StaticBreadthSectionBuilder(
             ui_snapshot_service=self._ui_snapshot_service,
@@ -449,42 +463,10 @@ class StaticSiteExportService:
         )
 
     def _export_chart_bundle(self, **kwargs) -> dict[str, Any]:
-        from app.services import static_chart_bundle_exporter as chart_module
-
-        chart_module.STATIC_CHART_LIMIT = STATIC_CHART_LIMIT
-        chart_module.STATIC_CHART_LOOKUP_BATCH_SIZE = STATIC_CHART_LOOKUP_BATCH_SIZE
-        chart_module.STATIC_CHART_PRESET_TOP_N = STATIC_CHART_PRESET_TOP_N
-        chart_module.STATIC_CHART_TOP_N_GROUPS = STATIC_CHART_TOP_N_GROUPS
-        self._chart_exporter._price_cache = self._price_cache
-        self._chart_exporter._fundamentals_cache = self._fundamentals_cache
-        self._chart_exporter._benchmark_cache = self._benchmark_cache
         return self._chart_exporter.export(**kwargs)
 
     def _build_breadth_payload(self, **kwargs) -> dict[str, Any]:
-        builder = self._breadth_builder
-        builder._get_market_benchmark_history = self._get_market_benchmark_history
-        builder._get_cached_price_histories = self._get_cached_price_histories
-        return builder.build(**kwargs)
-
-    def _get_market_benchmark_history(self, market: str, *, period: str):
-        return self._breadth_builder._get_market_benchmark_history(
-            market, period=period
-        )
-
-    def _get_cached_price_histories(self, symbols, *, period: str):
-        return self._breadth_builder._get_cached_price_histories(
-            symbols, period=period
-        )
-
-    def _serialize_history_bars(self, data, *, period_days: int, end_date: date):
-        return self._breadth_builder._serialize_history_bars(
-            data, period_days=period_days, end_date=end_date
-        )
-
-    def _compute_breadth_metrics_by_date(self, canonical_dates, price_data):
-        return self._breadth_builder._compute_breadth_metrics_by_date(
-            canonical_dates, price_data
-        )
+        return self._breadth_builder.build(**kwargs)
 
     @staticmethod
     def _market_metadata_path(market: str) -> Path:
@@ -847,18 +829,6 @@ class StaticSiteExportService:
             },
             "top_groups": top_groups,
         }
-
-    @staticmethod
-    def _build_group_movers(rankings: list[dict[str, Any]]) -> dict[str, Any]:
-        gainers = sorted(
-            [row for row in rankings if (row.get("rank_change_1w") or 0) > 0],
-            key=lambda row: (-(row.get("rank_change_1w") or 0), row["rank"]),
-        )[:10]
-        losers = sorted(
-            [row for row in rankings if (row.get("rank_change_1w") or 0) < 0],
-            key=lambda row: ((row.get("rank_change_1w") or 0), row["rank"]),
-        )[:10]
-        return {"period": "1w", "gainers": gainers, "losers": losers}
 
     def _serialize_scan_row(self, row) -> dict[str, Any]:
         item = ScanResultItem.from_domain(row, include_setup_payload=False).model_dump(mode="json")

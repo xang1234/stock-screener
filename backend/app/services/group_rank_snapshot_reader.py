@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
+    RsPublicationIdentity,
     balanced_run_has_required_price_basis,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
@@ -32,6 +33,34 @@ class GroupSnapshotUnavailable(LookupError):
 
 
 class GroupRankSnapshotReader:
+    def load_publication(
+        self,
+        db: Session,
+        *,
+        publication: RsPublicationIdentity,
+        include_top_symbol_names: bool = True,
+    ) -> list[dict[str, Any]]:
+        rows = self.load_exact(
+            db,
+            identity=publication.snapshot,
+            include_top_symbol_names=include_top_symbol_names,
+        )
+        if not rows:
+            return rows
+        actual_run_ids = {row.get("market_rs_run_id") for row in rows}
+        if actual_run_ids != {publication.market_rs_run_id}:
+            raise GroupSnapshotIntegrityError(
+                "Group rows do not reference the expected Market RS run"
+            )
+        if publication.market_rs_run_id is None:
+            return rows
+        run = db.get(MarketRsRun, publication.market_rs_run_id)
+        if run is None or int(run.eligible_symbol_count) != publication.universe_size:
+            raise GroupSnapshotIntegrityError(
+                "Group rows do not reference the expected Market RS universe"
+            )
+        return rows
+
     def load_exact(
         self,
         db: Session,
