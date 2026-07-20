@@ -457,6 +457,55 @@ describe('GroupRankingsPage', () => {
     expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US', '2026-04-10');
   });
 
+  it('uses the live latest rankings when bootstrap publication stays stale after calculation', async () => {
+    runtimeState.features = { tasks: true };
+    runtimeState.uiSnapshots = { groups: true };
+    runtimeState.primaryMarket = 'US';
+    runtimeState.enabledMarkets = ['US'];
+    const staleRow = { ...rankingRowFor('US'), date: '2026-04-09' };
+    const staleBootstrap = {
+      available: true,
+      is_stale: false,
+      payload: {
+        rankings: {
+          date: '2026-04-09',
+          total_groups: 1,
+          market_scope: 'US',
+          rankings: [staleRow],
+        },
+        movers: {
+          period: '1w',
+          market_scope: 'US',
+          gainers: [staleRow],
+          losers: [],
+        },
+      },
+    };
+    getGroupsBootstrap.mockResolvedValue(staleBootstrap);
+    triggerCalculation.mockResolvedValue({ task_id: 'group-task-stale-bootstrap' });
+    getCalculationStatus.mockResolvedValue({ status: 'completed' });
+    getCurrentRankings.mockImplementation(async (_limit, market, asOfDate) => {
+      const rankingDate = asOfDate ?? '2026-04-10';
+      return {
+        date: rankingDate,
+        total_groups: 1,
+        market_scope: market,
+        rankings: [{ ...rankingRowFor(market), date: rankingDate }],
+      };
+    });
+
+    renderGroupRankingsPage();
+    expect(await screen.findByText('US | 1 groups | 2026-04-09')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => {
+      expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US');
+    });
+    expect(await screen.findByText('US | 1 groups | 2026-04-10')).toBeInTheDocument();
+  });
+
   it('hides RRG for group-ranking markets without RRG capability', async () => {
     runtimeState.primaryMarket = 'KR';
     runtimeState.enabledMarkets = ['KR'];

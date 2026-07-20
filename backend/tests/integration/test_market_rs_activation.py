@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import app.services.market_rs_activator as activation_module
 from app.domain.feature_store.models import RunStatus
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
@@ -146,6 +147,39 @@ def test_activation_switches_market_and_feature_pointers_in_one_commit(
     ).run_id == candidate_id
 
 
+def test_activation_invalidates_group_cache_after_commit(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    rs_run_id, candidate_id, _old_id = _seed_activation_candidates(db_session)
+    service = _service(MarketRsRunRepository(), SqlFeatureRunRepository)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"schema_version":"static-site-v3"}', encoding="utf-8")
+    manifest_hash = MarketRsStaticArtifactValidator.bundle_fingerprint(
+        tmp_path,
+        market="US",
+    ).sha256
+    monkeypatch.setattr(service.validator, "revalidate_static", lambda *args, **kwargs: ())
+    invalidations: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        activation_module,
+        "bump_group_rankings_epoch",
+        lambda market: invalidations.append((market, db_session.in_transaction())),
+    )
+
+    service.activate(
+        db_session,
+        market="US",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        feature_run_id=candidate_id,
+        validation=_validation(rs_run_id, candidate_id, manifest_hash),
+        static_staging_dir=tmp_path,
+    )
+
+    assert invalidations == [("US", False)]
+
+
 def test_failure_after_market_pointer_flush_rolls_back_both_pointers(
     db_session, tmp_path, monkeypatch
 ):
@@ -163,6 +197,12 @@ def test_failure_after_market_pointer_flush_rolls_back_both_pointers(
         market="US",
     ).sha256
     monkeypatch.setattr(service.validator, "revalidate_static", lambda *args, **kwargs: ())
+    invalidations: list[str] = []
+    monkeypatch.setattr(
+        activation_module,
+        "bump_group_rankings_epoch",
+        invalidations.append,
+    )
 
     with pytest.raises(RuntimeError, match="pointer write failed"):
         service.activate(
@@ -182,3 +222,4 @@ def test_failure_after_market_pointer_flush_rolls_back_both_pointers(
         FeatureRunPointer,
         "latest_published_market:US",
     ).run_id == old_id
+    assert invalidations == []

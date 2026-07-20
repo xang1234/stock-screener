@@ -333,6 +333,42 @@ def test_get_latest_published_run_ignores_market_pointer_for_wrong_market(
     assert run.id == 4
 
 
+def test_export_rejects_formula_override_that_mismatches_feature_run(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=6,
+            as_of_date=date(2026, 3, 31),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 3, 31, 21, 30, 0),
+            config_json={"universe": {"market": "US"}},
+        ),
+        pointer_run_id=6,
+        pointer_key="latest_published_market:US",
+    )
+    monkeypatch.setattr(
+        service,
+        "_load_scan_export_source",
+        lambda *_args, **_kwargs: pytest.fail(
+            "scan export started before formula compatibility was validated"
+        ),
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="does not match Feature run 6"):
+        service.export(
+            tmp_path / "static-data",
+            markets=("US",),
+            rs_formula_version_overrides={"US": BALANCED_RS_FORMULA_VERSION},
+            feature_run_ids_by_market={"US": 6},
+        )
+
+
 def test_export_writes_serializable_manifest_and_page_bundles(
     service_and_session_factory,
     monkeypatch,
@@ -347,7 +383,13 @@ def test_export_writes_serializable_manifest_and_page_bundles(
             run_type="daily_snapshot",
             status="published",
             published_at=datetime(2026, 3, 31, 21, 30, 0),
-            config_json={"universe": {"market": "US"}},
+            config_json={
+                "universe": {"market": "US"},
+                "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                "market_rs_run_id": 42,
+                "rs_as_of_date": "2026-03-31",
+                "rs_universe_size": 5000,
+            },
         ),
         pointer_run_id=7,
     )

@@ -621,6 +621,11 @@ function GroupRankingsPage() {
       queryClient.invalidateQueries({ queryKey: ['groupMovers'] }),
       queryClient.invalidateQueries({ queryKey: ['groupRRGBundle', selectedMarket] }),
     ]);
+    const refreshedBootstrap = queryClient.getQueryData(['groupsBootstrap', selectedMarket]);
+    if (!refreshedBootstrap || refreshedBootstrap.is_stale) {
+      return null;
+    }
+    return refreshedBootstrap.payload?.rankings?.date ?? null;
   }, [queryClient, selectedMarket]);
 
   // Handle calculation completion/failure
@@ -630,10 +635,22 @@ function GroupRankingsPage() {
       setIsCalculating(false);
       if (calcStatus.status === 'completed') {
         setCalculationError(null);
-        void refreshPublishedGroups().catch((error) => {
-          console.error('Failed to refresh published Group snapshot:', error);
-          setCalculationError(error?.message || 'Failed to refresh published Group snapshot.');
-        });
+        const previouslyPublishedDate = queryClient.getQueryData(
+          ['groupsBootstrap', selectedMarket],
+        )?.payload?.rankings?.date ?? null;
+        void refreshPublishedGroups()
+          .then((refreshedPublishedDate) => {
+            if (
+              !refreshedPublishedDate
+              || refreshedPublishedDate === previouslyPublishedDate
+            ) {
+              setLiveRankingMarket(selectedMarket);
+            }
+          })
+          .catch((error) => {
+            console.error('Failed to refresh published Group snapshot:', error);
+            setCalculationError(error?.message || 'Failed to refresh published Group snapshot.');
+          });
       } else {
         const baseMessage = calcStatus.error || 'Calculation failed. See server logs for details.';
         const hint = REASON_HINTS[calcStatus.reason_code];
@@ -642,7 +659,7 @@ function GroupRankingsPage() {
         setCalculationError(message);
       }
     }
-  }, [calcStatus, refreshPublishedGroups]);
+  }, [calcStatus, queryClient, refreshPublishedGroups, selectedMarket]);
 
   const handlePeriodChange = (event, newValue) => {
     setSelectedPeriod(newValue);

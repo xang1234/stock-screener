@@ -50,7 +50,10 @@ from app.services.static_site_errors import (
     NoPublishedStaticMarketArtifact,
     StaticSiteSectionUnavailableError,
 )
-from app.services.static_artifact_combiner import StaticArtifactCombiner
+from app.services.static_artifact_combiner import (
+    StaticArtifactCombiner,
+    StaticArtifactFormulaError,
+)
 from app.services.static_chart_bundle_exporter import (
     StaticChartBundleConfig,
     StaticChartBundleExporter,
@@ -300,13 +303,23 @@ class StaticSiteExportService:
                 markets=(market,),
             )
 
-        path_prefix = Path("markets") / market.lower()
-        scan_rows, filter_options = self._load_scan_export_source(db, latest_run)
         formula_version = (
             str(formula_version_override).strip()
             if formula_version_override is not None
             else self._market_rs_repository.active_formula(db, market=market)
         )
+        feature_formula_version = resolve_feature_run_rs_identity(
+            latest_run,
+            ranking_date=latest_run.as_of_date,
+        ).identity.formula_version
+        if feature_formula_version != formula_version:
+            raise StaticArtifactFormulaError(
+                f"Requested RS formula {formula_version} does not match Feature run "
+                f"{latest_run.id} formula {feature_formula_version} for {market}"
+            )
+
+        path_prefix = Path("markets") / market.lower()
+        scan_rows, filter_options = self._load_scan_export_source(db, latest_run)
         scan_manifest, serialized_rows = self._export_scan_bundle(
             db=db,
             output_dir=output_dir,

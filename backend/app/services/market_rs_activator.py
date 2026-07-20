@@ -19,6 +19,7 @@ from app.services.feature_run_rs_identity import (
     FeatureRunRsIdentityError,
     resolve_feature_run_rs_identity,
 )
+from app.services.group_rankings_cache import bump_group_rankings_epoch
 from app.services.market_rs_activation_validator import (
     MarketRsActivationValidator,
 )
@@ -200,6 +201,7 @@ class MarketRsActivator:
         except Exception:
             db.rollback()
             raise
+        bump_group_rankings_epoch(normalized)
 
 
 __all__ = ["MarketRsActivator"]

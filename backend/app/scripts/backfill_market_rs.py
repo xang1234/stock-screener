@@ -99,10 +99,8 @@ def _export_static_v3(
 
 
 def _publish_live_groups(market: str) -> None:
-    from app.services.group_rankings_cache import bump_group_rankings_epoch
     from app.services.ui_snapshot_service import safe_publish_groups_bootstrap
 
-    bump_group_rankings_epoch(market)
     if market == "US":
         safe_publish_groups_bootstrap()
 

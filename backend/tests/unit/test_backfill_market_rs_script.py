@@ -109,6 +109,27 @@ def test_activate_stages_validates_then_atomically_switches(monkeypatch, tmp_pat
     assert result["formula_version"] == BALANCED_RS_FORMULA_VERSION
 
 
+def test_publish_live_groups_does_not_duplicate_activation_cache_invalidation(
+    monkeypatch,
+):
+    from app.scripts import backfill_market_rs as module
+    from app.services import group_rankings_cache, ui_snapshot_service
+
+    bump_epoch = MagicMock()
+    publish_bootstrap = MagicMock()
+    monkeypatch.setattr(group_rankings_cache, "bump_group_rankings_epoch", bump_epoch)
+    monkeypatch.setattr(
+        ui_snapshot_service,
+        "safe_publish_groups_bootstrap",
+        publish_bootstrap,
+    )
+
+    module._publish_live_groups("US")  # noqa: SLF001 - operator workflow boundary
+
+    bump_epoch.assert_not_called()
+    publish_bootstrap.assert_called_once_with()
+
+
 def test_activate_stops_before_feature_build_when_backfill_failed(monkeypatch, tmp_path):
     from app.scripts import backfill_market_rs as module
 
