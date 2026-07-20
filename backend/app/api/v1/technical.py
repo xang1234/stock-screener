@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...domain.scanning.ports import CanonicalStockRsSource, MarketRsReader
+from ...services.benchmark_registry_service import benchmark_registry
 from ...wiring.bootstrap import get_market_rs_reader, get_yfinance_service
 from ._price_history import resolve_symbol_market
 
@@ -133,28 +134,32 @@ async def get_rs_rating(
             **audit_fields,
         }
 
-    response = _legacy_live_rs_rating(normalized_symbol)
+    response = _legacy_live_rs_rating(normalized_symbol, market=market)
     response.update({"market": market, **audit_fields})
     return convert_numpy_types(response)
 
 
-def _legacy_live_rs_rating(symbol: str) -> dict:
+def _legacy_live_rs_rating(symbol: str, *, market: str) -> dict:
     """Calculate the old live benchmark-relative rating for rollback mode."""
     from ...scanners.criteria.relative_strength import RelativeStrengthCalculator
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
     yfinance_service = get_yfinance_service()
+    benchmark_symbol = benchmark_registry.get_primary_symbol(market)
     stock_data = yfinance_service.get_historical_data(symbol, period="2y")
-    spy_data = yfinance_service.get_historical_data("SPY", period="2y")
+    benchmark_data = yfinance_service.get_historical_data(
+        benchmark_symbol,
+        period="2y",
+    )
 
-    if stock_data is None or spy_data is None:
+    if stock_data is None or benchmark_data is None:
         return {"error": "Unable to fetch price data"}
 
     stock_prices = stock_data["Close"][::-1].reset_index(drop=True)
-    spy_prices = spy_data["Close"][::-1].reset_index(drop=True)
+    benchmark_prices = benchmark_data["Close"][::-1].reset_index(drop=True)
 
-    calc = RelativeStrengthCalculator()
-    result = calc.calculate_rs_rating(symbol, stock_prices, spy_prices)
+    calc = RelativeStrengthCalculator(benchmark=benchmark_symbol)
+    result = calc.calculate_rs_rating(symbol, stock_prices, benchmark_prices)
 
     # Add period returns
     period_returns = calc.calculate_period_returns(stock_prices)
@@ -164,7 +169,7 @@ def _legacy_live_rs_rating(symbol: str) -> dict:
         "rs_rating": result["rs_rating"],
         "relative_performance": result["relative_performance"],
         "period_returns": period_returns,
-        "benchmark": "SPY",
+        "benchmark": benchmark_symbol,
     }
     return response
 

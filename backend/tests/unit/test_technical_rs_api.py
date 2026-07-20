@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import pandas as pd
 import pytest
 from fastapi import HTTPException
 
@@ -143,3 +144,39 @@ async def test_technical_rs_returns_service_unavailable_when_publication_is_miss
     assert exc_info.value.detail == (
         "Canonical Market RS is unavailable for US at latest"
     )
+
+
+@pytest.mark.asyncio
+async def test_legacy_technical_rs_uses_resolved_market_benchmark(
+    universe_session,
+    monkeypatch,
+):
+    _add_stock(universe_session, symbol="0700.HK", market="HK")
+
+    class _LegacyReader:
+        @staticmethod
+        def get(*, market, symbols, as_of_date, formula_version):
+            return MarketRsResolution.legacy(
+                market=market,
+                as_of_date=as_of_date,
+            )
+
+    calls: list[tuple[str, str]] = []
+
+    class _PriceService:
+        @staticmethod
+        def get_historical_data(symbol, period):
+            calls.append((symbol, period))
+            return pd.DataFrame({"Close": range(1, 301)})
+
+    monkeypatch.setattr(technical, "get_yfinance_service", _PriceService)
+
+    response = await technical.get_rs_rating(
+        "0700.hk",
+        db=universe_session,
+        market_rs_reader=_LegacyReader(),
+    )
+
+    assert calls == [("0700.HK", "2y"), ("^HSI", "2y")]
+    assert response["market"] == "HK"
+    assert response["benchmark"] == "^HSI"
