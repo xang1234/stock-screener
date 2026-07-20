@@ -442,6 +442,15 @@ class MarketRsStaticArtifactValidator:
                 formula_version=BALANCED_RS_FORMULA_VERSION,
             )
         except StaticGroupsRRGUnavailableError as exc:
+            if exc.reason_code is StaticGroupsRRGUnavailableReason.NOT_ENABLED:
+                if rrg_path.is_file():
+                    payload = self._json_file(rrg_path)
+                    if payload.get("available") or payload.get("payload"):
+                        errors.append(
+                            "Static RRG contains coordinates despite RRG not "
+                            "being enabled for this market."
+                        )
+                return "not_enabled"
             if (
                 exc.reason_code
                 is StaticGroupsRRGUnavailableReason.INSUFFICIENT_HISTORY

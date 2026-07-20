@@ -17,8 +17,9 @@ from app.services.point_in_time_universe_service import (
 
 
 class _CalendarStub:
-    def __init__(self, latest: date):
+    def __init__(self, latest: date, *, current: date | None = None):
         self.latest = latest
+        self.current = current or latest
 
     @staticmethod
     def normalize_market(market: str) -> str:
@@ -26,6 +27,9 @@ class _CalendarStub:
 
     def last_completed_trading_day(self, _market: str) -> date:
         return self.latest
+
+    def market_now(self, _market: str) -> datetime:
+        return datetime.combine(self.current, datetime.min.time(), tzinfo=UTC)
 
 
 def _universe_row(
@@ -154,3 +158,43 @@ def test_current_resolve_uses_authoritative_active_filter_without_event_history(
     )
 
     assert snapshot.symbols == ("CURRENT",)
+
+
+def test_latest_completed_resolve_uses_event_cutoff_during_post_close_buffer(
+    db_session,
+):
+    db_session.add_all(
+        [
+            _universe_row(
+                "CHANGED_AFTER_CUTOFF",
+                first_seen_at=datetime(2025, 1, 2, tzinfo=UTC),
+                status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+                is_active=False,
+            ),
+            _status_event(
+                "CHANGED_AFTER_CUTOFF",
+                UNIVERSE_STATUS_ACTIVE,
+                created_at=datetime(2025, 1, 2, 12, tzinfo=UTC),
+            ),
+            _status_event(
+                "CHANGED_AFTER_CUTOFF",
+                UNIVERSE_STATUS_INACTIVE_MANUAL,
+                created_at=datetime(2026, 4, 10, 5, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+    service = PointInTimeUniverseService(
+        market_calendar=_CalendarStub(
+            latest=date(2026, 4, 9),
+            current=date(2026, 4, 10),
+        )
+    )
+
+    snapshot = service.resolve(
+        db_session,
+        market="US",
+        as_of_date=date(2026, 4, 9),
+    )
+
+    assert snapshot.symbols == ("CHANGED_AFTER_CUTOFF",)

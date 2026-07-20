@@ -68,7 +68,7 @@ class PointInTimeUniverseService:
         as_of_date: date,
     ) -> PointInTimeUniverse:
         normalized = self._market_calendar.normalize_market(market)
-        if as_of_date == self._market_calendar.last_completed_trading_day(normalized):
+        if as_of_date == self._market_calendar.market_now(normalized).date():
             symbols = tuple(
                 row[0]
                 for row in db.query(StockUniverse.symbol)

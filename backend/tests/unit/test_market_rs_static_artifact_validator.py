@@ -12,6 +12,10 @@ from app.services.market_rs_static_artifact_validator import (
     MarketRsStaticArtifactValidator,
     StaticRsArtifactDocuments,
 )
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGUnavailableError,
+    StaticGroupsRRGUnavailableReason,
+)
 from app.services.static_site_export_service import STATIC_SITE_SCHEMA_VERSION
 from app.services.static_site_export_service import SCAN_BUNDLE_SCHEMA_VERSION
 
@@ -202,4 +206,38 @@ def test_stock_parity_allows_audited_rows_excluded_from_canonical_ratings():
         errors=errors,
     )
 
+    assert errors == []
+
+
+def test_rrg_validation_accepts_market_where_rrg_is_not_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    class _UnavailableSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def build(self, **_kwargs):
+            raise StaticGroupsRRGUnavailableError(
+                section="CA rrg",
+                reason_code=StaticGroupsRRGUnavailableReason.NOT_ENABLED,
+                reason="RRG is not enabled for market CA.",
+            )
+
+    monkeypatch.setattr(
+        "app.services.market_rs_static_artifact_validator."
+        "StaticGroupsRRGDatabasePayloadSource",
+        _UnavailableSource,
+    )
+    errors: list[str] = []
+
+    status = MarketRsStaticArtifactValidator()._validate_rrg(
+        MagicMock(),
+        market="CA",
+        through_date=date(2026, 4, 10),
+        market_dir=tmp_path,
+        errors=errors,
+    )
+
+    assert status == "not_enabled"
     assert errors == []
