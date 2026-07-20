@@ -7,7 +7,10 @@ from app.services.market_rs_inputs import (
     MarketRsInputLoader,
     MarketRsInputUnavailable,
 )
-from app.services.point_in_time_universe_service import PointInTimeUniverse
+from app.services.point_in_time_universe_service import (
+    PointInTimeUniverse,
+    PointInTimeUniverseUnavailable,
+)
 
 
 ANCHORS = {
@@ -192,3 +195,26 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
         == "current_adjusted_price_coverage_below_threshold"
     )
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.8)
+
+
+def test_load_translates_unavailable_historical_universe_to_input_failure(db_session):
+    class _UnavailableUniverse:
+        @staticmethod
+        def resolve(_db, *, market, as_of_date):
+            raise PointInTimeUniverseUnavailable(
+                f"{market} historical universe for {as_of_date} is incomplete"
+            )
+
+    loader = MarketRsInputLoader(
+        point_in_time_universe=_UnavailableUniverse(),
+        market_calendar=_CalendarStub(),
+        benchmark_registry=_BenchmarkRegistryStub(),
+    )
+
+    with pytest.raises(MarketRsInputUnavailable) as exc_info:
+        loader.load(db_session, market="US", as_of_date=ANCHORS[0])
+
+    assert exc_info.value.reason_code == "point_in_time_universe_unavailable"
+    assert exc_info.value.diagnostics == {
+        "error": "US historical universe for 2026-04-10 is incomplete"
+    }

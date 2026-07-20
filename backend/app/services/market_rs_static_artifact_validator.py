@@ -396,10 +396,18 @@ class MarketRsStaticArtifactValidator:
             key=lambda row: str(row.get("symbol")),
         ):
             stock = stock_by_symbol.get(static_row.get("symbol"))
+            for field, expected in expected_identity.items():
+                if static_row.get(field) != expected:
+                    errors.append(
+                        f"Static stock {static_row.get('symbol')}.{field}="
+                        f"{static_row.get(field)!r}; expected {expected!r}."
+                    )
             if stock is None:
-                errors.append(
-                    f"Static stock {static_row.get('symbol')} is absent from the canonical Market RS run."
-                )
+                if any(static_row.get(field) is not None for field in stock_fields):
+                    errors.append(
+                        f"Static stock {static_row.get('symbol')} carries RS ratings "
+                        "but is absent from the canonical Market RS run."
+                    )
                 continue
             compared += 1
             for static_field, stock_field in stock_fields.items():
@@ -407,12 +415,6 @@ class MarketRsStaticArtifactValidator:
                     errors.append(
                         f"Live/static stock mismatch for "
                         f"{stock.symbol}.{static_field}."
-                    )
-            for field, expected in expected_identity.items():
-                if static_row.get(field) != expected:
-                    errors.append(
-                        f"Static stock {stock.symbol}.{field}="
-                        f"{static_row.get(field)!r}; expected {expected!r}."
                     )
         if latest_run.rows and compared == 0:
             errors.append(

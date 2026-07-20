@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from fastapi import HTTPException
 
 from app.api.v1 import technical
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.ports import MarketRsResolution
 from app.models.stock_universe import StockUniverse
+from app.services.market_rs_reader import CanonicalMarketRsUnavailable
 
 
 class _Reader:
@@ -115,3 +117,29 @@ async def test_balanced_technical_rs_ineligible_stock_returns_not_enough_history
     assert response["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
     assert response["market_rs_run_id"] == 42
     assert response["rs_as_of_date"] == "2026-07-17"
+
+
+@pytest.mark.asyncio
+async def test_technical_rs_returns_service_unavailable_when_publication_is_missing(
+    universe_session,
+):
+    _add_stock(universe_session)
+
+    class _UnavailableReader:
+        @staticmethod
+        def get(**_kwargs):
+            raise CanonicalMarketRsUnavailable(
+                "Canonical Market RS is unavailable for US at latest"
+            )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await technical.get_rs_rating(
+            "TEST",
+            db=universe_session,
+            market_rs_reader=_UnavailableReader(),
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == (
+        "Canonical Market RS is unavailable for US at latest"
+    )

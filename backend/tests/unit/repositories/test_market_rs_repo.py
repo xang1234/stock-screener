@@ -176,6 +176,29 @@ def test_active_formula_rejects_an_unconfigured_market(db_session):
         MarketRsRunRepository().active_formula(db_session, market="US")
 
 
+def test_provision_formula_pointers_adds_missing_legacy_rows_without_overwrite(
+    db_session,
+):
+    repo = MarketRsRunRepository()
+    db_session.add(
+        MarketRsFormulaPointer(
+            market="US",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+    )
+    db_session.commit()
+
+    provisioned = repo.provision_formula_pointers(
+        db_session,
+        markets=("US", "nz", "NZ"),
+    )
+    db_session.commit()
+
+    assert provisioned == ("NZ",)
+    assert repo.active_formula(db_session, market="US") == BALANCED_RS_FORMULA_VERSION
+    assert repo.active_formula(db_session, market="NZ") == LEGACY_RS_FORMULA_VERSION
+
+
 def test_two_sessions_share_one_completed_winner_and_never_read_partial_rows(
     db_session,
 ):

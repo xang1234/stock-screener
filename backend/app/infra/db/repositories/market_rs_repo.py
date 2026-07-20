@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 import math
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session, selectinload
@@ -36,6 +36,49 @@ class MarketRsFormulaUnsupported(ValueError):
 
 
 class MarketRsRunRepository:
+    def provision_formula_pointers(
+        self,
+        db: Session,
+        *,
+        markets: Iterable[str],
+    ) -> tuple[str, ...]:
+        """Seed newly supported markets in explicit legacy mode.
+
+        Existing pointers are never changed; balanced activation remains an
+        explicit rollout operation. Savepoints make concurrent web/worker
+        startup provisioning safe without taking ownership of the caller's
+        outer transaction.
+        """
+        normalized_markets = tuple(
+            sorted(
+                {
+                    str(market).strip().upper()
+                    for market in markets
+                    if str(market).strip()
+                }
+            )
+        )
+        provisioned: list[str] = []
+        for market in normalized_markets:
+            if db.get(MarketRsFormulaPointer, market) is not None:
+                continue
+            try:
+                with db.begin_nested():
+                    db.add(
+                        MarketRsFormulaPointer(
+                            market=market,
+                            formula_version=LEGACY_RS_FORMULA_VERSION,
+                        )
+                    )
+                    db.flush()
+            except IntegrityError:
+                db.expire_all()
+                if db.get(MarketRsFormulaPointer, market) is None:
+                    raise
+            else:
+                provisioned.append(market)
+        return tuple(provisioned)
+
     @staticmethod
     def _run_query(
         db: Session,

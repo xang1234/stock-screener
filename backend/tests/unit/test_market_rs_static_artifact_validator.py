@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.services.market_rs_static_artifact_validator import (
     MarketRsStaticArtifactValidator,
+    StaticRsArtifactDocuments,
 )
 from app.services.static_site_export_service import STATIC_SITE_SCHEMA_VERSION
 from app.services.static_site_export_service import SCAN_BUNDLE_SCHEMA_VERSION
@@ -148,3 +149,57 @@ def test_validate_checks_every_scan_shard_and_requires_exact_row_identity(
         for error in result.errors
     )
     assert result.bundle_fingerprint is not None
+
+
+def test_stock_parity_allows_audited_rows_excluded_from_canonical_ratings():
+    latest_run = SimpleNamespace(
+        id=42,
+        eligible_symbol_count=1,
+        rows=[
+            SimpleNamespace(
+                symbol="AAA",
+                overall_rs=90,
+                rs_1m=88,
+                rs_3m=89,
+                rs_12m=91,
+            )
+        ],
+    )
+    identity = {
+        "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": 42,
+        "rs_as_of_date": "2026-04-10",
+        "rs_universe_size": 1,
+    }
+    documents = StaticRsArtifactDocuments(
+        manifest={},
+        groups={},
+        scan_rows=(
+            {
+                "symbol": "AAA",
+                "rs_rating": 90,
+                "rs_rating_1m": 88,
+                "rs_rating_3m": 89,
+                "rs_rating_12m": 91,
+                **identity,
+            },
+            {
+                "symbol": "YOUNG",
+                "rs_rating": None,
+                "rs_rating_1m": None,
+                "rs_rating_3m": None,
+                "rs_rating_12m": None,
+                **identity,
+            },
+        ),
+    )
+    errors: list[str] = []
+
+    MarketRsStaticArtifactValidator._validate_stock_parity(
+        latest_run=latest_run,
+        through_date=date(2026, 4, 10),
+        documents=documents,
+        errors=errors,
+    )
+
+    assert errors == []

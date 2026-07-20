@@ -600,6 +600,21 @@ def reset_runtime_services(token: Token[RuntimeServices | None]) -> None:
     _runtime_services_ctx.reset(token)
 
 
+def _provision_market_rs_formula_pointers(
+    session_factory: SessionFactory,
+) -> None:
+    """Provision newly cataloged markets before any runtime reader is exposed."""
+    from app.domain.markets import market_registry
+    from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
+
+    with session_factory() as db:
+        MarketRsRunRepository().provision_formula_pointers(
+            db,
+            markets=market_registry.supported_market_codes(),
+        )
+        db.commit()
+
+
 def initialize_process_runtime_services(
     *,
     session_factory: SessionFactory = SessionLocal,
@@ -609,6 +624,7 @@ def initialize_process_runtime_services(
     global _process_runtime_services
     with _process_runtime_services_lock:
         if _process_runtime_services is None or force:
+            _provision_market_rs_formula_pointers(session_factory)
             _process_runtime_services = build_runtime_services(
                 session_factory=session_factory
             )

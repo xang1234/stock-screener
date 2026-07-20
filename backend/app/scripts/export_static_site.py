@@ -851,6 +851,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 clean=not args.no_clean,
                 markets=((args.market,) if args.market else None),
                 write_manifest=args.market is None,
+                rs_formula_version_overrides=rs_formula_policy,
             )
         except NoPublishedStaticMarketArtifact:
             if (

@@ -99,12 +99,15 @@ async def get_rs_rating(
     if market is None:
         raise HTTPException(status_code=404, detail=f"Unknown active symbol: {normalized_symbol}")
 
-    resolution = market_rs_reader.get(
-        market=market,
-        symbols=(normalized_symbol,),
-        as_of_date=None,
-        formula_version=None,
-    )
+    try:
+        resolution = market_rs_reader.get(
+            market=market,
+            symbols=(normalized_symbol,),
+            as_of_date=None,
+            formula_version=None,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     rs_source = resolution.stock_source(normalized_symbol)
     audit_fields = {
         **rs_source.audit_fields(),

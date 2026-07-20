@@ -284,19 +284,12 @@ class IBDGroupRankService:
         market: str,
         policy: DerivedDataExecutionPolicy,
     ) -> GroupRankCalculationResult:
-        run = self.market_rs_repository.get_completed_exact(
+        run = self.market_rs_snapshot_service.calculate(
             db,
             market=market,
             as_of_date=calculation_date,
             formula_version=BALANCED_RS_FORMULA_VERSION,
         )
-        if run is None:
-            run = self.market_rs_snapshot_service.calculate(
-                db,
-                market=market,
-                as_of_date=calculation_date,
-                formula_version=BALANCED_RS_FORMULA_VERSION,
-            )
         rows = self.canonical_group_service.calculate_and_store(
             db,
             market=market,

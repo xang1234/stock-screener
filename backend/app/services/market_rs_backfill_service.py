@@ -182,6 +182,7 @@ class MarketRsBackfillService:
                     )
                 )
                 continue
+            stage = "stock_calculation"
             try:
                 run = self.snapshot_service.calculate(
                     db,
@@ -190,6 +191,7 @@ class MarketRsBackfillService:
                     formula_version=BALANCED_RS_FORMULA_VERSION,
                     rebuild_incompatible=True,
                 )
+                stage = "group_calculation"
                 groups = self.group_service.calculate_and_store(
                     db,
                     market=normalized,
@@ -222,14 +224,11 @@ class MarketRsBackfillService:
                 )
             except Exception as exc:
                 db.rollback()
-                stage = (
-                    "group_calculation"
-                    if run is not None
-                    and not isinstance(exc, MarketRsInputUnavailable)
-                    else "stock_calculation"
-                )
                 reason_code = self._reason_code(exc, stage=stage)
-                if stage == "group_calculation":
+                if (
+                    stage == "group_calculation"
+                    and not isinstance(exc, MarketRsInputUnavailable)
+                ):
                     reason_code = "group_calculation_failed"
                 diagnostics: dict[str, object] = {
                     "error_type": type(exc).__name__,

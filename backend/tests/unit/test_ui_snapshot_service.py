@@ -254,6 +254,77 @@ def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():
     assert service.get_groups_bootstrap() is None
 
 
+def test_groups_source_revision_changes_when_active_rs_identity_changes():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        pointer = MarketRsFormulaPointer(
+            market="US",
+            formula_version=LEGACY_RS_FORMULA_VERSION,
+        )
+        db.add_all(
+            [
+                pointer,
+                IBDGroupRank(
+                    market="US",
+                    industry_group="Software",
+                    date=date(2026, 3, 28),
+                    rank=1,
+                    avg_rs_rating=90,
+                    median_rs_rating=90,
+                    weighted_avg_rs_rating=90,
+                    rs_std_dev=0,
+                    num_stocks=10,
+                    num_stocks_rs_above_80=8,
+                    rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+                ),
+            ]
+        )
+        db.commit()
+        legacy_revision = service._resolve_groups_source_revision(db)  # noqa: SLF001
+
+        run = MarketRsRun(
+            market="US",
+            as_of_date=date(2026, 3, 28),
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            status="completed",
+            benchmark_symbol="SPY",
+            benchmark_as_of_date=date(2026, 3, 28),
+            universe_hash="revision-test",
+            expected_symbol_count=100,
+            eligible_symbol_count=100,
+            excluded_symbol_count=0,
+        )
+        db.add(run)
+        db.flush()
+        run_id = run.id
+        db.add(
+            IBDGroupRank(
+                market="US",
+                industry_group="Software",
+                date=date(2026, 3, 28),
+                rank=1,
+                avg_rs_rating=91,
+                median_rs_rating=91,
+                weighted_avg_rs_rating=91,
+                rs_std_dev=0,
+                num_stocks=10,
+                num_stocks_rs_above_80=8,
+                rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+                market_rs_run_id=run.id,
+            )
+        )
+        pointer.formula_version = BALANCED_RS_FORMULA_VERSION
+        db.commit()
+        balanced_revision = service._resolve_groups_source_revision(db)  # noqa: SLF001
+
+    assert legacy_revision == "2026-03-28|legacy-linear-v1|none"
+    assert balanced_revision == f"2026-03-28|balanced-horizon-percentile-v2|{run_id}"
+
+
 def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

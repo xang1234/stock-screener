@@ -1493,6 +1493,49 @@ def test_main_rejects_global_rs_formula_override_when_combining(
         export_script.main()
 
 
+def test_main_passes_formula_override_to_direct_market_export(
+    monkeypatch,
+    tmp_path,
+):
+    captured: dict[str, object] = {}
+
+    class FakeExportService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def export(self, output_dir, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                output_dir=output_dir,
+                generated_at="2026-04-05T22:00:00Z",
+                as_of_date="2026-04-05",
+                warnings=(),
+            )
+
+    monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(export_script, "StaticSiteExportService", FakeExportService)
+
+    result = export_script.main(
+        [
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--market",
+            "HK",
+            "--rs-formula-version",
+            LEGACY_RS_FORMULA_VERSION,
+        ]
+    )
+
+    assert result == 0
+    assert captured["rs_formula_version_overrides"] == {
+        **{
+            market: BALANCED_RS_FORMULA_VERSION
+            for market in export_script.STATIC_EXPORT_MARKETS
+        },
+        "HK": LEGACY_RS_FORMULA_VERSION,
+    }
+
+
 def test_main_returns_skip_code_for_market_not_trading_day(monkeypatch, tmp_path, capsys):
     export_calls: list[object] = []
     output_dir = tmp_path / "out"

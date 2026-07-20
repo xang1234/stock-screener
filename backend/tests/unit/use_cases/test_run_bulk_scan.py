@@ -301,6 +301,66 @@ class TestRunBulkScanHappyPath:
         }
         assert captured["0700.HK"].rs_source.ratings["rs_rating"] == 77
 
+    def test_pins_market_rs_publication_across_scan_chunks(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+
+        class _Reader:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs["as_of_date"] is None and len(self.calls) > 1:
+                    publication_date = date(2026, 4, 11)
+                    run_id = 43
+                else:
+                    publication_date = date(2026, 4, 10)
+                    run_id = 42
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=publication_date,
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=run_id,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 80,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 80,
+                            "rs_rating_12m": 80,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        result = RunBulkScanUseCase(
+            scanner=_BulkAwareFakeScanner(),
+            data_provider=FakeStockDataProvider(),
+            market_rs_reader=reader,
+        ).execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAA", "BBB", "CCC", "DDD"],
+                chunk_size=2,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert [call["as_of_date"] for call in reader.calls] == [
+            None,
+            date(2026, 4, 10),
+        ]
+        assert [call["formula_version"] for call in reader.calls] == [
+            None,
+            BALANCED_RS_FORMULA_VERSION,
+        ]
+
     def test_cache_only_flag_propagates_to_bulk_data_fetch(self):
         """cache_only=True on the command must disable live-fetch fallback inside
         prepare_data_bulk. This is the teeth behind the API-level staleness gate:

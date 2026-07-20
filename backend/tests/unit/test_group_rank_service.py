@@ -181,6 +181,58 @@ def test_balanced_calculation_uses_canonical_publication_without_legacy_prefetch
     service.market_rs_snapshot_service.calculate.assert_called_once()
 
 
+def test_balanced_calculation_revalidates_existing_run_through_snapshot_service():
+    service = _make_group_rank_service()
+    preexisting_run = Mock(
+        id=41,
+        expected_symbol_count=1,
+        eligible_symbol_count=1,
+        excluded_symbol_count=0,
+        benchmark_symbol="OLD",
+    )
+    compatible_run = Mock(
+        id=42,
+        expected_symbol_count=4,
+        eligible_symbol_count=3,
+        excluded_symbol_count=1,
+        benchmark_symbol="SPY",
+    )
+    service.market_rs_repository.active_formula.return_value = (
+        BALANCED_RS_FORMULA_VERSION
+    )
+    service.market_rs_repository.get_completed_exact.return_value = preexisting_run
+    service.market_rs_snapshot_service.calculate.return_value = compatible_run
+    service.canonical_group_service.calculate_and_store.return_value = [
+        {
+            "industry_group": "Software",
+            "date": date(2026, 3, 20),
+            "rank": 1,
+            "avg_rs_rating": 90.0,
+            "avg_rs_rating_1m": 88.0,
+            "avg_rs_rating_3m": 92.0,
+            "median_rs_rating": 91.0,
+            "weighted_avg_rs_rating": 90.5,
+            "rs_std_dev": 2.0,
+            "num_stocks": 3,
+            "num_stocks_rs_above_80": 3,
+            "top_symbol": "AAA",
+            "top_rs_rating": 97.0,
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+        }
+    ]
+
+    result = service.calculate_group_rankings(
+        Mock(),
+        date(2026, 3, 20),
+        market="US",
+    )
+
+    assert result.rankings[0].market_rs_run_id == 42
+    assert result.prefetch_stats.symbols_with_prices == 3
+    service.market_rs_snapshot_service.calculate.assert_called_once()
+
+
 def _replace_taxonomy_source(
     monkeypatch,
     service,

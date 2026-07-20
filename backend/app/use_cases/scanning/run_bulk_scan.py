@@ -21,6 +21,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Iterator, Sequence
 
 from app.domain.common.errors import EntityNotFoundError
@@ -214,6 +215,10 @@ class RunBulkScanUseCase:
         passed = getattr(scan, "passed_stocks", 0) or 0
         failed = 0
         start_time = time.monotonic()
+        rs_publication_by_market: dict[
+            str,
+            tuple[str, int | None, date | None],
+        ] = {}
 
         for chunk in _chunked(remaining_symbols, cmd.chunk_size):
             # 5a — Cancellation gate
@@ -265,12 +270,27 @@ class RunBulkScanUseCase:
                         str(symbol).upper()
                     )
                 for data_market, market_symbols in symbols_by_market.items():
+                    pinned_publication = rs_publication_by_market.get(data_market)
                     resolution = self._market_rs_reader.get(
                         market=data_market,
                         symbols=tuple(market_symbols),
-                        as_of_date=None,
-                        formula_version=None,
+                        as_of_date=(
+                            pinned_publication[2]
+                            if pinned_publication is not None
+                            else None
+                        ),
+                        formula_version=(
+                            pinned_publication[0]
+                            if pinned_publication is not None
+                            else None
+                        ),
                     )
+                    resolved_publication = (
+                        resolution.formula_version,
+                        resolution.run_id,
+                        resolution.as_of_date,
+                    )
+                    rs_publication_by_market[data_market] = resolved_publication
                     market_data = {
                         symbol: pre_fetched_data[symbol]
                         for symbol in market_symbols

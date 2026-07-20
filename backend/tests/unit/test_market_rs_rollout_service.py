@@ -138,6 +138,38 @@ def test_backfill_resumes_completed_stock_run_and_reports_all_failures(monkeypat
     )
 
 
+def test_backfill_labels_snapshot_rebuild_failure_as_stock_calculation(monkeypatch):
+    calculation_date = date(2026, 4, 10)
+    repository = MagicMock()
+    repository.get_completed_exact.return_value = SimpleNamespace(
+        id=10,
+        eligible_symbol_count=2,
+    )
+    snapshot = MagicMock()
+    snapshot.calculate.side_effect = RuntimeError("incompatible stock price basis")
+    groups = MagicMock()
+    service = _service(repository=repository, snapshot=snapshot, groups=groups)
+    monkeypatch.setattr(
+        service.backfill_service,
+        "earliest_backfillable_date",
+        lambda *a, **k: calculation_date,
+    )
+    monkeypatch.setattr(
+        service.backfill_service,
+        "candidate_dates",
+        lambda *a, **k: (calculation_date,),
+    )
+
+    report = service.backfill(
+        MagicMock(),
+        market="US",
+        through_date=calculation_date,
+    )
+
+    assert report.results[0].reason_code == "stock_calculation_runtime_error"
+    groups.calculate_and_store.assert_not_called()
+
+
 def test_rejected_activation_rolls_back_without_moving_either_pointer(tmp_path):
     repository = MagicMock()
     feature_repository = MagicMock()

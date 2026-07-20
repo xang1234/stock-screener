@@ -16,7 +16,10 @@ from app.services.benchmark_registry_service import (
     benchmark_registry,
 )
 from app.services.market_calendar_service import MarketCalendarService
-from app.services.point_in_time_universe_service import PointInTimeUniverseService
+from app.services.point_in_time_universe_service import (
+    PointInTimeUniverseService,
+    PointInTimeUniverseUnavailable,
+)
 
 
 EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
@@ -85,11 +88,19 @@ class MarketRsInputLoader:
             self._benchmark_registry.get_candidate_symbols(normalized)
         )
         primary_benchmark = self._benchmark_registry.get_primary_symbol(normalized)
-        universe = self._point_in_time_universe.resolve(
-            db,
-            market=normalized,
-            as_of_date=as_of_date,
-        )
+        try:
+            universe = self._point_in_time_universe.resolve(
+                db,
+                market=normalized,
+                as_of_date=as_of_date,
+            )
+        except PointInTimeUniverseUnavailable as exc:
+            raise MarketRsInputUnavailable(
+                str(exc),
+                reason_code="point_in_time_universe_unavailable",
+                diagnostics={"error": str(exc)},
+                benchmark_symbol=primary_benchmark,
+            ) from exc
         context = {
             "benchmark_symbol": primary_benchmark,
             "universe_hash": universe.universe_hash,
