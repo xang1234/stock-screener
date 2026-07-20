@@ -4,6 +4,7 @@ from datetime import date
 
 from sqlalchemy import func
 
+from app.domain.markets import get_market_catalog
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.industry import IBDIndustryGroup
 from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
@@ -43,6 +44,34 @@ class FeatureRunGroupEnrichmentService:
                 ranking_date=ranking_date,
             )
             identity = resolution.identity
+            raw_total_rows = (
+                db.query(func.count(StockFeatureDaily.symbol))
+                .filter(StockFeatureDaily.run_id == feature_run_id)
+                .scalar()
+                or 0
+            )
+            total_rows = (
+                int(raw_total_rows)
+                if isinstance(raw_total_rows, (int, float))
+                else 0
+            )
+            if not (
+                get_market_catalog()
+                .get(identity.market)
+                .capabilities.group_rankings
+            ):
+                return {
+                    "run_id": feature_run_id,
+                    "ranking_date": ranking_date.isoformat(),
+                    "total_rows": total_rows,
+                    "updated_rows": 0,
+                    "missing_industry_rows": 0,
+                    "missing_rank_rows": 0,
+                    "rs_formula_version": identity.formula_version,
+                    "identity_source": resolution.identity_source,
+                    "status": "skipped",
+                    "reason": "group_rankings_not_supported",
+                }
             snapshot_rows = self._snapshot_reader.load_publication(
                 db,
                 publication=resolution.publication,
@@ -55,17 +84,6 @@ class FeatureRunGroupEnrichmentService:
                 for row in snapshot_rows
             }
 
-            raw_total_rows = (
-                db.query(func.count(StockFeatureDaily.symbol))
-                .filter(StockFeatureDaily.run_id == feature_run_id)
-                .scalar()
-                or 0
-            )
-            total_rows = (
-                int(raw_total_rows)
-                if isinstance(raw_total_rows, (int, float))
-                else 0
-            )
             industries_by_symbol: dict[str, str | None] = {}
             market_themes_by_symbol: dict[str, list[str]] = {}
             sector_by_symbol: dict[str, str | None] = {}

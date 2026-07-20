@@ -148,3 +148,50 @@ def test_missing_exact_snapshot_rolls_back_without_erasing_previous_rank():
     assert stored.details_json["ibd_group_rank"] == 4
     assert stored.details_json["ibd_group_rank_date"] == "2026-04-09"
     engine.dispose()
+
+
+def test_group_less_market_enrichment_is_a_noop():
+    engine = create_engine("sqlite:///:memory:")
+    _tables(engine)
+    factory = sessionmaker(bind=engine)
+    with factory() as db:
+        db.add_all(
+            [
+                FeatureRun(
+                    id=33,
+                    as_of_date=AS_OF,
+                    run_type="daily_snapshot",
+                    status="published",
+                    config_json={"market": "DE"},
+                ),
+                _row(
+                    run_id=33,
+                    details={
+                        "ibd_industry_group": "Software",
+                        "ibd_group_rank": 4,
+                    },
+                ),
+            ]
+        )
+        db.commit()
+
+    class _UnexpectedReader:
+        @staticmethod
+        def load_publication(*_args, **_kwargs):
+            raise AssertionError("group snapshot must not be loaded")
+
+    stats = FeatureRunGroupEnrichmentService(
+        session_factory=factory,
+        taxonomy_service=_Taxonomy(),
+        snapshot_reader=_UnexpectedReader(),
+        batch_size=10,
+    ).enrich(feature_run_id=33, ranking_date=AS_OF)
+
+    with factory() as db:
+        stored = db.query(StockFeatureDaily).filter_by(run_id=33, symbol="AAA").one()
+    assert stats["status"] == "skipped"
+    assert stats["reason"] == "group_rankings_not_supported"
+    assert stats["total_rows"] == 1
+    assert stats["updated_rows"] == 0
+    assert stored.details_json["ibd_group_rank"] == 4
+    engine.dispose()
