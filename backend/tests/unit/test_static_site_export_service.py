@@ -1472,7 +1472,13 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
             run_type="daily_snapshot",
             status="published",
             published_at=datetime(2026, 4, 2, 21, 30, 0),
-            config_json={"universe": {"market": "US"}},
+            config_json={
+                "universe": {"market": "US"},
+                "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                "market_rs_run_id": 42,
+                "rs_as_of_date": "2026-04-02",
+                "rs_universe_size": 2,
+            },
         ),
         pointer_run_id=12,
     )
@@ -1482,6 +1488,10 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
         "generated_at": "2026-04-02T22:00:00Z",
         "as_of_date": "2026-04-02",
         "run_id": 12,
+        "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": 42,
+        "rs_as_of_date": "2026-04-02",
+        "rs_universe_size": 2,
         "rows_total": 2,
         "default_filtered_rows_total": 1,
         "chunks": [{"path": "scan/chunks/chunk-0001.json", "count": 2}],
@@ -1520,7 +1530,10 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
     )
 
     output_dir = tmp_path / "static-data"
-    result = service.export(output_dir)
+    result = service.export(
+        output_dir,
+        rs_formula_version_overrides={"US": BALANCED_RS_FORMULA_VERSION},
+    )
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     breadth = json.loads((output_dir / "markets" / "us" / "breadth.json").read_text(encoding="utf-8"))
@@ -1532,6 +1545,9 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
     assert manifest["features"]["groups"] is False
     assert manifest["markets"]["US"]["features"]["breadth"] is False
     assert manifest["markets"]["US"]["features"]["groups"] is False
+    assert manifest["markets"]["US"]["market_rs_run_id"] == 42
+    assert manifest["markets"]["US"]["rs_as_of_date"] == "2026-04-02"
+    assert manifest["markets"]["US"]["rs_universe_size"] == 2
     assert len(manifest["warnings"]) == 3
     assert any("Static US rrg data unavailable" in warning for warning in manifest["warnings"])
     assert breadth["available"] is False

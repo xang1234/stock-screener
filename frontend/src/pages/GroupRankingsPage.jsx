@@ -645,6 +645,8 @@ function GroupRankingsPage() {
               || refreshedPublishedDate === previouslyPublishedDate
             ) {
               setLiveRankingMarket(selectedMarket);
+            } else {
+              setLiveRankingMarket(null);
             }
           })
           .catch((error) => {

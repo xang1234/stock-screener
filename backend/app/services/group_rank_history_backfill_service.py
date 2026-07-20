@@ -10,6 +10,7 @@ from typing import Any, Callable, Protocol
 
 from sqlalchemy.orm import Session
 
+from app.domain.markets import get_market_catalog
 from app.models.industry import IBDGroupRank
 from app.domain.relative_strength import GroupSnapshotIdentity
 from app.services.group_rank_snapshot_coordinator import GroupSnapshotStatus
@@ -94,6 +95,18 @@ class GroupRankHistoryBackfillService:
     ) -> GroupRankHistoryBackfillResult:
         normalized_market = str(market or "US").strip().upper()
         start_date = as_of_date - timedelta(days=self.lookback_days)
+        if not (
+            get_market_catalog()
+            .get(normalized_market)
+            .capabilities.group_rankings
+        ):
+            return GroupRankHistoryBackfillResult(
+                status=GroupRankHistoryBackfillStatus.SKIPPED,
+                market=normalized_market,
+                as_of_date=as_of_date,
+                lookback_start_date=start_date,
+                reason="group_rankings_not_supported",
+            )
         desired_dates = self.calendar_service.trading_days(
             normalized_market,
             start_date,

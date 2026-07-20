@@ -434,11 +434,21 @@ class StaticSiteExportService:
             "display_name": STATIC_MARKET_DISPLAY.get(market, market),
             "as_of_date": latest_run.as_of_date.isoformat(),
             "rs_formula_version": formula_version,
-            "market_rs_run_id": groups_payload.get("market_rs_run_id"),
-            "rs_as_of_date": groups_payload.get(
-                "rs_as_of_date", latest_run.as_of_date.isoformat()
+            "market_rs_run_id": scan_manifest.get(
+                "market_rs_run_id",
+                groups_payload.get("market_rs_run_id"),
             ),
-            "rs_universe_size": groups_payload.get("rs_universe_size"),
+            "rs_as_of_date": scan_manifest.get(
+                "rs_as_of_date",
+                groups_payload.get(
+                    "rs_as_of_date",
+                    latest_run.as_of_date.isoformat(),
+                ),
+            ),
+            "rs_universe_size": scan_manifest.get(
+                "rs_universe_size",
+                groups_payload.get("rs_universe_size"),
+            ),
             "features": {
                 "scan": True,
                 "breadth": bool(breadth_payload.get("available", True)),

@@ -20,6 +20,32 @@ from app.services.group_rank_snapshot_coordinator import (
 )
 
 
+def test_backfill_skips_market_without_group_rankings():
+    calendar = MagicMock()
+    coordinator = MagicMock()
+
+    def session_factory():
+        raise AssertionError("group-less backfill must not open a database session")
+
+    service = GroupRankHistoryBackfillService(
+        session_factory=session_factory,
+        calendar_service=calendar,
+        group_snapshot_coordinator=coordinator,
+    )
+
+    result = service.backfill(
+        as_of_date=date(2026, 4, 7),
+        market="DE",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+
+    assert result.status is GroupRankHistoryBackfillStatus.SKIPPED
+    assert result.reason == "group_rankings_not_supported"
+    assert result.ready_for_enrichment is True
+    calendar.trading_days.assert_not_called()
+    coordinator.backfill.assert_not_called()
+
+
 def test_backfill_uses_canonical_market_session_range():
     query = MagicMock()
     query.filter.return_value = query

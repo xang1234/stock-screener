@@ -506,6 +506,73 @@ describe('GroupRankingsPage', () => {
     expect(await screen.findByText('US | 1 groups | 2026-04-10')).toBeInTheDocument();
   });
 
+  it('returns from live fallback to the snapshot when a later calculation publishes', async () => {
+    runtimeState.features = { tasks: true };
+    runtimeState.uiSnapshots = { groups: true };
+    runtimeState.primaryMarket = 'US';
+    runtimeState.enabledMarkets = ['US'];
+    const bootstrapFor = (snapshotDate) => {
+      const row = { ...rankingRowFor('US'), date: snapshotDate };
+      return {
+        available: true,
+        is_stale: false,
+        payload: {
+          rankings: {
+            date: snapshotDate,
+            total_groups: 1,
+            market_scope: 'US',
+            rankings: [row],
+          },
+          movers: {
+            period: '1w',
+            market_scope: 'US',
+            gainers: [row],
+            losers: [],
+          },
+        },
+      };
+    };
+    getGroupsBootstrap
+      .mockResolvedValueOnce(bootstrapFor('2026-04-09'))
+      .mockResolvedValueOnce(bootstrapFor('2026-04-09'))
+      .mockResolvedValueOnce(bootstrapFor('2026-04-10'));
+    triggerCalculation
+      .mockResolvedValueOnce({ task_id: 'group-task-stale' })
+      .mockResolvedValueOnce({ task_id: 'group-task-published' });
+    getCalculationStatus.mockResolvedValue({ status: 'completed' });
+    getCurrentRankings.mockImplementation(async (_limit, market, asOfDate) => {
+      const rankingDate = asOfDate ?? '2026-04-10';
+      return {
+        date: rankingDate,
+        total_groups: 1,
+        market_scope: market,
+        rankings: [{ ...rankingRowFor(market), date: rankingDate }],
+      };
+    });
+
+    const { queryClient } = renderGroupRankingsPage();
+    expect(await screen.findByText('US | 1 groups | 2026-04-09')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(getGroupsBootstrap).toHaveBeenCalledTimes(3));
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData(['groupsBootstrap', 'US'])?.payload?.rankings?.date,
+      ).toBe('2026-04-10');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'RRG' }));
+    await waitFor(() => {
+      expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'US', '2026-04-10');
+    });
+  });
+
   it('hides RRG for group-ranking markets without RRG capability', async () => {
     runtimeState.primaryMarket = 'KR';
     runtimeState.enabledMarkets = ['KR'];
