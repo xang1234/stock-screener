@@ -175,7 +175,19 @@ The core screener. Combines multiple methodologies over the selected market/univ
 | **Setup Engine** | Chart-pattern setups near a pivot | Detectors: Cup-with-Handle, VCP, Three Weeks Tight, High Tight Flag, First Pullback, NR7 Inside Day, Double Bottom. Outputs a quality score + a readiness score (proximity to pivot) and a `setup_ready` flag. |
 | **Custom** | User-defined screen | Toggle any filters (price, volume, RS, market cap, EPS/sales growth, MA alignment, near-52wk-high, debt/equity, sector include/exclude); each contributes to a 0–100 score; passes at the user-set minimum. |
 
-**Relative Strength (RS) Rating** underpins most screeners: excess return vs the market benchmark, weighted across periods (3mo 40%, then 6/9/12mo 20% each), scaled 0–100 (or universe percentile). Group RS is the average RS of a group's constituents.
+### Relative Strength (RS) Rating
+
+The canonical formula, `balanced-horizon-percentile-v2`, is calculated once per Market and trading date so every scanner and Group consumer reads the same stock ratings.
+
+1. Resolve one Market-wide eligible stock set. Every included stock and the Market benchmark must have adjusted closes at the current session and the exact 21, 63, 126, 189, and 252 prior-session anchors. A stock missing any anchor is excluded from all five horizons, rather than entering only the shorter-period comparisons.
+2. Calculate stock return minus benchmark return separately at 1M, 3M, 6M, 9M, and 12M.
+3. Cross-sectionally rank each horizon over that same set to obtain 1–99 ratings P1, P3, P6, P9, and P12. Ties receive their average rank.
+4. Calculate `20% × P1 + 30% × P3 + 20% × P6 + 15% × P9 + 15% × P12`.
+5. Cross-sectionally rank that weighted score once more to produce overall RS, also from 1–99.
+
+The 1M 20% and 3M 30% weights give recent performance half of the composite. Since each horizon is normalized before weighting, an old 1,000% gain cannot dominate by raw magnitude: increasing it to 10,000% without changing the stock's 12M ordering leaves its 12M percentile unchanged. A former long-term winner that has recently fallen 30–50% can therefore lose overall and Group rank as its 1M/3M percentiles deteriorate.
+
+Scan rows display overall RS plus 1M, 3M, and 12M RS. The formula is IBD/CANSLIM-inspired in using benchmark-relative performance and market percentiles, but it is not the same as IBD's undisclosed proprietary calculation. Formula version, as-of date, Market/universe identity, and source run are retained so results can be audited and formula versions are not compared as though they were one continuous series.
 
 **RS-line Blue Dot / RSBD** is the O'Neil/Minervini-style early-leadership signal. The app computes the stock's RS line as `stock close / market benchmark close` (SPY for US, the market benchmark elsewhere). A blue dot fires when the RS line reaches a new trailing 252-session high while price has **not** made its own new 252-session high on that same date. In practice this highlights names where relative strength is already breaking out before price has confirmed the breakout.
 
@@ -320,7 +332,7 @@ The **Stockbee MM** tab on the Daily page surfaces these same daily counts in a 
 
 ## Groups & Relative Rotation Graph
 
-~197 IBD-style industry groups (and sector roll-ups), ranked per market by the **average RS of their constituents** (min 3 stocks).
+~197 IBD-style industry groups (and sector roll-ups), ranked per Market by the **average overall RS of their constituents** (min 3 eligible stocks). Group overall, 1M, and 3M RS are equal-weight means of the corresponding canonical stock ratings over the same eligible constituent set. The main Group Rank is based only on overall Group RS; the live and static tables also expose sortable **1M RS** and **3M RS** columns.
 
 ![IBD group rankings with movers](screenshots/group-rankings.png)
 *Group Rankings — ranked table with top movers*
@@ -351,6 +363,8 @@ Plots each group's **RS-Ratio** (x, relative-strength level) against **RS-Moment
 
 A group needs ≥ 12 weeks of history to plot and ≥ 30 weeks for a non-provisional reading; the default tail shows the last 8 weeks.
 
+The RRG transformation above is unchanged by `balanced-horizon-percentile-v2`; only its stored Group overall-RS input series changes. RRG history and rank-change comparisons are filtered to one formula version. Immediately after activation, balanced history may therefore be shorter or rankings may move substantially—especially for prior long-term winners with weak recent performance—without crossing the legacy/balanced boundary.
+
 ![RRG sector rotation with weekly tails](screenshots/rrg-rotation.png)
 *RRG — sector rotation; full 197-group scope available from the same view*
 
@@ -365,7 +379,7 @@ Symbol-level research view:
 
 - **Chart** — OHLCV, 1mo–5y, with SMA 20/50/200, RSI(14), ATR.
 - **Fundamentals** — market cap, sector/industry, EPS rating, growth, valuation metrics.
-- **Technicals** — stage, Minervini score, VCP detection, MA alignment, ADR%, RS (1m/3m/12m) and RS trend.
+- **Technicals** — stage, Minervini score, VCP detection, MA alignment, ADR%, overall/1M/3M/12M RS and RS trend.
 - **Market themes** — themes the stock currently belongs to.
 - **Watchlist actions** and **validation history** (entry price, 1-/5-session returns, MFE/MAE).
 
@@ -426,10 +440,10 @@ Open Operations when the header chip warns, a scan is blocked by a refresh, or b
 
 | Signal | Threshold / window |
 |--------|--------------------|
-| RS rating periods | 3mo 40% · 6/9/12mo 20% each, scaled 0–100 |
+| RS rating | Same-set excess-return percentiles: 1M 20% · 3M 30% · 6M 20% · 9M 15% · 12M 15%; weighted score re-ranked to overall 1–99 |
 | Breadth daily mover | ±4% vs prior close |
 | Breadth momentum | ±13% / 34d · ±25% / 21d & 63d · ±50% / 21d |
-| Group universe | ~197 IBD groups, ranked by avg constituent RS |
+| Group universe | ~197 IBD groups; overall/1M/3M are equal eligible-constituent means (min 3), ranked by overall only |
 | RRG axes | RS-Ratio = EMA(5w)→z(26w); RS-Momentum = 4w-ROC→EMA(3w)→z(13w); both `100 + 5z`, clamp 80–120 |
 | Health stance | 0–100 from base 50 → Power Trend / Confirmed / Under Pressure / Caution / In Cash |
 | Composite rating | Strong Buy ≥ 80 · Buy ≥ 70 · Watch ≥ 60 · Pass < 60 |

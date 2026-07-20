@@ -3,10 +3,15 @@ Technical analysis API endpoints.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 import logging
+from sqlalchemy.orm import Session
 
-from ...wiring.bootstrap import get_yfinance_service
+from ...database import get_db
+from ...domain.scanning.ports import CanonicalStockRsSource, MarketRsReader
+from ...services.benchmark_registry_service import benchmark_registry
+from ...wiring.bootstrap import get_market_rs_reader, get_yfinance_service
+from ._price_history import resolve_symbol_market
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -79,45 +84,94 @@ async def scan_minervini(
 
 
 @router.get("/{symbol}/rs-rating")
-async def get_rs_rating(symbol: str):
+async def get_rs_rating(
+    symbol: str,
+    db: Session = Depends(get_db),
+    market_rs_reader: MarketRsReader = Depends(get_market_rs_reader),
+):
     """
-    Get Relative Strength (RS) rating for a stock.
+    Get the active Market-scoped Relative Strength rating for a stock.
 
-    Calculates weighted performance vs SPY benchmark over multiple periods:
-    - 63 days (Q1): 40% weight
-    - 126 days (Q2): 20% weight
-    - 189 days (Q3): 20% weight
-    - 252 days (1 year): 20% weight
-
-    Returns RS rating (0-100) and performance breakdown.
+    Canonical balanced mode reads the published percentile snapshot. The live
+    benchmark calculation is retained only for explicit legacy rollback mode.
     """
+    normalized_symbol = symbol.strip().upper()
+    market = resolve_symbol_market(db, normalized_symbol)
+    if market is None:
+        raise HTTPException(status_code=404, detail=f"Unknown active symbol: {normalized_symbol}")
+
+    try:
+        resolution = market_rs_reader.get(
+            market=market,
+            symbols=(normalized_symbol,),
+            as_of_date=None,
+            formula_version=None,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    rs_source = resolution.stock_source(normalized_symbol)
+    audit_fields = {
+        **rs_source.audit_fields(),
+        "rs_as_of_date": (
+            resolution.as_of_date.isoformat()
+            if resolution.as_of_date is not None
+            else None
+        ),
+    }
+    if isinstance(rs_source, CanonicalStockRsSource):
+        ratings = rs_source.ratings
+        if ratings is None:
+            return {
+                "symbol": normalized_symbol,
+                "market": market,
+                "error": "Not enough history to calculate RS rating",
+                **audit_fields,
+            }
+        return {
+            "symbol": normalized_symbol,
+            "market": market,
+            **ratings,
+            **audit_fields,
+        }
+
+    response = _legacy_live_rs_rating(normalized_symbol, market=market)
+    response.update({"market": market, **audit_fields})
+    return convert_numpy_types(response)
+
+
+def _legacy_live_rs_rating(symbol: str, *, market: str) -> dict:
+    """Calculate the old live benchmark-relative rating for rollback mode."""
     from ...scanners.criteria.relative_strength import RelativeStrengthCalculator
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
     yfinance_service = get_yfinance_service()
-    stock_data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
-    spy_data = yfinance_service.get_historical_data("SPY", period="2y")
+    benchmark_symbol = benchmark_registry.get_primary_symbol(market)
+    stock_data = yfinance_service.get_historical_data(symbol, period="2y")
+    benchmark_data = yfinance_service.get_historical_data(
+        benchmark_symbol,
+        period="2y",
+    )
 
-    if stock_data is None or spy_data is None:
+    if stock_data is None or benchmark_data is None:
         return {"error": "Unable to fetch price data"}
 
     stock_prices = stock_data["Close"][::-1].reset_index(drop=True)
-    spy_prices = spy_data["Close"][::-1].reset_index(drop=True)
+    benchmark_prices = benchmark_data["Close"][::-1].reset_index(drop=True)
 
-    calc = RelativeStrengthCalculator()
-    result = calc.calculate_rs_rating(symbol.upper(), stock_prices, spy_prices)
+    calc = RelativeStrengthCalculator(benchmark=benchmark_symbol)
+    result = calc.calculate_rs_rating(symbol, stock_prices, benchmark_prices)
 
     # Add period returns
     period_returns = calc.calculate_period_returns(stock_prices)
 
     response = {
-        "symbol": symbol.upper(),
+        "symbol": symbol,
         "rs_rating": result["rs_rating"],
         "relative_performance": result["relative_performance"],
         "period_returns": period_returns,
-        "benchmark": "SPY",
+        "benchmark": benchmark_symbol,
     }
-    return convert_numpy_types(response)
+    return response
 
 
 @router.get("/{symbol}/stage")

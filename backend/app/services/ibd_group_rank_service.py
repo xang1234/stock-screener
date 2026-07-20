@@ -7,10 +7,21 @@ import logging
 from typing import Any, Dict, List
 from datetime import datetime, date, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+    GroupSnapshotIdentity,
+    RsPublicationIdentity,
+)
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 
 from ..models.industry import IBDGroupRank
-from .group_constituent_source import GroupConstituentSource
+from .canonical_group_ranking_service import CanonicalGroupRankingService
+from .group_constituent_source import (
+    GroupConstituentPublicationUnavailable,
+    GroupConstituentSource,
+)
 from .group_detail_payloads import constituent_stock_payloads_from_scan_items
 from .group_ranking_history import build_group_detail_payload_from_parts
 from .group_rank_cache_policy import GroupRankCacheRequirement
@@ -18,6 +29,7 @@ from .group_rank_models import (
     GroupRankCalculationResult,
     GroupRankPrefetchData,
     GroupRankPrefetchStats,
+    GroupRanking,
 )
 from .group_rank_input_loader import GroupRankInputLoader
 from .group_rank_historical_calculator import (
@@ -26,6 +38,8 @@ from .group_rank_historical_calculator import (
 from .group_rank_legacy_adapter import LegacyGroupRankPrefetchAdapter
 from .group_ranking_calculator import GroupRankingCalculator
 from .group_ranking_repository import GroupRankingRepository
+from .group_ranking_payloads import rank_record_payload
+from .market_rs_snapshot_service import MarketRsSnapshotService
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService
@@ -83,6 +97,9 @@ class IBDGroupRankService:
         benchmark_cache: BenchmarkCacheService,
         rs_calculator: RelativeStrengthCalculator | None = None,
         group_constituent_source: GroupConstituentSource | None = None,
+        canonical_group_service: CanonicalGroupRankingService,
+        market_rs_repository: MarketRsRunRepository,
+        market_rs_snapshot_service: MarketRsSnapshotService,
         input_loader: GroupRankInputLoader,
         ranking_calculator: GroupRankingCalculator | None = None,
         ranking_repository: GroupRankingRepository | None = None,
@@ -98,6 +115,9 @@ class IBDGroupRankService:
         self.group_constituent_source = (
             group_constituent_source or GroupConstituentSource()
         )
+        self.canonical_group_service = canonical_group_service
+        self.market_rs_repository = market_rs_repository
+        self.market_rs_snapshot_service = market_rs_snapshot_service
         self.input_loader = input_loader
         self.ranking_calculator = (
             ranking_calculator
@@ -122,6 +142,7 @@ class IBDGroupRankService:
             DerivedDataExecutionPolicy.provider_allowed()
         ),
         cache_requirement: GroupRankCacheRequirement = GroupRankCacheRequirement.disabled(),
+        formula_version: str | None = None,
     ) -> GroupRankCalculationResult:
         """
         Calculate and store rankings for all IBD groups for a given date.
@@ -137,6 +158,19 @@ class IBDGroupRankService:
             calculation_date = datetime.now().date()
 
         normalized_market = (market or "US").upper()
+        requested_formula = formula_version or self.market_rs_repository.active_formula(
+            db,
+            market=normalized_market,
+        )
+        if requested_formula == BALANCED_RS_FORMULA_VERSION:
+            return self._calculate_canonical(
+                db,
+                calculation_date=calculation_date,
+                market=normalized_market,
+                policy=policy,
+            )
+        if requested_formula != LEGACY_RS_FORMULA_VERSION:
+            raise ValueError(f"Unsupported Group RS formula: {requested_formula}")
         logger.info(
             "Calculating industry group rankings for market=%s date=%s",
             normalized_market, calculation_date,
@@ -242,6 +276,47 @@ class IBDGroupRankService:
             prefetch_stats=prefetch_stats,
         )
 
+    def _calculate_canonical(
+        self,
+        db: Session,
+        *,
+        calculation_date: date,
+        market: str,
+        policy: DerivedDataExecutionPolicy,
+    ) -> GroupRankCalculationResult:
+        run = self.market_rs_snapshot_service.calculate(
+            db,
+            market=market,
+            as_of_date=calculation_date,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+        rows = self.canonical_group_service.calculate_and_store(
+            db,
+            market=market,
+            as_of_date=calculation_date,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+        expected = int(run.expected_symbol_count or 0)
+        eligible = int(run.eligible_symbol_count or 0)
+        stats = GroupRankPrefetchStats(
+            target_symbols=expected,
+            symbols_with_prices=eligible,
+            cache_miss_symbols=0,
+            cache_miss_symbols_sample=(),
+            cache_coverage_ratio=(eligible / expected if expected else 1.0),
+            benchmark_available=True,
+            benchmark_cached=True,
+            benchmark_symbol=str(run.benchmark_symbol),
+            benchmark_role="market_rs_snapshot",
+            market=market,
+            cache_only=policy.cache_only,
+            skipped_unsupported_symbols=int(run.excluded_symbol_count or 0),
+        )
+        return GroupRankCalculationResult(
+            rankings=tuple(GroupRanking.from_mapping(row) for row in rows),
+            prefetch_stats=stats,
+        )
+
     def get_current_rankings(
         self,
         db: Session,
@@ -249,6 +324,7 @@ class IBDGroupRankService:
         calculation_date: date | None = None,
         *,
         market: str = "US",
+        formula_version: str | None = None,
     ) -> List[Dict]:
         """
         Get most recent group rankings with rank changes for one market.
@@ -258,11 +334,16 @@ class IBDGroupRankService:
         must filter by market to avoid mixing them.
         """
         normalized_market = (market or "US").upper()
+        resolved_formula = formula_version or self.market_rs_repository.active_formula(
+            db,
+            market=normalized_market,
+        )
         rankings = self.ranking_repository.current_rank_rows(
             db,
             limit=limit,
             market=normalized_market,
             calculation_date=calculation_date,
+            formula_version=resolved_formula,
         )
 
         if not rankings:
@@ -282,6 +363,7 @@ class IBDGroupRankService:
             current_date=latest_date,
             period_days=period_days,
             market=normalized_market,
+            formula_version=resolved_formula,
         )
 
         # Build result with rank changes
@@ -318,25 +400,11 @@ class IBDGroupRankService:
         pct_rs_above_80: float | None,
         top_symbol_name: str | None = None,
     ) -> Dict:
-        return {
-            'industry_group': ranking.industry_group,
-            'date': ranking.date.isoformat(),
-            'rank': ranking.rank,
-            'avg_rs_rating': ranking.avg_rs_rating,
-            'median_rs_rating': ranking.median_rs_rating,
-            'weighted_avg_rs_rating': ranking.weighted_avg_rs_rating,
-            'rs_std_dev': ranking.rs_std_dev,
-            'num_stocks': ranking.num_stocks,
-            'num_stocks_rs_above_80': ranking.num_stocks_rs_above_80,
-            'pct_rs_above_80': pct_rs_above_80,
-            'top_symbol': ranking.top_symbol,
-            'top_symbol_name': top_symbol_name,
-            'top_rs_rating': ranking.top_rs_rating,
-            'rank_change_1w': None,
-            'rank_change_1m': None,
-            'rank_change_3m': None,
-            'rank_change_6m': None,
-        }
+        return rank_record_payload(
+            ranking,
+            pct_rs_above_80=pct_rs_above_80,
+            top_symbol_name=top_symbol_name,
+        )
 
     def _annotate_top_symbol_names(self, db: Session, rows: List[Dict]) -> None:
         name_map = self._get_symbol_name_map(
@@ -371,14 +439,20 @@ class IBDGroupRankService:
         period_days: Dict[str, int],
         *,
         market: str = "US",
+        formula_version: str | None = None,
     ) -> Dict[tuple, int]:
         """Return closest historical ranks for each group and period."""
+        resolved_formula = formula_version or self.market_rs_repository.active_formula(
+            db,
+            market=(market or "US").upper(),
+        )
         return self.ranking_repository.historical_ranks_batch(
             db,
             group_names=group_names,
             current_date=current_date,
             period_days=period_days,
             market=market,
+            formula_version=resolved_formula,
         )
 
     def get_group_history(
@@ -388,9 +462,14 @@ class IBDGroupRankService:
         days: int = 180,
         *,
         market: str = "US",
+        formula_version: str | None = None,
     ) -> Dict:
         """Get historical ranking data for a specific group, scoped by market."""
         normalized_market = (market or "US").upper()
+        resolved_formula = formula_version or self.market_rs_repository.active_formula(
+            db,
+            market=normalized_market,
+        )
         cutoff_date = datetime.now().date() - timedelta(days=days)
 
         records = self.ranking_repository.group_rank_rows(
@@ -398,6 +477,7 @@ class IBDGroupRankService:
             industry_group=industry_group,
             start_date=cutoff_date,
             market=normalized_market,
+            formula_version=resolved_formula,
         )
 
         if not records:
@@ -416,6 +496,7 @@ class IBDGroupRankService:
             current_date=current.date,
             period_days=period_days,
             market=normalized_market,
+            formula_version=resolved_formula,
         )
         for period_name in period_days:
             historical_rank = historical_ranks.get((industry_group, period_name))
@@ -430,6 +511,8 @@ class IBDGroupRankService:
                 'date': r.date.isoformat(),
                 'rank': r.rank,
                 'avg_rs_rating': r.avg_rs_rating,
+                'avg_rs_rating_1m': r.avg_rs_rating_1m,
+                'avg_rs_rating_3m': r.avg_rs_rating_3m,
                 'num_stocks': r.num_stocks,
             }
             for r in records
@@ -439,8 +522,7 @@ class IBDGroupRankService:
         stocks = self._get_constituent_stocks(
             db,
             industry_group,
-            market=normalized_market,
-            as_of_date=current.date,
+            ranking=current,
         )
 
         pct_above_80 = self.ranking_calculator._calculate_pct_above_80(
@@ -469,8 +551,7 @@ class IBDGroupRankService:
         db: Session,
         industry_group: str,
         *,
-        market: str = "US",
-        as_of_date: date | None = None,
+        ranking: IBDGroupRank,
     ) -> List[Dict]:
         """
         Get constituent stocks for an industry group with their metrics.
@@ -484,11 +565,46 @@ class IBDGroupRankService:
         Returns:
             List of stocks with RS, earnings, and sales metrics
         """
+        snapshot = GroupSnapshotIdentity(
+            ranking.market,
+            ranking.date,
+            ranking.rs_formula_version,
+        )
+        if snapshot.formula_version == BALANCED_RS_FORMULA_VERSION:
+            run = self.market_rs_repository.get_completed_exact(
+                db,
+                market=snapshot.market,
+                as_of_date=snapshot.as_of_date,
+                formula_version=snapshot.formula_version,
+            )
+            if (
+                run is None
+                or run.id != ranking.market_rs_run_id
+                or run.eligible_symbol_count <= 0
+            ):
+                raise GroupConstituentPublicationUnavailable(
+                    "Canonical Group rank no longer resolves to its exact "
+                    "Market RS publication."
+                )
+            publication = RsPublicationIdentity(
+                snapshot=snapshot,
+                market_rs_run_id=run.id,
+                universe_size=run.eligible_symbol_count,
+            )
+        elif snapshot.formula_version == LEGACY_RS_FORMULA_VERSION:
+            publication = RsPublicationIdentity(
+                snapshot=snapshot,
+                market_rs_run_id=None,
+                universe_size=None,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported Group RS formula: {snapshot.formula_version}"
+            )
         items = self.group_constituent_source.get_constituent_items(
             db,
             industry_group,
-            market=market,
-            as_of_date=as_of_date,
+            publication=publication,
         )
         return constituent_stock_payloads_from_scan_items(items)
 
@@ -500,6 +616,7 @@ class IBDGroupRankService:
         calculation_date: date | None = None,
         *,
         market: str = "US",
+        formula_version: str | None = None,
     ) -> Dict:
         """Get groups with biggest rank changes over a period, scoped by market."""
         current_rankings = self.get_current_rankings(
@@ -507,6 +624,7 @@ class IBDGroupRankService:
             limit=197,
             calculation_date=calculation_date,
             market=market,
+            formula_version=formula_version,
         )
 
         if not current_rankings:
@@ -560,7 +678,34 @@ class IBDGroupRankService:
         end_date: date,
         *,
         market: str = "US",
+        formula_version: str | None = None,
     ) -> Dict:
+        resolved_formula = formula_version or self.market_rs_repository.active_formula(
+            db,
+            market=(market or "US").upper(),
+        )
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            dates: list[date] = []
+            cursor = start_date
+            while cursor <= end_date:
+                if self.historical_calculator.calendar_service.is_trading_day(
+                    (market or "US").upper(),
+                    cursor,
+                ):
+                    dates.append(cursor)
+                cursor += timedelta(days=1)
+            result = self.fill_gaps_optimized(
+                db,
+                dates,
+                market=market,
+                formula_version=resolved_formula,
+            )
+            return {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "deleted": 0,
+                **result,
+            }
         return self.historical_calculator.backfill_rankings_optimized(
             db,
             start_date=start_date,
@@ -590,12 +735,18 @@ class IBDGroupRankService:
         *,
         market: str = "US",
         end_date: date | None = None,
+        formula_version: str | None = None,
     ) -> List[date]:
+        resolved_formula = formula_version or self.market_rs_repository.active_formula(
+            db,
+            market=(market or "US").upper(),
+        )
         return self.historical_calculator.find_missing_dates(
             db,
             lookback_days,
             market=market,
             end_date=end_date,
+            formula_version=resolved_formula,
         )
 
     def fill_gaps(
@@ -620,7 +771,39 @@ class IBDGroupRankService:
         policy: DerivedDataExecutionPolicy = (
             DerivedDataExecutionPolicy.provider_allowed()
         ),
+        formula_version: str | None = None,
     ) -> Dict:
+        resolved_formula = formula_version or self.market_rs_repository.active_formula(
+            db,
+            market=(market or "US").upper(),
+        )
+        if resolved_formula == BALANCED_RS_FORMULA_VERSION:
+            processed = 0
+            errors = 0
+            for calculation_date in missing_dates:
+                try:
+                    result = self.calculate_group_rankings(
+                        db,
+                        calculation_date,
+                        market=market,
+                        policy=policy,
+                        formula_version=resolved_formula,
+                    )
+                    processed += bool(result.rankings)
+                    errors += not bool(result.rankings)
+                except Exception:
+                    db.rollback()
+                    errors += 1
+                    logger.exception(
+                        "Canonical Group gap-fill failed for %s",
+                        calculation_date,
+                    )
+            return {
+                "total_dates": len(missing_dates),
+                "processed": processed,
+                "skipped": 0,
+                "errors": errors,
+            }
         return self.historical_calculator.fill_gaps_optimized(
             db,
             missing_dates,

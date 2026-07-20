@@ -56,6 +56,7 @@ GATE_3 = \
   tests/unit/test_setup_engine_feature_flag.py \
   tests/integration/test_setup_engine_query_integration.py \
   tests/unit/test_backfill_setup_engine.py \
+  tests/parity/test_canonical_market_rs_parity.py \
   tests/parity/test_scan_parity.py \
   tests/unit/test_scan_path_parity.py
 

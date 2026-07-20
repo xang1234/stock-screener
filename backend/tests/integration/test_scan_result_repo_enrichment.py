@@ -9,14 +9,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import Base
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
 from app.domain.scanning.filter_spec import QuerySpec
+from app.domain.scanning.ports import ScanResultRsAudit
+from app.infra.db.models.relative_strength import MarketRsFormulaPointer
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
 from app.schemas.scanning import ScanResultItem
-from app.services.market_group_ranking_service import GroupRankSnapshot
 from app.services.market_taxonomy_service import MarketTaxonomyEntry
 
 
@@ -29,6 +34,14 @@ def session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as sess:
+        sess.add_all(
+            MarketRsFormulaPointer(
+                market=market,
+                formula_version=LEGACY_RS_FORMULA_VERSION,
+            )
+            for market in ("US", "HK", "JP", "TW", "IN")
+        )
+        sess.commit()
         yield sess
 
 
@@ -106,6 +119,122 @@ def test_persist_orchestrator_results_enriches_reference_fields(session: Session
     assert ScanResultItem.from_domain(page.items[0]).ibd_group_rank_date == "2026-02-19"
 
 
+def test_scan_enrichment_uses_only_the_markets_active_group_formula(session: Session):
+    pointer = session.get(MarketRsFormulaPointer, "US")
+    assert pointer is not None
+    pointer.formula_version = BALANCED_RS_FORMULA_VERSION
+    session.add(
+        IBDIndustryGroup(
+            symbol="NVDA",
+            industry_group="Electronic-Semiconductor Fabless",
+        )
+    )
+    session.add_all(
+        [
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 18),
+                rank=2,
+                avg_rs_rating=88.0,
+                rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+            ),
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 18),
+                rank=91,
+                avg_rs_rating=99.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ]
+    )
+    session.commit()
+
+    repo = SqlScanResultRepository(session)
+    repo.persist_orchestrator_results("scan-active-rs", [("NVDA", _base_raw_result())])
+
+    row = (
+        session.query(ScanResult)
+        .filter(
+            ScanResult.scan_id == "scan-active-rs",
+            ScanResult.symbol == "NVDA",
+        )
+        .one()
+    )
+    assert row.ibd_group_rank == 2
+    assert row.details["ibd_group_rank_date"] == "2026-06-18"
+
+
+def test_scan_enrichment_uses_pinned_row_rs_identity(session: Session):
+    pointer = session.get(MarketRsFormulaPointer, "US")
+    assert pointer is not None
+    pointer.formula_version = LEGACY_RS_FORMULA_VERSION
+    session.add(
+        IBDIndustryGroup(
+            symbol="NVDA",
+            industry_group="Electronic-Semiconductor Fabless",
+        )
+    )
+    session.add_all(
+        [
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 18),
+                rank=2,
+                avg_rs_rating=88.0,
+                rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+                market_rs_run_id=42,
+            ),
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 19),
+                rank=1,
+                avg_rs_rating=90.0,
+                rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+                market_rs_run_id=43,
+            ),
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 19),
+                rank=91,
+                avg_rs_rating=50.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ]
+    )
+    session.commit()
+    raw = _base_raw_result()
+    raw.update(
+        rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+        market_rs_run_id=42,
+    )
+
+    repo = SqlScanResultRepository(session)
+    repo.persist_orchestrator_results("scan-pinned-rs", [("NVDA", raw)])
+
+    row = (
+        session.query(ScanResult)
+        .filter(
+            ScanResult.scan_id == "scan-pinned-rs",
+            ScanResult.symbol == "NVDA",
+        )
+        .one()
+    )
+    assert row.ibd_group_rank == 2
+    assert row.details["ibd_group_rank_date"] == "2026-06-18"
+    assert repo.list_rs_audits_by_scan_id("scan-pinned-rs") == (
+        ScanResultRsAudit(
+            symbol="NVDA",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            run_id=42,
+        ),
+    )
+
+
 def test_persist_orchestrator_results_uses_ipo_screener_date_fallback(session: Session):
     # No fundamentals row on purpose, so IPO date must come from ipo screener details.
     session.add(StockIndustry(symbol="MSFT", sector="Technology", industry="Software"))
@@ -136,14 +265,24 @@ def test_persist_orchestrator_results_uses_ipo_screener_date_fallback(session: S
     assert row.gics_industry == "Software"
 
 def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: Session):
-    session.add(
-        StockUniverse(
-            symbol="0700.HK",
-            market="HK",
-            exchange="XHKG",
-            currency="HKD",
-            timezone="Asia/Hong_Kong",
-        )
+    session.add_all(
+        [
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+            ),
+            IBDGroupRank(
+                market="HK",
+                industry_group="Internet Services",
+                date=date(2026, 6, 14),
+                rank=4,
+                avg_rs_rating=81.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ]
     )
     session.commit()
 
@@ -158,19 +297,9 @@ def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: S
                 )
             return None
 
-    class _FakeMarketGroupRankingService:
-        def get_current_rank_snapshot(self, db, *, market, calculation_date=None):  # noqa: ARG002
-            assert market == "HK"
-            assert calculation_date is None
-            return GroupRankSnapshot(
-                date="2026-06-14",
-                ranks_by_group={"Internet Services": 4},
-            )
-
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_FakeMarketGroupRankingService(),
     )
     repo.persist_orchestrator_results("scan-hk-1", [("0700.HK", _base_raw_result())])
 
@@ -187,18 +316,26 @@ def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: S
 
 
 def test_non_us_rank_enrichment_honors_explicit_ranking_date(session: Session):
-    session.add(
-        StockUniverse(
-            symbol="0700.HK",
-            market="HK",
-            exchange="XHKG",
-            currency="HKD",
-            timezone="Asia/Hong_Kong",
-        )
+    session.add_all(
+        [
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+            ),
+            IBDGroupRank(
+                market="HK",
+                industry_group="Internet Services",
+                date=date(2026, 2, 19),
+                rank=7,
+                avg_rs_rating=74.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ]
     )
     session.commit()
-
-    seen_dates: list[date | None] = []
 
     class _FakeTaxonomyService:
         def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
@@ -210,19 +347,9 @@ def test_non_us_rank_enrichment_honors_explicit_ranking_date(session: Session):
                 )
             return None
 
-    class _FakeMarketGroupRankingService:
-        def get_current_rank_snapshot(self, db, *, market, calculation_date=None):  # noqa: ARG002
-            assert market == "HK"
-            seen_dates.append(calculation_date)
-            return GroupRankSnapshot(
-                date=calculation_date.isoformat() if calculation_date else None,
-                ranks_by_group={"Internet Services": 7},
-            )
-
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_FakeMarketGroupRankingService(),
     )
     session.add(
         ScanResult(
@@ -254,18 +381,27 @@ def test_non_us_rank_enrichment_honors_explicit_ranking_date(session: Session):
     assert stats["updated_rows"] == 1
     assert row.ibd_group_rank == 7
     assert row.details["ibd_group_rank_date"] == "2026-02-19"
-    assert seen_dates == [date(2026, 2, 19)]
 
 
 def test_persist_orchestrator_results_overrides_non_us_sector_and_industry_with_taxonomy(session: Session):
-    session.add(
-        StockUniverse(
-            symbol="7203.T",
-            market="JP",
-            exchange="XTKS",
-            currency="JPY",
-            timezone="Asia/Tokyo",
-        )
+    session.add_all(
+        [
+            StockUniverse(
+                symbol="7203.T",
+                market="JP",
+                exchange="XTKS",
+                currency="JPY",
+                timezone="Asia/Tokyo",
+            ),
+            IBDGroupRank(
+                market="JP",
+                industry_group="Transportation Equipment",
+                date=date(2026, 6, 14),
+                rank=3,
+                avg_rs_rating=86.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ]
     )
     session.commit()
 
@@ -288,18 +424,9 @@ def test_persist_orchestrator_results_overrides_non_us_sector_and_industry_with_
                 )
             return None
 
-    class _FakeMarketGroupRankingService:
-        def get_current_rank_snapshot(self, db, *, market, calculation_date=None):  # noqa: ARG002
-            assert market == "JP"
-            return GroupRankSnapshot(
-                date=calculation_date.isoformat() if calculation_date else "2026-06-14",
-                ranks_by_group={"Transportation Equipment": 3},
-            )
-
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_FakeMarketGroupRankingService(),
     )
     repo.persist_orchestrator_results("scan-jp-1", [("7203.T", raw)])
 
@@ -386,14 +513,24 @@ def test_backfill_ibd_metadata_for_existing_scan_rows(session: Session):
 
 
 def test_persist_orchestrator_results_strips_market_before_rank_map_lookup(session: Session):
-    session.add(
-        StockUniverse(
-            symbol="0700.HK",
-            market=" HK ",
-            exchange="XHKG",
-            currency="HKD",
-            timezone="Asia/Hong_Kong",
-        )
+    session.add_all(
+        [
+            StockUniverse(
+                symbol="0700.HK",
+                market=" HK ",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+            ),
+            IBDGroupRank(
+                market="HK",
+                industry_group="Internet Services",
+                date=date(2026, 6, 14),
+                rank=4,
+                avg_rs_rating=81.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ]
     )
     session.commit()
 
@@ -408,18 +545,9 @@ def test_persist_orchestrator_results_strips_market_before_rank_map_lookup(sessi
                 )
             return None
 
-    class _FakeMarketGroupRankingService:
-        def get_current_rank_snapshot(self, db, *, market, calculation_date=None):  # noqa: ARG002
-            assert market == "HK"
-            return GroupRankSnapshot(
-                date=calculation_date.isoformat() if calculation_date else "2026-06-14",
-                ranks_by_group={"Internet Services": 4},
-            )
-
     repo = SqlScanResultRepository(
         session,
         taxonomy_service=_FakeTaxonomyService(),
-        market_group_ranking_service=_FakeMarketGroupRankingService(),
     )
     repo.persist_orchestrator_results("scan-hk-whitespace", [("0700.HK", _base_raw_result())])
 

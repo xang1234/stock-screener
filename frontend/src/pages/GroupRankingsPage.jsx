@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -19,7 +19,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  TableSortLabel,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -61,10 +60,10 @@ import PriceSparkline from '../components/Scan/PriceSparkline';
 import RSSparkline from '../components/Scan/RSSparkline';
 import GroupChartsGrid from '../components/Charts/GroupChartsGrid';
 import { rrgScopesForMarket } from '../utils/rrgScopes';
+import LiveGroupRankingsTable from '../features/groups/LiveGroupRankingsTable';
 
 const GROUP_RANKING_MARKET_FALLBACKS = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA'];
 const EMPTY_AS_OF_ARGS = [];
-
 const REASON_HINTS = {
   warmup_incomplete: 'Wait for the post-close cache warmup to finish, then retry.',
   missing_ibd_mappings: 'Load IBD industry group mappings into the database first.',
@@ -88,23 +87,6 @@ const RankChangeCell = ({ value }) => {
       <Box component="span" sx={{ color, fontWeight: value !== 0 ? 600 : 400, fontSize: '11px' }}>
         {prefix}{value}
       </Box>
-    </Box>
-  );
-};
-
-// Helper to show historical rank (current rank + rank change = historical rank)
-const HistoricalRankCell = ({ currentRank, rankChange }) => {
-  if (rankChange === null || rankChange === undefined || currentRank === null || currentRank === undefined) {
-    return <Box sx={{ color: 'text.secondary', fontFamily: 'monospace', fontSize: '11px' }}>-</Box>;
-  }
-
-  // Historical rank = current rank + rank change
-  // (rank_change = historical_rank - current_rank, so historical_rank = current_rank + rank_change)
-  const historicalRank = currentRank + rankChange;
-
-  return (
-    <Box sx={{ fontFamily: 'monospace', fontSize: '11px', textAlign: 'right' }}>
-      {historicalRank}
     </Box>
   );
 };
@@ -541,6 +523,7 @@ function GroupRankingsPage() {
     },
     enabled: snapshotEnabled,
     retry: false,
+    refetchInterval: 60_000,
     staleTime: 60_000,
   });
   const groupsBootstrapPayload = (
@@ -623,6 +606,28 @@ function GroupRankingsPage() {
     refetchInterval: 2000,
   });
 
+  const refreshPublishedGroups = useCallback(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ['groupsBootstrap', selectedMarket],
+      refetchType: 'none',
+    });
+    await queryClient.refetchQueries({
+      queryKey: ['groupsBootstrap', selectedMarket],
+      type: 'active',
+      exact: true,
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['groupRankings', selectedMarket] }),
+      queryClient.invalidateQueries({ queryKey: ['groupMovers'] }),
+      queryClient.invalidateQueries({ queryKey: ['groupRRGBundle', selectedMarket] }),
+    ]);
+    const refreshedBootstrap = queryClient.getQueryData(['groupsBootstrap', selectedMarket]);
+    if (!refreshedBootstrap || refreshedBootstrap.is_stale) {
+      return null;
+    }
+    return refreshedBootstrap.payload?.rankings?.date ?? null;
+  }, [queryClient, selectedMarket]);
+
   // Handle calculation completion/failure
   useEffect(() => {
     if (calcStatus?.status === 'completed' || calcStatus?.status === 'failed') {
@@ -630,23 +635,24 @@ function GroupRankingsPage() {
       setIsCalculating(false);
       if (calcStatus.status === 'completed') {
         setCalculationError(null);
-        queryClient.invalidateQueries({
-          queryKey: ['groupRankings', selectedMarket, null],
-          exact: true,
-        });
-        queryClient.invalidateQueries({
-          predicate: ({ queryKey }) => (
-            queryKey[0] === 'groupMovers'
-            && queryKey[2] === selectedMarket
-            && queryKey[3] === null
-          ),
-          refetchType: 'active',
-        });
-        queryClient.invalidateQueries({
-          queryKey: ['groupRRGBundle', selectedMarket, null],
-          exact: true,
-        });
-        setLiveRankingMarket(selectedMarket);
+        const previouslyPublishedDate = queryClient.getQueryData(
+          ['groupsBootstrap', selectedMarket],
+        )?.payload?.rankings?.date ?? null;
+        void refreshPublishedGroups()
+          .then((refreshedPublishedDate) => {
+            if (
+              !refreshedPublishedDate
+              || refreshedPublishedDate === previouslyPublishedDate
+            ) {
+              setLiveRankingMarket(selectedMarket);
+            } else {
+              setLiveRankingMarket(null);
+            }
+          })
+          .catch((error) => {
+            console.error('Failed to refresh published Group snapshot:', error);
+            setCalculationError(error?.message || 'Failed to refresh published Group snapshot.');
+          });
       } else {
         const baseMessage = calcStatus.error || 'Calculation failed. See server logs for details.';
         const hint = REASON_HINTS[calcStatus.reason_code];
@@ -655,7 +661,7 @@ function GroupRankingsPage() {
         setCalculationError(message);
       }
     }
-  }, [calcStatus, queryClient, selectedMarket]);
+  }, [calcStatus, queryClient, refreshPublishedGroups, selectedMarket]);
 
   const handlePeriodChange = (event, newValue) => {
     setSelectedPeriod(newValue);
@@ -885,200 +891,14 @@ function GroupRankingsPage() {
                 )}
               </Box>
             </Box>
-            <TableContainer sx={{ maxHeight: 'calc(100vh - 200px)', flexGrow: 1 }}>
-              <Table stickyHeader size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>
-                      <TableSortLabel
-                        active={orderBy === 'rank'}
-                        direction={orderBy === 'rank' ? order : 'asc'}
-                        onClick={() => handleSort('rank')}
-                      >
-                        Rank
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell>Industry Group</TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'avg_rs_rating'}
-                        direction={orderBy === 'avg_rs_rating' ? order : 'asc'}
-                        onClick={() => handleSort('avg_rs_rating')}
-                      >
-                        RS
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'median_rs_rating'}
-                        direction={orderBy === 'median_rs_rating' ? order : 'asc'}
-                        onClick={() => handleSort('median_rs_rating')}
-                      >
-                        Med RS
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'weighted_avg_rs_rating'}
-                        direction={orderBy === 'weighted_avg_rs_rating' ? order : 'asc'}
-                        onClick={() => handleSort('weighted_avg_rs_rating')}
-                      >
-                        Wtd RS
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'rs_std_dev'}
-                        direction={orderBy === 'rs_std_dev' ? order : 'asc'}
-                        onClick={() => handleSort('rs_std_dev')}
-                      >
-                        Disp
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'num_stocks'}
-                        direction={orderBy === 'num_stocks' ? order : 'asc'}
-                        onClick={() => handleSort('num_stocks')}
-                      >
-                        #
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'pct_rs_above_80'}
-                        direction={orderBy === 'pct_rs_above_80' ? order : 'asc'}
-                        onClick={() => handleSort('pct_rs_above_80')}
-                      >
-                        80+%
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">Top</TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'rank_change_1w'}
-                        direction={orderBy === 'rank_change_1w' ? order : 'asc'}
-                        onClick={() => handleSort('rank_change_1w')}
-                      >
-                        1W
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'rank_change_1m'}
-                        direction={orderBy === 'rank_change_1m' ? order : 'asc'}
-                        onClick={() => handleSort('rank_change_1m')}
-                      >
-                        1M
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'rank_change_3m'}
-                        direction={orderBy === 'rank_change_3m' ? order : 'asc'}
-                        onClick={() => handleSort('rank_change_3m')}
-                      >
-                        3M
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TableSortLabel
-                        active={orderBy === 'rank_change_6m'}
-                        direction={orderBy === 'rank_change_6m' ? order : 'asc'}
-                        onClick={() => handleSort('rank_change_6m')}
-                      >
-                        6M
-                      </TableSortLabel>
-                    </TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {sortedRankings.map((row) => (
-                    <TableRow
-                      key={row.industry_group}
-                      hover
-                      onClick={() => setSelectedGroup(row.industry_group)}
-                      sx={{ cursor: 'pointer' }}
-                    >
-                      <TableCell>
-                        <Box
-                          component="span"
-                          sx={{
-                            backgroundColor: row.rank <= 20 ? 'success.main' : row.rank >= 177 ? 'error.main' : 'warning.main',
-                            color: row.rank <= 20 || row.rank >= 177 ? 'white' : 'warning.contrastText',
-                            padding: '1px 5px',
-                            borderRadius: '2px',
-                            fontSize: '10px',
-                            fontWeight: 600,
-                            fontFamily: 'monospace',
-                          }}
-                        >
-                          {row.rank}
-                        </Box>
-                      </TableCell>
-                      <TableCell sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {row.industry_group}
-                      </TableCell>
-                      <TableCell align="right" sx={{
-                        fontFamily: 'monospace',
-                        fontWeight: 600,
-                        color: row.avg_rs_rating >= 70 ? 'success.main' : row.avg_rs_rating <= 30 ? 'error.main' : 'text.primary'
-                      }}>
-                        {row.avg_rs_rating?.toFixed(1)}
-                      </TableCell>
-                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
-                        {row.median_rs_rating != null ? row.median_rs_rating.toFixed(1) : '-'}
-                      </TableCell>
-                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
-                        {row.weighted_avg_rs_rating != null ? row.weighted_avg_rs_rating.toFixed(1) : '-'}
-                      </TableCell>
-                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
-                        {row.rs_std_dev != null ? row.rs_std_dev.toFixed(1) : '-'}
-                      </TableCell>
-                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.num_stocks}</TableCell>
-                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
-                        {row.pct_rs_above_80 != null
-                          ? `${row.pct_rs_above_80.toFixed(1)}%`
-                          : row.num_stocks
-                            ? `${(((row.num_stocks_rs_above_80 ?? 0) / row.num_stocks) * 100).toFixed(1)}%`
-                            : '-'}
-                      </TableCell>
-                      <TableCell align="right" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                        {row.top_symbol || '-'}
-                      </TableCell>
-                      <TableCell align="right">
-                        {showHistoricalRanks ? (
-                          <HistoricalRankCell currentRank={row.rank} rankChange={row.rank_change_1w} />
-                        ) : (
-                          <RankChangeCell value={row.rank_change_1w} />
-                        )}
-                      </TableCell>
-                      <TableCell align="right">
-                        {showHistoricalRanks ? (
-                          <HistoricalRankCell currentRank={row.rank} rankChange={row.rank_change_1m} />
-                        ) : (
-                          <RankChangeCell value={row.rank_change_1m} />
-                        )}
-                      </TableCell>
-                      <TableCell align="right">
-                        {showHistoricalRanks ? (
-                          <HistoricalRankCell currentRank={row.rank} rankChange={row.rank_change_3m} />
-                        ) : (
-                          <RankChangeCell value={row.rank_change_3m} />
-                        )}
-                      </TableCell>
-                      <TableCell align="right">
-                        {showHistoricalRanks ? (
-                          <HistoricalRankCell currentRank={row.rank} rankChange={row.rank_change_6m} />
-                        ) : (
-                          <RankChangeCell value={row.rank_change_6m} />
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
+            <LiveGroupRankingsTable
+              rankings={sortedRankings}
+              order={order}
+              orderBy={orderBy}
+              onSort={handleSort}
+              onSelectGroup={setSelectedGroup}
+              showHistoricalRanks={showHistoricalRanks}
+            />
               </Paper>
             </Grid>
           </Grid>

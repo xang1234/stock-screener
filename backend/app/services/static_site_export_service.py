@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import json
 import logging
-import math
 from pathlib import Path
 import shutil
-from typing import Any
-from urllib.parse import quote
+from typing import Any, Mapping
 
-import pandas as pd
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
 from app.domain.common.query import SortOrder, SortSpec
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.markets.catalog import get_market_catalog
+from app.domain.relative_strength import GroupSnapshotIdentity
 from app.domain.scanning.default_filters import (
     DEFAULT_SCAN_FILTERS_BY_MARKET,
     DEFAULT_SCAN_FILTERS_FALLBACK,
@@ -28,24 +25,13 @@ from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.serialization import json_safe
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
-from app.services.breadth_attribution_service import BreadthAttributionService
-from app.services.group_detail_payloads import scan_result_item_to_group_row
-from app.services.group_ranking_history import (
-    GROUP_RANK_CHANGE_OFFSETS,
-    apply_group_rank_changes,
-    build_group_details,
-    select_group_history_runs,
-    select_market_run_series,
-)
-from app.services.group_ranking_payloads import (
-    compute_group_rankings_from_serialized_rows,
-)
 from app.services.key_market_history import build_key_market_entries
+from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.preset_screens import (
     PRESET_SCREENS,
-    get_preset_chart_symbols,
     resolve_preset_screens_for_defaults,
 )
 from app.services.static_groups_rrg_export import (
@@ -53,15 +39,26 @@ from app.services.static_groups_rrg_export import (
     StaticGroupsRRGUnavailableError,
     StaticGroupsRRGPayloadSource,
 )
-from app.services.static_groups_payload_builder import (
-    StaticGroupsSnapshot,
-    build_static_groups_payload,
-)
 from app.services.snapshot_date_coherence import (
     SnapshotSectionDates,
     build_snapshot_freshness,
 )
 from app.services.ui_snapshot_service import UISnapshotService
+from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
+from app.services.static_group_section_builder import StaticGroupSectionBuilder
+from app.services.static_site_errors import (
+    NoPublishedStaticMarketArtifact,
+    StaticSiteSectionUnavailableError,
+)
+from app.services.static_artifact_combiner import (
+    StaticArtifactCombiner,
+    StaticArtifactFormulaError,
+)
+from app.services.static_chart_bundle_exporter import (
+    StaticChartBundleConfig,
+    StaticChartBundleExporter,
+)
+from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
 from app.wiring.bootstrap import (
     get_benchmark_cache,
     get_fundamentals_cache,
@@ -72,7 +69,7 @@ from app.wiring.bootstrap import (
 
 logger = logging.getLogger(__name__)
 
-STATIC_SITE_SCHEMA_VERSION = "static-site-v2"
+STATIC_SITE_SCHEMA_VERSION = "static-site-v3"
 SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v1"
 CHART_BUNDLE_SCHEMA_VERSION = "static-charts-v1"
 SCAN_CHUNK_SIZE = 1000
@@ -99,14 +96,6 @@ STATIC_MARKET_DISPLAY = {
     market: _MARKET_CATALOG.get(market).label for market in STATIC_SUPPORTED_MARKETS
 }
 STATIC_GROUP_HISTORY_RUNS = 40
-STATIC_GROUP_RUN_SERIES_LIMIT = max(
-    STATIC_GROUP_HISTORY_RUNS,
-    max(GROUP_RANK_CHANGE_OFFSETS.values()) + 1,
-)
-STATIC_GROUP_TABLE_FALLBACK_OFFSETS = {
-    period: GROUP_RANK_CHANGE_OFFSETS[period]
-    for period in ("1w", "1m", "3m")
-}
 @dataclass(frozen=True)
 class StaticSiteExportResult:
     """Summary of one static-site export run."""
@@ -118,23 +107,6 @@ class StaticSiteExportResult:
     manifest: dict[str, Any]
 
 
-class NoPublishedStaticMarketArtifact(RuntimeError):
-    """Raised when static export cannot find a published market artifact source."""
-
-    def __init__(self, message: str, *, markets: tuple[str, ...] = ()) -> None:
-        self.markets = tuple(markets)
-        super().__init__(message)
-
-
-class StaticSiteSectionUnavailableError(RuntimeError):
-    """Raised when an optional static-site section cannot be exported for the target date."""
-
-    def __init__(self, *, section: str, reason: str) -> None:
-        self.section = section
-        self.reason = reason
-        super().__init__(reason)
-
-
 class StaticSiteExportService:
     """Generate a static JSON bundle for the read-only frontend."""
 
@@ -143,6 +115,11 @@ class StaticSiteExportService:
         session_factory: sessionmaker,
         *,
         rrg_payload_source: StaticGroupsRRGPayloadSource | None = None,
+        group_section_builder: StaticGroupSectionBuilder | None = None,
+        price_cache=None,
+        fundamentals_cache=None,
+        benchmark_cache=None,
+        chart_config: StaticChartBundleConfig | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._rrg_payload_source = (
@@ -153,9 +130,33 @@ class StaticSiteExportService:
             )
         )
         self._ui_snapshot_service = UISnapshotService(session_factory)
-        self._price_cache = get_price_cache()
-        self._fundamentals_cache = get_fundamentals_cache()
-        self._benchmark_cache = get_benchmark_cache()
+        self._market_rs_repository = MarketRsRunRepository()
+        self._price_cache = price_cache if price_cache is not None else get_price_cache()
+        self._fundamentals_cache = (
+            fundamentals_cache
+            if fundamentals_cache is not None
+            else get_fundamentals_cache()
+        )
+        self._benchmark_cache = (
+            benchmark_cache if benchmark_cache is not None else get_benchmark_cache()
+        )
+        self._group_section_builder = group_section_builder or StaticGroupSectionBuilder(
+            snapshot_reader=GroupRankSnapshotReader(),
+            rank_history_reader=get_group_rank_service(),
+        )
+        self._chart_exporter = StaticChartBundleExporter(
+            price_cache=self._price_cache,
+            fundamentals_cache=self._fundamentals_cache,
+            benchmark_cache=self._benchmark_cache,
+            json_writer=self._write_json,
+            scan_row_serializer=self._serialize_scan_row,
+            config=chart_config,
+        )
+        self._breadth_builder = StaticBreadthSectionBuilder(
+            ui_snapshot_service=self._ui_snapshot_service,
+            price_cache=self._price_cache,
+            benchmark_cache=self._benchmark_cache,
+        )
 
     def export(
         self,
@@ -164,6 +165,8 @@ class StaticSiteExportService:
         clean: bool = True,
         markets: tuple[str, ...] | None = None,
         write_manifest: bool = True,
+        rs_formula_version_overrides: Mapping[str, str] | None = None,
+        feature_run_ids_by_market: Mapping[str, int] | None = None,
     ) -> StaticSiteExportResult:
         output_dir = Path(output_dir)
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
@@ -175,11 +178,27 @@ class StaticSiteExportService:
 
         with self._session_factory() as db:
             market_entries: dict[str, dict[str, Any]] = {}
-            selected_markets = tuple(markets or STATIC_SUPPORTED_MARKETS)
+            selected_markets = tuple(
+                str(market).strip().upper()
+                for market in (markets or STATIC_SUPPORTED_MARKETS)
+            )
+            formula_overrides = {
+                str(market).strip().upper(): str(formula).strip()
+                for market, formula in (rs_formula_version_overrides or {}).items()
+            }
+            run_overrides = {
+                str(market).strip().upper(): int(run_id)
+                for market, run_id in (feature_run_ids_by_market or {}).items()
+            }
             available_markets = [
                 market
                 for market in selected_markets
-                if self._get_latest_published_run(db, market=market) is not None
+                if self._resolve_static_feature_run(
+                    db,
+                    market=market,
+                    feature_run_id=run_overrides.get(market),
+                )
+                is not None
             ]
             if not available_markets:
                 latest_run = self._get_latest_published_run(db)
@@ -201,6 +220,8 @@ class StaticSiteExportService:
                     market=market,
                     generated_at=generated_at,
                     warnings=warnings,
+                    formula_version_override=formula_overrides.get(market),
+                    feature_run_id=run_overrides.get(market),
                 )
                 self._write_market_metadata(
                     output_dir=output_dir,
@@ -234,53 +255,36 @@ class StaticSiteExportService:
         *,
         fallback_artifacts_dir: Path | None = None,
         clean: bool = True,
+        rs_formula_version_overrides: Mapping[str, str] | None = None,
+        fallback_rs_formula_version_overrides: Mapping[str, str] | None = None,
     ) -> StaticSiteExportResult:
-        artifacts_dir = Path(artifacts_dir)
-        output_dir = Path(output_dir)
-        generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-        warnings: list[str] = []
-
-        if clean and output_dir.exists():
-            shutil.rmtree(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        market_entries, warnings = cls._collect_market_artifacts(
-            artifacts_dir=artifacts_dir,
-            output_dir=output_dir,
-            warnings=warnings,
-            allow_empty=True,
+        combined = StaticArtifactCombiner(
+            schema_version=STATIC_SITE_SCHEMA_VERSION,
+            supported_markets=STATIC_SUPPORTED_MARKETS,
+            default_market=STATIC_DEFAULT_MARKET,
+            metadata_filename=STATIC_MARKET_METADATA_FILENAME,
+        ).combine(
+            artifacts_dir=Path(artifacts_dir),
+            fallback_artifacts_dir=(
+                Path(fallback_artifacts_dir)
+                if fallback_artifacts_dir is not None
+                else None
+            ),
+            output_dir=Path(output_dir),
+            required_formula_by_market=rs_formula_version_overrides or {},
+            fallback_required_formula_by_market=(
+                fallback_rs_formula_version_overrides
+                if fallback_rs_formula_version_overrides is not None
+                else None
+            ),
+            clean=clean,
         )
-        if fallback_artifacts_dir is not None:
-            fallback_entries, warnings = cls._collect_market_artifacts(
-                artifacts_dir=Path(fallback_artifacts_dir),
-                output_dir=output_dir,
-                warnings=warnings,
-                skip_markets=set(market_entries),
-                allow_empty=True,
-                fallback_source=True,
-            )
-            market_entries.update(fallback_entries)
-        if not market_entries:
-            raise RuntimeError("No market artifacts are available to combine into a static-site bundle")
-        missing_markets = [
-            market for market in STATIC_SUPPORTED_MARKETS if market not in market_entries
-        ]
-        warnings.extend(
-            f"Static export market {market} was omitted from the combined bundle because no artifact was produced."
-            for market in missing_markets
-        )
-        manifest = cls._build_manifest(
-            market_entries=market_entries,
-            generated_at=generated_at,
-            warnings=warnings,
-        )
-        cls._write_json(output_dir / "manifest.json", manifest)
         return StaticSiteExportResult(
-            output_dir=output_dir,
-            generated_at=generated_at,
-            as_of_date=manifest["as_of_date"],
-            warnings=tuple(warnings),
-            manifest=manifest,
+            output_dir=combined.output_dir,
+            generated_at=combined.generated_at,
+            as_of_date=combined.as_of_date,
+            warnings=combined.warnings,
+            manifest=combined.manifest,
         )
 
     def _export_market_bundle(
@@ -291,12 +295,33 @@ class StaticSiteExportService:
         market: str,
         generated_at: str,
         warnings: list[str],
+        formula_version_override: str | None = None,
+        feature_run_id: int | None = None,
     ) -> dict[str, Any]:
-        latest_run = self._get_latest_published_run(db, market=market)
+        latest_run = self._resolve_static_feature_run(
+            db,
+            market=market,
+            feature_run_id=feature_run_id,
+        )
         if latest_run is None:
             raise NoPublishedStaticMarketArtifact(
                 f"No published feature run is available for static-site export market {market}",
                 markets=(market,),
+            )
+
+        formula_version = (
+            str(formula_version_override).strip()
+            if formula_version_override is not None
+            else self._market_rs_repository.active_formula(db, market=market)
+        )
+        feature_formula_version = resolve_feature_run_rs_identity(
+            latest_run,
+            ranking_date=latest_run.as_of_date,
+        ).identity.formula_version
+        if feature_formula_version != formula_version:
+            raise StaticArtifactFormulaError(
+                f"Requested RS formula {formula_version} does not match Feature run "
+                f"{latest_run.id} formula {feature_formula_version} for {market}"
             )
 
         path_prefix = Path("markets") / market.lower()
@@ -322,6 +347,7 @@ class StaticSiteExportService:
                 expected_as_of_date=latest_run.as_of_date,
                 market=market,
                 latest_run=latest_run,
+                formula_version=formula_version,
                 serialized_rows=serialized_rows,
             ),
         )
@@ -335,6 +361,7 @@ class StaticSiteExportService:
                 generated_at=generated_at,
                 expected_as_of_date=latest_run.as_of_date,
                 market=market,
+                formula_version=formula_version,
             ),
         )
         chart_manifest = self._export_chart_bundle(
@@ -412,6 +439,22 @@ class StaticSiteExportService:
             "market": market,
             "display_name": STATIC_MARKET_DISPLAY.get(market, market),
             "as_of_date": latest_run.as_of_date.isoformat(),
+            "rs_formula_version": formula_version,
+            "market_rs_run_id": scan_manifest.get(
+                "market_rs_run_id",
+                groups_payload.get("market_rs_run_id"),
+            ),
+            "rs_as_of_date": scan_manifest.get(
+                "rs_as_of_date",
+                groups_payload.get(
+                    "rs_as_of_date",
+                    latest_run.as_of_date.isoformat(),
+                ),
+            ),
+            "rs_universe_size": scan_manifest.get(
+                "rs_universe_size",
+                groups_payload.get("rs_universe_size"),
+            ),
             "features": {
                 "scan": True,
                 "breadth": bool(breadth_payload.get("available", True)),
@@ -428,6 +471,33 @@ class StaticSiteExportService:
             "assets": assets,
             "freshness": home_payload.get("freshness", {}),
         }
+
+    def _build_groups_payload(
+        self,
+        *,
+        db: Session,
+        generated_at: str,
+        expected_as_of_date: date,
+        market: str,
+        latest_run: FeatureRun,
+        formula_version: str,
+        serialized_rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return self._group_section_builder.build(
+            db=db,
+            generated_at=generated_at,
+            identity=GroupSnapshotIdentity(
+                market, expected_as_of_date, formula_version
+            ),
+            latest_run=latest_run,
+            serialized_rows=serialized_rows,
+        )
+
+    def _export_chart_bundle(self, **kwargs) -> dict[str, Any]:
+        return self._chart_exporter.export(**kwargs)
+
+    def _build_breadth_payload(self, **kwargs) -> dict[str, Any]:
+        return self._breadth_builder.build(**kwargs)
 
     @staticmethod
     def _market_metadata_path(market: str) -> Path:
@@ -484,55 +554,6 @@ class StaticSiteExportService:
             "warnings": list(warnings),
         }
 
-    @classmethod
-    def _collect_market_artifacts(
-        cls,
-        *,
-        artifacts_dir: Path,
-        output_dir: Path,
-        warnings: list[str],
-        skip_markets: set[str] | None = None,
-        allow_empty: bool = False,
-        fallback_source: bool = False,
-    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
-        market_entries: dict[str, dict[str, Any]] = {}
-        skipped = skip_markets or set()
-        metadata_paths = sorted(artifacts_dir.rglob(STATIC_MARKET_METADATA_FILENAME)) if artifacts_dir.exists() else []
-        for metadata_path in metadata_paths:
-            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-            market = str(payload["market"]).upper()
-            schema_version = payload.get("schema_version")
-            if schema_version != STATIC_SITE_SCHEMA_VERSION:
-                message = (
-                    f"{market} artifact uses schema_version {schema_version!r}; "
-                    f"expected {STATIC_SITE_SCHEMA_VERSION!r}."
-                )
-                if fallback_source:
-                    warnings.append(
-                        f"{market} fallback artifact uses schema_version {schema_version!r}; "
-                        f"expected {STATIC_SITE_SCHEMA_VERSION!r}. Skipping."
-                    )
-                    continue
-                raise RuntimeError(f"Invalid market metadata payload at {metadata_path}: {message}")
-            if market in skipped:
-                continue
-            entry = payload.get("entry")
-            if not isinstance(entry, dict):
-                raise RuntimeError(f"Invalid market metadata payload at {metadata_path}")
-            source_market_dir = metadata_path.parent
-            target_market_dir = output_dir / "markets" / market.lower()
-            shutil.copytree(source_market_dir, target_market_dir, dirs_exist_ok=True)
-            market_entries[market] = entry
-            warnings.extend(str(item) for item in payload.get("warnings", []))
-            if fallback_source:
-                warnings.append(
-                    f"{market} reused from a previous static-site market artifact because the current run produced no artifact."
-                )
-
-        if not market_entries and not allow_empty:
-            raise RuntimeError("No market artifacts are available to combine into a static-site bundle")
-        return market_entries, warnings
-
     def _build_groups_rrg_payload(
         self,
         *,
@@ -540,6 +561,7 @@ class StaticSiteExportService:
         generated_at: str,
         expected_as_of_date: date,
         market: str,
+        formula_version: str,
     ) -> dict[str, Any]:
         """Pre-compute the Relative Rotation Graph payload for the static bundle.
 
@@ -561,6 +583,7 @@ class StaticSiteExportService:
                 generated_at=generated_at,
                 expected_as_of_date=expected_as_of_date,
                 market=market,
+                formula_version=formula_version,
             )
         except StaticGroupsRRGUnavailableError as exc:
             raise StaticSiteSectionUnavailableError(
@@ -638,6 +661,34 @@ class StaticSiteExportService:
                 return run
         return None
 
+    def _resolve_static_feature_run(
+        self,
+        db: Session,
+        *,
+        market: str,
+        feature_run_id: int | None,
+    ) -> FeatureRun | None:
+        normalized_market = str(market or "").strip().upper()
+        if feature_run_id is None:
+            return self._get_latest_published_run(db, market=normalized_market)
+        run = db.get(FeatureRun, int(feature_run_id))
+        if run is None:
+            raise NoPublishedStaticMarketArtifact(
+                f"Feature run {feature_run_id} does not exist for static market {normalized_market}",
+                markets=(normalized_market,),
+            )
+        if run.status != "published":
+            raise NoPublishedStaticMarketArtifact(
+                f"Feature run {feature_run_id} is not published for static market {normalized_market}",
+                markets=(normalized_market,),
+            )
+        if feature_run_market(run) != normalized_market:
+            raise NoPublishedStaticMarketArtifact(
+                f"Feature run {feature_run_id} is not scoped to static market {normalized_market}",
+                markets=(normalized_market,),
+            )
+        return run
+
     def _load_scan_export_rows(
         self,
         db: Session,
@@ -684,6 +735,18 @@ class StaticSiteExportService:
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
         serialized_rows = [self._serialize_scan_row(row) for row in rows]
+        publication = resolve_feature_run_rs_identity(
+            run,
+            ranking_date=run.as_of_date,
+        ).publication
+        rs_metadata = {
+            "rs_formula_version": publication.snapshot.formula_version,
+            "market_rs_run_id": publication.market_rs_run_id,
+            "rs_as_of_date": publication.snapshot.as_of_date.isoformat(),
+            "rs_universe_size": publication.universe_size,
+        }
+        for serialized_row in serialized_rows:
+            serialized_row.update(rs_metadata)
         self._annotate_percentile_ranks(serialized_rows)
         serialized_rows = self._sort_static_scan_rows(serialized_rows)
         resolved_default_filters = self.resolve_static_default_filters(market)
@@ -705,6 +768,7 @@ class StaticSiteExportService:
                 "as_of_date": run.as_of_date.isoformat(),
                 "run_id": run.id,
                 "chunk_index": chunk_num,
+                **rs_metadata,
                 "rows": chunk_rows,
             }
             self._write_json(output_dir / rel_path, payload)
@@ -720,6 +784,7 @@ class StaticSiteExportService:
             "generated_at": generated_at,
             "as_of_date": run.as_of_date.isoformat(),
             "run_id": run.id,
+            **rs_metadata,
             "sort": {"field": "composite_score", "order": "desc"},
             "default_page_size": 50,
             "chunk_size": SCAN_CHUNK_SIZE,
@@ -738,454 +803,6 @@ class StaticSiteExportService:
         }
         self._write_json(scan_dir / "manifest.json", manifest)
         return manifest, serialized_rows
-
-    def _export_chart_bundle(
-        self,
-        *,
-        output_dir: Path,
-        generated_at: str,
-        run: FeatureRun,
-        rows: list[Any],
-        serialized_rows: list[dict[str, Any]] | None = None,
-        path_prefix: Path | None = None,
-        groups_payload: dict[str, Any] | None = None,
-        preset_screens: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        normalized_prefix = Path() if path_prefix is None else Path(path_prefix)
-        chart_dir = output_dir / normalized_prefix / "charts"
-        chart_dir.mkdir(parents=True, exist_ok=True)
-
-        # Market benchmark (fetched once) drives the per-symbol RS line + blue dots.
-        market = feature_run_market(run) or STATIC_DEFAULT_MARKET
-        benchmark_symbol, benchmark_df = self._get_market_benchmark_history(market, period="2y")
-
-        entries: list[dict[str, Any]] = []
-        skipped_symbols: list[str] = []
-        row_by_symbol: dict[str, Any] = {}
-        ordered_rows = list(rows)
-
-        def _emit_chart(symbol, *, rank, stock_data, price_df, fundamentals_value) -> None:
-            """Serialize + write one chart payload, recording it in ``entries`` (or skip)."""
-            bars = self._serialize_chart_bars(price_df)
-            if not bars:
-                skipped_symbols.append(symbol)
-                return
-            rs_line, blue_dots = self._serialize_rs_line(price_df, benchmark_df)
-            rel_path = self._chart_payload_path(symbol, path_prefix=normalized_prefix)
-            self._write_json(
-                output_dir / rel_path,
-                {
-                    "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
-                    "generated_at": generated_at,
-                    "as_of_date": run.as_of_date.isoformat(),
-                    "symbol": symbol,
-                    "rank": rank,
-                    "period": STATIC_CHART_PERIOD,
-                    "bars": bars,
-                    "rs_line": rs_line,
-                    "blue_dots": blue_dots,
-                    "benchmark_symbol": benchmark_symbol,
-                    "stock_data": stock_data,
-                    "fundamentals": fundamentals_value,
-                },
-            )
-            entries.append({"symbol": symbol, "rank": rank, "path": rel_path.as_posix()})
-
-        def _expand_extra_charts(candidate_symbols, *, log_label) -> None:
-            """Emit charts for symbols not already exported (preset/group expansion)."""
-            extra = sorted(candidate_symbols - {e["symbol"] for e in entries} - set(skipped_symbols))
-            if not extra:
-                return
-            before = len(entries)
-            ser_by_symbol = {r["symbol"]: r for r in (serialized_rows or []) if r.get("symbol")}
-            for row in ordered_rows:
-                sym = getattr(row, "symbol", None)
-                if sym and sym not in row_by_symbol:
-                    row_by_symbol[sym] = row
-            for offset in range(0, len(extra), STATIC_CHART_LOOKUP_BATCH_SIZE):
-                batch = extra[offset:offset + STATIC_CHART_LOOKUP_BATCH_SIZE]
-                price_data = self._price_cache.get_many_cached_only(batch, period="2y")
-                fundamentals = self._fundamentals_cache.get_many_cached_only(batch)
-                for symbol in batch:
-                    domain_row = row_by_symbol.get(symbol)
-                    stock_data = self._serialize_scan_row(domain_row) if domain_row else ser_by_symbol.get(symbol)
-                    _emit_chart(
-                        symbol,
-                        rank=None,
-                        stock_data=stock_data,
-                        price_df=price_data.get(symbol),
-                        fundamentals_value=fundamentals.get(symbol),
-                    )
-            logger.info(
-                "%s added %d charts (%d extra symbols attempted)",
-                log_label,
-                len(entries) - before,
-                len(extra),
-            )
-
-        if serialized_rows is not None:
-            raw_rows_by_symbol = {
-                getattr(row, "symbol", None): row
-                for row in rows
-                if getattr(row, "symbol", None)
-            }
-            ordered_symbols = [row["symbol"] for row in serialized_rows if row.get("symbol")]
-            ordered_rows = [
-                raw_rows_by_symbol[symbol]
-                for symbol in ordered_symbols
-                if symbol in raw_rows_by_symbol
-            ]
-            seen_symbols = {getattr(row, "symbol", None) for row in ordered_rows}
-            ordered_rows.extend(
-                row
-                for row in rows
-                if getattr(row, "symbol", None) not in seen_symbols
-            )
-
-        # --- Pass 1: export charts for top-N by composite score (default) ---
-        for start in range(0, len(ordered_rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
-            if len(entries) >= STATIC_CHART_LIMIT:
-                break
-
-            batch_rows = list(ordered_rows[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE])
-            symbols = [row.symbol for row in batch_rows if getattr(row, "symbol", None)]
-            price_data = self._price_cache.get_many_cached_only(symbols, period="2y")
-            fundamentals = self._fundamentals_cache.get_many_cached_only(symbols)
-
-            for rank, row in enumerate(batch_rows, start=start + 1):
-                if len(entries) >= STATIC_CHART_LIMIT:
-                    break
-
-                symbol = getattr(row, "symbol", None)
-                if not symbol:
-                    continue
-
-                row_by_symbol[symbol] = row
-                _emit_chart(
-                    symbol,
-                    rank=rank,
-                    stock_data=self._serialize_scan_row(row),
-                    price_df=price_data.get(symbol),
-                    fundamentals_value=fundamentals.get(symbol),
-                )
-
-        # --- Pass 2: expand preset screen top-N charts ---
-        if serialized_rows is not None:
-            _expand_extra_charts(
-                get_preset_chart_symbols(
-                    serialized_rows,
-                    PRESET_SCREENS if preset_screens is None else preset_screens,
-                    STATIC_CHART_PRESET_TOP_N,
-                ),
-                log_label="Preset screen expansion",
-            )
-
-        # --- Pass 3: expand coverage to all constituents of top-N groups ---
-        group_symbols = self._collect_top_group_constituent_symbols(
-            groups_payload=groups_payload,
-            top_n=STATIC_CHART_TOP_N_GROUPS,
-        )
-        if group_symbols:
-            _expand_extra_charts(
-                group_symbols,
-                log_label=f"Top-{STATIC_CHART_TOP_N_GROUPS} groups expansion",
-            )
-
-        index_rel_path = normalized_prefix / "charts" / "index.json"
-        index_payload = {
-            "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "as_of_date": run.as_of_date.isoformat(),
-            "limit": STATIC_CHART_LIMIT,
-            "symbols_total": len(entries),
-            "skipped_symbols": skipped_symbols,
-            "symbols": entries,
-        }
-        self._write_json(output_dir / index_rel_path, index_payload)
-        return {
-            "path": index_rel_path.as_posix(),
-            "limit": STATIC_CHART_LIMIT,
-            "symbols_total": len(entries),
-            "available": bool(entries),
-            "skipped_symbols": skipped_symbols,
-        }
-
-    @staticmethod
-    def _collect_top_group_constituent_symbols(
-        *,
-        groups_payload: dict[str, Any] | None,
-        top_n: int,
-    ) -> set[str]:
-        """Return constituent symbols across the top-N IBD industry groups.
-
-        Pulls from `groups_payload['payload']['group_details']`, which maps
-        group name → details (including `current_rank` and `stocks`).
-        """
-        if not groups_payload or not groups_payload.get("available"):
-            return set()
-        payload = groups_payload.get("payload") or {}
-        group_details = payload.get("group_details") or {}
-        symbols: set[str] = set()
-        for detail in group_details.values():
-            if not isinstance(detail, dict):
-                continue
-            rank = detail.get("current_rank")
-            if rank is None or rank > top_n:
-                continue
-            for stock in detail.get("stocks") or []:
-                if isinstance(stock, dict):
-                    symbol = stock.get("symbol")
-                    if symbol:
-                        symbols.add(symbol)
-        return symbols
-
-    def _build_breadth_payload(
-        self,
-        *,
-        generated_at: str,
-        expected_as_of_date: date,
-        market: str = STATIC_DEFAULT_MARKET,
-        serialized_rows: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        if serialized_rows is None:
-            snapshot = self._ui_snapshot_service.publish_breadth_bootstrap(market=market).to_dict()
-            payload = snapshot.get("payload", {})
-            current_date = ((payload.get("current") or {}).get("date"))
-            if current_date != expected_as_of_date.isoformat():
-                raise StaticSiteSectionUnavailableError(
-                    section="breadth",
-                    reason=(
-                        "No breadth snapshot is available for static-site export date "
-                        f"{expected_as_of_date.isoformat()} (latest snapshot date: {current_date or 'none'})."
-                    ),
-                )
-            return {
-                "schema_version": STATIC_SITE_SCHEMA_VERSION,
-                "generated_at": generated_at,
-                "available": True,
-                "published_at": _coerce_datetime(snapshot.get("published_at")),
-                "source_revision": snapshot.get("source_revision"),
-                "payload": payload,
-            }
-
-        symbols = [row["symbol"] for row in serialized_rows if row.get("symbol")]
-        if not symbols:
-            raise StaticSiteSectionUnavailableError(
-                section="breadth",
-                reason=f"No scan rows are available for market {market} on {expected_as_of_date.isoformat()}.",
-            )
-
-        benchmark_symbol, benchmark = self._get_market_benchmark_history(market, period="1y")
-        if benchmark.empty:
-            raise StaticSiteSectionUnavailableError(
-                section="breadth",
-                reason=f"No cached benchmark price history is available for market {market}.",
-            )
-
-        canonical_dates = [
-            ts.date()
-            for ts in pd.to_datetime(benchmark.index)
-            if ts.date() <= expected_as_of_date
-        ]
-        if expected_as_of_date not in canonical_dates:
-            raise StaticSiteSectionUnavailableError(
-                section="breadth",
-                reason=(
-                    f"No benchmark trading session is available for market {market} "
-                    f"on {expected_as_of_date.isoformat()}."
-                ),
-            )
-
-        canonical_dates = canonical_dates[-max(STATIC_BREADTH_HISTORY_LOOKBACK_DAYS + 15, 120):]
-        price_data = self._get_cached_price_histories(symbols, period="1y")
-        metrics_by_date = self._compute_breadth_metrics_by_date(canonical_dates, price_data)
-        current = metrics_by_date.get(expected_as_of_date)
-        if current is None:
-            raise StaticSiteSectionUnavailableError(
-                section="breadth",
-                reason=f"No breadth snapshot could be derived for market {market} on {expected_as_of_date.isoformat()}.",
-            )
-
-        ordered_dates = sorted(metrics_by_date.keys())
-        ordered_history = [
-            {**metrics_by_date[item_date], "market": market}
-            for item_date in ordered_dates
-        ]
-        chart_data = ordered_history[-31:]
-        current = {**current, "market": market}
-        benchmark_overlay = self._serialize_history_bars(
-            benchmark,
-            period_days=31,
-            end_date=expected_as_of_date,
-        )
-        group_attribution = self._build_group_attribution(
-            market=market,
-            serialized_rows=serialized_rows,
-            price_data=price_data,
-            ordered_dates=ordered_dates,
-        )
-        return {
-            "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "available": True,
-            "published_at": _coerce_datetime(datetime.utcnow()),
-            "source_revision": f"feature-run:{market}:{expected_as_of_date.isoformat()}",
-            "market": market,
-            "payload": {
-                "current": current,
-                "summary": {
-                    "market": market,
-                    "latest_date": expected_as_of_date.isoformat(),
-                    "total_records": len(ordered_history),
-                    "date_range_start": ordered_dates[0].isoformat() if ordered_dates else None,
-                    "date_range_end": ordered_dates[-1].isoformat() if ordered_dates else None,
-                },
-                "history_90d": list(reversed(ordered_history[-STATIC_BREADTH_HISTORY_LOOKBACK_DAYS:])),
-                "chart_range": "1M",
-                "chart_data": list(reversed(chart_data)),
-                "benchmark_symbol": benchmark_symbol,
-                "benchmark_overlay": benchmark_overlay,
-                "spy_overlay": benchmark_overlay,
-                "group_attribution": group_attribution,
-            },
-        }
-
-    def _build_group_attribution(
-        self,
-        *,
-        market: str,
-        serialized_rows: list[dict[str, Any]],
-        price_data: dict[str, pd.DataFrame | None],
-        ordered_dates: list[date],
-    ) -> dict[str, Any]:
-        """Attribute ±4% movers to IBD industry groups for the most recent sessions.
-
-        Only enabled for markets in ``STATIC_BREADTH_ATTRIBUTION_MARKETS`` — non-US
-        taxonomies aren't wired in for the first cut. Returns an
-        ``{available: False, reason}`` payload when skipped so the static client
-        can hide the feature cleanly.
-        """
-        if market not in STATIC_BREADTH_ATTRIBUTION_MARKETS:
-            return {
-                "available": False,
-                "reason": f"Group attribution is not yet supported for market {market}.",
-            }
-        if not ordered_dates:
-            return {
-                "available": False,
-                "reason": "No trading dates were available to attribute.",
-            }
-
-        attribution_dates = ordered_dates[-STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS:]
-        symbols_meta = [
-            {
-                "symbol": row.get("symbol"),
-                "company_name": row.get("company_name"),
-                "ibd_industry_group": row.get("ibd_industry_group"),
-            }
-            for row in serialized_rows
-            if row.get("symbol")
-        ]
-        service = BreadthAttributionService()
-        history = service.compute(
-            symbols_meta=symbols_meta,
-            price_data=price_data,
-            target_dates=attribution_dates,
-        )
-        has_any_mover = any(
-            (day.get("stocks_up_4pct", 0) + day.get("stocks_down_4pct", 0)) > 0
-            for day in history
-        )
-        if not history or not has_any_mover:
-            return {
-                "available": False,
-                "reason": "No 4%+ movers were attributable for the lookback window.",
-            }
-
-        latest = history[-1]
-        return {
-            "available": True,
-            "market": market,
-            "threshold_pct": 4.0,
-            "lookback_days": STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS,
-            "latest_date": latest["date"] if latest else None,
-            "history": list(reversed(history)),
-        }
-
-    def _build_groups_payload(
-        self,
-        *,
-        db: Session,
-        generated_at: str,
-        expected_as_of_date: date,
-        market: str,
-        latest_run: FeatureRun,
-        serialized_rows: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        rankings = compute_group_rankings_from_serialized_rows(
-            serialized_rows,
-            ranking_date=expected_as_of_date,
-        )
-        if not rankings:
-            raise StaticSiteSectionUnavailableError(
-                section="groups",
-                reason=(
-                    "No group rankings are available for static-site export date "
-                    f"{expected_as_of_date.isoformat()}."
-                ),
-            )
-        market_runs = select_market_run_series(
-            db,
-            market=market,
-            latest_run=latest_run,
-            min_runs=STATIC_GROUP_RUN_SERIES_LIMIT,
-            max_runs=STATIC_GROUP_RUN_SERIES_LIMIT,
-        )
-        history_runs = select_group_history_runs(
-            market_runs,
-            history_runs=STATIC_GROUP_HISTORY_RUNS,
-            offsets=GROUP_RANK_CHANGE_OFFSETS,
-        )
-        historical_rankings = {latest_run.id: rankings}
-        for run in history_runs:
-            if run.id in historical_rankings:
-                continue
-            historical_rankings[run.id] = self._compute_group_rankings_from_rows(
-                self._load_scan_export_rows(db, run, include_sparklines=False),
-                ranking_date=run.as_of_date,
-            )
-        apply_group_rank_changes(
-            rankings,
-            market_runs,
-            historical_rankings,
-            offsets=GROUP_RANK_CHANGE_OFFSETS,
-        )
-        self._apply_group_rank_changes_from_table(
-            db,
-            rankings,
-            market=market,
-            calculation_date=expected_as_of_date,
-        )
-        group_details = build_group_details(
-            rankings=rankings,
-            serialized_rows=serialized_rows,
-            market_runs=market_runs,
-            historical_rankings=historical_rankings,
-            history_limit=STATIC_GROUP_HISTORY_RUNS,
-        )
-        movers = self._build_group_movers(rankings)
-
-        return build_static_groups_payload(
-            StaticGroupsSnapshot(
-                date=expected_as_of_date.isoformat(),
-                rankings=rankings,
-                movers=movers,
-                group_details=group_details,
-                market=market,
-            ),
-            generated_at=generated_at,
-            schema_version=STATIC_SITE_SCHEMA_VERSION,
-        )
 
     def _build_home_payload(
         self,
@@ -1252,253 +869,6 @@ class StaticSiteExportService:
             },
             "top_groups": top_groups,
         }
-
-    def _compute_group_rankings_from_rows(
-        self,
-        rows: list[Any],
-        *,
-        ranking_date: date,
-    ) -> list[dict[str, Any]]:
-        normalized_rows = [scan_result_item_to_group_row(row) for row in rows]
-        return compute_group_rankings_from_serialized_rows(
-            normalized_rows,
-            ranking_date=ranking_date,
-        )
-
-    def _apply_group_rank_changes_from_table(
-        self,
-        db: Session,
-        rankings: list[dict[str, Any]],
-        *,
-        market: str,
-        calculation_date: date,
-    ) -> None:
-        """Backfill rank-change deltas from the ``IBDGroupRank`` history table.
-
-        Runs after the FeatureRun-based path so it only fills periods that the
-        historical-FeatureRun lookup couldn't supply (typical in CI, where
-        Postgres is ephemeral and only one FeatureRun per market exists).
-        Existing non-null deltas are preserved.
-        """
-        if not rankings:
-            return
-        period_days = dict(STATIC_GROUP_TABLE_FALLBACK_OFFSETS)
-        group_names = [ranking["industry_group"] for ranking in rankings]
-        normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
-        try:
-            historical = get_group_rank_service().get_historical_ranks_batch(
-                db,
-                group_names,
-                calculation_date,
-                period_days,
-                market=normalized_market,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to load IBDGroupRank history for market %s on %s",
-                normalized_market,
-                calculation_date,
-                exc_info=True,
-            )
-            return
-        if not historical:
-            return
-        for ranking in rankings:
-            for period in period_days:
-                key = f"rank_change_{period}"
-                if ranking.get(key) is not None:
-                    continue
-                historical_rank = historical.get((ranking["industry_group"], period))
-                if historical_rank is None:
-                    continue
-                ranking[key] = historical_rank - ranking["rank"]
-
-    @staticmethod
-    def _build_group_movers(rankings: list[dict[str, Any]]) -> dict[str, Any]:
-        gainers = sorted(
-            [row for row in rankings if (row.get("rank_change_1w") or 0) > 0],
-            key=lambda row: (-(row.get("rank_change_1w") or 0), row["rank"]),
-        )[:10]
-        losers = sorted(
-            [row for row in rankings if (row.get("rank_change_1w") or 0) < 0],
-            key=lambda row: ((row.get("rank_change_1w") or 0), row["rank"]),
-        )[:10]
-        return {"period": "1w", "gainers": gainers, "losers": losers}
-
-    def _get_cached_price_histories(
-        self,
-        symbols: list[str],
-        *,
-        period: str,
-    ) -> dict[str, pd.DataFrame | None]:
-        results: dict[str, pd.DataFrame | None] = {}
-        for start in range(0, len(symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
-            batch = symbols[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE]
-            results.update(self._price_cache.get_many_cached_only(batch, period=period))
-        return results
-
-    def _get_market_benchmark_history(self, market: str, *, period: str) -> tuple[str, pd.DataFrame]:
-        for candidate in self._benchmark_cache.get_benchmark_candidates(market):
-            history = self._get_symbol_price_history(candidate, period=period)
-            if history is not None and not history.empty:
-                return candidate, history
-        return self._benchmark_cache.get_benchmark_symbol(market), pd.DataFrame()
-
-    def _get_symbol_price_history(self, symbol: str, *, period: str) -> pd.DataFrame | None:
-        data = self._price_cache.get_cached_only(symbol.upper(), period=period)
-        if data is None or data.empty:
-            return None
-        return data
-
-    def _compute_breadth_metrics_by_date(
-        self,
-        canonical_dates: list[date],
-        price_data: dict[str, pd.DataFrame | None],
-    ) -> dict[date, dict[str, Any]]:
-        if not canonical_dates:
-            return {}
-
-        date_index = pd.Index(canonical_dates)
-        empty = lambda: [0] * len(canonical_dates)
-        aggregates = {
-            "stocks_up_4pct": empty(),
-            "stocks_down_4pct": empty(),
-            "stocks_up_25pct_quarter": empty(),
-            "stocks_down_25pct_quarter": empty(),
-            "stocks_up_25pct_month": empty(),
-            "stocks_down_25pct_month": empty(),
-            "stocks_up_50pct_month": empty(),
-            "stocks_down_50pct_month": empty(),
-            "stocks_up_13pct_34days": empty(),
-            "stocks_down_13pct_34days": empty(),
-            "total_stocks_scanned": empty(),
-        }
-
-        for history in price_data.values():
-            if history is None or history.empty or "Close" not in history.columns:
-                continue
-            close_series = pd.Series(
-                history["Close"].to_numpy(),
-                index=[ts.date() for ts in pd.to_datetime(history.index)],
-            )
-            close_series = close_series[~close_series.index.duplicated(keep="last")].sort_index()
-            pct_1d = ((close_series / close_series.shift(1)) - 1.0) * 100.0
-            pct_21d = ((close_series / close_series.shift(21)) - 1.0) * 100.0
-            pct_34d = ((close_series / close_series.shift(34)) - 1.0) * 100.0
-            pct_63d = ((close_series / close_series.shift(63)) - 1.0) * 100.0
-
-            close_series = close_series.reindex(date_index)
-            pct_1d = pct_1d.reindex(date_index)
-            pct_21d = pct_21d.reindex(date_index)
-            pct_34d = pct_34d.reindex(date_index)
-            pct_63d = pct_63d.reindex(date_index)
-            valid = close_series.notna().to_numpy()
-
-            for index, is_valid in enumerate(valid):
-                if is_valid:
-                    aggregates["total_stocks_scanned"][index] += 1
-
-            for key, series in (
-                ("stocks_up_4pct", pct_1d >= 4.0),
-                ("stocks_down_4pct", pct_1d <= -4.0),
-                ("stocks_up_25pct_month", pct_21d >= 25.0),
-                ("stocks_down_25pct_month", pct_21d <= -25.0),
-                ("stocks_up_50pct_month", pct_21d >= 50.0),
-                ("stocks_down_50pct_month", pct_21d <= -50.0),
-                ("stocks_up_13pct_34days", pct_34d >= 13.0),
-                ("stocks_down_13pct_34days", pct_34d <= -13.0),
-                ("stocks_up_25pct_quarter", pct_63d >= 25.0),
-                ("stocks_down_25pct_quarter", pct_63d <= -25.0),
-            ):
-                flags = series.fillna(False).to_numpy()
-                for index, flag in enumerate(flags):
-                    if flag and valid[index]:
-                        aggregates[key][index] += 1
-
-        results: dict[date, dict[str, Any]] = {}
-        for index, item_date in enumerate(canonical_dates):
-            ratio_5day = None
-            ratio_10day = None
-            if index >= 5:
-                up_5 = sum(aggregates["stocks_up_4pct"][max(index - 5, 0):index])
-                down_5 = sum(aggregates["stocks_down_4pct"][max(index - 5, 0):index])
-                ratio_5day = round(up_5 / down_5, 2) if down_5 > 0 else None
-            if index >= 10:
-                up_10 = sum(aggregates["stocks_up_4pct"][index - 10:index])
-                down_10 = sum(aggregates["stocks_down_4pct"][index - 10:index])
-                ratio_10day = round(up_10 / down_10, 2) if down_10 > 0 else None
-
-            results[item_date] = {
-                "date": item_date.isoformat(),
-                "stocks_up_4pct": int(aggregates["stocks_up_4pct"][index]),
-                "stocks_down_4pct": int(aggregates["stocks_down_4pct"][index]),
-                "ratio_5day": ratio_5day,
-                "ratio_10day": ratio_10day,
-                "stocks_up_25pct_quarter": int(aggregates["stocks_up_25pct_quarter"][index]),
-                "stocks_down_25pct_quarter": int(aggregates["stocks_down_25pct_quarter"][index]),
-                "stocks_up_25pct_month": int(aggregates["stocks_up_25pct_month"][index]),
-                "stocks_down_25pct_month": int(aggregates["stocks_down_25pct_month"][index]),
-                "stocks_up_50pct_month": int(aggregates["stocks_up_50pct_month"][index]),
-                "stocks_down_50pct_month": int(aggregates["stocks_down_50pct_month"][index]),
-                "stocks_up_13pct_34days": int(aggregates["stocks_up_13pct_34days"][index]),
-                "stocks_down_13pct_34days": int(aggregates["stocks_down_13pct_34days"][index]),
-                "total_stocks_scanned": int(aggregates["total_stocks_scanned"][index]),
-            }
-        return results
-
-    @staticmethod
-    def _serialize_close_history(data: pd.DataFrame | None, *, days: int) -> list[dict[str, Any]]:
-        if data is None or data.empty or "Close" not in data.columns:
-            return []
-        frame = data.tail(days).reset_index()
-        date_col = frame.columns[0]
-        frame = frame.rename(columns={date_col: "Date"})
-        frame["Date"] = pd.to_datetime(frame["Date"]).dt.strftime("%Y-%m-%d")
-        return [
-            {
-                "date": row["Date"],
-                "close": round(float(row["Close"]), 2),
-            }
-            for _, row in frame.iterrows()
-            if row["Close"] is not None and not math.isnan(float(row["Close"]))
-        ]
-
-    @staticmethod
-    def _serialize_history_bars(
-        data: pd.DataFrame | None,
-        *,
-        period_days: int,
-        end_date: date | None = None,
-    ) -> list[dict[str, Any]]:
-        if data is None or data.empty:
-            return []
-        end_timestamp = pd.Timestamp(end_date or datetime.utcnow())
-        cutoff_date = end_timestamp - timedelta(days=period_days)
-        if data.index.tz is not None:
-            cutoff_date = cutoff_date.tz_localize(data.index.tz)
-            end_timestamp = end_timestamp.tz_localize(data.index.tz)
-        filtered = data[(data.index >= cutoff_date) & (data.index <= end_timestamp)]
-        if filtered.empty:
-            return []
-        frame = filtered.reset_index()
-        date_col = frame.columns[0]
-        frame = frame.rename(columns={date_col: "Date"})
-        frame["Date"] = pd.to_datetime(frame["Date"]).dt.strftime("%Y-%m-%d")
-        return [
-            {
-                "date": row["Date"],
-                "open": round(float(row["Open"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-                "close": round(float(row["Close"]), 2),
-                "volume": int(row["Volume"]),
-            }
-            for _, row in frame.iterrows()
-            if all(
-                value is not None and not math.isnan(float(value))
-                for value in (row["Open"], row["High"], row["Low"], row["Close"], row["Volume"])
-            )
-        ]
 
     def _serialize_scan_row(self, row) -> dict[str, Any]:
         item = ScanResultItem.from_domain(row, include_setup_payload=False).model_dump(mode="json")
@@ -1592,83 +962,6 @@ class StaticSiteExportService:
                 row.get("symbol") or "",
             ),
         )
-
-    @staticmethod
-    def _static_chart_cutoff(index) -> datetime:
-        """The display-window cutoff (``STATIC_CHART_PERIOD_DAYS``), converted to ``index``'s tz.
-
-        Computed in UTC and tz-converted (not ``replace(tzinfo=...)``, which would
-        reinterpret the UTC wall time as local and shift the boundary day).
-        """
-        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=STATIC_CHART_PERIOD_DAYS)
-        index_tz = getattr(index, "tz", None)
-        if index_tz is not None:
-            return cutoff.tz_convert(index_tz).to_pydatetime()
-        return cutoff.tz_localize(None).to_pydatetime()
-
-    def _serialize_rs_line(
-        self, stock_data, benchmark_df
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        """RS line series + blue-dot dates for a symbol, trimmed to the bar window.
-
-        New-high detection runs over the full cached history (the 252-day lookback
-        needs more than the displayed window), then output is trimmed to the same
-        ``STATIC_CHART_PERIOD_DAYS`` window as the candles so the overlay aligns.
-        """
-        if (
-            stock_data is None
-            or getattr(stock_data, "empty", True)
-            or benchmark_df is None
-            or benchmark_df.empty
-            or "Close" not in benchmark_df.columns
-        ):
-            return [], []
-
-        rs_line_full = compute_rs_line(stock_data["Close"], benchmark_df["Close"], normalize=True)
-        blue_full = blue_dot_series(stock_data["Close"], benchmark_df["Close"])
-
-        cutoff = self._static_chart_cutoff(rs_line_full.index)
-        rs_window = rs_line_full[rs_line_full.index >= cutoff].dropna()
-        blue_window = blue_full[(blue_full.index >= cutoff) & blue_full]
-
-        rs_line = [
-            {"time": ts.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
-            for ts, v in rs_window.items()
-        ]
-        blue_dots = [ts.strftime("%Y-%m-%d") for ts in blue_window.index]
-        return rs_line, blue_dots
-
-    def _serialize_chart_bars(self, data) -> list[dict[str, Any]]:
-        if data is None or getattr(data, "empty", True):
-            return []
-
-        filtered = data[data.index >= self._static_chart_cutoff(data.index)]
-        if filtered.empty:
-            return []
-
-        frame = filtered.reset_index()
-        date_col = frame.columns[0]
-        frame = frame.rename(columns={date_col: "Date"})
-        frame["Date"] = frame["Date"].dt.strftime("%Y-%m-%d")
-
-        bars: list[dict[str, Any]] = []
-        for _, row in frame.iterrows():
-            bars.append(
-                {
-                    "date": row["Date"],
-                    "open": round(float(row["Open"]), 2),
-                    "high": round(float(row["High"]), 2),
-                    "low": round(float(row["Low"]), 2),
-                    "close": round(float(row["Close"]), 2),
-                    "volume": int(row["Volume"]),
-                }
-            )
-        return bars
-
-    @staticmethod
-    def _chart_payload_path(symbol: str, *, path_prefix: Path | None = None) -> Path:
-        normalized_prefix = Path() if path_prefix is None else Path(path_prefix)
-        return normalized_prefix / "charts" / f"{quote(symbol, safe='')}.json"
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:

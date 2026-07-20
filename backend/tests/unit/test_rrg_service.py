@@ -17,10 +17,23 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    LEGACY_RS_FORMULA_VERSION,
+)
+from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
-from app.services.rrg_history_provider import USGroupRankHistoryProvider
+from app.services.rrg_history_provider import (
+    StoredGroupRankHistoryProvider,
+    USGroupRankHistoryProvider,
+)
 from app.services.rrg_service import RRGService
+from app.services.static_rrg_history_bundle import (
+    StaticRRGHistoryBundleService,
+    StaticRRGHistoryProvider,
+)
 
 
 def _session():
@@ -34,8 +47,46 @@ def _weekly_fridays(n_weeks: int, start: date = date(2024, 1, 5)):
     return [start + timedelta(weeks=k) for k in range(n_weeks)]
 
 
-def _seed_group(session, *, market, group, dates, rs_fn, num_stocks=10, rank=1):
+def _seed_group(
+    session,
+    *,
+    market,
+    group,
+    dates,
+    rs_fn,
+    num_stocks=10,
+    rank=1,
+    formula_version=LEGACY_RS_FORMULA_VERSION,
+):
     for i, d in enumerate(dates):
+        market_rs_run_id = None
+        if formula_version == BALANCED_RS_FORMULA_VERSION:
+            run = (
+                session.query(MarketRsRun)
+                .filter(
+                    MarketRsRun.market == market,
+                    MarketRsRun.as_of_date == d,
+                    MarketRsRun.formula_version == formula_version,
+                )
+                .one_or_none()
+            )
+            if run is None:
+                run = MarketRsRun(
+                    market=market,
+                    as_of_date=d,
+                    formula_version=formula_version,
+                    status="completed",
+                    benchmark_symbol="SPY",
+                    benchmark_as_of_date=d,
+                    universe_hash=f"rrg-{market}-{d.isoformat()}",
+                    expected_symbol_count=10,
+                    eligible_symbol_count=10,
+                    excluded_symbol_count=0,
+                    diagnostics_json={"price_basis": "adj_close_only"},
+                )
+                session.add(run)
+                session.flush()
+            market_rs_run_id = run.id
         session.add(
             IBDGroupRank(
                 market=market,
@@ -45,6 +96,8 @@ def _seed_group(session, *, market, group, dates, rs_fn, num_stocks=10, rank=1):
                 avg_rs_rating=float(rs_fn(i)),
                 num_stocks=num_stocks,
                 num_stocks_rs_above_80=0,
+                rs_formula_version=formula_version,
+                market_rs_run_id=market_rs_run_id,
             )
         )
     session.commit()
@@ -56,8 +109,21 @@ class _StubRankService:
     def __init__(self, rows):
         self._rows = rows
 
-    def get_current_rankings(self, db, limit=197, calculation_date=None, market="US"):
+    def get_current_rankings(
+        self,
+        db,
+        limit=197,
+        calculation_date=None,
+        market="US",
+        formula_version=None,
+    ):
         rows = [r for r in self._rows if r["market"] == market]
+        if formula_version is not None:
+            rows = [
+                r for r in rows
+                if r.get("rs_formula_version", LEGACY_RS_FORMULA_VERSION)
+                == formula_version
+            ]
         if calculation_date is not None:
             expected = calculation_date.isoformat()
             rows = [r for r in rows if r["date"] == expected]
@@ -74,6 +140,144 @@ def _service_for_rank_rows(rows, **kwargs):
         history_provider=USGroupRankHistoryProvider(_StubRankService(rows)),
         **kwargs,
     )
+
+
+def test_stored_rrg_history_provider_isolates_the_active_formula():
+    session = _session()
+    dates = _weekly_fridays(14)
+    _seed_group(
+        session,
+        market="HK",
+        group="Internet Services",
+        dates=dates,
+        rs_fn=lambda i: 10 + i,
+        formula_version=LEGACY_RS_FORMULA_VERSION,
+    )
+    _seed_group(
+        session,
+        market="HK",
+        group="Internet Services",
+        dates=dates,
+        rs_fn=lambda i: 70 + i,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+    session.add(
+        MarketRsFormulaPointer(
+            market="HK",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+    )
+    session.commit()
+
+    class _StoredRankService:
+        def get_current_rankings(
+            self,
+            db,
+            limit=197,
+            calculation_date=None,
+            *,
+            market="US",
+            formula_version=None,
+        ):
+            query = db.query(IBDGroupRank).filter(
+                IBDGroupRank.market == market,
+                IBDGroupRank.rs_formula_version == formula_version,
+            )
+            if calculation_date is not None:
+                query = query.filter(IBDGroupRank.date == calculation_date)
+            latest = query.order_by(IBDGroupRank.date.desc()).first()
+            if latest is None:
+                return []
+            return [
+                {
+                    "industry_group": latest.industry_group,
+                    "date": latest.date.isoformat(),
+                    "rank": latest.rank,
+                    "avg_rs_rating": latest.avg_rs_rating,
+                    "num_stocks": latest.num_stocks,
+                    "rs_formula_version": latest.rs_formula_version,
+                }
+            ]
+
+    provider = StoredGroupRankHistoryProvider(
+        _StoredRankService(),
+        MarketRsRunRepository(),
+    )
+    latest, _meta, balanced_series = provider.get_all_groups_history(
+        session,
+        market="hk",
+        days=365,
+    )
+    assert latest == dates[-1].isoformat()
+    assert [point[1] for point in balanced_series["Internet Services"]] == [
+        70.0 + index for index in range(14)
+    ]
+
+    pointer = session.get(MarketRsFormulaPointer, "HK")
+    assert pointer is not None
+    pointer.formula_version = LEGACY_RS_FORMULA_VERSION
+    session.commit()
+    _latest, _meta, legacy_series = provider.get_all_groups_history(
+        session,
+        market="HK",
+        days=365,
+    )
+    assert [point[1] for point in legacy_series["Internet Services"]] == [
+        10.0 + index for index in range(14)
+    ]
+
+
+def test_live_and_static_rrg_coordinates_match_for_formula_isolated_history():
+    session = _session()
+    dates = _weekly_fridays(40)
+    _seed_group(
+        session,
+        market="HK",
+        group="Internet Services",
+        dates=dates,
+        rs_fn=lambda i: 40 + 0.6 * i,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+    session.add(
+        MarketRsFormulaPointer(
+            market="HK",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+    )
+    session.commit()
+
+    latest = dates[-1].isoformat()
+    current = _StubRankService(
+        [
+            {
+                "market": "HK",
+                "industry_group": "Internet Services",
+                "date": latest,
+                "rank": 1,
+                "num_stocks": 10,
+                "avg_rs_rating": 63.4,
+                "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            }
+        ]
+    )
+    live = RRGService(
+        history_provider=StoredGroupRankHistoryProvider(
+            current,
+            MarketRsRunRepository(),
+        )
+    ).get_rrg(session, market="HK")
+    state = StaticRRGHistoryBundleService().build(
+        session,
+        market="HK",
+        through_date=dates[-1],
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+    static = RRGService(
+        history_provider=StaticRRGHistoryProvider(state)
+    ).get_rrg(session, market="HK")
+
+    assert state.rs_formula_version == BALANCED_RS_FORMULA_VERSION
+    assert live["groups"] == static["groups"]
 
 
 def test_get_rrg_groups_scope_returns_quadrants_and_tails():
@@ -153,7 +357,7 @@ def test_get_rrg_omits_groups_with_too_little_history():
                 rs_fn=lambda i: 40 + 0.6 * i)
     # Only 5 weekly points -> below MIN_TAIL_WEEKS -> omitted.
     _seed_group(session, market="US", group="TinyNew", dates=_weekly_fridays(5),
-                rs_fn=lambda i: 50.0)
+                rs_fn=lambda i: 50.0, rank=2)
 
     latest = dates[-1].isoformat()
     stub = _StubRankService([
@@ -172,11 +376,11 @@ def test_get_rrg_sectors_scope_rolls_groups_into_gics_sectors():
     session = _session()
     dates = _weekly_fridays(40)
     _seed_group(session, market="US", group="AlphaTech", dates=dates,
-                rs_fn=lambda i: 40 + 0.6 * i, num_stocks=12)
+                rs_fn=lambda i: 40 + 0.6 * i, num_stocks=12, rank=1)
     _seed_group(session, market="US", group="GammaChips", dates=dates,
-                rs_fn=lambda i: 42 + 0.5 * i, num_stocks=8)
+                rs_fn=lambda i: 42 + 0.5 * i, num_stocks=8, rank=2)
     _seed_group(session, market="US", group="BetaMetals", dates=dates,
-                rs_fn=lambda i: 60 - 0.6 * i, num_stocks=10)
+                rs_fn=lambda i: 60 - 0.6 * i, num_stocks=10, rank=3)
 
     # Group -> dominant GICS sector via constituents.
     for sym, grp, sector in [

@@ -8,6 +8,8 @@ from typing import Any, Mapping, Optional
 
 import pandas as pd
 
+from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
+
 from .group_rank_cache_policy import GroupRankCacheRequirement
 
 
@@ -111,6 +113,32 @@ class GroupRanking:
     num_stocks_rs_above_80: int
     top_symbol: str | None
     top_rs_rating: float | None
+    avg_rs_rating_1m: float | None = None
+    avg_rs_rating_3m: float | None = None
+    rs_formula_version: str = LEGACY_RS_FORMULA_VERSION
+    market_rs_run_id: int | None = None
+
+    @classmethod
+    def from_mapping(cls, row: Mapping[str, Any]) -> "GroupRanking":
+        return cls(
+            industry_group=str(row["industry_group"]),
+            date=row["date"],
+            rank=int(row["rank"]),
+            avg_rs_rating=float(row["avg_rs_rating"]),
+            median_rs_rating=row.get("median_rs_rating"),
+            weighted_avg_rs_rating=row.get("weighted_avg_rs_rating"),
+            rs_std_dev=row.get("rs_std_dev"),
+            num_stocks=int(row["num_stocks"]),
+            num_stocks_rs_above_80=int(row["num_stocks_rs_above_80"]),
+            top_symbol=row.get("top_symbol"),
+            top_rs_rating=row.get("top_rs_rating"),
+            avg_rs_rating_1m=row.get("avg_rs_rating_1m"),
+            avg_rs_rating_3m=row.get("avg_rs_rating_3m"),
+            rs_formula_version=str(
+                row.get("rs_formula_version") or LEGACY_RS_FORMULA_VERSION
+            ),
+            market_rs_run_id=row.get("market_rs_run_id"),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +153,10 @@ class GroupRanking:
             "num_stocks_rs_above_80": self.num_stocks_rs_above_80,
             "top_symbol": self.top_symbol,
             "top_rs_rating": self.top_rs_rating,
+            "avg_rs_rating_1m": self.avg_rs_rating_1m,
+            "avg_rs_rating_3m": self.avg_rs_rating_3m,
+            "rs_formula_version": self.rs_formula_version,
+            "market_rs_run_id": self.market_rs_run_id,
         }
 
 

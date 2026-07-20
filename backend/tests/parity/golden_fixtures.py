@@ -50,6 +50,27 @@ GOLDEN_PROFILES: dict[str, dict[str, Any]] = {
 
 GOLDEN_TICKERS: list[str] = list(GOLDEN_PROFILES.keys())
 
+CANONICAL_STOCK_RS_FIELDS: tuple[str, ...] = (
+    "rs_rating",
+    "rs_rating_1m",
+    "rs_rating_3m",
+    "rs_rating_12m",
+    "rs_formula_version",
+    "market_rs_run_id",
+    "rs_universe_size",
+)
+
+CANONICAL_GROUP_RS_FIELDS: tuple[str, ...] = (
+    "rank",
+    "avg_rs_rating",
+    "avg_rs_rating_1m",
+    "avg_rs_rating_3m",
+    "num_stocks",
+    "top_symbol",
+    "rs_formula_version",
+    "market_rs_run_id",
+)
+
 
 def _base_dict(symbol: str) -> dict[str, Any]:
     """Common fields shared by all profiles, ensuring no key is missed."""

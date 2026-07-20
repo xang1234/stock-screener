@@ -211,3 +211,12 @@ def test_golden_provisional_short_history_flagged():
     result = compute_group_rrg(series, RRGParams())
     assert result["is_provisional"] is True
     assert result["current"] == {"date": "2024-05-12", "x": 108.5403, "y": 96.4545}
+
+
+def test_formula_versioning_does_not_change_the_rrg_transform_itself():
+    series = _daily(200, lambda i: 40.0 + 0.1 * i)
+
+    legacy_coordinates = compute_group_rrg(series, RRGParams())
+    balanced_coordinates = compute_group_rrg(tuple(series), RRGParams())
+
+    assert balanced_coordinates == legacy_coordinates

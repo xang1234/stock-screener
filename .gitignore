@@ -74,6 +74,7 @@ frontend/test-results/
 # Generated agent runtime state
 .superpowers/brainstorm/**/state/**
 .research/
+.worktrees/
 
 # bv (beads viewer) local config and caches
 .bv/

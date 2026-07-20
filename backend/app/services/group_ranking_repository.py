@@ -9,6 +9,8 @@ from sqlalchemy import and_, desc
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
+
 from ..models.industry import IBDGroupRank
 from .group_rank_models import GroupRanking
 
@@ -22,6 +24,9 @@ class GroupRankingRepository:
         rankings: Sequence[GroupRanking],
         market: str,
     ) -> None:
+        formula_versions = {ranking.rs_formula_version for ranking in rankings}
+        if len(formula_versions) > 1:
+            raise ValueError("One Group ranking write cannot mix RS formulas")
         for ranking in rankings:
             if ranking.date != calculation_date:
                 raise ValueError(
@@ -48,6 +53,7 @@ class GroupRankingRepository:
                         "industry_group",
                         "date",
                         "market",
+                        "rs_formula_version",
                     ],
                     set_={
                         "rank": stmt.excluded.rank,
@@ -67,6 +73,9 @@ class GroupRankingRepository:
                         "top_rs_rating": (
                             stmt.excluded.top_rs_rating
                         ),
+                        "avg_rs_rating_1m": stmt.excluded.avg_rs_rating_1m,
+                        "avg_rs_rating_3m": stmt.excluded.avg_rs_rating_3m,
+                        "market_rs_run_id": stmt.excluded.market_rs_run_id,
                     },
                 )
             )
@@ -77,6 +86,7 @@ class GroupRankingRepository:
             calculation_date,
             values,
             market=market,
+            formula_version=next(iter(formula_versions)),
         )
 
     def delete_range(
@@ -86,6 +96,7 @@ class GroupRankingRepository:
         start_date: date,
         end_date: date,
         market: str,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
     ) -> int:
         normalized_market = (market or "US").upper()
         return (
@@ -95,6 +106,7 @@ class GroupRankingRepository:
                     IBDGroupRank.date >= start_date,
                     IBDGroupRank.date <= end_date,
                     IBDGroupRank.market == normalized_market,
+                    IBDGroupRank.rs_formula_version == formula_version,
                 )
             )
             .delete(synchronize_session=False)
@@ -107,6 +119,7 @@ class GroupRankingRepository:
         calculation_date: date,
         rankings: Sequence[GroupRanking],
         market: str,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
     ) -> int:
         normalized_market = (market or "US").upper()
         deleted = (
@@ -114,6 +127,7 @@ class GroupRankingRepository:
             .filter(
                 IBDGroupRank.date == calculation_date,
                 IBDGroupRank.market == normalized_market,
+                IBDGroupRank.rs_formula_version == formula_version,
             )
             .delete(synchronize_session=False)
         )
@@ -132,6 +146,7 @@ class GroupRankingRepository:
         limit: int,
         market: str,
         calculation_date: date | None,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
     ) -> list[IBDGroupRank]:
         normalized_market = (market or "US").upper()
         if calculation_date is not None:
@@ -141,6 +156,7 @@ class GroupRankingRepository:
                 db.query(IBDGroupRank)
                 .filter(
                     IBDGroupRank.market == normalized_market,
+                    IBDGroupRank.rs_formula_version == formula_version,
                 )
                 .order_by(desc(IBDGroupRank.date))
                 .first()
@@ -154,6 +170,7 @@ class GroupRankingRepository:
             .filter(
                 IBDGroupRank.date == latest_date,
                 IBDGroupRank.market == normalized_market,
+                IBDGroupRank.rs_formula_version == formula_version,
             )
             .order_by(IBDGroupRank.rank)
             .limit(limit)
@@ -167,6 +184,7 @@ class GroupRankingRepository:
         start_date: date,
         end_date: date,
         market: str,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
     ) -> frozenset[date]:
         rows = (
             db.query(IBDGroupRank.date)
@@ -177,6 +195,7 @@ class GroupRankingRepository:
                     IBDGroupRank.date <= end_date,
                     IBDGroupRank.market
                     == (market or "US").upper(),
+                    IBDGroupRank.rs_formula_version == formula_version,
                 )
             )
             .all()
@@ -194,6 +213,7 @@ class GroupRankingRepository:
         current_date: date,
         period_days: Mapping[str, int],
         market: str,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
     ) -> dict[tuple[str, str], int]:
         if not group_names or not period_days:
             return {}
@@ -215,6 +235,7 @@ class GroupRankingRepository:
                     IBDGroupRank.date < current_date,
                     IBDGroupRank.market
                     == (market or "US").upper(),
+                    IBDGroupRank.rs_formula_version == formula_version,
                 )
             )
             .all()
@@ -268,6 +289,7 @@ class GroupRankingRepository:
         industry_group: str,
         start_date: date,
         market: str,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
     ) -> list[IBDGroupRank]:
         return (
             db.query(IBDGroupRank)
@@ -278,6 +300,7 @@ class GroupRankingRepository:
                     IBDGroupRank.date >= start_date,
                     IBDGroupRank.market
                     == (market or "US").upper(),
+                    IBDGroupRank.rs_formula_version == formula_version,
                 )
             )
             .order_by(IBDGroupRank.date.desc())
@@ -308,6 +331,10 @@ class GroupRankingRepository:
             ),
             "top_symbol": ranking.top_symbol,
             "top_rs_rating": ranking.top_rs_rating,
+            "avg_rs_rating_1m": ranking.avg_rs_rating_1m,
+            "avg_rs_rating_3m": ranking.avg_rs_rating_3m,
+            "rs_formula_version": ranking.rs_formula_version,
+            "market_rs_run_id": ranking.market_rs_run_id,
         }
 
     @staticmethod
@@ -317,6 +344,7 @@ class GroupRankingRepository:
         values: Sequence[Mapping[str, Any]],
         *,
         market: str,
+        formula_version: str,
     ) -> None:
         group_names = [
             value["industry_group"]
@@ -331,6 +359,7 @@ class GroupRankingRepository:
                     ),
                     IBDGroupRank.date == calculation_date,
                     IBDGroupRank.market == market,
+                    IBDGroupRank.rs_formula_version == formula_version,
                 )
             )
             .all()
@@ -345,24 +374,13 @@ class GroupRankingRepository:
                 value["industry_group"]
             )
             if existing:
-                existing.rank = value["rank"]
-                existing.avg_rs_rating = value[
-                    "avg_rs_rating"
-                ]
-                existing.num_stocks = value["num_stocks"]
-                existing.num_stocks_rs_above_80 = value[
-                    "num_stocks_rs_above_80"
-                ]
-                existing.top_symbol = value["top_symbol"]
-                existing.top_rs_rating = value[
-                    "top_rs_rating"
-                ]
-                existing.median_rs_rating = value.get(
-                    "median_rs_rating"
-                )
-                existing.weighted_avg_rs_rating = value.get(
-                    "weighted_avg_rs_rating"
-                )
-                existing.rs_std_dev = value.get("rs_std_dev")
+                for field, field_value in value.items():
+                    if field not in {
+                        "market",
+                        "industry_group",
+                        "date",
+                        "rs_formula_version",
+                    }:
+                        setattr(existing, field, field_value)
             else:
                 db.add(IBDGroupRank(**dict(value)))

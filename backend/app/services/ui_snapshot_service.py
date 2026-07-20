@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 import json
 import logging
 from threading import Lock
@@ -19,6 +19,7 @@ from app.domain.common.query import PageSpec, SortOrder, SortSpec
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.serialization import json_safe
 from app.infra.db.uow import SqlUnitOfWork
+from app.infra.db.models.relative_strength import MarketRsFormulaPointer
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
@@ -60,6 +61,7 @@ from app.schemas.theme import (
     ThemeRankingsResponse,
 )
 from app.services.theme_discovery_service import ThemeDiscoveryService
+from app.services.group_ranking_payloads import group_snapshot_metadata
 from app.services.theme_pipeline_state_service import compute_pipeline_observability
 from app.services.theme_taxonomy_service import ThemeTaxonomyService
 from app.use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
@@ -428,10 +430,23 @@ class UISnapshotService:
         return latest.isoformat() if latest else "none"
 
     def _resolve_groups_source_revision(self, db: Session) -> str:
-        latest = db.query(func.max(IBDGroupRank.date)).filter(
-            IBDGroupRank.market == "US",
-        ).scalar()
-        return latest.isoformat() if latest else "none"
+        pointer = db.get(MarketRsFormulaPointer, "US")
+        formula_version = (
+            str(pointer.formula_version) if pointer is not None else "unconfigured"
+        )
+        latest = (
+            db.query(IBDGroupRank.date, IBDGroupRank.market_rs_run_id)
+            .filter(
+                IBDGroupRank.market == "US",
+                IBDGroupRank.rs_formula_version == formula_version,
+            )
+            .order_by(IBDGroupRank.date.desc(), IBDGroupRank.id.desc())
+            .first()
+        )
+        if latest is None:
+            return f"none|{formula_version}|none"
+        run_id = latest.market_rs_run_id if latest.market_rs_run_id is not None else "none"
+        return f"{latest.date.isoformat()}|{formula_version}|{run_id}"
 
     def _resolve_themes_source_revision(self, db: Session, pipeline: str) -> str:
         latest_metrics = db.query(func.max(ThemeMetrics.date)).filter(ThemeMetrics.pipeline == pipeline).scalar()
@@ -445,8 +460,8 @@ class UISnapshotService:
         candidate_count = db.query(func.count(ThemeCluster.id)).filter(
             ThemeCluster.pipeline == pipeline,
             ThemeCluster.lifecycle_state == "candidate",
-            ThemeCluster.is_active == True,
-            ThemeCluster.is_l1 == False,
+            ThemeCluster.is_active.is_(True),
+            ThemeCluster.is_l1.is_(False),
         ).scalar() or 0
         failed_count = self._query_failed_items_count(db, pipeline)
         parts = [
@@ -665,11 +680,13 @@ class UISnapshotService:
 
         movers = service.get_rank_movers(db, period=DEFAULT_GROUP_PERIOD, limit=10)
         ranking_date = rankings[0]["date"]
+        metadata = group_snapshot_metadata(db, market="US", rankings=rankings)
         return {
             "rankings": GroupRankingsResponse(
                 date=ranking_date,
                 total_groups=len(rankings),
                 rankings=[GroupRankResponse(**row) for row in rankings],
+                **metadata,
                 **market_scope_tag("US"),
             ).model_dump(mode="json"),
             "movers_period": DEFAULT_GROUP_PERIOD,
@@ -677,6 +694,7 @@ class UISnapshotService:
                 period=movers["period"],
                 gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
                 losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+                **metadata,
                 **market_scope_tag("US"),
             ).model_dump(mode="json"),
             "task_controls_enabled": settings.feature_tasks,
@@ -691,14 +709,17 @@ class UISnapshotService:
             emerging = discovery.discover_emerging_themes(min_velocity=1.5, min_mentions=3)
             alerts_rows = (
                 db.query(ThemeAlert)
-                .filter(ThemeAlert.is_dismissed == False)
+                .filter(ThemeAlert.is_dismissed.is_(False))
                 .order_by(ThemeAlert.triggered_at.desc())
                 .limit(50)
                 .all()
             )
             unread_count = (
                 db.query(func.count(ThemeAlert.id))
-                .filter(ThemeAlert.is_read == False, ThemeAlert.is_dismissed == False)
+                .filter(
+                    ThemeAlert.is_read.is_(False),
+                    ThemeAlert.is_dismissed.is_(False),
+                )
                 .scalar()
                 or 0
             )
@@ -796,7 +817,11 @@ class UISnapshotService:
 
     def _resolve_source_ids_for_pipeline(self, db: Session, pipeline: str) -> list[int]:
         source_ids: list[int] = []
-        rows = db.query(ContentSource.id, ContentSource.pipelines).filter(ContentSource.is_active == True).all()
+        rows = (
+            db.query(ContentSource.id, ContentSource.pipelines)
+            .filter(ContentSource.is_active.is_(True))
+            .all()
+        )
         for source_id, source_pipelines in rows:
             parsed = source_pipelines or ["technical", "fundamental"]
             if isinstance(parsed, str):
@@ -811,8 +836,8 @@ class UISnapshotService:
     def _ensure_l2_theme_metrics(self, db: Session, pipeline: str) -> None:
         themes_without_metrics = db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == pipeline,
-            ThemeCluster.is_active == True,
-            ThemeCluster.is_l1 == False,
+            ThemeCluster.is_active.is_(True),
+            ThemeCluster.is_l1.is_(False),
             ~ThemeCluster.id.in_(db.query(ThemeMetrics.theme_cluster_id).distinct()),
         ).count()
         if themes_without_metrics > 0:

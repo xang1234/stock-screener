@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 
@@ -58,10 +58,24 @@ describe('StaticGroupsPage', () => {
                     industry_group: 'Semiconductors',
                     rank: 1,
                     avg_rs_rating: 92.5,
+                    avg_rs_rating_1m: 38.25,
+                    avg_rs_rating_3m: 61.75,
                     num_stocks: 14,
                     rank_change_1w: 2,
                     rank_change_1m: 4,
                     rank_change_3m: 7,
+                  },
+                  {
+                    industry_group: 'Retail',
+                    rank: 2,
+                    avg_rs_rating: 0,
+                    avg_rs_rating_1m: 0,
+                    avg_rs_rating_3m: null,
+                    num_stocks: 4,
+                    rank_change_1w: 0,
+                    rank_change_1m: 0,
+                    rank_change_3m: 0,
+                    rank_change_6m: 0,
                   },
                 ],
               },
@@ -96,6 +110,33 @@ describe('StaticGroupsPage', () => {
     expect(screen.getByRole('columnheader', { name: '1W' })).toBeInTheDocument();
     expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
     expect(screen.getByText('+3')).toBeInTheDocument();
+  });
+
+  it('renders 1M and 3M RS columns with finite-value formatting', async () => {
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'US Group Rankings' })).toBeInTheDocument();
+    const table = screen.getByRole('columnheader', { name: 'Avg RS' }).closest('table');
+    const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent.trim());
+    expect(headers).toEqual([
+      'Rank',
+      'Group',
+      'Avg RS',
+      '1M RS',
+      '3M RS',
+      'Stocks',
+      '1W',
+      '1M',
+      '3M',
+      '6M',
+      'Top Stock',
+    ]);
+    const rows = within(table).getAllByRole('row');
+    expect(within(rows[1]).getAllByRole('cell')[3]).toHaveTextContent('38.3');
+    expect(within(rows[1]).getAllByRole('cell')[4]).toHaveTextContent('61.8');
+    expect(within(rows[2]).getAllByRole('cell')[2]).toHaveTextContent('0.0');
+    expect(within(rows[2]).getAllByRole('cell')[3]).toHaveTextContent('0.0');
+    expect(within(rows[2]).getAllByRole('cell')[4]).toHaveTextContent('-');
   });
 
   it('renders the RRG chart from the baked bundle when the toggle is selected', async () => {

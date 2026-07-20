@@ -290,6 +290,7 @@ def test_find_missing_dates_reads_existing_dates_from_repository():
         "start_date": date(2026, 3, 18),
         "end_date": date(2026, 3, 20),
         "market": "US",
+        "formula_version": "legacy-linear-v1",
     }
     assert calendar.is_trading_day.call_count == 2
 

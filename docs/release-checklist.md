@@ -1,6 +1,6 @@
 # Release-Readiness Checklist
 
-Pre-merge and pre-release verification for the Setup Engine.
+Pre-merge and pre-release verification for the Setup Engine and versioned Market RS changes.
 
 ---
 
@@ -72,3 +72,21 @@ Reviewer due diligence beyond automated gates:
       in the UI and match expected detector outputs
 - [ ] Frontend lint and tests pass: `make frontend`
 - [ ] Documentation review: verify `docs/INSTALL_*.md` match any compose or build changes
+
+---
+
+## 4. Balanced Market RS Rollout
+
+Complete this section once per Market when activating `balanced-horizon-percentile-v2`.
+
+- [ ] Record the current `market_rs_formula_pointers` row and the retained legacy `latest_published_market:<MARKET>` Feature-run ID.
+- [ ] Run the shadow backfill without `--activate`; confirm **1M 20%**, **3M 30%**, 6M 20%, 9M 15%, and 12M 15% same-set percentile history reaches the target trading date.
+- [ ] Confirm `failed_count == 0`, no `validation_errors`, completed stock/Group rows for every required date, and a zero exit status.
+- [ ] Prepare an absolute, empty, non-serving `--static-staging-dir`; never use the configured static serving directory.
+- [ ] Run the per-Market activation command from [Operations](OPERATIONS.md#balanced-market-rs-rollout).
+- [ ] Confirm activation validation passes stock ranges/coverage, Group rank determinism, formula/run/universe provenance, live/static parity, `static-site-v3`, and `static-rrg-history-v4` (or the explicit insufficient-balanced-history state).
+- [ ] Confirm both the Market formula and Feature-run pointers changed atomically and the output says `activated: true`.
+- [ ] Verify live Scan overall/1M/3M/12M RS and live Group overall/**Group 1M RS**/3M RS against the staged artifacts; verify the live table has 1M RS and 3M RS columns.
+- [ ] Trigger `.github/workflows/static-site.yml` through the existing release procedure; confirm compatible fallback handling, Pages deployment, and static Group 1M/3M columns.
+- [ ] Review expected rank changes, particularly former 6–12M leaders with weak 1M/3M performance; do not compare movers or RRG points across formula versions.
+- [ ] Retain legacy rows and the saved legacy Feature run until acceptance. Rehearse rollback by restoring both pointers together, invalidating/rebuilding live Groups bootstrap, then running the Static Site workflow with a per-Market JSON override such as `rs_formula_overrides={"US":"legacy-linear-v1"}`.

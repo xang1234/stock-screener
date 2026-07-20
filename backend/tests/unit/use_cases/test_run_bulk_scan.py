@@ -5,6 +5,7 @@ No DB, no Redis, no Celery — pure domain logic testing.
 
 from __future__ import annotations
 
+from datetime import date
 import time
 from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
 from threading import Lock
@@ -12,10 +13,11 @@ from threading import Lock
 import pytest
 
 from app.domain.common.errors import EntityNotFoundError
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.models import ScanStatus
+from app.domain.scanning.ports import MarketRsResolution
 from app.use_cases.scanning.run_bulk_scan import (
     RunBulkScanCommand,
-    RunBulkScanResult,
     RunBulkScanUseCase,
 )
 
@@ -229,6 +231,252 @@ class TestRunBulkScanHappyPath:
             for call in scanner.calls
         )
         assert all(call["pre_fetched_data"] is not None for call in scanner.calls)
+
+    def test_hydrates_prefetched_rows_once_per_market_from_canonical_reader(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+        captured = {}
+
+        class _Provider(FakeStockDataProvider):
+            def _make_stock_data(self, symbol):
+                data = super()._make_stock_data(symbol)
+                data.market = "HK" if symbol.endswith(".HK") else "US"
+                return data
+
+        class _Scanner(_BulkAwareScanner):
+            def scan_stock_multi(self, symbol, screener_names, **kwargs):
+                captured[symbol] = kwargs["pre_fetched_data"]
+                return super().scan_stock_multi(symbol, screener_names, **kwargs)
+
+        class _Reader:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                rating = 87 if kwargs["market"] == "US" else 77
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=date(2026, 4, 10),
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=42 if kwargs["market"] == "US" else 43,
+                    universe_size=5000 if kwargs["market"] == "US" else 2500,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": rating,
+                            "rs_rating_1m": rating - 2,
+                            "rs_rating_3m": rating - 1,
+                            "rs_rating_12m": rating + 1,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        result = RunBulkScanUseCase(
+            scanner=_Scanner(),
+            data_provider=_Provider(),
+            market_rs_reader=reader,
+        ).execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1", symbols=["AAPL", "0700.HK"], chunk_size=2
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert {(call["market"], call["symbols"]) for call in reader.calls} == {
+            ("US", ("AAPL",)),
+            ("HK", ("0700.HK",)),
+        }
+        assert all(call["as_of_date"] is None for call in reader.calls)
+        assert captured["AAPL"].rs_source.ratings["rs_rating"] == 87
+        assert captured["AAPL"].rs_source.audit_fields() == {
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+            "rs_universe_size": 5000,
+        }
+        assert captured["0700.HK"].rs_source.ratings["rs_rating"] == 77
+
+    @pytest.mark.parametrize("bulk_mode", ("partial", "failure"))
+    def test_passes_pinned_market_rs_to_bulk_prefetch_fallbacks(
+        self,
+        bulk_mode,
+    ):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan(
+            "s1",
+            screener_types=["minervini"],
+        )
+        uow = FakeUnitOfWork(scans=scan_repo)
+        captured: dict[str, dict] = {}
+
+        class _FallbackProvider(FakeStockDataProvider):
+            def prepare_data_bulk(self, symbols, requirements, **kwargs):
+                if bulk_mode == "failure":
+                    raise RuntimeError("bulk unavailable")
+                return {symbols[0]: self._make_stock_data(symbols[0])}
+
+        class _Scanner(_BulkAwareFakeScanner):
+            def scan_stock_multi(self, symbol, screener_names, **kwargs):
+                captured[symbol] = kwargs
+                return super().scan_stock_multi(symbol, screener_names, **kwargs)
+
+        class _Reader:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=date(2026, 4, 10),
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=42,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 80,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 80,
+                            "rs_rating_12m": 80,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        result = RunBulkScanUseCase(
+            scanner=_Scanner(),
+            data_provider=_FallbackProvider(),
+            market_rs_reader=reader,
+        ).execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAA", "BBB"],
+                chunk_size=2,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert reader.calls[0]["symbols"] == ("AAA", "BBB")
+        fallback_symbols = ("BBB",) if bulk_mode == "partial" else ("AAA", "BBB")
+        for symbol in fallback_symbols:
+            assert "pre_fetched_data" not in captured[symbol]
+            assert captured[symbol]["market_rs_resolution"].run_id == 42
+
+    def test_pins_market_rs_publication_across_scan_chunks(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+
+        class _Reader:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs["as_of_date"] is None and len(self.calls) > 1:
+                    publication_date = date(2026, 4, 11)
+                    run_id = 43
+                else:
+                    publication_date = date(2026, 4, 10)
+                    run_id = 42
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=publication_date,
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=run_id,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 80,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 80,
+                            "rs_rating_12m": 80,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        result = RunBulkScanUseCase(
+            scanner=_BulkAwareFakeScanner(),
+            data_provider=FakeStockDataProvider(),
+            market_rs_reader=reader,
+        ).execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAA", "BBB", "CCC", "DDD"],
+                chunk_size=2,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert [call["as_of_date"] for call in reader.calls] == [
+            None,
+            date(2026, 4, 10),
+        ]
+        assert [call["formula_version"] for call in reader.calls] == [
+            None,
+            BALANCED_RS_FORMULA_VERSION,
+        ]
+
+    def test_fails_if_pinned_market_rs_run_changes_between_chunks(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+
+        class _Reader:
+            def __init__(self):
+                self.calls = 0
+
+            def get(self, **kwargs):
+                self.calls += 1
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=date(2026, 4, 10),
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=41 + self.calls,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 80,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 80,
+                            "rs_rating_12m": 80,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        with pytest.raises(RuntimeError, match="Market RS publication changed for US"):
+            RunBulkScanUseCase(
+                scanner=_BulkAwareFakeScanner(),
+                data_provider=FakeStockDataProvider(),
+                market_rs_reader=_Reader(),
+            ).execute(
+                uow,
+                RunBulkScanCommand(
+                    scan_id="s1",
+                    symbols=["AAA", "BBB", "CCC", "DDD"],
+                    chunk_size=2,
+                ),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert scan_repo.scans["s1"].status == ScanStatus.FAILED.value
+        assert uow.scan_results.count_by_scan_id("s1") == 2
 
     def test_cache_only_flag_propagates_to_bulk_data_fetch(self):
         """cache_only=True on the command must disable live-fetch fallback inside
@@ -730,6 +978,96 @@ class TestCancellation:
 
 class TestResume:
     """Checkpoint recovery skips already-processed symbols."""
+
+    def test_resume_reuses_persisted_market_rs_run(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        result_repo = FakeScanResultRepository()
+        result_repo._persisted_results = [
+            (
+                "s1",
+                "AAA",
+                {
+                    "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                    "market_rs_run_id": 42,
+                },
+            )
+        ]
+        uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
+
+        class _Reader:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=date(2026, 4, 10),
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=42,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 80,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 80,
+                            "rs_rating_12m": 80,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        result = RunBulkScanUseCase(
+            scanner=_BulkAwareFakeScanner(),
+            data_provider=FakeStockDataProvider(),
+            market_rs_reader=reader,
+        ).execute(
+            uow,
+            RunBulkScanCommand(scan_id="s1", symbols=["AAA", "BBB"]),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert reader.calls[0]["formula_version"] == BALANCED_RS_FORMULA_VERSION
+        assert reader.calls[0]["run_id"] == 42
+
+    def test_resume_rejects_mixed_persisted_market_rs_runs(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        result_repo = FakeScanResultRepository()
+        result_repo._persisted_results = [
+            (
+                "s1",
+                symbol,
+                {
+                    "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                    "market_rs_run_id": run_id,
+                },
+            )
+            for symbol, run_id in (("AAA", 42), ("BBB", 43))
+        ]
+        uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
+
+        class _Reader:
+            def get(self, **_kwargs):
+                raise AssertionError("mixed persisted runs must fail before reading RS")
+
+        with pytest.raises(RuntimeError, match="persisted Market RS publications disagree"):
+            RunBulkScanUseCase(
+                scanner=_BulkAwareFakeScanner(),
+                data_provider=FakeStockDataProvider(),
+                market_rs_reader=_Reader(),
+            ).execute(
+                uow,
+                RunBulkScanCommand(scan_id="s1", symbols=["AAA", "BBB", "CCC"]),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert scan_repo.scans["s1"].status == ScanStatus.FAILED.value
 
     def test_resume_skips_already_processed(self):
         scan_repo = FakeScanRepository()

@@ -71,10 +71,12 @@ Bootstrap stages:
 1. **Universe refresh** — seeds the market symbol list. US uses S&P 500 / Russell / NDX via `refresh_stock_universe`; HK / IN / JP / KR / TW / CN / CA / DE / SG / MY / AU use official exchange feeds via `refresh_official_market_universe`.
 2. **Benchmark + price refresh** — imports the GitHub daily price bundle first, accepts recent stale bundles during bootstrap, then live-fetches missing/current-session gaps (`7d` top-up for stale symbols, `2y` for no-history symbols). Under `live_only` this stage skips the bundle and fetches live — see [Market Data Source Mode](#market-data-source-mode).
 3. **Fundamentals refresh** — loads quarterly and annual financials.
-4. **Breadth calculation** — computes StockBee-style advance/decline data with gap-fill.
-5. **Group rankings** — computes IBD-style relative strength group ranks.
-6. **Feature snapshot** — US-only daily feature rollup for the Setup Engine.
-7. **Initial autoscan** — publishes the first default-profile scan.
+4. **Market RS snapshot** — computes the canonical balanced-horizon percentile RS snapshot after prices and fundamentals are ready. During a guarded rollout, the new formula can remain in shadow mode until that market's formula pointer is activated.
+5. **Breadth calculation** — computes StockBee-style advance/decline data with gap-fill.
+6. **Market exposure** — derives the market-regime exposure state from the refreshed breadth data.
+7. **Group rankings** — averages canonical constituent RS values for each group, using the active formula for that market.
+8. **Feature snapshot** — US-only daily feature rollup for the Setup Engine.
+9. **Initial autoscan** — publishes the first default-profile scan.
 
 Selecting many enabled markets multiplies this work. On smaller hosts, start with one primary market and add markets after the workspace is ready.
 
@@ -195,6 +197,100 @@ When the tasks feature is enabled, the header settings icon opens **Scheduled Ta
 *Scheduled Tasks — registered jobs with schedule, last-run, status, and run-now*
 
 The dialog shows each task's display name and description, schedule, last run time and duration, last status, and a run-now action (with polling while a task is active). Tasks are feature-gated; deployments without task support do not show this control.
+
+## Balanced Market RS Rollout
+
+`balanced-horizon-percentile-v2` is activated independently for each Market. Its five same-set excess-return percentiles are weighted **1M 20%**, **3M 30%**, **6M 20%**, **9M 15%**, and **12M 15%** before the composite is re-ranked. Keep the prior `legacy-linear-v1` Market formula pointer and legacy Feature-run ID until the rollout is accepted.
+
+### 1. Record the rollback state
+
+Before activation, record both active pointers. Substitute the target Market in both predicates:
+
+```sql
+SELECT market, formula_version
+FROM market_rs_formula_pointers
+WHERE market = 'US';
+
+SELECT p.key, p.run_id, r.status, r.as_of_date, r.config_json
+FROM feature_run_pointers AS p
+JOIN feature_runs AS r ON r.id = p.run_id
+WHERE p.key = 'latest_published_market:US';
+```
+
+The saved Feature run must remain present with status `published`; activation does not delete it.
+
+### 2. Run the resumable shadow backfill
+
+Run from `backend` with its virtual environment active. `--start-date` is optional when resuming a repaired range:
+
+```bash
+python -m app.scripts.backfill_market_rs \
+  --market US \
+  --through-date 2026-07-17
+```
+
+This leaves the active pointers unchanged. Inspect the JSON report: `formula_version` must be `balanced-horizon-percentile-v2`, `failed_count` and `validation_errors` must be empty/zero, every required trading date must be completed, and the latest run must reach `through_date`. A failed date is isolated for repair and the command exits nonzero.
+
+### 3. Validate and activate atomically
+
+Choose an absolute, empty directory that is not `STATIC_EXPORT_OUTPUT_DIR` and is not served by nginx or another web server. The activation command refuses a relative, non-empty, or configured serving directory.
+
+```bash
+python -m app.scripts.backfill_market_rs \
+  --market US \
+  --through-date 2026-07-17 \
+  --static-staging-dir /var/tmp/stockscreen-rs-us-20260717 \
+  --activate
+```
+
+The command resumes the backfill, builds a balanced Feature snapshot, stages `static-site-v3`, and checks stock/Group coverage, 1–99 ranges, contiguous deterministic Group ranks, exact formula/run/universe metadata on every Scan shard and row, live/static stock and Group parity, and formula-isolated RRG state. Approval records a fingerprint of the root manifest plus the complete staged Market tree, so any file change invalidates activation. Any failed gate exits nonzero without changing either active pointer. A successful validation updates the Market formula pointer and `latest_published_market:<MARKET>` Feature pointer in one database transaction, then invalidates Group caches and republishes the US bootstrap snapshot when applicable.
+
+After success, verify the JSON has `activated: true`, the expected formula/run IDs, and no validation errors. In the live app, refresh Groups and a Scan and confirm:
+
+- the response metadata names `balanced-horizon-percentile-v2` and the activation date;
+- Scan overall/1M/3M/12M RS matches the staged sample;
+- Group overall/1M/3M RS and ranks match staged `markets/<market>/groups.json`;
+- the Group page shows 1M RS and 3M RS columns; and
+- RRG either uses balanced history or explicitly reports insufficient balanced history.
+
+### 4. Promote static artifacts
+
+Do not copy an unvalidated staging directory into the serving directory. After the code and Market activation are on the default branch, use the existing Static Site workflow so its combine, fallback-compatibility, frontend-build, and Pages deployment gates remain in force:
+
+```bash
+gh workflow run static-site.yml -f market_group=us
+# Use market_group=asia or market_group=all for the corresponding rollout set.
+```
+
+Confirm the workflow publishes `static-site-v3`, updates the Market's `static-rrg-history-v4` release asset where applicable, and deploys Pages successfully.
+
+### 5. Roll back one Market
+
+Rollback must restore both saved pointers together. First verify the recorded legacy Feature run is still `published`, then replace `<LEGACY_FEATURE_RUN_ID>` in this transaction:
+
+```sql
+BEGIN;
+
+UPDATE market_rs_formula_pointers
+SET formula_version = 'legacy-linear-v1', updated_at = CURRENT_TIMESTAMP
+WHERE market = 'US';
+
+UPDATE feature_run_pointers
+SET run_id = <LEGACY_FEATURE_RUN_ID>, updated_at = CURRENT_TIMESTAMP
+WHERE key = 'latest_published_market:US';
+
+COMMIT;
+```
+
+If either row was not updated, roll back the transaction and investigate rather than leaving split pointers. After restoration, invalidate the affected Market's Group-ranking cache and republish/reload the live Groups bootstrap. Regenerate rollback artifacts with the workflow's explicit formula input (and the appropriate `market_group`):
+
+```bash
+gh workflow run static-site.yml \
+  -f market_group=us \
+  -f 'rs_formula_overrides={"US":"legacy-linear-v1"}'
+```
+
+The JSON map is per Market; omitted Markets remain on `balanced-horizon-percentile-v2`, allowing an isolated rollback without changing other current or fallback artifacts. Verify live/static metadata says `legacy-linear-v1` for the restored Market. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and omit that Market from `rs_formula_overrides`.
 
 ## Common Recovery Paths
 

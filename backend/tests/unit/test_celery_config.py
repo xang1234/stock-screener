@@ -68,6 +68,13 @@ class TestOffsetSchedule:
         assert (h, m) == (13, 0)
 
 
+def test_market_rs_task_is_registered_and_routed_to_market_jobs():
+    task_name = "app.tasks.market_rs_tasks.calculate_market_rs_snapshot"
+
+    assert "app.tasks.market_rs_tasks" in celery_app.conf.include
+    assert celery_app.conf.task_routes[task_name] == {"queue": "market_jobs_us"}
+
+
 # ---------------------------------------------------------------------------
 # Redis backend resilience
 # ---------------------------------------------------------------------------

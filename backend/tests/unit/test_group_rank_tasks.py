@@ -532,8 +532,6 @@ def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatc
 def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
     """On a trading day, orchestrator gap-fills missing dates then runs the daily task."""
     import app.tasks.group_rank_tasks as module
-    from datetime import date as date_cls
-
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
@@ -553,7 +551,7 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
     )
 
     fake_service = MagicMock()
-    fake_service.find_missing_dates.return_value = [date_cls(2026, 3, 19)]
+    fake_service.find_missing_dates.return_value = [date(2026, 3, 19)]
     fake_service.fill_gaps_optimized.return_value = {
         "total_dates": 1, "processed": 1, "errors": 0,
     }
@@ -590,8 +588,6 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
 
 def test_orchestrator_releases_gapfill_memory_before_today(monkeypatch):
     import app.tasks.group_rank_tasks as module
-    from datetime import date as date_cls
-
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
@@ -611,7 +607,7 @@ def test_orchestrator_releases_gapfill_memory_before_today(monkeypatch):
     )
 
     fake_service = MagicMock()
-    fake_service.find_missing_dates.return_value = [date_cls(2026, 3, 19)]
+    fake_service.find_missing_dates.return_value = [date(2026, 3, 19)]
     fake_service.fill_gaps_optimized.return_value = {
         "total_dates": 1,
         "processed": 1,
@@ -825,7 +821,6 @@ def test_orchestrator_does_not_skip_unexpected_taxonomy_value_error(monkeypatch)
 def test_orchestrator_runs_for_non_us_market(monkeypatch):
     """HK orchestrator runs end-to-end on a trading day."""
     import app.tasks.group_rank_tasks as module
-    from datetime import date as date_cls
 
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)

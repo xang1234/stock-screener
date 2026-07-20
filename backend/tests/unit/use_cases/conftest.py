@@ -18,22 +18,20 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from app.domain.common.errors import EntityNotFoundError
-from app.domain.common.query import FilterSpec, PageSpec, SortSpec
+from app.domain.common.errors import EntityNotFoundError, InvalidTransitionError
+from app.domain.common.query import PageSpec
 from app.domain.common.uow import UnitOfWork
 from app.domain.feature_store.models import (
     FeaturePage,
     FeatureRow,
-    FeatureRowWrite,
     FeatureRunDomain,
-    RunStats,
     RunStatus,
     RunType,
     validate_transition,
 )
 from collections.abc import Sequence
 from app.domain.feature_store.ports import FeatureRunRepository, FeatureStoreRepository
-from app.domain.feature_store.quality import DQInputs, DQResult
+from app.domain.feature_store.quality import DQInputs
 from app.domain.scanning.models import (
     FilterOptions,
     ProgressEvent,
@@ -45,6 +43,7 @@ from app.domain.scanning.ports import (
     ProgressSink,
     ScanRepository,
     ScanResultRepository,
+    ScanResultRsAudit,
     StockDataProvider,
     TaskDispatcher,
     UniverseRepository,
@@ -221,6 +220,16 @@ class FakeScanResultRepository(ScanResultRepository):
     def count_by_scan_id(self, scan_id: str) -> int:
         return sum(1 for sid, _, _ in self._persisted_results if sid == scan_id)
 
+    def list_rs_audits_by_scan_id(
+        self,
+        scan_id: str,
+    ) -> tuple[ScanResultRsAudit, ...]:
+        return tuple(
+            ScanResultRsAudit.from_payload(symbol, result)
+            for sid, symbol, result in self._persisted_results
+            if sid == scan_id
+        )
+
     def query(
         self,
         scan_id,
@@ -393,6 +402,10 @@ class FakeStockDataProvider(StockDataProvider):
         batch_only_fundamentals: bool = False,
     ) -> dict[str, StockData]:
         return {s: self.prepare_data(s, requirements) for s in symbols}
+
+    def apply_market_rs_resolution(self, results, resolution) -> None:
+        for symbol, item in results.items():
+            item.rs_source = resolution.stock_source(symbol)
 
     def _make_stock_data(self, symbol: str) -> StockData:
         dates = pd.date_range(
@@ -589,6 +602,17 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         self._runs[run_id] = updated
         self._pointers[pointer_key] = run_id
         return updated
+
+    def repoint_published(
+        self,
+        run_id: int,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain:
+        run = self._get_or_raise(run_id)
+        if run.status != RunStatus.PUBLISHED:
+            raise InvalidTransitionError(run.status, RunStatus.PUBLISHED)
+        self._pointers[pointer_key] = run_id
+        return run
 
     def get_latest_published(
         self, pointer_key: str = "latest_published"

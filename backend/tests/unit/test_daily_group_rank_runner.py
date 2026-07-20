@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.services.daily_group_rank_runner import (
     DailyGroupRankDependencies,
     DailyGroupRankRequest,
@@ -152,6 +153,30 @@ def test_strict_warmup_failure_prevents_calculation(monkeypatch):
 
     service.calculate_group_rankings.assert_not_called()
     dependencies.bump_epoch.assert_not_called()
+
+
+def test_balanced_publication_bypasses_legacy_cache_warmup(monkeypatch):
+    import app.services.daily_group_rank_runner as module
+
+    service = Mock()
+    service.market_rs_repository.active_formula.return_value = (
+        BALANCED_RS_FORMULA_VERSION
+    )
+    dependencies = _dependencies(service=service)
+    warmup = Mock(side_effect=AssertionError("legacy warmup used"))
+    monkeypatch.setattr(module, "evaluate_same_day_group_rank_warmup", warmup)
+
+    run_daily_group_rankings(
+        MagicMock(),
+        _request(policy=_policy("auto")),
+        dependencies,
+    )
+
+    warmup.assert_not_called()
+    assert (
+        service.calculate_group_rankings.call_args.kwargs["cache_requirement"]
+        == GroupRankCacheRequirement.disabled()
+    )
 
 
 def test_no_groups_failure_carries_prefetch_stats():

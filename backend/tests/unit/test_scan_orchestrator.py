@@ -11,10 +11,12 @@ Verifies:
 
 from __future__ import annotations
 
-import pandas as pd
-import pytest
+from datetime import date
 
-from app.domain.scanning.ports import StockDataProvider
+import pandas as pd
+
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.scanning.ports import MarketRsResolution, StockDataProvider
 from app.scanners.base_screener import (
     BaseStockScreener,
     DataRequirements,
@@ -51,6 +53,10 @@ class FakeDataProvider(StockDataProvider):
         batch_only_fundamentals: bool = False,
     ) -> dict[str, object]:
         return {s: self._map[s] for s in symbols if s in self._map}
+
+    def apply_market_rs_resolution(self, results, resolution) -> None:
+        for symbol, item in results.items():
+            item.rs_source = resolution.stock_source(symbol)
 
 
 def _make_stock_data(symbol: str = "TEST", n_days: int = 200) -> StockData:
@@ -203,6 +209,49 @@ def _build_orchestrator(
 
 
 class TestScanOrchestratorScoring:
+    def test_pinned_market_rs_resolution_prevents_latest_reresolution(self):
+        stock_data = _make_stock_data("TEST")
+        stock_data.market = "US"
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+        registry.register(make_fake_screener_class("alpha", 75.0, True))
+
+        class UnexpectedReader:
+            @staticmethod
+            def get(**_kwargs):
+                raise AssertionError("latest Market RS must not be resolved")
+
+        pinned = MarketRsResolution.canonical(
+            market="US",
+            as_of_date=date(2026, 1, 15),
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            run_id=42,
+            universe_size=5000,
+            ratings_by_symbol={
+                "TEST": {
+                    "rs_rating": 87,
+                    "rs_rating_1m": 80,
+                    "rs_rating_3m": 85,
+                    "rs_rating_12m": 90,
+                }
+            },
+        )
+        orchestrator = ScanOrchestrator(
+            data_provider=provider,
+            registry=registry,
+            market_rs_reader=UnexpectedReader(),
+        )
+
+        result = orchestrator.scan_stock_multi(
+            "TEST",
+            ["alpha"],
+            market_rs_resolution=pinned,
+        )
+
+        assert result["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
+        assert result["market_rs_run_id"] == 42
+        assert result["rs_universe_size"] == 5000
+
     def test_single_screener_scoring(self):
         """Single screener: composite score equals the screener's score."""
         orch, _, _ = _build_orchestrator([("alpha", 75.0, True)])

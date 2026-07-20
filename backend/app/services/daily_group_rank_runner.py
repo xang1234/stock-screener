@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+
 from .derived_data_execution_policy import (
     DerivedDataExecutionPolicy,
     DerivedDataValidationProfile,
@@ -105,7 +107,7 @@ def run_daily_group_rankings(
 ) -> DailyGroupRankOutcome:
     """Calculate, persist, and publish one daily group-ranking result."""
     started_at = time.perf_counter()
-    cache_requirement = _cache_requirement(request, dependencies)
+    cache_requirement = _cache_requirement(db, request, dependencies)
     calculation = dependencies.service.calculate_group_rankings(
         db,
         request.calculation_date,
@@ -167,9 +169,18 @@ def run_daily_group_rankings(
 
 
 def _cache_requirement(
+    db: Session,
     request: DailyGroupRankRequest,
     dependencies: DailyGroupRankDependencies,
 ) -> GroupRankCacheRequirement:
+    formula_version = (
+        dependencies.service.market_rs_repository.active_formula(
+            db,
+            market=request.market,
+        )
+    )
+    if formula_version == BALANCED_RS_FORMULA_VERSION:
+        return GroupRankCacheRequirement.disabled()
     validation_profile = request.policy.validation_profile
     if (
         validation_profile

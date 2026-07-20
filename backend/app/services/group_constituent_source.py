@@ -9,17 +9,25 @@ from typing import Callable
 from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
-from app.domain.feature_store.run_metadata import feature_run_market
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    RsPublicationIdentity,
+)
 from app.domain.scanning.models import ScanResultItemDomain
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.models.scan_result import Scan
+from app.services.feature_run_rs_identity import feature_run_matches_rs_source
 
 logger = logging.getLogger(__name__)
 
 FeatureRepoFactory = Callable[[Session], SqlFeatureStoreRepository]
 ScanRepoFactory = Callable[[Session], SqlScanResultRepository]
+
+
+class GroupConstituentPublicationUnavailable(LookupError):
+    """No Feature run matches the exact canonical Group publication."""
 
 
 class GroupConstituentSource:
@@ -39,17 +47,15 @@ class GroupConstituentSource:
         db: Session,
         industry_group: str,
         *,
-        market: str = "US",
-        as_of_date: date | None = None,
+        publication: RsPublicationIdentity,
     ) -> tuple[ScanResultItemDomain, ...]:
-        latest_feature_run = self._get_latest_feature_run_for_market(
+        feature_run = self._get_feature_run_for_publication(
             db,
-            market=market,
-            as_of_date=as_of_date,
+            publication=publication,
         )
-        if latest_feature_run is not None:
+        if feature_run is not None:
             peers = self._feature_repo_factory(db).get_peers_by_industry_for_run(
-                latest_feature_run.id,
+                feature_run.id,
                 industry_group,
                 include_sparklines=True,
             )
@@ -57,14 +63,22 @@ class GroupConstituentSource:
                 "Found %d feature-run stocks for group %s (%s)",
                 len(peers),
                 industry_group,
-                market,
+                publication.snapshot.market,
             )
             return peers
 
+        if publication.snapshot.formula_version == BALANCED_RS_FORMULA_VERSION:
+            raise GroupConstituentPublicationUnavailable(
+                "No published Feature run matches canonical Group publication "
+                f"{publication.snapshot.market}/"
+                f"{publication.snapshot.as_of_date.isoformat()}/"
+                f"run-{publication.market_rs_run_id}."
+            )
+
         latest_scan = self._get_latest_legacy_scan_for_market(
             db,
-            market=market,
-            as_of_date=as_of_date,
+            market=publication.snapshot.market,
+            as_of_date=publication.snapshot.as_of_date,
         )
         if not latest_scan:
             logger.warning("No completed scans found for constituent stocks")
@@ -78,7 +92,7 @@ class GroupConstituentSource:
             "Found %d legacy scan stocks for group %s (%s)",
             len(peers),
             industry_group,
-            market,
+            publication.snapshot.market,
         )
         return peers
 
@@ -88,27 +102,30 @@ class GroupConstituentSource:
             return or_(Scan.universe_market == "US", Scan.universe_market.is_(None))
         return Scan.universe_market == normalized_market
 
-    def _get_latest_feature_run_for_market(
+    def _get_feature_run_for_publication(
         self,
         db: Session,
         *,
-        market: str,
-        as_of_date: date | None,
+        publication: RsPublicationIdentity,
     ) -> FeatureRun | None:
-        normalized_market = str(market or "US").strip().upper()
         query = (
             db.query(FeatureRun)
-            .filter(FeatureRun.status == "published")
+            .filter(
+                FeatureRun.status == "published",
+                FeatureRun.as_of_date == publication.snapshot.as_of_date,
+            )
             .order_by(
-                desc(FeatureRun.as_of_date),
                 desc(FeatureRun.published_at),
                 desc(FeatureRun.id),
             )
         )
-        if as_of_date is not None:
-            query = query.filter(FeatureRun.as_of_date <= as_of_date)
         for run in query.all():
-            if feature_run_market(run) == normalized_market:
+            if feature_run_matches_rs_source(
+                run,
+                identity=publication.snapshot,
+                market_rs_run_id=publication.market_rs_run_id,
+                universe_size=publication.universe_size,
+            ):
                 return run
         return None
 

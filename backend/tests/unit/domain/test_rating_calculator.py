@@ -282,6 +282,10 @@ class TestParityWithOrchestrator:
             ):
                 return {s: stock_data for s in symbols}
 
+            def apply_market_rs_resolution(self, results, resolution):
+                for symbol, item in results.items():
+                    item.rs_source = resolution.stock_source(symbol)
+
         provider = LocalFakeProvider()
         registry = ScreenerRegistry()
         for name, score, passes in screener_configs:

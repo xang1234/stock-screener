@@ -28,6 +28,7 @@ import { useRRGScopeSelection } from '../../components/Charts/useRRGScopeSelecti
 import RankChangeCell from '../../components/shared/RankChangeCell';
 import TickerCell from '../../components/common/TickerCell';
 import { useStaticMarket } from '../StaticMarketContext';
+import { GROUP_RS_FIELDS, formatGroupRs } from '../../features/groups/groupRankingFields';
 
 function MoversCard({ title, rows }) {
   return (
@@ -78,12 +79,14 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
           Current Rankings
         </Typography>
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 720 }}>
+          <Table size="small" sx={{ minWidth: 860 }}>
             <TableHead>
               <TableRow>
                 <TableCell align="center">Rank</TableCell>
                 <TableCell>Group</TableCell>
-                <TableCell align="center">Avg RS</TableCell>
+                {GROUP_RS_FIELDS.map(({ field, staticLabel }) => (
+                  <TableCell key={field} align="center">{staticLabel}</TableCell>
+                ))}
                 <TableCell align="center">Stocks</TableCell>
                 <TableCell align="right">1W</TableCell>
                 <TableCell align="right">1M</TableCell>
@@ -109,7 +112,11 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
                 >
                   <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{row.rank}</TableCell>
                   <TableCell>{row.industry_group}</TableCell>
-                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{row.avg_rs_rating?.toFixed?.(1) ?? '-'}</TableCell>
+                  {GROUP_RS_FIELDS.map(({ field }) => (
+                    <TableCell key={field} align="center" sx={{ fontFamily: 'monospace' }}>
+                      {formatGroupRs(row[field])}
+                    </TableCell>
+                  ))}
                   <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{row.num_stocks}</TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_1w} /></TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_1m} /></TableCell>

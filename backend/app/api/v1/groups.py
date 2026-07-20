@@ -29,7 +29,7 @@ from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...domain.analytics.scope import market_scope_tag
 from ...domain.markets.catalog import get_market_catalog
 from ...services.group_rankings_cache import cached_group_payload
-from ...services.market_group_ranking_service import get_market_group_ranking_service
+from ...services.group_ranking_payloads import group_snapshot_metadata
 from ...services.ui_snapshot_service import GroupsBootstrapUnavailableError
 from ...wiring.bootstrap import (
     get_group_rank_service,
@@ -50,10 +50,6 @@ DEFAULT_GROUP_PERIOD = "1w"
 
 def _get_group_rank_service():
     return get_group_rank_service()
-
-
-def _get_market_group_service():
-    return get_market_group_ranking_service()
 
 
 def _get_rrg_service():
@@ -170,12 +166,14 @@ def _build_groups_payload(db: Session, *, market: str) -> dict:
         )
 
     ranking_date = rankings[0]["date"]
+    metadata = group_snapshot_metadata(db, market=market, rankings=rankings)
     scope = market_scope_tag(market)
     return {
         "rankings": GroupRankingsResponse(
             date=ranking_date,
             total_groups=len(rankings),
             rankings=[GroupRankResponse(**row) for row in rankings],
+            **metadata,
             **scope,
         ).model_dump(mode="json"),
         "movers_period": DEFAULT_GROUP_PERIOD,
@@ -183,6 +181,7 @@ def _build_groups_payload(db: Session, *, market: str) -> dict:
             period=movers["period"],
             gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
             losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+            **metadata,
             **scope,
         ).model_dump(mode="json"),
         "task_controls_enabled": settings.feature_tasks and market == "US",
@@ -226,11 +225,17 @@ async def get_current_rankings(
 
     # Get the date from the first ranking
     ranking_date = rankings[0]['date'] if rankings else None
+    metadata = group_snapshot_metadata(
+        db,
+        market=normalized_market,
+        rankings=rankings,
+    )
 
     return GroupRankingsResponse(
         date=ranking_date,
         total_groups=len(rankings),
         rankings=[GroupRankResponse(**r) for r in rankings],
+        **metadata,
         **market_scope_tag(normalized_market),
     )
 
@@ -443,10 +448,18 @@ async def get_rank_movers(
             detail=f"No mover data available for period '{period}'"
         )
 
+    metadata_rows = [*movers.get("gainers", []), *movers.get("losers", [])]
+    metadata = group_snapshot_metadata(
+        db,
+        market=normalized_market,
+        rankings=metadata_rows,
+    )
+
     return MoversResponse(
         period=movers['period'],
         gainers=[GroupRankResponse(**g) for g in movers.get('gainers', [])],
         losers=[GroupRankResponse(**loser) for loser in movers.get('losers', [])],
+        **metadata,
         **market_scope_tag(normalized_market),
     )
 
@@ -469,17 +482,13 @@ async def get_group_detail(
         Current rank, rank changes, and historical data points
     """
     normalized_market = _normalize_market_param(market)
-    if normalized_market == "US":
-        service = _get_group_rank_service()
-        detail = service.get_group_history(db, group, days=days)
-    else:
-        service = _get_market_group_service()
-        detail = service.get_group_history(
-            db,
-            market=normalized_market,
-            industry_group=group,
-            days=days,
-        )
+    service = _get_group_rank_service()
+    detail = service.get_group_history(
+        db,
+        group,
+        days=days,
+        market=normalized_market,
+    )
 
     if not detail.get('history'):
         raise HTTPException(
@@ -675,8 +684,8 @@ async def get_rankings_summary(db: Session = Depends(get_db)):
     """
     from sqlalchemy import func
 
-    # This summary endpoint is US-scoped today; non-US partitions get their
-    # own surfaces via _get_market_group_service.
+    # This summary endpoint remains US-scoped; market-aware reads use the
+    # shared stored Group ranking service above.
     us_only = IBDGroupRank.market == "US"
 
     total_records = db.query(func.count(IBDGroupRank.id)).filter(us_only).scalar() or 0

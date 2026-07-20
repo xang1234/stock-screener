@@ -1,8 +1,9 @@
 """
-Relative Strength (RS) calculation for stocks.
+Legacy Relative Strength (RS) calculation for stocks.
 
-Implements the Minervini/O'Neil methodology for calculating relative strength
-rating (0-100) based on price performance vs benchmark over multiple timeframes.
+Retained for explicit ``legacy-linear-v1`` rollback mode. The active balanced
+formula is implemented in ``app.domain.relative_strength`` and read from a
+published Market-scoped snapshot by scanner consumers.
 """
 import pandas as pd
 import numpy as np
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class RelativeStrengthCalculator:
     """
-    Calculate Relative Strength rating for stocks.
+    Calculate the legacy scan-local Relative Strength rating for stocks.
 
     Methodology:
     - Compare stock performance vs benchmark (SPY) over multiple periods

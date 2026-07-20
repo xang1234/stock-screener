@@ -127,11 +127,18 @@ class DailySnapshotTopGroup(BaseModel):
 
     industry_group: str
     rank: Optional[float] = None
+    avg_rs_rating: Optional[float] = None
+    avg_rs_rating_1m: Optional[float] = None
+    avg_rs_rating_3m: Optional[float] = None
     rank_change_1w: Optional[float] = None
     rank_change_1m: Optional[float] = None
     top_symbol: Optional[str] = None
     top_symbol_name: Optional[str] = None
     top_rs_rating: Optional[float] = None
+    rs_formula_version: Optional[str] = None
+    market_rs_run_id: Optional[int] = None
+    rs_as_of_date: Optional[str] = None
+    rs_universe_size: Optional[int] = None
 
 
 class MarketHealthExposureHistoryPoint(BaseModel):

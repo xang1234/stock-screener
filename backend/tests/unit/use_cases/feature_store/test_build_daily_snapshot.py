@@ -14,6 +14,8 @@ import pytest
 
 from app.domain.common.errors import ValidationError
 from app.domain.feature_store.models import RunStatus
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.scanning.ports import MarketRsResolution
 from app.use_cases.feature_store.build_daily_snapshot import (
     BootstrapCacheCoverageInsufficient,
     BuildDailyFeatureSnapshotUseCase,
@@ -177,8 +179,6 @@ class TestBuildDailySnapshotCommand:
 
 class TestHappyPath:
     def test_execute_uses_market_calendar_for_requested_market(self, monkeypatch):
-        from app.use_cases.feature_store import build_daily_snapshot as module
-
         calls = []
 
         class _Calendar:
@@ -279,6 +279,163 @@ class TestHappyPath:
         assert run.config["signature"]["signature_version"] == 1
         assert run.config["publish_pointer_key"] == "latest_published"
         assert run.config["universe"] == {}
+
+    @_PATCH_TRADING_DAY
+    def test_exact_balanced_rs_is_hydrated_and_audited_on_feature_run(
+        self, _mock_td
+    ):
+        uow, _scanner = _make_uow(symbols=["AAPL", "MSFT"])
+        captured_data = []
+
+        class _Scanner:
+            @staticmethod
+            def get_merged_requirements(_names, _criteria=None):
+                return {"needs": "price"}
+
+            def scan_stock_multi(self, symbol, screener_names, **kwargs):
+                captured_data.append(kwargs["pre_fetched_data"])
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        class _Reader:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                return MarketRsResolution.canonical(
+                    market="US",
+                    as_of_date=AS_OF,
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=42,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 87,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 85,
+                            "rs_rating_12m": 90,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=_Scanner(),
+            data_provider=FakeStockDataProvider(),
+            market_rs_reader=reader,
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                market="US",
+                rs_formula_version_override=BALANCED_RS_FORMULA_VERSION,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert reader.calls == [
+            {
+                "market": "US",
+                "symbols": ("AAPL", "MSFT"),
+                "as_of_date": AS_OF,
+                "formula_version": BALANCED_RS_FORMULA_VERSION,
+            }
+        ]
+        assert len(captured_data) == 2
+        assert all(data.rs_source.ratings["rs_rating"] == 87 for data in captured_data)
+        assert all(
+            data.rs_source.audit_fields()
+            == {
+                "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                "market_rs_run_id": 42,
+                "rs_universe_size": 5000,
+            }
+            for data in captured_data
+        )
+        run = uow.feature_runs.get_run(result.run_id)
+        assert run.config["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
+        assert run.config["market_rs_run_id"] == 42
+        assert run.config["rs_as_of_date"] == AS_OF.isoformat()
+        assert run.config["rs_universe_size"] == 5000
+
+    @_PATCH_TRADING_DAY
+    def test_symbol_fallback_receives_pinned_market_rs_resolution(self, _mock_td):
+        uow, _scanner = _make_uow(symbols=["AAPL"])
+        captured_resolutions: list[MarketRsResolution | None] = []
+
+        class FallbackProvider(FakeStockDataProvider):
+            def prepare_data_bulk(self, *_args, **_kwargs):
+                return {}
+
+        class RecordingScanner:
+            @staticmethod
+            def get_merged_requirements(_names, _criteria=None):
+                return {"needs": "price"}
+
+            def scan_stock_multi(
+                self,
+                symbol,
+                screener_names,
+                *,
+                market_rs_resolution=None,
+                **_kwargs,
+            ):
+                del symbol, screener_names
+                captured_resolutions.append(market_rs_resolution)
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        pinned = MarketRsResolution.canonical(
+            market="US",
+            as_of_date=AS_OF,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            run_id=42,
+            universe_size=5000,
+            ratings_by_symbol={
+                "AAPL": {
+                    "rs_rating": 87,
+                    "rs_rating_1m": 80,
+                    "rs_rating_3m": 85,
+                    "rs_rating_12m": 90,
+                }
+            },
+        )
+
+        class Reader:
+            @staticmethod
+            def get(**_kwargs):
+                return pinned
+
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=RecordingScanner(),
+            data_provider=FallbackProvider(),
+            market_rs_reader=Reader(),
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                market="US",
+                rs_formula_version_override=BALANCED_RS_FORMULA_VERSION,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == RunStatus.PUBLISHED.value
+        assert captured_resolutions == [pinned]
 
     @_PATCH_TRADING_DAY
     def test_run_stats_include_passed_symbols(self, _mock_td):

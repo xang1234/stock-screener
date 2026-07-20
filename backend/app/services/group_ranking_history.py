@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
 from app.domain.feature_store.run_metadata import (
     feature_run_market as _feature_run_market,
 )
@@ -132,8 +133,10 @@ def _group_history_points_from_maps(
                 date=historical["date"],
                 rank=historical["rank"],
                 avg_rs_rating=historical["avg_rs_rating"],
+                avg_rs_rating_1m=historical.get("avg_rs_rating_1m"),
+                avg_rs_rating_3m=historical.get("avg_rs_rating_3m"),
                 num_stocks=historical["num_stocks"],
-            ).model_dump(mode="json")
+            ).model_dump(mode="json", exclude_none=True)
         )
     return history
 
@@ -189,10 +192,12 @@ def build_group_detail_payload_from_parts(
     history: Iterable[Mapping[str, Any]],
     stocks: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    return GroupDetailResponse(
+    response = GroupDetailResponse(
         industry_group=industry_group,
         current_rank=ranking["rank"],
         current_avg_rs=ranking["avg_rs_rating"],
+        current_avg_rs_1m=ranking.get("avg_rs_rating_1m"),
+        current_avg_rs_3m=ranking.get("avg_rs_rating_3m"),
         current_median_rs=ranking.get("median_rs_rating"),
         current_weighted_avg_rs=ranking.get("weighted_avg_rs_rating"),
         current_rs_std_dev=ranking.get("rs_std_dev"),
@@ -201,16 +206,28 @@ def build_group_detail_payload_from_parts(
         top_symbol=ranking.get("top_symbol"),
         top_symbol_name=ranking.get("top_symbol_name"),
         top_rs_rating=ranking.get("top_rs_rating"),
+        rs_formula_version=ranking.get(
+            "rs_formula_version", LEGACY_RS_FORMULA_VERSION
+        ),
+        market_rs_run_id=ranking.get("market_rs_run_id"),
         rank_change_1w=ranking.get("rank_change_1w"),
         rank_change_1m=ranking.get("rank_change_1m"),
         rank_change_3m=ranking.get("rank_change_3m"),
         rank_change_6m=ranking.get("rank_change_6m"),
         history=[
-            HistoricalDataPoint(**point).model_dump(mode="json")
+            HistoricalDataPoint(**point).model_dump(mode="json", exclude_none=True)
             for point in history
         ],
         stocks=list(stocks),
-    ).model_dump(mode="json")
+    )
+    payload = response.model_dump(mode="json", exclude_none=True)
+    # Rank-change keys are part of the stable detail contract even when the
+    # requested lookback is unavailable. Other optional fields retain the
+    # historical omit-when-missing behavior.
+    for key in GROUP_RANK_CHANGE_OFFSETS:
+        field = f"rank_change_{key}"
+        payload[field] = getattr(response, field)
+    return payload
 
 
 def build_group_details(

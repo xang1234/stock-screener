@@ -6,11 +6,14 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
-from typing import Any, Callable, Protocol, TypedDict
+from typing import Any, Callable, Protocol
 
 from sqlalchemy.orm import Session
 
+from app.domain.markets import get_market_catalog
 from app.models.industry import IBDGroupRank
+from app.domain.relative_strength import GroupSnapshotIdentity
+from app.services.group_rank_snapshot_coordinator import GroupSnapshotStatus
 
 
 DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS = 100
@@ -18,25 +21,6 @@ DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS = 100
 
 class TradingDayRange(Protocol):
     def trading_days(self, market: str, start: date, end: date) -> list[date]: ...
-
-
-class GroupRankGapFillStats(TypedDict, total=False):
-    total_dates: int
-    processed: int
-    skipped: int
-    errors: int
-    duration_seconds: float
-    error: str
-
-
-class GroupRankGapFiller(Protocol):
-    def fill_gaps_optimized(
-        self,
-        db: Session,
-        dates: list[date],
-        *,
-        market: str,
-    ) -> GroupRankGapFillStats: ...
 
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
@@ -99,17 +83,30 @@ class GroupRankHistoryBackfillService:
 
     session_factory: SessionFactory
     calendar_service: TradingDayRange
-    group_rank_service: GroupRankGapFiller
+    group_snapshot_coordinator: Any
     lookback_days: int = DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS
 
     def backfill(
         self,
         *,
         as_of_date: date,
+        formula_version: str,
         market: str = "US",
     ) -> GroupRankHistoryBackfillResult:
         normalized_market = str(market or "US").strip().upper()
         start_date = as_of_date - timedelta(days=self.lookback_days)
+        if not (
+            get_market_catalog()
+            .get(normalized_market)
+            .capabilities.group_rankings
+        ):
+            return GroupRankHistoryBackfillResult(
+                status=GroupRankHistoryBackfillStatus.SKIPPED,
+                market=normalized_market,
+                as_of_date=as_of_date,
+                lookback_start_date=start_date,
+                reason="group_rankings_not_supported",
+            )
         desired_dates = self.calendar_service.trading_days(
             normalized_market,
             start_date,
@@ -124,6 +121,7 @@ class GroupRankHistoryBackfillService:
                     IBDGroupRank.date >= start_date,
                     IBDGroupRank.date <= as_of_date,
                     IBDGroupRank.market == normalized_market,
+                    IBDGroupRank.rs_formula_version == formula_version,
                 )
                 .distinct()
                 .all()
@@ -142,10 +140,17 @@ class GroupRankHistoryBackfillService:
                 )
 
             try:
-                stats = self.group_rank_service.fill_gaps_optimized(
+                report = self.group_snapshot_coordinator.backfill(
                     db,
-                    missing_dates,
-                    market=normalized_market,
+                    identities=tuple(
+                        GroupSnapshotIdentity(
+                            normalized_market,
+                            calculation_date,
+                            formula_version,
+                        )
+                        for calculation_date in missing_dates
+                    ),
+                    continue_on_error=True,
                 )
             except Exception as exc:
                 return GroupRankHistoryBackfillResult(
@@ -157,8 +162,14 @@ class GroupRankHistoryBackfillService:
                     errors=len(missing_dates),
                     error=str(exc),
                 )
-            errors = int(stats.get("errors") or 0)
-            error = str(stats["error"]) if stats.get("error") else None
+            errors = report.errors
+            error_messages = [item.error for item in report.results if item.error]
+            error = "; ".join(error_messages) if error_messages else None
+            skipped = sum(
+                item.status
+                in {GroupSnapshotStatus.EXISTING, GroupSnapshotStatus.EMPTY}
+                for item in report.results
+            )
             return GroupRankHistoryBackfillResult(
                 status=(
                     GroupRankHistoryBackfillStatus.ERRORED
@@ -169,15 +180,10 @@ class GroupRankHistoryBackfillService:
                 as_of_date=as_of_date,
                 lookback_start_date=start_date,
                 missing_dates=len(missing_dates),
-                processed=int(stats.get("processed") or 0),
-                skipped=int(stats.get("skipped") or 0),
+                processed=report.processed + report.existing,
+                skipped=skipped,
                 errors=errors,
-                total_dates=int(stats.get("total_dates") or 0),
-                duration_seconds=(
-                    float(stats["duration_seconds"])
-                    if stats.get("duration_seconds") is not None
-                    else None
-                ),
+                total_dates=len(report.results),
                 error=error,
             )
 

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from app.domain.markets import market_registry
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -127,6 +128,21 @@ def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
     upload_artifact = content.index("- name: Upload market artifact", artifact_success)
     assert failure_guard < artifact_success < upload_artifact
     assert "outputs.restore_status != 'failed'" not in content
+
+
+def test_static_workflow_supports_independent_per_market_rs_rollback():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "rs_formula_overrides:" in content
+    assert "default: '{}'" in content
+    assert "rs_formula_version:" not in content
+    assert f"{BALANCED_RS_FORMULA_VERSION}" in content
+    assert "legacy-linear-v1" in content
+    assert content.count(
+        '--rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"'
+    ) == 2
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
 from app.services.derived_data_execution_policy import (
@@ -108,11 +109,16 @@ def _make_group_rank_service(
         calendar_service=MarketCalendarService(),
         legacy_adapter=legacy_adapter,
     )
+    market_rs_repository = Mock()
+    market_rs_repository.active_formula.return_value = "legacy-linear-v1"
     return IBDGroupRankService(
         price_cache=price_cache,
         benchmark_cache=benchmark_cache,
         rs_calculator=rs_calculator,
         group_constituent_source=group_constituent_source,
+        canonical_group_service=Mock(),
+        market_rs_repository=market_rs_repository,
+        market_rs_snapshot_service=Mock(),
         input_loader=input_loader,
         ranking_calculator=ranking_calculator,
         ranking_repository=ranking_repository,
@@ -127,6 +133,104 @@ def _policy(mode: str, target: date):
         target_date=target,
         current_date=date(2026, 3, 20),
     )
+
+
+def test_balanced_calculation_uses_canonical_publication_without_legacy_prefetch():
+    service = _make_group_rank_service()
+    run = Mock(
+        expected_symbol_count=4,
+        eligible_symbol_count=3,
+        excluded_symbol_count=1,
+        benchmark_symbol="SPY",
+    )
+    service.market_rs_repository.active_formula.return_value = (
+        BALANCED_RS_FORMULA_VERSION
+    )
+    service.market_rs_repository.get_completed_exact.return_value = None
+    service.market_rs_snapshot_service.calculate.return_value = run
+    service.canonical_group_service.calculate_and_store.return_value = [
+        {
+            "industry_group": "Software",
+            "date": date(2026, 3, 20),
+            "rank": 1,
+            "avg_rs_rating": 90.0,
+            "avg_rs_rating_1m": 88.0,
+            "avg_rs_rating_3m": 92.0,
+            "median_rs_rating": 91.0,
+            "weighted_avg_rs_rating": 90.5,
+            "rs_std_dev": 2.0,
+            "num_stocks": 3,
+            "num_stocks_rs_above_80": 3,
+            "top_symbol": "AAA",
+            "top_rs_rating": 97.0,
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+        }
+    ]
+    service._prefetch_all_data = Mock(side_effect=AssertionError("legacy path used"))
+
+    result = service.calculate_group_rankings(
+        Mock(),
+        date(2026, 3, 20),
+        market="US",
+    )
+
+    assert result.rankings[0].avg_rs_rating_1m == 88.0
+    assert result.rankings[0].market_rs_run_id == 42
+    assert result.prefetch_stats.symbols_with_prices == 3
+    service.market_rs_snapshot_service.calculate.assert_called_once()
+
+
+def test_balanced_calculation_revalidates_existing_run_through_snapshot_service():
+    service = _make_group_rank_service()
+    preexisting_run = Mock(
+        id=41,
+        expected_symbol_count=1,
+        eligible_symbol_count=1,
+        excluded_symbol_count=0,
+        benchmark_symbol="OLD",
+    )
+    compatible_run = Mock(
+        id=42,
+        expected_symbol_count=4,
+        eligible_symbol_count=3,
+        excluded_symbol_count=1,
+        benchmark_symbol="SPY",
+    )
+    service.market_rs_repository.active_formula.return_value = (
+        BALANCED_RS_FORMULA_VERSION
+    )
+    service.market_rs_repository.get_completed_exact.return_value = preexisting_run
+    service.market_rs_snapshot_service.calculate.return_value = compatible_run
+    service.canonical_group_service.calculate_and_store.return_value = [
+        {
+            "industry_group": "Software",
+            "date": date(2026, 3, 20),
+            "rank": 1,
+            "avg_rs_rating": 90.0,
+            "avg_rs_rating_1m": 88.0,
+            "avg_rs_rating_3m": 92.0,
+            "median_rs_rating": 91.0,
+            "weighted_avg_rs_rating": 90.5,
+            "rs_std_dev": 2.0,
+            "num_stocks": 3,
+            "num_stocks_rs_above_80": 3,
+            "top_symbol": "AAA",
+            "top_rs_rating": 97.0,
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+        }
+    ]
+
+    result = service.calculate_group_rankings(
+        Mock(),
+        date(2026, 3, 20),
+        market="US",
+    )
+
+    assert result.rankings[0].market_rs_run_id == 42
+    assert result.prefetch_stats.symbols_with_prices == 3
+    service.market_rs_snapshot_service.calculate.assert_called_once()
 
 
 def _replace_taxonomy_source(
@@ -265,7 +369,15 @@ def test_get_group_history_uses_calendar_rank_change_offsets(monkeypatch):
 
         expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
-        def fake_historical_batch(db, *, group_names, current_date, period_days, market):  # noqa: ANN001
+        def fake_historical_batch(  # noqa: ANN001
+            db,
+            *,
+            group_names,
+            current_date,
+            period_days,
+            market,
+            formula_version,
+        ):
             captured_period_days.append(dict(period_days))
             return {(group, "1w"): 6}
 
@@ -299,7 +411,15 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
 
         expected_period_days = dict(group_rank_module.GROUP_RANK_CHANGE_CALENDAR_DAYS)
 
-        def fake_historical_batch(db, *, group_names, current_date, period_days, market):  # noqa: ANN001
+        def fake_historical_batch(  # noqa: ANN001
+            db,
+            *,
+            group_names,
+            current_date,
+            period_days,
+            market,
+            formula_version,
+        ):
             captured_period_days.append(dict(period_days))
             return {(group, "1w"): 6}
 
@@ -713,7 +833,10 @@ def test_get_rank_movers_filters_gainers_and_losers_by_sign(monkeypatch):
     movers = service.get_rank_movers(Mock(), period="1w", limit=10, market="HK")
 
     assert [g["industry_group"] for g in movers["gainers"]] == ["Up Big", "Up Small"]
-    assert [l["industry_group"] for l in movers["losers"]] == ["Down Big", "Down Small"]
+    assert [row["industry_group"] for row in movers["losers"]] == [
+        "Down Big",
+        "Down Small",
+    ]
 
 
 def test_get_rank_movers_omits_losers_when_only_gainers_exist(monkeypatch):

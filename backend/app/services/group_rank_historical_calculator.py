@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 import logging
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from sqlalchemy.orm import Session
+
+from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
 
 from ..config import settings
 from .derived_data_execution_policy import (
@@ -195,6 +197,7 @@ class GroupRankHistoricalCalculator:
         *,
         market: str = "US",
         end_date: date | None = None,
+        formula_version: str = LEGACY_RS_FORMULA_VERSION,
     ) -> List[date]:
         normalized_market = (market or "US").upper()
         window_end = (
@@ -209,6 +212,7 @@ class GroupRankHistoricalCalculator:
             start_date=start_date,
             end_date=window_end,
             market=normalized_market,
+            formula_version=formula_version,
         )
 
         missing_dates = []

@@ -21,13 +21,18 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Iterator, Sequence
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.uow import UnitOfWork
+from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.models import ProgressEvent, ScanStatus
 from app.domain.scanning.ports import (
     CancellationToken,
+    MarketRsReader,
+    MarketRsResolution,
     ProgressSink,
     StockDataProvider,
     StockScanner,
@@ -115,9 +120,11 @@ class RunBulkScanUseCase:
         self,
         scanner: StockScanner,
         data_provider: StockDataProvider | None = None,
+        market_rs_reader: MarketRsReader | None = None,
     ) -> None:
         self._scanner = scanner
         self._data_provider = data_provider
+        self._market_rs_reader = market_rs_reader
 
     def execute(
         self,
@@ -187,6 +194,13 @@ class RunBulkScanUseCase:
         # ── Checkpoint: skip already-persisted results ────────────
         already_done = uow.scan_results.count_by_scan_id(cmd.scan_id)
         remaining_symbols = cmd.symbols[already_done:]
+        default_market = str(
+            getattr(scan, "universe_market", None) or "US"
+        ).strip().upper()
+        rs_publication_by_market: dict[
+            str,
+            tuple[str, int | None, date | None],
+        ] = {}
 
         if already_done > 0:
             logger.info(
@@ -195,6 +209,45 @@ class RunBulkScanUseCase:
                 already_done,
                 total,
             )
+            if self._market_rs_reader is not None:
+                audits = uow.scan_results.list_rs_audits_by_scan_id(cmd.scan_id)
+                if len(audits) != already_done:
+                    raise RuntimeError(
+                        f"Cannot resume scan {cmd.scan_id}: persisted result count "
+                        "does not match its Market RS audit rows"
+                    )
+                for audit in audits:
+                    if not audit.formula_version:
+                        raise RuntimeError(
+                            f"Cannot resume scan {cmd.scan_id}: {audit.symbol} has "
+                            "no persisted Market RS publication identity"
+                        )
+                    if (
+                        audit.formula_version == BALANCED_RS_FORMULA_VERSION
+                        and audit.run_id is None
+                    ):
+                        raise RuntimeError(
+                            f"Cannot resume scan {cmd.scan_id}: {audit.symbol} has "
+                            "no persisted canonical Market RS run ID"
+                        )
+                    market = (
+                        market_symbol_suffix_registry.market_for_symbol(audit.symbol)
+                        or default_market
+                    ).strip().upper()
+                    publication = (
+                        audit.formula_version,
+                        audit.run_id,
+                        None,
+                    )
+                    pinned = rs_publication_by_market.get(market)
+                    if pinned is not None and pinned[:2] != publication[:2]:
+                        raise RuntimeError(
+                            "Cannot resume scan "
+                            f"{cmd.scan_id}: persisted Market RS publications "
+                            f"disagree for {market}: {pinned[:2]!r} and "
+                            f"{publication[:2]!r}"
+                        )
+                    rs_publication_by_market[market] = publication
 
         # ── Mark running ──────────────────────────────────────────
         uow.scans.update_status(
@@ -211,7 +264,6 @@ class RunBulkScanUseCase:
         passed = getattr(scan, "passed_stocks", 0) or 0
         failed = 0
         start_time = time.monotonic()
-
         for chunk in _chunked(remaining_symbols, cmd.chunk_size):
             # 5a — Cancellation gate
             if cancel.is_cancelled():
@@ -250,6 +302,78 @@ class RunBulkScanUseCase:
                     )
                     pre_fetched_data = {}
 
+            chunk_rs_resolution_by_symbol: dict[str, MarketRsResolution] = {}
+            if self._market_rs_reader is not None:
+                symbols_by_market: dict[str, list[str]] = {}
+                for symbol in chunk:
+                    normalized_symbol = str(symbol).upper()
+                    stock_data = pre_fetched_data.get(normalized_symbol)
+                    stock_market = str(
+                        getattr(stock_data, "market", None) or ""
+                    ).strip().upper()
+                    data_market = stock_market or (
+                        market_symbol_suffix_registry.market_for_symbol(
+                            normalized_symbol
+                        )
+                        or default_market
+                    ).strip().upper()
+                    symbols_by_market.setdefault(data_market, []).append(
+                        normalized_symbol
+                    )
+                for data_market, market_symbols in symbols_by_market.items():
+                    pinned_publication = rs_publication_by_market.get(data_market)
+                    resolution = self._market_rs_reader.get(
+                        market=data_market,
+                        symbols=tuple(market_symbols),
+                        as_of_date=(
+                            pinned_publication[2]
+                            if pinned_publication is not None
+                            else None
+                        ),
+                        formula_version=(
+                            pinned_publication[0]
+                            if pinned_publication is not None
+                            else None
+                        ),
+                        run_id=(
+                            pinned_publication[1]
+                            if pinned_publication is not None
+                            else None
+                        ),
+                    )
+                    resolved_publication = (
+                        resolution.formula_version,
+                        resolution.run_id,
+                        resolution.as_of_date,
+                    )
+                    publication_changed = pinned_publication is not None and (
+                        resolved_publication[:2] != pinned_publication[:2]
+                        or (
+                            pinned_publication[2] is not None
+                            and resolved_publication[2] != pinned_publication[2]
+                        )
+                    )
+                    if publication_changed:
+                        raise RuntimeError(
+                            f"Market RS publication changed for {data_market} "
+                            f"during scan {cmd.scan_id}: expected "
+                            f"{pinned_publication!r}, got {resolved_publication!r}"
+                        )
+                    if pinned_publication is None or pinned_publication[2] is None:
+                        rs_publication_by_market[data_market] = resolved_publication
+                    market_data = {
+                        symbol: pre_fetched_data[symbol]
+                        for symbol in market_symbols
+                        if symbol in pre_fetched_data
+                    }
+                    if self._data_provider is not None and market_data:
+                        self._data_provider.apply_market_rs_resolution(
+                            market_data,
+                            resolution,
+                        )
+                    for symbol in market_symbols:
+                        chunk_rs_resolution_by_symbol[symbol] = resolution
+
             # 5b — Scan each symbol in the chunk
             chunk_results: list[tuple[str, dict]] = []
 
@@ -265,6 +389,13 @@ class RunBulkScanUseCase:
                 scan_kwargs: dict[str, object] = {}
                 if merged_requirements is not None:
                     scan_kwargs["pre_merged_requirements"] = merged_requirements
+                if (
+                    sym not in pre_fetched_data
+                    and sym in chunk_rs_resolution_by_symbol
+                ):
+                    scan_kwargs["market_rs_resolution"] = (
+                        chunk_rs_resolution_by_symbol[sym]
+                    )
                 if sym in pre_fetched_data:
                     scan_kwargs["pre_fetched_data"] = pre_fetched_data[sym]
                 try:
