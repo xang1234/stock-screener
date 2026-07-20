@@ -10,6 +10,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import RunStatus
+from app.domain.markets import get_market_catalog
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
@@ -102,6 +103,9 @@ class MarketRsActivationValidator:
                     f"Non-finite stock RS composite for {row.symbol} "
                     f"on {calculation_date}."
                 )
+
+        if not get_market_catalog().get(market).capabilities.group_rankings:
+            return run
 
         group_rows = (
             db.query(IBDGroupRank)

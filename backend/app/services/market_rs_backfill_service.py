@@ -7,6 +7,7 @@ from datetime import date
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.domain.markets import get_market_catalog
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.stock import StockPrice
@@ -125,6 +126,9 @@ class MarketRsBackfillService:
         start_date: date | None = None,
     ) -> BackfillReport:
         normalized = normalize_rollout_market(market)
+        groups_applicable = (
+            get_market_catalog().get(normalized).capabilities.group_rankings
+        )
         first_valid = self.earliest_backfillable_date(
             db,
             market=normalized,
@@ -191,27 +195,32 @@ class MarketRsBackfillService:
                     formula_version=BALANCED_RS_FORMULA_VERSION,
                     rebuild_incompatible=True,
                 )
-                stage = "group_calculation"
-                groups = self.group_service.calculate_and_store(
-                    db,
-                    market=normalized,
-                    as_of_date=calculation_date,
-                    formula_version=BALANCED_RS_FORMULA_VERSION,
-                )
-                if not groups:
-                    raise RuntimeError("No eligible Group rows were produced")
-                group_run_ids = {
-                    int(row["market_rs_run_id"])
-                    for row in groups
-                    if row.get("market_rs_run_id") is not None
-                }
-                group_run_id = (
-                    next(iter(group_run_ids)) if len(group_run_ids) == 1 else None
-                )
-                if group_run_id != run.id:
-                    raise RuntimeError(
-                        "Group rows do not reference the exact Market RS run"
+                groups: list[dict[str, object]] = []
+                group_run_id = None
+                if groups_applicable:
+                    stage = "group_calculation"
+                    groups = self.group_service.calculate_and_store(
+                        db,
+                        market=normalized,
+                        as_of_date=calculation_date,
+                        formula_version=BALANCED_RS_FORMULA_VERSION,
                     )
+                    if not groups:
+                        raise RuntimeError("No eligible Group rows were produced")
+                    group_run_ids = {
+                        int(row["market_rs_run_id"])
+                        for row in groups
+                        if row.get("market_rs_run_id") is not None
+                    }
+                    group_run_id = (
+                        next(iter(group_run_ids))
+                        if len(group_run_ids) == 1
+                        else None
+                    )
+                    if group_run_id != run.id:
+                        raise RuntimeError(
+                            "Group rows do not reference the exact Market RS run"
+                        )
                 results.append(
                     BackfillDateResult(
                         as_of_date=calculation_date,

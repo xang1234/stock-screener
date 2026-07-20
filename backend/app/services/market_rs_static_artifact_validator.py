@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.domain.markets import get_market_catalog
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.models.industry import IBDGroupRank
 from app.services.static_groups_rrg_export import (
@@ -124,6 +125,9 @@ class MarketRsStaticArtifactValidator:
                 )
 
         market_dir = static_staging_dir / "markets" / market.lower()
+        groups_applicable = (
+            get_market_catalog().get(market).capabilities.group_rankings
+        )
         groups_path = market_dir / "groups.json"
         scan_path = market_dir / "scan" / "manifest.json"
         groups_payload: dict[str, Any] = {}
@@ -138,12 +142,13 @@ class MarketRsStaticArtifactValidator:
                 errors.append(
                     "Staged Groups artifact has mismatched schema metadata."
                 )
-            self._validate_identity(
-                groups_payload,
-                expected_identity=expected_identity,
-                label="Staged Groups artifact",
-                errors=errors,
-            )
+            if groups_payload.get("available", True):
+                self._validate_identity(
+                    groups_payload,
+                    expected_identity=expected_identity,
+                    label="Staged Groups artifact",
+                    errors=errors,
+                )
         scan_payload: dict[str, Any] = {}
         scan_rows: tuple[dict[str, Any], ...] = ()
         if not scan_path.is_file():
@@ -177,13 +182,14 @@ class MarketRsStaticArtifactValidator:
             groups=groups_payload,
             scan_rows=scan_rows,
         )
-        self._validate_group_parity(
-            db,
-            market=market,
-            through_date=through_date,
-            documents=documents,
-            errors=errors,
-        )
+        if groups_applicable:
+            self._validate_group_parity(
+                db,
+                market=market,
+                through_date=through_date,
+                documents=documents,
+                errors=errors,
+            )
         self._validate_stock_parity(
             latest_run=latest_run,
             through_date=through_date,

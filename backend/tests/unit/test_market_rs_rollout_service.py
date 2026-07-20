@@ -170,6 +170,74 @@ def test_backfill_labels_snapshot_rebuild_failure_as_stock_calculation(monkeypat
     groups.calculate_and_store.assert_not_called()
 
 
+def test_backfill_completes_without_groups_when_market_lacks_capability(monkeypatch):
+    calculation_date = date(2026, 4, 10)
+    run = SimpleNamespace(id=42, eligible_symbol_count=2)
+    repository = MagicMock()
+    repository.get_completed_exact.return_value = run
+    snapshot = MagicMock()
+    snapshot.calculate.return_value = run
+    groups = MagicMock()
+    groups.calculate_and_store.return_value = []
+    service = _service(repository=repository, snapshot=snapshot, groups=groups)
+    monkeypatch.setattr(
+        service.backfill_service,
+        "earliest_backfillable_date",
+        lambda *a, **k: calculation_date,
+    )
+    monkeypatch.setattr(
+        service.backfill_service,
+        "candidate_dates",
+        lambda *a, **k: (calculation_date,),
+    )
+
+    report = service.backfill(
+        MagicMock(),
+        market="DE",
+        through_date=calculation_date,
+    )
+
+    assert report.completed_count == 1
+    assert report.failed_count == 0
+    assert report.latest_run_id == 42
+    assert report.group_row_count == 0
+    assert report.results[0].group_market_rs_run_id is None
+    groups.calculate_and_store.assert_not_called()
+
+
+def test_activation_validation_skips_groups_when_market_lacks_capability(
+    monkeypatch,
+):
+    calculation_date = date(2026, 4, 10)
+    run = SimpleNamespace(id=42, eligible_symbol_count=0, rows=[])
+    repository = MagicMock()
+    repository.get_completed_exact.return_value = run
+    service = _service(repository=repository)
+    monkeypatch.setattr(
+        "app.services.market_rs_activation_validator."
+        "balanced_run_has_required_price_basis",
+        lambda _run: True,
+    )
+    monkeypatch.setattr(
+        "app.services.market_rs_activation_validator."
+        "IBDIndustryService.get_group_memberships",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("group memberships must not be loaded")
+        ),
+    )
+    errors: list[str] = []
+
+    result = service.validator._validate_run_and_groups(
+        MagicMock(),
+        market="DE",
+        calculation_date=calculation_date,
+        errors=errors,
+    )
+
+    assert result is run
+    assert errors == []
+
+
 def test_rejected_activation_rolls_back_without_moving_either_pointer(tmp_path):
     repository = MagicMock()
     feature_repository = MagicMock()

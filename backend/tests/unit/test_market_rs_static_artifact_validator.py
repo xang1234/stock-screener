@@ -25,8 +25,15 @@ def _write_json(path, payload) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _staged_bundle(tmp_path, *, second_row_metadata: dict | None = None):
-    market_dir = tmp_path / "markets" / "us"
+def _staged_bundle(
+    tmp_path,
+    *,
+    market: str = "US",
+    groups_available: bool = True,
+    second_row_metadata: dict | None = None,
+):
+    market_lower = market.lower()
+    market_dir = tmp_path / "markets" / market_lower
     identity = {
         "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
         "market_rs_run_id": 42,
@@ -37,16 +44,26 @@ def _staged_bundle(tmp_path, *, second_row_metadata: dict | None = None):
         tmp_path / "manifest.json",
         {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "markets": {"US": dict(identity)},
+            "markets": {market: dict(identity)},
         },
     )
-    _write_json(
-        market_dir / "groups.json",
+    groups_payload = (
         {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             **identity,
             "payload": {"rankings": {"rankings": []}},
-        },
+        }
+        if groups_available
+        else {
+            "schema_version": STATIC_SITE_SCHEMA_VERSION,
+            "available": False,
+            "message": f"No group rankings are available for {market}.",
+            "payload": {},
+        }
+    )
+    _write_json(
+        market_dir / "groups.json",
+        groups_payload,
     )
     rows = [
         {
@@ -69,7 +86,7 @@ def _staged_bundle(tmp_path, *, second_row_metadata: dict | None = None):
     ]
     chunks = []
     for index, row in enumerate(rows, start=1):
-        relative = f"markets/us/scan/chunks/chunk-{index:04d}.json"
+        relative = f"markets/{market_lower}/scan/chunks/chunk-{index:04d}.json"
         chunks.append({"path": relative, "count": 1})
         _write_json(
             tmp_path / relative,
@@ -241,3 +258,27 @@ def test_rrg_validation_accepts_market_where_rrg_is_not_enabled(
 
     assert status == "not_enabled"
     assert errors == []
+
+
+def test_validate_accepts_unavailable_groups_for_group_less_market(
+    tmp_path,
+    monkeypatch,
+):
+    _staged_bundle(tmp_path, market="DE", groups_available=False)
+    validator = MarketRsStaticArtifactValidator()
+    validate_group_parity = MagicMock()
+    monkeypatch.setattr(validator, "_validate_group_parity", validate_group_parity)
+    monkeypatch.setattr(validator, "_validate_rrg", lambda *a, **k: "not_enabled")
+
+    result = validator.validate(
+        MagicMock(),
+        market="DE",
+        through_date=date(2026, 4, 10),
+        latest_run=_latest_run(),
+        feature_run_id=99,
+        static_staging_dir=tmp_path,
+    )
+
+    assert result.errors == ()
+    assert result.rrg_status == "not_enabled"
+    validate_group_parity.assert_not_called()
