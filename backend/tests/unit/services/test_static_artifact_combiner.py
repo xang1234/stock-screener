@@ -28,7 +28,10 @@ def write_market_artifact(
     scan_formula: str | None = None,
     chunk_formula: str | None = None,
 ) -> Path:
-    market_dir = root / f"static-market-{market}" / "markets" / market.lower()
+    # actions/upload-artifact uploads the contents of the selected market
+    # directory, so download-artifact restores manifest.market.json directly
+    # beneath the artifact-name directory.
+    market_dir = root / f"static-market-{market}"
     chunk_dir = market_dir / "scan" / "chunks"
     chunk_dir.mkdir(parents=True)
     chunk_path = f"markets/{market.lower()}/scan/chunks/chunk-0001.json"
@@ -89,6 +92,29 @@ def combiner() -> StaticArtifactCombiner:
         supported_markets=STATIC_SUPPORTED_MARKETS,
         default_market=STATIC_DEFAULT_MARKET,
     )
+
+
+def test_combiner_accepts_downloaded_market_artifact_layout(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=None,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+        clean=True,
+    )
+
+    assert result.manifest["markets"]["US"]["rs_formula_version"] == (
+        BALANCED_RS_FORMULA_VERSION
+    )
+    assert (
+        tmp_path / "out" / "markets" / "us" / "scan" / "chunks" / "chunk-0001.json"
+    ).is_file()
 
 
 def test_combiner_rejects_wrong_formula_current_without_using_fallback(tmp_path):

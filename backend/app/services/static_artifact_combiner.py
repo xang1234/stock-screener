@@ -205,10 +205,20 @@ class StaticArtifactCombiner:
         if scan_manifest_path.is_file():
             scan_manifest = json.loads(scan_manifest_path.read_text(encoding="utf-8"))
             observed["Scan manifest"] = scan_manifest.get("rs_formula_version")
-            artifact_root = market_dir.parents[1].resolve()
+            artifact_root = market_dir.resolve()
+            published_market_prefix = Path("markets") / market.lower()
             for chunk_ref in scan_manifest.get("chunks") or []:
                 advertised_path = str(chunk_ref.get("path") or "").strip()
-                chunk_path = (artifact_root / advertised_path).resolve()
+                relative_path = Path(advertised_path)
+                try:
+                    relative_path = relative_path.relative_to(
+                        published_market_prefix
+                    )
+                except ValueError:
+                    # Older manifests may already advertise paths relative to
+                    # the per-market artifact root.
+                    pass
+                chunk_path = (artifact_root / relative_path).resolve()
                 try:
                     chunk_path.relative_to(artifact_root)
                 except ValueError as exc:
