@@ -290,7 +290,17 @@ class RunBulkScanUseCase:
                         resolution.run_id,
                         resolution.as_of_date,
                     )
-                    rs_publication_by_market[data_market] = resolved_publication
+                    if (
+                        pinned_publication is not None
+                        and resolved_publication != pinned_publication
+                    ):
+                        raise RuntimeError(
+                            f"Market RS publication changed for {data_market} "
+                            f"during scan {cmd.scan_id}: expected "
+                            f"{pinned_publication!r}, got {resolved_publication!r}"
+                        )
+                    if pinned_publication is None:
+                        rs_publication_by_market[data_market] = resolved_publication
                     market_data = {
                         symbol: pre_fetched_data[symbol]
                         for symbol in market_symbols

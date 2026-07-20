@@ -361,6 +361,53 @@ class TestRunBulkScanHappyPath:
             BALANCED_RS_FORMULA_VERSION,
         ]
 
+    def test_fails_if_pinned_market_rs_run_changes_between_chunks(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+
+        class _Reader:
+            def __init__(self):
+                self.calls = 0
+
+            def get(self, **kwargs):
+                self.calls += 1
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=date(2026, 4, 10),
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=41 + self.calls,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 80,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 80,
+                            "rs_rating_12m": 80,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        with pytest.raises(RuntimeError, match="Market RS publication changed for US"):
+            RunBulkScanUseCase(
+                scanner=_BulkAwareFakeScanner(),
+                data_provider=FakeStockDataProvider(),
+                market_rs_reader=_Reader(),
+            ).execute(
+                uow,
+                RunBulkScanCommand(
+                    scan_id="s1",
+                    symbols=["AAA", "BBB", "CCC", "DDD"],
+                    chunk_size=2,
+                ),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert scan_repo.scans["s1"].status == ScanStatus.FAILED.value
+        assert uow.scan_results.count_by_scan_id("s1") == 2
+
     def test_cache_only_flag_propagates_to_bulk_data_fetch(self):
         """cache_only=True on the command must disable live-fetch fallback inside
         prepare_data_bulk. This is the teeth behind the API-level staleness gate:
