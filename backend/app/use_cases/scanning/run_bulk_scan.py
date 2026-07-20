@@ -26,10 +26,12 @@ from typing import Iterator, Sequence
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.uow import UnitOfWork
+from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.domain.scanning.models import ProgressEvent, ScanStatus
 from app.domain.scanning.ports import (
     CancellationToken,
     MarketRsReader,
+    MarketRsResolution,
     ProgressSink,
     StockDataProvider,
     StockScanner,
@@ -258,16 +260,26 @@ class RunBulkScanUseCase:
                     )
                     pre_fetched_data = {}
 
-            if self._market_rs_reader is not None and pre_fetched_data:
+            chunk_rs_resolution_by_symbol: dict[str, MarketRsResolution] = {}
+            if self._market_rs_reader is not None:
                 symbols_by_market: dict[str, list[str]] = {}
-                for symbol, stock_data in pre_fetched_data.items():
-                    data_market = str(
-                        getattr(stock_data, "market", None)
-                        or getattr(scan, "universe_market", None)
-                        or "US"
+                default_market = str(
+                    getattr(scan, "universe_market", None) or "US"
+                ).strip().upper()
+                for symbol in chunk:
+                    normalized_symbol = str(symbol).upper()
+                    stock_data = pre_fetched_data.get(normalized_symbol)
+                    stock_market = str(
+                        getattr(stock_data, "market", None) or ""
+                    ).strip().upper()
+                    data_market = stock_market or (
+                        market_symbol_suffix_registry.market_for_symbol(
+                            normalized_symbol
+                        )
+                        or default_market
                     ).strip().upper()
                     symbols_by_market.setdefault(data_market, []).append(
-                        str(symbol).upper()
+                        normalized_symbol
                     )
                 for data_market, market_symbols in symbols_by_market.items():
                     pinned_publication = rs_publication_by_market.get(data_market)
@@ -304,11 +316,15 @@ class RunBulkScanUseCase:
                     market_data = {
                         symbol: pre_fetched_data[symbol]
                         for symbol in market_symbols
+                        if symbol in pre_fetched_data
                     }
-                    self._data_provider.apply_market_rs_resolution(
-                        market_data,
-                        resolution,
-                    )
+                    if self._data_provider is not None and market_data:
+                        self._data_provider.apply_market_rs_resolution(
+                            market_data,
+                            resolution,
+                        )
+                    for symbol in market_symbols:
+                        chunk_rs_resolution_by_symbol[symbol] = resolution
 
             # 5b — Scan each symbol in the chunk
             chunk_results: list[tuple[str, dict]] = []
@@ -325,6 +341,13 @@ class RunBulkScanUseCase:
                 scan_kwargs: dict[str, object] = {}
                 if merged_requirements is not None:
                     scan_kwargs["pre_merged_requirements"] = merged_requirements
+                if (
+                    sym not in pre_fetched_data
+                    and sym in chunk_rs_resolution_by_symbol
+                ):
+                    scan_kwargs["market_rs_resolution"] = (
+                        chunk_rs_resolution_by_symbol[sym]
+                    )
                 if sym in pre_fetched_data:
                     scan_kwargs["pre_fetched_data"] = pre_fetched_data[sym]
                 try:
