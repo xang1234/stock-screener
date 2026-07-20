@@ -256,6 +256,7 @@ class StaticSiteExportService:
         fallback_artifacts_dir: Path | None = None,
         clean: bool = True,
         rs_formula_version_overrides: Mapping[str, str] | None = None,
+        fallback_rs_formula_version_overrides: Mapping[str, str] | None = None,
     ) -> StaticSiteExportResult:
         combined = StaticArtifactCombiner(
             schema_version=STATIC_SITE_SCHEMA_VERSION,
@@ -271,6 +272,11 @@ class StaticSiteExportService:
             ),
             output_dir=Path(output_dir),
             required_formula_by_market=rs_formula_version_overrides or {},
+            fallback_required_formula_by_market=(
+                fallback_rs_formula_version_overrides
+                if fallback_rs_formula_version_overrides is not None
+                else None
+            ),
             clean=clean,
         )
         return StaticSiteExportResult(

@@ -45,12 +45,21 @@ class StaticArtifactCombiner:
         fallback_artifacts_dir: Path | None,
         output_dir: Path,
         required_formula_by_market: Mapping[str, str],
+        fallback_required_formula_by_market: Mapping[str, str] | None = None,
         clean: bool,
     ) -> StaticArtifactCombineResult:
         required = {
             str(market).strip().upper(): str(formula).strip()
             for market, formula in required_formula_by_market.items()
         }
+        fallback_required = (
+            required
+            if fallback_required_formula_by_market is None
+            else {
+                str(market).strip().upper(): str(formula).strip()
+                for market, formula in fallback_required_formula_by_market.items()
+            }
+        )
         current = self._discover(
             Path(artifacts_dir),
             source_label="current",
@@ -60,7 +69,7 @@ class StaticArtifactCombiner:
             self._discover(
                 Path(fallback_artifacts_dir),
                 source_label="fallback",
-                required=required,
+                required=fallback_required,
             )
             if fallback_artifacts_dir is not None
             else {}

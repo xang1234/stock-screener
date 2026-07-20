@@ -781,6 +781,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             clean=not args.no_clean,
             rs_formula_version_overrides=rs_formula_policy,
+            # Last-good artifacts can predate the balanced rollout. Only an
+            # explicit operator override constrains a fallback publication.
+            fallback_rs_formula_version_overrides=args.rs_formula_overrides_json,
         )
     else:
         prepare_runtime()

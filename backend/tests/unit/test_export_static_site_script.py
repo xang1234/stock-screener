@@ -1376,7 +1376,7 @@ def test_main_rejects_fallback_artifacts_without_combine_mode(monkeypatch, tmp_p
 
 
 def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
-    combine_calls: list[tuple[object, object, object, bool, object]] = []
+    combine_calls: list[tuple[object, object, object, bool, object, object]] = []
     output_dir = tmp_path / "out"
     artifacts_dir = tmp_path / "artifacts"
     fallback_dir = tmp_path / "fallback"
@@ -1385,13 +1385,15 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
         export_script.StaticSiteExportService,
         "combine_market_artifacts",
         lambda artifacts_dir, output_dir, *, fallback_artifacts_dir=None, clean=True,
-        rs_formula_version_overrides=None: combine_calls.append(
+        rs_formula_version_overrides=None,
+        fallback_rs_formula_version_overrides=None: combine_calls.append(
             (
                 artifacts_dir,
                 output_dir,
                 fallback_artifacts_dir,
                 clean,
                 rs_formula_version_overrides,
+                fallback_rs_formula_version_overrides,
             )
         )
         or SimpleNamespace(
@@ -1428,6 +1430,7 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
             market: BALANCED_RS_FORMULA_VERSION
             for market in export_script.STATIC_EXPORT_MARKETS
         },
+        {},
     )]
 
 
@@ -1435,15 +1438,13 @@ def test_main_combines_with_independent_per_market_rs_formula_policy(
     monkeypatch,
     tmp_path,
 ):
-    captured: list[dict[str, str]] = []
+    captured: list[dict[str, object]] = []
     output_dir = tmp_path / "out"
 
     monkeypatch.setattr(
         export_script.StaticSiteExportService,
         "combine_market_artifacts",
-        lambda _artifacts_dir, _output_dir, **kwargs: captured.append(
-            kwargs["rs_formula_version_overrides"]
-        )
+        lambda _artifacts_dir, _output_dir, **kwargs: captured.append(kwargs)
         or SimpleNamespace(
             output_dir=output_dir,
             generated_at="2026-04-05T22:00:00Z",
@@ -1467,8 +1468,13 @@ def test_main_combines_with_independent_per_market_rs_formula_policy(
     )
 
     assert export_script.main() == 0
-    assert captured[0]["HK"] == LEGACY_RS_FORMULA_VERSION
-    assert captured[0]["US"] == BALANCED_RS_FORMULA_VERSION
+    current_policy = captured[0]["rs_formula_version_overrides"]
+    assert isinstance(current_policy, dict)
+    assert current_policy["HK"] == LEGACY_RS_FORMULA_VERSION
+    assert current_policy["US"] == BALANCED_RS_FORMULA_VERSION
+    assert captured[0]["fallback_rs_formula_version_overrides"] == {
+        "HK": LEGACY_RS_FORMULA_VERSION
+    }
 
 
 def test_main_rejects_global_rs_formula_override_when_combining(

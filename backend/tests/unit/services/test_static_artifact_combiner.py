@@ -153,6 +153,38 @@ def test_combiner_rejects_wrong_formula_fallback(tmp_path):
         )
 
 
+def test_combiner_allows_legacy_fallback_outside_explicit_formula_policy(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+    )
+    fallback = write_market_artifact(
+        tmp_path / "fallback",
+        market="HK",
+        formula=LEGACY_RS_FORMULA_VERSION,
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={
+            "US": BALANCED_RS_FORMULA_VERSION,
+            "HK": BALANCED_RS_FORMULA_VERSION,
+        },
+        fallback_required_formula_by_market={},
+        clean=True,
+    )
+
+    assert result.manifest["markets"]["US"]["rs_formula_version"] == (
+        BALANCED_RS_FORMULA_VERSION
+    )
+    assert result.manifest["markets"]["HK"]["rs_formula_version"] == (
+        LEGACY_RS_FORMULA_VERSION
+    )
+
+
 def test_combiner_rejects_wrong_scan_manifest_formula(tmp_path):
     current = write_market_artifact(
         tmp_path / "current",
