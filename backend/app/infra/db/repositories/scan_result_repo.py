@@ -39,6 +39,16 @@ from app.services.market_taxonomy_service import (
 logger = logging.getLogger(__name__)
 
 
+def _rs_publication_identity(
+    payload: dict[str, Any],
+) -> tuple[str, int | None] | None:
+    formula_version = str(payload.get("rs_formula_version") or "").strip()
+    if not formula_version:
+        return None
+    run_id = payload.get("market_rs_run_id")
+    return formula_version, int(run_id) if run_id is not None else None
+
+
 def _scan_results_query(session: Session, scan_id: str):
     """Base query for scan results that joins market-identity + USD-normalised fields.
 
@@ -286,7 +296,15 @@ class SqlScanResultRepository(ScanResultRepository):
             return 0
 
         symbols = [symbol.upper() for symbol, _ in results]
-        enrichment = self._load_symbol_enrichment(symbols)
+        rs_identity_by_symbol = {
+            symbol.upper(): identity
+            for symbol, result in results
+            if (identity := _rs_publication_identity(result)) is not None
+        }
+        enrichment = self._load_symbol_enrichment(
+            symbols,
+            rs_identity_by_symbol=rs_identity_by_symbol,
+        )
 
         rows = [
             _map_orchestrator_result(
@@ -303,6 +321,7 @@ class SqlScanResultRepository(ScanResultRepository):
         symbols: list[str],
         *,
         ranking_date: date | None = None,
+        rs_identity_by_symbol: dict[str, tuple[str, int | None]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Load enrichment fields used by scan result persistence in bulk."""
         if not symbols:
@@ -397,48 +416,77 @@ class SqlScanResultRepository(ScanResultRepository):
                 d["industry"] = entry.industry
             d["market_themes"] = entry.themes_list()
 
-        rank_maps: dict[str, dict[str, int]] = {}
-        rank_dates: dict[str, date | None] = {}
-        requested_markets = {
-            str(d.get("market") or "US").strip().upper() or "US"
-            for d in enrichment.values()
-            if d.get("ibd_industry_group")
-        }
-        for market in requested_markets:
-            formula_version = self._market_rs_repository.active_formula(
-                self._session,
-                market=market,
-            )
+        rank_maps: dict[
+            tuple[str, str, int | None, bool],
+            dict[str, int],
+        ] = {}
+        rank_dates: dict[tuple[str, str, int | None, bool], date | None] = {}
+        rank_identity_by_symbol: dict[
+            str,
+            tuple[str, str, int | None, bool],
+        ] = {}
+        requested_identities: set[tuple[str, str, int | None, bool]] = set()
+        pinned_identities = rs_identity_by_symbol or {}
+        for symbol, d in enrichment.items():
+            if not d.get("ibd_industry_group"):
+                continue
+            market = str(d.get("market") or "US").strip().upper() or "US"
+            pinned_identity = pinned_identities.get(symbol)
+            if pinned_identity is None:
+                formula_version = self._market_rs_repository.active_formula(
+                    self._session,
+                    market=market,
+                )
+                rank_identity = (market, formula_version, None, False)
+            else:
+                formula_version, market_rs_run_id = pinned_identity
+                rank_identity = (
+                    market,
+                    formula_version,
+                    market_rs_run_id,
+                    True,
+                )
+            rank_identity_by_symbol[symbol] = rank_identity
+            requested_identities.add(rank_identity)
+
+        for rank_identity in requested_identities:
+            market, formula_version, market_rs_run_id, is_pinned = rank_identity
             snapshot_date = ranking_date
             if snapshot_date is None:
-                snapshot_date = self._session.query(
-                    func.max(IBDGroupRank.date)
-                ).filter(
+                date_query = self._session.query(func.max(IBDGroupRank.date)).filter(
                     IBDGroupRank.market == market,
                     IBDGroupRank.rs_formula_version == formula_version,
-                ).scalar()
-            rank_dates[market] = snapshot_date
+                )
+                if is_pinned:
+                    date_query = date_query.filter(
+                        IBDGroupRank.market_rs_run_id == market_rs_run_id,
+                    )
+                snapshot_date = date_query.scalar()
+            rank_dates[rank_identity] = snapshot_date
             if snapshot_date is None:
-                rank_maps[market] = {}
+                rank_maps[rank_identity] = {}
                 continue
-            rank_maps[market] = dict(
-                self._session.query(
-                    IBDGroupRank.industry_group,
-                    IBDGroupRank.rank,
-                ).filter(
-                    IBDGroupRank.market == market,
-                    IBDGroupRank.date == snapshot_date,
-                    IBDGroupRank.rs_formula_version == formula_version,
-                ).all()
+            rank_query = self._session.query(
+                IBDGroupRank.industry_group,
+                IBDGroupRank.rank,
+            ).filter(
+                IBDGroupRank.market == market,
+                IBDGroupRank.date == snapshot_date,
+                IBDGroupRank.rs_formula_version == formula_version,
             )
+            if is_pinned:
+                rank_query = rank_query.filter(
+                    IBDGroupRank.market_rs_run_id == market_rs_run_id,
+                )
+            rank_maps[rank_identity] = dict(rank_query.all())
 
-        for d in enrichment.values():
+        for symbol, d in enrichment.items():
             group_name = d.get("ibd_industry_group")
             if not group_name:
                 continue
-            market = str(d.get("market") or "US").strip().upper() or "US"
-            group_rank = rank_maps.get(market, {}).get(str(group_name))
-            snapshot_date = rank_dates.get(market)
+            rank_identity = rank_identity_by_symbol[symbol]
+            group_rank = rank_maps.get(rank_identity, {}).get(str(group_name))
+            snapshot_date = rank_dates.get(rank_identity)
             d["ibd_group_rank"] = group_rank
             d["ibd_group_rank_date"] = (
                 snapshot_date.isoformat()
@@ -470,9 +518,16 @@ class SqlScanResultRepository(ScanResultRepository):
                 "missing_rank_rows": 0,
             }
 
+        rs_identity_by_symbol = {
+            row.symbol.upper(): identity
+            for row in rows
+            if (identity := _rs_publication_identity(dict(row.details or {})))
+            is not None
+        }
         enrichment = self._load_symbol_enrichment(
             [row.symbol for row in rows],
             ranking_date=ranking_date,
+            rs_identity_by_symbol=rs_identity_by_symbol,
         )
         updated_rows = 0
         missing_industry_rows = 0

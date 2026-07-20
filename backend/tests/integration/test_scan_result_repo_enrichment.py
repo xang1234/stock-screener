@@ -165,6 +165,68 @@ def test_scan_enrichment_uses_only_the_markets_active_group_formula(session: Ses
     assert row.details["ibd_group_rank_date"] == "2026-06-18"
 
 
+def test_scan_enrichment_uses_pinned_row_rs_identity(session: Session):
+    pointer = session.get(MarketRsFormulaPointer, "US")
+    assert pointer is not None
+    pointer.formula_version = LEGACY_RS_FORMULA_VERSION
+    session.add(
+        IBDIndustryGroup(
+            symbol="NVDA",
+            industry_group="Electronic-Semiconductor Fabless",
+        )
+    )
+    session.add_all(
+        [
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 18),
+                rank=2,
+                avg_rs_rating=88.0,
+                rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+                market_rs_run_id=42,
+            ),
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 19),
+                rank=1,
+                avg_rs_rating=90.0,
+                rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+                market_rs_run_id=43,
+            ),
+            IBDGroupRank(
+                market="US",
+                industry_group="Electronic-Semiconductor Fabless",
+                date=date(2026, 6, 19),
+                rank=91,
+                avg_rs_rating=50.0,
+                rs_formula_version=LEGACY_RS_FORMULA_VERSION,
+            ),
+        ]
+    )
+    session.commit()
+    raw = _base_raw_result()
+    raw.update(
+        rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+        market_rs_run_id=42,
+    )
+
+    repo = SqlScanResultRepository(session)
+    repo.persist_orchestrator_results("scan-pinned-rs", [("NVDA", raw)])
+
+    row = (
+        session.query(ScanResult)
+        .filter(
+            ScanResult.scan_id == "scan-pinned-rs",
+            ScanResult.symbol == "NVDA",
+        )
+        .one()
+    )
+    assert row.ibd_group_rank == 2
+    assert row.details["ibd_group_rank_date"] == "2026-06-18"
+
+
 def test_persist_orchestrator_results_uses_ipo_screener_date_fallback(session: Session):
     # No fundamentals row on purpose, so IPO date must come from ipo screener details.
     session.add(StockIndustry(symbol="MSFT", sector="Technology", industry="Software"))
