@@ -13,7 +13,7 @@ from app.domain.relative_strength import (
     balanced_run_has_required_price_basis,
 )
 from app.domain.scanning.ports import MarketRsResolution
-from app.infra.db.models.relative_strength import StockRsSnapshot
+from app.infra.db.models.relative_strength import MarketRsRun, StockRsSnapshot
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 
 
@@ -38,6 +38,7 @@ class SqlMarketRsReader:
         symbols: Sequence[str],
         as_of_date: date | None,
         formula_version: str | None = None,
+        run_id: int | None = None,
     ) -> MarketRsResolution:
         normalized_market = market.strip().upper()
         normalized_symbols = tuple(
@@ -45,10 +46,28 @@ class SqlMarketRsReader:
         )
         db: Session = self._session_factory()
         try:
-            resolved_formula = formula_version or self._repository.active_formula(
-                db, market=normalized_market
+            requested_run = (
+                db.get(MarketRsRun, int(run_id)) if run_id is not None else None
+            )
+            if run_id is not None and requested_run is None:
+                raise CanonicalMarketRsUnavailable(
+                    f"Canonical Market RS run {run_id} is unavailable"
+                )
+            resolved_formula = (
+                formula_version
+                or (
+                    requested_run.formula_version
+                    if requested_run is not None
+                    else self._repository.active_formula(
+                        db, market=normalized_market
+                    )
+                )
             )
             if resolved_formula == LEGACY_RS_FORMULA_VERSION:
+                if run_id is not None:
+                    raise CanonicalMarketRsUnavailable(
+                        "Legacy Market RS does not have a canonical run ID"
+                    )
                 return MarketRsResolution.legacy(
                     market=normalized_market,
                     as_of_date=as_of_date,
@@ -60,7 +79,20 @@ class SqlMarketRsReader:
                     f"{resolved_formula}"
                 )
 
-            if as_of_date is None:
+            if requested_run is not None:
+                run = requested_run
+                run_matches_request = (
+                    run.status == "completed"
+                    and run.market == normalized_market
+                    and run.formula_version == resolved_formula
+                    and (as_of_date is None or run.as_of_date == as_of_date)
+                )
+                if not run_matches_request:
+                    raise CanonicalMarketRsUnavailable(
+                        f"Canonical Market RS run {run_id} does not match the "
+                        f"requested publication for {normalized_market}"
+                    )
+            elif as_of_date is None:
                 run = self._repository.get_latest_completed(
                     db,
                     market=normalized_market,

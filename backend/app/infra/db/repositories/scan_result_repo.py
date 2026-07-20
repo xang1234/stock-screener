@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.domain.common.query import PageSpec, SortSpec
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
-from app.domain.scanning.ports import ScanResultRepository
+from app.domain.scanning.ports import ScanResultRepository, ScanResultRsAudit
 from app.analysis.patterns.report import validate_setup_engine_report_payload
 from app.infra.query import scan_result_query
 from app.infra.query.scan_result_query import (
@@ -656,6 +656,20 @@ class SqlScanResultRepository(ScanResultRepository):
             .filter(ScanResult.scan_id == scan_id)
             .scalar()
             or 0
+        )
+
+    def list_rs_audits_by_scan_id(
+        self,
+        scan_id: str,
+    ) -> tuple[ScanResultRsAudit, ...]:
+        rows = (
+            self._session.query(ScanResult.symbol, ScanResult.details)
+            .filter(ScanResult.scan_id == scan_id)
+            .all()
+        )
+        return tuple(
+            ScanResultRsAudit.from_payload(symbol, details)
+            for symbol, details in rows
         )
 
     def query(

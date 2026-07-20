@@ -31,6 +31,31 @@ from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDoma
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ScanResultRsAudit:
+    """Market RS publication identity persisted with one scan-result row."""
+
+    symbol: str
+    formula_version: str | None
+    run_id: int | None
+
+    @classmethod
+    def from_payload(
+        cls,
+        symbol: str,
+        payload: Mapping[str, object] | None,
+    ) -> "ScanResultRsAudit":
+        details = payload or {}
+        formula_version = str(details.get("rs_formula_version") or "").strip()
+        raw_run_id = details.get("market_rs_run_id")
+        run_id = int(raw_run_id) if raw_run_id is not None else None
+        return cls(
+            symbol=str(symbol).strip().upper(),
+            formula_version=formula_version or None,
+            run_id=run_id,
+        )
+
+
 class ScanRepository(abc.ABC):
     """Persist and retrieve scan metadata."""
 
@@ -96,6 +121,14 @@ class ScanResultRepository(abc.ABC):
     @abc.abstractmethod
     def count_by_scan_id(self, scan_id: str) -> int:
         """Return the number of results already stored for *scan_id*."""
+        ...
+
+    @abc.abstractmethod
+    def list_rs_audits_by_scan_id(
+        self,
+        scan_id: str,
+    ) -> tuple[ScanResultRsAudit, ...]:
+        """Return persisted Market RS audit identities for a resumable scan."""
         ...
 
     @abc.abstractmethod
@@ -452,6 +485,7 @@ class MarketRsReader(Protocol):
         symbols: Sequence[str],
         as_of_date: date | None,
         formula_version: str | None = None,
+        run_id: int | None = None,
     ) -> MarketRsResolution:
         raise NotImplementedError
 

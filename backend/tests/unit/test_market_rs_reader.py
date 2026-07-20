@@ -121,6 +121,27 @@ def test_reader_returns_exact_market_snapshot_without_repercentiling_requested_s
     )
 
 
+def test_reader_returns_exact_run_id_without_relying_on_active_date(db_session):
+    run = _seed_balanced_run(db_session)
+    db_session.add(
+        MarketRsFormulaPointer(
+            market="US", formula_version=BALANCED_RS_FORMULA_VERSION
+        )
+    )
+    db_session.commit()
+
+    resolution = _reader(db_session).get(
+        market="US",
+        symbols=("AAA",),
+        as_of_date=None,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        run_id=run.id,
+    )
+
+    assert resolution.run_id == run.id
+    assert resolution.as_of_date == AS_OF
+
+
 def test_reader_fails_closed_when_balanced_exact_run_is_missing(db_session):
     db_session.add(
         MarketRsFormulaPointer(

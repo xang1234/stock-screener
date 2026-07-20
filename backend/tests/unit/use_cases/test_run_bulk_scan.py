@@ -979,6 +979,96 @@ class TestCancellation:
 class TestResume:
     """Checkpoint recovery skips already-processed symbols."""
 
+    def test_resume_reuses_persisted_market_rs_run(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        result_repo = FakeScanResultRepository()
+        result_repo._persisted_results = [
+            (
+                "s1",
+                "AAA",
+                {
+                    "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                    "market_rs_run_id": 42,
+                },
+            )
+        ]
+        uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
+
+        class _Reader:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def get(self, **kwargs):
+                self.calls.append(kwargs)
+                return MarketRsResolution.canonical(
+                    market=kwargs["market"],
+                    as_of_date=date(2026, 4, 10),
+                    formula_version=BALANCED_RS_FORMULA_VERSION,
+                    run_id=42,
+                    universe_size=5000,
+                    ratings_by_symbol={
+                        symbol: {
+                            "rs_rating": 80,
+                            "rs_rating_1m": 80,
+                            "rs_rating_3m": 80,
+                            "rs_rating_12m": 80,
+                        }
+                        for symbol in kwargs["symbols"]
+                    },
+                )
+
+        reader = _Reader()
+        result = RunBulkScanUseCase(
+            scanner=_BulkAwareFakeScanner(),
+            data_provider=FakeStockDataProvider(),
+            market_rs_reader=reader,
+        ).execute(
+            uow,
+            RunBulkScanCommand(scan_id="s1", symbols=["AAA", "BBB"]),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert reader.calls[0]["formula_version"] == BALANCED_RS_FORMULA_VERSION
+        assert reader.calls[0]["run_id"] == 42
+
+    def test_resume_rejects_mixed_persisted_market_rs_runs(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        result_repo = FakeScanResultRepository()
+        result_repo._persisted_results = [
+            (
+                "s1",
+                symbol,
+                {
+                    "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+                    "market_rs_run_id": run_id,
+                },
+            )
+            for symbol, run_id in (("AAA", 42), ("BBB", 43))
+        ]
+        uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
+
+        class _Reader:
+            def get(self, **_kwargs):
+                raise AssertionError("mixed persisted runs must fail before reading RS")
+
+        with pytest.raises(RuntimeError, match="persisted Market RS publications disagree"):
+            RunBulkScanUseCase(
+                scanner=_BulkAwareFakeScanner(),
+                data_provider=FakeStockDataProvider(),
+                market_rs_reader=_Reader(),
+            ).execute(
+                uow,
+                RunBulkScanCommand(scan_id="s1", symbols=["AAA", "BBB", "CCC"]),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert scan_repo.scans["s1"].status == ScanStatus.FAILED.value
+
     def test_resume_skips_already_processed(self):
         scan_repo = FakeScanRepository()
         scan_repo.scans["s1"] = _make_scan("s1")

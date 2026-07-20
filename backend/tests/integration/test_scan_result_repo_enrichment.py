@@ -9,11 +9,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import Base
-from app.domain.scanning.filter_spec import QuerySpec
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
+from app.domain.scanning.filter_spec import QuerySpec
+from app.domain.scanning.ports import ScanResultRsAudit
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
@@ -225,6 +226,13 @@ def test_scan_enrichment_uses_pinned_row_rs_identity(session: Session):
     )
     assert row.ibd_group_rank == 2
     assert row.details["ibd_group_rank_date"] == "2026-06-18"
+    assert repo.list_rs_audits_by_scan_id("scan-pinned-rs") == (
+        ScanResultRsAudit(
+            symbol="NVDA",
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            run_id=42,
+        ),
+    )
 
 
 def test_persist_orchestrator_results_uses_ipo_screener_date_fallback(session: Session):

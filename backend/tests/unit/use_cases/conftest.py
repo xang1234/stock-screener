@@ -43,6 +43,7 @@ from app.domain.scanning.ports import (
     ProgressSink,
     ScanRepository,
     ScanResultRepository,
+    ScanResultRsAudit,
     StockDataProvider,
     TaskDispatcher,
     UniverseRepository,
@@ -218,6 +219,16 @@ class FakeScanResultRepository(ScanResultRepository):
 
     def count_by_scan_id(self, scan_id: str) -> int:
         return sum(1 for sid, _, _ in self._persisted_results if sid == scan_id)
+
+    def list_rs_audits_by_scan_id(
+        self,
+        scan_id: str,
+    ) -> tuple[ScanResultRsAudit, ...]:
+        return tuple(
+            ScanResultRsAudit.from_payload(symbol, result)
+            for sid, symbol, result in self._persisted_results
+            if sid == scan_id
+        )
 
     def query(
         self,
