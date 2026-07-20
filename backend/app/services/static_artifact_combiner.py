@@ -196,6 +196,35 @@ class StaticArtifactCombiner:
             raise RuntimeError(f"{market} {source_label} metadata has no Market entry")
         observed = {"market entry": entry.get("rs_formula_version")}
         features = entry.get("features") if isinstance(entry.get("features"), dict) else {}
+        scan_manifest_path = market_dir / "scan" / "manifest.json"
+        if features.get("scan") and not scan_manifest_path.is_file():
+            raise StaticArtifactFormulaError(
+                f"{market} {source_label} artifact advertises Scan but "
+                "scan/manifest.json is absent"
+            )
+        if scan_manifest_path.is_file():
+            scan_manifest = json.loads(scan_manifest_path.read_text(encoding="utf-8"))
+            observed["Scan manifest"] = scan_manifest.get("rs_formula_version")
+            artifact_root = market_dir.parents[1].resolve()
+            for chunk_ref in scan_manifest.get("chunks") or []:
+                advertised_path = str(chunk_ref.get("path") or "").strip()
+                chunk_path = (artifact_root / advertised_path).resolve()
+                try:
+                    chunk_path.relative_to(artifact_root)
+                except ValueError as exc:
+                    raise StaticArtifactFormulaError(
+                        f"{market} {source_label} Scan chunk path escapes its artifact: "
+                        f"{advertised_path!r}"
+                    ) from exc
+                if not advertised_path or not chunk_path.is_file():
+                    raise StaticArtifactFormulaError(
+                        f"{market} {source_label} Scan chunk is absent: "
+                        f"{advertised_path!r}"
+                    )
+                chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
+                observed[f"Scan chunk {chunk_path.name}"] = chunk.get(
+                    "rs_formula_version"
+                )
         groups_path = market_dir / "groups.json"
         if features.get("groups") and not groups_path.is_file():
             raise StaticArtifactFormulaError(

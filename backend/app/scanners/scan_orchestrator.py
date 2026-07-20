@@ -38,6 +38,7 @@ from app.domain.scanning.scoring import (
 from app.domain.scanning.ports import (
     CanonicalStockRsSource,
     MarketRsReader,
+    MarketRsResolution,
     StockDataProvider,
 )
 
@@ -307,7 +308,8 @@ class ScanOrchestrator:
         criteria: Optional[Dict] = None,
         composite_method: str = "weighted_average",
         pre_merged_requirements: Optional[DataRequirements] = None,
-        pre_fetched_data: Optional[StockData] = None
+        pre_fetched_data: Optional[StockData] = None,
+        market_rs_resolution: MarketRsResolution | None = None,
     ) -> Dict:
         """
         Run multiple screeners on a single stock.
@@ -319,6 +321,7 @@ class ScanOrchestrator:
             composite_method: How to combine scores (weighted_average, maximum, minimum)
             pre_merged_requirements: Optional pre-merged requirements (batch optimization)
             pre_fetched_data: Optional pre-fetched stock data (batch optimization)
+            market_rs_resolution: Optional publication pinned by the calling workflow
 
         Returns:
             Dict with combined results from all screeners
@@ -373,7 +376,12 @@ class ScanOrchestrator:
                 # Fetch data ONCE
                 stock_data = self._data_provider.prepare_data(symbol, requirements)
 
-            if stock_data.rs_source is None and self._market_rs_reader is not None:
+            if stock_data.rs_source is None and market_rs_resolution is not None:
+                self._data_provider.apply_market_rs_resolution(
+                    {stock_data.symbol.strip().upper(): stock_data},
+                    market_rs_resolution,
+                )
+            elif stock_data.rs_source is None and self._market_rs_reader is not None:
                 resolution = self._market_rs_reader.get(
                     market=str(stock_data.market or "US").strip().upper(),
                     symbols=(stock_data.symbol.strip().upper(),),
@@ -381,8 +389,7 @@ class ScanOrchestrator:
                     formula_version=None,
                 )
                 self._data_provider.apply_market_rs_resolution(
-                    {stock_data.symbol.strip().upper(): stock_data},
-                    resolution,
+                    {stock_data.symbol.strip().upper(): stock_data}, resolution
                 )
 
             history_bars = _history_bar_count(stock_data)

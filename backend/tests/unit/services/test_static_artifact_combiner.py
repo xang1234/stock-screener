@@ -20,11 +20,37 @@ from app.services.static_site_export_service import (
 )
 
 
-def write_market_artifact(root: Path, *, market: str, formula: str) -> Path:
+def write_market_artifact(
+    root: Path,
+    *,
+    market: str,
+    formula: str,
+    scan_formula: str | None = None,
+    chunk_formula: str | None = None,
+) -> Path:
     market_dir = root / f"static-market-{market}" / "markets" / market.lower()
-    (market_dir / "scan").mkdir(parents=True)
+    chunk_dir = market_dir / "scan" / "chunks"
+    chunk_dir.mkdir(parents=True)
+    chunk_path = f"markets/{market.lower()}/scan/chunks/chunk-0001.json"
+    (chunk_dir / "chunk-0001.json").write_text(
+        json.dumps(
+            {
+                "rs_formula_version": chunk_formula or formula,
+                "rows": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (market_dir / "scan" / "manifest.json").write_text(
-        '{"ok": true}\n', encoding="utf-8"
+        json.dumps(
+            {
+                "rs_formula_version": scan_formula or formula,
+                "chunks": [{"path": chunk_path, "count": 0}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
     )
     entry = {
         "market": market,
@@ -97,6 +123,48 @@ def test_combiner_rejects_wrong_formula_fallback(tmp_path):
             fallback_artifacts_dir=fallback,
             output_dir=tmp_path / "out",
             required_formula_by_market={"HK": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )
+
+
+def test_combiner_rejects_wrong_scan_manifest_formula(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+        scan_formula=LEGACY_RS_FORMULA_VERSION,
+    )
+
+    with pytest.raises(
+        StaticArtifactFormulaError,
+        match="Scan manifest='legacy-linear-v1'",
+    ):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )
+
+
+def test_combiner_rejects_wrong_scan_chunk_formula(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+        chunk_formula=LEGACY_RS_FORMULA_VERSION,
+    )
+
+    with pytest.raises(
+        StaticArtifactFormulaError,
+        match="Scan chunk chunk-0001.json='legacy-linear-v1'",
+    ):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
             clean=True,
         )
 

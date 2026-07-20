@@ -506,5 +506,6 @@ class StockScanner(Protocol):
         composite_method: str = ...,
         pre_merged_requirements: object | None = ...,
         pre_fetched_data: object | None = ...,
+        market_rs_resolution: MarketRsResolution | None = ...,
     ) -> dict:
         ...

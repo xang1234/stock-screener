@@ -367,6 +367,77 @@ class TestHappyPath:
         assert run.config["rs_universe_size"] == 5000
 
     @_PATCH_TRADING_DAY
+    def test_symbol_fallback_receives_pinned_market_rs_resolution(self, _mock_td):
+        uow, _scanner = _make_uow(symbols=["AAPL"])
+        captured_resolutions: list[MarketRsResolution | None] = []
+
+        class FallbackProvider(FakeStockDataProvider):
+            def prepare_data_bulk(self, *_args, **_kwargs):
+                return {}
+
+        class RecordingScanner:
+            @staticmethod
+            def get_merged_requirements(_names, _criteria=None):
+                return {"needs": "price"}
+
+            def scan_stock_multi(
+                self,
+                symbol,
+                screener_names,
+                *,
+                market_rs_resolution=None,
+                **_kwargs,
+            ):
+                del symbol, screener_names
+                captured_resolutions.append(market_rs_resolution)
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        pinned = MarketRsResolution.canonical(
+            market="US",
+            as_of_date=AS_OF,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+            run_id=42,
+            universe_size=5000,
+            ratings_by_symbol={
+                "AAPL": {
+                    "rs_rating": 87,
+                    "rs_rating_1m": 80,
+                    "rs_rating_3m": 85,
+                    "rs_rating_12m": 90,
+                }
+            },
+        )
+
+        class Reader:
+            @staticmethod
+            def get(**_kwargs):
+                return pinned
+
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=RecordingScanner(),
+            data_provider=FallbackProvider(),
+            market_rs_reader=Reader(),
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                market="US",
+                rs_formula_version_override=BALANCED_RS_FORMULA_VERSION,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == RunStatus.PUBLISHED.value
+        assert captured_resolutions == [pinned]
+
+    @_PATCH_TRADING_DAY
     def test_run_stats_include_passed_symbols(self, _mock_td):
         uow, scanner = _make_uow()
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
