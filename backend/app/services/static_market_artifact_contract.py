@@ -52,3 +52,16 @@ def market_from_static_market_artifact_name(artifact_name: str) -> str:
     if "-" in market:
         return ""
     return market
+
+
+def expected_market_from_static_market_manifest_path(
+    root: Path,
+    manifest_path: Path,
+) -> str | None:
+    try:
+        artifact_name = manifest_path.relative_to(root).parts[0]
+    except (IndexError, ValueError) as exc:
+        raise StaticMarketArtifactContractError(
+            f"{manifest_path}: manifest is not inside a static market artifact."
+        ) from exc
+    return market_from_static_market_artifact_name(artifact_name) or None

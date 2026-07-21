@@ -682,6 +682,19 @@ class Settings(BaseSettings):
             raise ValueError(f"provider snapshot ratio must be between 0 and 1, got {v}")
         return v
 
+    @field_validator(
+        'market_rs_min_current_price_coverage',
+        'market_rs_min_current_price_coverage_ca',
+    )
+    @classmethod
+    def validate_market_rs_current_price_coverage(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(
+                "market RS minimum current price coverage must be between "
+                f"0 and 1, got {v}"
+            )
+        return v
+
     @field_validator("market_data_source_mode")
     @classmethod
     def validate_market_data_source_mode(cls, v: str) -> str:

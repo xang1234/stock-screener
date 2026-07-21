@@ -11,6 +11,7 @@ from app.domain.markets import market_registry
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     StaticMarketArtifactContractError,
+    expected_market_from_static_market_manifest_path,
     read_static_market_manifest,
 )
 
@@ -136,7 +137,14 @@ def collect_markets(base: Path) -> set[str]:
         return markets
     for manifest in base.rglob(STATIC_MARKET_METADATA_FILENAME):
         try:
-            payload = read_static_market_manifest(manifest)
+            expected_market = expected_market_from_static_market_manifest_path(
+                base,
+                manifest,
+            )
+            payload = read_static_market_manifest(
+                manifest,
+                expected_market=expected_market,
+            )
         except (OSError, json.JSONDecodeError, TypeError):
             continue
         except StaticMarketArtifactContractError as exc:

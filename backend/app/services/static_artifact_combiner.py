@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
+    expected_market_from_static_market_manifest_path,
     read_static_market_manifest,
 )
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
@@ -142,9 +143,14 @@ class StaticArtifactCombiner:
         discovered: dict[str, dict[str, Any]] = {}
         paths = sorted(root.rglob(self._metadata_filename)) if root.exists() else []
         for metadata_path in paths:
+            expected_market = expected_market_from_static_market_manifest_path(
+                root,
+                metadata_path,
+            )
             metadata = read_static_market_manifest(
                 metadata_path,
                 expected_schema_version=self._schema_version,
+                expected_market=expected_market,
             )
             market = str(metadata.get("market") or "").strip().upper()
             if market in discovered:

@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     StaticMarketArtifactContractError,
+    expected_market_from_static_market_manifest_path,
     market_from_static_market_artifact_name,
     read_static_market_manifest,
 )
@@ -118,7 +119,14 @@ def collect_current_markets(current_dir: Path) -> set[str]:
     )
     for metadata_path in metadata_paths:
         try:
-            payload = read_static_market_manifest(metadata_path)
+            expected_market = expected_market_from_static_market_manifest_path(
+                current_dir,
+                metadata_path,
+            )
+            payload = read_static_market_manifest(
+                metadata_path,
+                expected_market=expected_market,
+            )
             market = str(payload.get("market", "")).upper()
         except (
             OSError,
@@ -144,22 +152,25 @@ def downloaded_market_is_compatible(
     if not metadata_paths:
         warn(f"{artifact_name} from run {run_id} has no {STATIC_MARKET_METADATA_FILENAME}.")
         return False
+    if len(metadata_paths) != 1:
+        warn(
+            f"{artifact_name} from run {run_id} has multiple "
+            f"{STATIC_MARKET_METADATA_FILENAME} files."
+        )
+        return False
 
-    for metadata_path in metadata_paths:
-        try:
-            read_static_market_manifest(metadata_path, expected_market=market)
-        except (OSError, json.JSONDecodeError, TypeError) as exc:
-            warn(
-                f"{artifact_name} metadata at {metadata_path} could not be read ({exc})."
-            )
-            return False
-        except StaticMarketArtifactContractError as exc:
-            warn(str(exc))
-            return False
-        return True
-
-    warn(f"{artifact_name} from run {run_id} has no metadata for market {market}.")
-    return False
+    metadata_path = metadata_paths[0]
+    try:
+        read_static_market_manifest(metadata_path, expected_market=market)
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        warn(
+            f"{artifact_name} metadata at {metadata_path} could not be read ({exc})."
+        )
+        return False
+    except StaticMarketArtifactContractError as exc:
+        warn(str(exc))
+        return False
+    return True
 
 
 def download_fallback_artifacts(
@@ -276,6 +287,7 @@ def download_fallback_artifacts(
                     f"{artifact_name} from run {run_id} failed to download "
                     f"with exit {exc.returncode}.{command_error_detail(exc)}"
                 )
+                shutil.rmtree(target_dir, ignore_errors=True)
                 continue
 
             if not downloaded_market_is_compatible(

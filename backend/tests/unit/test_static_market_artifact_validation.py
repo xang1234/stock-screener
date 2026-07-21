@@ -270,3 +270,21 @@ def test_static_market_validator_rejects_missing_manifest_market(tmp_path: Path)
 
     assert "static-market-AU" in str(exc_info.value)
     assert "market is required" in str(exc_info.value)
+
+
+def test_static_market_validator_rejects_swapped_manifest_market(tmp_path: Path) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+    _write_market_manifest(fallback_dir, "static-market-AU", "US")
+
+    with pytest.raises(StaticMarketArtifactValidationError) as exc_info:
+        validate_market_artifacts(
+            current_dir=current_dir,
+            fallback_dir=fallback_dir,
+            selected_markets={"US"},
+            expected_markets={"US", "AU"},
+        )
+
+    assert "static-market-AU" in str(exc_info.value)
+    assert "market 'US'; expected 'AU'" in str(exc_info.value)

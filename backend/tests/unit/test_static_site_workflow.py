@@ -8,7 +8,10 @@ import subprocess
 import sys
 import textwrap
 
-from app.scripts.download_static_market_fallbacks import downloaded_market_is_compatible
+from app.scripts.download_static_market_fallbacks import (
+    collect_current_markets,
+    downloaded_market_is_compatible,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -210,6 +213,9 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
             elif args[:2] == ["run", "download"]:
                 artifact_name = args[args.index("--name") + 1]
                 if artifact_name == "static-market-HK":
+                    target_dir = pathlib.Path(args[args.index("--dir") + 1])
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    (target_dir / "partial.txt").write_text("partial")
                     print("download denied for HK", file=sys.stderr)
                     sys.exit(7)
                 target_dir = pathlib.Path(args[args.index("--dir") + 1])
@@ -378,3 +384,41 @@ def test_static_site_fallback_downloader_rejects_missing_manifest_market(
         artifact_name="static-market-AU",
         run_id=222,
     )
+
+
+def test_static_site_fallback_downloader_rejects_multiple_market_manifests(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "static-market-AU"
+    target_dir.mkdir()
+    (target_dir / "manifest.market.json").write_text(
+        json.dumps({"market": "AU", "schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+    nested_dir = target_dir / "nested"
+    nested_dir.mkdir()
+    (nested_dir / "manifest.market.json").write_text(
+        json.dumps({"market": "HK", "schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+
+    assert not downloaded_market_is_compatible(
+        target_dir,
+        market="AU",
+        artifact_name="static-market-AU",
+        run_id=222,
+    )
+
+
+def test_static_site_current_market_collection_rejects_swapped_artifact_name(
+    tmp_path: Path,
+) -> None:
+    current_dir = tmp_path / "current"
+    market_dir = current_dir / "static-market-US"
+    market_dir.mkdir(parents=True)
+    (market_dir / "manifest.market.json").write_text(
+        json.dumps({"market": "AU", "schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+
+    assert collect_current_markets(current_dir) == set()

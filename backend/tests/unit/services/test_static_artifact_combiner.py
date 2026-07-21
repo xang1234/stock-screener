@@ -153,6 +153,29 @@ def test_combiner_rejects_wrong_formula_fallback(tmp_path):
         )
 
 
+def test_combiner_rejects_swapped_artifact_name_and_manifest_market(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="AU",
+        formula=BALANCED_RS_FORMULA_VERSION,
+    )
+    artifact_dir = current / "static-market-AU"
+    manifest_path = artifact_dir / STATIC_MARKET_METADATA_FILENAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["market"] = "US"
+    manifest["entry"]["market"] = "US"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="market 'US'; expected 'AU'"):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"AU": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )
+
+
 def test_combiner_allows_legacy_fallback_outside_explicit_formula_policy(tmp_path):
     current = write_market_artifact(
         tmp_path / "current",
