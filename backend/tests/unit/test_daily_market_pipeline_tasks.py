@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import date
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -108,6 +110,55 @@ def test_queue_daily_market_pipeline_skips_disabled_market(monkeypatch):
 
     assert result["status"] == "skipped"
     assert result["reason"] == "market HK is disabled in local runtime preferences"
+
+
+def test_queue_daily_market_pipeline_skips_until_local_bootstrap_ready(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    class _FakeCalendar:
+        def market_now(self, _market):
+            return datetime(2026, 3, 16, 10, 0)
+
+        def is_trading_day(self, _market, _today):
+            return True
+
+        def last_completed_trading_day(self, _market):
+            return date(2026, 3, 16)
+
+    chain_called = False
+
+    class _FakeChain:
+        def apply_async(self):
+            nonlocal chain_called
+            chain_called = True
+            return SimpleNamespace(id="queued-task")
+
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _market: True,
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.get_runtime_bootstrap_status",
+        lambda _db: SimpleNamespace(
+            bootstrap_required=True,
+            bootstrap_state="not_started",
+            primary_market="US",
+            enabled_markets=["US"],
+        ),
+    )
+    monkeypatch.setattr(module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(module, "_market_pipeline_active", lambda _market: None)
+    monkeypatch.setattr(module, "MarketCalendarService", lambda: _FakeCalendar())
+    monkeypatch.setattr(module, "_build_daily_market_pipeline_signatures", lambda *_args: [])
+    monkeypatch.setattr(module, "chain", lambda *_signatures: _FakeChain())
+
+    result = module.queue_daily_market_pipeline.run("US")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "local_runtime_bootstrap_not_ready"
+    assert result["bootstrap_state"] == "not_started"
+    assert result["bootstrap_required"] is True
+    assert chain_called is False
 
 
 def test_guard_price_refresh_fails_lock_contention_skip_result():

@@ -54,19 +54,22 @@ def build_runtime_activity_status(
     )
     summary_status = "warning" if has_warning else ("active" if active_markets else "idle")
 
+    bootstrap_records = [
+        record for record in activity_records if record.lifecycle == "bootstrap"
+    ]
     primary_record = next(
-        (record for record in activity_records if record.market == primary_market),
+        (record for record in bootstrap_records if record.market == primary_market),
         None,
     )
     secondary_active = [
         record.market
-        for record in activity_records
+        for record in bootstrap_records
         if record.market != primary_market and record.active_bootstrap
     ]
     secondary_active_record = next(
         (
             record
-            for record in activity_records
+            for record in bootstrap_records
             if record.market != primary_market and record.active_bootstrap
         ),
         None,
@@ -94,15 +97,15 @@ def build_runtime_activity_status(
             if not secondary_active
             else "Primary market is ready while additional market loading continues."
         )
-    elif any(record.progress_mode == "determinate" for record in activity_records):
+    elif any(record.progress_mode == "determinate" for record in bootstrap_records):
         focus_record = next(
-            (record for record in activity_records if record.status in ACTIVE_ACTIVITY_STATUSES),
+            (record for record in bootstrap_records if record.status in ACTIVE_ACTIVITY_STATUSES),
             primary_record,
         )
         bootstrap_progress_mode = "determinate"
         bootstrap_percent = round(
-            sum(_bootstrap_progress_percent(record) for record in activity_records)
-            / max(len(activity_records), 1),
+            sum(_bootstrap_progress_percent(record) for record in bootstrap_records)
+            / max(len(bootstrap_records), 1),
             2,
         )
         bootstrap_stage = focus_record.stage_label if focus_record else None
