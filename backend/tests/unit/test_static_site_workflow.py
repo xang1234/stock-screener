@@ -8,6 +8,8 @@ import subprocess
 import sys
 import textwrap
 
+from app.scripts.download_static_market_fallbacks import downloaded_market_is_compatible
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -358,3 +360,21 @@ def test_static_site_fallback_downloader_skips_incompatible_schema_and_keeps_sea
     )
     assert manifest["schema_version"] == "static-site-v3"
     assert "static-site-v2" in result.stdout
+
+
+def test_static_site_fallback_downloader_rejects_missing_manifest_market(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "static-market-AU"
+    target_dir.mkdir()
+    (target_dir / "manifest.market.json").write_text(
+        json.dumps({"schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+
+    assert not downloaded_market_is_compatible(
+        target_dir,
+        market="AU",
+        artifact_name="static-market-AU",
+        run_id=222,
+    )

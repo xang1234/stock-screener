@@ -147,20 +147,15 @@ def downloaded_market_is_compatible(
 
     for metadata_path in metadata_paths:
         try:
-            payload = read_static_market_manifest(metadata_path)
-        except (
-            OSError,
-            json.JSONDecodeError,
-            TypeError,
-            StaticMarketArtifactContractError,
-        ) as exc:
+            read_static_market_manifest(metadata_path, expected_market=market)
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
             warn(
                 f"{artifact_name} metadata at {metadata_path} could not be read ({exc})."
             )
             return False
-        payload_market = str(payload.get("market", "")).strip().upper()
-        if payload_market and payload_market != market:
-            continue
+        except StaticMarketArtifactContractError as exc:
+            warn(str(exc))
+            return False
         return True
 
     warn(f"{artifact_name} from run {run_id} has no metadata for market {market}.")
