@@ -229,6 +229,25 @@ def test_bootstrap_price_cache_coverage_uses_market_specific_threshold():
     assert report["eligible"] is True
 
 
+def test_hk_bootstrap_price_policy_accepts_current_github_bundle_floor():
+    db = _session()
+    symbols = [f"SYM{i}" for i in range(100)]
+    as_of = date(2026, 7, 20)
+    db.add_all([_price(symbol, as_of) for symbol in symbols[:77]])
+    db.commit()
+
+    report = evaluate_bootstrap_price_cache_coverage(
+        db,
+        market="HK",
+        symbols=symbols,
+        as_of_date=as_of,
+    )
+
+    assert report["threshold"] == 0.75
+    assert report["price_coverage_ratio"] == 0.77
+    assert report["eligible"] is True
+
+
 def test_bootstrap_cache_coverage_keeps_fundamentals_threshold_strict_for_partial_price_markets():
     db = _session()
     symbols = [f"SYM{i}" for i in range(20)]
@@ -365,7 +384,7 @@ def test_bootstrap_price_thresholds_cover_every_supported_market():
         "CA": 0.75,
         "CN": 0.90,
         "DE": 0.90,
-        "HK": 0.80,
+        "HK": 0.75,
         "IN": 0.50,
         "JP": 0.90,
         "KR": 0.95,

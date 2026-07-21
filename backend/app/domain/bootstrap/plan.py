@@ -136,6 +136,7 @@ def _build_market_plan(market: str) -> MarketBootstrapPlan:
                 operation=BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL,
                 queue_kind=BootstrapQueueKind.MARKET_JOBS,
                 market=market,
+                execution_policy="refresh_guarded",
             ),
             _stage(
                 key="exposure",
@@ -148,6 +149,7 @@ def _build_market_plan(market: str) -> MarketBootstrapPlan:
                 operation=BootstrapOperation.CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL,
                 queue_kind=BootstrapQueueKind.MARKET_JOBS,
                 market=market,
+                execution_policy="refresh_guarded",
             ),
             _stage(
                 key="snapshot",

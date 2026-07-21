@@ -49,6 +49,11 @@ def test_non_us_bootstrap_plan_uses_official_universe_without_industry_seed() ->
         "activity_lifecycle": "bootstrap",
         "bootstrap_cache_only_if_covered": True,
     }
+    breadth_stage = next(stage for stage in hk_plan.stages if stage.key == "breadth")
+    groups_stage = next(stage for stage in hk_plan.stages if stage.key == "groups")
+
+    assert breadth_stage.kwargs["execution_policy"] == "refresh_guarded"
+    assert groups_stage.kwargs["execution_policy"] == "refresh_guarded"
 
 
 def test_au_bootstrap_plan_refreshes_universe_before_prices_and_fundamentals() -> None:

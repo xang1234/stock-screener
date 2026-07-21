@@ -103,6 +103,19 @@ def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
         "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill"
         in task_names
     )
+    breadth = next(
+        signature
+        for signature in signatures
+        if signature.task == "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill"
+    )
+    groups = next(
+        signature
+        for signature in signatures
+        if signature.task
+        == "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill"
+    )
+    assert breadth.kwargs["execution_policy"] == "refresh_guarded"
+    assert groups.kwargs["execution_policy"] == "refresh_guarded"
     snapshot = signatures[-1]
     assert snapshot.kwargs["market"] == "HK"
     assert snapshot.kwargs["universe_name"] == "market:HK"

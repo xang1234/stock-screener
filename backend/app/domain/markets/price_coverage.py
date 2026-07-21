@@ -9,13 +9,14 @@ CACHE_ONLY_MIN_PRICE_COVERAGE = 0.95
 CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE = 0.95
 
 # Thresholds follow observed daily-price static bundle availability, rounded
-# down to conservative five-point floors.
+# down to conservative five-point floors. HK has many listed-but-stale symbols,
+# so its durable bundle coverage currently sits just above 75%.
 PRICE_MIN_COVERAGE_BY_MARKET: dict[str, float] = {
     "AU": 0.90,
     "CA": 0.75,
     "CN": 0.90,
     "DE": 0.90,
-    "HK": 0.80,
+    "HK": 0.75,
     "IN": 0.50,
     "JP": 0.90,
     "KR": 0.95,
