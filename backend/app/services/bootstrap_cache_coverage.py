@@ -16,8 +16,8 @@ from app.domain.feature_store.bootstrap_coverage import (
 )
 from app.domain.markets.price_coverage import (
     PriceCoveragePolicy,
+    bootstrap_price_coverage_policy_for_market,
     normalize_market_code,
-    price_coverage_policy_for_market,
 )
 from app.models.provider_snapshot import (
     ProviderSnapshotPointer,
@@ -215,7 +215,7 @@ def evaluate_bootstrap_price_cache_coverage(
         if latest_price_by_symbol.get(symbol) is None
         or latest_price_by_symbol[symbol] < as_of_date
     )
-    policy = price_coverage_policy_for_market(normalized_market)
+    policy = bootstrap_price_coverage_policy_for_market(normalized_market)
     return BootstrapPriceCoverageReport(
         policy=policy,
         price_coverage_date=as_of_date,

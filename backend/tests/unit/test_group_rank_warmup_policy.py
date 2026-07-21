@@ -25,6 +25,21 @@ def test_group_rank_warmup_policy_allows_partial_cache_above_market_threshold() 
     )
 
 
+def test_group_rank_warmup_policy_keeps_hk_same_day_threshold_stricter_than_bootstrap() -> None:
+    price_cache = MagicMock()
+    price_cache.get_warmup_metadata.return_value = {
+        "status": "partial",
+        "count": 77,
+        "total": 100,
+        "completed_at": datetime.now().isoformat(),
+    }
+
+    decision = evaluate_same_day_group_rank_warmup(price_cache, market="HK")
+
+    assert decision.error is not None
+    assert decision.cache_requirement == GroupRankCacheRequirement.disabled()
+
+
 def test_group_rank_warmup_policy_uses_strict_requirement_after_completed_warmup() -> None:
     price_cache = MagicMock()
     price_cache.get_warmup_metadata.return_value = {

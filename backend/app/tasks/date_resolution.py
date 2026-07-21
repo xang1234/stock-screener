@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Protocol
 
 
 class MarketCalendarLike(Protocol):
-    def market_now(self, market: str) -> datetime:
+    def last_completed_trading_day(self, market: str) -> date:
         ...
 
 
@@ -27,13 +27,13 @@ def resolve_task_target_date(
     market: str,
     calendar_service: MarketCalendarLike,
 ) -> ResolvedTaskDate:
-    """Resolve a task target date without changing nested task semantics."""
+    """Resolve implicit daily work to the latest completed market session."""
     if calculation_date:
         return ResolvedTaskDate(
-            target_date=datetime.strptime(calculation_date, "%Y-%m-%d").date(),
+            target_date=date.fromisoformat(calculation_date),
             was_explicit=True,
         )
     return ResolvedTaskDate(
-        target_date=calendar_service.market_now(market).date(),
+        target_date=calendar_service.last_completed_trading_day(market),
         was_explicit=False,
     )

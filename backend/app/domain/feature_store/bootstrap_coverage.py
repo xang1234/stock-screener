@@ -7,7 +7,7 @@ from typing import Any
 
 from app.domain.markets.price_coverage import (
     PriceCoveragePolicy,
-    price_coverage_policy_for_market,
+    bootstrap_price_coverage_policy_for_market,
 )
 
 
@@ -44,7 +44,7 @@ def normalize_bootstrap_gate_report(
     unsupported_symbols: Sequence[str],
 ) -> dict[str, Any]:
     payload = dict(report or {})
-    policy = price_coverage_policy_for_market(market)
+    policy = bootstrap_price_coverage_policy_for_market(market)
     eligible = _report_meets_policy(payload, policy)
     payload.update(
         {

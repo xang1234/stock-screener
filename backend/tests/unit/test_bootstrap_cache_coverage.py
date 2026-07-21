@@ -229,6 +229,25 @@ def test_bootstrap_price_cache_coverage_uses_market_specific_threshold():
     assert report["eligible"] is True
 
 
+def test_hk_bootstrap_price_policy_accepts_current_github_bundle_floor():
+    db = _session()
+    symbols = [f"SYM{i}" for i in range(100)]
+    as_of = date(2026, 7, 20)
+    db.add_all([_price(symbol, as_of) for symbol in symbols[:77]])
+    db.commit()
+
+    report = evaluate_bootstrap_price_cache_coverage(
+        db,
+        market="HK",
+        symbols=symbols,
+        as_of_date=as_of,
+    )
+
+    assert report["threshold"] == 0.75
+    assert report["price_coverage_ratio"] == 0.77
+    assert report["eligible"] is True
+
+
 def test_bootstrap_cache_coverage_keeps_fundamentals_threshold_strict_for_partial_price_markets():
     db = _session()
     symbols = [f"SYM{i}" for i in range(20)]
@@ -310,6 +329,23 @@ def test_normalize_bootstrap_gate_report_owns_threshold_and_unsupported_metadata
     assert report["mode"] == "cache_only"
     assert report["unsupported_skipped_count"] == 2
     assert report["unsupported_symbols_preview"] == ["1234.BAD", "5678.BAD"]
+
+
+def test_normalize_bootstrap_gate_report_uses_bootstrap_specific_hk_price_floor():
+    report = normalize_bootstrap_gate_report(
+        market="HK",
+        report={
+            "eligible": False,
+            "price_coverage_ratio": 0.77,
+            "fundamentals_coverage_ratio": 1.0,
+        },
+        unsupported_symbols=["1234.BAD"],
+    )
+
+    assert report["threshold"] == report["price_threshold"] == 0.75
+    assert report["eligible"] is True
+    assert report["mode"] == "cache_only"
+    assert report["unsupported_skipped_count"] == 1
 
 
 def test_normalize_bootstrap_gate_report_derives_eligibility_from_ratios_not_claim():
