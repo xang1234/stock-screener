@@ -22,6 +22,7 @@ _VALID_REASON_VALUES = frozenset(
         "export_failed",
     }
 )
+_EXPECTED_SCHEMA_VERSION = "static-site-v3"
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,12 @@ def collect_markets(base: Path) -> set[str]:
             continue
         if not isinstance(payload, dict):
             continue
+        schema_version = payload.get("schema_version")
+        if schema_version != _EXPECTED_SCHEMA_VERSION:
+            raise StaticMarketArtifactValidationError(
+                f"{manifest}: schema_version {schema_version!r}; "
+                f"expected {_EXPECTED_SCHEMA_VERSION!r}."
+            )
         market = str(payload.get("market", "")).strip().upper()
         if market:
             markets.add(market)

@@ -197,6 +197,27 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.8)
 
 
+def test_load_allows_ca_current_price_coverage_matching_recent_static_runs(db_session):
+    symbols = tuple(f"S{index}" for index in range(20))
+    db_session.add_all(
+        [
+            *[
+                _price(symbol, 0, adjusted=100.0)
+                for symbol in symbols[:15]
+            ],
+            *_complete_rows("^GSPTSE", {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    inputs = _loader(symbols, candidates=("^GSPTSE",)).load(
+        db_session, market="CA", as_of_date=ANCHORS[0]
+    )
+
+    assert inputs.current_price_coverage == pytest.approx(0.75)
+    assert set(inputs.exclusions) == set(symbols)
+
+
 def test_load_translates_unavailable_historical_universe_to_input_failure(db_session):
     class _UnavailableUniverse:
         @staticmethod

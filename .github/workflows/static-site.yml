@@ -395,6 +395,7 @@ jobs:
           branch_name = os.environ["BRANCH_NAME"]
           current_dir = Path("/tmp/static-market-artifacts-current")
           fallback_dir = Path("/tmp/static-market-artifacts-fallback")
+          expected_schema_version = "static-site-v3"
           fallback_dir.mkdir(parents=True, exist_ok=True)
           query = urlencode(
               {
@@ -430,6 +431,37 @@ jobs:
               if "-" in market:
                   return ""
               return market
+
+          def downloaded_market_is_compatible(target_dir, market, artifact_name, run_id):
+              metadata_paths = sorted(target_dir.rglob("manifest.market.json"))
+              if not metadata_paths:
+                  warn(f"{artifact_name} from run {run_id} has no manifest.market.json.")
+                  return False
+
+              for metadata_path in metadata_paths:
+                  try:
+                      payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                  except (OSError, json.JSONDecodeError, TypeError) as exc:
+                      warn(
+                          f"{artifact_name} metadata at {metadata_path} could not be read ({exc})."
+                      )
+                      return False
+                  payload_market = str(payload.get("market", "")).strip().upper()
+                  if payload_market and payload_market != market:
+                      continue
+                  schema_version = payload.get("schema_version")
+                  if schema_version != expected_schema_version:
+                      warn(
+                          f"{artifact_name} from run {run_id} uses schema_version "
+                          f"{schema_version!r}; expected {expected_schema_version!r}."
+                      )
+                      return False
+                  return True
+
+              warn(
+                  f"{artifact_name} from run {run_id} has no metadata for market {market}."
+              )
+              return False
 
           def extract_runs(payload):
               if isinstance(payload, dict):
@@ -614,6 +646,15 @@ jobs:
                           f"{artifact_name} from run {run_id} failed to download "
                           f"with exit {exc.returncode}.{command_error_detail(exc)}"
                       )
+                      continue
+
+                  if not downloaded_market_is_compatible(
+                      target_dir,
+                      market,
+                      artifact_name,
+                      run_id,
+                  ):
+                      shutil.rmtree(target_dir)
                       continue
 
                   fallback_markets.add(market)
