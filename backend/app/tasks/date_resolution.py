@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Protocol
 
 
@@ -30,7 +30,7 @@ def resolve_task_target_date(
     """Resolve implicit daily work to the latest completed market session."""
     if calculation_date:
         return ResolvedTaskDate(
-            target_date=datetime.strptime(calculation_date, "%Y-%m-%d").date(),
+            target_date=date.fromisoformat(calculation_date),
             was_explicit=True,
         )
     return ResolvedTaskDate(

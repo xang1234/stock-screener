@@ -331,6 +331,23 @@ def test_normalize_bootstrap_gate_report_owns_threshold_and_unsupported_metadata
     assert report["unsupported_symbols_preview"] == ["1234.BAD", "5678.BAD"]
 
 
+def test_normalize_bootstrap_gate_report_uses_bootstrap_specific_hk_price_floor():
+    report = normalize_bootstrap_gate_report(
+        market="HK",
+        report={
+            "eligible": False,
+            "price_coverage_ratio": 0.77,
+            "fundamentals_coverage_ratio": 1.0,
+        },
+        unsupported_symbols=["1234.BAD"],
+    )
+
+    assert report["threshold"] == report["price_threshold"] == 0.75
+    assert report["eligible"] is True
+    assert report["mode"] == "cache_only"
+    assert report["unsupported_skipped_count"] == 1
+
+
 def test_normalize_bootstrap_gate_report_derives_eligibility_from_ratios_not_claim():
     report = normalize_bootstrap_gate_report(
         market="TW",
@@ -384,7 +401,7 @@ def test_bootstrap_price_thresholds_cover_every_supported_market():
         "CA": 0.75,
         "CN": 0.90,
         "DE": 0.90,
-        "HK": 0.75,
+        "HK": 0.80,
         "IN": 0.50,
         "JP": 0.90,
         "KR": 0.95,

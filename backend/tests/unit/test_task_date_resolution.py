@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from app.tasks.date_resolution import resolve_task_target_date
 
 
@@ -35,6 +37,17 @@ def test_resolve_task_target_date_uses_explicit_date_without_calendar_lookup():
     assert resolved.nested_daily_kwargs() == {"calculation_date": "2026-03-16"}
     assert calendar.market_calls == []
     assert calendar.last_completed_calls == []
+
+
+def test_resolve_task_target_date_rejects_non_iso_explicit_date():
+    calendar = FakeCalendar(datetime(2026, 3, 17, 12, 0, 0))
+
+    with pytest.raises(ValueError):
+        resolve_task_target_date(
+            "2026-3-7",
+            market="HK",
+            calendar_service=calendar,
+        )
 
 
 def test_resolve_task_target_date_uses_last_completed_session_for_scheduled_runs():
