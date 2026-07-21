@@ -2,6 +2,7 @@ from datetime import date
 
 import pytest
 
+from app.config import settings
 from app.models.stock import StockPrice
 from app.services.market_rs_inputs import (
     MarketRsInputLoader,
@@ -195,6 +196,61 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
         == "current_adjusted_price_coverage_below_threshold"
     )
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.8)
+
+
+def test_load_allows_ca_current_price_coverage_matching_configured_policy(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "market_rs_min_current_price_coverage_ca", 0.70)
+    symbols = tuple(f"S{index}" for index in range(20))
+    db_session.add_all(
+        [
+            *[
+                _price(symbol, 0, adjusted=100.0)
+                for symbol in symbols[:15]
+            ],
+            *_complete_rows("^GSPTSE", {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    inputs = _loader(symbols, candidates=("^GSPTSE",)).load(
+        db_session, market="CA", as_of_date=ANCHORS[0]
+    )
+
+    assert inputs.current_price_coverage == pytest.approx(0.75)
+    assert set(inputs.exclusions) == set(symbols)
+
+
+def test_load_uses_configured_market_specific_current_price_threshold(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "market_rs_min_current_price_coverage_ca", 0.80)
+    symbols = tuple(f"S{index}" for index in range(20))
+    db_session.add_all(
+        [
+            *[
+                _price(symbol, 0, adjusted=100.0)
+                for symbol in symbols[:15]
+            ],
+            *_complete_rows("^GSPTSE", {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    with pytest.raises(MarketRsInputUnavailable) as exc_info:
+        _loader(symbols, candidates=("^GSPTSE",)).load(
+            db_session, market="CA", as_of_date=ANCHORS[0]
+        )
+
+    assert (
+        exc_info.value.reason_code
+        == "current_adjusted_price_coverage_below_threshold"
+    )
+    assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.75)
+    assert exc_info.value.diagnostics["minimum_current_price_coverage"] == pytest.approx(0.80)
 
 
 def test_load_translates_unavailable_historical_universe_to_input_failure(db_session):

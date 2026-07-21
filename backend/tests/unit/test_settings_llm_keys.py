@@ -16,7 +16,7 @@ def test_zai_api_keys_list_prefers_multi_key_field() -> None:
 
 
 def test_zai_api_keys_list_falls_back_to_single_key() -> None:
-    settings = Settings(zai_api_key="single-key")
+    settings = Settings(zai_api_keys="", zai_api_key="single-key")
 
     assert settings.zai_api_keys_list == ["single-key"]
 
@@ -37,6 +37,22 @@ def test_universe_source_timeout_seconds_cn_must_be_positive_when_set() -> None:
         assert "universe_source_timeout_seconds_cn must be > 0" in str(exc)
     else:
         raise AssertionError("Expected invalid universe_source_timeout_seconds_cn to fail")
+
+
+def test_market_rs_current_price_coverage_settings_must_be_ratios() -> None:
+    for kwargs in (
+        {"market_rs_min_current_price_coverage": 70},
+        {"market_rs_min_current_price_coverage_ca": -1},
+    ):
+        try:
+            Settings(**kwargs)
+        except ValueError as exc:
+            assert (
+                "market RS minimum current price coverage must be between 0 and 1"
+                in str(exc)
+            )
+        else:
+            raise AssertionError(f"Expected invalid settings to fail: {kwargs}")
 
 
 def test_x_ingest_provider_is_normalized_and_validated() -> None:

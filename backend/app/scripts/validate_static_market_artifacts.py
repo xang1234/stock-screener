@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from app.domain.markets import market_registry
+from app.services.static_market_artifact_contract import (
+    STATIC_MARKET_METADATA_FILENAME,
+    StaticMarketArtifactContractError,
+    expected_market_from_static_market_manifest_path,
+    read_static_market_manifest,
+)
 
 
 class StaticMarketArtifactValidationError(RuntimeError):
@@ -129,13 +135,22 @@ def collect_markets(base: Path) -> set[str]:
     markets: set[str] = set()
     if not base.exists():
         return markets
-    for manifest in base.rglob("manifest.market.json"):
+    for manifest in base.rglob(STATIC_MARKET_METADATA_FILENAME):
         try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            expected_market = expected_market_from_static_market_manifest_path(
+                base,
+                manifest,
+            )
+            payload = read_static_market_manifest(
+                manifest,
+                expected_market=expected_market,
+            )
         except (OSError, json.JSONDecodeError, TypeError):
             continue
-        if not isinstance(payload, dict):
-            continue
+        except StaticMarketArtifactContractError as exc:
+            raise StaticMarketArtifactValidationError(
+                str(exc)
+            ) from exc
         market = str(payload.get("market", "")).strip().upper()
         if market:
             markets.add(market)

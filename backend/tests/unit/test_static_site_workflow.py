@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shutil
 import stat
 import subprocess
 import sys
 import textwrap
+
+from app.scripts.download_static_market_fallbacks import (
+    collect_current_markets,
+    downloaded_market_is_compatible,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -29,13 +33,11 @@ def _combine_and_build_job() -> str:
     )[0]
 
 
-def _fallback_download_script() -> str:
-    step = _combine_and_build_job().split("      - name: Download per-market fallback artifacts\n", 1)[1].split(
+def _fallback_download_step() -> str:
+    return _combine_and_build_job().split("      - name: Download per-market fallback artifacts\n", 1)[1].split(
         "\n      - name: Validate market artifacts",
         1,
     )[0]
-    run = step.split("          python - <<'PY'\n", 1)[1].rsplit("\n          PY", 1)[0]
-    return textwrap.dedent(run)
 
 
 def test_static_site_market_build_failures_are_not_marked_continue_on_error() -> None:
@@ -138,6 +140,7 @@ def test_static_site_uploads_market_diagnostics_after_export() -> None:
 
 def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:
     combine_job = _combine_and_build_job()
+    fallback_step = _fallback_download_step()
 
     assert "needs: [select-markets, build-market]" in combine_job
     assert "needs.select-markets.outputs.markets" in combine_job
@@ -148,23 +151,11 @@ def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts
     assert "--fallback-artifacts-dir /tmp/static-market-artifacts-fallback" in combine_job
     assert "FALLBACK_MARKETS" not in combine_job
     assert "github.ref_name" in combine_job
-    assert "--paginate" in combine_job
-    assert "runs = extract_runs(pages)" in combine_job
-    assert "market_from_artifact_name" in combine_job
-    assert '"gh",' in combine_job
-    assert '"run",' in combine_job
-    assert '"download",' in combine_job
-    assert "actions/runs/{run_id}/artifacts" in combine_job
-    assert "artifact.get(\"expired\")" in combine_job
-    assert "current_markets" in combine_job
-    assert "command_error_detail" in combine_job
-    assert "exc.stderr" in combine_job
-    assert "run.get(\"conclusion\") == \"success\"" not in combine_job
-    assert "subprocess.CalledProcessError" in combine_job
-    assert "::warning::Unable to download fallback market artifact" in combine_job
-    assert "isinstance(payload, dict)" in combine_job
-    assert "isinstance(page, dict)" in combine_job
-    assert "Unexpected GitHub API response shape" in combine_job
+    assert "python -m app.scripts.download_static_market_fallbacks" in fallback_step
+    assert "--current-dir /tmp/static-market-artifacts-current" in fallback_step
+    assert "--fallback-dir /tmp/static-market-artifacts-fallback" in fallback_step
+    assert "python - <<'PY'" not in fallback_step
+    assert "static-site-v3" not in fallback_step
 
 
 def test_static_site_validation_uses_python_module_not_inline_control_plane() -> None:
@@ -183,14 +174,12 @@ def test_static_site_validation_uses_python_module_not_inline_control_plane() ->
 
 
 def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tmp_path) -> None:
-    current_dir = Path("/tmp/static-market-artifacts-current")
-    fallback_dir = Path("/tmp/static-market-artifacts-fallback")
-    shutil.rmtree(current_dir, ignore_errors=True)
-    shutil.rmtree(fallback_dir, ignore_errors=True)
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
     current_us_dir = current_dir / "static-market-US" / "markets" / "us"
     current_us_dir.mkdir(parents=True)
     (current_us_dir / "manifest.market.json").write_text(
-        json.dumps({"market": "US"}),
+        json.dumps({"market": "US", "schema_version": "static-site-v3"}),
         encoding="utf-8",
     )
 
@@ -224,11 +213,14 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
             elif args[:2] == ["run", "download"]:
                 artifact_name = args[args.index("--name") + 1]
                 if artifact_name == "static-market-HK":
+                    target_dir = pathlib.Path(args[args.index("--dir") + 1])
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    (target_dir / "partial.txt").write_text("partial")
                     print("download denied for HK", file=sys.stderr)
                     sys.exit(7)
                 target_dir = pathlib.Path(args[args.index("--dir") + 1])
                 target_dir.mkdir(parents=True, exist_ok=True)
-                (target_dir / "manifest.market.json").write_text(json.dumps({{"market": artifact_name.rsplit("-", 1)[1]}}))
+                (target_dir / "manifest.market.json").write_text(json.dumps({{"market": artifact_name.rsplit("-", 1)[1], "schema_version": "static-site-v3"}}))
                 with downloads_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps({{"artifact": artifact_name}}) + "\\n")
             else:
@@ -250,26 +242,183 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
         }
     )
 
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", _fallback_download_script()],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.scripts.download_static_market_fallbacks",
+            "--current-dir",
+            str(current_dir),
+            "--fallback-dir",
+            str(fallback_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=ROOT / "backend",
+    )
 
-        downloads = [
-            json.loads(line)
-            for line in downloads_log.read_text(encoding="utf-8").splitlines()
-        ]
-        assert downloads == [{"artifact": "static-market-TW"}]
-        assert not (fallback_dir / "static-market-diagnostics-CN").exists()
-        assert not (fallback_dir / "static-market-status-CN").exists()
-        assert not (fallback_dir / "static-market-US").exists()
-        assert not (fallback_dir / "static-market-HK").exists()
-        assert (fallback_dir / "static-market-TW" / "manifest.market.json").exists()
-        assert "exit 7. Details: stderr: download denied for HK" in result.stdout
-    finally:
-        shutil.rmtree(current_dir, ignore_errors=True)
-        shutil.rmtree(fallback_dir, ignore_errors=True)
+    downloads = [
+        json.loads(line)
+        for line in downloads_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert downloads == [{"artifact": "static-market-TW"}]
+    assert not (fallback_dir / "static-market-diagnostics-CN").exists()
+    assert not (fallback_dir / "static-market-status-CN").exists()
+    assert not (fallback_dir / "static-market-US").exists()
+    assert not (fallback_dir / "static-market-HK").exists()
+    assert (fallback_dir / "static-market-TW" / "manifest.market.json").exists()
+    assert "exit 7. Details: stderr: download denied for HK" in result.stdout
+
+
+def test_static_site_fallback_downloader_skips_incompatible_schema_and_keeps_searching(tmp_path) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    downloads_log = tmp_path / "downloads.jsonl"
+    fake_gh.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            import json
+            import pathlib
+            import sys
+
+            downloads_log = pathlib.Path({str(downloads_log)!r})
+            args = sys.argv[1:]
+            if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
+                print(json.dumps([{{"workflow_runs": [
+                    {{"id": 999}},
+                    {{"id": 333}},
+                    {{"id": 222}}
+                ]}}]))
+            elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
+                print(json.dumps([{{"artifacts": [
+                    {{"name": "static-market-AU", "expired": False}}
+                ]}}]))
+            elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
+                print(json.dumps([{{"artifacts": [
+                    {{"name": "static-market-AU", "expired": False}}
+                ]}}]))
+            elif args[:2] == ["run", "download"]:
+                run_id = args[2]
+                artifact_name = args[args.index("--name") + 1]
+                target_dir = pathlib.Path(args[args.index("--dir") + 1])
+                target_dir.mkdir(parents=True, exist_ok=True)
+                schema_version = "static-site-v2" if run_id == "333" else "static-site-v3"
+                (target_dir / "manifest.market.json").write_text(
+                    json.dumps({{"market": "AU", "schema_version": schema_version}})
+                )
+                with downloads_log.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({{"run": run_id, "artifact": artifact_name}}) + "\\n")
+            else:
+                print(f"unexpected gh args: {{args}}", file=sys.stderr)
+                sys.exit(2)
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "REPOSITORY": "xang1234/stock-screener",
+            "CURRENT_RUN_ID": "999",
+            "BRANCH_NAME": "main",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.scripts.download_static_market_fallbacks",
+            "--current-dir",
+            str(current_dir),
+            "--fallback-dir",
+            str(fallback_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=ROOT / "backend",
+    )
+
+    downloads = [
+        json.loads(line)
+        for line in downloads_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert downloads == [
+        {"run": "333", "artifact": "static-market-AU"},
+        {"run": "222", "artifact": "static-market-AU"},
+    ]
+    manifest = json.loads(
+        (fallback_dir / "static-market-AU" / "manifest.market.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["schema_version"] == "static-site-v3"
+    assert "static-site-v2" in result.stdout
+
+
+def test_static_site_fallback_downloader_rejects_missing_manifest_market(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "static-market-AU"
+    target_dir.mkdir()
+    (target_dir / "manifest.market.json").write_text(
+        json.dumps({"schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+
+    assert not downloaded_market_is_compatible(
+        target_dir,
+        market="AU",
+        artifact_name="static-market-AU",
+        run_id=222,
+    )
+
+
+def test_static_site_fallback_downloader_rejects_multiple_market_manifests(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "static-market-AU"
+    target_dir.mkdir()
+    (target_dir / "manifest.market.json").write_text(
+        json.dumps({"market": "AU", "schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+    nested_dir = target_dir / "nested"
+    nested_dir.mkdir()
+    (nested_dir / "manifest.market.json").write_text(
+        json.dumps({"market": "HK", "schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+
+    assert not downloaded_market_is_compatible(
+        target_dir,
+        market="AU",
+        artifact_name="static-market-AU",
+        run_id=222,
+    )
+
+
+def test_static_site_current_market_collection_rejects_swapped_artifact_name(
+    tmp_path: Path,
+) -> None:
+    current_dir = tmp_path / "current"
+    market_dir = current_dir / "static-market-US"
+    market_dir.mkdir(parents=True)
+    (market_dir / "manifest.market.json").write_text(
+        json.dumps({"market": "AU", "schema_version": "static-site-v3"}),
+        encoding="utf-8",
+    )
+
+    assert collect_current_markets(current_dir) == set()

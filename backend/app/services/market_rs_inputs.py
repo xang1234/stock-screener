@@ -9,6 +9,7 @@ import math
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.domain.relative_strength import HORIZON_SESSIONS
 from app.models.stock import StockPrice
 from app.services.benchmark_registry_service import (
@@ -23,7 +24,6 @@ from app.services.point_in_time_universe_service import (
 
 
 EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
-MINIMUM_CURRENT_PRICE_COVERAGE = 0.90
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,18 @@ class MarketRsInputLoader:
     @staticmethod
     def _valid_price(value: float | None) -> bool:
         return value is not None and math.isfinite(float(value)) and float(value) > 0
+
+    @staticmethod
+    def _minimum_current_price_coverage(market: str) -> float:
+        normalized = str(market or "").strip().lower()
+        market_threshold = getattr(
+            settings,
+            f"market_rs_min_current_price_coverage_{normalized}",
+            None,
+        )
+        if market_threshold is not None:
+            return float(market_threshold)
+        return float(settings.market_rs_min_current_price_coverage)
 
     def load(
         self,
@@ -174,13 +186,18 @@ class MarketRsInputLoader:
         current_price_coverage = (
             current_available / len(universe.symbols) if universe.symbols else 0.0
         )
-        if current_price_coverage < MINIMUM_CURRENT_PRICE_COVERAGE:
+        minimum_current_price_coverage = self._minimum_current_price_coverage(
+            normalized
+        )
+        if current_price_coverage < minimum_current_price_coverage:
             raise MarketRsInputUnavailable(
                 f"{normalized} current price coverage is "
-                f"{current_price_coverage:.1%}; 90.0% required",
+                f"{current_price_coverage:.1%}; "
+                f"{minimum_current_price_coverage:.1%} required",
                 reason_code="current_adjusted_price_coverage_below_threshold",
                 diagnostics={
                     "current_price_coverage": current_price_coverage,
+                    "minimum_current_price_coverage": minimum_current_price_coverage,
                     "current_prices_available": current_available,
                     "expected_symbol_count": len(universe.symbols),
                 },

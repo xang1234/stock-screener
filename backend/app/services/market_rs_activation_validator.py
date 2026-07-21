@@ -33,6 +33,7 @@ from app.services.market_rs_rollout_contracts import (
 from app.services.market_rs_static_artifact_validator import (
     MarketRsStaticArtifactValidator,
 )
+from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
 
 
 FeatureRunRepositoryFactory = Callable[[Session], SqlFeatureRunRepository]
@@ -287,7 +288,7 @@ class MarketRsActivationValidator:
                     f"Staged static artifact validation failed: {exc}"
                 )
         elif not (Path(static_staging_dir) / "manifest.json").is_file():
-            errors.append("Missing staged static-site-v3 manifest.")
+            errors.append(f"Missing staged {STATIC_SITE_SCHEMA_VERSION} manifest.")
 
         return ActivationValidationReport(
             market=normalized,

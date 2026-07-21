@@ -8,6 +8,11 @@ import shutil
 import tempfile
 from typing import Any, Mapping
 
+from app.services.static_market_artifact_contract import (
+    STATIC_MARKET_METADATA_FILENAME,
+    expected_market_from_static_market_manifest_path,
+    read_static_market_manifest,
+)
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
 
 
@@ -31,7 +36,7 @@ class StaticArtifactCombiner:
         schema_version: str,
         supported_markets: tuple[str, ...],
         default_market: str,
-        metadata_filename: str = "manifest.market.json",
+        metadata_filename: str = STATIC_MARKET_METADATA_FILENAME,
     ) -> None:
         self._schema_version = schema_version
         self._supported_markets = tuple(supported_markets)
@@ -138,17 +143,18 @@ class StaticArtifactCombiner:
         discovered: dict[str, dict[str, Any]] = {}
         paths = sorted(root.rglob(self._metadata_filename)) if root.exists() else []
         for metadata_path in paths:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            expected_market = expected_market_from_static_market_manifest_path(
+                root,
+                metadata_path,
+            )
+            metadata = read_static_market_manifest(
+                metadata_path,
+                expected_schema_version=self._schema_version,
+                expected_market=expected_market,
+            )
             market = str(metadata.get("market") or "").strip().upper()
-            if not market:
-                raise RuntimeError(f"Invalid Market metadata at {metadata_path}")
             if market in discovered:
                 raise RuntimeError(f"Duplicate {source_label} artifact for {market}")
-            if metadata.get("schema_version") != self._schema_version:
-                raise RuntimeError(
-                    f"{market} {source_label} artifact uses schema_version "
-                    f"{metadata.get('schema_version')!r}; expected {self._schema_version!r}"
-                )
             market_dir = metadata_path.parent
             entry = metadata.get("entry")
             if not isinstance(entry, dict):

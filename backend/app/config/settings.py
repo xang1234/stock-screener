@@ -527,6 +527,12 @@ class Settings(BaseSettings):
     provider_snapshot_max_missing_ratio_sg: float = 0.30
     provider_snapshot_max_missing_ratio_au: float = 0.30
     provider_snapshot_max_missing_ratio_my: float = 0.30
+    market_rs_min_current_price_coverage: float = 0.90
+    # Recent CA static and canonical Market RS runs commonly land around 70-75%
+    # Yahoo adjusted-price coverage because the broad universe includes symbols
+    # Yahoo does not price consistently. This gate applies to every canonical
+    # Market RS calculation path, including static publish, backfill, and rollout.
+    market_rs_min_current_price_coverage_ca: float = 0.70
     market_data_source_mode: str = "github_first"  # github_first | live_only
     github_data_repository: str = "xang1234/stock-screener"
     github_data_api_base: str = "https://api.github.com"
@@ -674,6 +680,19 @@ class Settings(BaseSettings):
     def validate_provider_snapshot_ratios(cls, v: float) -> float:
         if not 0.0 <= v <= 1.0:
             raise ValueError(f"provider snapshot ratio must be between 0 and 1, got {v}")
+        return v
+
+    @field_validator(
+        'market_rs_min_current_price_coverage',
+        'market_rs_min_current_price_coverage_ca',
+    )
+    @classmethod
+    def validate_market_rs_current_price_coverage(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(
+                "market RS minimum current price coverage must be between "
+                f"0 and 1, got {v}"
+            )
         return v
 
     @field_validator("market_data_source_mode")

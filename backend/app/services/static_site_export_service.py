@@ -59,6 +59,10 @@ from app.services.static_chart_bundle_exporter import (
     StaticChartBundleExporter,
 )
 from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
+from app.services.static_market_artifact_contract import (
+    STATIC_MARKET_METADATA_FILENAME,
+    STATIC_SITE_SCHEMA_VERSION,
+)
 from app.wiring.bootstrap import (
     get_benchmark_cache,
     get_fundamentals_cache,
@@ -69,7 +73,6 @@ from app.wiring.bootstrap import (
 
 logger = logging.getLogger(__name__)
 
-STATIC_SITE_SCHEMA_VERSION = "static-site-v3"
 SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v1"
 CHART_BUNDLE_SCHEMA_VERSION = "static-charts-v1"
 SCAN_CHUNK_SIZE = 1000
@@ -91,7 +94,6 @@ STATIC_BREADTH_ATTRIBUTION_MARKETS = ("US",)
 STATIC_DEFAULT_MARKET = "US"
 _MARKET_CATALOG = get_market_catalog()
 STATIC_SUPPORTED_MARKETS = tuple(_MARKET_CATALOG.supported_market_codes())
-STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
     market: _MARKET_CATALOG.get(market).label for market in STATIC_SUPPORTED_MARKETS
 }

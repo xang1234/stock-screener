@@ -7,9 +7,9 @@ from typing import Any
 import pandas as pd
 
 from app.services.breadth_attribution_service import BreadthAttributionService
+from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
 from app.services.static_site_errors import StaticSiteSectionUnavailableError
 
-STATIC_SITE_SCHEMA_VERSION = "static-site-v3"
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS = 10
 STATIC_BREADTH_ATTRIBUTION_MARKETS = ("US",)
