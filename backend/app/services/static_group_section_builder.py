@@ -25,10 +25,10 @@ from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
 )
+from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
 from app.services.static_site_errors import StaticSiteSectionUnavailableError
 
 
-STATIC_SITE_SCHEMA_VERSION = "static-site-v3"
 STATIC_GROUP_HISTORY_RUNS = 40
 
 

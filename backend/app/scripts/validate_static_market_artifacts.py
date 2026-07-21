@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from app.domain.markets import market_registry
+from app.services.static_market_artifact_contract import (
+    STATIC_MARKET_METADATA_FILENAME,
+    StaticMarketArtifactContractError,
+    read_static_market_manifest,
+)
 
 
 class StaticMarketArtifactValidationError(RuntimeError):
@@ -22,7 +27,6 @@ _VALID_REASON_VALUES = frozenset(
         "export_failed",
     }
 )
-_EXPECTED_SCHEMA_VERSION = "static-site-v3"
 
 
 @dataclass(frozen=True)
@@ -130,19 +134,15 @@ def collect_markets(base: Path) -> set[str]:
     markets: set[str] = set()
     if not base.exists():
         return markets
-    for manifest in base.rglob("manifest.market.json"):
+    for manifest in base.rglob(STATIC_MARKET_METADATA_FILENAME):
         try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload = read_static_market_manifest(manifest)
         except (OSError, json.JSONDecodeError, TypeError):
             continue
-        if not isinstance(payload, dict):
-            continue
-        schema_version = payload.get("schema_version")
-        if schema_version != _EXPECTED_SCHEMA_VERSION:
+        except StaticMarketArtifactContractError as exc:
             raise StaticMarketArtifactValidationError(
-                f"{manifest}: schema_version {schema_version!r}; "
-                f"expected {_EXPECTED_SCHEMA_VERSION!r}."
-            )
+                str(exc)
+            ) from exc
         market = str(payload.get("market", "")).strip().upper()
         if market:
             markets.add(market)

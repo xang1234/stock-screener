@@ -527,6 +527,12 @@ class Settings(BaseSettings):
     provider_snapshot_max_missing_ratio_sg: float = 0.30
     provider_snapshot_max_missing_ratio_au: float = 0.30
     provider_snapshot_max_missing_ratio_my: float = 0.30
+    market_rs_min_current_price_coverage: float = 0.90
+    # Recent CA static and canonical Market RS runs commonly land around 70-75%
+    # Yahoo adjusted-price coverage because the broad universe includes symbols
+    # Yahoo does not price consistently. This gate applies to every canonical
+    # Market RS calculation path, including static publish, backfill, and rollout.
+    market_rs_min_current_price_coverage_ca: float = 0.70
     market_data_source_mode: str = "github_first"  # github_first | live_only
     github_data_repository: str = "xang1234/stock-screener"
     github_data_api_base: str = "https://api.github.com"

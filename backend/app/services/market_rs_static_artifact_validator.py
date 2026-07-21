@@ -20,10 +20,8 @@ from app.services.static_groups_rrg_export import (
     StaticGroupsRRGUnavailableError,
     StaticGroupsRRGUnavailableReason,
 )
-from app.services.static_site_export_service import (
-    SCAN_BUNDLE_SCHEMA_VERSION,
-    STATIC_SITE_SCHEMA_VERSION,
-)
+from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
+from app.services.static_site_export_service import SCAN_BUNDLE_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -94,7 +92,7 @@ class MarketRsStaticArtifactValidator:
             return StaticArtifactValidationResult(
                 bundle_fingerprint=None,
                 rrg_status=None,
-                errors=("Missing staged static-site-v3 manifest.",),
+                errors=(f"Missing staged {STATIC_SITE_SCHEMA_VERSION} manifest.",),
             )
         bundle_fingerprint = self.bundle_fingerprint(
             static_staging_dir,
@@ -109,7 +107,9 @@ class MarketRsStaticArtifactValidator:
                 errors=(f"Invalid staged static manifest: {exc}",),
             )
         if manifest.get("schema_version") != STATIC_SITE_SCHEMA_VERSION:
-            errors.append("Staged static manifest is not static-site-v3.")
+            errors.append(
+                f"Staged static manifest is not {STATIC_SITE_SCHEMA_VERSION}."
+            )
         entry = (manifest.get("markets") or {}).get(market) or {}
         expected_identity = {
             "rs_formula_version": BALANCED_RS_FORMULA_VERSION,

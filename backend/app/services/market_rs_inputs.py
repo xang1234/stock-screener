@@ -9,6 +9,7 @@ import math
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.domain.relative_strength import HORIZON_SESSIONS
 from app.models.stock import StockPrice
 from app.services.benchmark_registry_service import (
@@ -23,12 +24,6 @@ from app.services.point_in_time_universe_service import (
 
 
 EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
-MINIMUM_CURRENT_PRICE_COVERAGE = 0.90
-MARKET_CURRENT_PRICE_COVERAGE_THRESHOLDS = {
-    # Recent CA static runs commonly publish with broad-but-not-90% Yahoo
-    # adjusted-price coverage; the first balanced-RS CA run observed 74.3%.
-    "CA": 0.70,
-}
 
 
 @dataclass(frozen=True)
@@ -83,10 +78,15 @@ class MarketRsInputLoader:
 
     @staticmethod
     def _minimum_current_price_coverage(market: str) -> float:
-        return MARKET_CURRENT_PRICE_COVERAGE_THRESHOLDS.get(
-            market.upper(),
-            MINIMUM_CURRENT_PRICE_COVERAGE,
+        normalized = str(market or "").strip().lower()
+        market_threshold = getattr(
+            settings,
+            f"market_rs_min_current_price_coverage_{normalized}",
+            None,
         )
+        if market_threshold is not None:
+            return float(market_threshold)
+        return float(settings.market_rs_min_current_price_coverage)
 
     def load(
         self,
