@@ -105,11 +105,46 @@ def test_queue_daily_market_pipeline_skips_disabled_market(monkeypatch):
         "app.services.runtime_preferences_service.is_market_enabled_now",
         lambda _market: False,
     )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.get_runtime_bootstrap_status",
+        lambda _db: SimpleNamespace(
+            bootstrap_required=False,
+            bootstrap_state="ready",
+            primary_market="US",
+            enabled_markets=["US"],
+        ),
+    )
+    monkeypatch.setattr(module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
 
     result = module.queue_daily_market_pipeline.run("HK")
 
     assert result["status"] == "skipped"
     assert result["reason"] == "market HK is disabled in local runtime preferences"
+
+
+def test_queue_daily_market_pipeline_prefers_bootstrap_blocker_over_disabled_market(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _market: False,
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.get_runtime_bootstrap_status",
+        lambda _db: SimpleNamespace(
+            bootstrap_required=True,
+            bootstrap_state="not_started",
+            primary_market="US",
+            enabled_markets=["US"],
+        ),
+    )
+    monkeypatch.setattr(module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    result = module.queue_daily_market_pipeline.run("HK")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "local_runtime_bootstrap_not_ready"
+    assert result["market"] == "HK"
 
 
 def test_queue_daily_market_pipeline_skips_until_local_bootstrap_ready(monkeypatch):

@@ -336,6 +336,10 @@ def queue_daily_market_pipeline(self, market: str) -> dict:
     from app.services.runtime_preferences_service import is_market_enabled_now
 
     market_code = _normalize_pipeline_market(market)
+    bootstrap_blocker = _local_runtime_bootstrap_blocker(market_code)
+    if bootstrap_blocker is not None:
+        return bootstrap_blocker
+
     if not is_market_enabled_now(market_code):
         return {
             "status": "skipped",
@@ -343,10 +347,6 @@ def queue_daily_market_pipeline(self, market: str) -> dict:
             "market": market_code,
             "timestamp": datetime.now().isoformat(),
         }
-
-    bootstrap_blocker = _local_runtime_bootstrap_blocker(market_code)
-    if bootstrap_blocker is not None:
-        return bootstrap_blocker
 
     holder = _market_pipeline_active(market_code)
     if holder:
