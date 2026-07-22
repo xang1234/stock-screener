@@ -1195,6 +1195,32 @@ def test_fetch_from_finviz_prefers_ticker_metadata_over_logo_text(monkeypatch):
     assert requests_seen == [{"v": 111, "f": "exch_nyse", "o": "ticker"}]
 
 
+def test_parse_finviz_screener_soup_skips_rows_with_mismatched_columns(caplog):
+    service = StockUniverseService()
+    html = """
+    <html><body>
+      <table class="screener_table">
+        <tr>
+          <th>No.</th><th>Ticker</th><th>Company</th><th>Sector</th>
+          <th>Industry</th><th>Country</th><th>Market Cap</th>
+        </tr>
+        <tr>
+          <td>1</td><td data-boxover-ticker="A">AA</td><td>Agilent</td>
+          <td>Healthcare</td><td>Diagnostics</td><td>USA</td><td>38.00B</td>
+        </tr>
+        <tr>
+          <td>2</td><td data-boxover-ticker="BAD">BADBAD</td><td>Malformed</td>
+        </tr>
+      </table>
+    </body></html>
+    """
+
+    stocks = service._parse_finviz_screener_soup(BeautifulSoup(html, "lxml"), "NYSE")
+
+    assert [stock["symbol"] for stock in stocks] == ["A"]
+    assert "Skipping finviz row with 2 cells (expected 6 headers)" in caplog.text
+
+
 def test_populate_universe_reconciliation_baseline_is_source_scoped(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()

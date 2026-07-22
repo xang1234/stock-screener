@@ -125,8 +125,15 @@ def _official_lock_retry_delay(retry_count: int) -> int:
     )
 
 
-def _allow_stale_weekly_reference_for_lifecycle(activity_lifecycle: str | None) -> bool:
-    return str(activity_lifecycle or "").strip().lower() == "bootstrap"
+def _allow_stale_weekly_reference_for_lifecycle(
+    activity_lifecycle: str | None,
+    *,
+    active_universe_count: int | None,
+) -> bool:
+    return (
+        str(activity_lifecycle or "").strip().lower() == "bootstrap"
+        and active_universe_count == 0
+    )
 
 
 def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
@@ -225,7 +232,10 @@ def refresh_stock_universe(
             market=effective_market,
             hydrate_cache=True,
             hydrate_mode="static",
-            allow_stale=_allow_stale_weekly_reference_for_lifecycle(activity_lifecycle),
+            allow_stale=_allow_stale_weekly_reference_for_lifecycle(
+                activity_lifecycle,
+                active_universe_count=prior_size,
+            ),
         )
         if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
             _emit_universe_drift(effective_market, prior_size)
@@ -397,7 +407,10 @@ def refresh_official_market_universe(
                 market=_market,
                 hydrate_cache=True,
                 hydrate_mode="static",
-                allow_stale=_allow_stale_weekly_reference_for_lifecycle(activity_lifecycle),
+                allow_stale=_allow_stale_weekly_reference_for_lifecycle(
+                    activity_lifecycle,
+                    active_universe_count=prior_size,
+                ),
             )
         finally:
             sync_db.close()

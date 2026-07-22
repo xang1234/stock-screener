@@ -196,7 +196,7 @@ def test_refresh_stock_universe_allows_stale_github_bundle_for_bootstrap(monkeyp
     sync_calls: list[dict] = []
     _patch_data_fetch_lock(monkeypatch)
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)
+    monkeypatch.setattr(module, "_count_active_universe", lambda _market: 0)
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
@@ -228,6 +228,47 @@ def test_refresh_stock_universe_allows_stale_github_bundle_for_bootstrap(monkeyp
     assert result["status"] == "success"
     assert result["source"] == "github"
     assert sync_calls[0]["allow_stale"] is True
+
+
+def test_refresh_stock_universe_does_not_allow_stale_github_bundle_for_populated_bootstrap(monkeypatch):
+    import app.tasks.universe_tasks as module
+
+    fake_db = MagicMock()
+    sync_calls: list[dict] = []
+    _patch_data_fetch_lock(monkeypatch)
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "_count_active_universe", lambda _market: 42)
+    monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            sync_weekly_reference_from_github=lambda db, **kwargs: sync_calls.append(kwargs)
+            or {
+                "status": "success",
+                "source": "github",
+                "market": kwargs["market"],
+                "source_revision": "fundamentals_v1_us:20260711143920-seeded-fallback",
+                "import": {"universe_rows": 100},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(populate_universe=MagicMock()),
+    )
+
+    result = module.refresh_stock_universe.run(
+        market="US",
+        activity_lifecycle="bootstrap",
+    )
+
+    assert result["status"] == "success"
+    assert result["source"] == "github"
+    assert sync_calls[0]["allow_stale"] is False
 
 
 def test_refresh_official_market_universe_falls_back_when_github_sync_is_unsupported(monkeypatch):
@@ -289,7 +330,7 @@ def test_refresh_official_market_universe_allows_stale_github_bundle_for_bootstr
     sync_calls: list[dict] = []
     activity_sessions = [MagicMock(), MagicMock(), MagicMock()]
     monkeypatch.setattr(module, "SessionLocal", lambda: activity_sessions.pop(0))
-    monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)
+    monkeypatch.setattr(module, "_count_active_universe", lambda _market: 0)
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "_mark_market_activity_progress_safely", lambda **kwargs: None)
@@ -323,6 +364,50 @@ def test_refresh_official_market_universe_allows_stale_github_bundle_for_bootstr
     assert result["status"] == "success"
     assert result["source"] == "github"
     assert sync_calls[0]["allow_stale"] is True
+    fake_lock.release.assert_called_once_with("task-123", market="HK")
+
+
+def test_refresh_official_market_universe_does_not_allow_stale_github_bundle_for_populated_bootstrap(monkeypatch):
+    import app.tasks.universe_tasks as module
+
+    fake_lock = _patch_data_fetch_lock(monkeypatch)
+    sync_calls: list[dict] = []
+    activity_sessions = [MagicMock(), MagicMock(), MagicMock()]
+    monkeypatch.setattr(module, "SessionLocal", lambda: activity_sessions.pop(0))
+    monkeypatch.setattr(module, "_count_active_universe", lambda _market: 42)
+    monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_mark_market_activity_progress_safely", lambda **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            sync_weekly_reference_from_github=lambda db, **kwargs: sync_calls.append(kwargs)
+            or {
+                "status": "success",
+                "source": "github",
+                "market": kwargs["market"],
+                "source_revision": "fundamentals_v1_hk:20260711143920-seeded-fallback",
+                "import": {"universe_rows": 100},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.OfficialMarketUniverseSourceService.fetch_market_snapshot",
+        MagicMock(side_effect=AssertionError("live provider should not be used")),
+    )
+
+    module.refresh_official_market_universe.request.id = "task-123"
+    module.refresh_official_market_universe.request.retries = 0
+    result = module.refresh_official_market_universe.run(
+        market="HK",
+        activity_lifecycle="bootstrap",
+    )
+
+    assert result["status"] == "success"
+    assert result["source"] == "github"
+    assert sync_calls[0]["allow_stale"] is False
     fake_lock.release.assert_called_once_with("task-123", market="HK")
 
 

@@ -84,6 +84,8 @@ FINVIZ_EXCHANGE_FILTER_CODES = {
     "NASDAQ": "nasd",
     "NYSE": "nyse",
 }
+# Keep the universe path on our parser: finvizfinance==1.2.0 reads ticker-cell
+# text, which duplicates the leading ticker letter after Finviz's logo markup.
 FINVIZ_SCREENER_URL = "https://finviz.com/screener.ashx"
 FINVIZ_OVERVIEW_PAGE = 111
 FINVIZ_SCREENER_PAGE_SIZE = 20
@@ -650,8 +652,15 @@ class StockUniverseService:
             cells = row.find_all("td")[1:]
             if not cells:
                 continue
+            if len(cells) != len(headers):
+                logger.warning(
+                    "Skipping finviz row with %d cells (expected %d headers)",
+                    len(cells),
+                    len(headers),
+                )
+                continue
             payload: dict[str, Any] = {}
-            for header, cell in zip(headers, cells):
+            for header, cell in zip(headers, cells, strict=True):
                 if header == "Ticker":
                     payload[header] = self._extract_finviz_ticker(cell)
                 else:
