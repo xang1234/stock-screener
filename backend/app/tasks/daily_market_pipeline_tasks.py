@@ -305,6 +305,28 @@ def _market_pipeline_active(market: str) -> dict | None:
         return None
 
 
+def _local_runtime_bootstrap_blocker(market: str) -> dict | None:
+    from app.services.runtime_preferences_service import get_runtime_bootstrap_status
+
+    db = SessionLocal()
+    try:
+        bootstrap_status = get_runtime_bootstrap_status(db)
+    finally:
+        db.close()
+
+    if not bootstrap_status.bootstrap_required:
+        return None
+
+    return {
+        "status": "skipped",
+        "reason": "local_runtime_bootstrap_not_ready",
+        "market": market,
+        "bootstrap_state": bootstrap_status.bootstrap_state,
+        "bootstrap_required": bootstrap_status.bootstrap_required,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline",
@@ -314,6 +336,10 @@ def queue_daily_market_pipeline(self, market: str) -> dict:
     from app.services.runtime_preferences_service import is_market_enabled_now
 
     market_code = _normalize_pipeline_market(market)
+    bootstrap_blocker = _local_runtime_bootstrap_blocker(market_code)
+    if bootstrap_blocker is not None:
+        return bootstrap_blocker
+
     if not is_market_enabled_now(market_code):
         return {
             "status": "skipped",
