@@ -9,11 +9,13 @@ import hashlib
 import io
 import json
 import os
+from time import sleep
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 import pandas as pd
 from typing import Any, Dict, Iterable, List, Mapping, Optional
-from finvizfinance.screener.overview import Overview
+from finvizfinance.util import web_scrap
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_
 from datetime import datetime, timedelta, timezone
@@ -77,6 +79,16 @@ CN_ACTIVE_UNIVERSE_MIN_COUNT = 5217
 # after ETF/fund/debt/derivative exclusions). Re-baseline against the first
 # successful TMX snapshot before treating as authoritative.
 CA_ACTIVE_UNIVERSE_MIN_COUNT = 2300
+FINVIZ_EXCHANGE_FILTER_CODES = {
+    "AMEX": "amex",
+    "NASDAQ": "nasd",
+    "NYSE": "nyse",
+}
+# Keep the universe path on our parser: finvizfinance==1.2.0 reads ticker-cell
+# text, which duplicates the leading ticker letter after Finviz's logo markup.
+FINVIZ_SCREENER_URL = "https://finviz.com/screener.ashx"
+FINVIZ_OVERVIEW_PAGE = 111
+FINVIZ_SCREENER_PAGE_SIZE = 20
 
 
 class StockUniverseService:
@@ -550,7 +562,7 @@ class StockUniverseService:
 
     def fetch_from_finviz(self, exchange_filter: Optional[str] = None) -> List[Dict]:
         """
-        Fetch all US stocks from finviz using finvizfinance library.
+        Fetch all US stocks from the Finviz screener.
 
         Args:
             exchange_filter: Optional filter: 'nyse', 'nasdaq', 'amex', or None for all
@@ -569,15 +581,10 @@ class StockUniverseService:
                     try:
                         logger.info(f"Fetching stocks from {exchange}...")
 
-                        # Create new screener instance for each exchange
-                        fviz = Overview()
-                        fviz.set_filter(filters_dict={'Exchange': exchange})
-                        df = fviz.screener_view(verbose=0)
-
-                        if df is not None and not df.empty:
-                            stocks = self._parse_finviz_dataframe(df, exchange)
+                        stocks = self._fetch_finviz_exchange_rows(exchange)
+                        if stocks:
                             all_stocks.extend(stocks)
-                            logger.info(f"Fetched {len(stocks)} stocks from {exchange}")
+                        logger.info(f"Fetched {len(stocks)} stocks from {exchange}")
                     except Exception as e:
                         logger.warning(f"Error fetching from {exchange}: {e}")
                         continue
@@ -591,21 +598,95 @@ class StockUniverseService:
                     logger.warning(f"Invalid exchange filter: {exchange_filter}")
                     return []
 
-                fviz = Overview()
-                fviz.set_filter(filters_dict={'Exchange': exchange_name})
-                df = fviz.screener_view(verbose=0)
-
-                if df is None or df.empty:
+                stocks = self._fetch_finviz_exchange_rows(exchange_name)
+                if not stocks:
                     logger.warning(f"No data returned from finviz for exchange {exchange_filter}")
                     return []
 
-                stocks = self._parse_finviz_dataframe(df, exchange_name)
                 logger.info(f"Successfully fetched {len(stocks)} stocks from {exchange_name}")
                 return stocks
 
         except Exception as e:
             logger.error(f"Error fetching stocks from finviz: {e}", exc_info=True)
             return []
+
+    def _fetch_finviz_exchange_rows(self, exchange: str) -> List[Dict[str, Any]]:
+        params: dict[str, Any] = {
+            "v": FINVIZ_OVERVIEW_PAGE,
+            "f": f"exch_{FINVIZ_EXCHANGE_FILTER_CODES[exchange]}",
+            "o": "ticker",
+        }
+        stocks: list[dict[str, Any]] = []
+
+        soup = web_scrap(FINVIZ_SCREENER_URL, params)
+        page_count = self._finviz_page_count(soup)
+        stocks.extend(self._parse_finviz_screener_soup(soup, exchange))
+
+        for page_index in range(1, page_count):
+            sleep(1)
+            params["r"] = page_index * FINVIZ_SCREENER_PAGE_SIZE + 1
+            soup = web_scrap(FINVIZ_SCREENER_URL, params)
+            stocks.extend(self._parse_finviz_screener_soup(soup, exchange))
+
+        return stocks
+
+    @staticmethod
+    def _finviz_page_count(soup: Any) -> int:
+        page_select = soup.find(id="pageSelect")
+        if page_select is None:
+            return 0
+        return len(page_select.find_all("option"))
+
+    def _parse_finviz_screener_soup(self, soup: Any, exchange: str) -> list[dict[str, Any]]:
+        table = soup.find("table", class_="screener_table")
+        if table is None:
+            return []
+
+        rows = table.find_all("tr")
+        if not rows:
+            return []
+
+        headers = [header.get_text(strip=True) for header in rows[0].find_all("th")][1:]
+        parsed_rows: list[dict[str, Any]] = []
+        for row in rows[1:]:
+            cells = row.find_all("td")[1:]
+            if not cells:
+                continue
+            if len(cells) != len(headers):
+                logger.warning(
+                    "Skipping finviz row with %d cells (expected %d headers)",
+                    len(cells),
+                    len(headers),
+                )
+                continue
+            payload: dict[str, Any] = {}
+            for header, cell in zip(headers, cells, strict=True):
+                if header == "Ticker":
+                    payload[header] = self._extract_finviz_ticker(cell)
+                else:
+                    payload[header] = cell.get_text(strip=True)
+            parsed_rows.append(payload)
+
+        return self._parse_finviz_dataframe(pd.DataFrame(parsed_rows), exchange)
+
+    @staticmethod
+    def _extract_finviz_ticker(cell: Any) -> str:
+        data_ticker = str(cell.get("data-boxover-ticker") or "").strip()
+        if data_ticker:
+            return data_ticker
+
+        tab_link = cell.find("a", class_=lambda value: value and "tab-link" in value)
+        if tab_link is not None:
+            tab_text = tab_link.get_text(strip=True)
+            if tab_text:
+                return tab_text
+
+        for link in cell.find_all("a", href=True):
+            ticker_values = parse_qs(urlparse(link["href"]).query).get("t")
+            if ticker_values and ticker_values[0]:
+                return ticker_values[0]
+
+        return cell.get_text(strip=True)
 
     def _parse_finviz_dataframe(self, df, exchange: str) -> List[Dict]:
         """
