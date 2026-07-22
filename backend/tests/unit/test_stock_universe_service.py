@@ -4,10 +4,12 @@ import json
 from datetime import datetime, timedelta
 
 import pytest
+from bs4 import BeautifulSoup
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+import app.services.stock_universe_service as stock_universe_module
 from app.models.stock_universe import (
     StockUniverse,
     StockUniverseReconciliationRun,
@@ -1141,6 +1143,56 @@ def test_populate_universe_keeps_snapshot_when_finviz_has_bad_rows(monkeypatch):
     assert stats["rejected_rows"][0]["reason"] == "Missing symbol/ticker"
     assert db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
     db.close()
+
+
+def test_fetch_from_finviz_prefers_ticker_metadata_over_logo_text(monkeypatch):
+    service = StockUniverseService()
+    html = """
+    <html><body>
+      <select id="pageSelect"><option value="1">1</option></select>
+      <table class="screener_table">
+        <tr>
+          <th>No.</th><th>Ticker</th><th>Company</th><th>Sector</th>
+          <th>Industry</th><th>Country</th><th>Market Cap</th><th>P/E</th>
+          <th>Price</th><th>Change</th><th>Volume</th>
+        </tr>
+        <tr>
+          <td><a href="stock?t=A&amp;ty=c&amp;p=d&amp;b=1">1</a></td>
+          <td data-boxover-ticker="A">
+            <span>
+              <a class="company-ticker" href="stock?t=A&amp;ty=c&amp;p=d&amp;b=1">
+                <span>A</span>
+              </a>
+              <a class="tab-link" href="stock?t=A&amp;ty=c&amp;p=d&amp;b=1">A</a>
+            </span>
+          </td>
+          <td>Agilent Technologies Inc</td>
+          <td>Healthcare</td>
+          <td>Diagnostics &amp; Research</td>
+          <td>USA</td>
+          <td>38.00B</td>
+          <td>27.02</td>
+          <td>133.00</td>
+          <td>1.00%</td>
+          <td>2,000,000</td>
+        </tr>
+      </table>
+    </body></html>
+    """
+    requests_seen = []
+
+    def fake_web_scrap(url, params=None):
+        requests_seen.append(dict(params or {}))
+        return BeautifulSoup(html, "lxml")
+
+    monkeypatch.setattr(stock_universe_module, "web_scrap", fake_web_scrap, raising=False)
+
+    stocks = service.fetch_from_finviz(exchange_filter="NYSE")
+
+    assert stocks[0]["symbol"] == "A"
+    assert stocks[0]["name"] == "Agilent Technologies Inc"
+    assert stocks[0]["market_cap"] == 38_000_000_000.0
+    assert requests_seen == [{"v": 111, "f": "exch_nyse", "o": "ticker"}]
 
 
 def test_populate_universe_reconciliation_baseline_is_source_scoped(monkeypatch):
