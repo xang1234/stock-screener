@@ -125,6 +125,10 @@ def _official_lock_retry_delay(retry_count: int) -> int:
     )
 
 
+def _allow_stale_weekly_reference_for_lifecycle(activity_lifecycle: str | None) -> bool:
+    return str(activity_lifecycle or "").strip().lower() == "bootstrap"
+
+
 def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
     """Dispatch an official-source snapshot into the market-specific ingest path."""
     db = SessionLocal()
@@ -221,6 +225,7 @@ def refresh_stock_universe(
             market=effective_market,
             hydrate_cache=True,
             hydrate_mode="static",
+            allow_stale=_allow_stale_weekly_reference_for_lifecycle(activity_lifecycle),
         )
         if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
             _emit_universe_drift(effective_market, prior_size)
@@ -392,6 +397,7 @@ def refresh_official_market_universe(
                 market=_market,
                 hydrate_cache=True,
                 hydrate_mode="static",
+                allow_stale=_allow_stale_weekly_reference_for_lifecycle(activity_lifecycle),
             )
         finally:
             sync_db.close()
