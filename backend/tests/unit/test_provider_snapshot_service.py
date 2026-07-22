@@ -7,7 +7,9 @@ from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
+from bs4 import BeautifulSoup
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -20,6 +22,7 @@ from app.models.provider_snapshot import (
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 import app.services.fundamentals_cache_service as fundamentals_cache_module
+import app.services.provider_snapshot_service as provider_snapshot_module
 from app.services.fundamentals_cache_service import FundamentalsCacheService
 from app.services.provider_snapshot_service import ProviderSnapshotService, settings
 
@@ -93,6 +96,77 @@ def _make_provider_snapshot_service(
         fundamentals_cache=fundamentals_cache or _StubFundamentalsCache(),
         rate_limiter=MagicMock(),
     )
+
+
+def test_build_snapshot_rows_extracts_canonical_ticker_from_finviz_markup(monkeypatch):
+    service = _make_provider_snapshot_service()
+    html = """
+    <html><body>
+      <select id="pageSelect"><option value="1">1</option></select>
+      <table class="screener_table">
+        <tr>
+          <th>No.</th><th>Ticker</th><th>Company</th><th>Sector</th>
+          <th>Industry</th><th>Country</th><th>Market Cap</th>
+        </tr>
+        <tr>
+          <td>1</td>
+          <td data-boxover-ticker="A">
+            <span>
+              <a class="company-ticker" href="stock?t=A&amp;ty=c&amp;p=d&amp;b=1">
+                <span>A</span>
+              </a>
+              <a class="tab-link" href="stock?t=A&amp;ty=c&amp;p=d&amp;b=1">A</a>
+            </span>
+          </td>
+          <td>Agilent Technologies Inc</td>
+          <td>Healthcare</td>
+          <td>Diagnostics &amp; Research</td>
+          <td>USA</td>
+          <td>38.00B</td>
+        </tr>
+      </table>
+    </body></html>
+    """
+
+    class BrokenOverview:
+        url = "https://finviz.com/screener.ashx"
+        size = 20
+
+        def __init__(self):
+            self.request_params = {"v": 111}
+
+        def set_filter(self, filters_dict):
+            self.request_params["f"] = "exch_nyse"
+
+        def screener_view(self, verbose=0):
+            return pd.DataFrame(
+                [
+                    {
+                        "Ticker": "AA",
+                        "Company": "Agilent Technologies Inc",
+                        "Sector": "Healthcare",
+                        "Industry": "Diagnostics & Research",
+                        "Country": "USA",
+                        "Market Cap": "38.00B",
+                    }
+                ]
+            )
+
+    monkeypatch.setattr(service, "CATEGORY_LOADERS", {"overview": ("fake", "BrokenOverview")})
+    monkeypatch.setattr(service, "EXCHANGES", ("NYSE",))
+    monkeypatch.setattr(service, "_load_screener_class", lambda category: BrokenOverview)
+    monkeypatch.setattr(
+        provider_snapshot_module,
+        "web_scrap",
+        lambda url, params=None: BeautifulSoup(html, "lxml"),
+        raising=False,
+    )
+
+    rows = service._build_snapshot_rows()
+
+    assert sorted(rows) == ["A"]
+    assert rows["A"]["normalized_payload"]["symbol"] == "A"
+    assert rows["A"]["raw_payload"]["overview"]["Ticker"] == "A"
 
 
 def test_create_snapshot_run_blocks_publish_when_coverage_below_threshold(monkeypatch):
