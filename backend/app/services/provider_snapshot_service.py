@@ -12,9 +12,13 @@ import shutil
 import tempfile
 from datetime import date, datetime
 from pathlib import Path
+from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
+from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
+from finvizfinance.constants import NUMBER_COL
+from finvizfinance.util import number_covert, progress_bar, web_scrap
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -223,8 +227,84 @@ class ProviderSnapshotService:
         screener_cls = self._load_screener_class(category)
         screener = screener_cls()
         screener.set_filter(filters_dict={"Exchange": exchange})
-        df = screener.screener_view(verbose=1 if show_progress else 0)
-        return df if df is not None else pd.DataFrame()
+        screener.request_params["o"] = "ticker"
+
+        soup = web_scrap(screener.url, screener.request_params)
+        page_count = self._finviz_page_count(soup)
+        if page_count == 0:
+            return pd.DataFrame()
+
+        df = self._parse_finviz_screener_table(soup)
+        for page_index in range(1, page_count):
+            sleep(1)
+            if show_progress:
+                progress_bar(page_index, page_count)
+            screener.request_params["r"] = page_index * screener.size + 1
+            soup = web_scrap(screener.url, screener.request_params)
+            page_df = self._parse_finviz_screener_table(soup)
+            df = pd.concat([df, page_df], ignore_index=True)
+        return df
+
+    @staticmethod
+    def _finviz_page_count(soup: Any) -> int:
+        page_select = soup.find(id="pageSelect")
+        if page_select is None:
+            return 0
+        return len(page_select.find_all("option"))
+
+    @staticmethod
+    def _extract_finviz_ticker(cell: Any) -> str:
+        data_ticker = str(cell.get("data-boxover-ticker") or "").strip()
+        if data_ticker:
+            return data_ticker
+
+        tab_link = cell.find("a", class_=lambda value: value and "tab-link" in value)
+        if tab_link is not None:
+            tab_text = tab_link.get_text(strip=True)
+            if tab_text:
+                return tab_text
+
+        for link in cell.find_all("a", href=True):
+            ticker_values = parse_qs(urlparse(link["href"]).query).get("t")
+            if ticker_values and ticker_values[0]:
+                return ticker_values[0]
+
+        return cell.get_text(strip=True)
+
+    @classmethod
+    def _parse_finviz_screener_table(cls, soup: Any) -> pd.DataFrame:
+        table = soup.find("table", class_="screener_table")
+        if table is None:
+            return pd.DataFrame()
+
+        rows = table.find_all("tr")
+        if not rows:
+            return pd.DataFrame()
+
+        headers = [header.get_text(strip=True) for header in rows[0].find_all("th")][1:]
+        frame: list[dict[str, Any]] = []
+        for row in rows[1:]:
+            cells = row.find_all("td")[1:]
+            if not cells:
+                continue
+            if len(cells) != len(headers):
+                logger.warning(
+                    "Skipping finviz snapshot row with %d cells (expected %d headers)",
+                    len(cells),
+                    len(headers),
+                )
+                continue
+
+            payload: dict[str, Any] = {}
+            for header, cell in zip(headers, cells, strict=True):
+                if header == "Ticker":
+                    payload[header] = cls._extract_finviz_ticker(cell)
+                elif header in NUMBER_COL:
+                    payload[header] = number_covert(cell.get_text(strip=True))
+                else:
+                    payload[header] = cell.get_text(strip=True)
+            frame.append(payload)
+        return pd.DataFrame(frame)
 
     def _normalize_row(self, raw_row: Dict[str, Any], exchange: str) -> Dict[str, Any]:
         normalized = self.parser.normalize_fundamentals(raw_row)
