@@ -233,6 +233,36 @@ def test_combiner_omits_optional_market_without_current_or_fallback_artifact(tmp
     assert any("CN was omitted" in warning for warning in result.manifest["warnings"])
 
 
+def test_combiner_removes_stale_optional_market_directory_on_incremental_publish(
+    tmp_path,
+):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+    )
+    output_dir = tmp_path / "out"
+    stale_cn_scan_dir = output_dir / "markets" / "cn" / "scan"
+    stale_cn_scan_dir.mkdir(parents=True)
+    (stale_cn_scan_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=tmp_path / "empty-fallback",
+        output_dir=output_dir,
+        required_formula_by_market={
+            "US": BALANCED_RS_FORMULA_VERSION,
+            "CN": BALANCED_RS_FORMULA_VERSION,
+        },
+        optional_markets={"CN"},
+        clean=False,
+    )
+
+    assert result.manifest["supported_markets"] == ["US"]
+    assert (output_dir / "markets" / "us").is_dir()
+    assert not (output_dir / "markets" / "cn").exists()
+
+
 def test_combiner_validates_optional_market_formula_when_artifact_exists(tmp_path):
     current = write_market_artifact(
         tmp_path / "current",

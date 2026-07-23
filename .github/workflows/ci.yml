@@ -81,15 +81,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r backend/requirements.txt -r backend/requirements-test.txt
 
-      - name: Restore backend unit duration cache
-        uses: actions/cache/restore@v4
-        with:
-          path: backend/.test_durations
-          key: backend-unit-durations-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ matrix.shard }}
-          restore-keys: |
-            backend-unit-durations-${{ runner.os }}-${{ github.ref_name }}-
-            backend-unit-durations-${{ runner.os }}-
-
       - name: Comprehensive backend unit suite (shard ${{ matrix.shard }}/4)
         shell: bash
         run: |
@@ -109,16 +100,7 @@ jobs:
             --splits 4 \
             --group "${{ matrix.shard }}" \
             --splitting-algorithm least_duration \
-            --durations-path .test_durations \
-            --store-durations \
             -vv
-
-      - name: Save backend unit duration cache
-        if: always() && hashFiles('backend/.test_durations') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: backend/.test_durations
-          key: backend-unit-durations-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ matrix.shard }}
 
   frontend:
     name: Frontend

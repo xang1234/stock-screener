@@ -197,15 +197,20 @@ def validate_market_artifacts(
     )
     current_markets = collect_markets(current_dir)
     fallback_markets = collect_markets(fallback_dir)
+    statuses = collect_statuses(current_dir)
     missing_set = expected - (current_markets | fallback_markets)
-    allowed_missing = missing_set & _ALLOWED_MISSING_MARKETS
-    disallowed_missing = sorted(missing_set - _ALLOWED_MISSING_MARKETS)
+    allowed_missing = {
+        market
+        for market in missing_set & _ALLOWED_MISSING_MARKETS
+        if (status := statuses.get(market)) is None or not status.has_current_artifact
+    }
+    disallowed_missing = sorted(missing_set - allowed_missing)
     result = StaticMarketArtifactValidationResult(
         expected_markets=expected,
         selected_markets=_normalize_markets(selected_markets),
         current_markets=current_markets,
         fallback_markets=fallback_markets,
-        statuses=collect_statuses(current_dir),
+        statuses=statuses,
         allowed_missing_markets=allowed_missing,
     )
     if disallowed_missing:

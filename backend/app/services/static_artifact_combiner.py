@@ -137,6 +137,7 @@ class StaticArtifactCombiner:
         )
         self._publish(
             selected=selected,
+            omitted_markets=optional_missing,
             output_dir=Path(output_dir),
             manifest=manifest,
             clean=clean,
@@ -334,6 +335,7 @@ class StaticArtifactCombiner:
     def _publish(
         *,
         selected: dict[str, dict[str, Any]],
+        omitted_markets: Iterable[str],
         output_dir: Path,
         manifest: dict[str, Any],
         clean: bool,
@@ -346,6 +348,8 @@ class StaticArtifactCombiner:
         try:
             if not clean and output_dir.exists():
                 shutil.copytree(output_dir, stage, dirs_exist_ok=True)
+            for market in omitted_markets:
+                shutil.rmtree(stage / "markets" / market.lower(), ignore_errors=True)
             for market, artifact in selected.items():
                 shutil.copytree(
                     artifact["market_dir"],

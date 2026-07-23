@@ -14,6 +14,8 @@ def test_backend_unit_shards_are_duration_split_and_exclude_opt_in_markers():
     names = [step.get("name") for step in steps]
 
     assert "Safe test collection" not in names
+    assert "Restore backend unit duration cache" not in names
+    assert "Save backend unit duration cache" not in names
     shard_script = next(
         step["run"]
         for step in steps
@@ -28,7 +30,7 @@ def test_backend_unit_shards_are_duration_split_and_exclude_opt_in_markers():
     assert "--splits 4 \\" in shard_script
     assert '--group "${{ matrix.shard }}" \\' in shard_script
     assert "--splitting-algorithm least_duration \\" in shard_script
-    assert "--durations-path .test_durations \\" in shard_script
-    assert "--store-durations \\" in shard_script
+    assert "--durations-path" not in shard_script
+    assert "--store-durations" not in shard_script
     assert "--collect-only" not in shard_script
     assert "index % 4" not in shard_script
