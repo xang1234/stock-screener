@@ -30,6 +30,7 @@ _VALID_REASON_VALUES = frozenset(
     }
 )
 _ALLOWED_MISSING_MARKETS = OPTIONAL_STATIC_MARKETS
+_ALLOWED_MISSING_REASONS = frozenset({"not_trading_day", "no_current_artifact"})
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,14 @@ def _normalize_markets(markets: Iterable[str]) -> set[str]:
     return {str(market).strip().upper() for market in markets if str(market).strip()}
 
 
+def _can_omit_optional_market(status: MarketArtifactStatus | None) -> bool:
+    if status is None:
+        return True
+    if status.has_current_artifact:
+        return False
+    return status.reason in _ALLOWED_MISSING_REASONS
+
+
 def validate_market_artifacts(
     *,
     current_dir: Path,
@@ -202,7 +211,7 @@ def validate_market_artifacts(
     allowed_missing = {
         market
         for market in missing_set & _ALLOWED_MISSING_MARKETS
-        if (status := statuses.get(market)) is None or not status.has_current_artifact
+        if _can_omit_optional_market(statuses.get(market))
     }
     disallowed_missing = sorted(missing_set - allowed_missing)
     result = StaticMarketArtifactValidationResult(
