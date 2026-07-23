@@ -10,7 +10,7 @@ import logging
 import math
 import shutil
 import tempfile
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
@@ -634,20 +634,12 @@ class ProviderSnapshotService:
         db.query(StockUniverse).filter(StockUniverse.market == market).delete(
             synchronize_session=False
         )
-        imported_universe = ProviderSnapshotService._deserialize_universe_rows(rows)
-        ProviderSnapshotService._prepare_imported_universe_lifecycle_rows(
-            imported_universe,
-            baseline_at=lifecycle_event_baseline_at,
+        return ProviderSnapshotService._insert_universe_rows_with_lifecycle(
+            db,
+            rows=rows,
+            lifecycle_event_baseline_at=lifecycle_event_baseline_at,
+            lifecycle_event_source_revision=lifecycle_event_source_revision,
         )
-        if imported_universe:
-            db.bulk_save_objects(imported_universe)
-            ProviderSnapshotService._seed_imported_universe_status_events(
-                db,
-                rows=imported_universe,
-                baseline_at=lifecycle_event_baseline_at,
-                source_revision=lifecycle_event_source_revision,
-            )
-        return len(imported_universe)
 
     @staticmethod
     def _replace_all_universe_rows(
@@ -658,6 +650,21 @@ class ProviderSnapshotService:
         lifecycle_event_source_revision: str | None = None,
     ) -> int:
         db.query(StockUniverse).delete(synchronize_session=False)
+        return ProviderSnapshotService._insert_universe_rows_with_lifecycle(
+            db,
+            rows=rows,
+            lifecycle_event_baseline_at=lifecycle_event_baseline_at,
+            lifecycle_event_source_revision=lifecycle_event_source_revision,
+        )
+
+    @staticmethod
+    def _insert_universe_rows_with_lifecycle(
+        db: Session,
+        *,
+        rows: Iterable[Dict[str, Any]],
+        lifecycle_event_baseline_at: datetime | None = None,
+        lifecycle_event_source_revision: str | None = None,
+    ) -> int:
         imported_universe = ProviderSnapshotService._deserialize_universe_rows(rows)
         ProviderSnapshotService._prepare_imported_universe_lifecycle_rows(
             imported_universe,
@@ -755,21 +762,24 @@ class ProviderSnapshotService:
             )
             if not new_status:
                 continue
-            event_at = row.first_seen_at or baseline_at
+            event_at = max(
+                _as_utc_datetime(row.first_seen_at or baseline_at),
+                _as_utc_datetime(baseline_at),
+            )
             latest = latest_by_symbol.get(row.symbol)
-            if (
-                latest is not None
-                and latest.new_status == new_status
-                and latest.created_at is not None
-                and _as_utc_datetime(latest.created_at)
-                <= _as_utc_datetime(event_at)
-            ):
-                continue
+            old_status = latest.new_status if latest is not None else None
+            if latest is not None:
+                if latest.new_status == new_status:
+                    continue
+                if latest.created_at is not None:
+                    latest_at = _as_utc_datetime(latest.created_at)
+                    if event_at <= latest_at:
+                        event_at = latest_at + timedelta(microseconds=1)
             events.append(
                 StockUniverseStatusEvent(
                     symbol=row.symbol,
                     event_type=UNIVERSE_EVENT_STATUS_CHANGED,
-                    old_status=None,
+                    old_status=old_status,
                     new_status=new_status,
                     trigger_source="weekly_reference_import",
                     reason="Seeded lifecycle status from weekly reference bundle",

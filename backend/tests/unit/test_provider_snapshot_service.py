@@ -25,6 +25,7 @@ from app.models.stock_universe import (
     StockUniverseStatusEvent,
     UNIVERSE_EVENT_STATUS_CHANGED,
     UNIVERSE_STATUS_ACTIVE,
+    UNIVERSE_STATUS_INACTIVE_MANUAL,
 )
 import app.services.fundamentals_cache_service as fundamentals_cache_module
 import app.services.provider_snapshot_service as provider_snapshot_module
@@ -1277,6 +1278,113 @@ def test_import_weekly_reference_bundle_seeds_lifecycle_events_for_pit_static_bu
     assert event.new_status == UNIVERSE_STATUS_ACTIVE
     assert event.trigger_source == "weekly_reference_import"
     assert event_at < datetime(2026, 7, 23, 16, tzinfo=UTC)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_reactivation_seed_supersedes_newer_inactive_event(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("HK")
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+            local_code="0700",
+            is_active=False,
+            status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            first_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    db.add_all(
+        [
+            StockUniverseStatusEvent(
+                symbol="0700.HK",
+                event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+                new_status=UNIVERSE_STATUS_ACTIVE,
+                trigger_source="test",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            StockUniverseStatusEvent(
+                symbol="0700.HK",
+                event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+                new_status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+                trigger_source="test",
+                created_at=datetime(2026, 7, 22, 12, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+    bundle_path = tmp_path / "weekly-reference-hk.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "HK",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                        "market": "HK",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    snapshot = PointInTimeUniverseService(
+        market_calendar=_StaticImportCalendarStub()
+    ).resolve(db, market="HK", as_of_date=date(2026, 7, 23))
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "0700.HK",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+        )
+        .order_by(StockUniverseStatusEvent.created_at.asc())
+        .all()
+    )
+
+    assert snapshot.symbols == ("0700.HK",)
+    assert [event.new_status for event in events] == [
+        UNIVERSE_STATUS_ACTIVE,
+        UNIVERSE_STATUS_INACTIVE_MANUAL,
+        UNIVERSE_STATUS_ACTIVE,
+    ]
     db.close()
 
 
