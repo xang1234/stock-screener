@@ -130,6 +130,40 @@ def test_static_market_validator_allows_selected_market_fallback_without_status(
     assert result.selected_fallback_diagnostics == {"CN": "missing status artifact"}
 
 
+def test_static_market_validator_allows_missing_cn_without_fallback(tmp_path: Path) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+
+    result = validate_market_artifacts(
+        current_dir=current_dir,
+        fallback_dir=fallback_dir,
+        selected_markets={"CN"},
+        expected_markets={"US", "CN"},
+    )
+
+    assert result.present_markets == {"US"}
+    assert result.allowed_missing_markets == {"CN"}
+
+
+def test_static_market_validator_still_rejects_missing_non_cn_market(tmp_path: Path) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+
+    with pytest.raises(StaticMarketArtifactValidationError) as exc_info:
+        validate_market_artifacts(
+            current_dir=current_dir,
+            fallback_dir=fallback_dir,
+            selected_markets={"HK"},
+            expected_markets={"US", "HK", "CN"},
+        )
+
+    message = str(exc_info.value)
+    assert "HK" in message
+    assert "CN" not in message
+
+
 def test_static_market_validator_warns_when_selected_market_uses_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -167,6 +201,36 @@ def test_static_market_validator_warns_when_selected_market_uses_fallback(
         "::warning::Publishing last-known-good fallback artifacts for selected markets: CN. "
         "Details: CN: status failed/no_current_artifact."
     ) in capsys.readouterr().out
+
+
+def test_static_market_validator_warns_when_cn_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+    monkeypatch.setattr(
+        "app.scripts.validate_static_market_artifacts.market_registry.supported_market_codes",
+        lambda: ("US", "CN"),
+    )
+
+    exit_code = main(
+        [
+            "--current-dir",
+            str(current_dir),
+            "--fallback-dir",
+            str(fallback_dir),
+            "--selected-markets",
+            '["CN"]',
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "::warning::Publishing without optional market artifacts for: CN." in output
+    assert "Required market artifacts present; static site is publishable." in output
 
 
 def test_static_market_validator_rejects_string_boolean_status_contract(tmp_path: Path) -> None:

@@ -28,6 +28,7 @@ _VALID_REASON_VALUES = frozenset(
         "export_failed",
     }
 )
+_ALLOWED_MISSING_MARKETS = frozenset({"CN"})
 
 
 @dataclass(frozen=True)
@@ -100,6 +101,7 @@ class StaticMarketArtifactValidationResult:
     current_markets: set[str]
     fallback_markets: set[str]
     statuses: dict[str, MarketArtifactStatus]
+    allowed_missing_markets: set[str]
 
     @property
     def present_markets(self) -> set[str]:
@@ -192,19 +194,23 @@ def validate_market_artifacts(
         if expected_markets is not None
         else {code.upper() for code in market_registry.supported_market_codes()}
     )
+    current_markets = collect_markets(current_dir)
+    fallback_markets = collect_markets(fallback_dir)
+    missing_set = expected - (current_markets | fallback_markets)
+    allowed_missing = missing_set & _ALLOWED_MISSING_MARKETS
+    disallowed_missing = sorted(missing_set - _ALLOWED_MISSING_MARKETS)
     result = StaticMarketArtifactValidationResult(
         expected_markets=expected,
         selected_markets=_normalize_markets(selected_markets),
-        current_markets=collect_markets(current_dir),
-        fallback_markets=collect_markets(fallback_dir),
+        current_markets=current_markets,
+        fallback_markets=fallback_markets,
         statuses=collect_statuses(current_dir),
+        allowed_missing_markets=allowed_missing,
     )
-
-    missing = sorted(result.expected_markets - result.present_markets)
-    if missing:
+    if disallowed_missing:
         raise StaticMarketArtifactValidationError(
             "Refusing to publish an incomplete static site. No current build "
-            f"and no fallback artifact for: {', '.join(missing)}."
+            f"and no fallback artifact for: {', '.join(disallowed_missing)}."
         )
 
     return result
@@ -247,7 +253,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{_format_market_list(result.selected_fallback_markets)}. Details: {details}.",
             flush=True,
         )
-    print("All supported markets present; static site is complete.")
+    if result.allowed_missing_markets:
+        print(
+            "::warning::Publishing without optional market artifacts for: "
+            f"{_format_market_list(result.allowed_missing_markets)}.",
+            flush=True,
+        )
+        print("Required market artifacts present; static site is publishable.")
+    else:
+        print("All supported markets present; static site is complete.")
     return 0
 
 
