@@ -533,6 +533,15 @@ class Settings(BaseSettings):
     # Yahoo does not price consistently. This gate applies to every canonical
     # Market RS calculation path, including static publish, backfill, and rollout.
     market_rs_min_current_price_coverage_ca: float = 0.70
+    # Asia static-site actuals from the 2026-07-22 scheduled run landed well
+    # below the global 90% bar for several Yahoo-covered broad universes. Keep
+    # market-specific floors close to observed coverage instead of weakening
+    # JP/AU/KR or the global default.
+    market_rs_min_current_price_coverage_hk: float = 0.75
+    market_rs_min_current_price_coverage_in: float = 0.45
+    market_rs_min_current_price_coverage_my: float = 0.85
+    market_rs_min_current_price_coverage_sg: float = 0.55
+    market_rs_min_current_price_coverage_tw: float = 0.50
     market_data_source_mode: str = "github_first"  # github_first | live_only
     github_data_repository: str = "xang1234/stock-screener"
     github_data_api_base: str = "https://api.github.com"
@@ -685,6 +694,11 @@ class Settings(BaseSettings):
     @field_validator(
         'market_rs_min_current_price_coverage',
         'market_rs_min_current_price_coverage_ca',
+        'market_rs_min_current_price_coverage_hk',
+        'market_rs_min_current_price_coverage_in',
+        'market_rs_min_current_price_coverage_my',
+        'market_rs_min_current_price_coverage_sg',
+        'market_rs_min_current_price_coverage_tw',
     )
     @classmethod
     def validate_market_rs_current_price_coverage(cls, v: float) -> float:
