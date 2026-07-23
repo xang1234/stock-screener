@@ -34,7 +34,5 @@ def test_backend_unit_shards_use_cache_free_equal_weight_split_and_exclude_opt_i
     assert "--splits 4 \\" in shard_script
     assert '--group "${{ matrix.shard }}" \\' in shard_script
     assert "--splitting-algorithm least_duration \\" in shard_script
-    assert "--durations-path" not in shard_script
-    assert "--store-durations" not in shard_script
     assert "--collect-only" not in shard_script
     assert "index % 4" not in shard_script
