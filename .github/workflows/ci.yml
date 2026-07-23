@@ -94,6 +94,7 @@ jobs:
             ignore_args+=(--ignore "${path}")
           done < "${gate_unit_file}"
 
+          # Intentionally cache-free: without duration data, pytest-split gives each test equal weight and all shards compute the same partition.
           python -m pytest tests/unit \
             "${ignore_args[@]}" \
             -m "not live_service and not load" \

@@ -349,7 +349,9 @@ class StaticArtifactCombiner:
             if not clean and output_dir.exists():
                 shutil.copytree(output_dir, stage, dirs_exist_ok=True)
             for market in omitted_markets:
-                shutil.rmtree(stage / "markets" / market.lower(), ignore_errors=True)
+                omitted_dir = stage / "markets" / market.lower()
+                if omitted_dir.exists() or omitted_dir.is_symlink():
+                    shutil.rmtree(omitted_dir)
             for market, artifact in selected.items():
                 shutil.copytree(
                     artifact["market_dir"],

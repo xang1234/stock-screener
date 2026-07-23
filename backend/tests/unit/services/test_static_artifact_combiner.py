@@ -263,6 +263,34 @@ def test_combiner_removes_stale_optional_market_directory_on_incremental_publish
     assert not (output_dir / "markets" / "cn").exists()
 
 
+def test_combiner_surfaces_stale_optional_market_cleanup_errors(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+    )
+    output_dir = tmp_path / "out"
+    stale_cn_path = output_dir / "markets" / "cn"
+    stale_cn_path.parent.mkdir(parents=True)
+    stale_cn_path.write_text("stale", encoding="utf-8")
+
+    with pytest.raises(NotADirectoryError):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=tmp_path / "empty-fallback",
+            output_dir=output_dir,
+            required_formula_by_market={
+                "US": BALANCED_RS_FORMULA_VERSION,
+                "CN": BALANCED_RS_FORMULA_VERSION,
+            },
+            optional_markets={"CN"},
+            clean=False,
+        )
+
+    assert stale_cn_path.is_file()
+    assert not (output_dir / "markets" / "us").exists()
+
+
 def test_combiner_validates_optional_market_formula_when_artifact_exists(tmp_path):
     current = write_market_artifact(
         tmp_path / "current",
