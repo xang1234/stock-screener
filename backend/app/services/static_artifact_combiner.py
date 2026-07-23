@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
@@ -51,11 +51,17 @@ class StaticArtifactCombiner:
         output_dir: Path,
         required_formula_by_market: Mapping[str, str],
         fallback_required_formula_by_market: Mapping[str, str] | None = None,
+        optional_markets: Iterable[str] = (),
         clean: bool,
     ) -> StaticArtifactCombineResult:
         required = {
             str(market).strip().upper(): str(formula).strip()
             for market, formula in required_formula_by_market.items()
+        }
+        optional = {
+            str(market).strip().upper()
+            for market in optional_markets
+            if str(market).strip()
         }
         fallback_required = (
             required
@@ -84,7 +90,11 @@ class StaticArtifactCombiner:
             selected.setdefault(market, artifact)
 
         if required:
-            missing = sorted(market for market in required if market not in selected)
+            missing = sorted(
+                market
+                for market in required
+                if market not in selected and market not in optional
+            )
             if missing:
                 raise NoPublishedStaticMarketArtifact(
                     "No published compatible static artifact is available for required "
@@ -107,6 +117,12 @@ class StaticArtifactCombiner:
                     f"{market} reused from a previous static-site market artifact "
                     "because the current run produced no artifact."
                 )
+        optional_missing = sorted(market for market in optional if market not in entries)
+        warnings.extend(
+            f"Static export market {market} was omitted from the combined bundle "
+            "because no current or fallback artifact was available."
+            for market in optional_missing
+        )
         if not required:
             warnings.extend(
                 f"Static export market {market} was omitted from the combined bundle "
@@ -121,6 +137,7 @@ class StaticArtifactCombiner:
         )
         self._publish(
             selected=selected,
+            omitted_markets=optional_missing,
             output_dir=Path(output_dir),
             manifest=manifest,
             clean=clean,
@@ -318,6 +335,7 @@ class StaticArtifactCombiner:
     def _publish(
         *,
         selected: dict[str, dict[str, Any]],
+        omitted_markets: Iterable[str],
         output_dir: Path,
         manifest: dict[str, Any],
         clean: bool,
@@ -330,6 +348,10 @@ class StaticArtifactCombiner:
         try:
             if not clean and output_dir.exists():
                 shutil.copytree(output_dir, stage, dirs_exist_ok=True)
+            for market in omitted_markets:
+                omitted_dir = stage / "markets" / market.lower()
+                if omitted_dir.exists() or omitted_dir.is_symlink():
+                    shutil.rmtree(omitted_dir)
             for market, artifact in selected.items():
                 shutil.copytree(
                     artifact["market_dir"],

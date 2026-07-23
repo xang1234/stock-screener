@@ -223,6 +223,44 @@ def test_load_allows_ca_current_price_coverage_matching_configured_policy(
     assert set(inputs.exclusions) == set(symbols)
 
 
+@pytest.mark.parametrize(
+    ("market", "benchmark", "covered_count", "symbol_count", "expected_coverage"),
+    [
+        ("HK", "^HSI", 76, 100, 0.76),
+        ("IN", "^NSEI", 49, 100, 0.49),
+        ("MY", "^KLSE", 87, 100, 0.87),
+        ("SG", "^STI", 58, 100, 0.58),
+        ("TW", "^TWII", 55, 100, 0.55),
+    ],
+)
+def test_load_allows_static_asia_current_price_coverage_actuals(
+    db_session,
+    market,
+    benchmark,
+    covered_count,
+    symbol_count,
+    expected_coverage,
+):
+    symbols = tuple(f"S{index}" for index in range(symbol_count))
+    db_session.add_all(
+        [
+            *[
+                _price(symbol, 0, adjusted=100.0)
+                for symbol in symbols[:covered_count]
+            ],
+            *_complete_rows(benchmark, {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    inputs = _loader(symbols, candidates=(benchmark,)).load(
+        db_session, market=market, as_of_date=ANCHORS[0]
+    )
+
+    assert inputs.current_price_coverage == pytest.approx(expected_coverage)
+    assert set(inputs.exclusions) == set(symbols)
+
+
 def test_load_uses_configured_market_specific_current_price_threshold(
     db_session,
     monkeypatch: pytest.MonkeyPatch,

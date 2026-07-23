@@ -14,6 +14,7 @@ from app.services.static_market_artifact_contract import (
     expected_market_from_static_market_manifest_path,
     read_static_market_manifest,
 )
+from app.services.static_market_publish_policy import OPTIONAL_STATIC_MARKETS
 
 
 class StaticMarketArtifactValidationError(RuntimeError):
@@ -28,6 +29,7 @@ _VALID_REASON_VALUES = frozenset(
         "export_failed",
     }
 )
+_ALLOWED_MISSING_MARKETS = OPTIONAL_STATIC_MARKETS
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,7 @@ class StaticMarketArtifactValidationResult:
     current_markets: set[str]
     fallback_markets: set[str]
     statuses: dict[str, MarketArtifactStatus]
+    allowed_missing_markets: set[str]
 
     @property
     def present_markets(self) -> set[str]:
@@ -192,19 +195,28 @@ def validate_market_artifacts(
         if expected_markets is not None
         else {code.upper() for code in market_registry.supported_market_codes()}
     )
+    current_markets = collect_markets(current_dir)
+    fallback_markets = collect_markets(fallback_dir)
+    statuses = collect_statuses(current_dir)
+    missing_set = expected - (current_markets | fallback_markets)
+    allowed_missing = {
+        market
+        for market in missing_set & _ALLOWED_MISSING_MARKETS
+        if (status := statuses.get(market)) is None or not status.has_current_artifact
+    }
+    disallowed_missing = sorted(missing_set - allowed_missing)
     result = StaticMarketArtifactValidationResult(
         expected_markets=expected,
         selected_markets=_normalize_markets(selected_markets),
-        current_markets=collect_markets(current_dir),
-        fallback_markets=collect_markets(fallback_dir),
-        statuses=collect_statuses(current_dir),
+        current_markets=current_markets,
+        fallback_markets=fallback_markets,
+        statuses=statuses,
+        allowed_missing_markets=allowed_missing,
     )
-
-    missing = sorted(result.expected_markets - result.present_markets)
-    if missing:
+    if disallowed_missing:
         raise StaticMarketArtifactValidationError(
             "Refusing to publish an incomplete static site. No current build "
-            f"and no fallback artifact for: {', '.join(missing)}."
+            f"and no fallback artifact for: {', '.join(disallowed_missing)}."
         )
 
     return result
@@ -247,7 +259,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{_format_market_list(result.selected_fallback_markets)}. Details: {details}.",
             flush=True,
         )
-    print("All supported markets present; static site is complete.")
+    if result.allowed_missing_markets:
+        print(
+            "::warning::Publishing without optional market artifacts for: "
+            f"{_format_market_list(result.allowed_missing_markets)}.",
+            flush=True,
+        )
+        print("Required market artifacts present; static site is publishable.")
+    else:
+        print("All supported markets present; static site is complete.")
     return 0
 
 

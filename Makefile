@@ -11,7 +11,8 @@
 
 .PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gate-6-load gate-7-chaos \
         gate-market-parity gates gate-check frontend-lint frontend-test frontend \
-        phase2-type-gate phase2-reliability golden-update load-baseline-update all
+        phase2-type-gate phase2-reliability golden-update load-baseline-update \
+        gate-unit-files all
 
 # ── Tooling ─────────────────────────────────────────────────────────
 
@@ -87,6 +88,8 @@ GATE_MARKET_PARITY = \
 # All gate files (used by gate-check)
 ALL_GATE_FILES = $(GATE_1) $(GATE_2) $(GATE_3) $(GATE_4) $(GATE_5) $(GATE_MARKET_PARITY)
 
+GATE_UNIT_FILES = $(filter tests/unit/%,$(GATE_IDENTITY) $(ALL_GATE_FILES))
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Targets
@@ -102,6 +105,9 @@ help: ## Show available targets
 
 gate-1: ## Detector correctness
 	$(PYTEST) $(GATE_1) -v --tb=short
+
+gate-unit-files: ## Print unit test files already covered by backend gates
+	@printf '%s\n' $(GATE_UNIT_FILES) | sort -u
 
 gate-identity: ## Theme identity invariants
 	$(PYTEST) $(GATE_IDENTITY) -v --tb=short

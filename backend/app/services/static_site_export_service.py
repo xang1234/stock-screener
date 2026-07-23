@@ -8,7 +8,7 @@ import json
 import logging
 from pathlib import Path
 import shutil
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -259,6 +259,7 @@ class StaticSiteExportService:
         clean: bool = True,
         rs_formula_version_overrides: Mapping[str, str] | None = None,
         fallback_rs_formula_version_overrides: Mapping[str, str] | None = None,
+        optional_markets: Iterable[str] = (),
     ) -> StaticSiteExportResult:
         combined = StaticArtifactCombiner(
             schema_version=STATIC_SITE_SCHEMA_VERSION,
@@ -279,6 +280,7 @@ class StaticSiteExportService:
                 if fallback_rs_formula_version_overrides is not None
                 else None
             ),
+            optional_markets=optional_markets,
             clean=clean,
         )
         return StaticSiteExportResult(

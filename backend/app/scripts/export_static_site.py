@@ -40,6 +40,7 @@ from app.services.static_groups_rrg_export import (
     StaticGroupsRRGRollingHistoryExportSession,
 )
 from app.services.static_rrg_history_contract import StaticRRGHistoryBundleError
+from app.services.static_market_publish_policy import OPTIONAL_STATIC_MARKETS
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
 from app.wiring.bootstrap import (
@@ -784,6 +785,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Last-good artifacts can predate the balanced rollout. Only an
             # explicit operator override constrains a fallback publication.
             fallback_rs_formula_version_overrides=args.rs_formula_overrides_json,
+            optional_markets=OPTIONAL_STATIC_MARKETS,
         )
     else:
         prepare_runtime()

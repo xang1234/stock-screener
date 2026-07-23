@@ -2,6 +2,8 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from uuid import uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,6 +18,29 @@ import app.models.stock_universe  # noqa: F401
 
 from app.scanners.base_screener import StockData
 from app.scanners.data_preparation import DataPreparationLayer
+
+
+@pytest.fixture(autouse=True)
+def stub_celery_task_dispatch(monkeypatch, request):
+    """Prevent unit tests from opening real Celery broker connections."""
+    if request.node.get_closest_marker("allow_real_celery_dispatch"):
+        yield
+        return
+
+    from celery.app.task import Task
+
+    def apply_async_stub(self, args=None, kwargs=None, task_id=None, **_options):
+        resolved_task_id = task_id or f"unit-test-{self.name or 'celery-task'}-{uuid4().hex}"
+        return SimpleNamespace(
+            id=resolved_task_id,
+            task_id=resolved_task_id,
+            state="PENDING",
+            status="PENDING",
+        )
+
+    apply_async_stub._stockscreener_unit_stub = True
+    monkeypatch.setattr(Task, "apply_async", apply_async_stub)
+    yield
 
 
 @pytest.fixture
