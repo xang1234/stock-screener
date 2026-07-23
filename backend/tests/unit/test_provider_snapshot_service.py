@@ -3,7 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import tempfile
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -20,10 +20,16 @@ from app.models.provider_snapshot import (
     ProviderSnapshotRun,
 )
 from app.models.stock import StockFundamental
-from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
+from app.models.stock_universe import (
+    StockUniverse,
+    StockUniverseStatusEvent,
+    UNIVERSE_EVENT_STATUS_CHANGED,
+    UNIVERSE_STATUS_ACTIVE,
+)
 import app.services.fundamentals_cache_service as fundamentals_cache_module
 import app.services.provider_snapshot_service as provider_snapshot_module
 from app.services.fundamentals_cache_service import FundamentalsCacheService
+from app.services.point_in_time_universe_service import PointInTimeUniverseService
 from app.services.provider_snapshot_service import ProviderSnapshotService, settings
 
 
@@ -77,6 +83,16 @@ class _StubTechnicalCalc:
     @staticmethod
     def calculate_batch(price_data):
         return {}
+
+
+class _StaticImportCalendarStub:
+    @staticmethod
+    def normalize_market(market):
+        return market.upper()
+
+    @staticmethod
+    def market_now(_market):
+        return datetime(2026, 7, 24, tzinfo=UTC)
 
 
 def _make_session():
@@ -1186,6 +1202,81 @@ def test_import_weekly_reference_bundle_preserves_other_market_universe_rows(
         for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()
     ]
     assert imported_symbols == sorted(expected_symbols)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_seeds_lifecycle_events_for_pit_static_build(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("HK")
+    bundle_path = tmp_path / "weekly-reference-hk.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "HK",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                        "market": "HK",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-23T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    snapshot = PointInTimeUniverseService(
+        market_calendar=_StaticImportCalendarStub()
+    ).resolve(db, market="HK", as_of_date=date(2026, 7, 23))
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "0700.HK",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+        )
+        .one()
+    )
+    event_at = event.created_at
+    if event_at.tzinfo is None:
+        event_at = event_at.replace(tzinfo=UTC)
+
+    assert snapshot.symbols == ("0700.HK",)
+    assert event.new_status == UNIVERSE_STATUS_ACTIVE
+    assert event.trigger_source == "weekly_reference_import"
+    assert event_at < datetime(2026, 7, 23, 16, tzinfo=UTC)
     db.close()
 
 

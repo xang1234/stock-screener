@@ -10,7 +10,7 @@ import logging
 import math
 import shutil
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
@@ -29,7 +29,12 @@ from ..models.provider_snapshot import (
     ProviderSnapshotRow,
     ProviderSnapshotRun,
 )
-from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
+from ..models.stock_universe import (
+    UNIVERSE_EVENT_STATUS_CHANGED,
+    UNIVERSE_STATUS_ACTIVE,
+    StockUniverse,
+    StockUniverseStatusEvent,
+)
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
 from .github_release_sync_service import GitHubReleaseSyncService
@@ -70,6 +75,12 @@ def _deserialize_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value)
+
+
+def _as_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _finite_or_none(value: Any) -> Any:
@@ -617,13 +628,25 @@ class ProviderSnapshotService:
         *,
         market: str,
         rows: Iterable[Dict[str, Any]],
+        lifecycle_event_baseline_at: datetime | None = None,
+        lifecycle_event_source_revision: str | None = None,
     ) -> int:
         db.query(StockUniverse).filter(StockUniverse.market == market).delete(
             synchronize_session=False
         )
         imported_universe = ProviderSnapshotService._deserialize_universe_rows(rows)
+        ProviderSnapshotService._prepare_imported_universe_lifecycle_rows(
+            imported_universe,
+            baseline_at=lifecycle_event_baseline_at,
+        )
         if imported_universe:
             db.bulk_save_objects(imported_universe)
+            ProviderSnapshotService._seed_imported_universe_status_events(
+                db,
+                rows=imported_universe,
+                baseline_at=lifecycle_event_baseline_at,
+                source_revision=lifecycle_event_source_revision,
+            )
         return len(imported_universe)
 
     @staticmethod
@@ -631,12 +654,138 @@ class ProviderSnapshotService:
         db: Session,
         *,
         rows: Iterable[Dict[str, Any]],
+        lifecycle_event_baseline_at: datetime | None = None,
+        lifecycle_event_source_revision: str | None = None,
     ) -> int:
         db.query(StockUniverse).delete(synchronize_session=False)
         imported_universe = ProviderSnapshotService._deserialize_universe_rows(rows)
+        ProviderSnapshotService._prepare_imported_universe_lifecycle_rows(
+            imported_universe,
+            baseline_at=lifecycle_event_baseline_at,
+        )
         if imported_universe:
             db.bulk_save_objects(imported_universe)
+            ProviderSnapshotService._seed_imported_universe_status_events(
+                db,
+                rows=imported_universe,
+                baseline_at=lifecycle_event_baseline_at,
+                source_revision=lifecycle_event_source_revision,
+            )
         return len(imported_universe)
+
+    @staticmethod
+    def _weekly_reference_lifecycle_baseline_at(
+        payload: Dict[str, Any],
+        snapshot: Dict[str, Any],
+    ) -> datetime:
+        raw_as_of_date = payload.get("as_of_date")
+        if raw_as_of_date:
+            try:
+                as_of_date = date.fromisoformat(str(raw_as_of_date)[:10])
+                return datetime.combine(as_of_date, time.min, tzinfo=timezone.utc)
+            except ValueError:
+                logger.warning(
+                    "Unable to parse weekly reference as_of_date %r for lifecycle seed",
+                    raw_as_of_date,
+                )
+
+        for raw_timestamp in (
+            snapshot.get("published_at"),
+            snapshot.get("created_at"),
+            payload.get("generated_at"),
+        ):
+            timestamp = _deserialize_datetime(raw_timestamp)
+            if timestamp is not None:
+                return _as_utc_datetime(timestamp)
+
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _prepare_imported_universe_lifecycle_rows(
+        rows: Iterable[StockUniverse],
+        *,
+        baseline_at: datetime | None,
+    ) -> None:
+        if baseline_at is None:
+            return
+        for row in rows:
+            if row.first_seen_at is None:
+                row.first_seen_at = baseline_at
+            if row.added_at is None:
+                row.added_at = row.first_seen_at
+            if row.is_active and row.last_seen_in_source_at is None:
+                row.last_seen_in_source_at = row.first_seen_at
+
+    @staticmethod
+    def _seed_imported_universe_status_events(
+        db: Session,
+        *,
+        rows: Iterable[StockUniverse],
+        baseline_at: datetime | None,
+        source_revision: str | None,
+    ) -> int:
+        if baseline_at is None:
+            return 0
+        imported_rows = tuple(rows)
+        if not imported_rows:
+            return 0
+
+        symbols = tuple(row.symbol for row in imported_rows)
+        existing_events = (
+            db.query(StockUniverseStatusEvent)
+            .filter(
+                StockUniverseStatusEvent.symbol.in_(symbols),
+                StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+            )
+            .order_by(
+                StockUniverseStatusEvent.symbol.asc(),
+                StockUniverseStatusEvent.created_at.desc(),
+                StockUniverseStatusEvent.id.desc(),
+            )
+            .all()
+        )
+        latest_by_symbol: dict[str, StockUniverseStatusEvent] = {}
+        for event in existing_events:
+            latest_by_symbol.setdefault(event.symbol, event)
+
+        events: list[StockUniverseStatusEvent] = []
+        for row in imported_rows:
+            new_status = row.status or (
+                UNIVERSE_STATUS_ACTIVE if row.is_active else None
+            )
+            if not new_status:
+                continue
+            event_at = row.first_seen_at or baseline_at
+            latest = latest_by_symbol.get(row.symbol)
+            if (
+                latest is not None
+                and latest.new_status == new_status
+                and latest.created_at is not None
+                and _as_utc_datetime(latest.created_at)
+                <= _as_utc_datetime(event_at)
+            ):
+                continue
+            events.append(
+                StockUniverseStatusEvent(
+                    symbol=row.symbol,
+                    event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+                    old_status=None,
+                    new_status=new_status,
+                    trigger_source="weekly_reference_import",
+                    reason="Seeded lifecycle status from weekly reference bundle",
+                    payload_json=json.dumps(
+                        {
+                            "market": row.market,
+                            "source_revision": source_revision,
+                        },
+                        sort_keys=True,
+                    ),
+                    created_at=event_at,
+                )
+            )
+        if events:
+            db.add_all(events)
+        return len(events)
 
     def publish_market_snapshot_run(
         self,
@@ -1396,6 +1545,11 @@ class ProviderSnapshotService:
         parity = snapshot.get("parity_stats")
         warnings = snapshot.get("warnings")
         imported_payloads: list[dict[str, Any]] = []
+        lifecycle_event_baseline_at = self._weekly_reference_lifecycle_baseline_at(
+            payload,
+            snapshot,
+        )
+        lifecycle_event_source_revision = snapshot.get("source_revision")
 
         try:
             self._replace_snapshot_key_runs(db, snapshot_key=snapshot_key)
@@ -1403,12 +1557,16 @@ class ProviderSnapshotService:
                 imported_universe_count = self._replace_all_universe_rows(
                     db,
                     rows=universe_rows,
+                    lifecycle_event_baseline_at=lifecycle_event_baseline_at,
+                    lifecycle_event_source_revision=lifecycle_event_source_revision,
                 )
             else:
                 imported_universe_count = self._replace_market_universe_rows(
                     db,
                     market=bundle_market,
                     rows=universe_rows,
+                    lifecycle_event_baseline_at=lifecycle_event_baseline_at,
+                    lifecycle_event_source_revision=lifecycle_event_source_revision,
                 )
 
             run = ProviderSnapshotRun(
