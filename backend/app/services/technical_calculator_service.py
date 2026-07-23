@@ -84,12 +84,20 @@ class TechnicalCalculatorService:
 
         # Average volume
         if 'Volume' in price_data.columns:
-            result['avg_volume'] = int(price_data['Volume'].tail(50).mean())
+            volume = pd.to_numeric(price_data['Volume'], errors='coerce')
+            avg_vol = volume.tail(50).mean()
+            avg_vol_is_finite = pd.notna(avg_vol) and np.isfinite(avg_vol)
+            if avg_vol_is_finite:
+                result['avg_volume'] = int(avg_vol)
 
             # Relative volume (today vs 50-day avg)
-            current_volume = price_data['Volume'].iloc[-1]
-            avg_vol = price_data['Volume'].tail(50).mean()
-            if avg_vol > 0:
+            current_volume = volume.iloc[-1]
+            if (
+                avg_vol_is_finite
+                and avg_vol > 0
+                and pd.notna(current_volume)
+                and np.isfinite(current_volume)
+            ):
                 result['relative_volume'] = round(current_volume / avg_vol, 2)
 
         return result
