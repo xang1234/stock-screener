@@ -6,6 +6,30 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_backend_ci_uses_runtime_requirements_without_optional_theme_ml_stack():
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    )
+
+    for job_name in ("backend", "backend-unit"):
+        steps = workflow["jobs"][job_name]["steps"]
+        setup_python_step = next(
+            step for step in steps if step.get("uses") == "actions/setup-python@v5"
+        )
+        cache_dependency_path = setup_python_step["with"]["cache-dependency-path"]
+        assert "backend/requirements-runtime.txt" in cache_dependency_path
+        assert "backend/requirements-test.txt" in cache_dependency_path
+        assert "backend/requirements.txt" not in cache_dependency_path
+
+        install_step = next(
+            step for step in steps if step.get("name") == "Install dependencies"
+        )
+        assert install_step["run"] == (
+            "pip install -r backend/requirements-runtime.txt "
+            "-r backend/requirements-test.txt"
+        )
+
+
 def test_backend_unit_shards_use_cache_free_equal_weight_split_and_exclude_opt_in_markers():
     workflow = yaml.safe_load(
         (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
