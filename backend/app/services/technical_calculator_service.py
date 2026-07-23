@@ -86,13 +86,15 @@ class TechnicalCalculatorService:
         if 'Volume' in price_data.columns:
             volume = pd.to_numeric(price_data['Volume'], errors='coerce')
             avg_vol = volume.tail(50).mean()
-            if pd.notna(avg_vol) and np.isfinite(avg_vol):
+            avg_vol_is_finite = pd.notna(avg_vol) and np.isfinite(avg_vol)
+            if avg_vol_is_finite:
                 result['avg_volume'] = int(avg_vol)
 
             # Relative volume (today vs 50-day avg)
             current_volume = volume.iloc[-1]
             if (
-                avg_vol > 0
+                avg_vol_is_finite
+                and avg_vol > 0
                 and pd.notna(current_volume)
                 and np.isfinite(current_volume)
             ):

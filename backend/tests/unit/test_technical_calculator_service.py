@@ -27,3 +27,14 @@ def test_calculate_all_skips_volume_metrics_when_recent_volume_is_missing():
 
     assert "avg_volume" not in result
     assert "relative_volume" not in result
+
+
+def test_calculate_all_skips_volume_metrics_when_recent_average_is_infinite():
+    volume = [1000.0] * 60
+    volume[-2] = float("inf")
+    frame = _price_frame_with_volume(volume)
+
+    result = TechnicalCalculatorService().calculate_all(frame)
+
+    assert "avg_volume" not in result
+    assert "relative_volume" not in result
