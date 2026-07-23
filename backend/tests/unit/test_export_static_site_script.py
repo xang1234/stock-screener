@@ -1376,7 +1376,7 @@ def test_main_rejects_fallback_artifacts_without_combine_mode(monkeypatch, tmp_p
 
 
 def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
-    combine_calls: list[tuple[object, object, object, bool, object, object]] = []
+    combine_calls: list[tuple[object, object, object, bool, object, object, object]] = []
     output_dir = tmp_path / "out"
     artifacts_dir = tmp_path / "artifacts"
     fallback_dir = tmp_path / "fallback"
@@ -1386,7 +1386,8 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
         "combine_market_artifacts",
         lambda artifacts_dir, output_dir, *, fallback_artifacts_dir=None, clean=True,
         rs_formula_version_overrides=None,
-        fallback_rs_formula_version_overrides=None: combine_calls.append(
+        fallback_rs_formula_version_overrides=None,
+        optional_markets=(): combine_calls.append(
             (
                 artifacts_dir,
                 output_dir,
@@ -1394,6 +1395,7 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
                 clean,
                 rs_formula_version_overrides,
                 fallback_rs_formula_version_overrides,
+                optional_markets,
             )
         )
         or SimpleNamespace(
@@ -1431,6 +1433,7 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
             for market in export_script.STATIC_EXPORT_MARKETS
         },
         {},
+        export_script.OPTIONAL_STATIC_MARKETS,
     )]
 
 

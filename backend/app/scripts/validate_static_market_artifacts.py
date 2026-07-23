@@ -14,6 +14,7 @@ from app.services.static_market_artifact_contract import (
     expected_market_from_static_market_manifest_path,
     read_static_market_manifest,
 )
+from app.services.static_market_publish_policy import OPTIONAL_STATIC_MARKETS
 
 
 class StaticMarketArtifactValidationError(RuntimeError):
@@ -28,7 +29,7 @@ _VALID_REASON_VALUES = frozenset(
         "export_failed",
     }
 )
-_ALLOWED_MISSING_MARKETS = frozenset({"CN"})
+_ALLOWED_MISSING_MARKETS = OPTIONAL_STATIC_MARKETS
 
 
 @dataclass(frozen=True)

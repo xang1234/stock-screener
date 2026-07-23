@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
@@ -51,11 +51,17 @@ class StaticArtifactCombiner:
         output_dir: Path,
         required_formula_by_market: Mapping[str, str],
         fallback_required_formula_by_market: Mapping[str, str] | None = None,
+        optional_markets: Iterable[str] = (),
         clean: bool,
     ) -> StaticArtifactCombineResult:
         required = {
             str(market).strip().upper(): str(formula).strip()
             for market, formula in required_formula_by_market.items()
+        }
+        optional = {
+            str(market).strip().upper()
+            for market in optional_markets
+            if str(market).strip()
         }
         fallback_required = (
             required
@@ -84,7 +90,11 @@ class StaticArtifactCombiner:
             selected.setdefault(market, artifact)
 
         if required:
-            missing = sorted(market for market in required if market not in selected)
+            missing = sorted(
+                market
+                for market in required
+                if market not in selected and market not in optional
+            )
             if missing:
                 raise NoPublishedStaticMarketArtifact(
                     "No published compatible static artifact is available for required "
@@ -107,6 +117,12 @@ class StaticArtifactCombiner:
                     f"{market} reused from a previous static-site market artifact "
                     "because the current run produced no artifact."
                 )
+        optional_missing = sorted(market for market in optional if market not in entries)
+        warnings.extend(
+            f"Static export market {market} was omitted from the combined bundle "
+            "because no current or fallback artifact was available."
+            for market in optional_missing
+        )
         if not required:
             warnings.extend(
                 f"Static export market {market} was omitted from the combined bundle "
