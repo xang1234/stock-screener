@@ -35,6 +35,27 @@ US_KEY_MARKET_PRICE_SYMBOLS = [
 ]
 
 
+class _RRGStartupCalendar:
+    @staticmethod
+    def trading_days(market, start, end):
+        assert market == "IN"
+        assert start < end
+        return [date(2026, 3, 2), end]
+
+    @staticmethod
+    def session_anchors(market, as_of_date, *, offsets):
+        assert market == "IN"
+        assert tuple(offsets) == (21, 63, 126, 189, 252)
+        return {
+            0: as_of_date,
+            21: date(2026, 1, 30),
+            63: date(2025, 12, 1),
+            126: date(2025, 9, 1),
+            189: date(2025, 6, 2),
+            252: date(2025, 3, 3),
+        }
+
+
 def _sqlite_session_factory():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
@@ -440,6 +461,7 @@ def test_static_daily_price_refresh_hydrates_short_history_for_rrg_startup() -> 
         price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
         fetcher=_FakeFetcher(),
         batch_size_for_market=lambda _market: 25,
+        calendar_service=_RRGStartupCalendar(),
         sleep=lambda _seconds: None,
     )
 
@@ -462,6 +484,90 @@ def test_static_daily_price_refresh_hydrates_short_history_for_rrg_startup() -> 
     assert result["no_history_symbols"] == len(IN_KEY_MARKET_PRICE_SYMBOLS)
     assert result["history_incomplete_symbols"] == 1
     assert result["yahoo_fetched_symbols"] == 6
+
+
+def test_static_daily_price_refresh_hydrates_sparse_old_rows_for_rrg_startup() -> None:
+    session_factory = _sqlite_session_factory()
+
+    with session_factory() as db:
+        db.add(
+            StockUniverse(
+                symbol="SPARSE.NS",
+                market="IN",
+                is_active=True,
+                market_cap=100.0,
+            )
+        )
+        db.add_all(
+            [
+                StockPrice(
+                    symbol="SPARSE.NS",
+                    date=date(2025, 1, 2),
+                    open=1.0,
+                    high=1.0,
+                    low=1.0,
+                    close=1.0,
+                    adj_close=1.0,
+                    volume=1000,
+                ),
+                StockPrice(
+                    symbol="SPARSE.NS",
+                    date=date(2026, 6, 4),
+                    open=2.0,
+                    high=2.0,
+                    low=2.0,
+                    close=2.0,
+                    adj_close=2.0,
+                    volume=1000,
+                ),
+            ]
+        )
+        db.commit()
+
+    fetch_calls: list[dict] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(
+            self, symbols, period="2y", start_batch_size=None, market=None
+        ):
+            fetch_calls.append(
+                {
+                    "symbols": list(symbols),
+                    "period": period,
+                    "start_batch_size": start_batch_size,
+                    "market": market,
+                }
+            )
+            return {
+                symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+                for symbol in symbols
+            }
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+        fetcher=_FakeFetcher(),
+        batch_size_for_market=lambda _market: 25,
+        calendar_service=_RRGStartupCalendar(),
+        sleep=lambda _seconds: None,
+    )
+
+    result = service.refresh(
+        as_of_date=date(2026, 6, 4),
+        market="IN",
+        ensure_rrg_history=True,
+    )
+
+    assert fetch_calls == [
+        {
+            "symbols": ["SPARSE.NS", *IN_KEY_MARKET_PRICE_SYMBOLS],
+            "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+            "start_batch_size": 25,
+            "market": "IN",
+        }
+    ]
+    assert result["db_fresh_symbols"] == 1
+    assert result["history_incomplete_symbols"] == 1
 
 
 def test_static_daily_price_refresh_uses_date_only_freshness_for_key_market_symbols() -> None:
