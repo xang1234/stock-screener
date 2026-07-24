@@ -276,14 +276,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--current-dir", type=Path, required=True)
     parser.add_argument("--fallback-dir", type=Path, required=True)
     parser.add_argument("--selected-markets", default="[]")
+    parser.add_argument("--required-markets")
     args = parser.parse_args(argv)
 
     try:
         selected_markets = parse_selected_markets(args.selected_markets)
+        required_markets = (
+            parse_selected_markets(args.required_markets)
+            if args.required_markets is not None
+            else None
+        )
         result = validate_market_artifacts(
             current_dir=args.current_dir,
             fallback_dir=args.fallback_dir,
             selected_markets=selected_markets,
+            expected_markets=required_markets,
         )
     except (json.JSONDecodeError, StaticMarketArtifactValidationError) as exc:
         print(f"::error::{exc}", flush=True)
@@ -309,6 +316,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{_format_market_list(result.allowed_missing_markets)}.",
             flush=True,
         )
+        print("Required market artifacts present; static site is publishable.")
+    elif required_markets is not None:
         print("Required market artifacts present; static site is publishable.")
     else:
         print("All supported markets present; static site is complete.")
