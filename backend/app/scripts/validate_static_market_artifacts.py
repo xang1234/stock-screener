@@ -30,7 +30,10 @@ _VALID_REASON_VALUES = frozenset(
     }
 )
 _ALLOWED_MISSING_MARKETS = OPTIONAL_STATIC_MARKETS
-_ALLOWED_MISSING_REASONS = frozenset({"not_trading_day", "no_current_artifact"})
+_ALLOWED_OPTIONAL_OMISSION_REASONS = frozenset(
+    {"not_trading_day", "no_current_artifact", "export_failed"}
+)
+_ALLOWED_FALLBACK_REASONS = frozenset({"not_trading_day", "no_current_artifact"})
 
 
 @dataclass(frozen=True)
@@ -183,14 +186,24 @@ def _normalize_markets(markets: Iterable[str]) -> set[str]:
     return {str(market).strip().upper() for market in markets if str(market).strip()}
 
 
-def _can_tolerate_missing_current_artifact(
+def _can_omit_optional_market(
     status: MarketArtifactStatus | None,
 ) -> bool:
     if status is None:
         return True
     if status.has_current_artifact:
         return False
-    return status.reason in _ALLOWED_MISSING_REASONS
+    return status.reason in _ALLOWED_OPTIONAL_OMISSION_REASONS
+
+
+def _can_publish_fallback_for_missing_current(
+    status: MarketArtifactStatus | None,
+) -> bool:
+    if status is None:
+        return True
+    if status.has_current_artifact:
+        return False
+    return status.reason in _ALLOWED_FALLBACK_REASONS
 
 
 def validate_market_artifacts(
@@ -215,14 +228,14 @@ def validate_market_artifacts(
     allowed_missing = {
         market
         for market in missing_set & _ALLOWED_MISSING_MARKETS
-        if _can_tolerate_missing_current_artifact(statuses.get(market))
+        if _can_omit_optional_market(statuses.get(market))
     }
     disallowed_missing = sorted(missing_set - allowed_missing)
     fallback_status_checked_markets = _ALLOWED_MISSING_MARKETS | normalized_selected
     disallowed_fallback_omissions = sorted(
         market
         for market in fallback_backed_omissions & fallback_status_checked_markets
-        if not _can_tolerate_missing_current_artifact(statuses.get(market))
+        if not _can_publish_fallback_for_missing_current(statuses.get(market))
     )
     result = StaticMarketArtifactValidationResult(
         expected_markets=expected,

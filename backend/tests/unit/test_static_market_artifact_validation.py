@@ -171,7 +171,7 @@ def test_static_market_validator_rejects_missing_cn_when_status_says_artifact_ex
     assert "CN" in str(exc_info.value)
 
 
-def test_static_market_validator_rejects_missing_cn_after_export_failure(
+def test_static_market_validator_allows_missing_cn_after_export_failure(
     tmp_path: Path,
 ) -> None:
     current_dir = tmp_path / "current"
@@ -185,15 +185,15 @@ def test_static_market_validator_rejects_missing_cn_after_export_failure(
         reason="export_failed",
     )
 
-    with pytest.raises(StaticMarketArtifactValidationError) as exc_info:
-        validate_market_artifacts(
-            current_dir=current_dir,
-            fallback_dir=fallback_dir,
-            selected_markets={"CN"},
-            expected_markets={"US", "CN"},
-        )
+    result = validate_market_artifacts(
+        current_dir=current_dir,
+        fallback_dir=fallback_dir,
+        selected_markets={"CN"},
+        expected_markets={"US", "CN"},
+    )
 
-    assert "CN" in str(exc_info.value)
+    assert result.present_markets == {"US"}
+    assert result.allowed_missing_markets == {"CN"}
 
 
 def test_static_market_validator_rejects_failed_selected_market_fallback(
