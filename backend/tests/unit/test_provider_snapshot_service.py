@@ -1887,6 +1887,125 @@ def test_import_legacy_weekly_reference_bundle_replaces_global_universe(tmp_path
     db.close()
 
 
+def test_import_legacy_weekly_reference_bundle_seeds_lifecycle_by_row_market(
+    tmp_path,
+):
+    class _AfterWeekendCalendarStub(_StaticImportCalendarStub):
+        @staticmethod
+        def market_now(_market):
+            return datetime(2026, 7, 27, tzinfo=UTC)
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    bundle_path = tmp_path / "weekly-reference-legacy.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "generated_at": "2026-07-25T12:00:00Z",
+        "as_of_date": "2026-07-25",
+        "snapshot": {
+            "snapshot_key": "fundamentals_v1",
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1:20260725120000",
+            "created_at": "2026-07-25T12:00:00Z",
+            "published_at": "2026-07-25T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                    },
+                },
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-aapl",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                    },
+                },
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-25T12:00:00+00:00",
+            },
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-25T12:00:00+00:00",
+            },
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_AfterWeekendCalendarStub())
+    us_previous_snapshot = resolver.resolve(
+        db,
+        market="US",
+        as_of_date=date(2026, 7, 23),
+    )
+    us_imported_snapshot = resolver.resolve(
+        db,
+        market="US",
+        as_of_date=date(2026, 7, 24),
+    )
+    hk_previous_snapshot = resolver.resolve(
+        db,
+        market="HK",
+        as_of_date=date(2026, 7, 23),
+    )
+    hk_imported_snapshot = resolver.resolve(
+        db,
+        market="HK",
+        as_of_date=date(2026, 7, 24),
+    )
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+            StockUniverseStatusEvent.trigger_source == "weekly_reference_import",
+        )
+        .all()
+    )
+    event_at_by_symbol = {}
+    for event in events:
+        event_at = event.created_at
+        if event_at.tzinfo is None:
+            event_at = event_at.replace(tzinfo=UTC)
+        event_at_by_symbol[event.symbol] = event_at
+
+    assert us_previous_snapshot.symbols == ()
+    assert us_imported_snapshot.symbols == ("AAPL",)
+    assert hk_previous_snapshot.symbols == ()
+    assert hk_imported_snapshot.symbols == ("0700.HK",)
+    assert event_at_by_symbol == {
+        "0700.HK": datetime(2026, 7, 23, 16, tzinfo=UTC),
+        "AAPL": datetime(2026, 7, 24, 4, tzinfo=UTC),
+    }
+    db.close()
+
+
 def test_import_weekly_reference_bundle_can_skip_cache_hydration(tmp_path):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()

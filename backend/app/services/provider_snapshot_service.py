@@ -182,6 +182,24 @@ class ProviderSnapshotService:
                 return identity.market
         return None
 
+    @staticmethod
+    def _infer_markets_from_bundle_rows(
+        rows: Iterable[Dict[str, Any]],
+    ) -> set[str]:
+        markets: set[str] = set()
+        for row in rows:
+            identity = security_master_resolver.resolve_identity(
+                symbol=str(row.get("symbol") or ""),
+                market=row.get("market"),
+                exchange=row.get("exchange"),
+                currency=row.get("currency"),
+                timezone=row.get("timezone"),
+                local_code=row.get("local_code"),
+            )
+            if identity.market:
+                markets.add(identity.market)
+        return markets
+
     def __init__(
         self,
         *,
@@ -649,6 +667,7 @@ class ProviderSnapshotService:
         *,
         rows: Iterable[Dict[str, Any]],
         lifecycle_event_baseline_at: datetime | None = None,
+        lifecycle_event_baseline_by_market: dict[str, datetime] | None = None,
         lifecycle_event_source_revision: str | None = None,
     ) -> int:
         db.query(StockUniverse).delete(synchronize_session=False)
@@ -656,6 +675,7 @@ class ProviderSnapshotService:
             db,
             rows=rows,
             lifecycle_event_baseline_at=lifecycle_event_baseline_at,
+            lifecycle_event_baseline_by_market=lifecycle_event_baseline_by_market,
             lifecycle_event_source_revision=lifecycle_event_source_revision,
         )
 
@@ -665,26 +685,42 @@ class ProviderSnapshotService:
         *,
         rows: Iterable[Dict[str, Any]],
         lifecycle_event_baseline_at: datetime | None = None,
+        lifecycle_event_baseline_by_market: dict[str, datetime] | None = None,
         lifecycle_event_source_revision: str | None = None,
     ) -> int:
         imported_universe = ProviderSnapshotService._deserialize_universe_rows(rows)
-        ProviderSnapshotService._prepare_imported_universe_lifecycle_rows(
-            imported_universe,
-            baseline_at=lifecycle_event_baseline_at,
-        )
-        ProviderSnapshotService._clamp_imported_universe_first_seen_to_lifecycle_seed(
-            db,
-            rows=imported_universe,
-            baseline_at=lifecycle_event_baseline_at,
-        )
+        rows_by_baseline: dict[datetime | None, list[StockUniverse]] = {}
+        for row in imported_universe:
+            row_market = str(row.market or "").strip().upper()
+            baseline_at = (
+                lifecycle_event_baseline_by_market.get(
+                    row_market,
+                    lifecycle_event_baseline_at,
+                )
+                if lifecycle_event_baseline_by_market
+                else lifecycle_event_baseline_at
+            )
+            rows_by_baseline.setdefault(baseline_at, []).append(row)
+
+        for baseline_at, baseline_rows in rows_by_baseline.items():
+            ProviderSnapshotService._prepare_imported_universe_lifecycle_rows(
+                baseline_rows,
+                baseline_at=baseline_at,
+            )
+            ProviderSnapshotService._clamp_imported_universe_first_seen_to_lifecycle_seed(
+                db,
+                rows=baseline_rows,
+                baseline_at=baseline_at,
+            )
         if imported_universe:
             db.bulk_save_objects(imported_universe)
-            ProviderSnapshotService._seed_imported_universe_status_events(
-                db,
-                rows=imported_universe,
-                baseline_at=lifecycle_event_baseline_at,
-                source_revision=lifecycle_event_source_revision,
-            )
+            for baseline_at, baseline_rows in rows_by_baseline.items():
+                ProviderSnapshotService._seed_imported_universe_status_events(
+                    db,
+                    rows=baseline_rows,
+                    baseline_at=baseline_at,
+                    source_revision=lifecycle_event_source_revision,
+                )
         return len(imported_universe)
 
     @staticmethod
@@ -1696,6 +1732,18 @@ class ProviderSnapshotService:
             snapshot,
             market=bundle_market,
         )
+        lifecycle_event_baseline_by_market = None
+        if legacy_global_bundle:
+            lifecycle_event_baseline_by_market = {
+                row_market: self._weekly_reference_lifecycle_baseline_at(
+                    payload,
+                    snapshot,
+                    market=row_market,
+                )
+                for row_market in sorted(
+                    self._infer_markets_from_bundle_rows(universe_rows)
+                )
+            }
         lifecycle_event_source_revision = snapshot.get("source_revision")
 
         try:
@@ -1705,6 +1753,9 @@ class ProviderSnapshotService:
                     db,
                     rows=universe_rows,
                     lifecycle_event_baseline_at=lifecycle_event_baseline_at,
+                    lifecycle_event_baseline_by_market=(
+                        lifecycle_event_baseline_by_market
+                    ),
                     lifecycle_event_source_revision=lifecycle_event_source_revision,
                 )
             else:
