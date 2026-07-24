@@ -390,13 +390,15 @@ jobs:
       - name: Validate market artifacts
         env:
           SELECTED_MARKETS: ${{ needs.select-markets.outputs.markets }}
+          REQUIRED_MARKETS: '["US"]'
         run: |
           mkdir -p /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback
           cd backend
           python -m app.scripts.validate_static_market_artifacts \
             --current-dir /tmp/static-market-artifacts-current \
             --fallback-dir /tmp/static-market-artifacts-fallback \
-            --selected-markets "${SELECTED_MARKETS}"
+            --selected-markets "${SELECTED_MARKETS}" \
+            --required-markets "${REQUIRED_MARKETS}"
 
       - name: Combine static data bundle
         env:

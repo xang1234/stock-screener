@@ -338,6 +338,46 @@ def test_static_market_validator_warns_when_cn_is_missing(
     assert "Required market artifacts present; static site is publishable." in output
 
 
+def test_static_market_validator_cli_requires_only_configured_markets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+    _write_market_manifest(fallback_dir, "static-market-DE", "DE")
+    _write_market_status(
+        current_dir,
+        "DE",
+        has_current_artifact=False,
+        status="failed",
+        reason="export_failed",
+    )
+    monkeypatch.setattr(
+        "app.scripts.validate_static_market_artifacts.market_registry.supported_market_codes",
+        lambda: ("US", "DE"),
+    )
+
+    exit_code = main(
+        [
+            "--current-dir",
+            str(current_dir),
+            "--fallback-dir",
+            str(fallback_dir),
+            "--selected-markets",
+            '["US", "DE"]',
+            "--required-markets",
+            '["US"]',
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Expected markets: US" in output
+    assert "Required market artifacts present; static site is publishable." in output
+
+
 def test_static_market_validator_rejects_string_boolean_status_contract(tmp_path: Path) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
