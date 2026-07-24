@@ -245,8 +245,8 @@ def validate_market_artifacts(
         )
         suffix = f" Details: {details}." if details else ""
         raise StaticMarketArtifactValidationError(
-            "Refusing to publish fallback static market artifacts for failed "
-            "current builds: "
+            "Refusing to publish fallback static market artifacts for "
+            "ineligible current statuses: "
             f"{', '.join(disallowed_fallback_omissions)}.{suffix}"
         )
 
