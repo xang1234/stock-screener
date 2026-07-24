@@ -39,6 +39,7 @@ from ..models.stock_universe import (
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
 from .github_release_sync_service import GitHubReleaseSyncService
+from .market_calendar_service import MarketCalendarService
 from .security_master_service import security_master_resolver
 from .technical_calculator_service import TechnicalCalculatorService
 from .weekly_reference_github_sync import (
@@ -692,25 +693,43 @@ class ProviderSnapshotService:
         if raw_as_of_date:
             try:
                 as_of_date = date.fromisoformat(str(raw_as_of_date)[:10])
+                baseline_date = as_of_date
                 timezone_name = None
                 raw_market = market or payload.get("market")
+                market_code = str(raw_market).strip().upper() if raw_market else None
                 if raw_market:
                     try:
-                        timezone_name = market_registry.profile(
-                            str(raw_market).strip().upper()
-                        ).timezone_name
+                        timezone_name = market_registry.profile(market_code).timezone_name
                     except ValueError:
                         timezone_name = None
                 if timezone_name:
                     try:
+                        market_timezone = ZoneInfo(timezone_name)
+                        if market_code:
+                            baseline_date = MarketCalendarService().last_completed_trading_day(
+                                market_code,
+                                now=datetime.combine(
+                                    as_of_date,
+                                    time.max,
+                                    tzinfo=market_timezone,
+                                ),
+                            )
                         return datetime.combine(
-                            as_of_date,
+                            baseline_date,
                             time.min,
-                            tzinfo=ZoneInfo(timezone_name),
+                            tzinfo=market_timezone,
                         ).astimezone(timezone.utc)
                     except ZoneInfoNotFoundError:
                         pass
-                return datetime.combine(as_of_date, time.min, tzinfo=timezone.utc)
+                    except (RuntimeError, ValueError) as exc:
+                        logger.warning(
+                            "Unable to resolve weekly reference trading date for "
+                            "%s as_of_date %s: %s",
+                            market_code,
+                            as_of_date.isoformat(),
+                            exc,
+                        )
+                return datetime.combine(baseline_date, time.min, tzinfo=timezone.utc)
             except ValueError:
                 logger.warning(
                     "Unable to parse weekly reference as_of_date %r for lifecycle seed",
