@@ -15,6 +15,7 @@ from pathlib import Path
 from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 from finvizfinance.constants import NUMBER_COL
@@ -751,9 +752,9 @@ class ProviderSnapshotService:
             )
             .all()
         )
-        latest_by_symbol: dict[str, StockUniverseStatusEvent] = {}
+        events_by_symbol: dict[str, list[StockUniverseStatusEvent]] = {}
         for event in existing_events:
-            latest_by_symbol.setdefault(event.symbol, event)
+            events_by_symbol.setdefault(event.symbol, []).append(event)
 
         events: list[StockUniverseStatusEvent] = []
         for row in imported_rows:
@@ -762,19 +763,56 @@ class ProviderSnapshotService:
             )
             if not new_status:
                 continue
+            baseline_utc = _as_utc_datetime(baseline_at)
             event_at = max(
                 _as_utc_datetime(row.first_seen_at or baseline_at),
-                _as_utc_datetime(baseline_at),
+                baseline_utc,
             )
-            latest = latest_by_symbol.get(row.symbol)
-            old_status = latest.new_status if latest is not None else None
-            if latest is not None:
-                if latest.new_status == new_status:
+            cutoff_at = baseline_utc + timedelta(days=1)
+            timezone_name = row.timezone
+            if not timezone_name and row.market:
+                try:
+                    timezone_name = market_registry.profile(row.market).timezone_name
+                except ValueError:
+                    timezone_name = None
+            if timezone_name:
+                try:
+                    cutoff_at = datetime.combine(
+                        baseline_utc.date() + timedelta(days=1),
+                        time.min,
+                        tzinfo=ZoneInfo(timezone_name),
+                    ).astimezone(timezone.utc)
+                except ZoneInfoNotFoundError:
+                    pass
+
+            latest_before_cutoff = None
+            for event in events_by_symbol.get(row.symbol, []):
+                if event.created_at is None:
                     continue
-                if latest.created_at is not None:
-                    latest_at = _as_utc_datetime(latest.created_at)
-                    if event_at <= latest_at:
-                        event_at = latest_at + timedelta(microseconds=1)
+                if _as_utc_datetime(event.created_at) < cutoff_at:
+                    latest_before_cutoff = event
+                    break
+            if (
+                latest_before_cutoff is not None
+                and latest_before_cutoff.new_status == new_status
+            ):
+                continue
+
+            old_status = (
+                latest_before_cutoff.new_status
+                if latest_before_cutoff is not None
+                else None
+            )
+            if (
+                latest_before_cutoff is not None
+                and latest_before_cutoff.created_at is not None
+            ):
+                latest_at = _as_utc_datetime(latest_before_cutoff.created_at)
+                if event_at <= latest_at:
+                    next_event_at = latest_at + timedelta(microseconds=1)
+                    event_at = (
+                        next_event_at if next_event_at < cutoff_at else latest_at
+                    )
             events.append(
                 StockUniverseStatusEvent(
                     symbol=row.symbol,

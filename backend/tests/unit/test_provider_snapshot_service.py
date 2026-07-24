@@ -1388,6 +1388,99 @@ def test_import_weekly_reference_bundle_reactivation_seed_supersedes_newer_inact
     db.close()
 
 
+def test_import_weekly_reference_bundle_seed_not_deduped_by_future_matching_event(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("HK")
+    db.add(
+        StockUniverseStatusEvent(
+            symbol="0700.HK",
+            event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+            new_status=UNIVERSE_STATUS_ACTIVE,
+            trigger_source="test",
+            created_at=datetime(2026, 7, 24, tzinfo=UTC),
+        )
+    )
+    db.commit()
+    bundle_path = tmp_path / "weekly-reference-hk.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "HK",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                        "market": "HK",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    snapshot = PointInTimeUniverseService(
+        market_calendar=_StaticImportCalendarStub()
+    ).resolve(db, market="HK", as_of_date=date(2026, 7, 23))
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "0700.HK",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+        )
+        .order_by(StockUniverseStatusEvent.created_at.asc())
+        .all()
+    )
+    seeded_event_at = events[0].created_at
+    if seeded_event_at.tzinfo is None:
+        seeded_event_at = seeded_event_at.replace(tzinfo=UTC)
+
+    assert snapshot.symbols == ("0700.HK",)
+    assert [event.trigger_source for event in events] == [
+        "weekly_reference_import",
+        "test",
+    ]
+    assert seeded_event_at < datetime(2026, 7, 23, 16, tzinfo=UTC)
+    db.close()
+
+
 def test_import_legacy_weekly_reference_bundle_replaces_global_universe(tmp_path):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
