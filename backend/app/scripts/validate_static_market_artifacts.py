@@ -183,7 +183,9 @@ def _normalize_markets(markets: Iterable[str]) -> set[str]:
     return {str(market).strip().upper() for market in markets if str(market).strip()}
 
 
-def _can_omit_optional_market(status: MarketArtifactStatus | None) -> bool:
+def _can_tolerate_missing_current_artifact(
+    status: MarketArtifactStatus | None,
+) -> bool:
     if status is None:
         return True
     if status.has_current_artifact:
@@ -207,22 +209,24 @@ def validate_market_artifacts(
     current_markets = collect_markets(current_dir)
     fallback_markets = collect_markets(fallback_dir)
     statuses = collect_statuses(current_dir)
+    normalized_selected = _normalize_markets(selected_markets)
     missing_set = expected - (current_markets | fallback_markets)
     fallback_backed_omissions = (expected - current_markets) & fallback_markets
     allowed_missing = {
         market
         for market in missing_set & _ALLOWED_MISSING_MARKETS
-        if _can_omit_optional_market(statuses.get(market))
+        if _can_tolerate_missing_current_artifact(statuses.get(market))
     }
     disallowed_missing = sorted(missing_set - allowed_missing)
+    fallback_status_checked_markets = _ALLOWED_MISSING_MARKETS | normalized_selected
     disallowed_fallback_omissions = sorted(
         market
-        for market in fallback_backed_omissions & _ALLOWED_MISSING_MARKETS
-        if not _can_omit_optional_market(statuses.get(market))
+        for market in fallback_backed_omissions & fallback_status_checked_markets
+        if not _can_tolerate_missing_current_artifact(statuses.get(market))
     )
     result = StaticMarketArtifactValidationResult(
         expected_markets=expected,
-        selected_markets=_normalize_markets(selected_markets),
+        selected_markets=normalized_selected,
         current_markets=current_markets,
         fallback_markets=fallback_markets,
         statuses=statuses,

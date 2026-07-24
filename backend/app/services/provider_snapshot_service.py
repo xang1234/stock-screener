@@ -672,6 +672,11 @@ class ProviderSnapshotService:
             imported_universe,
             baseline_at=lifecycle_event_baseline_at,
         )
+        ProviderSnapshotService._clamp_imported_universe_first_seen_to_lifecycle_seed(
+            db,
+            rows=imported_universe,
+            baseline_at=lifecycle_event_baseline_at,
+        )
         if imported_universe:
             db.bulk_save_objects(imported_universe)
             ProviderSnapshotService._seed_imported_universe_status_events(
@@ -762,6 +767,61 @@ class ProviderSnapshotService:
                 row.added_at = row.first_seen_at
             if row.is_active and row.last_seen_in_source_at is None:
                 row.last_seen_in_source_at = row.first_seen_at
+
+    @staticmethod
+    def _clamp_imported_universe_first_seen_to_lifecycle_seed(
+        db: Session,
+        *,
+        rows: Iterable[StockUniverse],
+        baseline_at: datetime | None,
+    ) -> None:
+        if baseline_at is None:
+            return
+        imported_rows = tuple(rows)
+        if not imported_rows:
+            return
+
+        baseline_utc = _as_utc_datetime(baseline_at)
+        symbols_needing_evidence = tuple(
+            row.symbol
+            for row in imported_rows
+            if row.first_seen_at is not None
+            and _as_utc_datetime(row.first_seen_at) < baseline_utc
+        )
+        if not symbols_needing_evidence:
+            return
+
+        symbols_with_prior_lifecycle = {
+            symbol
+            for (symbol,) in db.query(StockUniverseStatusEvent.symbol)
+            .filter(
+                StockUniverseStatusEvent.symbol.in_(symbols_needing_evidence),
+                StockUniverseStatusEvent.event_type
+                == UNIVERSE_EVENT_STATUS_CHANGED,
+                StockUniverseStatusEvent.created_at < baseline_utc,
+            )
+            .distinct()
+            .all()
+        }
+        for row in imported_rows:
+            if row.symbol in symbols_with_prior_lifecycle:
+                continue
+            if row.first_seen_at is None:
+                continue
+            if _as_utc_datetime(row.first_seen_at) >= baseline_utc:
+                continue
+            row.first_seen_at = baseline_utc
+            if (
+                row.added_at is not None
+                and _as_utc_datetime(row.added_at) < baseline_utc
+            ):
+                row.added_at = baseline_utc
+            if (
+                row.is_active
+                and row.last_seen_in_source_at is not None
+                and _as_utc_datetime(row.last_seen_in_source_at) < baseline_utc
+            ):
+                row.last_seen_in_source_at = baseline_utc
 
     @staticmethod
     def _seed_imported_universe_status_events(
