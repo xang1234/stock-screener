@@ -685,11 +685,31 @@ class ProviderSnapshotService:
     def _weekly_reference_lifecycle_baseline_at(
         payload: Dict[str, Any],
         snapshot: Dict[str, Any],
+        *,
+        market: str | None = None,
     ) -> datetime:
         raw_as_of_date = payload.get("as_of_date")
         if raw_as_of_date:
             try:
                 as_of_date = date.fromisoformat(str(raw_as_of_date)[:10])
+                timezone_name = None
+                raw_market = market or payload.get("market")
+                if raw_market:
+                    try:
+                        timezone_name = market_registry.profile(
+                            str(raw_market).strip().upper()
+                        ).timezone_name
+                    except ValueError:
+                        timezone_name = None
+                if timezone_name:
+                    try:
+                        return datetime.combine(
+                            as_of_date,
+                            time.min,
+                            tzinfo=ZoneInfo(timezone_name),
+                        ).astimezone(timezone.utc)
+                    except ZoneInfoNotFoundError:
+                        pass
                 return datetime.combine(as_of_date, time.min, tzinfo=timezone.utc)
             except ValueError:
                 logger.warning(
@@ -777,10 +797,12 @@ class ProviderSnapshotService:
                     timezone_name = None
             if timezone_name:
                 try:
+                    market_timezone = ZoneInfo(timezone_name)
                     cutoff_at = datetime.combine(
-                        baseline_utc.date() + timedelta(days=1),
+                        baseline_utc.astimezone(market_timezone).date()
+                        + timedelta(days=1),
                         time.min,
-                        tzinfo=ZoneInfo(timezone_name),
+                        tzinfo=market_timezone,
                     ).astimezone(timezone.utc)
                 except ZoneInfoNotFoundError:
                     pass
@@ -1596,6 +1618,7 @@ class ProviderSnapshotService:
         lifecycle_event_baseline_at = self._weekly_reference_lifecycle_baseline_at(
             payload,
             snapshot,
+            market=bundle_market,
         )
         lifecycle_event_source_revision = snapshot.get("source_revision")
 
