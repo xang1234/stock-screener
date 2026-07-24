@@ -208,12 +208,18 @@ def validate_market_artifacts(
     fallback_markets = collect_markets(fallback_dir)
     statuses = collect_statuses(current_dir)
     missing_set = expected - (current_markets | fallback_markets)
+    fallback_backed_omissions = (expected - current_markets) & fallback_markets
     allowed_missing = {
         market
         for market in missing_set & _ALLOWED_MISSING_MARKETS
         if _can_omit_optional_market(statuses.get(market))
     }
     disallowed_missing = sorted(missing_set - allowed_missing)
+    disallowed_fallback_omissions = sorted(
+        market
+        for market in fallback_backed_omissions & _ALLOWED_MISSING_MARKETS
+        if not _can_omit_optional_market(statuses.get(market))
+    )
     result = StaticMarketArtifactValidationResult(
         expected_markets=expected,
         selected_markets=_normalize_markets(selected_markets),
@@ -226,6 +232,18 @@ def validate_market_artifacts(
         raise StaticMarketArtifactValidationError(
             "Refusing to publish an incomplete static site. No current build "
             f"and no fallback artifact for: {', '.join(disallowed_missing)}."
+        )
+    if disallowed_fallback_omissions:
+        details = "; ".join(
+            f"{market}: {statuses[market].diagnostic_label()}"
+            for market in disallowed_fallback_omissions
+            if market in statuses
+        )
+        suffix = f" Details: {details}." if details else ""
+        raise StaticMarketArtifactValidationError(
+            "Refusing to publish fallback static market artifacts for failed "
+            "current builds: "
+            f"{', '.join(disallowed_fallback_omissions)}.{suffix}"
         )
 
     return result
