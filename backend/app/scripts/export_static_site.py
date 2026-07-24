@@ -254,7 +254,11 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
         fetcher=BulkDataFetcher(),
         batch_size_for_market=_static_daily_price_refresh_batch_size,
     )
-    return service.refresh(as_of_date=as_of_date, market=market)
+    return service.refresh(
+        as_of_date=as_of_date,
+        market=market,
+        ensure_rrg_history=True,
+    )
 
 
 def _prepare_balanced_static_rs(*, market: str, as_of_date: date) -> dict[str, Any]:

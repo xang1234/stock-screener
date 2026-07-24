@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Callable
 
+from sqlalchemy import func
+
+from app.domain.markets import get_market_catalog
+from app.domain.markets.key_markets import key_market_price_symbols
+from app.domain.providers.price_symbol_support import split_supported_price_symbols
+from app.domain.relative_strength import HORIZON_SESSIONS
+from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.bulk_data_fetcher import BulkDataFetcher
+from app.services.group_rank_history_backfill_service import (
+    DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS,
+)
+from app.services.market_calendar_service import MarketCalendarService
 from app.services.price_history_coverage import classify_price_history
 from app.services.price_refresh_planning import (
     NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
     STALE_PRICE_TOP_UP_PERIOD,
 )
-from app.domain.providers.price_symbol_support import split_supported_price_symbols
-from app.domain.markets.key_markets import key_market_price_symbols
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = STALE_PRICE_TOP_UP_PERIOD
@@ -76,19 +85,27 @@ class StaticDailyPriceRefreshService:
         price_cache,
         fetcher: BulkDataFetcher,
         batch_size_for_market: Callable[[str | None], int] = static_daily_price_refresh_batch_size,
+        calendar_service: MarketCalendarService | None = None,
         sleep: Callable[[float], None] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._price_cache = price_cache
         self._fetcher = fetcher
         self._batch_size_for_market = batch_size_for_market
+        self._calendar_service = calendar_service or MarketCalendarService()
         if sleep is None:
             import time
 
             sleep = time.sleep
         self._sleep = sleep
 
-    def refresh(self, *, as_of_date: date, market: str | None = None) -> dict[str, Any]:
+    def refresh(
+        self,
+        *,
+        as_of_date: date,
+        market: str | None = None,
+        ensure_rrg_history: bool = False,
+    ) -> dict[str, Any]:
         with self._session_factory() as db:
             query = (
                 db.query(StockUniverse.symbol)
@@ -112,12 +129,27 @@ class StaticDailyPriceRefreshService:
                 as_of_date=as_of_date,
                 symbols_requiring_positive_volume=volume_required_symbols,
             )
+            history_incomplete_symbols = self._symbols_with_short_rrg_history(
+                db,
+                symbols=coverage.fresh + coverage.stale,
+                as_of_date=as_of_date,
+                market=market,
+                enabled=ensure_rrg_history,
+            )
 
         db_fresh_symbols = list(coverage.fresh)
-        stale_symbols = list(coverage.stale)
+        history_incomplete_symbol_set = set(history_incomplete_symbols)
+        stale_symbols = [
+            symbol
+            for symbol in coverage.stale
+            if symbol not in history_incomplete_symbol_set
+        ]
         no_history_symbols = list(coverage.no_history)
+        bootstrap_symbols = _dedupe_symbols(
+            [*history_incomplete_symbols, *no_history_symbols]
+        )
 
-        if not stale_symbols and not no_history_symbols:
+        if not stale_symbols and not bootstrap_symbols:
             print(
                 f"[static-daily prices] Database already has fresh price rows for "
                 f"{len(db_fresh_symbols):,} supported symbols as of {as_of_date}.",
@@ -133,6 +165,7 @@ class StaticDailyPriceRefreshService:
                 "db_fresh_symbols": len(db_fresh_symbols),
                 "stale_symbols": len(stale_symbols),
                 "no_history_symbols": len(no_history_symbols),
+                "history_incomplete_symbols": len(history_incomplete_symbols),
                 "skipped_unsupported_symbols": len(skipped_symbols),
                 "yahoo_fetched_symbols": 0,
                 "yahoo_failed_symbols": 0,
@@ -141,7 +174,7 @@ class StaticDailyPriceRefreshService:
         batch_size = self._batch_size_for_market(market)
         total_batches = (
             (len(stale_symbols) + batch_size - 1) // batch_size
-            + (len(no_history_symbols) + batch_size - 1) // batch_size
+            + (len(bootstrap_symbols) + batch_size - 1) // batch_size
         )
 
         print(
@@ -150,6 +183,12 @@ class StaticDailyPriceRefreshService:
             f"(DB fresh: {len(db_fresh_symbols):,}, unsupported skipped: {len(skipped_symbols):,}).",
             flush=True,
         )
+        if history_incomplete_symbols:
+            print(
+                f"[static-daily prices] Hydrating {len(history_incomplete_symbols):,} "
+                "symbols with short history for RRG startup backfill.",
+                flush=True,
+            )
 
         stale_refreshed, stale_failed, stale_rate_limited = self._fetch_and_store(
             stale_symbols,
@@ -158,7 +197,7 @@ class StaticDailyPriceRefreshService:
             market=market,
         )
         bootstrap_refreshed, bootstrap_failed, bootstrap_rate_limited = self._fetch_and_store(
-            no_history_symbols,
+            bootstrap_symbols,
             period=STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
             batch_size=batch_size,
             market=market,
@@ -185,11 +224,88 @@ class StaticDailyPriceRefreshService:
             "db_fresh_symbols": len(db_fresh_symbols),
             "stale_symbols": len(stale_symbols),
             "no_history_symbols": len(no_history_symbols),
+            "history_incomplete_symbols": len(history_incomplete_symbols),
             "skipped_unsupported_symbols": len(skipped_symbols),
             "yahoo_fetched_symbols": refreshed,
             "yahoo_failed_symbols": failed,
             "rate_limited_retry": retry_stats,
         }
+
+    def _rrg_history_cutoff(
+        self,
+        *,
+        as_of_date: date,
+        market: str | None,
+    ) -> date | None:
+        if market is None:
+            return None
+        normalized_market = str(market or "").strip().upper()
+        try:
+            if (
+                not get_market_catalog()
+                .get(normalized_market)
+                .capabilities.group_rankings
+            ):
+                return None
+            target_start = as_of_date - timedelta(
+                days=DEFAULT_GROUP_RANK_HISTORY_LOOKBACK_DAYS
+            )
+            target_dates = self._calendar_service.trading_days(
+                normalized_market,
+                target_start,
+                as_of_date,
+            )
+            if not target_dates:
+                return None
+            oldest_target = target_dates[0]
+            oldest_offset = max(HORIZON_SESSIONS.values())
+            anchors = self._calendar_service.session_anchors(
+                normalized_market,
+                oldest_target,
+                offsets=(oldest_offset,),
+            )
+        except Exception:
+            return None
+        return anchors[oldest_offset]
+
+    def _symbols_with_short_rrg_history(
+        self,
+        db,
+        *,
+        symbols: tuple[str, ...],
+        as_of_date: date,
+        market: str | None,
+        enabled: bool,
+    ) -> list[str]:
+        if not enabled or not symbols:
+            return []
+        cutoff = self._rrg_history_cutoff(as_of_date=as_of_date, market=market)
+        if cutoff is None:
+            return []
+
+        earliest_by_symbol: dict[str, date] = {}
+        for chunk_start in range(0, len(symbols), 500):
+            chunk_symbols = symbols[chunk_start:chunk_start + 500]
+            rows = (
+                db.query(StockPrice.symbol, func.min(StockPrice.date))
+                .filter(StockPrice.symbol.in_(chunk_symbols))
+                .group_by(StockPrice.symbol)
+                .all()
+            )
+            earliest_by_symbol.update(
+                {
+                    str(symbol).upper(): earliest_date
+                    for symbol, earliest_date in rows
+                    if earliest_date is not None
+                }
+            )
+
+        return [
+            symbol
+            for symbol in symbols
+            if earliest_by_symbol.get(symbol) is not None
+            and earliest_by_symbol[symbol] > cutoff
+        ]
 
     def _fetch_and_store(
         self,
