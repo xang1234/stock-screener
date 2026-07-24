@@ -533,6 +533,9 @@ class Settings(BaseSettings):
     # Yahoo does not price consistently. This gate applies to every canonical
     # Market RS calculation path, including static publish, backfill, and rollout.
     market_rs_min_current_price_coverage_ca: float = 0.70
+    # DE static runs include many broad-market listings Yahoo cannot price
+    # reliably; the 2026-07-23 run landed at 89.08%, below the global 90% bar.
+    market_rs_min_current_price_coverage_de: float = 0.88
     # Asia static-site actuals from the 2026-07-22 scheduled run landed well
     # below the global 90% bar for several Yahoo-covered broad universes. Keep
     # market-specific floors close to observed coverage instead of weakening
@@ -694,6 +697,7 @@ class Settings(BaseSettings):
     @field_validator(
         'market_rs_min_current_price_coverage',
         'market_rs_min_current_price_coverage_ca',
+        'market_rs_min_current_price_coverage_de',
         'market_rs_min_current_price_coverage_hk',
         'market_rs_min_current_price_coverage_in',
         'market_rs_min_current_price_coverage_my',

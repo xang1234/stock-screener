@@ -3,7 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import tempfile
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -20,10 +20,17 @@ from app.models.provider_snapshot import (
     ProviderSnapshotRun,
 )
 from app.models.stock import StockFundamental
-from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
+from app.models.stock_universe import (
+    StockUniverse,
+    StockUniverseStatusEvent,
+    UNIVERSE_EVENT_STATUS_CHANGED,
+    UNIVERSE_STATUS_ACTIVE,
+    UNIVERSE_STATUS_INACTIVE_MANUAL,
+)
 import app.services.fundamentals_cache_service as fundamentals_cache_module
 import app.services.provider_snapshot_service as provider_snapshot_module
 from app.services.fundamentals_cache_service import FundamentalsCacheService
+from app.services.point_in_time_universe_service import PointInTimeUniverseService
 from app.services.provider_snapshot_service import ProviderSnapshotService, settings
 
 
@@ -77,6 +84,16 @@ class _StubTechnicalCalc:
     @staticmethod
     def calculate_batch(price_data):
         return {}
+
+
+class _StaticImportCalendarStub:
+    @staticmethod
+    def normalize_market(market):
+        return market.upper()
+
+    @staticmethod
+    def market_now(_market):
+        return datetime(2026, 7, 24, tzinfo=UTC)
 
 
 def _make_session():
@@ -1189,6 +1206,678 @@ def test_import_weekly_reference_bundle_preserves_other_market_universe_rows(
     db.close()
 
 
+def test_import_weekly_reference_bundle_seeds_lifecycle_events_for_pit_static_build(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("HK")
+    bundle_path = tmp_path / "weekly-reference-hk.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "HK",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                        "market": "HK",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-23T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    snapshot = PointInTimeUniverseService(
+        market_calendar=_StaticImportCalendarStub()
+    ).resolve(db, market="HK", as_of_date=date(2026, 7, 23))
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "0700.HK",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+        )
+        .one()
+    )
+    event_at = event.created_at
+    if event_at.tzinfo is None:
+        event_at = event_at.replace(tzinfo=UTC)
+
+    assert snapshot.symbols == ("0700.HK",)
+    assert event.new_status == UNIVERSE_STATUS_ACTIVE
+    assert event.trigger_source == "weekly_reference_import"
+    assert event_at < datetime(2026, 7, 23, 16, tzinfo=UTC)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_reactivation_seed_supersedes_newer_inactive_event(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("HK")
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+            local_code="0700",
+            is_active=False,
+            status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            first_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    db.add_all(
+        [
+            StockUniverseStatusEvent(
+                symbol="0700.HK",
+                event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+                new_status=UNIVERSE_STATUS_ACTIVE,
+                trigger_source="test",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            StockUniverseStatusEvent(
+                symbol="0700.HK",
+                event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+                new_status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+                trigger_source="test",
+                created_at=datetime(2026, 7, 22, 12, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+    bundle_path = tmp_path / "weekly-reference-hk.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "HK",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                        "market": "HK",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    snapshot = PointInTimeUniverseService(
+        market_calendar=_StaticImportCalendarStub()
+    ).resolve(db, market="HK", as_of_date=date(2026, 7, 23))
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "0700.HK",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+        )
+        .order_by(StockUniverseStatusEvent.created_at.asc())
+        .all()
+    )
+
+    assert snapshot.symbols == ("0700.HK",)
+    assert [event.new_status for event in events] == [
+        UNIVERSE_STATUS_ACTIVE,
+        UNIVERSE_STATUS_INACTIVE_MANUAL,
+        UNIVERSE_STATUS_ACTIVE,
+    ]
+    db.close()
+
+
+def test_import_weekly_reference_bundle_uses_local_midnight_lifecycle_seed_for_us(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("US")
+    db.add(
+        StockUniverseStatusEvent(
+            symbol="AAPL",
+            event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+            new_status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            trigger_source="test",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    db.commit()
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-us",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                        "market": "US",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_StaticImportCalendarStub())
+    previous_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 22))
+    imported_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 23))
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "AAPL",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+            StockUniverseStatusEvent.trigger_source == "weekly_reference_import",
+        )
+        .one()
+    )
+    imported_row = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
+    event_at = event.created_at
+    if event_at.tzinfo is None:
+        event_at = event_at.replace(tzinfo=UTC)
+    first_seen_at = imported_row.first_seen_at
+    if first_seen_at.tzinfo is None:
+        first_seen_at = first_seen_at.replace(tzinfo=UTC)
+
+    assert previous_snapshot.symbols == ()
+    assert imported_snapshot.symbols == ("AAPL",)
+    assert event_at == datetime(2026, 7, 23, 4, tzinfo=UTC)
+    assert first_seen_at == datetime(2026, 1, 1, tzinfo=UTC)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_clamps_first_seen_to_seed_without_prior_events_for_us(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("US")
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-us",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                        "market": "US",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-23T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_StaticImportCalendarStub())
+    previous_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 22))
+    imported_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 23))
+    imported_row = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
+    first_seen_at = imported_row.first_seen_at
+    if first_seen_at.tzinfo is None:
+        first_seen_at = first_seen_at.replace(tzinfo=UTC)
+
+    assert previous_snapshot.symbols == ()
+    assert imported_snapshot.symbols == ("AAPL",)
+    assert first_seen_at == datetime(2026, 7, 23, 4, tzinfo=UTC)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_clamps_weekend_seed_to_latest_trading_day_for_us(
+    tmp_path,
+):
+    class _AfterWeekendCalendarStub(_StaticImportCalendarStub):
+        @staticmethod
+        def market_now(_market):
+            return datetime(2026, 7, 27, tzinfo=UTC)
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("US")
+    db.add(
+        StockUniverseStatusEvent(
+            symbol="AAPL",
+            event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+            new_status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            trigger_source="test",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    db.commit()
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-07-25T12:00:00Z",
+        "as_of_date": "2026-07-25",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260725120000",
+            "created_at": "2026-07-25T12:00:00Z",
+            "published_at": "2026-07-25T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-us",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                        "market": "US",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_AfterWeekendCalendarStub())
+    previous_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 23))
+    imported_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 24))
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "AAPL",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+            StockUniverseStatusEvent.trigger_source == "weekly_reference_import",
+        )
+        .one()
+    )
+    event_at = event.created_at
+    if event_at.tzinfo is None:
+        event_at = event_at.replace(tzinfo=UTC)
+
+    assert previous_snapshot.symbols == ()
+    assert imported_snapshot.symbols == ("AAPL",)
+    assert event_at == datetime(2026, 7, 24, 4, tzinfo=UTC)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_clamps_future_first_seen_to_weekend_seed_for_us(
+    tmp_path,
+):
+    class _AfterWeekendCalendarStub(_StaticImportCalendarStub):
+        @staticmethod
+        def market_now(_market):
+            return datetime(2026, 7, 27, tzinfo=UTC)
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("US")
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-07-25T12:00:00Z",
+        "as_of_date": "2026-07-25",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260725120000",
+            "created_at": "2026-07-25T12:00:00Z",
+            "published_at": "2026-07-25T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-us",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                        "market": "US",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-25T12:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_AfterWeekendCalendarStub())
+    imported_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 24))
+    imported_row = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
+    first_seen_at = imported_row.first_seen_at
+    if first_seen_at.tzinfo is None:
+        first_seen_at = first_seen_at.replace(tzinfo=UTC)
+
+    assert imported_snapshot.symbols == ("AAPL",)
+    assert first_seen_at == datetime(2026, 7, 24, 4, tzinfo=UTC)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_clamps_future_first_seen_with_prior_lifecycle_for_us(
+    tmp_path,
+):
+    class _AfterWeekendCalendarStub(_StaticImportCalendarStub):
+        @staticmethod
+        def market_now(_market):
+            return datetime(2026, 7, 27, tzinfo=UTC)
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("US")
+    db.add(
+        StockUniverseStatusEvent(
+            symbol="AAPL",
+            event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+            new_status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            trigger_source="test",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    db.commit()
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-07-25T12:00:00Z",
+        "as_of_date": "2026-07-25",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260725120000",
+            "created_at": "2026-07-25T12:00:00Z",
+            "published_at": "2026-07-25T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-us",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                        "market": "US",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-25T12:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_AfterWeekendCalendarStub())
+    imported_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 24))
+    imported_row = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
+    first_seen_at = imported_row.first_seen_at
+    if first_seen_at.tzinfo is None:
+        first_seen_at = first_seen_at.replace(tzinfo=UTC)
+
+    assert imported_snapshot.symbols == ("AAPL",)
+    assert first_seen_at == datetime(2026, 7, 24, 4, tzinfo=UTC)
+    db.close()
+
+
+def test_import_weekly_reference_bundle_seed_not_deduped_by_future_matching_event(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("HK")
+    db.add(
+        StockUniverseStatusEvent(
+            symbol="0700.HK",
+            event_type=UNIVERSE_EVENT_STATUS_CHANGED,
+            new_status=UNIVERSE_STATUS_ACTIVE,
+            trigger_source="test",
+            created_at=datetime(2026, 7, 24, tzinfo=UTC),
+        )
+    )
+    db.commit()
+    bundle_path = tmp_path / "weekly-reference-hk.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "HK",
+        "generated_at": "2026-07-23T12:00:00Z",
+        "as_of_date": "2026-07-23",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260723120000",
+            "created_at": "2026-07-23T12:00:00Z",
+            "published_at": "2026-07-23T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                        "market": "HK",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    snapshot = PointInTimeUniverseService(
+        market_calendar=_StaticImportCalendarStub()
+    ).resolve(db, market="HK", as_of_date=date(2026, 7, 23))
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.symbol == "0700.HK",
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+        )
+        .order_by(StockUniverseStatusEvent.created_at.asc())
+        .all()
+    )
+    seeded_event_at = events[0].created_at
+    if seeded_event_at.tzinfo is None:
+        seeded_event_at = seeded_event_at.replace(tzinfo=UTC)
+
+    assert snapshot.symbols == ("0700.HK",)
+    assert [event.trigger_source for event in events] == [
+        "weekly_reference_import",
+        "test",
+    ]
+    assert seeded_event_at < datetime(2026, 7, 23, 16, tzinfo=UTC)
+    db.close()
+
+
 def test_import_legacy_weekly_reference_bundle_replaces_global_universe(tmp_path):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -1275,6 +1964,125 @@ def test_import_legacy_weekly_reference_bundle_replaces_global_universe(tmp_path
     assert imported_symbols == ["0700.HK", "AAPL"]
     assert imported_run is not None
     assert imported_run.source_revision == "fundamentals_v1:20260411120000"
+    db.close()
+
+
+def test_import_legacy_weekly_reference_bundle_seeds_lifecycle_by_row_market(
+    tmp_path,
+):
+    class _AfterWeekendCalendarStub(_StaticImportCalendarStub):
+        @staticmethod
+        def market_now(_market):
+            return datetime(2026, 7, 27, tzinfo=UTC)
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    bundle_path = tmp_path / "weekly-reference-legacy.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "generated_at": "2026-07-25T12:00:00Z",
+        "as_of_date": "2026-07-25",
+        "snapshot": {
+            "snapshot_key": "fundamentals_v1",
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1:20260725120000",
+            "created_at": "2026-07-25T12:00:00Z",
+            "published_at": "2026-07-25T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {
+                        "symbol": "0700.HK",
+                        "exchange": "XHKG",
+                    },
+                },
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-aapl",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                    },
+                },
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-25T12:00:00+00:00",
+            },
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-25T12:00:00+00:00",
+            },
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_AfterWeekendCalendarStub())
+    us_previous_snapshot = resolver.resolve(
+        db,
+        market="US",
+        as_of_date=date(2026, 7, 23),
+    )
+    us_imported_snapshot = resolver.resolve(
+        db,
+        market="US",
+        as_of_date=date(2026, 7, 24),
+    )
+    hk_previous_snapshot = resolver.resolve(
+        db,
+        market="HK",
+        as_of_date=date(2026, 7, 23),
+    )
+    hk_imported_snapshot = resolver.resolve(
+        db,
+        market="HK",
+        as_of_date=date(2026, 7, 24),
+    )
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(
+            StockUniverseStatusEvent.event_type == UNIVERSE_EVENT_STATUS_CHANGED,
+            StockUniverseStatusEvent.trigger_source == "weekly_reference_import",
+        )
+        .all()
+    )
+    event_at_by_symbol = {}
+    for event in events:
+        event_at = event.created_at
+        if event_at.tzinfo is None:
+            event_at = event_at.replace(tzinfo=UTC)
+        event_at_by_symbol[event.symbol] = event_at
+
+    assert us_previous_snapshot.symbols == ()
+    assert us_imported_snapshot.symbols == ("AAPL",)
+    assert hk_previous_snapshot.symbols == ()
+    assert hk_imported_snapshot.symbols == ("0700.HK",)
+    assert event_at_by_symbol == {
+        "0700.HK": datetime(2026, 7, 23, 16, tzinfo=UTC),
+        "AAPL": datetime(2026, 7, 24, 4, tzinfo=UTC),
+    }
     db.close()
 
 

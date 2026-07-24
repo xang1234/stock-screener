@@ -261,6 +261,27 @@ def test_load_allows_static_asia_current_price_coverage_actuals(
     assert set(inputs.exclusions) == set(symbols)
 
 
+def test_load_allows_de_static_current_price_coverage_actual(db_session):
+    symbols = tuple(f"S{index}" for index in range(101))
+    db_session.add_all(
+        [
+            *[
+                _price(symbol, 0, adjusted=100.0)
+                for symbol in symbols[:90]
+            ],
+            *_complete_rows("^GDAXI", {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    inputs = _loader(symbols, candidates=("^GDAXI",)).load(
+        db_session, market="DE", as_of_date=ANCHORS[0]
+    )
+
+    assert inputs.current_price_coverage == pytest.approx(90 / 101)
+    assert set(inputs.exclusions) == set(symbols)
+
+
 def test_load_uses_configured_market_specific_current_price_threshold(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
