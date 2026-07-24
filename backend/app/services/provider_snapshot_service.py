@@ -839,11 +839,14 @@ class ProviderSnapshotService:
             .all()
         }
         for row in imported_rows:
-            if row.symbol in symbols_with_prior_lifecycle:
-                continue
             if row.first_seen_at is None:
                 continue
             first_seen_utc = _as_utc_datetime(row.first_seen_at)
+            if (
+                row.symbol in symbols_with_prior_lifecycle
+                and first_seen_utc <= baseline_utc
+            ):
+                continue
             if first_seen_utc == baseline_utc:
                 continue
             row.first_seen_at = baseline_utc
