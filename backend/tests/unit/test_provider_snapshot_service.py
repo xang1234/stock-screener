@@ -1635,6 +1635,76 @@ def test_import_weekly_reference_bundle_clamps_weekend_seed_to_latest_trading_da
     db.close()
 
 
+def test_import_weekly_reference_bundle_clamps_future_first_seen_to_weekend_seed_for_us(
+    tmp_path,
+):
+    class _AfterWeekendCalendarStub(_StaticImportCalendarStub):
+        @staticmethod
+        def market_now(_market):
+            return datetime(2026, 7, 27, tzinfo=UTC)
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market("US")
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-07-25T12:00:00Z",
+        "as_of_date": "2026-07-25",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260725120000",
+            "created_at": "2026-07-25T12:00:00Z",
+            "published_at": "2026-07-25T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-us",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                        "market": "US",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+                "first_seen_at": "2026-07-25T12:00:00+00:00",
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    resolver = PointInTimeUniverseService(market_calendar=_AfterWeekendCalendarStub())
+    imported_snapshot = resolver.resolve(db, market="US", as_of_date=date(2026, 7, 24))
+    imported_row = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
+    first_seen_at = imported_row.first_seen_at
+    if first_seen_at.tzinfo is None:
+        first_seen_at = first_seen_at.replace(tzinfo=UTC)
+
+    assert imported_snapshot.symbols == ("AAPL",)
+    assert first_seen_at == datetime(2026, 7, 24, 4, tzinfo=UTC)
+    db.close()
+
+
 def test_import_weekly_reference_bundle_seed_not_deduped_by_future_matching_event(
     tmp_path,
 ):

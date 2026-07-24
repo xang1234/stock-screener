@@ -786,7 +786,6 @@ class ProviderSnapshotService:
             row.symbol
             for row in imported_rows
             if row.first_seen_at is not None
-            and _as_utc_datetime(row.first_seen_at) < baseline_utc
         )
         if not symbols_needing_evidence:
             return
@@ -808,20 +807,18 @@ class ProviderSnapshotService:
                 continue
             if row.first_seen_at is None:
                 continue
-            if _as_utc_datetime(row.first_seen_at) >= baseline_utc:
+            first_seen_utc = _as_utc_datetime(row.first_seen_at)
+            if first_seen_utc == baseline_utc:
                 continue
             row.first_seen_at = baseline_utc
-            if (
-                row.added_at is not None
-                and _as_utc_datetime(row.added_at) < baseline_utc
-            ):
-                row.added_at = baseline_utc
-            if (
-                row.is_active
-                and row.last_seen_in_source_at is not None
-                and _as_utc_datetime(row.last_seen_in_source_at) < baseline_utc
-            ):
-                row.last_seen_in_source_at = baseline_utc
+            if row.added_at is not None:
+                added_at_utc = _as_utc_datetime(row.added_at)
+                if added_at_utc < baseline_utc or added_at_utc == first_seen_utc:
+                    row.added_at = baseline_utc
+            if row.is_active and row.last_seen_in_source_at is not None:
+                last_seen_utc = _as_utc_datetime(row.last_seen_in_source_at)
+                if last_seen_utc < baseline_utc or last_seen_utc == first_seen_utc:
+                    row.last_seen_in_source_at = baseline_utc
 
     @staticmethod
     def _seed_imported_universe_status_events(
