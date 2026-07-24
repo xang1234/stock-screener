@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import math
 from typing import Any, Callable
-
-from sqlalchemy import func
 
 from app.domain.markets import get_market_catalog
 from app.domain.markets.key_markets import key_market_price_symbols
@@ -231,12 +230,12 @@ class StaticDailyPriceRefreshService:
             "rate_limited_retry": retry_stats,
         }
 
-    def _rrg_history_cutoff(
+    def _rrg_required_anchor_dates(
         self,
         *,
         as_of_date: date,
         market: str | None,
-    ) -> date | None:
+    ) -> frozenset[date] | None:
         if market is None:
             return None
         normalized_market = str(market or "").strip().upper()
@@ -257,16 +256,33 @@ class StaticDailyPriceRefreshService:
             )
             if not target_dates:
                 return None
-            oldest_target = target_dates[0]
-            oldest_offset = max(HORIZON_SESSIONS.values())
-            anchors = self._calendar_service.session_anchors(
-                normalized_market,
-                oldest_target,
-                offsets=(oldest_offset,),
+            anchor_dates: set[date] = set()
+            offsets = tuple(HORIZON_SESSIONS.values())
+            for target_date in target_dates:
+                anchors = self._calendar_service.session_anchors(
+                    normalized_market,
+                    target_date,
+                    offsets=offsets,
+                )
+                anchor_dates.update(anchors.values())
+        except Exception as exc:
+            print(
+                "[static-daily prices] Could not resolve RRG history anchors "
+                f"for market={normalized_market}: {exc}",
+                flush=True,
             )
-        except Exception:
             return None
-        return anchors[oldest_offset]
+        return frozenset(anchor_dates)
+
+    @staticmethod
+    def _valid_adjusted_close(value: object) -> bool:
+        if value is None:
+            return False
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(price) and price > 0
 
     def _symbols_with_short_rrg_history(
         self,
@@ -279,32 +295,41 @@ class StaticDailyPriceRefreshService:
     ) -> list[str]:
         if not enabled or not symbols:
             return []
-        cutoff = self._rrg_history_cutoff(as_of_date=as_of_date, market=market)
-        if cutoff is None:
+        anchor_dates = self._rrg_required_anchor_dates(
+            as_of_date=as_of_date,
+            market=market,
+        )
+        if not anchor_dates:
             return []
 
-        earliest_by_symbol: dict[str, date] = {}
+        anchor_count = len(anchor_dates)
+        available_anchor_counts: dict[str, int] = {}
         for chunk_start in range(0, len(symbols), 500):
             chunk_symbols = symbols[chunk_start:chunk_start + 500]
             rows = (
-                db.query(StockPrice.symbol, func.min(StockPrice.date))
-                .filter(StockPrice.symbol.in_(chunk_symbols))
-                .group_by(StockPrice.symbol)
+                db.query(StockPrice.symbol, StockPrice.date, StockPrice.adj_close)
+                .filter(
+                    StockPrice.symbol.in_(chunk_symbols),
+                    StockPrice.date.in_(anchor_dates),
+                )
                 .all()
             )
-            earliest_by_symbol.update(
+            available_by_symbol: dict[str, set[date]] = {}
+            for symbol, row_date, adj_close in rows:
+                if row_date is None or not self._valid_adjusted_close(adj_close):
+                    continue
+                available_by_symbol.setdefault(str(symbol).upper(), set()).add(row_date)
+            available_anchor_counts.update(
                 {
-                    str(symbol).upper(): earliest_date
-                    for symbol, earliest_date in rows
-                    if earliest_date is not None
+                    symbol: len(dates)
+                    for symbol, dates in available_by_symbol.items()
                 }
             )
 
         return [
             symbol
             for symbol in symbols
-            if earliest_by_symbol.get(symbol) is not None
-            and earliest_by_symbol[symbol] > cutoff
+            if available_anchor_counts.get(symbol, 0) < anchor_count
         ]
 
     def _fetch_and_store(
