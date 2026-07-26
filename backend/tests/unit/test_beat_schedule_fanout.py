@@ -81,13 +81,21 @@ class TestBeatScheduleFanout:
 
     def test_weekly_universe_refresh_uses_market_appropriate_task(self):
         schedule = celery_app.conf.beat_schedule or {}
-        assert schedule["weekly-universe-refresh-us"]["task"] == (
-            "app.tasks.universe_tasks.refresh_stock_universe"
-        )
-        for market in (m.lower() for m in settings.enabled_markets_list if m != "US"):
+
+        if "US" in settings.enabled_markets_list:
+            assert schedule["weekly-universe-refresh-us"]["task"] == (
+                "app.tasks.universe_tasks.refresh_stock_universe"
+            )
+
+        for market in (
+            m.lower()
+            for m in settings.enabled_markets_list
+            if m != "US"
+        ):
             assert schedule[f"weekly-universe-refresh-{market}"]["task"] == (
                 "app.tasks.universe_tasks.refresh_official_market_universe"
             )
+        
 
     def test_independent_daily_refresh_compute_and_snapshot_entries_are_removed(self):
         schedule = celery_app.conf.beat_schedule or {}
