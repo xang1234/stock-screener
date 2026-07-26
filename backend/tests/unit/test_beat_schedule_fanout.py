@@ -7,14 +7,12 @@ check it's easy for a new beat entry to silently land on the shared queue.
 from __future__ import annotations
 
 import pytest
-
 from app.celery_app import celery_app
+from app.config import settings
 from app.tasks.market_queues import (
-    SUPPORTED_MARKETS,
     data_fetch_queue_for_market,
     market_jobs_queue_for_market,
 )
-
 
 # Beat entry name prefixes that MUST be fanned out per market onto the
 # external-fetch lane.
@@ -65,7 +63,7 @@ class TestBeatScheduleFanout:
                 for name in schedule
                 if name.startswith(prefix)
             }
-            for m in SUPPORTED_MARKETS:
+            for m in settings.enabled_markets_list:
                 assert m in present, (
                     f"No beat entry for market {m!r} with prefix {prefix!r}. "
                     f"Fan-out gap: got {sorted(present)}"
@@ -86,14 +84,14 @@ class TestBeatScheduleFanout:
         assert schedule["weekly-universe-refresh-us"]["task"] == (
             "app.tasks.universe_tasks.refresh_stock_universe"
         )
-        for market in (m.lower() for m in SUPPORTED_MARKETS if m != "US"):
+        for market in (m.lower() for m in settings.enabled_markets_list if m != "US"):
             assert schedule[f"weekly-universe-refresh-{market}"]["task"] == (
                 "app.tasks.universe_tasks.refresh_official_market_universe"
             )
 
     def test_independent_daily_refresh_compute_and_snapshot_entries_are_removed(self):
         schedule = celery_app.conf.beat_schedule or {}
-        for market in SUPPORTED_MARKETS:
+        for market in settings.enabled_markets_list:
             m_lower = market.lower()
             assert f"daily-smart-refresh-{m_lower}" not in schedule
             assert f"daily-breadth-calculation-{m_lower}" not in schedule
