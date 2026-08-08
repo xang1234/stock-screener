@@ -52,6 +52,14 @@ _include("fundamentals", tags=["fundamentals"])
 _include("data_fetch_status", tags=["data-fetch"])
 _include("telemetry", tags=["telemetry"])
 _include("operations", tags=["operations"])
+_include("max_pain", prefix="/max-pain", tags=["max-pain"])
+_include("gex", prefix="/gex", tags=["gex"])
+_include("options", prefix="/options", tags=["options"])
+_include(
+    "options_command_center",
+    prefix="/options-command-center",
+    tags=["options-command-center"],
+)
 
 if settings.feature_themes:
     _include("themes", prefix="/themes", tags=["themes"])

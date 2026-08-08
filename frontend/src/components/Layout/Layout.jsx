@@ -172,6 +172,8 @@ function Layout({ children }) {
     { path: '/scan', label: 'Scan' },
     { path: '/breadth', label: 'Breadth' },
     { path: '/groups', label: 'Groups' },
+    { path: '/options-analytics', label: 'Options Analytics' },
+    { path: '/options-command-center', label: 'Command Center' },
     { path: '/validation', label: 'Backtest' },
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Assistant' }] : []),

@@ -8,6 +8,7 @@ const fetchAlerts = vi.fn();
 const acknowledgeAlert = vi.fn();
 const fetchOperationsJobs = vi.fn();
 const cancelOperationsJob = vi.fn();
+const forceReleaseDataFetchLock = vi.fn();
 const useRuntimeActivity = vi.fn();
 
 vi.mock('../api/telemetry', () => ({
@@ -18,6 +19,7 @@ vi.mock('../api/telemetry', () => ({
 vi.mock('../api/operations', () => ({
   fetchOperationsJobs: (...args) => fetchOperationsJobs(...args),
   cancelOperationsJob: (...args) => cancelOperationsJob(...args),
+  forceReleaseDataFetchLock: (...args) => forceReleaseDataFetchLock(...args),
 }));
 
 vi.mock('../hooks/useRuntimeActivity', () => ({
@@ -123,6 +125,10 @@ describe('OperationsPage', () => {
       cancel_strategy: 'scan_cancel',
       message: 'Cancelled task-scan-us',
     });
+    forceReleaseDataFetchLock.mockResolvedValue({
+      success: true,
+      message: 'Lock force-released',
+    });
     useRuntimeActivity.mockReturnValue({
       data: {
         bootstrap: {
@@ -198,6 +204,89 @@ describe('OperationsPage', () => {
       expect(cancelOperationsJob).toHaveBeenCalled();
     });
     expect(cancelOperationsJob.mock.calls[0][0]).toBe('task-fetch-hk');
+  });
+
+  it('renders force stop button for force_terminate jobs', async () => {
+    fetchOperationsJobs.mockResolvedValueOnce({
+      ...OPERATIONS_PAYLOAD,
+      jobs: [
+        {
+          task_id: 'task-run-1',
+          task_name: 'app.tasks.cache_tasks.smart_refresh_cache',
+          queue: 'data_fetch_us',
+          market: 'US',
+          state: 'running',
+          worker: 'general@host',
+          age_seconds: 120,
+          wait_reason: null,
+          heartbeat_lag_seconds: 60,
+          cancel_strategy: 'force_terminate',
+          progress_mode: 'indeterminate',
+          percent: null,
+          current: null,
+          total: null,
+          message: 'Running refresh',
+        },
+      ],
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    const forceStopButton = await screen.findByRole('button', { name: /force stop/i });
+    expect(forceStopButton).toBeInTheDocument();
+    fireEvent.click(forceStopButton);
+
+    await waitFor(() => {
+      expect(cancelOperationsJob).toHaveBeenCalledWith('task-run-1');
+    });
+  });
+
+  it('shows cleanup button for failed data fetch tasks', async () => {
+    fetchOperationsJobs.mockResolvedValueOnce({
+      ...OPERATIONS_PAYLOAD,
+      jobs: [
+        {
+          task_id: 'failed-task-1',
+          task_name: 'app.tasks.cache_tasks.smart_refresh_cache',
+          queue: 'data_fetch_us',
+          market: 'US',
+          state: 'failed',
+          worker: null,
+          age_seconds: 960,
+          wait_reason: null,
+          heartbeat_lag_seconds: null,
+          cancel_strategy: 'force_cancel_refresh',
+          progress_mode: 'indeterminate',
+          percent: null,
+          current: null,
+          total: null,
+          message: 'Task failed after retry',
+        },
+      ],
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    const cleanupButton = await screen.findByRole('button', { name: /clean up/i });
+    expect(cleanupButton).toBeInTheDocument();
+    fireEvent.click(cleanupButton);
+
+    await waitFor(() => {
+      expect(cancelOperationsJob).toHaveBeenCalledWith('failed-task-1');
+    });
+  });
+
+  it('shows force release lock button when a data fetch lease exists', async () => {
+    renderWithProviders(<OperationsPage />);
+
+    const releaseButton = await screen.findByRole('button', { name: /force release data-fetch lock/i });
+    expect(releaseButton).toBeInTheDocument();
+
+    fireEvent.click(releaseButton);
+
+    await waitFor(() => {
+      expect(forceReleaseDataFetchLock).toHaveBeenCalled();
+    });
   });
 
   it('clears the Working state after a cancel mutation settles', async () => {

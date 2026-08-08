@@ -10,3 +10,8 @@ export const cancelOperationsJob = async (taskId) => {
   return response.data;
 };
 
+export const forceReleaseDataFetchLock = async () => {
+  const response = await apiClient.post('/v1/data-fetch/force-release-lock');
+  return response.data;
+};
+

@@ -15,13 +15,15 @@
 
 services:
   postgres:
+    mem_limit: ${POSTGRES_MEM_LIMIT:-2G}
+    mem_reservation: ${POSTGRES_MEM_RESERVATION:-512M}
     deploy:
       resources:
         limits:
           cpus: '1'
-          memory: 1G
+          memory: 2G
         reservations:
-          memory: 256M
+          memory: 512M
     logging:
       driver: json-file
       options:
@@ -29,13 +31,15 @@ services:
         max-file: "5"
 
   redis:
+    mem_limit: ${REDIS_MEM_LIMIT:-1G}
+    mem_reservation: ${REDIS_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 256M
+          memory: 1G
         reservations:
-          memory: 64M
+          memory: 256M
     logging:
       driver: json-file
       options:
@@ -64,13 +68,15 @@ services:
   celery-general:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_GENERAL_MEM_LIMIT:-2G}
+    mem_reservation: ${CELERY_GENERAL_MEM_RESERVATION:-512M}
     deploy:
       resources:
         limits:
           cpus: '1'
-          memory: 1G
+          memory: 2G
         reservations:
-          memory: 256M
+          memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d general@$$HOSTNAME"]
       interval: 60s
@@ -86,15 +92,41 @@ services:
   celery-datafetch:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_DATAFETCH_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_DATAFETCH_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d datafetch-global@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-marketjobs:
+    env_file:
+      - .env.docker
+    mem_limit: ${CELERY_MARKETJOBS_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_MARKETJOBS_MEM_RESERVATION:-256M}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-default@$$HOSTNAME"]
       interval: 60s
       timeout: 30s
       retries: 3
@@ -108,13 +140,15 @@ services:
   celery-marketjobs-us:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_MARKETJOBS_US_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_MARKETJOBS_US_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-us@$$HOSTNAME"]
       interval: 60s
@@ -130,13 +164,15 @@ services:
   celery-marketjobs-hk:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_MARKETJOBS_HK_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_MARKETJOBS_HK_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-hk@$$HOSTNAME"]
       interval: 60s
@@ -152,13 +188,15 @@ services:
   celery-marketjobs-jp:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_MARKETJOBS_JP_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_MARKETJOBS_JP_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-jp@$$HOSTNAME"]
       interval: 60s
@@ -174,13 +212,15 @@ services:
   celery-marketjobs-tw:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_MARKETJOBS_TW_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_MARKETJOBS_TW_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-tw@$$HOSTNAME"]
       interval: 60s
@@ -196,13 +236,15 @@ services:
   celery-userscans:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_USERSCANS_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_USERSCANS_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-shared@$$HOSTNAME"]
       interval: 60s
@@ -218,13 +260,15 @@ services:
   celery-userscans-us:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_USERSCANS_US_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_USERSCANS_US_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-us@$$HOSTNAME"]
       interval: 60s
@@ -240,13 +284,15 @@ services:
   celery-userscans-hk:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_USERSCANS_HK_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_USERSCANS_HK_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-hk@$$HOSTNAME"]
       interval: 60s
@@ -262,13 +308,15 @@ services:
   celery-userscans-jp:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_USERSCANS_JP_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_USERSCANS_JP_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-jp@$$HOSTNAME"]
       interval: 60s
@@ -284,13 +332,15 @@ services:
   celery-userscans-tw:
     env_file:
       - .env.docker
+    mem_limit: ${CELERY_USERSCANS_TW_MEM_LIMIT:-1G}
+    mem_reservation: ${CELERY_USERSCANS_TW_MEM_RESERVATION:-256M}
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
         reservations:
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-tw@$$HOSTNAME"]
       interval: 60s
@@ -329,6 +379,22 @@ services:
           memory: 256M
         reservations:
           memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  pgadmin:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
     logging:
       driver: json-file
       options:

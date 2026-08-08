@@ -65,3 +65,28 @@ code {
 .MuiTableHead-root .MuiTableRow-root {
   background-color: var(--table-header-bg) !important;
 }
+
+/* Elements that only make sense in the interactive UI (controls, spinners,
+   the print trigger itself) -- hidden only when actually printing, not on
+   screen. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  /* MUI Paper relies on box-shadow for depth, which most browsers drop when
+     printing -- without this, printed cards have no visible edge at all. */
+  .MuiPaper-root {
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+    break-inside: avoid;
+  }
+
+  .MuiContainer-root {
+    max-width: 100% !important;
+  }
+
+  body {
+    background-color: #fff !important;
+  }
+}

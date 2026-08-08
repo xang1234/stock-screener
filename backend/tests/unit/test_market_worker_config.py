@@ -31,10 +31,28 @@ def test_docker_compose_datafetch_queues_are_derived_from_enabled_markets():
     assert "-Q \"$$QUEUES\"" in compose
 
 
+def test_docker_compose_userscans_base_worker_computes_queues_from_enabled_markets():
+    # celery-userscans must not rely on Compose profiles being activated to
+    # cover the enabled markets' user_scans_<mkt> queues (see stuck-scan bug
+    # where a manual scan sat "queued" forever with no worker consuming it).
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "compose_enabled_markets.py queues --queue-set userscans" in compose
+    assert "-n userscans-shared@%h" in compose
+
+
+def test_docker_compose_marketjobs_base_worker_computes_queues_from_enabled_markets():
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "  celery-marketjobs:\n" in compose
+    assert "compose_enabled_markets.py queues --queue-set marketjobs" in compose
+    assert "-n marketjobs-default@%h" in compose
+
+
 def test_release_overlay_uses_release_image_for_every_market_worker():
     release = (ROOT / "docker-compose.release.yml").read_text(encoding="utf-8")
 
-    for service in ("backend", "celery-general", "celery-datafetch", "celery-userscans", "celery-beat"):
+    for service in ("backend", "celery-general", "celery-datafetch", "celery-userscans", "celery-marketjobs", "celery-beat"):
         assert (
             f"  {service}:\n"
             "    build: !reset null\n"

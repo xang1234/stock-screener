@@ -51,6 +51,10 @@ services:
     build: !reset null
     <<: *backend-release-service
 
+  celery-marketjobs:
+    build: !reset null
+    <<: *backend-release-service
+
   celery-marketjobs-us:
     build: !reset null
     <<: *backend-release-service

@@ -3,12 +3,14 @@ Stock Universe API endpoints.
 
 Manages the list of scannable stocks from NYSE/NASDAQ.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body, Query
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 import logging
 from typing import Any
 
 from ...database import get_db
+from ...models.stock_universe import StockUniverse
 from ...wiring.bootstrap import get_stock_universe_service
 
 logger = logging.getLogger(__name__)
@@ -300,6 +302,48 @@ async def get_universe_market_audit(db: Session = Depends(get_db)):
             status_code=500,
             detail=f"Error getting universe market audit: {str(e)}"
         )
+
+
+@router.get("/symbols")
+async def list_symbols(
+    q: str | None = Query(default=None, description="Optional search term for symbol or company name"),
+    limit: int = Query(default=200, ge=1, le=500),
+    exchange: str | None = Query(default=None, description="Optional exchange filter"),
+    db: Session = Depends(get_db),
+):
+    """Return active universe symbols for UI autocomplete and dashboard selectors."""
+    try:
+        query = db.query(StockUniverse).filter(
+            StockUniverse.is_active.is_(True),
+            StockUniverse.status == "active",
+        )
+
+        if exchange:
+            query = query.filter(func.upper(StockUniverse.exchange) == exchange.strip().upper())
+
+        if q:
+            needle = q.strip().lower()
+            if needle:
+                query = query.filter(
+                    or_(
+                        func.lower(StockUniverse.symbol).like(f"%{needle}%"),
+                        func.lower(StockUniverse.name).like(f"%{needle}%"),
+                    )
+                )
+
+        rows = query.order_by(StockUniverse.symbol.asc()).limit(limit).all()
+        symbols = [
+            {
+                "symbol": row.symbol,
+                "name": row.name,
+                "exchange": row.exchange,
+            }
+            for row in rows
+        ]
+        return {"symbols": symbols}
+    except Exception as e:
+        logger.error(f"Error listing universe symbols: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/symbols")
