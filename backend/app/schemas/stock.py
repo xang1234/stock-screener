@@ -1,4 +1,5 @@
 """Stock data schemas"""
+from datetime import datetime
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 
@@ -249,3 +250,27 @@ class StockDecisionDashboardResponse(BaseModel):
     event_risk: StockEventRiskSummary
     regime_actions: StockRegimeActions
     degraded_reasons: List[str]
+
+
+class StockNewsItem(BaseModel):
+    """One article/post mentioning this ticker, per the theme-discovery
+    pipeline's LLM ticker extraction (ThemeMention.tickers)."""
+
+    mention_id: int
+    title: Optional[str] = None
+    url: Optional[str] = None
+    source_type: Optional[str] = None
+    source_name: Optional[str] = None
+    author: Optional[str] = None
+    published_at: Optional[datetime] = None
+    sentiment: Optional[str] = None
+    confidence: Optional[float] = None
+    excerpt: Optional[str] = None
+    theme: Optional[str] = None
+    other_tickers: List[str] = []
+
+
+class StockNewsResponse(BaseModel):
+    symbol: str
+    total_count: int
+    items: List[StockNewsItem]

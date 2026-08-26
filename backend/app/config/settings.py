@@ -250,6 +250,13 @@ class Settings(BaseSettings):
     )
     au_live_min_universe_size: int = 1500
     ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
+    # Derived GICS/sector -> IBD group lookup (scripts/build_ibd_crosswalk.py
+    # generates this from the CSV + stock_universe sector/industry -- it's what
+    # lets classify_live_industry_groups assign a brand-new/relisted symbol an
+    # industry group from its own live sector/industry, no per-symbol CSV row
+    # required). Regenerate whenever the curated CSV or GICS data changes
+    # meaningfully; stale is not harmful, just less accurate for very new sectors.
+    ibd_crosswalk_path: str = str(_PROJECT_ROOT / "data" / "ibd_crosswalk.json")
 
     # Per-market rate budget overrides. Each value is in requests-per-second
     # for that market specifically. None means "use universe-weighted division

@@ -175,6 +175,18 @@ services:
       exec celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1
       --without-mingle --without-gossip -Q "$$QUEUES" -n datafetch-global@%h'
 
+  # Always-on fallback covering every enabled market's market_jobs queue, so
+  # breadth/group-ranking/feature-snapshot jobs are never orphaned when the
+  # per-market "market-<mkt>" Compose profiles below aren't activated. The
+  # profiled celery-marketjobs-<mkt> services remain available as optional
+  # additional workers for scaling a specific market's throughput.
+  celery-marketjobs:
+    <<: *worker-common
+    command: >
+      sh -c 'QUEUES="$$(python scripts/compose_enabled_markets.py queues --queue-set marketjobs --markets "$${ENABLED_MARKETS:-US}")" &&
+      exec celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1
+      --without-mingle --without-gossip -Q "$$QUEUES" -n marketjobs-default@%h'
+
   celery-marketjobs-us:
     <<: *worker-common
     profiles: ["market-us"]
@@ -235,9 +247,17 @@ services:
     profiles: ["market-my"]
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_my -n marketjobs-my@%h
 
+  # Always-on fallback covering user_scans_shared plus every enabled market's
+  # user_scans_<mkt> queue, so manual scans are never orphaned when the
+  # per-market "market-<mkt>" Compose profiles below aren't activated. The
+  # profiled celery-userscans-<mkt> services remain available as optional
+  # additional workers for scaling a specific market's scan throughput.
   celery-userscans:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_shared -n userscans-shared@%h
+    command: >
+      sh -c 'QUEUES="$$(python scripts/compose_enabled_markets.py queues --queue-set userscans --markets "$${ENABLED_MARKETS:-US}")" &&
+      exec celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1
+      --without-mingle --without-gossip -Q "$$QUEUES" -n userscans-shared@%h'
 
   celery-userscans-us:
     <<: *worker-common
@@ -381,6 +401,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  pgadmin:
+    image: dpage/pgadmin4:9
+    profiles: ["pgadmin"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      # Loopback-only by default; override PGADMIN_BIND (e.g. 0.0.0.0:5050) to
+      # expose it on the LAN/behind a reverse proxy.
+      - "${PGADMIN_BIND:-127.0.0.1:5050}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
@@ -406,3 +444,4 @@ services:
 
 volumes:
   redis_data:
+  pgadmin_data:

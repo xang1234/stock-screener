@@ -50,6 +50,27 @@ def _get_setting(db: Session, key: str) -> AppSetting | None:
     return db.query(AppSetting).filter(AppSetting.key == key).first()
 
 
+def clear_market_activity_for_task(db: Session, *, market: str, task_id: str) -> bool:
+    """Remove a persisted runtime-activity record still owned by task_id.
+
+    Used by Operations job cleanup to drop orphaned failed/completed records
+    whose task already released its locks, so they stop reappearing in the
+    job console after a "clean up" action.
+    """
+    setting = _get_setting(db, _activity_key(market))
+    if setting is None:
+        return False
+    try:
+        payload = json.loads(setting.value)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(payload, dict) or payload.get("task_id") != task_id:
+        return False
+    db.delete(setting)
+    db.commit()
+    return True
+
+
 def _load_market_activity(db: Session, market: str) -> dict[str, Any] | None:
     setting = _get_setting(db, _activity_key(market))
     if setting is None:

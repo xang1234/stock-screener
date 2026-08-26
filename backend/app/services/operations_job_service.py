@@ -24,6 +24,7 @@ from app.services.job_backend import CeleryJobBackend
 from app.services.market_activity_service import (
     MARKET_ACTIVITY_KEY_PREFIX,
     RUNTIME_ACTIVITY_CATEGORY,
+    clear_market_activity_for_task,
 )
 from app.services.runtime_activity_contract import progress_mode
 from app.services.ui_snapshot_service import safe_publish_scan_bootstrap
@@ -50,6 +51,45 @@ HEARTBEAT_STUCK_AFTER_SECONDS = 30 * 60
 LEASE_STUCK_TTL_SECONDS = 10 * 60
 
 SCAN_TASK_NAME = "app.tasks.scan_tasks.run_bulk_scan"
+
+# Batch-tracking tables whose rows carry a celery_task_id (migration
+# 20260805_0029). A SIGTERM revoke doesn't reliably run the task's own
+# except/finally blocks -- the only place these rows would otherwise get
+# flipped to 'failed'/'completed' -- so without this map, a force-stopped
+# update_max_pain/update_gex run leaves its batch row stuck at
+# status='running' forever ("zombie" rows).
+def _batch_model_by_task_name() -> dict:
+    from app.models.max_pain import MaxPainBatch
+    from app.models.gex import GexBatch
+
+    return {
+        "app.tasks.max_pain_tasks.update_max_pain": MaxPainBatch,
+        "app.tasks.gex_tasks.update_gex": GexBatch,
+    }
+
+
+def _fail_orphaned_batch_row(db: Session, task_name: str, task_id: str, reason: str) -> None:
+    """Best-effort: mark the batch row this Celery task owns as failed.
+
+    Safe to call for any task_name/task_id -- no-ops unless there's a
+    matching model and a row still at status='running' for this exact task.
+    """
+    model = _batch_model_by_task_name().get(task_name)
+    if model is None:
+        return
+    try:
+        batch = (
+            db.query(model)
+            .filter(model.celery_task_id == task_id, model.status == "running")
+            .first()
+        )
+        if batch is not None:
+            batch.status = "failed"
+            batch.completed_at = datetime.utcnow()
+            batch.error_message = reason
+            db.commit()
+    except Exception:
+        logger.exception("Failed to mark batch row failed for task %s (%s)", task_id, task_name)
 
 
 @dataclass
@@ -178,6 +218,17 @@ def _queue_family(queue_name: str | None) -> str:
     return "general"
 
 
+def _is_current_external_fetch_holder(record: _JobRecord, lock: Any | None) -> bool:
+    if lock is None or _queue_family(record.queue) != "data_fetch":
+        return False
+
+    if record.market:
+        current = lock.get_current_holder(market=record.market)
+    else:
+        current = lock.get_any_current_holder()
+    return bool(current and current.get("task_id") == record.task_id)
+
+
 def _extract_scan_id(task_name: str, args: list[Any], kwargs: dict[str, Any]) -> str | None:
     if task_name != SCAN_TASK_NAME:
         return None
@@ -196,9 +247,17 @@ def _cancel_strategy_for(record: _JobRecord) -> str:
         return "revoke"
     if record.task_name == SCAN_TASK_NAME and record.state == "running":
         return "scan_cancel"
+    if record.state == "running":
+        return "force_terminate"
+    if record.state == "failed":
+        if _queue_family(record.queue) == "data_fetch":
+            return "force_cancel_refresh"
+        if _queue_family(record.queue) in {"market_jobs", "user_scans"}:
+            return "force_release_market_lease"
     if (
         record.state in {"stale", "stuck"}
         and _queue_family(record.queue) == "data_fetch"
+        and _is_current_external_fetch_holder(record, get_data_fetch_lock())
     ):
         return "force_cancel_refresh"
     if (
@@ -366,7 +425,12 @@ class OperationsJobService:
         return records
 
     def _inspect(self) -> Any:
-        return celery_app.control.inspect(timeout=1.0)
+        # With 5+ worker containers now registered (general/datafetch/marketjobs/
+        # userscans-shared/userscans-<market>), a 1s RPC timeout can come back
+        # empty right after a deploy/restart while workers finish their broker
+        # handshake, making the Job console look empty even though tasks are
+        # actively running (confirmed via direct list_jobs() call in prod).
+        return celery_app.control.inspect(timeout=3.0)
 
     def _worker_queue_map(self, active_queues: dict[str, Any]) -> dict[str, list[str]]:
         mapped: dict[str, list[str]] = {}
@@ -901,9 +965,51 @@ class OperationsJobService:
             self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome=status, message=message)
             return {"status": status, "cancel_strategy": strategy, "message": message}
 
+        if strategy == "force_terminate":
+            try:
+                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+                _fail_orphaned_batch_row(
+                    db, record.task_name, task_id, "Force-stopped by operator via Operations dashboard."
+                )
+                message = f"Force-terminated running task {task_id}."
+                self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="accepted", message=message)
+                return {"status": "accepted", "cancel_strategy": strategy, "message": message}
+            except Exception as exc:
+                message = f"Failed to force terminate task {task_id}: {exc}"
+                self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="blocked", message=message)
+                return {"status": "blocked", "cancel_strategy": strategy, "message": message}
+
         if strategy == "force_cancel_refresh":
             lock = get_data_fetch_lock()
             current = lock.get_any_current_task()
+            is_current_holder = bool(current and current.get("task_id") == task_id)
+
+            if record.state == "failed":
+                # A failed task already released its lock in a `finally` block,
+                # so requiring live lock ownership here would block cleanup
+                # forever. Release any dangling leases defensively and drop the
+                # orphaned runtime-activity record instead.
+                if current is not None and is_current_holder:
+                    lock_key = current.get("lock_key", "")
+                    suffix = lock_key.rsplit(":", 1)[-1] if ":" in lock_key else ""
+                    lock_market = None if suffix in {"", "shared"} else suffix
+                    lock.force_release(market=lock_market)
+                coordination = get_workload_coordination()
+                coordination.release_market_workload(task_id, market=record.market)
+                coordination.release_external_fetch(task_id)
+                if record.market:
+                    clear_market_activity_for_task(db, market=record.market, task_id=task_id)
+                try:
+                    celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+                except Exception:
+                    logger.exception("Failed to revoke task %s during force_cancel_refresh cleanup", task_id)
+                _fail_orphaned_batch_row(
+                    db, record.task_name, task_id, "Force-cleared failed task via Operations dashboard."
+                )
+                message = f"Cleared failed task {task_id} from the job console."
+                self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="accepted", message=message)
+                return {"status": "accepted", "cancel_strategy": strategy, "message": message}
+
             if not current or current.get("task_id") != task_id:
                 message = f"Task {task_id} is not the current external fetch holder."
                 self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="blocked", message=message)
@@ -920,6 +1026,13 @@ class OperationsJobService:
             coordination = get_workload_coordination()
             coordination.release_market_workload(task_id, market=market)
             coordination.release_external_fetch(task_id)
+            try:
+                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+            except Exception:
+                logger.exception("Failed to revoke task %s during force_cancel_refresh", task_id)
+            _fail_orphaned_batch_row(
+                db, record.task_name, task_id, "Force-cancelled as a stale external fetch task via Operations dashboard."
+            )
             from app.wiring.bootstrap import get_price_cache
 
             get_price_cache().clear_warmup_heartbeat(market=market)
@@ -938,6 +1051,10 @@ class OperationsJobService:
                 message = f"Market workload lease for task {task_id} is no longer held."
                 self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="blocked", message=message)
                 return {"status": "blocked", "cancel_strategy": strategy, "message": message}
+            try:
+                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+            except Exception:
+                logger.exception("Failed to revoke task %s during force_release_market_lease", task_id)
             message = f"Released stale market workload lease for task {task_id} ({record.market})."
             self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="accepted", message=message)
             return {"status": "accepted", "cancel_strategy": strategy, "message": message}

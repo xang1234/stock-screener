@@ -30,7 +30,7 @@ import {
   Typography,
 } from '@mui/material';
 import { fetchAlerts, acknowledgeAlert } from '../api/telemetry';
-import { cancelOperationsJob, fetchOperationsJobs } from '../api/operations';
+import { cancelOperationsJob, fetchOperationsJobs, forceReleaseDataFetchLock } from '../api/operations';
 import { useRuntimeActivity } from '../hooks/useRuntimeActivity';
 
 const POLL_MS = 30000;
@@ -93,8 +93,12 @@ function formatCancelLabel(strategy) {
       return 'Revoke';
     case 'scan_cancel':
       return 'Cancel scan';
+    case 'force_terminate':
+      return 'Force stop';
     case 'force_cancel_refresh':
-      return 'Force cancel';
+      return 'Clean up';
+    case 'force_release_market_lease':
+      return 'Release lease';
     case 'revoke_and_remove_from_queue':
       return 'Cancel';
     default:
@@ -465,7 +469,7 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
                   <Button
                     size="small"
                     variant="outlined"
-                    color={job.cancel_strategy === 'force_cancel_refresh' ? 'error' : 'primary'}
+                    color={['force_cancel_refresh', 'force_terminate'].includes(job.cancel_strategy) ? 'error' : 'primary'}
                     onClick={() => onCancel(job.task_id)}
                     disabled={isCancelling}
                   >
@@ -527,6 +531,19 @@ export default function OperationsPage() {
       queryClient.invalidateQueries({ queryKey: ['operations', 'jobs'] });
       queryClient.invalidateQueries({ queryKey: ['runtimeActivity'] });
       if (payload.status !== 'accepted') {
+        setJobActionError(payload.message);
+      }
+    },
+    onError: (err) => setJobActionError(err?.response?.data?.detail || err.message),
+  });
+
+  const releaseLockMutation = useMutation({
+    mutationFn: forceReleaseDataFetchLock,
+    onSuccess: (payload) => {
+      setJobActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['operations', 'jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['runtimeActivity'] });
+      if (!payload.success) {
         setJobActionError(payload.message);
       }
     },
@@ -700,7 +717,25 @@ export default function OperationsPage() {
       {jobsQuery.isLoading ? (
         <CircularProgress size={20} />
       ) : (
-        <LeaseSummary leases={leases} />
+        <Box sx={{ mb: 2 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="body2" color="text.secondary">
+              Lease status shows the current external fetch and market workload holders.
+            </Typography>
+            {(leases?.external_fetch_global || Object.values(leases?.market_workload || {}).some(Boolean)) && (
+              <Button
+                size="small"
+                variant="outlined"
+                color="error"
+                onClick={() => releaseLockMutation.mutate()}
+                disabled={releaseLockMutation.isPending}
+              >
+                {releaseLockMutation.isPending ? 'Cleaning…' : 'Force release data-fetch lock'}
+              </Button>
+            )}
+          </Box>
+          <LeaseSummary leases={leases} />
+        </Box>
       )}
 
       <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} sx={{ mt: 3 }}>

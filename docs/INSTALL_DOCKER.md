@@ -27,6 +27,8 @@ This starts PostgreSQL, Redis, the Backend API, the shared Celery workers, the m
 
 > **Note:** Local backups are now opt-in so the default laptop stack stays lighter. Start `db-backup` with `COMPOSE_PROFILES=backup scripts/docker-compose-enabled-markets.sh up -d db-backup` (or add the profile in a local override) when you want local `pg_dump` snapshots under `./data/backups`.
 
+> **Note:** A pgAdmin UI for browsing/managing the Postgres database is also opt-in. Start it with `COMPOSE_PROFILES=pgadmin scripts/docker-compose-enabled-markets.sh up -d pgadmin`, then open http://localhost:5050 and log in with `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD` (defaults `admin@example.com` / `admin` — change these in `.env`/`.env.docker` before enabling on a shared host). Add a server inside pgAdmin with Host=`postgres`, Port=`5432`, and the `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` values from your env file. The UI binds to `127.0.0.1:5050` by default; set `PGADMIN_BIND=0.0.0.0:5050` to expose it on the LAN or behind a reverse proxy.
+
 > **Note:** This local quick start reads environment variables from `.env` in the project root. The production examples below pass `--env-file .env.docker` explicitly. `SERVER_AUTH_PASSWORD` is required for server access, and LLM API keys are required for chatbot features.
 
 ## Homelab (Behind Reverse Proxy)
@@ -124,6 +126,7 @@ The HTTPS overlay sets `SERVER_AUTH_SECURE_COOKIE=true` on the backend automatic
 | `celery-userscans-*` | Enabled-market user scan queues, selected through Compose profiles |
 | `celery-beat` | Celery Beat scheduler |
 | `db-backup` | Automated PostgreSQL backups to `./data/backups` |
+| `pgadmin` | (opt-in, `pgadmin` profile) Web UI for browsing/managing Postgres |
 | `frontend` | React app served via nginx |
 | `caddy` | (HTTPS overlay only) TLS termination with Let's Encrypt |
 

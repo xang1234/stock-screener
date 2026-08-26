@@ -38,12 +38,30 @@ def datafetch_queues_for_markets(markets: Sequence[str]) -> list[str]:
     return queues
 
 
+def user_scans_queues_for_markets(markets: Sequence[str]) -> list[str]:
+    queues = ["user_scans_shared"]
+    queues.extend(f"user_scans_{market.lower()}" for market in markets)
+    return queues
+
+
+def market_jobs_queues_for_markets(markets: Sequence[str]) -> list[str]:
+    # market_jobs has no shared fallback queue — every task requires an explicit market.
+    return [f"market_jobs_{market.lower()}" for market in markets]
+
+
+QUEUE_BUILDERS = {
+    "datafetch": datafetch_queues_for_markets,
+    "userscans": user_scans_queues_for_markets,
+    "marketjobs": market_jobs_queues_for_markets,
+}
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
         choices=("profiles", "queues", "env"),
-        help="Output Compose profiles, data-fetch queues, or shell env assignments.",
+        help="Output Compose profiles, queues for a queue set, or shell env assignments.",
     )
     parser.add_argument(
         "--markets",
@@ -52,6 +70,12 @@ def _parser() -> argparse.ArgumentParser:
             ",".join(DEFAULT_DEPLOYMENT_ENABLED_MARKETS),
         ),
         help="Comma-separated market codes. Defaults to ENABLED_MARKETS or US.",
+    )
+    parser.add_argument(
+        "--queue-set",
+        choices=tuple(QUEUE_BUILDERS),
+        default="datafetch",
+        help="Which queue family to compute for the 'queues' command. Defaults to datafetch.",
     )
     return parser
 
@@ -65,15 +89,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     profiles = ",".join(compose_profiles_for_markets(markets))
-    queues = ",".join(datafetch_queues_for_markets(markets))
+    queues = ",".join(QUEUE_BUILDERS[args.queue_set](markets))
 
     if args.command == "profiles":
         print(profiles)
     elif args.command == "queues":
         print(queues)
     else:
+        datafetch_queues = ",".join(datafetch_queues_for_markets(markets))
+        userscans_queues = ",".join(user_scans_queues_for_markets(markets))
+        marketjobs_queues = ",".join(market_jobs_queues_for_markets(markets))
         print(f"COMPOSE_PROFILES={profiles}")
-        print(f"DATAFETCH_QUEUES={queues}")
+        print(f"DATAFETCH_QUEUES={datafetch_queues}")
+        print(f"USERSCANS_QUEUES={userscans_queues}")
+        print(f"MARKETJOBS_QUEUES={marketjobs_queues}")
     return 0
 
 

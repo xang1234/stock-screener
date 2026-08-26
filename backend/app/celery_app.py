@@ -53,6 +53,10 @@ celery_app = Celery(
         'app.tasks.runtime_bootstrap_tasks',  # Local-default first-run bootstrap orchestration
         'app.tasks.static_export_tasks',  # Scheduled static-data bundle export
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
+        'app.tasks.max_pain_tasks',  # Max pain options analysis tasks
+        'app.tasks.gex_tasks',  # Gamma exposure options analysis tasks
+        'app.tasks.options_tasks',  # Options metrics precompute
+        'app.tasks.options_analysis_tasks',  # Batch options structural analysis
     ]
 )
 celery_app.loader.override_backends = {
@@ -298,6 +302,21 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
     'app.tasks.universe_tasks.refresh_sp500_membership',
 )
 
+# Options pipeline (Max Pain / GEX / structural exposure): all US-only,
+# yfinance-driven fetches. Every current call site (API trigger-update
+# endpoints, the max_pain->gex->options chain in each task's `finally` block,
+# task_registry_service's manual dispatch) already passes an explicit
+# queue=data_fetch_queue_for_market("US") to these, since routing the wrapper
+# scheduler tasks doesn't propagate to them (see comments in
+# max_pain_tasks.schedule_daily_update). This route entry is a backstop for
+# any future/forgotten dispatch that omits the explicit queue -- explicit
+# queue= on apply_async still takes precedence over this default.
+_OPTIONS_DATA_FETCH_TASKS = (
+    'app.tasks.max_pain_tasks.update_max_pain',
+    'app.tasks.gex_tasks.update_gex',
+    'app.tasks.options_analysis_tasks.analyze_options_exposure',
+)
+
 _MARKET_JOB_TASKS = (
     'app.tasks.industry_tasks.load_tracked_ibd_industry_groups',
     'app.tasks.industry_tasks.sync_ibd_classification',
@@ -329,6 +348,10 @@ celery_app.conf.task_routes = {
 celery_app.conf.task_routes.update({
     task_name: {'queue': market_jobs_queue_for_market("US")}
     for task_name in _MARKET_JOB_TASKS
+})
+celery_app.conf.task_routes.update({
+    task_name: {'queue': data_fetch_queue_for_market("US")}
+    for task_name in _OPTIONS_DATA_FETCH_TASKS
 })
 
 # User scans: same default-to-shared pattern; API layer sets the queue explicitly.
@@ -405,6 +428,21 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
         beat_schedule[f'weekly-ibd-classification-sync-{_m_lower}'] = {
             'task': 'app.tasks.industry_tasks.sync_ibd_classification',
             'schedule': crontab(hour=6, minute=0, day_of_week=0),
+            'options': {'queue': market_jobs_queue_for_market(_market)},
+            'kwargs': {'market': _market},
+        }
+
+        # Daily live-data industry-group classification. Unlike the weekly
+        # GitHub sync above (a no-op in `live_only` mode) or the CSV loader
+        # (never scheduled), this classifies straight from this deployment's
+        # own stock_universe sector/industry via the crosswalk -- no external
+        # bundle or per-symbol CSV row needed, so a brand-new/relisted symbol
+        # gets covered within a day instead of staying unclassified
+        # indefinitely. Cheap (in-process dict lookups, no external calls), so
+        # daily is safe. 7 AM ET, after the weekly universe/IBD-sync jobs.
+        beat_schedule[f'daily-live-ibd-classification-{_m_lower}'] = {
+            'task': 'app.tasks.industry_tasks.classify_live_industry_groups',
+            'schedule': crontab(hour=7, minute=0),
             'options': {'queue': market_jobs_queue_for_market(_market)},
             'kwargs': {'market': _market},
         }
@@ -527,6 +565,48 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
                 day_of_week=0,  # Sunday
             ),
         },
+
+        # Daily options pipeline: max pain -> GEX -> options metrics/batch
+        # analysis, chained rather than scheduled at three independent fixed
+        # clock times.
+        #
+        # These all share ONE single-concurrency global data_fetch worker
+        # (see start_celery.sh), so they were always going to run
+        # sequentially regardless of scheduling. Firing them 10 minutes apart
+        # (4:30/4:40/4:50) assumed each finished almost instantly; in
+        # practice a full-universe yfinance sweep can run for hours, so the
+        # later jobs piled up in "Queued" for most of the day waiting on the
+        # one before them. Each task now triggers the next one itself, from
+        # its `finally` block, the moment it actually finishes (success or
+        # failure) — see the end of max_pain_tasks.update_max_pain and
+        # gex_tasks.update_gex. Only the first stage needs a beat entry.
+        #
+        # Routed to the US data_fetch queue (previously unrouted, which meant
+        # this long, rate-limited yfinance sweep ran on the shared general
+        # 'celery' queue and tied up a general-compute worker for its duration).
+        #
+        # 17:30 ET, not 16:30 -- daily-market-pipeline-us also starts at
+        # 16:30 and its first step (smart_refresh_cache) needs this same
+        # data_fetch_us queue before the rest of that chain (breadth, group
+        # rankings, market RS) can even begin. The pipeline's data_fetch step
+        # is a quick delta refresh; Max Pain's full-universe sweep is much
+        # longer, so if Max Pain won the race to the single data_fetch_us
+        # worker, the whole US pipeline sat blocked behind it. An hour of
+        # headroom is a guessed gap, not a guarantee (same caveat as the old
+        # 10-minute gaps this replaced) -- if the US pipeline is ever still
+        # mid-run at 17:30, revisit this as a chain instead, the same fix
+        # applied to max_pain -> gex -> options below.
+        'daily-max-pain-update': {
+            'task': 'app.tasks.max_pain_tasks.schedule_daily_update',
+            'schedule': crontab(hour=17, minute=30),
+            'options': {'queue': data_fetch_queue_for_market('US')},
+        },
+
+        # daily-gex-update and daily-options-update no longer have their own
+        # beat entries -- they're chained from max-pain and GEX respectively
+        # (see comment above). Both tasks remain registered in
+        # task_registry_service.SCHEDULED_TASKS for manual/independent
+        # triggering from the Scheduled Tasks dashboard.
     }
 
     # Merge shared entries into the fanned-out schedule.

@@ -16,6 +16,7 @@ import {
   Typography,
   Box,
   CircularProgress,
+  LinearProgress,
   IconButton,
   Tooltip,
   Chip,
@@ -107,7 +108,14 @@ function TaskSettingsModal({ open, onClose }) {
           delete updated[taskName];
           queryClient.invalidateQueries({ queryKey: ['scheduledTasks'] });
         } else {
-          updated[taskName] = { taskId, status: status.status };
+          updated[taskName] = {
+            taskId,
+            status: status.status,
+            percent: status.progress ?? null,
+            current: status.current ?? null,
+            total: status.total ?? null,
+            message: status.message || '',
+          };
         }
         return updated;
       });
@@ -222,12 +230,30 @@ function TaskSettingsModal({ open, onClose }) {
                       </TableCell>
                       <TableCell>
                         {running ? (
-                          <Chip
-                            size="small"
-                            color="info"
-                            icon={<CircularProgress size={12} color="inherit" />}
-                            label="Running"
-                          />
+                          <Box sx={{ minWidth: 120 }}>
+                            <Chip
+                              size="small"
+                              color="info"
+                              icon={<CircularProgress size={12} color="inherit" />}
+                              label="Running"
+                              sx={{ mb: 0.5 }}
+                            />
+                            <LinearProgress
+                              variant={
+                                typeof runningTasks[task.name]?.percent === 'number'
+                                  ? 'determinate'
+                                  : 'indeterminate'
+                              }
+                              value={runningTasks[task.name]?.percent ?? undefined}
+                              sx={{ borderRadius: 1, height: 6 }}
+                            />
+                            {(runningTasks[task.name]?.message || typeof runningTasks[task.name]?.current === 'number') && (
+                              <Typography variant="caption" color="text.secondary" noWrap>
+                                {runningTasks[task.name]?.message ||
+                                  `${runningTasks[task.name]?.current ?? 0}/${runningTasks[task.name]?.total ?? '?'}`}
+                              </Typography>
+                            )}
+                          </Box>
                         ) : statusDisplay ? (
                           <Chip
                             size="small"

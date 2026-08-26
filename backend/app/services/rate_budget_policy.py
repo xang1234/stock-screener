@@ -302,10 +302,22 @@ class RateBudgetPolicy:
     # ------------------------------------------------------------------
     # Batch size lookup
     # ------------------------------------------------------------------
-    def get_batch_size(self, provider: str, market: Optional[str]) -> int:
+    @classmethod
+    def get_batch_size(cls, provider: str, market: Optional[str]) -> int:
         """Return the batch size to use for a provider×market combination.
 
         Resolution: per-market env override → built-in default → 50.
+
+        Classmethod (not instance method) because _DEFAULT_BATCH_SIZE is a
+        pure class-level constant -- nothing here needs instance state. One
+        caller (options_analysis_tasks.py) was invoking this unbound on the
+        class itself (RateBudgetPolicy.get_batch_size(...), no instance),
+        which silently shifted every argument over by one slot into `self`
+        and raised "missing 1 required positional argument: 'market'" on
+        every call. Classmethod semantics work identically whether called
+        via the class or an instance, so this fixes that call site without
+        needing it (or the three call sites that already instantiate first)
+        to change at all.
         """
         normalized = normalize_market(market)
         if normalized == SHARED_SENTINEL:
@@ -316,7 +328,7 @@ class RateBudgetPolicy:
         override = getattr(settings, attr, None)
         if override is not None and override > 0:
             return int(override)
-        return self._DEFAULT_BATCH_SIZE.get(provider, {}).get(normalized, 50)
+        return cls._DEFAULT_BATCH_SIZE.get(provider, {}).get(normalized, 50)
 
     # ------------------------------------------------------------------
     # Worker count per provider × market

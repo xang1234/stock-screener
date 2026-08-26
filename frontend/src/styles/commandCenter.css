@@ -1,0 +1,23 @@
+/* Scoped Tailwind stylesheet for the Options Command Center page only.
+ *
+ * Deliberately imports theme + utilities WITHOUT preflight (Tailwind's base
+ * reset) -- preflight rewrites default element styles globally (margins,
+ * headings, buttons, form elements) and would visibly break every existing
+ * MUI page the moment this stylesheet loaded, since MUI ships its own
+ * baseline via CssBaseline. Only OptionsCommandCenterPage imports this file,
+ * so Tailwind utility classes are available there and nowhere else.
+ */
+@import 'tailwindcss/theme.css';
+@import 'tailwindcss/utilities.css';
+
+/* Marquee for the Executive Alert Ticker. Referenced via Tailwind's
+ * arbitrary-value animation syntax (animate-[cc-marquee_...]) rather than a
+ * theme() animation entry, since preflight is intentionally not imported. */
+@keyframes cc-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
