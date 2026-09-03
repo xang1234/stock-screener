@@ -9,6 +9,11 @@ import app.services.key_market_history as key_market_history
 import app.services.snapshot_date_coherence as snapshot_date_coherence
 import pytest
 from app.api.v1.market_scan import _if_none_match_matches
+from app.domain.scanning.leadership_policy import (
+    LEADERS_MAX_GROUP_RANK,
+    LEADERS_MIN_RS_RATING,
+    leadership_order_key,
+)
 from app.schemas.market_scan import DailySnapshotResponse
 from app.services.daily_snapshot_service import (
     DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
@@ -355,6 +360,22 @@ class TestScanFreshness:
         freshness = _scan_freshness(scan)
         assert freshness["scan_as_of_date"] == "2026-06-11"
         assert freshness["scan_published_at"].startswith("2026-06-11T01:00")
+
+
+def test_shared_leadership_policy_keeps_existing_thresholds_and_stable_order() -> None:
+    rows = [
+        {"symbol": "MSFT", "composite_score": 90},
+        {"symbol": "AAPL", "composite_score": 90},
+        {"symbol": "NVDA", "composite_score": 95},
+    ]
+
+    assert LEADERS_MAX_GROUP_RANK == 40
+    assert LEADERS_MIN_RS_RATING == 80
+    assert [row["symbol"] for row in sorted(rows, key=leadership_order_key)] == [
+        "NVDA",
+        "AAPL",
+        "MSFT",
+    ]
 
 
 class TestDailySnapshotDateCoherence:

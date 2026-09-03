@@ -27,6 +27,11 @@ from app.domain.scanning.materialization import (
 )
 from app.domain.scanning.opportunity_state import ActionState
 from app.domain.scanning.opportunity_summary import OpportunityStateSummaryReader
+from app.domain.scanning.leadership_policy import (
+    LEADERS_MAX_GROUP_RANK,
+    LEADERS_MIN_RS_RATING,
+    LEADERS_PRIMARY_SORT_FIELD,
+)
 from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
@@ -47,8 +52,6 @@ DAILY_SNAPSHOT_SCHEMA_VERSION = 4
 DAILY_SNAPSHOT_CACHE_TTL_SECONDS = 600
 DAILY_SNAPSHOT_TOP_RESULTS = 20
 ACTION_STATE_VALUES = tuple(state.value for state in ActionState)
-LEADERS_MAX_GROUP_RANK = 40
-LEADERS_MIN_RS_RATING = 80
 TOP_GROUPS_LIMIT = 10
 DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES = 32
 
@@ -268,7 +271,7 @@ def _query_scan_rows(
         query_spec=QuerySpec.from_filter_spec(
             filters,
             sort=sort
-            or SortSpec(field="composite_score", order=SortOrder.DESC),
+            or SortSpec(field=LEADERS_PRIMARY_SORT_FIELD, order=SortOrder.DESC),
             page=PageSpec(page=1, per_page=per_page),
         ),
         include_sparklines=include_sparklines,
