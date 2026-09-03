@@ -78,8 +78,12 @@ def test_continuity_lasts_five_sessions_and_is_gone_before_sixth() -> None:
         top_candidates=[],
         leaders=[],
         continuity=[
-            CandidateHistoryInput(_input("FIFTH", 80), sessions_since_current=5, prior_best_rank=2),
-            CandidateHistoryInput(_input("SIXTH", 90), sessions_since_current=6, prior_best_rank=1),
+            CandidateHistoryInput(
+                _input("FIFTH", 80), sessions_since_current=5, prior_best_rank=2
+            ),
+            CandidateHistoryInput(
+                _input("SIXTH", 90), sessions_since_current=6, prior_best_rank=1
+            ),
         ],
     )
 
@@ -123,4 +127,3 @@ def test_current_membership_overrides_continuity_and_total_is_bounded() -> None:
     assert sum(row.kind is CandidateKind.CURRENT for row in cohort) == 80
     assert sum(row.kind is CandidateKind.CONTINUITY for row in cohort) == 20
     assert [row for row in cohort if row.symbol == "C000"][0].kind is CandidateKind.CURRENT
-

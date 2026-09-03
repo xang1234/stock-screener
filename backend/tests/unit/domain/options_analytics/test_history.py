@@ -27,7 +27,11 @@ def _observation(session: date, version: str = "v1") -> HistoricalObservation:
 
 def test_five_compatible_observations_in_last_seven_enable_short_history() -> None:
     sessions = _sessions(10)
-    observations = [_observation(session) for session in sessions[-7::] if session != sessions[-3]][:5]
+    observations = [
+        _observation(session)
+        for session in sessions[-7::]
+        if session != sessions[-3]
+    ][:5]
 
     readiness = history_readiness(observations, sessions, calculation_version="v1")
 
