@@ -12,7 +12,7 @@
 
 ## Execution rules
 
-- Work only on branch feat/options-command-center in the isolated worktree.
+- Work only on branch feat/options-command-center-implementation in the isolated worktree.
 - Do not copy, cherry-pick, or adapt code, migrations, fixtures, or file layout from PR #339.
 - Begin each task with the named failing tests. Confirm the failure is for the missing behavior before adding implementation.
 - Tests and CI must never call Yahoo, Redis, Celery workers, or a live server unless the step is explicitly marked as a manual smoke test.

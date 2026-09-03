@@ -88,6 +88,34 @@ _Avoid_: market enabled state
 The first-run hydration workflow that prepares selected Markets with universe, price, fundamentals, breadth, group ranking, feature snapshot, and initial autoscan data.
 _Avoid_: setup, initial load
 
+**Options Analytics Run**:
+A bounded attempt to collect one selected option-chain observation for each member of a pinned US Candidate Cohort, calculate versioned metrics, and evaluate publication quality.
+_Avoid_: options scan, flow scan
+
+**Candidate Cohort**:
+The deterministic union of Current Candidates and Continuity Candidates staged for one Options Analytics Run.
+_Avoid_: options universe, watchlist
+
+**Current Candidate**:
+A security in the pinned published US feature run's independently capped Top Candidates or Leaders, with daily dollar volume strictly above USD 100 million.
+_Avoid_: current leader
+
+**Continuity Candidate**:
+A recently absent former Current Candidate collected for no more than five US trading sessions so ticker history can survive cohort gaps; it is excluded from current rankings and publication coverage.
+_Avoid_: stale candidate, reserve candidate
+
+**Chain Observation**:
+The single successful normalized payload for one security and selected expiration in an Options Analytics Run. Retries do not create additional observations.
+_Avoid_: chain snapshot, raw Yahoo response
+
+**Published Options Run**:
+An Options Analytics Run that passed the Current Candidate coverage gate and was atomically selected for live and static reads.
+_Avoid_: latest options run
+
+**Model Estimate**:
+An options metric whose value depends on documented assumptions rather than an observed market fact, including estimated GEX, gamma flip, and call/put walls.
+_Avoid_: dealer position, market-maker fact
+
 ## Relationships
 
 - A **Market Catalog** describes many **Markets**.
@@ -114,6 +142,11 @@ _Avoid_: setup, initial load
 - A **Scan** runs against exactly one **Universe**; that **Universe** may span multiple **Markets**.
 - **Scan Readiness** is evaluated for a **Scan** and its **Universe**; it is not the same as a Market being enabled.
 - **Bootstrap** creates **Market Workloads** for the primary and enabled **Markets**.
+- One published US feature run supplies the **Current Candidates** for an **Options Analytics Run**.
+- A **Candidate Cohort** contains Current Candidates plus bounded **Continuity Candidates**; only Current Candidates enter current ranking and publication coverage.
+- Each cohort member has at most one successful **Chain Observation** per Options Analytics Run.
+- Only a quality-approved **Published Options Run** is visible to readers; an unsuccessful attempt cannot replace it.
+- Every **Model Estimate** carries its assumptions and must be presented as estimated rather than observed fact.
 
 ## Example Dialogue
 

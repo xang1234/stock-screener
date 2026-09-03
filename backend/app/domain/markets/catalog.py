@@ -26,6 +26,7 @@ class MarketCapabilities:
     feature_snapshot: bool
     official_universe: bool
     finviz_screening: bool
+    options_analytics: bool = False
 
     def __post_init__(self) -> None:
         requested = tuple(str(scope).strip().lower() for scope in self.rrg_scopes)
@@ -318,6 +319,7 @@ MARKET_CATALOG = MarketCatalog(
                 feature_snapshot=True,
                 official_universe=False,
                 finviz_screening=True,
+                options_analytics=True,
             ),
         ),
         _market_entry(
