@@ -540,6 +540,12 @@ schema/calculation-version checked, checksummed, and writes through the same
 Options Analytics repository used by the live application. It is a portability
 mechanism for the relational model, not an alternate calculation or read path.
 
+Imported historical runs preserve their external source-run identity and
+origin, but do not advance the local Published Options Run pointer. Because an
+ephemeral build does not contain the old equity Feature Run rows, only verified
+transfer-origin history may omit the local source-feature-run foreign key;
+ordinary refresh runs always require that foreign key.
+
 If the bundle is missing, corrupt, or incompatible, the workflow starts new
 history: current metrics may still publish, historical metrics report
 `building_history`, and no observations are synthesized. The last-good static
