@@ -525,6 +525,27 @@ Equity `as_of_date` and options observation time are displayed separately. A
 fresh equity export with a retained prior options run displays a prominent
 options-stale banner rather than blocking the entire static site.
 
+### Static workflow continuity
+
+The GitHub Pages workflow uses an ephemeral PostgreSQL service, so its database
+does not survive between daily builds. For the US static build only, the
+workflow restores a compact, versioned options-history transfer bundle before
+running Options Analytics and publishes a replacement bundle only after a new
+Options Run passes the normal publication gate.
+
+The transfer bundle contains compatible published aggregate observations and
+the minimum candidate-membership dates needed to reconstruct continuity. It
+contains no raw Yahoo responses or strike-point history. Import is idempotent,
+schema/calculation-version checked, checksummed, and writes through the same
+Options Analytics repository used by the live application. It is a portability
+mechanism for the relational model, not an alternate calculation or read path.
+
+If the bundle is missing, corrupt, or incompatible, the workflow starts new
+history: current metrics may still publish, historical metrics report
+`building_history`, and no observations are synthesized. The last-good static
+options artifact is selected and validated independently from current Market
+artifacts, so a failed options refresh cannot block fresh equity pages.
+
 ## User experience
 
 The feature is one Options workspace:
@@ -672,6 +693,9 @@ release.
   contract, with separate equity and options timestamps.
 - Static mode performs no provider or live-API requests and can retain a
   last-good options artifact set with an explicit stale state.
+- Ephemeral GitHub Pages builds restore compatible aggregate options history or
+  visibly restart in `building_history`; they never infer continuity from the
+  static Command Center files.
 - Yahoo limitations are visible: GEX-family values are model estimates and no
   output claims net premium flow or trade direction.
 - The implementation adds no new worker family, subprocess batch pipeline,
