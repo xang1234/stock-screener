@@ -17,6 +17,9 @@ from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreReposito
 from app.infra.db.repositories.opportunity_summary_repo import (
     SqlOpportunityStateSummaryRepository,
 )
+from app.infra.db.repositories.options_analytics_repo import (
+    SqlOptionsAnalyticsRepository,
+)
 from app.infra.db.repositories.scan_repo import SqlScanRepository
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.infra.db.repositories.universe_repo import SqlUniverseRepository
@@ -36,6 +39,7 @@ class SqlUnitOfWork(UnitOfWork):
         self.universe = SqlUniverseRepository(self.session)
         self.feature_runs = SqlFeatureRunRepository(self.session)
         self.feature_store = SqlFeatureStoreRepository(self.session)
+        self.options_analytics = SqlOptionsAnalyticsRepository(self.session)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
