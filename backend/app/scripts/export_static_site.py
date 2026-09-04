@@ -1136,6 +1136,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Optional previous-run market artifacts directory used to fill markets missing from --combine-artifacts-dir.",
     )
     parser.add_argument(
+        "--options-artifacts-dir",
+        help="Optional current options directory selected independently in combine mode.",
+    )
+    parser.add_argument(
+        "--fallback-options-artifacts-dir",
+        help="Optional last-good options directory selected independently in combine mode.",
+    )
+    parser.add_argument(
         "--build-mode",
         choices=(STATIC_BUILD_MODE_PRICE_DELTA, STATIC_BUILD_MODE_FULL),
         default=STATIC_BUILD_MODE_PRICE_DELTA,
@@ -1188,6 +1196,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
     if args.fallback_artifacts_dir and not args.combine_artifacts_dir:
         raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
+    if (
+        args.options_artifacts_dir or args.fallback_options_artifacts_dir
+    ) and not args.combine_artifacts_dir:
+        raise SystemExit("options artifact directories require --combine-artifacts-dir")
     if args.rrg_history_dir and not args.market:
         raise SystemExit("--rrg-history-dir requires --market")
     if args.combine_artifacts_dir and args.rrg_history_dir:
@@ -1203,6 +1215,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     refresh_warnings: list[str] = []
     selected_market_non_publishable_snapshot: dict[str, Any] | None = None
     if args.combine_artifacts_dir:
+        options_combine_kwargs: dict[str, Path] = {}
+        if args.options_artifacts_dir:
+            options_combine_kwargs["options_artifacts_dir"] = Path(
+                args.options_artifacts_dir
+            )
+        if args.fallback_options_artifacts_dir:
+            options_combine_kwargs["fallback_options_artifacts_dir"] = Path(
+                args.fallback_options_artifacts_dir
+            )
         result = StaticSiteExportService.combine_market_artifacts(
             Path(args.combine_artifacts_dir),
             Path(args.output_dir),
@@ -1217,6 +1238,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # explicit operator override constrains a fallback publication.
             fallback_rs_formula_version_overrides=args.rs_formula_overrides_json,
             optional_markets=OPTIONAL_STATIC_MARKETS,
+            **options_combine_kwargs,
         )
     else:
         prepare_runtime()

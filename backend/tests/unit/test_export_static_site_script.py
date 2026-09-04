@@ -2814,6 +2814,45 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
     )]
 
 
+def test_main_passes_independent_options_roots_to_combine(monkeypatch, tmp_path):
+    output_dir = tmp_path / "output"
+    artifacts_dir = tmp_path / "markets"
+    options_dir = tmp_path / "options-current"
+    fallback_options_dir = tmp_path / "options-fallback"
+    captured = {}
+
+    def combine(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            output_dir=output_dir,
+            generated_at="2026-09-04T22:00:00Z",
+            as_of_date="2026-09-04",
+            warnings=(),
+            manifest={},
+        )
+
+    monkeypatch.setattr(
+        export_script.StaticSiteExportService,
+        "combine_market_artifacts",
+        combine,
+    )
+
+    assert export_script.main(
+        [
+            "--output-dir",
+            str(output_dir),
+            "--combine-artifacts-dir",
+            str(artifacts_dir),
+            "--options-artifacts-dir",
+            str(options_dir),
+            "--fallback-options-artifacts-dir",
+            str(fallback_options_dir),
+        ]
+    ) == 0
+    assert captured["options_artifacts_dir"] == options_dir
+    assert captured["fallback_options_artifacts_dir"] == fallback_options_dir
+
+
 def test_main_combines_with_independent_per_market_rs_formula_policy(
     monkeypatch,
     tmp_path,
