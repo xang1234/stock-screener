@@ -4,6 +4,8 @@ import StaticHomePage from './pages/StaticHomePage';
 import StaticScanPage from './pages/StaticScanPage';
 import StaticBreadthPage from './pages/StaticBreadthPage';
 import StaticGroupsPage from './pages/StaticGroupsPage';
+import StaticOptionsPage from './pages/StaticOptionsPage';
+import StaticOptionsSymbolPage from './pages/StaticOptionsSymbolPage';
 import { StaticMarketProvider } from './StaticMarketContext';
 import { getStaticSupportedMarkets, useStaticManifest } from './dataClient';
 
@@ -23,6 +25,8 @@ function StaticAppContent() {
           <Route path="/scan" element={<StaticScanPage />} />
           <Route path="/breadth" element={<StaticBreadthPage />} />
           <Route path="/groups" element={<StaticGroupsPage />} />
+          <Route path="/options" element={<StaticOptionsPage />} />
+          <Route path="/options/:symbol" element={<StaticOptionsSymbolPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </StaticLayout>

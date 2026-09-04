@@ -22,6 +22,7 @@ import { ColorModeContext } from '../contexts/ColorModeContext';
 import { useStaticMarket } from './StaticMarketContext';
 import { getStaticSupportedMarkets, resolveStaticMarketEntry, useStaticManifest } from './dataClient';
 import { marketFlag } from '../utils/marketFlags';
+import { isStaticOptionsAvailable } from '../features/options/optionsAvailability';
 
 const NAV_ITEMS = [
   { path: '/', label: 'Daily' },
@@ -38,6 +39,9 @@ function StaticLayout({ children }) {
   const supportedMarkets = getStaticSupportedMarkets(manifestQuery.data);
   const { selectedMarket, setSelectedMarket } = useStaticMarket();
   const marketEntry = resolveStaticMarketEntry(manifestQuery.data, selectedMarket);
+  const navItems = isStaticOptionsAvailable(marketEntry)
+    ? [...NAV_ITEMS, { path: '/options', label: 'Options', matchPrefix: true }]
+    : NAV_ITEMS;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -86,7 +90,9 @@ function StaticLayout({ children }) {
           </Box>
           <Box sx={{ flexGrow: 1 }} />
           <Tabs
-            value={NAV_ITEMS.some((item) => item.path === location.pathname) ? location.pathname : false}
+            value={navItems.find((item) => (
+              item.matchPrefix ? location.pathname.startsWith(item.path) : item.path === location.pathname
+            ))?.path || false}
             variant="scrollable"
             scrollButtons="auto"
             allowScrollButtonsMobile
@@ -94,7 +100,7 @@ function StaticLayout({ children }) {
             TabIndicatorProps={{ sx: { bgcolor: 'common.white' } }}
             sx={{ minHeight: 40, '& .MuiTab-root': { minHeight: 40 } }}
           >
-            {NAV_ITEMS.map((item) => (
+            {navItems.map((item) => (
               <Tab
                 key={item.path}
                 component={RouterLink}
