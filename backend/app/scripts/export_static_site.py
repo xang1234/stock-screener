@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
@@ -41,6 +42,12 @@ from app.services.static_breadth_eligibility import (
 from app.services.static_breadth_history_coordinator import (
     StaticBreadthHistoryCoordinator,
     StaticBreadthHistoryRequest,
+)
+from app.services.static_breadth_contributor_metadata_contract import (
+    build_static_breadth_contributor_metadata_plan,
+)
+from app.services.static_breadth_contributor_metadata_finalizer import (
+    StaticBreadthContributorMetadataFinalizer,
 )
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
@@ -653,6 +660,37 @@ def _static_breadth_ready_for_exposure(result: Any) -> bool:
     return result.get("status") in {"completed", "skipped"}
 
 
+def _finalize_static_breadth_contributor_metadata(
+    *,
+    market: str,
+    directory: Path,
+    source_status: str,
+) -> dict[str, Any]:
+    normalized_status = str(source_status or "").strip().lower()
+    if normalized_status == "failed":
+        raise RuntimeError(
+            f"Static breadth contributor metadata restore failed for {market}; "
+            "the market artifact is unsafe to publish."
+        )
+    plan = build_static_breadth_contributor_metadata_plan(
+        market=market,
+        directory=directory,
+    )
+    with SessionLocal() as db:
+        report = StaticBreadthContributorMetadataFinalizer(db).finalize(
+            market=market,
+            source_path=plan.source_path,
+            output_path=plan.output_path,
+            source_status=normalized_status,
+        )
+    return {
+        "status": "completed",
+        **report.as_dict(),
+        "asset_name": plan.asset_name,
+        "output_path": str(plan.output_path),
+    }
+
+
 def _run_daily_refresh(
     *,
     market: str | None = None,
@@ -662,6 +700,8 @@ def _run_daily_refresh(
     hydrate_published_snapshot: bool = False,
     rs_formula_version: str = BALANCED_RS_FORMULA_VERSION,
     rs_formula_version_by_market: Mapping[str, str] | None = None,
+    breadth_contributor_metadata_dir: Path | None = None,
+    breadth_contributor_metadata_restore_status: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
         _enrich_feature_run_with_ibd_metadata,
@@ -672,6 +712,10 @@ def _run_daily_refresh(
 
     warnings: list[str] = []
 
+    if breadth_contributor_metadata_dir is not None and market is None:
+        raise ValueError(
+            "Breadth contributor metadata finalization requires one selected market."
+        )
     selected_markets = (market,) if market is not None else STATIC_EXPORT_MARKETS
     formula_by_market = {
         selected_market: (
@@ -1080,6 +1124,35 @@ def _run_daily_refresh(
             )
         results["ibd_metadata_refresh"] = ibd_metadata_refresh
 
+        if breadth_contributor_metadata_dir is not None:
+            contributor_metadata: dict[str, Any] = {}
+            for selected_market in selected_markets:
+                if not supports_breadth_by_market[selected_market]:
+                    contributor_metadata[selected_market] = {
+                        "status": "skipped",
+                        "market": selected_market,
+                        "reason": "market_breadth_unsupported",
+                    }
+                    continue
+                snapshot = feature_snapshots.get(selected_market, {})
+                if not _snapshot_publishable(snapshot):
+                    contributor_metadata[selected_market] = {
+                        "status": "skipped",
+                        "market": selected_market,
+                        "reason": "snapshot_not_ready",
+                    }
+                    continue
+                contributor_metadata[selected_market] = (
+                    _finalize_static_breadth_contributor_metadata(
+                        market=selected_market,
+                        directory=breadth_contributor_metadata_dir,
+                        source_status=(
+                            breadth_contributor_metadata_restore_status or ""
+                        ),
+                    )
+                )
+            results["breadth_contributor_metadata"] = contributor_metadata
+
         for snapshot_market, snapshot in feature_snapshots.items():
             if snapshot_market == STATIC_DEFAULT_MARKET:
                 continue
@@ -1198,6 +1271,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Optional directory holding the market's rolling RRG history state.",
     )
     parser.add_argument(
+        "--breadth-contributor-metadata-dir",
+        help=(
+            "Optional directory holding the market's rolling breadth contributor "
+            "metadata state."
+        ),
+    )
+    parser.add_argument(
+        "--breadth-contributor-metadata-restore-status",
+        choices=("restored", "missing", "failed"),
+        default=os.environ.get("BREADTH_CONTRIBUTOR_METADATA_RESTORE_STATUS"),
+        help="Result of restoring the rolling breadth contributor metadata asset.",
+    )
+    parser.add_argument(
         "--rs-formula-version",
         choices=(BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION),
         help="RS formula override for a single --market export.",
@@ -1228,6 +1314,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--rrg-history-dir requires --market")
     if args.combine_artifacts_dir and args.rrg_history_dir:
         raise SystemExit("--rrg-history-dir cannot be used while combining artifacts")
+    if args.breadth_contributor_metadata_dir and not args.market:
+        raise SystemExit("--breadth-contributor-metadata-dir requires --market")
+    if (
+        args.breadth_contributor_metadata_dir
+        and not args.breadth_contributor_metadata_restore_status
+    ):
+        raise SystemExit(
+            "--breadth-contributor-metadata-restore-status is required when "
+            "--breadth-contributor-metadata-dir is used"
+        )
+    if args.breadth_contributor_metadata_dir and not args.refresh_daily:
+        raise SystemExit(
+            "--breadth-contributor-metadata-dir requires --refresh-daily"
+        )
     if args.rs_formula_version and (args.combine_artifacts_dir or not args.market):
         raise SystemExit("--rs-formula-version is limited to single-market exports")
 
@@ -1275,6 +1375,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 build_mode=args.build_mode,
                 hydrate_published_snapshot=args.hydrate_published_snapshot,
                 rs_formula_version_by_market=rs_formula_policy,
+                breadth_contributor_metadata_dir=(
+                    Path(args.breadth_contributor_metadata_dir)
+                    if args.breadth_contributor_metadata_dir
+                    else None
+                ),
+                breadth_contributor_metadata_restore_status=(
+                    args.breadth_contributor_metadata_restore_status
+                ),
             )
             refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")

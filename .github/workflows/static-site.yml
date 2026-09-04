@@ -127,6 +127,12 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "Options Analytics History" \
             --notes "Checksummed aggregate-only US options history for ephemeral static builds."
+          gh release view breadth-contributor-metadata-data \
+            --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+          gh release create breadth-contributor-metadata-data \
+            --repo "${{ github.repository }}" \
+            --title "Breadth Contributor Metadata Data" \
+            --notes "Rolling frozen company and IBD-group metadata for static breadth contributor drilldowns."
 
   build-market:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
@@ -270,14 +276,70 @@ jobs:
             echo "Unable to restore rolling RRG history for ${{ matrix.market }}; history publication will be skipped." >&2
           fi
 
+      - name: Plan breadth contributor metadata
+        id: breadth-contributor-metadata
+        run: |
+          mkdir -p /tmp/breadth-contributor-metadata
+          cd backend
+          PLAN="$(python -m app.scripts.describe_static_breadth_contributor_metadata \
+            --market "${{ matrix.market }}" \
+            --directory /tmp/breadth-contributor-metadata)"
+          echo "enabled=$(jq -r '.enabled' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$(jq -r '.asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "previous_asset_name=$(jq -r '.previous_asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "source_path=$(jq -r '.source_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "previous_path=$(jq -r '.previous_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "output_path=$(jq -r '.output_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore breadth contributor metadata
+        id: restore-breadth-contributor-metadata
+        if: ${{ steps.breadth-contributor-metadata.outputs.enabled == 'true' }}
+        env:
+          GITHUB_DATA_TOKEN: ${{ github.token }}
+          ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.asset_name }}
+          PREVIOUS_ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.previous_asset_name }}
+          SOURCE_PATH: ${{ steps.breadth-contributor-metadata.outputs.source_path }}
+        run: |
+          rm -f "$SOURCE_PATH"
+          cd backend
+          RESTORE_RESULT="$(python -m app.scripts.restore_static_breadth_contributor_metadata \
+            --repository "${{ github.repository }}" \
+            --market "${{ matrix.market }}" \
+            --asset-name "$ASSET_NAME" \
+            --previous-asset-name "$PREVIOUS_ASSET_NAME" \
+            --output-path "$SOURCE_PATH" || true)"
+          SAFE_TO_PUBLISH="$(jq -r '.safe_to_publish // false' <<<"$RESTORE_RESULT" 2>/dev/null || echo false)"
+          RESTORE_STATUS="$(jq -r '.status // "failed"' <<<"$RESTORE_RESULT" 2>/dev/null || echo failed)"
+          SOURCE_ASSET_NAME="$(jq -r '.source_asset_name // ""' <<<"$RESTORE_RESULT" 2>/dev/null || echo '')"
+          [ "$SAFE_TO_PUBLISH" = "true" ] || SAFE_TO_PUBLISH=false
+          echo "safe_to_publish=$SAFE_TO_PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "restore_status=$RESTORE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "source_asset_name=$SOURCE_ASSET_NAME" >> "$GITHUB_OUTPUT"
+          if [ "$RESTORE_STATUS" = "restored" ]; then
+            echo "Restored breadth contributor metadata for ${{ matrix.market }}."
+          elif [ "$RESTORE_STATUS" = "missing" ]; then
+            echo "No breadth contributor metadata found for ${{ matrix.market }}; the finalizer will bootstrap the newest 20 sessions."
+          else
+            echo "Unable to restore breadth contributor metadata for ${{ matrix.market }}; the market artifact will not be published." >&2
+          fi
+
       - name: Export market static data bundle
         id: export-market
         env:
           RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
           RRG_HISTORY_ENABLED: ${{ steps.rrg-history.outputs.enabled }}
           RRG_RESTORE_STATUS: ${{ steps.restore-rrg-history.outputs.restore_status }}
+          BREADTH_METADATA_ENABLED: ${{ steps.breadth-contributor-metadata.outputs.enabled }}
+          BREADTH_METADATA_RESTORE_STATUS: ${{ steps.restore-breadth-contributor-metadata.outputs.restore_status }}
         run: |
           cd backend
+          breadth_metadata_args=()
+          if [ "$BREADTH_METADATA_ENABLED" = "true" ]; then
+            breadth_metadata_args=(
+              --breadth-contributor-metadata-dir /tmp/breadth-contributor-metadata
+              --breadth-contributor-metadata-restore-status "$BREADTH_METADATA_RESTORE_STATUS"
+            )
+          fi
           set +e
           EXPORT_LOG="$(mktemp)"
           python -m app.scripts.export_static_market_artifact \
@@ -288,7 +350,8 @@ jobs:
             --skip-fundamentals-refresh \
             --market "${{ matrix.market }}" \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES" \
-            --rrg-history-dir "$RRG_HISTORY_DIR" 2>&1 | tee "$EXPORT_LOG"
+            --rrg-history-dir "$RRG_HISTORY_DIR" \
+            "${breadth_metadata_args[@]}" 2>&1 | tee "$EXPORT_LOG"
           pipeline_status=("${PIPESTATUS[@]}")
           status="${pipeline_status[0]}"
           log_status="${pipeline_status[1]}"
@@ -411,8 +474,57 @@ jobs:
           gh release upload daily-price-data "$BUNDLE_PATH" --clobber
           gh release upload daily-price-data "$MANIFEST_PATH" --clobber
 
+      - name: Publish breadth contributor metadata
+        id: publish-breadth-contributor-metadata
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.breadth-contributor-metadata.outputs.enabled == 'true' && steps.restore-breadth-contributor-metadata.outputs.safe_to_publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.asset_name }}
+          PREVIOUS_ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.previous_asset_name }}
+          SOURCE_PATH: ${{ steps.breadth-contributor-metadata.outputs.source_path }}
+          PREVIOUS_PATH: ${{ steps.breadth-contributor-metadata.outputs.previous_path }}
+          METADATA_PATH: ${{ steps.breadth-contributor-metadata.outputs.output_path }}
+          RESTORE_STATUS: ${{ steps.restore-breadth-contributor-metadata.outputs.restore_status }}
+          SOURCE_ASSET_NAME: ${{ steps.restore-breadth-contributor-metadata.outputs.source_asset_name }}
+        run: |
+          if [ ! -s "$METADATA_PATH" ]; then
+            echo "No current breadth contributor metadata state was produced; the market artifact will use its last-good fallback."
+            echo "metadata_state_published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$RESTORE_STATUS" = "restored" ] && [ "$SOURCE_ASSET_NAME" = "$ASSET_NAME" ]; then
+            cp "$SOURCE_PATH" "$PREVIOUS_PATH"
+            previous_published=false
+            for attempt in 1 2 3; do
+              if gh release upload breadth-contributor-metadata-data "$PREVIOUS_PATH" --clobber; then
+                previous_published=true
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            if [ "$previous_published" != "true" ]; then
+              echo "Unable to preserve the last-good breadth contributor metadata; canonical replacement was not attempted." >&2
+              echo "metadata_state_published=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          for attempt in 1 2 3; do
+            if gh release upload breadth-contributor-metadata-data "$METADATA_PATH" --clobber; then
+              echo "metadata_state_published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "Unable to publish breadth contributor metadata; the market artifact will use its last-good fallback." >&2
+          echo "metadata_state_published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+
       - name: Upload market artifact
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && (steps.breadth-contributor-metadata.outputs.enabled != 'true' || steps.publish-breadth-contributor-metadata.outputs.metadata_state_published == 'true') }}
         uses: actions/upload-artifact@v4
         with:
           name: static-market-${{ matrix.market }}
@@ -451,7 +563,7 @@ jobs:
           exit 1
 
       - name: Publish rolling RRG history
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.export-market.outputs.rrg_history_publishable == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.safe_to_publish == 'true' }}
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && (steps.breadth-contributor-metadata.outputs.enabled != 'true' || steps.publish-breadth-contributor-metadata.outputs.metadata_state_published == 'true') && steps.export-market.outputs.rrg_history_publishable == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.safe_to_publish == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

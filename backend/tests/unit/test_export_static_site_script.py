@@ -2306,7 +2306,10 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
     }
 
 
-def test_run_daily_refresh_builds_snapshot_before_group_rank_backfill_and_reenriches(monkeypatch):
+def test_run_daily_refresh_builds_snapshot_before_group_rank_backfill_and_reenriches(
+    monkeypatch,
+    tmp_path,
+):
     """``build_daily_snapshot`` hydrates broad historical prices in static CI.
     The group-rank history backfill must run after that hydration step, then
     re-run metadata enrichment so static export reads up-to-date
@@ -2368,9 +2371,20 @@ def test_run_daily_refresh_builds_snapshot_before_group_rank_backfill_and_reenri
         lambda db, csv_path=None: 10105,
     )
     monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        export_script,
+        "_finalize_static_breadth_contributor_metadata",
+        lambda **kwargs: events.append(f"finalize:{kwargs['market']}")
+        or {"status": "completed", "market": kwargs["market"]},
+        raising=False,
+    )
     _stub_static_market_exposure(monkeypatch)
 
-    results, warnings = export_script._run_daily_refresh(market="US")  # noqa: SLF001 - intentional unit test coverage
+    results, warnings = export_script._run_daily_refresh(  # noqa: SLF001
+        market="US",
+        breadth_contributor_metadata_dir=tmp_path,
+        breadth_contributor_metadata_restore_status="missing",
+    )
 
     assert warnings == []
     # Order matters: the group-rank backfill needs the historical prices
@@ -2382,6 +2396,7 @@ def test_run_daily_refresh_builds_snapshot_before_group_rank_backfill_and_reenri
         "feature_snapshot",
         "group_rank:US",
         "enrich:77",
+        "finalize:US",
     ]
     assert group_rank_calls == [{
         "as_of_date": date(2026, 4, 2),
@@ -2393,6 +2408,10 @@ def test_run_daily_refresh_builds_snapshot_before_group_rank_backfill_and_reenri
         "run_id": 77,
         "updated_rows": 3,
         "missing_rank_rows": 0,
+    }
+    assert results["breadth_contributor_metadata"]["US"] == {
+        "status": "completed",
+        "market": "US",
     }
 
 
@@ -2750,6 +2769,31 @@ def test_main_rejects_fallback_artifacts_without_combine_mode(monkeypatch, tmp_p
         export_script.main()
 
     assert combine_calls == []
+
+
+def test_main_requires_single_market_and_restore_status_for_breadth_metadata(tmp_path):
+    metadata_dir = tmp_path / "metadata"
+
+    with pytest.raises(
+        SystemExit,
+        match="--breadth-contributor-metadata-dir requires --market",
+    ):
+        export_script.main(
+            ["--breadth-contributor-metadata-dir", str(metadata_dir)]
+        )
+
+    with pytest.raises(
+        SystemExit,
+        match="--breadth-contributor-metadata-restore-status is required",
+    ):
+        export_script.main(
+            [
+                "--market",
+                "US",
+                "--breadth-contributor-metadata-dir",
+                str(metadata_dir),
+            ]
+        )
 
 
 def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):

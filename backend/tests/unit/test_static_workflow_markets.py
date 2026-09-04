@@ -6,11 +6,22 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 from app.domain.markets import market_registry
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _static_build_market_steps() -> list[dict]:
+    payload = yaml.safe_load(
+        (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    return payload["jobs"]["build-market"]["steps"]
 
 
 def _weekly_reference_matrix_markets(path: str) -> list[str]:
@@ -147,6 +158,67 @@ def test_static_workflow_does_not_replace_rrg_history_after_restore_failure():
     upload_artifact = content.index("- name: Upload market artifact", artifact_success)
     assert failure_guard < artifact_success < upload_artifact
     assert "outputs.restore_status != 'failed'" not in content
+
+
+def test_static_workflow_publishes_breadth_metadata_before_market_artifact():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
+    steps = _static_build_market_steps()
+    step_by_name = {step.get("name"): step for step in steps if step.get("name")}
+    names = [step.get("name") for step in steps]
+
+    assert "breadth-contributor-metadata-data" in content
+    assert names.index("Plan breadth contributor metadata") < names.index(
+        "Restore breadth contributor metadata"
+    )
+    assert names.index("Restore breadth contributor metadata") < names.index(
+        "Export market static data bundle"
+    )
+    assert names.index("Export market static data bundle") < names.index(
+        "Publish breadth contributor metadata"
+    )
+    assert names.index("Publish breadth contributor metadata") < names.index(
+        "Upload market artifact"
+    )
+
+    export_run = step_by_name["Export market static data bundle"]["run"]
+    assert "--breadth-contributor-metadata-dir" in export_run
+    assert "--breadth-contributor-metadata-restore-status" in export_run
+
+    breadth_plan_run = step_by_name["Plan breadth contributor metadata"]["run"]
+    rrg_plan_run = step_by_name["Plan rolling RRG history"]["run"]
+    assert "previous_asset_name=$(jq" in breadth_plan_run
+    assert "previous_path=$(jq" in breadth_plan_run
+    assert "previous_asset_name=$(jq" not in rrg_plan_run
+    assert "previous_path=$(jq" not in rrg_plan_run
+
+    publish = step_by_name["Publish breadth contributor metadata"]
+    assert publish["id"] == "publish-breadth-contributor-metadata"
+    assert "for attempt in 1 2 3" in publish["run"]
+    assert "metadata_state_published=false" in publish["run"]
+    assert "PREVIOUS_ASSET_NAME" in publish["env"]
+    assert publish["run"].index("$PREVIOUS_PATH\" --clobber") < publish[
+        "run"
+    ].index("$METADATA_PATH\" --clobber")
+
+    upload_condition = step_by_name["Upload market artifact"]["if"]
+    assert "publish-breadth-contributor-metadata.outputs.metadata_state_published" in upload_condition
+    assert "breadth-contributor-metadata.outputs.enabled" in upload_condition
+
+
+def test_static_workflow_never_advances_breadth_metadata_after_unsafe_restore():
+    steps = _static_build_market_steps()
+    step_by_name = {step.get("name"): step for step in steps if step.get("name")}
+
+    restore = step_by_name["Restore breadth contributor metadata"]
+    assert "safe_to_publish" in restore["run"]
+    assert 'RESTORE_STATUS="$(jq -r' in restore["run"]
+    assert "--previous-asset-name" in restore["run"]
+    assert "--market" in restore["run"]
+
+    publish_condition = step_by_name["Publish breadth contributor metadata"]["if"]
+    assert "restore-breadth-contributor-metadata.outputs.safe_to_publish == 'true'" in publish_condition
 
 
 def test_static_workflow_supports_independent_per_market_rs_rollback():
