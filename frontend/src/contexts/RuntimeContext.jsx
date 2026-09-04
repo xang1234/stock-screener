@@ -149,7 +149,6 @@ export const DEFAULT_BOOTSTRAP_STAGES = [
   { key: 'breadth', label: 'Breadth Calculation' },
   { key: 'groups', label: 'Group Rankings' },
   { key: 'scan', label: 'Scan' },
-  { key: 'options', label: 'Options Analytics' },
 ];
 
 export const DEFAULT_CAPABILITIES = {

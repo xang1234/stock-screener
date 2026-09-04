@@ -393,8 +393,8 @@ class SqlOptionsAnalyticsRepository:
                 == ObservationState.AVAILABLE.value,
             )
             .order_by(
-                OptionsAnalyticsRun.as_of_date.desc(),
-                OptionsAnalyticsRun.id.desc(),
+                OptionsAnalyticsRun.as_of_date.asc(),
+                OptionsAnalyticsRun.id.asc(),
             )
             .all()
         )

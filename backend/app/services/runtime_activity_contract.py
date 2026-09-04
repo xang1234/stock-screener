@@ -40,7 +40,6 @@ RUNTIME_STAGE_SEQUENCE = (
     "breadth",
     "groups",
     "scan",
-    "options",
 )
 
 STAGE_LABELS = {

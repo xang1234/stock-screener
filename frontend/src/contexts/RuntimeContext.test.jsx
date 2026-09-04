@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_CAPABILITIES,
-  DEFAULT_BOOTSTRAP_STAGES,
   RuntimeProvider,
   mergeBootstrapCapabilities,
   useRuntime,
@@ -321,10 +320,6 @@ describe('RuntimeProvider', () => {
 describe('fallback capabilities', () => {
   it('keeps options analytics disabled until the backend opts in', () => {
     expect(DEFAULT_CAPABILITIES.features.options_analytics).toBe(false);
-    expect(DEFAULT_BOOTSTRAP_STAGES).toContainEqual({
-      key: 'options',
-      label: 'Options Analytics',
-    });
   });
 });
 
