@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import shutil
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +12,7 @@ from app.schemas.options_analytics import (
     OptionsCommandCenterResponse,
     OptionsSymbolDetailResponse,
 )
+from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
 from app.services.static_options_contract import (
     STATIC_OPTIONS_SCHEMA_VERSION,
     validate_static_options_artifact,
@@ -39,8 +38,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 class StaticOptionsExporter:
-    def __init__(self, queries: Any) -> None:
+    def __init__(
+        self,
+        queries: Any,
+        *,
+        publisher: AtomicDirectoryPublisher | None = None,
+    ) -> None:
         self._queries = queries
+        self._publisher = publisher or AtomicDirectoryPublisher()
 
     def export(self, options_dir: Path, *, generated_at: str) -> dict[str, Any]:
         destination = Path(options_dir)
@@ -52,15 +57,7 @@ class StaticOptionsExporter:
         stale = self._queries.is_stale(run, "US")
         command = OptionsCommandCenterResponse.from_run(run, stale=stale)
 
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        stage = Path(
-            tempfile.mkdtemp(prefix=".options-stage-", dir=str(destination.parent))
-        )
-        backup = Path(
-            tempfile.mkdtemp(prefix=".options-backup-", dir=str(destination.parent))
-        )
-        backup.rmdir()
-        try:
+        def populate(stage: Path) -> dict[str, Any]:
             symbol_map: dict[str, dict[str, str]] = {}
             for item in command.items:
                 result = self._queries.get_published_symbol_detail(item.symbol, "US")
@@ -97,24 +94,13 @@ class StaticOptionsExporter:
                 "symbols": symbol_map,
             }
             _write_json(stage / "manifest.json", manifest)
-            validate_static_options_artifact(stage)
-
-            if destination.exists():
-                destination.rename(backup)
-            try:
-                stage.rename(destination)
-            except Exception:
-                if backup.exists() and not destination.exists():
-                    backup.rename(destination)
-                raise
-            if backup.exists():
-                shutil.rmtree(backup)
             return manifest
-        finally:
-            if stage.exists():
-                shutil.rmtree(stage)
-            if backup.exists():
-                shutil.rmtree(backup)
+
+        return self._publisher.publish(
+            destination,
+            populate,
+            validate=validate_static_options_artifact,
+        )
 
 
 __all__ = ["StaticOptionsExporter", "StaticOptionsUnavailable", "url_safe_symbol_key"]

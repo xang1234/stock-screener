@@ -9,7 +9,7 @@ import pytest
 from app.services.static_options_artifact_selector import StaticOptionsArtifactSelector
 from app.services.static_options_contract import validate_static_options_artifact
 from app.services.static_options_exporter import StaticOptionsExporter
-from app.services.static_site_export_service import StaticSiteExportService
+from app.services.static_options_section import StaticOptionsSection
 
 METRICS = (
     "max_pain",
@@ -215,9 +215,11 @@ def test_exporter_does_not_delete_an_unrelated_fixed_name_sibling(tmp_path):
 
 def test_static_site_composition_advertises_options_only_after_selection(tmp_path):
     run = _run(_item("AAPL"))
-    service = StaticSiteExportService.__new__(StaticSiteExportService)
-    service._options_exporter_factory = lambda _db: StaticOptionsExporter(_Queries(run))
-    service._options_artifact_selector = StaticOptionsArtifactSelector()
+    section = StaticOptionsSection(
+        enabled=True,
+        exporter_factory=lambda _db: StaticOptionsExporter(_Queries(run)),
+        selector=StaticOptionsArtifactSelector(),
+    )
     entry = {
         "feature_run_id": 33,
         "as_of_date": "2026-09-04",
@@ -225,18 +227,16 @@ def test_static_site_composition_advertises_options_only_after_selection(tmp_pat
         "pages": {},
         "assets": {},
     }
-    warnings = []
-
-    service._compose_options_artifact(
+    result = section.compose_live(
         db=SimpleNamespace(),
         output_dir=tmp_path,
         generated_at="2026-09-04T22:00:00Z",
-        us_entry=entry,
+        equity_entry=entry,
         fallback_options_dir=None,
-        warnings=warnings,
     )
 
-    assert warnings == []
+    assert result.warnings == ()
+    assert result.selected is True
     assert entry["features"]["options"] is True
     assert entry["pages"]["options"] == {"path": "options/manifest.json"}
     assert (

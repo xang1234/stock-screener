@@ -25,7 +25,7 @@ def _write_fake_gh(fake_gh: Path, payload: str) -> None:
     payload_path.write_text(textwrap.dedent(payload), encoding="utf-8")
     fake_gh.write_text(
         "#!/bin/sh\n"
-        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(payload_path))} \"$@\"\n",
+        f'exec {shlex.quote(sys.executable)} {shlex.quote(str(payload_path))} "$@"\n',
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -60,19 +60,24 @@ def _combine_and_build_job() -> str:
 
 
 def _fallback_download_step() -> str:
-    return _combine_and_build_job().split("      - name: Download per-market fallback artifacts\n", 1)[1].split(
-        "\n      - name: Validate market artifacts",
-        1,
-    )[0]
+    return (
+        _combine_and_build_job()
+        .split("      - name: Download per-market fallback artifacts\n", 1)[1]
+        .split(
+            "\n      - name: Validate market artifacts",
+            1,
+        )[0]
+    )
 
 
-def test_fake_gh_launcher_handles_python_path_with_spaces(tmp_path, monkeypatch) -> None:
+def test_fake_gh_launcher_handles_python_path_with_spaces(
+    tmp_path, monkeypatch
+) -> None:
     real_python = sys.executable
     interpreter = tmp_path / "interpreter dir" / "python"
     interpreter.parent.mkdir()
     interpreter.write_text(
-        "#!/bin/sh\n"
-        f"exec {shlex.quote(real_python)} \"$@\"\n",
+        f'#!/bin/sh\nexec {shlex.quote(real_python)} "$@"\n',
         encoding="utf-8",
     )
     interpreter.chmod(0o755)
@@ -101,7 +106,9 @@ def test_fake_gh_launcher_handles_python_path_with_spaces(tmp_path, monkeypatch)
 
 def test_static_site_market_build_failures_are_not_marked_continue_on_error() -> None:
     build_market_job = _build_market_job()
-    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+    export_step = build_market_job.split(
+        "      - name: Export market static data bundle\n", 1
+    )[1].split(
         "\n      - name: Upload market status",
         1,
     )[0]
@@ -111,7 +118,9 @@ def test_static_site_market_build_failures_are_not_marked_continue_on_error() ->
 
 def test_static_site_daily_price_seed_allows_stale_bootstrap() -> None:
     build_market_job = _build_market_job()
-    seed_step = build_market_job.split("      - name: Seed daily price bundle from GitHub\n", 1)[1].split(
+    seed_step = build_market_job.split(
+        "      - name: Seed daily price bundle from GitHub\n", 1
+    )[1].split(
         "\n      - name: Export market static data bundle",
         1,
     )[0]
@@ -121,19 +130,27 @@ def test_static_site_daily_price_seed_allows_stale_bootstrap() -> None:
 
 def test_static_site_market_export_preserves_price_bundle_after_soft_skip() -> None:
     build_market_job = _build_market_job()
-    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+    export_step = build_market_job.split(
+        "      - name: Export market static data bundle\n", 1
+    )[1].split(
         "\n      - name: Build daily price bundle",
         1,
     )[0]
-    build_price_step = build_market_job.split("      - name: Build daily price bundle\n", 1)[1].split(
+    build_price_step = build_market_job.split(
+        "      - name: Build daily price bundle\n", 1
+    )[1].split(
         "\n      - name: Upload daily price assets",
         1,
     )[0]
-    upload_price_step = build_market_job.split("      - name: Upload daily price assets\n", 1)[1].split(
+    upload_price_step = build_market_job.split(
+        "      - name: Upload daily price assets\n", 1
+    )[1].split(
         "\n      - name: Upload market artifact",
         1,
     )[0]
-    upload_market_step = build_market_job.split("      - name: Upload market artifact\n", 1)[1].split(
+    upload_market_step = build_market_job.split(
+        "      - name: Upload market artifact\n", 1
+    )[1].split(
         "\n\n  combine-and-build:",
         1,
     )[0]
@@ -152,7 +169,9 @@ def test_static_site_market_export_preserves_price_bundle_after_soft_skip() -> N
 
 def test_static_site_market_export_soft_skips_no_current_artifact_exit_code() -> None:
     build_market_job = _build_market_job()
-    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+    export_step = build_market_job.split(
+        "      - name: Export market static data bundle\n", 1
+    )[1].split(
         "\n      - name: Upload market status",
         1,
     )[0]
@@ -163,9 +182,13 @@ def test_static_site_market_export_soft_skips_no_current_artifact_exit_code() ->
     assert "no current market artifact will be uploaded" in export_step
 
 
-def test_static_site_market_export_uses_status_price_bundle_signal_for_soft_skip() -> None:
+def test_static_site_market_export_uses_status_price_bundle_signal_for_soft_skip() -> (
+    None
+):
     build_market_job = _build_market_job()
-    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+    export_step = build_market_job.split(
+        "      - name: Export market static data bundle\n", 1
+    )[1].split(
         "\n      - name: Upload market status",
         1,
     )[0]
@@ -174,19 +197,29 @@ def test_static_site_market_export_uses_status_price_bundle_signal_for_soft_skip
         1,
     )[0]
 
-    assert 'STATUS_PATH="/tmp/static-data/status/${MARKET_LOWER}/status.json"' in export_step
+    assert (
+        'STATUS_PATH="/tmp/static-data/status/${MARKET_LOWER}/status.json"'
+        in export_step
+    )
     assert ".has_price_bundle // false" in soft_skip_branch
-    assert 'echo "has_price_bundle=$has_price_bundle" >> "$GITHUB_OUTPUT"' in soft_skip_branch
+    assert (
+        'echo "has_price_bundle=$has_price_bundle" >> "$GITHUB_OUTPUT"'
+        in soft_skip_branch
+    )
     assert 'echo "has_price_bundle=true" >> "$GITHUB_OUTPUT"' not in soft_skip_branch
 
 
 def test_static_site_uploads_canonical_market_status_after_export() -> None:
     build_market_job = _build_market_job()
-    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+    export_step = build_market_job.split(
+        "      - name: Export market static data bundle\n", 1
+    )[1].split(
         "\n      - name: Upload market status",
         1,
     )[0]
-    status_step = build_market_job.split("      - name: Upload market status\n", 1)[1].split(
+    status_step = build_market_job.split("      - name: Upload market status\n", 1)[
+        1
+    ].split(
         "\n      - name: Upload market diagnostics",
         1,
     )[0]
@@ -198,13 +231,18 @@ def test_static_site_uploads_canonical_market_status_after_export() -> None:
     assert "if: ${{ always() }}" in status_step
     assert "uses: actions/upload-artifact@v4" in status_step
     assert "name: static-market-status-${{ matrix.market }}" in status_step
-    assert "path: /tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json" in status_step
+    assert (
+        "path: /tmp/static-data/status/${{ env.MARKET_LOWER }}/status.json"
+        in status_step
+    )
     assert "if-no-files-found: error" in status_step
 
 
 def test_static_site_uploads_market_diagnostics_after_export() -> None:
     build_market_job = _build_market_job()
-    diagnostics_step = build_market_job.split("      - name: Upload market diagnostics\n", 1)[1].split(
+    diagnostics_step = build_market_job.split(
+        "      - name: Upload market diagnostics\n", 1
+    )[1].split(
         "\n      - name: Build daily price bundle",
         1,
     )[0]
@@ -212,17 +250,23 @@ def test_static_site_uploads_market_diagnostics_after_export() -> None:
     assert "if: ${{ always() }}" in diagnostics_step
     assert "uses: actions/upload-artifact@v4" in diagnostics_step
     assert "name: static-market-diagnostics-${{ matrix.market }}" in diagnostics_step
-    assert "path: /tmp/static-data/diagnostics/${{ env.MARKET_LOWER }}" in diagnostics_step
+    assert (
+        "path: /tmp/static-data/diagnostics/${{ env.MARKET_LOWER }}" in diagnostics_step
+    )
     assert "if-no-files-found: ignore" in diagnostics_step
 
 
 def test_static_site_rrg_history_publish_skips_rewound_market_exports() -> None:
     build_market_job = _build_market_job()
-    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+    export_step = build_market_job.split(
+        "      - name: Export market static data bundle\n", 1
+    )[1].split(
         "\n      - name: Upload market status",
         1,
     )[0]
-    publish_rrg_step = build_market_job.split("      - name: Publish rolling RRG history\n", 1)[1].split(
+    publish_rrg_step = build_market_job.split(
+        "      - name: Publish rolling RRG history\n", 1
+    )[1].split(
         "\n\n  combine-and-build:",
         1,
     )[0]
@@ -237,16 +281,23 @@ def test_static_site_rrg_history_publish_skips_rewound_market_exports() -> None:
     assert "using benchmark-backed as-of date" in export_step
     assert "rrg_history_publishable=false" in export_step
     assert "rrg_history_publishable=true" in export_step
-    assert "steps.export-market.outputs.rrg_history_publishable == 'true'" in publish_rrg_step
+    assert (
+        "steps.export-market.outputs.rrg_history_publishable == 'true'"
+        in publish_rrg_step
+    )
 
 
 def test_static_site_daily_price_build_requires_current_session_coverage() -> None:
     build_market_job = _build_market_job()
-    build_price_step = build_market_job.split("      - name: Build daily price bundle\n", 1)[1].split(
+    build_price_step = build_market_job.split(
+        "      - name: Build daily price bundle\n", 1
+    )[1].split(
         "\n      - name: Upload daily price assets",
         1,
     )[0]
-    upload_price_step = build_market_job.split("      - name: Upload daily price assets\n", 1)[1].split(
+    upload_price_step = build_market_job.split(
+        "      - name: Upload daily price assets\n", 1
+    )[1].split(
         "\n      - name: Upload market artifact",
         1,
     )[0]
@@ -263,10 +314,15 @@ def test_static_site_daily_price_build_requires_current_session_coverage() -> No
     assert "price_bundle_ready=false" in build_price_step
     assert "price_bundle_ready=true" in build_price_step
     assert 'exit "$status"' in build_price_step
-    assert "steps.build-daily-price-bundle.outputs.price_bundle_ready == 'true'" in upload_price_step
+    assert (
+        "steps.build-daily-price-bundle.outputs.price_bundle_ready == 'true'"
+        in upload_price_step
+    )
 
 
-def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:
+def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> (
+    None
+):
     combine_job = _combine_and_build_job()
     fallback_step = _fallback_download_step()
 
@@ -276,7 +332,9 @@ def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts
     assert "Download current market artifacts" in combine_job
     assert "/tmp/static-market-artifacts-current" in combine_job
     assert "/tmp/static-market-artifacts-fallback" in combine_job
-    assert "--fallback-artifacts-dir /tmp/static-market-artifacts-fallback" in combine_job
+    assert (
+        "--fallback-artifacts-dir /tmp/static-market-artifacts-fallback" in combine_job
+    )
     assert "FALLBACK_MARKETS" not in combine_job
     assert "github.ref_name" in combine_job
     assert "python -m app.scripts.download_static_market_fallbacks" in fallback_step
@@ -302,14 +360,15 @@ def test_static_site_preserves_and_publishes_us_options_history() -> None:
     assert "--fallback-options-dir /tmp/static-options-fallback" in combine_job
     assert "--options-artifacts-dir /tmp/static-options-current" in combine_job
     assert (
-        "--fallback-options-artifacts-dir /tmp/static-options-fallback"
-        in combine_job
+        "--fallback-options-artifacts-dir /tmp/static-options-fallback" in combine_job
     )
 
 
 def test_static_site_validation_uses_python_module_not_inline_control_plane() -> None:
     combine_job = _combine_and_build_job()
-    validation_step = combine_job.split("      - name: Validate market artifacts\n", 1)[1].split(
+    validation_step = combine_job.split("      - name: Validate market artifacts\n", 1)[
+        1
+    ].split(
         "\n      - name: Combine static data bundle",
         1,
     )[0]
@@ -353,7 +412,11 @@ def test_static_site_fallback_candidate_install_restores_incumbent_on_failure(
     original_rename = Path.rename
 
     def flaky_rename(self, target):
-        if self == candidate_dir and Path(target) == target_dir:
+        if (
+            self.parent == target_dir.parent
+            and self.name.startswith(f".{target_dir.name}.stage-")
+            and Path(target) == target_dir
+        ):
             raise OSError("install failed")
         return original_rename(self, target)
 
@@ -382,7 +445,9 @@ def test_static_site_fallback_run_bound_allows_next_day_session_dates() -> None:
     )
 
 
-def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_market(tmp_path) -> None:
+def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_market(
+    tmp_path,
+) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
     current_us_dir = current_dir / "static-market-US" / "markets" / "us"
@@ -504,7 +569,9 @@ def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_mark
     assert "exit 7. Details: stderr: download denied for HK" in result.stdout
 
 
-def test_static_site_fallback_downloader_keeps_formula_compatible_candidate(tmp_path) -> None:
+def test_static_site_fallback_downloader_keeps_formula_compatible_candidate(
+    tmp_path,
+) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
 
@@ -601,14 +668,20 @@ def test_static_site_fallback_downloader_keeps_formula_compatible_candidate(tmp_
         {"run": "222", "artifact": "static-market-US"},
     ]
     manifest = json.loads(
-        (fallback_dir / "static-market-US" / "markets" / "us" / "manifest.market.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            fallback_dir
+            / "static-market-US"
+            / "markets"
+            / "us"
+            / "manifest.market.json"
+        ).read_text(encoding="utf-8")
     )
     assert manifest["entry"]["rs_formula_version"] == "legacy-linear-v1"
 
 
-def test_static_site_fallback_downloader_skips_damaged_advertised_assets(tmp_path) -> None:
+def test_static_site_fallback_downloader_skips_damaged_advertised_assets(
+    tmp_path,
+) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
     current_us_dir = current_dir / "static-market-US" / "markets" / "us"
@@ -684,7 +757,9 @@ def test_static_site_fallback_downloader_skips_damaged_advertised_assets(tmp_pat
     assert "advertises GROUPS but groups.json is absent" in result.stdout
 
 
-def test_static_site_fallback_downloader_skips_incompatible_schema_and_keeps_searching(tmp_path) -> None:
+def test_static_site_fallback_downloader_skips_incompatible_schema_and_keeps_searching(
+    tmp_path,
+) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
 

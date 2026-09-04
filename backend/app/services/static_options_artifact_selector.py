@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import shutil
-import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from app.infra.serialization import json_safe
+from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
 from app.services.static_options_contract import (
     StaticOptionsArtifactError,
     validate_static_options_artifact,
@@ -62,6 +62,13 @@ def _mark_stale(options_dir: Path, *, equity_run_id: int, equity_date: date) -> 
 
 
 class StaticOptionsArtifactSelector:
+    def __init__(
+        self,
+        *,
+        publisher: AtomicDirectoryPublisher | None = None,
+    ) -> None:
+        self._publisher = publisher or AtomicDirectoryPublisher()
+
     def select(
         self,
         *,
@@ -91,15 +98,8 @@ class StaticOptionsArtifactSelector:
             return None
 
         output = Path(output_options_dir)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        stage = Path(
-            tempfile.mkdtemp(prefix=".options-select-", dir=str(output.parent))
-        )
-        backup = Path(
-            tempfile.mkdtemp(prefix=".options-select-backup-", dir=str(output.parent))
-        )
-        backup.rmdir()
-        try:
+
+        def populate(stage: Path) -> None:
             shutil.copytree(selected[0], stage, dirs_exist_ok=True)
             if stale:
                 _mark_stale(
@@ -113,23 +113,13 @@ class StaticOptionsArtifactSelector:
                 manifest["equity_feature_run_id"] = equity_feature_run_id
                 manifest["equity_as_of_date"] = equity_as_of_date.isoformat()
                 _write_json(manifest_path, manifest)
-            validate_static_options_artifact(stage)
-            if output.exists():
-                output.rename(backup)
-            try:
-                stage.rename(output)
-            except Exception:
-                if backup.exists() and not output.exists():
-                    backup.rename(output)
-                raise
-            if backup.exists():
-                shutil.rmtree(backup)
-            return validate_static_options_artifact(output)
-        finally:
-            if stage.exists():
-                shutil.rmtree(stage)
-            if backup.exists():
-                shutil.rmtree(backup)
+
+        self._publisher.publish(
+            output,
+            populate,
+            validate=validate_static_options_artifact,
+        )
+        return validate_static_options_artifact(output)
 
 
 __all__ = ["StaticOptionsArtifactSelector"]

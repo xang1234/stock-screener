@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -13,7 +13,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import settings
 from app.domain.common.query import SortOrder, SortSpec
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.markets.catalog import get_market_catalog
@@ -64,12 +63,7 @@ from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     STATIC_SITE_SCHEMA_VERSION,
 )
-from app.services.static_options_artifact_selector import StaticOptionsArtifactSelector
-from app.services.static_options_contract import StaticOptionsArtifactError
-from app.services.static_options_exporter import (
-    StaticOptionsExporter,
-    StaticOptionsUnavailable,
-)
+from app.services.static_options_section import StaticOptionsSection
 from app.services.static_scan_bundle_exporter import (
     SCAN_BUNDLE_SCHEMA_VERSION as _SCAN_BUNDLE_SCHEMA_VERSION,
 )
@@ -81,6 +75,12 @@ from app.services.static_scan_bundle_exporter import (
 from app.services.static_site_errors import (
     NoPublishedStaticMarketArtifact,
     StaticSiteSectionUnavailableError,
+)
+from app.services.static_site_manifest import (
+    build_static_site_manifest,
+    coerce_datetime,
+    static_market_metadata_path,
+    write_static_market_metadata,
 )
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
@@ -144,9 +144,7 @@ class StaticSiteExportService:
         chart_config: StaticChartBundleConfig | None = None,
         breadth_engine_input_factory: StaticBreadthEngineInputFactory | None = None,
         breadth_contributor_exporter: StaticBreadthContributorExporter | None = None,
-        options_enabled: bool | None = None,
-        options_exporter_factory: Callable[[Session], StaticOptionsExporter] | None = None,
-        options_artifact_selector: StaticOptionsArtifactSelector | None = None,
+        options_section: StaticOptionsSection | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._rrg_payload_source = (
@@ -197,16 +195,8 @@ class StaticSiteExportService:
             breadth_contributor_exporter
             or StaticBreadthContributorExporter(json_writer=self._write_json)
         )
-        self._options_enabled = (
-            settings.options_analytics_enabled
-            if options_enabled is None
-            else options_enabled
-        )
-        self._options_exporter_factory = (
-            options_exporter_factory or self._build_options_exporter
-        )
-        self._options_artifact_selector = (
-            options_artifact_selector or StaticOptionsArtifactSelector()
+        self._options_section = options_section or StaticOptionsSection(
+            json_writer=self._write_json,
         )
 
     def export(
@@ -285,22 +275,23 @@ class StaticSiteExportService:
                     warnings=warnings[warning_count_before:],
                 )
 
-            if self._options_enabled and "US" in market_entries:
-                self._compose_options_artifact(
+            if "US" in market_entries:
+                options_result = self._options_section.compose_live(
                     db=db,
                     output_dir=output_dir,
                     generated_at=generated_at,
-                    us_entry=market_entries["US"],
+                    equity_entry=market_entries["US"],
                     fallback_options_dir=options_fallback_dir,
-                    warnings=warnings,
                 )
-                self._write_market_metadata(
-                    output_dir=output_dir,
-                    generated_at=generated_at,
-                    market="US",
-                    entry=market_entries["US"],
-                    warnings=warnings,
-                )
+                warnings.extend(options_result.warnings)
+                if options_result.selected:
+                    self._write_market_metadata(
+                        output_dir=output_dir,
+                        generated_at=generated_at,
+                        market="US",
+                        entry=market_entries["US"],
+                        warnings=warnings,
+                    )
 
         manifest = self._build_manifest(
             market_entries=market_entries,
@@ -356,29 +347,20 @@ class StaticSiteExportService:
         )
         manifest = combined.manifest
         warnings = list(combined.warnings)
-        us_entry = (manifest.get("markets") or {}).get("US")
-        if us_entry is not None and us_entry.get("feature_run_id") is not None:
-            selected = StaticOptionsArtifactSelector().select(
-                current_options_dir=options_artifacts_dir,
-                fallback_options_dir=fallback_options_artifacts_dir,
-                output_options_dir=Path(output_dir) / "options",
-                equity_feature_run_id=int(us_entry["feature_run_id"]),
-                equity_as_of_date=date.fromisoformat(us_entry["as_of_date"]),
-            )
-            if selected is not None:
-                cls._advertise_options(us_entry)
-                if manifest.get("default_market") == "US":
-                    manifest["features"] = dict(us_entry["features"])
-                    manifest["pages"] = dict(us_entry["pages"])
-                    manifest["assets"] = dict(us_entry["assets"])
-                cls._write_json(Path(output_dir) / "manifest.json", manifest)
-                metadata_path = Path(output_dir) / cls._market_metadata_path("US")
-                if metadata_path.is_file():
-                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                    metadata["entry"] = us_entry
-                    cls._write_json(metadata_path, metadata)
-            elif options_artifacts_dir is not None or fallback_options_artifacts_dir is not None:
-                warnings.append("No compatible static US options artifact was available")
+        options_result = StaticOptionsSection(
+            enabled=(
+                options_artifacts_dir is not None
+                or fallback_options_artifacts_dir is not None
+            ),
+            json_writer=cls._write_json,
+        ).compose_combined(
+            output_dir=Path(output_dir),
+            manifest=manifest,
+            current_options_dir=options_artifacts_dir,
+            fallback_options_dir=fallback_options_artifacts_dir,
+            market_metadata_path=(Path(output_dir) / cls._market_metadata_path("US")),
+        )
+        warnings.extend(options_result.warnings)
         return StaticSiteExportResult(
             output_dir=combined.output_dir,
             generated_at=combined.generated_at,
@@ -386,59 +368,6 @@ class StaticSiteExportService:
             warnings=tuple(warnings),
             manifest=manifest,
         )
-
-    @staticmethod
-    def _build_options_exporter(db: Session) -> StaticOptionsExporter:
-        from app.wiring.bootstrap import get_options_analytics_queries
-
-        return StaticOptionsExporter(get_options_analytics_queries(db))
-
-    @staticmethod
-    def _advertise_options(entry: dict[str, Any]) -> None:
-        entry.setdefault("features", {})["options"] = True
-        entry.setdefault("pages", {})["options"] = {
-            "path": "options/manifest.json"
-        }
-        entry.setdefault("assets", {})["options"] = {
-            "path": "options/manifest.json"
-        }
-
-    def _compose_options_artifact(
-        self,
-        *,
-        db: Session,
-        output_dir: Path,
-        generated_at: str,
-        us_entry: dict[str, Any],
-        fallback_options_dir: Path | None,
-        warnings: list[str],
-    ) -> None:
-        candidate_root = output_dir / ".options-current"
-        candidate_options = candidate_root / "options"
-        current: Path | None = None
-        try:
-            self._options_exporter_factory(db).export(
-                candidate_options,
-                generated_at=generated_at,
-            )
-            current = candidate_options
-        except (StaticOptionsUnavailable, StaticOptionsArtifactError) as exc:
-            warnings.append(f"Current US options artifact unavailable: {exc}")
-        try:
-            selected = self._options_artifact_selector.select(
-                current_options_dir=current,
-                fallback_options_dir=fallback_options_dir,
-                output_options_dir=output_dir / "options",
-                equity_feature_run_id=int(us_entry["feature_run_id"]),
-                equity_as_of_date=date.fromisoformat(us_entry["as_of_date"]),
-            )
-        finally:
-            if candidate_root.exists():
-                shutil.rmtree(candidate_root)
-        if selected is None:
-            warnings.append("Static US options data is unavailable")
-            return
-        self._advertise_options(us_entry)
 
     def _export_market_bundle(
         self,
@@ -714,7 +643,7 @@ class StaticSiteExportService:
 
     @staticmethod
     def _market_metadata_path(market: str) -> Path:
-        return Path("markets") / market.lower() / STATIC_MARKET_METADATA_FILENAME
+        return static_market_metadata_path(market)
 
     def _write_market_metadata(
         self,
@@ -725,14 +654,14 @@ class StaticSiteExportService:
         entry: dict[str, Any],
         warnings: list[str],
     ) -> None:
-        payload = {
-            "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "market": market,
-            "entry": entry,
-            "warnings": list(warnings),
-        }
-        self._write_json(output_dir / self._market_metadata_path(market), payload)
+        write_static_market_metadata(
+            output_dir=output_dir,
+            generated_at=generated_at,
+            market=market,
+            entry=entry,
+            warnings=warnings,
+            json_writer=self._write_json,
+        )
 
     @staticmethod
     def _build_manifest(
@@ -741,33 +670,13 @@ class StaticSiteExportService:
         generated_at: str,
         warnings: list[str],
     ) -> dict[str, Any]:
-        if not market_entries:
-            raise RuntimeError(
-                "No market artifacts are available to build a static-site manifest"
-            )
-
-        ordered_markets = [
-            market for market in STATIC_SUPPORTED_MARKETS if market in market_entries
-        ]
-        ordered_entries = {market: market_entries[market] for market in ordered_markets}
-        default_market = (
-            STATIC_DEFAULT_MARKET
-            if STATIC_DEFAULT_MARKET in ordered_entries
-            else next(iter(ordered_entries))
+        return build_static_site_manifest(
+            market_entries=market_entries,
+            generated_at=generated_at,
+            warnings=warnings,
+            supported_markets=STATIC_SUPPORTED_MARKETS,
+            default_market=STATIC_DEFAULT_MARKET,
         )
-        default_entry = ordered_entries[default_market]
-        return {
-            "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "as_of_date": default_entry["as_of_date"],
-            "default_market": default_market,
-            "supported_markets": ordered_markets,
-            "features": dict(default_entry["features"]),
-            "pages": dict(default_entry["pages"]),
-            "assets": dict(default_entry["assets"]),
-            "markets": ordered_entries,
-            "warnings": list(warnings),
-        }
 
     def _build_groups_rrg_payload(
         self,
@@ -1006,7 +915,7 @@ class StaticSiteExportService:
             base_freshness={
                 "scan_run_id": latest_run.id,
                 "scan_as_of_date": snapshot_date,
-                "scan_published_at": _coerce_datetime(latest_run.published_at),
+                "scan_published_at": coerce_datetime(latest_run.published_at),
             },
             anchor=latest_run.as_of_date,
             market_timezone=market_entry.display_timezone,
@@ -1082,13 +991,3 @@ class StaticSiteExportService:
             + "\n",
             encoding="utf-8",
         )
-
-
-def _coerce_datetime(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return str(value)
