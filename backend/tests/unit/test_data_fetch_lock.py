@@ -256,6 +256,30 @@ class TestSerializedDataFetchDecorator:
             def task():
                 return "unreachable"
 
+    def test_pre_lock_enabled_predicate_skips_without_constructing_lock(self, monkeypatch):
+        import app.tasks.data_fetch_lock as module
+
+        app = Celery("serialized-data-fetch-disabled-test")
+        monkeypatch.setattr(
+            "app.wiring.bootstrap.get_data_fetch_lock",
+            lambda: (_ for _ in ()).throw(AssertionError("lock constructed")),
+        )
+
+        @module.serialized_data_fetch_task(
+            app,
+            "disabled_task",
+            enabled=lambda: False,
+            disabled_reason="options_analytics_disabled",
+            name="tests.disabled_serialized_data_fetch_task",
+        )
+        def task(_self):
+            return "unreachable"
+
+        assert task.run() == {
+            "status": "skipped",
+            "reason_codes": ["options_analytics_disabled"],
+        }
+
     @pytest.mark.parametrize(
         "task_name",
         [

@@ -40,6 +40,7 @@ RUNTIME_STAGE_SEQUENCE = (
     "breadth",
     "groups",
     "scan",
+    "options",
 )
 
 STAGE_LABELS = {
@@ -51,6 +52,7 @@ STAGE_LABELS = {
     "groups": "Group Rankings",
     "snapshot": "Feature Snapshot",
     "scan": "Scan",
+    "options": "Options Analytics",
 }
 
 DEFAULT_LIFECYCLE_BY_STAGE = {
@@ -62,6 +64,7 @@ DEFAULT_LIFECYCLE_BY_STAGE = {
     "groups": "daily_refresh",
     "snapshot": "daily_refresh",
     "scan": "daily_refresh",
+    "options": "daily_refresh",
 }
 
 

@@ -218,13 +218,50 @@ def guard_group_result(result: dict | None = None, *, market: str) -> dict:
 )
 def guard_snapshot_result(result: dict | None = None, *, market: str) -> dict:
     if isinstance(result, dict) and result.get("auto_scan_id"):
-        return {
+        guarded = {
             "status": "ok",
             "market": market,
             "stage": "scan",
             "auto_scan_id": result["auto_scan_id"],
         }
+        for key in ("run_id", "as_of_date"):
+            if result.get(key) is not None:
+                guarded[key] = result[key]
+        return guarded
     raise RuntimeError(f"Daily market scan did not publish for {market}: {result}")
+
+
+@celery_app.task(
+    name="app.tasks.daily_market_pipeline_tasks.dispatch_options_after_snapshot",
+    queue="celery",
+)
+def dispatch_options_after_snapshot(
+    result: dict | None = None, *, market: str
+) -> dict:
+    payload = dict(result or {})
+    if _normalize_pipeline_market(market) != "US":
+        payload["options_dispatch"] = {
+            "status": "skipped",
+            "reason": "market_unsupported",
+        }
+        return payload
+    try:
+        from app.interfaces.tasks.options_analytics_tasks import (
+            refresh_options_analytics,
+        )
+
+        task = refresh_options_analytics.apply_async(
+            kwargs={"source_run_id": payload.get("run_id"), "market": "US"},
+            queue=data_fetch_queue_for_market("US"),
+        )
+        payload["options_dispatch"] = {"status": "queued", "task_id": task.id}
+    except Exception as exc:
+        logger.warning("Could not dispatch Options Analytics follow-on", exc_info=True)
+        payload["options_dispatch"] = {
+            "status": "failed_to_queue",
+            "reason": str(exc),
+        }
+    return payload
 
 
 def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> list:
@@ -297,6 +334,12 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
             queue=market_jobs_queue_for_market(market_code)
         ),
     ])
+    if market_code == "US":
+        signatures.append(
+            dispatch_options_after_snapshot.s(market=market_code).set(
+                queue=market_jobs_queue_for_market(market_code)
+            )
+        )
     return signatures
 
 
