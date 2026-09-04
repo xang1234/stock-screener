@@ -7,15 +7,11 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import OptionsPage from './OptionsPage';
 import { commandCenterFixture } from '../features/options/__fixtures__/optionsResponses';
 import * as optionsApi from '../api/optionsAnalytics';
-import * as tasksApi from '../api/tasks';
 
 vi.mock('../api/optionsAnalytics', () => ({
   getOptionsCommandCenter: vi.fn(),
+  getOptionsRefreshStatus: vi.fn(),
   refreshOptionsAnalytics: vi.fn(),
-}));
-
-vi.mock('../api/tasks', () => ({
-  getTaskStatus: vi.fn(),
 }));
 
 vi.mock('../features/options/OptionsCommandCenterView', () => ({
@@ -28,7 +24,7 @@ describe('OptionsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     optionsApi.getOptionsCommandCenter.mockResolvedValue(commandCenterFixture);
-    tasksApi.getTaskStatus.mockResolvedValue({ status: 'running' });
+    optionsApi.getOptionsRefreshStatus.mockResolvedValue({ status: 'running' });
   });
 
   it('loads the published run and URL-encodes row navigation', async () => {
@@ -92,7 +88,7 @@ describe('OptionsPage', () => {
     async (resultStatus) => {
       const user = userEvent.setup();
       optionsApi.refreshOptionsAnalytics.mockResolvedValue({ status: 'accepted', task_id: 'task-terminal' });
-      tasksApi.getTaskStatus.mockResolvedValue({
+      optionsApi.getOptionsRefreshStatus.mockResolvedValue({
         status: 'completed',
         result: { status: resultStatus, reason_codes: ['test_reason'] },
       });
@@ -109,7 +105,7 @@ describe('OptionsPage', () => {
   it('clears accepted state when task polling fails', async () => {
     const user = userEvent.setup();
     optionsApi.refreshOptionsAnalytics.mockResolvedValue({ status: 'accepted', task_id: 'task-error' });
-    tasksApi.getTaskStatus.mockRejectedValue(new Error('status unavailable'));
+    optionsApi.getOptionsRefreshStatus.mockRejectedValue(new Error('status unavailable'));
     renderWithProviders(<MemoryRouter><OptionsPage /></MemoryRouter>);
 
     await screen.findByRole('button', { name: 'Open AAPL' });

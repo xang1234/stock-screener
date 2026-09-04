@@ -197,3 +197,66 @@ async def test_live_reads_return_typed_404_and_refresh_is_immediate(
         "run_id": None,
         "source_run_id": 33,
     }
+
+
+def test_dispatch_refresh_scopes_task_to_us_market(monkeypatch) -> None:
+    from app.api.v1 import options_analytics as api
+
+    dispatched = {}
+
+    class Task:
+        @staticmethod
+        def apply_async(*, kwargs, queue):
+            dispatched.update(kwargs=kwargs, queue=queue)
+            return SimpleNamespace(id="task-us")
+
+    monkeypatch.setattr(
+        "app.interfaces.tasks.options_analytics_tasks.refresh_options_analytics",
+        Task(),
+    )
+
+    result = api.dispatch_options_refresh(source_run_id=None, force=True)
+
+    assert dispatched == {
+        "kwargs": {"source_run_id": None, "market": "US", "force": True},
+        "queue": "data_fetch_us",
+    }
+    assert result["task_id"] == "task-us"
+
+
+@pytest.mark.asyncio
+async def test_options_refresh_status_is_available_without_tasks_router(
+    monkeypatch,
+) -> None:
+    from app.api.v1 import options_analytics as api
+    from app.services import server_auth
+
+    class Service:
+        def get_task_status(self, task_name, task_id, db):
+            assert task_name == "daily-us-options-analytics"
+            assert task_id == "task-7"
+            assert db is not None
+            return {
+                "task_id": task_id,
+                "task_name": task_name,
+                "status": "completed",
+                "celery_state": "SUCCESS",
+                "result": {"status": "published", "run_id": 81},
+            }
+
+    monkeypatch.setattr(api, "get_task_registry_service", lambda: Service())
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    app.dependency_overrides[get_db] = lambda: object()
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/options-analytics/refresh/task-7/status"
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"status": "published", "run_id": 81}

@@ -4,13 +4,15 @@ import { Alert, Box, Button, CircularProgress, Typography } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useNavigate } from 'react-router-dom';
 
-import { getOptionsCommandCenter, refreshOptionsAnalytics } from '../api/optionsAnalytics';
-import { getTaskStatus } from '../api/tasks';
+import {
+  getOptionsCommandCenter,
+  getOptionsRefreshStatus,
+  refreshOptionsAnalytics,
+} from '../api/optionsAnalytics';
 import OptionsCommandCenterView from '../features/options/OptionsCommandCenterView';
 import { optionsCommandCenterQueryKey } from '../features/options/optionsContract';
 
 const commandKey = optionsCommandCenterQueryKey({ mode: 'live', runId: 'published' });
-const refreshTaskName = 'daily-us-options-analytics';
 
 export default function OptionsPage() {
   const navigate = useNavigate();
@@ -25,7 +27,7 @@ export default function OptionsPage() {
   });
   const taskQuery = useQuery({
     queryKey: ['options-analytics', 'refresh-task', accepted?.taskId ?? null],
-    queryFn: () => getTaskStatus(refreshTaskName, accepted.taskId),
+    queryFn: () => getOptionsRefreshStatus(accepted.taskId),
     enabled: Boolean(accepted?.taskId),
     retry: false,
     refetchInterval: (query) => (

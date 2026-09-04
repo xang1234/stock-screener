@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import apiClient from './client';
 import {
   getOptionsCommandCenter,
+  getOptionsRefreshStatus,
   getOptionsSymbolDetail,
   refreshOptionsAnalytics,
 } from './optionsAnalytics';
@@ -41,5 +42,15 @@ describe('live options analytics client', () => {
       source_run_id: 33,
       force: true,
     });
+  });
+
+  it('reads refresh status from the options-owned endpoint', async () => {
+    apiClient.get.mockResolvedValue({ data: { status: 'running' } });
+
+    await expect(getOptionsRefreshStatus('task/7')).resolves.toEqual({ status: 'running' });
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/v1/options-analytics/refresh/task%2F7/status',
+    );
   });
 });

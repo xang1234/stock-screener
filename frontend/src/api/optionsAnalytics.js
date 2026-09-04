@@ -28,3 +28,10 @@ export const refreshOptionsAnalytics = async ({ sourceRunId = null, force = fals
   });
   return response.data;
 };
+
+export const getOptionsRefreshStatus = async (taskId) => {
+  const response = await apiClient.get(
+    `/v1/options-analytics/refresh/${encodeURIComponent(taskId)}/status`,
+  );
+  return response.data;
+};

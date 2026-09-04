@@ -15,7 +15,11 @@ from app.schemas.options_analytics import (
     OptionsRunDiagnosticsResponse,
     OptionsSymbolDetailResponse,
 )
-from app.wiring.bootstrap import get_options_analytics_queries
+from app.schemas.task import TaskStatusResponse
+from app.wiring.bootstrap import (
+    get_options_analytics_queries,
+    get_task_registry_service,
+)
 
 router = APIRouter()
 
@@ -37,7 +41,7 @@ def dispatch_options_refresh(
     from app.tasks.market_queues import data_fetch_queue_for_market
 
     task = refresh_options_analytics.apply_async(
-        kwargs={"source_run_id": source_run_id, "force": force},
+        kwargs={"source_run_id": source_run_id, "market": "US", "force": force},
         queue=data_fetch_queue_for_market("US"),
     )
     return {"task_id": task.id, "run_id": None, "source_run_id": source_run_id}
@@ -90,3 +94,16 @@ def refresh_options(request: OptionsRefreshRequest):
         run_id=dispatched.get("run_id"),
         source_run_id=dispatched.get("source_run_id"),
     )
+
+
+@router.get("/refresh/{task_id}/status", response_model=TaskStatusResponse)
+def get_options_refresh_status(
+    task_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    result = get_task_registry_service().get_task_status(
+        "daily-us-options-analytics",
+        task_id,
+        db,
+    )
+    return TaskStatusResponse(**result)
