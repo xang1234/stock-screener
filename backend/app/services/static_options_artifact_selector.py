@@ -25,6 +25,14 @@ def _validated(path: Path | None) -> tuple[Path, dict[str, Any]] | None:
         return None
 
 
+def _stale_order_key(artifact: tuple[Path, dict[str, Any]]) -> tuple[date, int]:
+    manifest = artifact[1]
+    return (
+        date.fromisoformat(manifest["source_as_of_date"]),
+        int(manifest["published_run_id"]),
+    )
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(json_safe(payload), allow_nan=False, indent=2, sort_keys=True)
@@ -92,7 +100,14 @@ class StaticOptionsArtifactSelector:
             ):
                 selected = current
         if selected is None:
-            selected = fallback or current
+            stale_candidates = tuple(
+                artifact for artifact in (fallback, current) if artifact is not None
+            )
+            selected = (
+                max(stale_candidates, key=_stale_order_key)
+                if stale_candidates
+                else None
+            )
             stale = selected is not None
         if selected is None:
             return None

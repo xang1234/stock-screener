@@ -579,6 +579,41 @@ def test_symbol_history_keeps_only_the_newest_published_forced_attempt(session) 
     assert history[0].atm_iv == 0.30
 
 
+def test_history_keeps_only_newest_run_for_each_trading_session(session) -> None:
+    repo = _Repositories(session)
+    first = _start(repo, "first-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(first.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        first.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={"atm_iv": 0.20},
+        core_valid=True,
+    )
+    repo.publish(first.id, _published_summary())
+
+    newest = _start(repo, "new-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(newest.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        newest.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={"atm_iv": 0.30},
+        core_valid=True,
+    )
+    repo.publish(newest.id, _published_summary())
+    session.commit()
+
+    history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
+    exported = repo.export_history_observations("US", "v1")
+
+    assert len(history) == 1
+    assert history[0].run_id == newest.id
+    assert history[0].atm_iv == 0.30
+    assert len(exported) == 1
+    assert exported[0].atm_iv == 0.30
+
+
 def test_history_export_keeps_only_the_newest_published_forced_attempt(session) -> None:
     repo = _Repositories(session)
     first = _start(repo, "same-input")

@@ -11,6 +11,7 @@ from app.domain.options_analytics.expiration import retain_contracts_for_persist
 from app.domain.options_analytics.metrics.aggregate import ChainMetrics
 from app.domain.options_analytics.metrics.gex import estimate_contract_gex
 from app.domain.options_analytics.metrics.history import HistoricalMetrics
+from app.domain.options_analytics.metrics.volatility import aggregate_contract_iv
 from app.domain.options_analytics.models import (
     ChainObservation,
     NormalizedOptionContract,
@@ -32,31 +33,6 @@ def _complete_total(
     ):
         return None
     return sum(int(value) for value in values if value is not None)
-
-
-def _aggregate_iv(contracts: Sequence[NormalizedOptionContract]) -> float | None:
-    values = tuple(contract.implied_volatility for contract in contracts)
-    if not values or any(
-        value is None or not math.isfinite(float(value)) or value <= 0
-        for value in values
-    ):
-        return None
-    ivs = tuple(float(value) for value in values if value is not None)
-    open_interests = tuple(contract.open_interest for contract in contracts)
-    if all(
-        value is not None and math.isfinite(float(value)) and value >= 0
-        for value in open_interests
-    ):
-        total_open_interest = sum(
-            int(value) for value in open_interests if value is not None
-        )
-        if total_open_interest > 0:
-            return sum(
-                iv * int(open_interest)
-                for iv, open_interest in zip(ivs, open_interests, strict=True)
-                if open_interest is not None
-            ) / total_open_interest
-    return sum(ivs) / len(ivs)
 
 
 def dividend_assumption(candidate: OptionCandidate) -> tuple[float, str, str | None]:
@@ -131,7 +107,7 @@ def strike_points(
                 rows, "open_interest"
             )
             point[f"{prefix}_volume"] = _complete_total(rows, "volume")
-            point[f"{prefix}_iv"] = _aggregate_iv(rows)
+            point[f"{prefix}_iv"] = aggregate_contract_iv(rows)
             gex_values = []
             if risk_free_rate is not None:
                 gex_values = [

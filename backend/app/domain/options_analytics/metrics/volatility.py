@@ -13,17 +13,52 @@ def _valid_iv(value: float | None) -> bool:
     return value is not None and math.isfinite(float(value)) and float(value) > 0
 
 
+def aggregate_contract_iv(
+    contracts: Iterable[NormalizedOptionContract],
+) -> float | None:
+    """Aggregate valid contract IVs, preferring open-interest weighting."""
+    values = tuple(
+        (float(contract.implied_volatility), contract.open_interest)
+        for contract in contracts
+        if _valid_iv(contract.implied_volatility)
+    )
+    if not values:
+        return None
+    if all(
+        open_interest is not None
+        and math.isfinite(float(open_interest))
+        and open_interest >= 0
+        for _, open_interest in values
+    ):
+        total_open_interest = sum(
+            int(open_interest)
+            for _, open_interest in values
+            if open_interest is not None
+        )
+        if total_open_interest > 0:
+            return sum(
+                iv * int(open_interest)
+                for iv, open_interest in values
+                if open_interest is not None
+            ) / total_open_interest
+    return statistics.fmean(iv for iv, _ in values)
+
+
 def calculate_atm_iv(
     contracts: Iterable[NormalizedOptionContract], *, spot: float
 ) -> MetricValue:
-    by_strike: dict[float, dict[OptionSide, float]] = {}
+    by_strike: dict[float, dict[OptionSide, list[NormalizedOptionContract]]] = {}
     for contract in contracts:
         if _valid_iv(contract.implied_volatility):
-            by_strike.setdefault(contract.strike, {})[contract.side] = float(
-                contract.implied_volatility
-            )
+            by_strike.setdefault(contract.strike, {}).setdefault(
+                contract.side, []
+            ).append(contract)
     paired = [
-        (strike, sides)
+        (
+            strike,
+            aggregate_contract_iv(sides[OptionSide.CALL]),
+            aggregate_contract_iv(sides[OptionSide.PUT]),
+        )
         for strike, sides in by_strike.items()
         if OptionSide.CALL in sides and OptionSide.PUT in sides
     ]
@@ -32,10 +67,17 @@ def calculate_atm_iv(
             available=False,
             reason_codes=("atm_two_sided_iv_unavailable",),
         )
-    strike, sides = min(paired, key=lambda item: (abs(item[0] - spot), item[0]))
+    strike, call_iv, put_iv = min(
+        paired, key=lambda item: (abs(item[0] - spot), item[0])
+    )
+    if call_iv is None or put_iv is None:
+        return MetricValue(
+            available=False,
+            reason_codes=("atm_two_sided_iv_unavailable",),
+        )
     return MetricValue(
         available=True,
-        value=(sides[OptionSide.CALL] + sides[OptionSide.PUT]) / 2,
+        value=(call_iv + put_iv) / 2,
         evidence={"atm_strike": strike},
         label="ATM IV",
     )

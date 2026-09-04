@@ -10,9 +10,17 @@ from app.services.static_options_exporter import StaticOptionsExporter
 from .test_static_options_exporter import _item, _Queries, _run
 
 
-def _export(path, *, source_run_id=33):
+def _export(
+    path,
+    *,
+    source_run_id=33,
+    source_as_of_date=date(2026, 9, 4),
+    published_run_id=7,
+):
     run = _run(_item("AAPL"))
     run.source_feature_run_id = source_run_id
+    run.as_of_date = source_as_of_date
+    run.id = published_run_id
     return StaticOptionsExporter(_Queries(run)).export(
         path,
         generated_at="2026-09-04T22:00:00Z",
@@ -68,6 +76,55 @@ def test_selector_uses_compatible_last_good_and_marks_every_file_stale(tmp_path)
     assert command["stale"] is True
     detail_path = tmp_path / "output" / selected["symbols"]["AAPL"]["path"]
     assert json.loads(detail_path.read_text())["stale"] is True
+
+
+def test_selector_uses_newest_valid_stale_artifact(tmp_path):
+    current = tmp_path / "current" / "options"
+    fallback = tmp_path / "fallback" / "options"
+    output = tmp_path / "output" / "options"
+    current_manifest = _export(
+        current,
+        source_run_id=43,
+        source_as_of_date=date(2026, 9, 4),
+        published_run_id=8,
+    )
+    _export(
+        fallback,
+        source_run_id=42,
+        source_as_of_date=date(2026, 9, 3),
+        published_run_id=9,
+    )
+
+    selected = StaticOptionsArtifactSelector().select(
+        current_options_dir=current,
+        fallback_options_dir=fallback,
+        output_options_dir=output,
+        equity_feature_run_id=44,
+        equity_as_of_date=date(2026, 9, 5),
+    )
+
+    assert selected is not None
+    assert selected["published_run_id"] == current_manifest["published_run_id"]
+    assert selected["source_as_of_date"] == "2026-09-04"
+
+
+def test_selector_uses_newer_run_as_stale_artifact_date_tiebreaker(tmp_path):
+    current = tmp_path / "current" / "options"
+    fallback = tmp_path / "fallback" / "options"
+    output = tmp_path / "output" / "options"
+    current_manifest = _export(current, source_run_id=43, published_run_id=9)
+    _export(fallback, source_run_id=42, published_run_id=8)
+
+    selected = StaticOptionsArtifactSelector().select(
+        current_options_dir=current,
+        fallback_options_dir=fallback,
+        output_options_dir=output,
+        equity_feature_run_id=44,
+        equity_as_of_date=date(2026, 9, 5),
+    )
+
+    assert selected is not None
+    assert selected["published_run_id"] == current_manifest["published_run_id"]
 
 
 def test_selector_absence_does_not_create_an_options_directory(tmp_path):

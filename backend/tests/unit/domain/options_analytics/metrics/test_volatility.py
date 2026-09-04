@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+
 from app.domain.options_analytics.metrics.volatility import (
     calculate_25_delta_skew,
     calculate_atm_iv,
@@ -10,7 +11,13 @@ from app.domain.options_analytics.metrics.volatility import (
 from app.domain.options_analytics.models import NormalizedOptionContract, OptionSide
 
 
-def _contract(side: OptionSide, strike: float, iv: float | None, delta: float | None = None):
+def _contract(
+    side: OptionSide,
+    strike: float,
+    iv: float | None,
+    delta: float | None = None,
+    open_interest: int | None = 20,
+):
     return NormalizedOptionContract(
         side=side,
         strike=strike,
@@ -18,7 +25,7 @@ def _contract(side: OptionSide, strike: float, iv: float | None, delta: float | 
         ask=2,
         last_price=1.5,
         volume=10,
-        open_interest=20,
+        open_interest=open_interest,
         implied_volatility=iv,
         last_trade_at=None,
         contract_size="REGULAR",
@@ -39,6 +46,19 @@ def test_atm_iv_requires_valid_call_and_put_at_closest_strike() -> None:
     )
 
     assert result.value == pytest.approx(0.25)
+
+
+def test_atm_iv_aggregates_duplicate_contracts_with_open_interest_weighting() -> None:
+    contracts = (
+        _contract(OptionSide.CALL, 100, 0.20, open_interest=100),
+        _contract(OptionSide.CALL, 100, 0.30, open_interest=300),
+        _contract(OptionSide.PUT, 100, 0.40, open_interest=100),
+        _contract(OptionSide.PUT, 100, 0.50, open_interest=300),
+    )
+
+    result = calculate_atm_iv(contracts, spot=100)
+
+    assert result.value == pytest.approx(0.375)
 
 
 def test_atm_iv_is_unavailable_when_either_side_is_invalid() -> None:

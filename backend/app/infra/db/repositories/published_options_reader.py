@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy.orm import Session, selectinload
 
 from app.domain.options_analytics.history import HistoricalObservation
@@ -107,14 +109,12 @@ class SqlPublishedOptionsReader:
             .all()
         )
         history: list[OptionsAnalyticsRunItem] = []
-        seen: set[tuple[object, str]] = set()
+        seen_sessions: set[date] = set()
         for item in rows:
             run = item.run
-            source_identity = run.external_source_feature_run_key or run.input_signature
-            identity = (run.as_of_date, source_identity)
-            if identity in seen:
+            if run.as_of_date in seen_sessions:
                 continue
-            seen.add(identity)
+            seen_sessions.add(run.as_of_date)
             history.append(item)
         return tuple(history)
 

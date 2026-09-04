@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from datetime import timezone
+from datetime import date, timezone
 
 from sqlalchemy.orm import Session, selectinload
 
@@ -45,16 +45,16 @@ class SqlOptionsHistoryRepository:
             .all()
         )
         observations: list[OptionsHistoryObservation] = []
-        seen: set[tuple[str, str]] = set()
+        seen_sessions: set[tuple[date, str]] = set()
         for run in runs:
             external_key = run.external_source_feature_run_key or (
                 f"{run.market}:{run.as_of_date.isoformat()}:{run.input_signature}"
             )
             for item in sorted(run.items, key=lambda row: row.security_symbol):
-                identity = (external_key, item.security_symbol)
-                if identity in seen:
+                session_symbol = (run.as_of_date, item.security_symbol)
+                if session_symbol in seen_sessions:
                     continue
-                seen.add(identity)
+                seen_sessions.add(session_symbol)
                 observations.append(self._to_observation(run, item, external_key))
         return tuple(observations)
 
