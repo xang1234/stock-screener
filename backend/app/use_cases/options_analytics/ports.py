@@ -6,10 +6,12 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Protocol
 
+from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.models import (
     OptionCandidate,
     OptionsRunSummary,
 )
+from app.domain.options_analytics.ports import LastCurrentMembership
 
 from .analysis_models import CandidateAnalysis
 
@@ -110,7 +112,15 @@ class PublishedOptionsReader(Protocol):
         self,
         market: str,
         calculation_version: str,
-    ) -> Mapping[str, object]: ...
+    ) -> Mapping[str, LastCurrentMembership]: ...
+
+    def analysis_history(
+        self,
+        symbol: str,
+        *,
+        market: str,
+        calculation_version: str,
+    ) -> Sequence[HistoricalObservation]: ...
 
     def symbol_history(
         self,

@@ -11,10 +11,11 @@ export const STATIC_OPTIONS_SCHEMA_VERSION = manifest.properties.schema_version.
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
 
-const validators = {
-  manifest: ajv.compile(manifest),
-  commandCenter: ajv.compile(commandCenter),
-  symbolDetail: ajv.compile(symbolDetail),
+const validators = new Map();
+
+const getValidator = (name, schema) => {
+  if (!validators.has(name)) validators.set(name, ajv.compile(schema));
+  return validators.get(name);
 };
 
 const fail = (message) => {
@@ -76,7 +77,7 @@ const validateItemSemantics = (item, location) => {
 };
 
 export const normalizeOptionsManifest = (payload) => {
-  validateShape(validators.manifest, payload, 'manifest');
+  validateShape(getValidator('manifest', manifest), payload, 'manifest');
   requireSafeOptionsPath(payload.command_center_path, 'command_center_path');
   const paths = new Set();
   Object.entries(payload.symbols).forEach(([symbol, entry]) => {
@@ -95,7 +96,7 @@ export const normalizeOptionsManifest = (payload) => {
 };
 
 export const normalizeOptionsCommandCenter = (payload, context = {}) => {
-  validateShape(validators.commandCenter, payload, 'command center');
+  validateShape(getValidator('commandCenter', commandCenter), payload, 'command center');
   validateRunIdentity(payload, context);
   if (payload.current_count !== payload.items.length) fail('current count does not match items');
   const symbols = new Set();
@@ -108,7 +109,7 @@ export const normalizeOptionsCommandCenter = (payload, context = {}) => {
 };
 
 export const normalizeOptionsSymbolDetail = (payload, context = {}) => {
-  validateShape(validators.symbolDetail, payload, 'symbol detail');
+  validateShape(getValidator('symbolDetail', symbolDetail), payload, 'symbol detail');
   validateRunIdentity(payload, context);
   validateItemSemantics(payload.item, 'item');
   if (context.expectedSymbol && payload.item.symbol !== context.expectedSymbol) {

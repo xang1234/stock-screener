@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base
+from app.domain.options_analytics.selection import select_current_candidates
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
 from app.models.stock import StockFundamental, StockPrice
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
-def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs() -> None:
+def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs() -> (
+    None
+):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -51,7 +53,9 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
                 },
             )
         )
-        fundamentals.append(StockFundamental(symbol=symbol, adv_usd=200_000_000, dividend_yield=0.01))
+        fundamentals.append(
+            StockFundamental(symbol=symbol, adv_usd=200_000_000, dividend_yield=0.01)
+        )
     for index in range(45):
         symbol = f"L{index:02}"
         rows.append(
@@ -69,7 +73,9 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
                 },
             )
         )
-        fundamentals.append(StockFundamental(symbol=symbol, adv_usd=200_000_000, dividend_yield=0.02))
+        fundamentals.append(
+            StockFundamental(symbol=symbol, adv_usd=200_000_000, dividend_yield=0.02)
+        )
     rows.append(
         StockFeatureDaily(
             run_id=7,
@@ -101,11 +107,15 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
 
     assert result.source_feature_run_id == 7
     assert result.as_of_date == as_of
-    assert len(result.current_candidates) == 80
-    assert "EXACT" not in {row.symbol for row in result.current_candidates}
-    assert sum(row.candidate_rank is not None for row in result.current_candidates) == 40
-    assert sum(row.leader_rank is not None for row in result.current_candidates) == 40
-    first = result.current_candidates[0]
+    current = select_current_candidates(
+        result.top_candidate_inputs,
+        result.leader_inputs,
+    )
+    assert len(current) == 80
+    assert "EXACT" not in {row.symbol for row in current}
+    assert sum(row.candidate_rank is not None for row in current) == 40
+    assert sum(row.leader_rank is not None for row in current) == 40
+    first = current[0]
     assert first.symbol == "C00"
     assert first.spot_price == 100
     assert first.dividend_yield == 0.01
@@ -128,7 +138,14 @@ def test_candidate_source_preserves_both_ranks_for_overlap() -> None:
         ],
     )
     session = sessionmaker(bind=engine)()
-    session.add(FeatureRun(id=8, as_of_date=date(2026, 9, 4), run_type="daily_snapshot", status="published"))
+    session.add(
+        FeatureRun(
+            id=8,
+            as_of_date=date(2026, 9, 4),
+            run_type="daily_snapshot",
+            status="published",
+        )
+    )
     session.add(
         StockFeatureDaily(
             run_id=8,
@@ -148,10 +165,14 @@ def test_candidate_source_preserves_both_ranks_for_overlap() -> None:
 
     result = SqlOptionsCandidateSource(session).read(8)
 
-    assert len(result.current_candidates) == 1
-    assert result.current_candidates[0].symbol == "AAPL"
-    assert result.current_candidates[0].candidate_rank == 1
-    assert result.current_candidates[0].leader_rank == 1
+    current = select_current_candidates(
+        result.top_candidate_inputs,
+        result.leader_inputs,
+    )
+    assert len(current) == 1
+    assert current[0].symbol == "AAPL"
+    assert current[0].candidate_rank == 1
+    assert current[0].leader_rank == 1
     session.close()
     engine.dispose()
 
@@ -196,13 +217,19 @@ def test_current_liquidity_uses_feature_run_snapshot_not_mutable_fundamentals() 
 
     result = SqlOptionsCandidateSource(session).read(9)
 
-    assert [row.symbol for row in result.current_candidates] == ["AAPL"]
-    assert result.current_candidates[0].daily_dollar_volume == 150_000_000
+    current = select_current_candidates(
+        result.top_candidate_inputs,
+        result.leader_inputs,
+    )
+    assert [row.symbol for row in current] == ["AAPL"]
+    assert current[0].daily_dollar_volume == 150_000_000
     session.close()
     engine.dispose()
 
 
-def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_close() -> None:
+def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_close() -> (
+    None
+):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -219,9 +246,13 @@ def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_clo
     )
     session.add_all(
         [
-            StockPrice(symbol="aapl", date=as_of - timedelta(days=1), close=199, volume=1),
+            StockPrice(
+                symbol="aapl", date=as_of - timedelta(days=1), close=199, volume=1
+            ),
             StockPrice(symbol="aapl", date=as_of, close=201, volume=1),
-            StockPrice(symbol="aapl", date=as_of + timedelta(days=1), close=999, volume=1),
+            StockPrice(
+                symbol="aapl", date=as_of + timedelta(days=1), close=999, volume=1
+            ),
         ]
     )
     session.commit()

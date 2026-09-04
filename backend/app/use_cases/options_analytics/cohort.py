@@ -10,7 +10,6 @@ from typing import Protocol
 from app.domain.options_analytics.models import (
     CandidateKind,
     OptionCandidate,
-    OptionCandidateInput,
 )
 from app.domain.options_analytics.ports import (
     LastCurrentMembership,
@@ -29,8 +28,7 @@ class MembershipReader(Protocol):
         self,
         market: str,
         calculation_version: str,
-    ) -> Mapping[str, LastCurrentMembership]:
-        ...
+    ) -> Mapping[str, LastCurrentMembership]: ...
 
 
 @dataclass(frozen=True)
@@ -81,16 +79,17 @@ class OptionsCandidateCohortBuilder:
             market,
             self._calculation_version,
         )
-        recent_sessions = tuple(
-            self._calendar.sessions_ending_on(source.as_of_date, 6)
-        )
+        recent_sessions = tuple(self._calendar.sessions_ending_on(source.as_of_date, 6))
         inputs = self._candidate_source.read_continuity_inputs(
             tuple(memberships),
             source.as_of_date,
         )
         continuity: list[CandidateHistoryInput] = []
         for symbol, membership in memberships.items():
-            if symbol in current_symbols or membership.as_of_date not in recent_sessions:
+            if (
+                symbol in current_symbols
+                or membership.as_of_date not in recent_sessions
+            ):
                 continue
             candidate_input = inputs.get(symbol)
             if candidate_input is None:
@@ -99,8 +98,8 @@ class OptionsCandidateCohortBuilder:
                 CandidateHistoryInput(
                     candidate=replace(
                         candidate_input,
-                        dividend_yield=getattr(membership, "dividend_yield", None),
-                        dividend_source=getattr(membership, "dividend_source", None),
+                        dividend_yield=membership.dividend_yield,
+                        dividend_source=membership.dividend_source,
                     ),
                     sessions_since_current=sum(
                         session > membership.as_of_date for session in recent_sessions

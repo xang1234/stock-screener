@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import UTC, date, datetime
 
 import pytest
+from app.schemas.options_history_transfer import OptionsHistoryObservation
 from app.services.options_history_transfer import (
     OPTIONS_HISTORY_TRANSFER_SCHEMA_VERSION,
     OptionsHistoryTransfer,
@@ -63,7 +64,7 @@ class _Repository:
 
     def export_history_observations(self, market, calculation_version):
         assert (market, calculation_version) == ("US", "options-analytics-v1")
-        return (_observation(),)
+        return (OptionsHistoryObservation.model_validate(_observation()),)
 
     def import_history_transfer(self, observations, **identity):
         added = 0

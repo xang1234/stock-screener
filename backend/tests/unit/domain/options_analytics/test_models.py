@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.domain.options_analytics.models import (
     DividendSource,
     OptionCandidateInput,

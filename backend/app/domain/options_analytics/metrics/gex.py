@@ -37,8 +37,10 @@ def black_scholes_unit_gamma(
         + (rate - dividend_yield + volatility * volatility / 2) * time_years
     ) / (volatility * sqrt_time)
     density = math.exp(-(d1 * d1) / 2) / math.sqrt(2 * math.pi)
-    return math.exp(-dividend_yield * time_years) * density / (
-        spot * volatility * sqrt_time
+    return (
+        math.exp(-dividend_yield * time_years)
+        * density
+        / (spot * volatility * sqrt_time)
     )
 
 

@@ -16,7 +16,6 @@ class CompleteCandidateSource:
             as_of_date=date(2026, 9, 4),
             top_candidate_inputs=(),
             leader_inputs=(),
-            current_candidates=(),
         )
 
     def read_continuity_inputs(

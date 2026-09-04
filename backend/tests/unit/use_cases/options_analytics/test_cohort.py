@@ -32,14 +32,12 @@ class Source:
             as_of_date=date(2026, 9, 4),
             top_candidate_inputs=(self.current,),
             leader_inputs=(),
-            current_candidates=(),
         )
 
     def read_continuity_inputs(self, symbols, as_of_date):
         assert as_of_date == date(2026, 9, 4)
         return {
-            symbol: OptionCandidateInput(symbol, 80, None, 100)
-            for symbol in symbols
+            symbol: OptionCandidateInput(symbol, 80, None, 100) for symbol in symbols
         }
 
 
@@ -64,7 +62,9 @@ class Memberships:
         }
 
 
-def test_cohort_builder_restores_current_status_and_keeps_only_dropouts_as_continuity() -> None:
+def test_cohort_builder_restores_current_status_and_keeps_only_dropouts_as_continuity() -> (
+    None
+):
     current = OptionCandidateInput("AAPL", 99, 200_000_001, 101, 0.01)
     cohort = OptionsCandidateCohortBuilder(
         candidate_source=Source(current),

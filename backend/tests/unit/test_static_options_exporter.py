@@ -5,7 +5,6 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
-
 from app.services.static_options_artifact_selector import StaticOptionsArtifactSelector
 from app.services.static_options_contract import validate_static_options_artifact
 from app.services.static_options_exporter import StaticOptionsExporter

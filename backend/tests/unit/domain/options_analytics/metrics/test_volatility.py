@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.domain.options_analytics.metrics.volatility import (
     calculate_25_delta_skew,
     calculate_atm_iv,

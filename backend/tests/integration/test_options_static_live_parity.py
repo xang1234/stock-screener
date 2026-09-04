@@ -10,7 +10,8 @@ from app.schemas.options_analytics import (
 from app.services.static_options_artifact_selector import StaticOptionsArtifactSelector
 from app.services.static_options_contract import validate_static_options_artifact
 from app.services.static_options_exporter import StaticOptionsExporter
-from tests.unit.test_static_options_exporter import _Queries, _item, _run
+
+from tests.unit.test_static_options_exporter import _item, _Queries, _run
 
 
 def test_exported_static_contracts_equal_the_live_read_models(tmp_path):

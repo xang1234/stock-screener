@@ -7,15 +7,14 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-
 from app.domain.options_analytics.expiration import select_monthly_expiration
 from app.domain.options_analytics.models import OptionSide
+from app.domain.options_analytics.ports import TransientOptionsProviderError
 from app.infra.providers.yahoo_options import (
     OptionsSchemaError,
     ThrottledOptionsProviderError,
     YahooOptionsProvider,
 )
-from app.domain.options_analytics.ports import TransientOptionsProviderError
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "options" / "yahoo_chain_normalized_source.json"
 NOW = datetime(2026, 9, 4, 1, 2, 3, tzinfo=timezone.utc)

@@ -80,7 +80,9 @@ def calculate_chain_metrics(
             )
             for contract in contracts
         ]
-    usable_gex = [(contract, metric) for contract, metric in gex_values if metric.available]
+    usable_gex = [
+        (contract, metric) for contract, metric in gex_values if metric.available
+    ]
     if usable_gex:
         net_gex = MetricValue(
             available=True,

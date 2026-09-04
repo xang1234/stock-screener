@@ -23,6 +23,7 @@ from app.infra.db.models.options_analytics import (
 from app.use_cases.options_analytics.analysis_models import (
     AvailableCandidateAnalysis,
     CandidateAnalysis,
+    OptionsStrikePoint,
     UnavailableCandidateAnalysis,
 )
 
@@ -278,28 +279,24 @@ class SqlOptionsRunWriter:
     def _replace_strike_points(
         self,
         item: OptionsAnalyticsRunItem,
-        values: Sequence[object],
+        values: Sequence[OptionsStrikePoint],
     ) -> None:
-        existing = {point.strike: point for point in item.strike_points}
-        retained: set[float] = set()
-        for row in values:
-            strike = float(row.strike)
-            retained.add(strike)
-            point = existing.get(strike)
-            if point is None:
-                point = OptionsAnalyticsStrikePoint(item_id=item.id, strike=strike)
-                self._session.add(point)
-            point.call_open_interest = row.call_open_interest
-            point.put_open_interest = row.put_open_interest
-            point.call_volume = row.call_volume
-            point.put_volume = row.put_volume
-            point.call_iv = row.call_iv
-            point.put_iv = row.put_iv
-            point.estimated_call_gex = row.estimated_call_gex
-            point.estimated_put_gex = row.estimated_put_gex
-        for strike, point in existing.items():
-            if strike not in retained:
-                self._session.delete(point)
+        item.strike_points.clear()
+        self._session.flush()
+        item.strike_points.extend(
+            OptionsAnalyticsStrikePoint(
+                strike=float(row.strike),
+                call_open_interest=row.call_open_interest,
+                put_open_interest=row.put_open_interest,
+                call_volume=row.call_volume,
+                put_volume=row.put_volume,
+                call_iv=row.call_iv,
+                put_iv=row.put_iv,
+                estimated_call_gex=row.estimated_call_gex,
+                estimated_put_gex=row.estimated_put_gex,
+            )
+            for row in values
+        )
 
     def _get_run(self, run_id: int) -> OptionsAnalyticsRun:
         run = self._session.get(OptionsAnalyticsRun, run_id)

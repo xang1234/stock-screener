@@ -67,11 +67,7 @@ def calculate_25_delta_skew(
             sqrt_time = math.sqrt(float(time_years))
             d1 = (
                 math.log(float(spot) / contract.strike)
-                + (
-                    float(rate)
-                    - dividend_yield
-                    + volatility * volatility / 2
-                )
+                + (float(rate) - dividend_yield + volatility * volatility / 2)
                 * float(time_years)
             ) / (volatility * sqrt_time)
             normal_cdf = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
@@ -126,9 +122,7 @@ def calculate_25_delta_skew(
 def calculate_realized_volatility(closes: Sequence[float | None]) -> MetricValue:
     recent = tuple(closes[-21:])
     if len(recent) != 21 or any(
-        value is None
-        or not math.isfinite(float(value))
-        or float(value) <= 0
+        value is None or not math.isfinite(float(value)) or float(value) <= 0
         for value in recent
     ):
         return MetricValue(

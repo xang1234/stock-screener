@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any
 
 from app.domain.options_analytics.metrics.activity import rank_activity
 from app.domain.options_analytics.models import (
@@ -31,7 +31,15 @@ from .analysis_models import (
 )
 from .candidate_analysis import OptionsCandidateAnalyzer
 from .cohort import OptionsCandidateCohortBuilder, OptionsCohortSnapshot
-from .ports import OptionsRetention, OptionsRunItemRecord, OptionsRunWriter, PublishedOptionsReader
+from .ports import (
+    OptionsRetention,
+    OptionsRunItemRecord,
+    OptionsRunRecord,
+    OptionsRunWriter,
+    PublishedOptionsReader,
+)
+
+RefreshOptionsAnalyticsResult = dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -86,7 +94,10 @@ class RefreshOptionsAnalyticsUseCase:
             calculation_version=calculation_version,
         )
 
-    def execute(self, command: RefreshOptionsAnalyticsCommand) -> dict[str, Any]:
+    def execute(
+        self,
+        command: RefreshOptionsAnalyticsCommand,
+    ) -> RefreshOptionsAnalyticsResult:
         market = command.market.strip().upper()
         if not command.enabled:
             return {"status": "skipped", "reason_codes": ["options_analytics_disabled"]}
@@ -114,18 +125,15 @@ class RefreshOptionsAnalyticsUseCase:
 
         self._run_writer.stage_candidates(run.id, cohort.candidates)
         if self._cancellation.is_cancelled():
-            self._run_writer.cancel(run.id)
-            return {"run_id": run.id, "status": "cancelled", "coverage": 0.0}
+            return self._cancel_run(run.id)
 
-        risk_free_rate, risk_free_source, run_warnings = self._resolve_risk_free(
-            cohort
-        )
+        risk_free_rate, risk_free_source, run_warnings = self._resolve_risk_free(cohort)
         self._run_writer.save_run_assumptions(
             run.id,
             risk_free_rate=risk_free_rate,
             assumptions={"risk_free_source": risk_free_source},
         )
-        results = self._collect_analyses(
+        results, cancelled = self._collect_analyses(
             run.id,
             cohort,
             market=market,
@@ -134,6 +142,8 @@ class RefreshOptionsAnalyticsUseCase:
         )
         for analysis in results:
             self._persist_analysis(run.id, analysis)
+        if cancelled:
+            return self._cancel_run(run.id)
         return self._finish_run(run.id, cohort)
 
     def _resolve_risk_free(
@@ -157,7 +167,7 @@ class RefreshOptionsAnalyticsUseCase:
         market: str,
         risk_free_rate: float | None,
         run_warnings: tuple[str, ...],
-    ) -> tuple[CandidateAnalysis, ...]:
+    ) -> tuple[tuple[CandidateAnalysis, ...], bool]:
         by_symbol = {candidate.symbol: candidate for candidate in cohort.candidates}
         context = AnalysisContext(
             as_of_date=cohort.as_of_date,
@@ -170,16 +180,27 @@ class RefreshOptionsAnalyticsUseCase:
                 executor.submit(self._analyzer.analyze, by_symbol[symbol], context)
                 for symbol in self._run_writer.incomplete_symbols(run_id)
             }
-            return tuple(future.result() for future in as_completed(futures))
+            results: list[CandidateAnalysis] = []
+            for future in as_completed(futures):
+                results.append(future.result())
+                if self._cancellation.is_cancelled():
+                    for pending in futures:
+                        pending.cancel()
+                    return tuple(results), True
+            return tuple(results), False
 
     def _persist_analysis(self, run_id: int, analysis: CandidateAnalysis) -> None:
         self._run_writer.save_analysis(run_id, analysis)
+
+    def _cancel_run(self, run_id: int) -> RefreshOptionsAnalyticsResult:
+        self._run_writer.cancel(run_id)
+        return {"run_id": run_id, "status": "cancelled", "coverage": 0.0}
 
     def _finish_run(
         self,
         run_id: int,
         cohort: OptionsCohortSnapshot,
-    ) -> dict[str, Any]:
+    ) -> RefreshOptionsAnalyticsResult:
         items = self._run_writer.items_for_run(run_id)
         counts = self._counts(items)
         activity_values = {
@@ -269,13 +290,18 @@ class RefreshOptionsAnalyticsUseCase:
         calculation_version: str,
         schema_version: str,
     ) -> str:
-        material = f"{calculation_version}:{schema_version}:{source_run_id}:" + ",".join(
-            f"{candidate.symbol}:{candidate.kind.value}" for candidate in cohort
+        material = (
+            f"{calculation_version}:{schema_version}:{source_run_id}:"
+            + ",".join(
+                f"{candidate.symbol}:{candidate.kind.value}" for candidate in cohort
+            )
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _existing_run_result(run: object) -> dict[str, Any]:
+    def _existing_run_result(
+        run: OptionsRunRecord,
+    ) -> RefreshOptionsAnalyticsResult:
         return {
             "run_id": run.id,
             "source_run_id": run.source_feature_run_id,

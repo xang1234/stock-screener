@@ -26,7 +26,11 @@ class CandidateHistoryInput:
 
 def _is_liquid(candidate: OptionCandidateInput) -> bool:
     value = candidate.daily_dollar_volume
-    return value is not None and math.isfinite(value) and value > MIN_DAILY_DOLLAR_VOLUME_USD
+    return (
+        value is not None
+        and math.isfinite(value)
+        and value > MIN_DAILY_DOLLAR_VOLUME_USD
+    )
 
 
 def _rank_source(rows: Iterable[OptionCandidateInput]) -> list[OptionCandidateInput]:
@@ -35,9 +39,13 @@ def _rank_source(rows: Iterable[OptionCandidateInput]) -> list[OptionCandidateIn
         if not _is_liquid(row):
             continue
         existing = eligible_by_symbol.get(row.symbol)
-        if existing is None or leadership_order_key(row) < leadership_order_key(existing):
+        if existing is None or leadership_order_key(row) < leadership_order_key(
+            existing
+        ):
             eligible_by_symbol[row.symbol] = row
-    return sorted(eligible_by_symbol.values(), key=leadership_order_key)[:SOURCE_CANDIDATE_LIMIT]
+    return sorted(eligible_by_symbol.values(), key=leadership_order_key)[
+        :SOURCE_CANDIDATE_LIMIT
+    ]
 
 
 def _as_current(
@@ -67,7 +75,9 @@ def select_current_candidates(
     """Select each source independently, then merge without losing provenance."""
     ranked_candidates = _rank_source(top_candidates)
     ranked_leaders = _rank_source(leaders)
-    candidate_ranks = {row.symbol: rank for rank, row in enumerate(ranked_candidates, 1)}
+    candidate_ranks = {
+        row.symbol: rank for rank, row in enumerate(ranked_candidates, 1)
+    }
     leader_ranks = {row.symbol: rank for rank, row in enumerate(ranked_leaders, 1)}
 
     merged: list[OptionCandidate] = []
@@ -105,12 +115,14 @@ def build_candidate_cohort(
         if row.candidate.symbol in current_symbols:
             continue
         existing = continuity_by_symbol.get(row.candidate.symbol)
-        if existing is None or _continuity_order_key(row) < _continuity_order_key(existing):
+        if existing is None or _continuity_order_key(row) < _continuity_order_key(
+            existing
+        ):
             continuity_by_symbol[row.candidate.symbol] = row
 
-    selected_history = sorted(
-        continuity_by_symbol.values(), key=_continuity_order_key
-    )[:CONTINUITY_CANDIDATE_LIMIT]
+    selected_history = sorted(continuity_by_symbol.values(), key=_continuity_order_key)[
+        :CONTINUITY_CANDIDATE_LIMIT
+    ]
     continuity_candidates = [
         OptionCandidate(
             symbol=row.candidate.symbol,

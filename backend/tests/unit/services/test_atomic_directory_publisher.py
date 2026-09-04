@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
 
 

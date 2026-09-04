@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from app.use_cases.options_analytics.ports import (
     OptionsRunItemRecord,
     OptionsRunRecord,

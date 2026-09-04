@@ -8,8 +8,15 @@ from datetime import timezone
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.domain.options_analytics.models import CandidateKind, ObservationState, OptionsRunStatus
-from app.infra.db.models.options_analytics import OptionsAnalyticsRun, OptionsAnalyticsRunItem
+from app.domain.options_analytics.models import (
+    CandidateKind,
+    ObservationState,
+    OptionsRunStatus,
+)
+from app.infra.db.models.options_analytics import (
+    OptionsAnalyticsRun,
+    OptionsAnalyticsRunItem,
+)
 from app.schemas.options_history_transfer import OptionsHistoryObservation
 
 

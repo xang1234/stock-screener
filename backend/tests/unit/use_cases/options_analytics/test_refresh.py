@@ -10,6 +10,7 @@ from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
+    DividendSource,
     NormalizedOptionContract,
     ObservationState,
     OptionCandidate,
@@ -17,9 +18,11 @@ from app.domain.options_analytics.models import (
     OptionSide,
 )
 from app.domain.options_analytics.ports import (
+    LastCurrentMembership,
     OptionsProviderError,
     TransientOptionsProviderError,
 )
+from app.use_cases.options_analytics.analysis_models import OptionsMetricValues
 from app.use_cases.options_analytics.refresh import (
     RefreshOptionsAnalyticsCommand,
     RefreshOptionsAnalyticsUseCase,
@@ -197,8 +200,11 @@ class _Repository:
         for symbol, candidate in self.staged.items():
             if symbol in self.saved:
                 metric_values = self.saved[symbol].get(
-                    "metric_values",
-                    {"max_pain": 100, "atm_iv": 0.25, "activity_intensity": 0.5},
+                    "metric_values"
+                ) or OptionsMetricValues(
+                    max_pain=100,
+                    atm_iv=0.25,
+                    activity_intensity=0.5,
                 )
                 rows.append(
                     SimpleNamespace(
@@ -206,9 +212,9 @@ class _Repository:
                         candidate_kind=candidate.kind.value,
                         observation_state="available",
                         core_valid=self.saved[symbol].get("core_valid", True),
-                        max_pain=metric_values.get("max_pain"),
-                        atm_iv=metric_values.get("atm_iv"),
-                        activity_intensity=metric_values.get("activity_intensity"),
+                        max_pain=metric_values.max_pain,
+                        atm_iv=metric_values.atm_iv,
+                        activity_intensity=metric_values.activity_intensity,
                         retry_count=self.saved[symbol].get("retry_count", 0),
                     )
                 )
@@ -227,7 +233,7 @@ class _Repository:
                 )
         return tuple(rows)
 
-    def symbol_history(self, _symbol, **_kwargs):
+    def analysis_history(self, _symbol, **_kwargs):
         return self.history
 
     def save_activity_ranks(self, _run_id, ranks):
@@ -274,7 +280,6 @@ class _Source:
             as_of_date=date(2026, 9, 4),
             top_candidate_inputs=inputs,
             leader_inputs=(),
-            current_candidates=tuple(candidates),
         )
         self.continuity_inputs = dict(continuity_inputs or {})
 
@@ -297,6 +302,16 @@ class _Cancellation:
 
     def is_cancelled(self):
         return self.cancelled
+
+
+class _CancelAfterChecks:
+    def __init__(self, allowed_checks: int) -> None:
+        self._allowed_checks = allowed_checks
+        self._checks = 0
+
+    def is_cancelled(self) -> bool:
+        self._checks += 1
+        return self._checks > self._allowed_checks
 
 
 def _use_case(
@@ -326,24 +341,24 @@ def test_exactly_90_percent_current_coverage_publishes_and_prunes() -> None:
     candidates = [_candidate(f"S{index}") for index in range(10)]
     repo = _Repository(
         memberships={
-            "OLD": SimpleNamespace(
-                symbol="OLD", as_of_date=date(2026, 9, 3), prior_best_rank=4
+            "OLD": LastCurrentMembership(
+                symbol="OLD",
+                as_of_date=date(2026, 9, 3),
+                prior_best_rank=4,
+                dividend_yield=None,
+                dividend_source=None,
             )
         }
     )
     provider = _Provider(failures={"S9": 3, "OLD": 3})
-    continuity_inputs = {
-        "OLD": OptionCandidateInput("OLD", 80, 200_000_000, 100)
-    }
+    continuity_inputs = {"OLD": OptionCandidateInput("OLD", 80, 200_000_000, 100)}
 
     result = _use_case(
         candidates,
         repo=repo,
         provider=provider,
         continuity_inputs=continuity_inputs,
-    ).execute(
-        RefreshOptionsAnalyticsCommand(source_run_id=33)
-    )
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
 
     assert repo.published.coverage == 0.9
     assert repo.published.core_valid_current_count == 9
@@ -380,8 +395,12 @@ def test_below_90_percent_keeps_pointer_unpublished_and_skips_retention() -> Non
 def test_empty_current_cohort_fails_quality_even_with_continuity() -> None:
     repo = _Repository(
         memberships={
-            "OLD": SimpleNamespace(
-                symbol="OLD", as_of_date=date(2026, 9, 3), prior_best_rank=4
+            "OLD": LastCurrentMembership(
+                symbol="OLD",
+                as_of_date=date(2026, 9, 3),
+                prior_best_rank=4,
+                dividend_yield=None,
+                dividend_source=None,
             )
         }
     )
@@ -389,12 +408,8 @@ def test_empty_current_cohort_fails_quality_even_with_continuity() -> None:
     result = _use_case(
         [],
         repo=repo,
-        continuity_inputs={
-            "OLD": OptionCandidateInput("OLD", 80, 200_000_000, 100)
-        },
-    ).execute(
-        RefreshOptionsAnalyticsCommand(source_run_id=33)
-    )
+        continuity_inputs={"OLD": OptionCandidateInput("OLD", 80, 200_000_000, 100)},
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
 
     assert repo.failed_quality == ("empty_current_cohort",)
     assert result["coverage"] == 0.0
@@ -411,11 +426,11 @@ def test_transient_symbol_retries_three_times_but_saves_one_observation() -> Non
     assert provider.fetch_counts["AAPL"] == 3
     assert list(repo.saved) == ["AAPL"]
     assert repo.saved["AAPL"]["retry_count"] == 2
-    assert repo.saved["AAPL"]["metric_values"]["call_open_interest"] == 1000
-    assert repo.saved["AAPL"]["metric_values"]["put_open_interest"] == 1000
+    assert repo.saved["AAPL"]["metric_values"].call_open_interest == 1000
+    assert repo.saved["AAPL"]["metric_values"].put_open_interest == 1000
     strike = repo.saved["AAPL"]["strike_points"][0]
-    assert strike["estimated_call_gex"] > 0
-    assert strike["estimated_put_gex"] < 0
+    assert strike.estimated_call_gex > 0
+    assert strike.estimated_put_gex < 0
 
 
 def test_non_transient_provider_error_is_not_retried() -> None:
@@ -464,9 +479,7 @@ def test_missing_source_spot_is_unavailable_without_calling_provider() -> None:
     ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
 
     assert provider.fetch_counts == {}
-    assert repo.unavailable["AAPL"]["reason_codes"] == (
-        "source_spot_unavailable",
-    )
+    assert repo.unavailable["AAPL"]["reason_codes"] == ("source_spot_unavailable",)
 
 
 def test_successful_but_thin_chain_is_saved_as_insufficient_core_quality() -> None:
@@ -506,7 +519,7 @@ def test_structurally_valid_chain_without_atm_iv_remains_core_valid() -> None:
 
     assert result["status"] == "published"
     assert repo.saved["AAPL"]["core_valid"] is True
-    assert repo.saved["AAPL"]["metric_values"]["atm_iv"] is None
+    assert repo.saved["AAPL"]["metric_values"].atm_iv is None
 
 
 def test_invalid_observation_does_not_increment_compatible_history() -> None:
@@ -539,8 +552,8 @@ def test_risk_free_failure_only_makes_model_dependent_metrics_unavailable() -> N
     ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
 
     assert result["status"] == "published"
-    assert repo.saved["AAPL"]["metric_values"]["net_gex"] is None
-    assert repo.saved["AAPL"]["metric_values"]["atm_iv"] == 0.275
+    assert repo.saved["AAPL"]["metric_values"].net_gex is None
+    assert repo.saved["AAPL"]["metric_values"].atm_iv == 0.275
     assert repo.run_assumptions[0] is None
 
 
@@ -559,7 +572,9 @@ def test_fetches_at_most_two_concurrently_but_persists_on_caller_thread() -> Non
     assert repo.persistence_threads == [caller_thread, caller_thread, caller_thread]
 
 
-def test_resume_skips_successful_items_and_cancellation_persists_terminal_state() -> None:
+def test_resume_skips_successful_items_and_cancellation_persists_terminal_state() -> (
+    None
+):
     repo = _Repository()
     repo.staged = {"AAPL": _candidate("AAPL")}
     repo.saved = {"AAPL": {}}
@@ -577,6 +592,22 @@ def test_resume_skips_successful_items_and_cancellation_persists_terminal_state(
     assert repo.failed_quality is None
     assert repo.cancelled is True
     assert repo.run.status == "cancelled"
+    assert result["status"] == "cancelled"
+
+
+def test_cancellation_during_collection_persists_completed_work_then_cancels() -> None:
+    repo = _Repository()
+
+    result = _use_case(
+        [_candidate("AAPL")],
+        repo=repo,
+        cancellation=_CancelAfterChecks(allowed_checks=1),
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert tuple(repo.saved) == ("AAPL",)
+    assert repo.published is None
+    assert repo.failed_quality is None
+    assert repo.cancelled is True
     assert result["status"] == "cancelled"
 
 
@@ -598,7 +629,9 @@ def test_resume_counts_previously_saved_items_toward_publication() -> None:
 def test_history_readiness_uses_compatible_observations_with_real_gaps() -> None:
     sessions = _Calendar().sessions_ending_on(date(2026, 9, 4), 30)
     history = tuple(
-        HistoricalObservation(session=session, calculation_version="v1", state=ObservationState.AVAILABLE)
+        HistoricalObservation(
+            session=session, calculation_version="v1", state=ObservationState.AVAILABLE
+        )
         for session in sessions[::2]
     )
     repo = _Repository(history=history)
@@ -613,18 +646,24 @@ def test_history_readiness_uses_compatible_observations_with_real_gaps() -> None
     assert readiness.reason_codes == ("building_history",)
 
 
-def test_continuity_is_derived_from_last_current_membership_and_expires_after_five_sessions() -> None:
+def test_continuity_is_derived_from_last_current_membership_and_expires_after_five_sessions() -> (
+    None
+):
     repo = _Repository(
         memberships={
-            "RECENT": SimpleNamespace(
+            "RECENT": LastCurrentMembership(
                 symbol="RECENT",
                 as_of_date=date(2026, 8, 28),
                 prior_best_rank=2,
                 dividend_yield=0.0,
-                dividend_source="zero_assumption",
+                dividend_source=DividendSource.ZERO_ASSUMPTION,
             ),
-            "EXPIRED": SimpleNamespace(
-                symbol="EXPIRED", as_of_date=date(2026, 8, 27), prior_best_rank=1
+            "EXPIRED": LastCurrentMembership(
+                symbol="EXPIRED",
+                as_of_date=date(2026, 8, 27),
+                prior_best_rank=1,
+                dividend_yield=None,
+                dividend_source=None,
             ),
         }
     )
@@ -633,9 +672,9 @@ def test_continuity_is_derived_from_last_current_membership_and_expires_after_fi
         for symbol in ("RECENT", "EXPIRED")
     }
 
-    _use_case(
-        [_candidate("AAPL")], repo=repo, continuity_inputs=inputs
-    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+    _use_case([_candidate("AAPL")], repo=repo, continuity_inputs=inputs).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
 
     assert repo.staged["RECENT"].kind is CandidateKind.CONTINUITY
     assert repo.staged["RECENT"].sessions_since_current == 5
@@ -679,9 +718,9 @@ def test_quality_evidence_keeps_provider_spot_and_stale_trade_warning() -> None:
 
     repo = _Repository()
 
-    _use_case(
-        [_candidate("AAPL")], repo=repo, provider=DisagreementProvider()
-    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+    _use_case([_candidate("AAPL")], repo=repo, provider=DisagreementProvider()).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
 
     saved = repo.saved["AAPL"]
     assert saved["evidence"]["quality"]["provider_spot_price"] == 103
@@ -741,9 +780,7 @@ def test_unavailable_row_keeps_zero_dividend_warning() -> None:
         RefreshOptionsAnalyticsCommand(source_run_id=33)
     )
 
-    assert repo.unavailable["AAPL"]["warnings"] == (
-        "zero_dividend_assumption",
-    )
+    assert repo.unavailable["AAPL"]["warnings"] == ("zero_dividend_assumption",)
 
 
 def test_repeated_delivery_of_published_run_returns_without_mutation() -> None:
@@ -764,9 +801,9 @@ def test_repeated_delivery_of_published_run_returns_without_mutation() -> None:
     )
     provider = _Provider()
 
-    result = _use_case(
-        [_candidate("AAPL")], repo=repo, provider=provider
-    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+    result = _use_case([_candidate("AAPL")], repo=repo, provider=provider).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
 
     assert result == {
         "run_id": 17,

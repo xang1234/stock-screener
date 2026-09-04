@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.domain.options_analytics.metrics.activity import (
     calculate_activity_metrics,
     rank_activity,

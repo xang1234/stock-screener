@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol, runtime_checkable
 
-from .models import ChainObservation, OptionCandidate, OptionCandidateInput
+from .models import ChainObservation, DividendSource, OptionCandidateInput
 
 
 class OptionsProviderError(RuntimeError):
@@ -34,7 +34,6 @@ class CandidateSourceSnapshot:
     as_of_date: date
     top_candidate_inputs: tuple[OptionCandidateInput, ...]
     leader_inputs: tuple[OptionCandidateInput, ...]
-    current_candidates: tuple[OptionCandidate, ...]
 
 
 @dataclass(frozen=True)
@@ -43,7 +42,7 @@ class LastCurrentMembership:
     as_of_date: date
     prior_best_rank: int
     dividend_yield: float | None
-    dividend_source: str | None
+    dividend_source: DividendSource | None
 
 
 @runtime_checkable

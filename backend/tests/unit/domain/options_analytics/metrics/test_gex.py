@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.domain.options_analytics.metrics.gex import (
     black_scholes_unit_gamma,
     estimate_contract_gex,

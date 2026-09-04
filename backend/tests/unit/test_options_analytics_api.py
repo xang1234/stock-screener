@@ -5,14 +5,13 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from pydantic import ValidationError
-
 from app.database import get_db
 from app.main import app
 from app.schemas.options_analytics import (
     OptionsCommandCenterResponse,
     OptionsMetricResponse,
 )
+from pydantic import ValidationError
 
 
 def _item(symbol: str, *, kind="current", state="available", core_valid=None):

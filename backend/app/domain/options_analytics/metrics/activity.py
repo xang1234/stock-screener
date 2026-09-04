@@ -28,9 +28,13 @@ def _non_negative(value: int | None) -> int | None:
 def calculate_activity_metrics(
     contracts: tuple[NormalizedOptionContract, ...], *, spot: float
 ) -> ActivityMetrics:
-    volumes = [value for row in contracts if (value := _non_negative(row.volume)) is not None]
+    volumes = [
+        value for row in contracts if (value := _non_negative(row.volume)) is not None
+    ]
     open_interests = [
-        value for row in contracts if (value := _non_negative(row.open_interest)) is not None
+        value
+        for row in contracts
+        if (value := _non_negative(row.open_interest)) is not None
     ]
     total_volume = sum(volumes)
     total_open_interest = sum(open_interests)
@@ -85,6 +89,5 @@ def rank_activity(values: Mapping[str, MetricValue]) -> dict[str, int | None]:
     )
     ranks = {symbol: rank for rank, (symbol, _) in enumerate(available, 1)}
     return {
-        symbol.strip().upper(): ranks.get(symbol.strip().upper())
-        for symbol in values
+        symbol.strip().upper(): ranks.get(symbol.strip().upper()) for symbol in values
     }

@@ -8,9 +8,8 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.domain.options_analytics.models import OptionCandidate, OptionCandidateInput
+from app.domain.options_analytics.models import OptionCandidateInput
 from app.domain.options_analytics.ports import CandidateSourceSnapshot
-from app.domain.options_analytics.selection import select_current_candidates
 from app.domain.scanning.leadership_policy import (
     LEADERS_MAX_GROUP_RANK,
     LEADERS_MIN_RS_RATING,
@@ -81,13 +80,11 @@ class SqlOptionsCandidateSource:
                 and group_rank <= LEADERS_MAX_GROUP_RANK
             ):
                 leaders.append(item)
-        current = select_current_candidates(candidates, leaders)
         return CandidateSourceSnapshot(
             source_feature_run_id=run.id,
             as_of_date=run.as_of_date,
             top_candidate_inputs=tuple(candidates),
             leader_inputs=tuple(leaders),
-            current_candidates=tuple(current),
         )
 
     def _price_closes(
@@ -112,8 +109,7 @@ class SqlOptionsCandidateSource:
             if len(values) < 21:
                 values.append(float(close))
         return {
-            symbol: tuple(reversed(values))
-            for symbol, values in newest_first.items()
+            symbol: tuple(reversed(values)) for symbol, values in newest_first.items()
         }
 
     def read_continuity_inputs(

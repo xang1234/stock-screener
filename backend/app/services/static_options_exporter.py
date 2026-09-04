@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from app.infra.serialization import json_safe
 from app.schemas.options_analytics import (
@@ -17,6 +17,20 @@ from app.services.static_options_contract import (
     STATIC_OPTIONS_SCHEMA_VERSION,
     validate_static_options_artifact,
 )
+from app.use_cases.options_analytics.ports import OptionsRunRecord
+from app.use_cases.options_analytics.queries import PublishedOptionsSymbolDetail
+
+
+class StaticOptionsQueries(Protocol):
+    def get_published_command_center(self, market: str) -> OptionsRunRecord | None: ...
+
+    def get_published_symbol_detail(
+        self,
+        symbol: str,
+        market: str,
+    ) -> PublishedOptionsSymbolDetail | None: ...
+
+    def is_stale(self, run: OptionsRunRecord, market: str) -> bool: ...
 
 
 class StaticOptionsUnavailable(RuntimeError):
@@ -40,7 +54,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 class StaticOptionsExporter:
     def __init__(
         self,
-        queries: Any,
+        queries: StaticOptionsQueries,
         *,
         publisher: AtomicDirectoryPublisher | None = None,
     ) -> None:

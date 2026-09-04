@@ -33,12 +33,6 @@ class OptionsMetricValues:
     volume_oi_ratio: float | None = None
     near_spot_volume_concentration: float | None = None
 
-    def __getitem__(self, name: str) -> float | int | None:
-        return getattr(self, name)
-
-    def get(self, name: str, default=None):
-        return getattr(self, name, default)
-
 
 @dataclass(frozen=True)
 class OptionsStrikePoint:
@@ -51,9 +45,6 @@ class OptionsStrikePoint:
     put_iv: float | None = None
     estimated_call_gex: float | None = None
     estimated_put_gex: float | None = None
-
-    def __getitem__(self, name: str) -> float | int | None:
-        return getattr(self, name)
 
 
 @dataclass(frozen=True)

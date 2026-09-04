@@ -16,6 +16,7 @@ from app.domain.options_analytics.models import (
     OptionCandidate,
     OptionSide,
 )
+
 from .analysis_models import OptionsMetricValues, OptionsStrikePoint
 
 
@@ -204,31 +205,36 @@ def quality_evidence(
             }
         ),
         "open_interest_coverage": coverage(
-            lambda contract: getattr(contract, "open_interest") is not None
-            and getattr(contract, "open_interest") >= 0
+            lambda contract: (
+                contract.open_interest is not None and contract.open_interest >= 0
+            )
         ),
         "iv_coverage": coverage(
-            lambda contract: getattr(contract, "implied_volatility") is not None
-            and math.isfinite(float(getattr(contract, "implied_volatility")))
-            and getattr(contract, "implied_volatility") > 0
+            lambda contract: (
+                contract.implied_volatility is not None
+                and math.isfinite(float(contract.implied_volatility))
+                and contract.implied_volatility > 0
+            )
         ),
         "volume_coverage": coverage(
-            lambda contract: getattr(contract, "volume") is not None
-            and getattr(contract, "volume") >= 0
+            lambda contract: contract.volume is not None and contract.volume >= 0
         ),
         "two_sided_quote_coverage": coverage(
-            lambda contract: getattr(contract, "bid") is not None
-            and math.isfinite(float(getattr(contract, "bid")))
-            and getattr(contract, "bid") >= 0
-            and getattr(contract, "ask") is not None
-            and math.isfinite(float(getattr(contract, "ask")))
-            and getattr(contract, "ask") >= 0
+            lambda contract: (
+                contract.bid is not None
+                and math.isfinite(float(contract.bid))
+                and contract.bid >= 0
+                and contract.ask is not None
+                and math.isfinite(float(contract.ask))
+                and contract.ask >= 0
+            )
         ),
     }
     if provider_spot is not None and observation.source_spot_price > 0:
-        evidence["spot_disagreement_ratio"] = abs(
-            float(provider_spot) - observation.source_spot_price
-        ) / observation.source_spot_price
+        evidence["spot_disagreement_ratio"] = (
+            abs(float(provider_spot) - observation.source_spot_price)
+            / observation.source_spot_price
+        )
     return evidence
 
 

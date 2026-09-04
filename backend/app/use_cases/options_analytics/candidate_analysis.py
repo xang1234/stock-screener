@@ -6,9 +6,19 @@ import math
 from collections.abc import Sequence
 
 from app.domain.options_analytics.expiration import select_monthly_expiration
-from app.domain.options_analytics.history import HistoricalObservation, history_readiness
-from app.domain.options_analytics.metrics.aggregate import calculate_chain_metrics
-from app.domain.options_analytics.models import ObservationState, OptionCandidate
+from app.domain.options_analytics.history import (
+    HistoricalObservation,
+    history_readiness,
+)
+from app.domain.options_analytics.metrics.aggregate import (
+    ChainMetrics,
+    calculate_chain_metrics,
+)
+from app.domain.options_analytics.models import (
+    ChainObservation,
+    ObservationState,
+    OptionCandidate,
+)
 from app.domain.options_analytics.ports import (
     OptionsProvider,
     OptionsProviderError,
@@ -35,13 +45,13 @@ from .analysis_projection import (
 
 
 class SymbolHistoryReader:
-    def symbol_history(
+    def analysis_history(
         self,
         symbol: str,
         *,
         market: str,
         calculation_version: str,
-    ) -> Sequence[object]:
+    ) -> Sequence[HistoricalObservation]:
         raise NotImplementedError
 
 
@@ -94,7 +104,9 @@ class OptionsCandidateAnalyzer:
             try:
                 expiration = select_monthly_expiration(
                     as_of_date=context.as_of_date,
-                    listed_expirations=self._provider.list_expirations(candidate.symbol),
+                    listed_expirations=self._provider.list_expirations(
+                        candidate.symbol
+                    ),
                     calendar=self._calendar,
                 )
                 if expiration is None:
@@ -148,14 +160,14 @@ class OptionsCandidateAnalyzer:
 
     def _available(
         self,
-        candidate,
-        observation,
-        metrics,
-        context,
-        assumptions,
-        run_warnings,
-        retry_count,
-        dividend_yield,
+        candidate: OptionCandidate,
+        observation: ChainObservation,
+        metrics: ChainMetrics,
+        context: AnalysisContext,
+        assumptions: dict[str, object],
+        run_warnings: tuple[str, ...],
+        retry_count: int,
+        dividend_yield: float,
     ) -> AvailableCandidateAnalysis:
         core_valid = has_core_chain_coverage(observation)
         historical = (*self._historical_observations(candidate, context),)
@@ -216,24 +228,12 @@ class OptionsCandidateAnalyzer:
         candidate: OptionCandidate,
         context: AnalysisContext,
     ) -> tuple[HistoricalObservation, ...]:
-        rows = self._history_reader.symbol_history(
+        rows = self._history_reader.analysis_history(
             candidate.symbol,
             market=context.market,
             calculation_version=self._calculation_version,
         )
-        observations = []
-        for row in rows:
-            if isinstance(row, HistoricalObservation):
-                observations.append(row)
-            else:
-                observations.append(
-                    HistoricalObservation(
-                        session=row.run.as_of_date,
-                        calculation_version=row.run.calculation_version,
-                        state=ObservationState(row.observation_state),
-                    )
-                )
-        return tuple(observations)
+        return tuple(rows)
 
     @staticmethod
     def _unavailable(

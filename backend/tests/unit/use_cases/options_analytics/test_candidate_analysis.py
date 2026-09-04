@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from app.domain.options_analytics.models import CandidateKind, OptionCandidate
+from app.use_cases.options_analytics.analysis_models import (
+    OptionsMetricValues,
+    OptionsStrikePoint,
+)
 from app.use_cases.options_analytics.candidate_analysis import (
     AnalysisContext,
     OptionsCandidateAnalyzer,
     UnavailableCandidateAnalysis,
-)
-from app.use_cases.options_analytics.analysis_models import (
-    OptionsMetricValues,
-    OptionsStrikePoint,
 )
 
 
@@ -19,7 +19,9 @@ class Calendar:
         return value.weekday() < 5
 
     def sessions_ending_on(self, value: date, count: int) -> tuple[date, ...]:
-        return tuple(value - timedelta(days=offset) for offset in reversed(range(count)))
+        return tuple(
+            value - timedelta(days=offset) for offset in reversed(range(count))
+        )
 
 
 class Provider:
@@ -32,11 +34,19 @@ class Provider:
 
 
 class History:
-    def symbol_history(self, symbol: str, *, market: str, calculation_version: str):
+    def analysis_history(
+        self,
+        symbol: str,
+        *,
+        market: str,
+        calculation_version: str,
+    ):
         raise AssertionError((symbol, market, calculation_version))
 
 
-def test_missing_spot_returns_a_distinct_unavailable_result_without_provider_io() -> None:
+def test_missing_spot_returns_a_distinct_unavailable_result_without_provider_io() -> (
+    None
+):
     provider = Provider()
     analyzer = OptionsCandidateAnalyzer(
         provider=provider,
@@ -75,6 +85,6 @@ def test_persistence_projection_has_closed_metric_and_strike_fields() -> None:
     point = OptionsStrikePoint(strike=100, call_open_interest=200)
 
     assert metrics.atm_iv == 0.25
-    assert metrics["call_volume"] == 120
+    assert metrics.call_volume == 120
     assert point.call_open_interest == 200
-    assert point["strike"] == 100
+    assert point.strike == 100

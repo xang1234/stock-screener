@@ -4,15 +4,14 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base
+from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
     HistoryReadiness,
     NormalizedOptionContract,
+    ObservationState,
     OptionCandidate,
     OptionSide,
     OptionsRunStatus,
@@ -36,12 +35,14 @@ from app.infra.db.repositories.published_options_reader import (
     SqlPublishedOptionsReader,
 )
 from app.infra.db.uow import SqlUnitOfWork
+from app.schemas.options_history_transfer import OptionsHistoryObservation
 from app.use_cases.options_analytics.analysis_models import (
     OptionsMetricValues,
     OptionsStrikePoint,
     UnavailableCandidateAnalysis,
 )
-from app.schemas.options_history_transfer import OptionsHistoryObservation
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
 
 from ..test_options_history_transfer import _observation as _transfer_observation
 
@@ -289,7 +290,9 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
 def test_resume_returns_only_nonterminal_items(session) -> None:
     repo = _Repositories(session)
     run = _start(repo)
-    repo.stage_candidates(run.id, [_candidate("AAPL"), _candidate("MSFT"), _candidate("NVDA")])
+    repo.stage_candidates(
+        run.id, [_candidate("AAPL"), _candidate("MSFT"), _candidate("NVDA")]
+    )
     repo.save_item_result(run.id, "AAPL", observation=_observation("AAPL"))
     repo.save_unavailable(run.id, "MSFT", reason_codes=("expiration_unavailable",))
 
@@ -364,7 +367,9 @@ def test_save_records_history_readiness_counts_without_filling_gaps(session) -> 
     assert item.lifetime_observation_count == 14
 
 
-def test_publish_advances_pointer_atomically_and_failed_quality_does_not(session) -> None:
+def test_publish_advances_pointer_atomically_and_failed_quality_does_not(
+    session,
+) -> None:
     repo = _Repositories(session)
     first = _start(repo, "first")
     repo.stage_candidates(first.id, [_candidate("AAPL")])
@@ -380,7 +385,9 @@ def test_publish_advances_pointer_atomically_and_failed_quality_does_not(session
     assert repo.get_published_run("US", "v1").id == first.id
 
 
-def test_published_symbol_detail_and_run_diagnostics_use_repository_state(session) -> None:
+def test_published_symbol_detail_and_run_diagnostics_use_repository_state(
+    session,
+) -> None:
     repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(run.id, [_candidate("AAPL")])
@@ -427,7 +434,28 @@ def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) 
 
     history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
 
-    assert [row.run.as_of_date for row in history] == [date(2026, 9, 1), date(2026, 9, 3)]
+    assert [row.run.as_of_date for row in history] == [
+        date(2026, 9, 1),
+        date(2026, 9, 3),
+    ]
+
+    analysis_history = repo.analysis_history(
+        "AAPL",
+        market="US",
+        calculation_version="v1",
+    )
+    assert analysis_history == (
+        HistoricalObservation(
+            session=date(2026, 9, 1),
+            calculation_version="v1",
+            state=ObservationState.AVAILABLE,
+        ),
+        HistoricalObservation(
+            session=date(2026, 9, 3),
+            calculation_version="v1",
+            state=ObservationState.AVAILABLE,
+        ),
+    )
 
 
 def test_history_excludes_published_insufficient_quality_observations(session) -> None:
@@ -463,7 +491,9 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
     )
     repo.publish(current_run.id, _published_summary())
     continuity_run = _start(repo, "continuity", as_of=date(2026, 9, 2))
-    repo.stage_candidates(continuity_run.id, [_candidate("AAPL", CandidateKind.CONTINUITY)])
+    repo.stage_candidates(
+        continuity_run.id, [_candidate("AAPL", CandidateKind.CONTINUITY)]
+    )
     repo.publish(continuity_run.id, _published_summary())
     session.commit()
 
@@ -489,7 +519,9 @@ def test_named_repository_operations_commit_complete_state_transitions(session) 
     assert session.query(OptionsAnalyticsPointer).count() == 1
 
 
-def test_retention_prunes_old_aggregates_and_keeps_only_30_runs_of_strikes(session) -> None:
+def test_retention_prunes_old_aggregates_and_keeps_only_30_runs_of_strikes(
+    session,
+) -> None:
     repo = _Repositories(session)
     first_date = date(2026, 1, 5)
     for index in range(32):
@@ -515,7 +547,9 @@ def test_retention_prunes_old_aggregates_and_keeps_only_30_runs_of_strikes(sessi
     session.commit()
 
     pointer = session.get(OptionsAnalyticsPointer, ("US", "v1"))
-    assert session.get(OptionsAnalyticsRun, pointer.run_id).as_of_date == first_date + timedelta(days=31)
+    assert session.get(
+        OptionsAnalyticsRun, pointer.run_id
+    ).as_of_date == first_date + timedelta(days=31)
     assert session.query(OptionsAnalyticsRunItem).count() == 31
     assert session.query(OptionsAnalyticsStrikePoint).count() == 30
 

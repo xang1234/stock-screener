@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[2]
 PRODUCTION_ROOTS = (ROOT / "app", ROOT.parent / "frontend" / "src")
 FORBIDDEN = (

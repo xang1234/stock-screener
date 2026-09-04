@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 import pytest
-
 from app.domain.options_analytics.metrics.aggregate import calculate_chain_metrics
 from app.domain.options_analytics.models import (
     ChainObservation,

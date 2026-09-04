@@ -31,7 +31,7 @@ class OptionsHistoryRepository(Protocol):
         self,
         market: str,
         calculation_version: str,
-    ) -> Sequence[OptionsHistoryObservation | Mapping[str, object]]: ...
+    ) -> Sequence[OptionsHistoryObservation]: ...
 
     def import_history_transfer(
         self,
@@ -43,8 +43,16 @@ class OptionsHistoryRepository(Protocol):
     ) -> dict[str, int | str]: ...
 
 
+class PublishedRunRecord(Protocol):
+    id: int
+
+
 class PublishedRunReader(Protocol):
-    def get_published_run(self, market: str, calculation_version: str) -> object | None: ...
+    def get_published_run(
+        self,
+        market: str,
+        calculation_version: str,
+    ) -> PublishedRunRecord | None: ...
 
 
 def _canonical_payload(bundle: Mapping[str, object]) -> bytes:
@@ -97,12 +105,9 @@ class OptionsHistoryTransfer:
                 )
         observations = tuple(
             sorted(
-                (
-                    OptionsHistoryObservation.model_validate(row)
-                    for row in self._repository.export_history_observations(
-                        self._market,
-                        self._calculation_version,
-                    )
+                self._repository.export_history_observations(
+                    self._market,
+                    self._calculation_version,
                 ),
                 key=lambda row: (row.as_of_date, *row.identity),
             )
@@ -115,9 +120,7 @@ class OptionsHistoryTransfer:
             .astimezone(UTC)
             .isoformat()
             .replace("+00:00", "Z"),
-            "observations": [
-                row.model_dump(mode="json") for row in observations
-            ],
+            "observations": [row.model_dump(mode="json") for row in observations],
         }
         payload["payload_checksum"] = _checksum(payload)
         return payload
@@ -142,7 +145,9 @@ class OptionsHistoryTransfer:
         try:
             parsed = OptionsHistoryBundle.model_validate(bundle)
         except ValidationError as exc:
-            raise OptionsHistoryTransferError(f"invalid history payload: {exc}") from exc
+            raise OptionsHistoryTransferError(
+                f"invalid history payload: {exc}"
+            ) from exc
         self._validate_observations(parsed.observations, today=today)
         if parsed.payload_checksum != _checksum(bundle):
             raise OptionsHistoryTransferError("history payload checksum mismatch")

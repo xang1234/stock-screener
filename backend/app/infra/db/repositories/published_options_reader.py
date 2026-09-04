@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.domain.options_analytics.models import CandidateKind, ObservationState, OptionsRunStatus
+from app.domain.options_analytics.history import HistoricalObservation
+from app.domain.options_analytics.models import (
+    CandidateKind,
+    DividendSource,
+    ObservationState,
+    OptionsRunStatus,
+)
 from app.domain.options_analytics.ports import LastCurrentMembership
 from app.infra.db.models.feature_store import FeatureRunPointer
 from app.infra.db.models.options_analytics import (
@@ -100,6 +106,26 @@ class SqlPublishedOptionsReader:
             .all()
         )
 
+    def analysis_history(
+        self,
+        symbol: str,
+        *,
+        market: str,
+        calculation_version: str,
+    ) -> tuple[HistoricalObservation, ...]:
+        return tuple(
+            HistoricalObservation(
+                session=item.run.as_of_date,
+                calculation_version=item.run.calculation_version,
+                state=ObservationState(item.observation_state),
+            )
+            for item in self.symbol_history(
+                symbol,
+                market=market,
+                calculation_version=calculation_version,
+            )
+        )
+
     def last_current_memberships(
         self,
         market: str,
@@ -130,7 +156,11 @@ class SqlPublishedOptionsReader:
                 as_of_date=as_of_date,
                 prior_best_rank=min(ranks) if ranks else 10_000,
                 dividend_yield=(item.assumptions_json or {}).get("dividend_yield"),
-                dividend_source=(item.assumptions_json or {}).get("dividend_source"),
+                dividend_source=(
+                    DividendSource(source)
+                    if (source := (item.assumptions_json or {}).get("dividend_source"))
+                    else None
+                ),
             )
         return memberships
 

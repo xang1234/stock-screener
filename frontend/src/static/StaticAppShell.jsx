@@ -1,13 +1,15 @@
+import { lazy } from 'react';
 import { HashRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import StaticLayout from './StaticLayout';
 import StaticHomePage from './pages/StaticHomePage';
 import StaticScanPage from './pages/StaticScanPage';
 import StaticBreadthPage from './pages/StaticBreadthPage';
 import StaticGroupsPage from './pages/StaticGroupsPage';
-import StaticOptionsPage from './pages/StaticOptionsPage';
-import StaticOptionsSymbolPage from './pages/StaticOptionsSymbolPage';
 import { StaticMarketProvider } from './StaticMarketContext';
 import { getStaticSupportedMarkets, useStaticManifest } from './dataClient';
+
+const StaticOptionsPage = lazy(() => import('./pages/StaticOptionsPage'));
+const StaticOptionsSymbolPage = lazy(() => import('./pages/StaticOptionsSymbolPage'));
 
 function StaticAppContent() {
   const manifestQuery = useStaticManifest();
