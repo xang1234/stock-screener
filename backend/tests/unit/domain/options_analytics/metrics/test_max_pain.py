@@ -4,7 +4,13 @@ from app.domain.options_analytics.metrics.max_pain import calculate_max_pain
 from app.domain.options_analytics.models import NormalizedOptionContract, OptionSide
 
 
-def _contract(side: OptionSide, strike: float, oi: int | None) -> NormalizedOptionContract:
+def _contract(
+    side: OptionSide,
+    strike: float,
+    oi: int | None,
+    *,
+    multiplier: int | None = 100,
+) -> NormalizedOptionContract:
     return NormalizedOptionContract(
         side=side,
         strike=strike,
@@ -15,8 +21,8 @@ def _contract(side: OptionSide, strike: float, oi: int | None) -> NormalizedOpti
         open_interest=oi,
         implied_volatility=0.25,
         last_trade_at=None,
-        contract_size="REGULAR",
-        multiplier=100,
+        contract_size="REGULAR" if multiplier == 100 else "NON_STANDARD",
+        multiplier=multiplier,
     )
 
 
@@ -40,3 +46,18 @@ def test_max_pain_is_unavailable_without_non_negative_open_interest() -> None:
 
     assert result.available is False
     assert result.reason_codes == ("open_interest_unavailable",)
+
+
+def test_max_pain_weights_known_multipliers_and_ignores_unknown_contract_sizes() -> (
+    None
+):
+    contracts = (
+        _contract(OptionSide.CALL, 90, 1, multiplier=10),
+        _contract(OptionSide.PUT, 110, 1, multiplier=100),
+        _contract(OptionSide.CALL, 95, 10_000, multiplier=None),
+    )
+
+    result = calculate_max_pain(contracts)
+
+    assert result.available is True
+    assert result.value == 110

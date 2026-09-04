@@ -37,7 +37,11 @@ class SqlOptionsHistoryRepository:
                 OptionsAnalyticsRun.calculation_version == calculation_version,
                 OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
             )
-            .order_by(OptionsAnalyticsRun.as_of_date, OptionsAnalyticsRun.id)
+            .order_by(
+                OptionsAnalyticsRun.as_of_date.asc(),
+                OptionsAnalyticsRun.attempt_number.desc(),
+                OptionsAnalyticsRun.id.desc(),
+            )
             .all()
         )
         observations: list[OptionsHistoryObservation] = []
@@ -141,6 +145,16 @@ class SqlOptionsHistoryRepository:
             realized_volatility=item.realized_volatility,
             vrp=item.vrp,
             activity_intensity=item.activity_intensity,
+            iv_percentile=item.iv_percentile,
+            iv_rank=item.iv_rank,
+            max_pain_change_5=item.max_pain_change_5,
+            net_gex_change_5=item.net_gex_change_5,
+            gamma_flip_change_5=item.gamma_flip_change_5,
+            atm_iv_change_5=item.atm_iv_change_5,
+            skew_25_delta_change_5=item.skew_25_delta_change_5,
+            realized_volatility_change_5=item.realized_volatility_change_5,
+            vrp_change_5=item.vrp_change_5,
+            activity_intensity_change_5=item.activity_intensity_change_5,
             activity_rank=item.activity_rank,
             call_open_interest=item.call_open_interest,
             put_open_interest=item.put_open_interest,
@@ -196,7 +210,9 @@ class SqlOptionsHistoryRepository:
             expected_count=len(rows),
             current_count=len(current),
             continuity_count=len(rows) - len(current),
-            completed_count=sum(row.observation_state in completed_states for row in rows),
+            completed_count=sum(
+                row.observation_state in completed_states for row in rows
+            ),
             core_valid_current_count=core_valid_count,
             failed_count=sum(
                 row.observation_state
@@ -216,7 +232,9 @@ class SqlOptionsHistoryRepository:
         )
 
     @staticmethod
-    def _import_item(run_id: int, row: OptionsHistoryObservation) -> OptionsAnalyticsRunItem:
+    def _import_item(
+        run_id: int, row: OptionsHistoryObservation
+    ) -> OptionsAnalyticsRunItem:
         return OptionsAnalyticsRunItem(
             run_id=run_id,
             security_symbol=row.symbol,
@@ -238,6 +256,16 @@ class SqlOptionsHistoryRepository:
             realized_volatility=row.realized_volatility,
             vrp=row.vrp,
             activity_intensity=row.activity_intensity,
+            iv_percentile=row.iv_percentile,
+            iv_rank=row.iv_rank,
+            max_pain_change_5=row.max_pain_change_5,
+            net_gex_change_5=row.net_gex_change_5,
+            gamma_flip_change_5=row.gamma_flip_change_5,
+            atm_iv_change_5=row.atm_iv_change_5,
+            skew_25_delta_change_5=row.skew_25_delta_change_5,
+            realized_volatility_change_5=row.realized_volatility_change_5,
+            vrp_change_5=row.vrp_change_5,
+            activity_intensity_change_5=row.activity_intensity_change_5,
             activity_rank=row.activity_rank,
             call_open_interest=row.call_open_interest,
             put_open_interest=row.put_open_interest,

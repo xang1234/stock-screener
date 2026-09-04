@@ -75,6 +75,9 @@
               "default": null,
               "title": "Expiration"
             },
+            "historical_metrics": {
+              "$ref": "#/$defs/OptionsHistoricalMetricsResponse"
+            },
             "iv_history_observation_count": {
               "title": "Iv History Observation Count",
               "type": "integer"
@@ -198,9 +201,59 @@
             "lifetime_observation_count",
             "retry_count",
             "quality_evidence",
-            "metrics"
+            "metrics",
+            "historical_metrics"
           ],
           "title": "OptionsCommandCenterItemResponse",
+          "type": "object"
+        },
+        "OptionsHistoricalMetricsResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_intensity_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "atm_iv_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "gamma_flip_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_percentile": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_rank": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "max_pain_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "net_gex_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "realized_volatility_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "skew_25_delta_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "vrp_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            }
+          },
+          "required": [
+            "iv_percentile",
+            "iv_rank",
+            "max_pain_change_5",
+            "net_gex_change_5",
+            "gamma_flip_change_5",
+            "atm_iv_change_5",
+            "skew_25_delta_change_5",
+            "realized_volatility_change_5",
+            "vrp_change_5",
+            "activity_intensity_change_5"
+          ],
+          "title": "OptionsHistoricalMetricsResponse",
           "type": "object"
         },
         "OptionsMetricResponse": {
@@ -816,6 +869,9 @@
               "default": null,
               "title": "Expiration"
             },
+            "historical_metrics": {
+              "$ref": "#/$defs/OptionsHistoricalMetricsResponse"
+            },
             "iv_history_observation_count": {
               "title": "Iv History Observation Count",
               "type": "integer"
@@ -939,9 +995,59 @@
             "lifetime_observation_count",
             "retry_count",
             "quality_evidence",
-            "metrics"
+            "metrics",
+            "historical_metrics"
           ],
           "title": "OptionsCommandCenterItemResponse",
+          "type": "object"
+        },
+        "OptionsHistoricalMetricsResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_intensity_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "atm_iv_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "gamma_flip_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_percentile": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_rank": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "max_pain_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "net_gex_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "realized_volatility_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "skew_25_delta_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "vrp_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            }
+          },
+          "required": [
+            "iv_percentile",
+            "iv_rank",
+            "max_pain_change_5",
+            "net_gex_change_5",
+            "gamma_flip_change_5",
+            "atm_iv_change_5",
+            "skew_25_delta_change_5",
+            "realized_volatility_change_5",
+            "vrp_change_5",
+            "activity_intensity_change_5"
+          ],
+          "title": "OptionsHistoricalMetricsResponse",
           "type": "object"
         },
         "OptionsHistoryPointResponse": {
@@ -958,6 +1064,18 @@
               ],
               "default": null,
               "title": "Activity Intensity"
+            },
+            "activity_intensity_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Intensity Change 5"
             },
             "as_of_date": {
               "format": "date",
@@ -976,6 +1094,18 @@
               "default": null,
               "title": "Atm Iv"
             },
+            "atm_iv_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Atm Iv Change 5"
+            },
             "gamma_flip": {
               "anyOf": [
                 {
@@ -987,6 +1117,42 @@
               ],
               "default": null,
               "title": "Gamma Flip"
+            },
+            "gamma_flip_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gamma Flip Change 5"
+            },
+            "iv_percentile": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Iv Percentile"
+            },
+            "iv_rank": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Iv Rank"
             },
             "max_pain": {
               "anyOf": [
@@ -1000,6 +1166,18 @@
               "default": null,
               "title": "Max Pain"
             },
+            "max_pain_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Pain Change 5"
+            },
             "net_gex": {
               "anyOf": [
                 {
@@ -1011,6 +1189,18 @@
               ],
               "default": null,
               "title": "Net Gex"
+            },
+            "net_gex_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Net Gex Change 5"
             },
             "realized_volatility": {
               "anyOf": [
@@ -1024,6 +1214,18 @@
               "default": null,
               "title": "Realized Volatility"
             },
+            "realized_volatility_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Realized Volatility Change 5"
+            },
             "skew_25_delta": {
               "anyOf": [
                 {
@@ -1035,6 +1237,18 @@
               ],
               "default": null,
               "title": "Skew 25 Delta"
+            },
+            "skew_25_delta_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skew 25 Delta Change 5"
             },
             "state": {
               "title": "State",
@@ -1051,6 +1265,18 @@
               ],
               "default": null,
               "title": "Vrp"
+            },
+            "vrp_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vrp Change 5"
             }
           },
           "required": [

@@ -33,24 +33,12 @@ class Provider:
         raise AssertionError(symbol)
 
 
-class History:
-    def analysis_history(
-        self,
-        symbol: str,
-        *,
-        market: str,
-        calculation_version: str,
-    ):
-        raise AssertionError((symbol, market, calculation_version))
-
-
 def test_missing_spot_returns_a_distinct_unavailable_result_without_provider_io() -> (
     None
 ):
     provider = Provider()
     analyzer = OptionsCandidateAnalyzer(
         provider=provider,
-        history_reader=History(),
         calendar=Calendar(),
         calculation_version="v1",
     )

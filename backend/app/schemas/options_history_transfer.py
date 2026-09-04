@@ -38,6 +38,16 @@ class OptionsHistoryObservation(BaseModel):
     realized_volatility: float | None = None
     vrp: float | None = None
     activity_intensity: float | None = None
+    iv_percentile: float | None = None
+    iv_rank: float | None = None
+    max_pain_change_5: float | None = None
+    net_gex_change_5: float | None = None
+    gamma_flip_change_5: float | None = None
+    atm_iv_change_5: float | None = None
+    skew_25_delta_change_5: float | None = None
+    realized_volatility_change_5: float | None = None
+    vrp_change_5: float | None = None
+    activity_intensity_change_5: float | None = None
     activity_rank: int | None = Field(default=None, ge=1)
     call_open_interest: int | None = Field(default=None, ge=0)
     put_open_interest: int | None = Field(default=None, ge=0)

@@ -4,12 +4,17 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+
 from app.database import Base
 from app.domain.options_analytics.history import HistoricalObservation
+from app.domain.options_analytics.metrics.history import HistoricalMetrics
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
     HistoryReadiness,
+    MetricValue,
     NormalizedOptionContract,
     ObservationState,
     OptionCandidate,
@@ -41,8 +46,6 @@ from app.use_cases.options_analytics.analysis_models import (
     OptionsStrikePoint,
     UnavailableCandidateAnalysis,
 )
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
 
 from ..test_options_history_transfer import _observation as _transfer_observation
 
@@ -76,6 +79,7 @@ class _Repositories(
         retry_count=0,
         history_readiness=None,
         core_valid=None,
+        historical_metrics=None,
     ):
         metrics = {
             "max_pain": None,
@@ -116,6 +120,13 @@ class _Repositories(
             reason_codes=tuple(reason_codes),
             retry_count=retry_count,
             history_readiness=readiness,
+            historical_metrics=historical_metrics
+            or HistoricalMetrics(
+                **{
+                    name: MetricValue(available=False)
+                    for name in HistoricalMetrics.__dataclass_fields__
+                }
+            ),
         )
         self.save_analysis(run_id, analysis)
         return self._get_item(run_id, symbol)
@@ -367,6 +378,33 @@ def test_save_records_history_readiness_counts_without_filling_gaps(session) -> 
     assert item.lifetime_observation_count == 14
 
 
+def test_save_persists_calculated_historical_metrics(session) -> None:
+    repo = _Repositories(session)
+    run = _start(repo)
+    repo.stage_candidates(run.id, [_candidate("AAPL")])
+    historical = HistoricalMetrics(
+        **{
+            name: MetricValue(available=True, value=float(index))
+            for index, name in enumerate(
+                HistoricalMetrics.__dataclass_fields__,
+                start=1,
+            )
+        }
+    )
+
+    repo.save_item_result(
+        run.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        historical_metrics=historical,
+    )
+
+    item = session.query(OptionsAnalyticsRunItem).one()
+    assert item.iv_percentile == 1
+    assert item.iv_rank == 2
+    assert item.activity_intensity_change_5 == 10
+
+
 def test_publish_advances_pointer_atomically_and_failed_quality_does_not(
     session,
 ) -> None:
@@ -456,6 +494,69 @@ def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) 
             state=ObservationState.AVAILABLE,
         ),
     )
+
+
+def test_symbol_history_keeps_only_the_newest_published_forced_attempt(session) -> None:
+    repo = _Repositories(session)
+    first = _start(repo, "same-input")
+    repo.stage_candidates(first.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        first.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={"atm_iv": 0.20},
+        core_valid=True,
+    )
+    repo.publish(first.id, _published_summary())
+
+    forced = _start(repo, "same-input", force=True)
+    repo.stage_candidates(forced.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        forced.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={"atm_iv": 0.30},
+        core_valid=True,
+    )
+    repo.publish(forced.id, _published_summary())
+    session.commit()
+
+    history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
+
+    assert len(history) == 1
+    assert history[0].run_id == forced.id
+    assert history[0].atm_iv == 0.30
+
+
+def test_history_export_keeps_only_the_newest_published_forced_attempt(session) -> None:
+    repo = _Repositories(session)
+    first = _start(repo, "same-input")
+    repo.stage_candidates(first.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        first.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={"atm_iv": 0.20},
+        core_valid=True,
+    )
+    repo.publish(first.id, _published_summary())
+
+    forced = _start(repo, "same-input", force=True)
+    repo.stage_candidates(forced.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        forced.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={"atm_iv": 0.30},
+        core_valid=True,
+    )
+    repo.publish(forced.id, _published_summary())
+    session.commit()
+
+    exported = repo.export_history_observations("US", "v1")
+
+    assert len(exported) == 1
+    assert exported[0].atm_iv == 0.30
 
 
 def test_history_excludes_published_insufficient_quality_observations(session) -> None:

@@ -4,6 +4,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import sqlalchemy as sa
+
 from app.infra.db.models.options_analytics import (
     OptionsAnalyticsPointer,
     OptionsAnalyticsRun,
@@ -19,12 +20,20 @@ def _constraint_names(table) -> set[str]:
 def test_options_models_define_run_item_strike_and_pointer_identity() -> None:
     assert OptionsAnalyticsRun.__table__.name == "options_analytics_runs"
     assert OptionsAnalyticsRunItem.__table__.name == "options_analytics_run_items"
-    assert OptionsAnalyticsStrikePoint.__table__.name == "options_analytics_strike_points"
+    assert (
+        OptionsAnalyticsStrikePoint.__table__.name == "options_analytics_strike_points"
+    )
     assert OptionsAnalyticsPointer.__table__.name == "options_analytics_pointers"
 
-    assert "uq_options_run_signature_attempt" in _constraint_names(OptionsAnalyticsRun.__table__)
-    assert "uq_options_run_item_symbol" in _constraint_names(OptionsAnalyticsRunItem.__table__)
-    assert "uq_options_strike_item_strike" in _constraint_names(OptionsAnalyticsStrikePoint.__table__)
+    assert "uq_options_run_signature_attempt" in _constraint_names(
+        OptionsAnalyticsRun.__table__
+    )
+    assert "uq_options_run_item_symbol" in _constraint_names(
+        OptionsAnalyticsRunItem.__table__
+    )
+    assert "uq_options_strike_item_strike" in _constraint_names(
+        OptionsAnalyticsStrikePoint.__table__
+    )
     assert OptionsAnalyticsPointer.__table__.primary_key.columns.keys() == [
         "market",
         "calculation_version",
@@ -41,11 +50,20 @@ def test_options_models_keep_sortable_metrics_typed_and_diagnostics_json() -> No
         "atm_iv",
         "vrp",
         "activity_intensity",
+        "iv_percentile",
+        "iv_rank",
+        "max_pain_change_5",
+        "activity_intensity_change_5",
         "volume_oi_ratio",
         "near_spot_volume_concentration",
     ):
         assert isinstance(columns[name].type, sa.Float)
-    for name in ("call_open_interest", "put_open_interest", "call_volume", "put_volume"):
+    for name in (
+        "call_open_interest",
+        "put_open_interest",
+        "call_volume",
+        "put_volume",
+    ):
         assert isinstance(columns[name].type, sa.BigInteger)
     assert isinstance(columns["activity_rank"].type, sa.Integer)
     assert isinstance(columns["core_valid"].type, sa.Boolean)

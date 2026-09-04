@@ -22,6 +22,7 @@ from app.domain.options_analytics.ports import (
     OptionsProviderError,
     TransientOptionsProviderError,
 )
+from app.infra.providers.yahoo_options import ThrottledOptionsProviderError
 from app.use_cases.options_analytics.analysis_models import OptionsMetricValues
 from app.use_cases.options_analytics.refresh import (
     RefreshOptionsAnalyticsCommand,
@@ -145,6 +146,7 @@ class _Repository:
         self.cancelled = False
         self.prune_calls = 0
         self.persistence_threads = []
+        self.history_threads = []
         self.activity_ranks = None
         self.run_assumptions = None
         self.commit_count = 0
@@ -182,6 +184,7 @@ class _Repository:
             "retry_count": analysis.retry_count,
         }
         if hasattr(analysis, "observation"):
+            values["historical_metrics"] = getattr(analysis, "historical_metrics", None)
             self.save_item_result(
                 run_id,
                 analysis.candidate.symbol,
@@ -234,6 +237,7 @@ class _Repository:
         return tuple(rows)
 
     def analysis_history(self, _symbol, **_kwargs):
+        self.history_threads.append(threading.get_ident())
         return self.history
 
     def save_activity_ranks(self, _run_id, ranks):
@@ -321,6 +325,7 @@ def _use_case(
     provider=None,
     cancellation=None,
     continuity_inputs=None,
+    throttle_backoff=lambda _attempt: None,
 ):
     repositories = repo or _Repository()
     return RefreshOptionsAnalyticsUseCase(
@@ -334,6 +339,7 @@ def _use_case(
         calculation_version="v1",
         schema_version="v1",
         max_workers=2,
+        throttle_backoff=throttle_backoff,
     )
 
 
@@ -431,6 +437,27 @@ def test_transient_symbol_retries_three_times_but_saves_one_observation() -> Non
     strike = repo.saved["AAPL"]["strike_points"][0]
     assert strike.estimated_call_gex > 0
     assert strike.estimated_put_gex < 0
+
+
+def test_yahoo_throttling_applies_backoff_before_each_retry() -> None:
+    class ThrottledProvider(_Provider):
+        def fetch_chain(self, symbol, _expiration, *, source_spot_price):
+            self.fetch_counts[symbol] = self.fetch_counts.get(symbol, 0) + 1
+            if self.fetch_counts[symbol] < 3:
+                raise ThrottledOptionsProviderError("429")
+            return _observation(symbol)
+
+    provider = ThrottledProvider()
+    backoff_attempts = []
+
+    _use_case(
+        [_candidate("AAPL")],
+        provider=provider,
+        throttle_backoff=backoff_attempts.append,
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert provider.fetch_counts == {"AAPL": 3}
+    assert backoff_attempts == [1, 2]
 
 
 def test_non_transient_provider_error_is_not_retried() -> None:
@@ -569,6 +596,7 @@ def test_fetches_at_most_two_concurrently_but_persists_on_caller_thread() -> Non
     ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
 
     assert provider.max_active == 2
+    assert repo.history_threads == [caller_thread, caller_thread, caller_thread]
     assert repo.persistence_threads == [caller_thread, caller_thread, caller_thread]
 
 
@@ -644,6 +672,36 @@ def test_history_readiness_uses_compatible_observations_with_real_gaps() -> None
     assert readiness.lifetime_observation_count == 16
     assert readiness.short_observation_count in (3, 4)
     assert readiness.reason_codes == ("building_history",)
+
+
+def test_ready_history_calculates_iv_context_and_five_observation_changes() -> None:
+    sessions = _Calendar().sessions_ending_on(date(2026, 9, 4), 30)
+    history = tuple(
+        HistoricalObservation(
+            session=session,
+            calculation_version="v1",
+            state=ObservationState.AVAILABLE,
+            max_pain=90 + index,
+            net_gex=1_000 + index,
+            gamma_flip=95 + index,
+            atm_iv=0.10 + index / 100,
+            skew_25_delta=-0.05 + index / 1000,
+            realized_volatility=0.08 + index / 100,
+            vrp=0.02 + index / 1000,
+            activity_intensity=0.20 + index / 100,
+        )
+        for index, session in enumerate(sessions[-20:-1])
+    )
+    repo = _Repository(history=history)
+
+    _use_case([_candidate("AAPL")], repo=repo).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
+
+    metrics = repo.saved["AAPL"]["historical_metrics"]
+    assert metrics.iv_percentile.available is True
+    assert metrics.iv_rank.available is True
+    assert metrics.max_pain_change_5.available is True
 
 
 def test_continuity_is_derived_from_last_current_membership_and_expires_after_five_sessions() -> (

@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
+
 from app.services.static_options_artifact_selector import StaticOptionsArtifactSelector
 from app.services.static_options_contract import validate_static_options_artifact
 from app.services.static_options_exporter import StaticOptionsExporter
@@ -25,16 +26,32 @@ METRICS = (
     "near_spot_volume_concentration",
 )
 
+HISTORICAL_METRICS = (
+    "iv_percentile",
+    "iv_rank",
+    "max_pain_change_5",
+    "net_gex_change_5",
+    "gamma_flip_change_5",
+    "atm_iv_change_5",
+    "skew_25_delta_change_5",
+    "realized_volatility_change_5",
+    "vrp_change_5",
+    "activity_intensity_change_5",
+)
+
 
 def _item(symbol: str, *, kind: str = "current", rank: int = 1):
-    values = {name: (190.0 if name == "max_pain" else None) for name in METRICS}
+    values = {
+        name: (190.0 if name == "max_pain" else None)
+        for name in (*METRICS, *HISTORICAL_METRICS)
+    }
     evidence = {
         name: {
             "available": values[name] is not None,
             "reason_codes": [] if values[name] is not None else ["building_history"],
             "evidence": {},
         }
-        for name in METRICS
+        for name in (*METRICS, *HISTORICAL_METRICS)
     }
     evidence["quality"] = {
         "source_spot_price": 200.0,
@@ -147,12 +164,16 @@ def test_exporter_writes_complete_current_only_artifact_with_history_gaps(tmp_pa
         SimpleNamespace(
             run=SimpleNamespace(as_of_date=date(2026, 8, 31)),
             observation_state="available",
-            **{name: getattr(current, name) for name in METRICS},
+            **{
+                name: getattr(current, name) for name in (*METRICS, *HISTORICAL_METRICS)
+            },
         ),
         SimpleNamespace(
             run=SimpleNamespace(as_of_date=date(2026, 9, 4)),
             observation_state="available",
-            **{name: getattr(current, name) for name in METRICS},
+            **{
+                name: getattr(current, name) for name in (*METRICS, *HISTORICAL_METRICS)
+            },
         ),
     )
     destination = tmp_path / "options"

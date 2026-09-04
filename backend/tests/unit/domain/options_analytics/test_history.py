@@ -25,15 +25,14 @@ def _observation(session: date, version: str = "v1") -> HistoricalObservation:
         session=session,
         calculation_version=version,
         state=ObservationState.AVAILABLE,
+        atm_iv=0.25,
     )
 
 
 def test_five_compatible_observations_in_last_seven_enable_short_history() -> None:
     sessions = _sessions(10)
     observations = [
-        _observation(session)
-        for session in sessions[-7::]
-        if session != sessions[-3]
+        _observation(session) for session in sessions[-7::] if session != sessions[-3]
     ][:5]
 
     readiness = history_readiness(observations, sessions, calculation_version="v1")
@@ -56,7 +55,9 @@ def test_twenty_compatible_observations_in_last_thirty_enable_iv_history() -> No
     assert readiness.iv_history_available is True
 
 
-def test_gaps_do_not_reset_lifetime_history_and_incompatible_versions_are_ignored() -> None:
+def test_gaps_do_not_reset_lifetime_history_and_incompatible_versions_are_ignored() -> (
+    None
+):
     sessions = _sessions(30)
     observations = [
         _observation(sessions[0]),

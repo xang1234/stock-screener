@@ -86,7 +86,7 @@ class SqlPublishedOptionsReader:
         market: str,
         calculation_version: str,
     ) -> tuple[OptionsAnalyticsRunItem, ...]:
-        return tuple(
+        rows = (
             self._session.query(OptionsAnalyticsRunItem)
             .join(OptionsAnalyticsRun)
             .options(selectinload(OptionsAnalyticsRunItem.run))
@@ -101,10 +101,22 @@ class SqlPublishedOptionsReader:
             )
             .order_by(
                 OptionsAnalyticsRun.as_of_date.asc(),
-                OptionsAnalyticsRun.id.asc(),
+                OptionsAnalyticsRun.attempt_number.desc(),
+                OptionsAnalyticsRun.id.desc(),
             )
             .all()
         )
+        history: list[OptionsAnalyticsRunItem] = []
+        seen: set[tuple[object, str]] = set()
+        for item in rows:
+            run = item.run
+            source_identity = run.external_source_feature_run_key or run.input_signature
+            identity = (run.as_of_date, source_identity)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            history.append(item)
+        return tuple(history)
 
     def analysis_history(
         self,
@@ -118,6 +130,14 @@ class SqlPublishedOptionsReader:
                 session=item.run.as_of_date,
                 calculation_version=item.run.calculation_version,
                 state=ObservationState(item.observation_state),
+                max_pain=item.max_pain,
+                net_gex=item.net_gex,
+                gamma_flip=item.gamma_flip,
+                atm_iv=item.atm_iv,
+                skew_25_delta=item.skew_25_delta,
+                realized_volatility=item.realized_volatility,
+                vrp=item.vrp,
+                activity_intensity=item.activity_intensity,
             )
             for item in self.symbol_history(
                 symbol,

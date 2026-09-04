@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.metrics.aggregate import ChainMetrics
+from app.domain.options_analytics.metrics.history import HistoricalMetrics
 from app.domain.options_analytics.models import (
     ChainObservation,
     HistoryReadiness,
@@ -53,6 +55,7 @@ class AnalysisContext:
     market: str
     risk_free_rate: float | None
     run_warnings: tuple[str, ...] = ()
+    historical_observations: tuple[HistoricalObservation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,7 @@ class AvailableCandidateAnalysis:
     metrics: ChainMetrics
     core_valid: bool
     metric_values: OptionsMetricValues
+    historical_metrics: HistoricalMetrics
     strike_points: tuple[OptionsStrikePoint, ...]
     evidence: dict[str, Any]
     assumptions: dict[str, Any]

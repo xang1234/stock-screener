@@ -17,12 +17,9 @@ from app.domain.options_analytics.models import (
 )
 from app.domain.options_analytics.ports import (
     OptionsProviderError,
+    ThrottledOptionsProviderError,
     TransientOptionsProviderError,
 )
-
-
-class ThrottledOptionsProviderError(TransientOptionsProviderError):
-    pass
 
 
 class OptionsSchemaError(OptionsProviderError):
@@ -98,7 +95,9 @@ class YahooOptionsProvider:
             try:
                 return tuple(date.fromisoformat(str(value)) for value in ticker.options)
             except (TypeError, ValueError) as exc:
-                raise OptionsSchemaError("Yahoo returned an invalid expiration") from exc
+                raise OptionsSchemaError(
+                    "Yahoo returned an invalid expiration"
+                ) from exc
 
         return self._attempt(operation)
 

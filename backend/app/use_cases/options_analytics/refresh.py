@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.domain.options_analytics.metrics.activity import rank_activity
 from app.domain.options_analytics.models import (
@@ -72,8 +72,10 @@ class RefreshOptionsAnalyticsUseCase:
         calculation_version: str,
         schema_version: str,
         max_workers: int = 2,
+        throttle_backoff: Callable[[int], None] = lambda _attempt: None,
     ) -> None:
         self._run_writer = run_writer
+        self._published_reader = published_reader
         self._retention = retention
         self._provider = provider
         self._calendar = calendar
@@ -89,9 +91,9 @@ class RefreshOptionsAnalyticsUseCase:
         )
         self._analyzer = OptionsCandidateAnalyzer(
             provider=provider,
-            history_reader=published_reader,
             calendar=calendar,
             calculation_version=calculation_version,
+            throttle_backoff=throttle_backoff,
         )
 
     def execute(
@@ -169,16 +171,34 @@ class RefreshOptionsAnalyticsUseCase:
         run_warnings: tuple[str, ...],
     ) -> tuple[tuple[CandidateAnalysis, ...], bool]:
         by_symbol = {candidate.symbol: candidate for candidate in cohort.candidates}
-        context = AnalysisContext(
+        base_context = AnalysisContext(
             as_of_date=cohort.as_of_date,
             market=market,
             risk_free_rate=risk_free_rate,
             run_warnings=run_warnings,
         )
+        incomplete_symbols = self._run_writer.incomplete_symbols(run_id)
+        histories = {
+            symbol: tuple(
+                self._published_reader.analysis_history(
+                    symbol,
+                    market=market,
+                    calculation_version=self._calculation_version,
+                )
+            )
+            for symbol in incomplete_symbols
+        }
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {
-                executor.submit(self._analyzer.analyze, by_symbol[symbol], context)
-                for symbol in self._run_writer.incomplete_symbols(run_id)
+                executor.submit(
+                    self._analyzer.analyze,
+                    by_symbol[symbol],
+                    replace(
+                        base_context,
+                        historical_observations=histories[symbol],
+                    ),
+                )
+                for symbol in incomplete_symbols
             }
             results: list[CandidateAnalysis] = []
             for future in as_completed(futures):

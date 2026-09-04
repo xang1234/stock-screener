@@ -21,6 +21,27 @@ const availableMetrics = () => ({
   near_spot_volume_concentration: { available: true, value: 0.6, label: 'Near-Spot Volume Concentration', reason_codes: [], evidence: {} },
 });
 
+const buildingHistoricalMetrics = () => ({
+  iv_percentile: unavailableMetric('ATM IV Percentile'),
+  iv_rank: unavailableMetric('ATM IV Rank'),
+  max_pain_change_5: unavailableMetric('5-Observation Max Pain Change'),
+  net_gex_change_5: unavailableMetric('5-Observation Net GEX Change'),
+  gamma_flip_change_5: unavailableMetric('5-Observation Gamma Flip Change'),
+  atm_iv_change_5: unavailableMetric('5-Observation ATM IV Change'),
+  skew_25_delta_change_5: unavailableMetric('5-Observation 25-Delta Skew Change'),
+  realized_volatility_change_5: unavailableMetric('5-Observation Realized Volatility Change'),
+  vrp_change_5: unavailableMetric('5-Observation Volatility Risk Premium Change'),
+  activity_intensity_change_5: unavailableMetric('5-Observation Activity Intensity Change'),
+});
+
+const availableHistoricalMetrics = () => ({
+  ...buildingHistoricalMetrics(),
+  iv_percentile: { available: true, value: 0.8, label: 'ATM IV Percentile', reason_codes: [], evidence: {} },
+  iv_rank: { available: true, value: 0.7, label: 'ATM IV Rank', reason_codes: [], evidence: {} },
+  max_pain_change_5: { available: true, value: 5, label: '5-Observation Max Pain Change', reason_codes: [], evidence: {} },
+  atm_iv_change_5: { available: true, value: 0.03, label: '5-Observation ATM IV Change', reason_codes: [], evidence: {} },
+});
+
 export const commandCenterFixture = {
   schema_version: 'options-analytics-v1',
   calculation_version: 'options-analytics-v1',
@@ -78,6 +99,7 @@ export const commandCenterFixture = {
         two_sided_quote_coverage: 0.85,
       },
       metrics: availableMetrics(),
+      historical_metrics: buildingHistoricalMetrics(),
       assumptions: { gex_model: 'dealer_proxy' },
       warnings: [],
       reason_codes: ['building_history'],
@@ -116,6 +138,7 @@ export const commandCenterFixture = {
         two_sided_quote_coverage: 0.85,
       },
       metrics: availableMetrics(),
+      historical_metrics: availableHistoricalMetrics(),
       assumptions: {},
       warnings: [],
       reason_codes: [],

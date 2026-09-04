@@ -80,6 +80,19 @@ class OptionsMetricsResponse(_StrictModel):
     near_spot_volume_concentration: OptionsMetricResponse
 
 
+class OptionsHistoricalMetricsResponse(_StrictModel):
+    iv_percentile: OptionsMetricResponse
+    iv_rank: OptionsMetricResponse
+    max_pain_change_5: OptionsMetricResponse
+    net_gex_change_5: OptionsMetricResponse
+    gamma_flip_change_5: OptionsMetricResponse
+    atm_iv_change_5: OptionsMetricResponse
+    skew_25_delta_change_5: OptionsMetricResponse
+    realized_volatility_change_5: OptionsMetricResponse
+    vrp_change_5: OptionsMetricResponse
+    activity_intensity_change_5: OptionsMetricResponse
+
+
 class OptionsQualityEvidenceResponse(_StrictModel):
     source_spot_price: float | None = Field(gt=0)
     provider_spot_price: float | None
@@ -116,6 +129,7 @@ class OptionsCommandCenterItemResponse(_StrictModel):
     retry_count: int
     quality_evidence: OptionsQualityEvidenceResponse
     metrics: OptionsMetricsResponse
+    historical_metrics: OptionsHistoricalMetricsResponse
     assumptions: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     reason_codes: list[str] = Field(default_factory=list)
@@ -185,6 +199,16 @@ class OptionsHistoryPointResponse(_StrictModel):
     realized_volatility: float | None = None
     vrp: float | None = None
     activity_intensity: float | None = None
+    iv_percentile: float | None = None
+    iv_rank: float | None = None
+    max_pain_change_5: float | None = None
+    net_gex_change_5: float | None = None
+    gamma_flip_change_5: float | None = None
+    atm_iv_change_5: float | None = None
+    skew_25_delta_change_5: float | None = None
+    realized_volatility_change_5: float | None = None
+    vrp_change_5: float | None = None
+    activity_intensity_change_5: float | None = None
 
 
 class OptionsSymbolDetailResponse(OptionsRunMetadataResponse):
@@ -220,6 +244,16 @@ class OptionsSymbolDetailResponse(OptionsRunMetadataResponse):
                     realized_volatility=row.realized_volatility,
                     vrp=row.vrp,
                     activity_intensity=row.activity_intensity,
+                    iv_percentile=row.iv_percentile,
+                    iv_rank=row.iv_rank,
+                    max_pain_change_5=row.max_pain_change_5,
+                    net_gex_change_5=row.net_gex_change_5,
+                    gamma_flip_change_5=row.gamma_flip_change_5,
+                    atm_iv_change_5=row.atm_iv_change_5,
+                    skew_25_delta_change_5=row.skew_25_delta_change_5,
+                    realized_volatility_change_5=(row.realized_volatility_change_5),
+                    vrp_change_5=row.vrp_change_5,
+                    activity_intensity_change_5=(row.activity_intensity_change_5),
                 )
                 for row in result.history
             ],
@@ -268,6 +302,19 @@ _LABELS = {
     "near_spot_volume_concentration": "Near-Spot Volume Concentration",
 }
 
+_HISTORICAL_LABELS = {
+    "iv_percentile": "ATM IV Percentile",
+    "iv_rank": "ATM IV Rank",
+    "max_pain_change_5": "5-Observation Max Pain Change",
+    "net_gex_change_5": "5-Observation Net GEX Change",
+    "gamma_flip_change_5": "5-Observation Gamma Flip Change",
+    "atm_iv_change_5": "5-Observation ATM IV Change",
+    "skew_25_delta_change_5": "5-Observation 25-Delta Skew Change",
+    "realized_volatility_change_5": "5-Observation Realized Volatility Change",
+    "vrp_change_5": "5-Observation Volatility Risk Premium Change",
+    "activity_intensity_change_5": "5-Observation Activity Intensity Change",
+}
+
 
 def _metric(item: Any, name: str) -> OptionsMetricResponse:
     value = getattr(item, name)
@@ -279,7 +326,7 @@ def _metric(item: Any, name: str) -> OptionsMetricResponse:
     return OptionsMetricResponse(
         available=available,
         value=value if available else None,
-        label=details.get("label") or _LABELS[name],
+        label=(details.get("label") or _LABELS.get(name) or _HISTORICAL_LABELS[name]),
         reason_codes=reasons,
         evidence=dict(details.get("evidence") or {}),
     )
@@ -319,6 +366,9 @@ def _item_response(item: Any) -> OptionsCommandCenterItemResponse:
         quality_evidence=dict((item.evidence_json or {}).get("quality") or {}),
         metrics=OptionsMetricsResponse(
             **{name: _metric(item, name) for name in _LABELS}
+        ),
+        historical_metrics=OptionsHistoricalMetricsResponse(
+            **{name: _metric(item, name) for name in _HISTORICAL_LABELS}
         ),
         assumptions=dict(item.assumptions_json or {}),
         warnings=list(item.warnings_json or []),

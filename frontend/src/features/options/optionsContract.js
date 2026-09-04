@@ -74,6 +74,11 @@ const validateItemSemantics = (item, location) => {
       fail(`${location}.metrics.${name} availability does not match value`);
     }
   });
+  Object.entries(item.historical_metrics).forEach(([name, metric]) => {
+    if (metric.available !== (metric.value !== null)) {
+      fail(`${location}.historical_metrics.${name} availability does not match value`);
+    }
+  });
 };
 
 export const normalizeOptionsManifest = (payload) => {

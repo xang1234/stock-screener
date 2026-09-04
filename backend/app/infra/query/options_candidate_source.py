@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.options_analytics.models import OptionCandidateInput
 from app.domain.options_analytics.ports import CandidateSourceSnapshot
 from app.domain.scanning.leadership_policy import (
@@ -40,9 +41,9 @@ class SqlOptionsCandidateSource:
 
     def read(self, source_feature_run_id: int) -> CandidateSourceSnapshot:
         run = self._session.get(FeatureRun, source_feature_run_id)
-        if run is None or run.status != "published":
+        if run is None or run.status != "published" or feature_run_market(run) != "US":
             raise LookupError(
-                f"Published feature run {source_feature_run_id} does not exist"
+                f"Published US feature run {source_feature_run_id} does not exist"
             )
         rows = (
             self._session.query(StockFeatureDaily)

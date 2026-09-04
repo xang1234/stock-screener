@@ -18,6 +18,10 @@ class TransientOptionsProviderError(OptionsProviderError):
     """A provider failure that may be retried within the symbol budget."""
 
 
+class ThrottledOptionsProviderError(TransientOptionsProviderError):
+    """A provider throttle that requires policy-backed retry delay."""
+
+
 class OptionsProvider(Protocol):
     def list_expirations(self, symbol: str) -> Sequence[date]: ...
 

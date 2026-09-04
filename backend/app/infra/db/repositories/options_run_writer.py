@@ -255,6 +255,19 @@ class SqlOptionsRunWriter:
         item.realized_volatility = values.realized_volatility
         item.vrp = values.vrp
         item.activity_intensity = values.activity_intensity
+        historical = analysis.historical_metrics
+        item.iv_percentile = historical.iv_percentile.value
+        item.iv_rank = historical.iv_rank.value
+        item.max_pain_change_5 = historical.max_pain_change_5.value
+        item.net_gex_change_5 = historical.net_gex_change_5.value
+        item.gamma_flip_change_5 = historical.gamma_flip_change_5.value
+        item.atm_iv_change_5 = historical.atm_iv_change_5.value
+        item.skew_25_delta_change_5 = historical.skew_25_delta_change_5.value
+        item.realized_volatility_change_5 = (
+            historical.realized_volatility_change_5.value
+        )
+        item.vrp_change_5 = historical.vrp_change_5.value
+        item.activity_intensity_change_5 = historical.activity_intensity_change_5.value
         item.call_open_interest = values.call_open_interest
         item.put_open_interest = values.put_open_interest
         item.call_volume = values.call_volume

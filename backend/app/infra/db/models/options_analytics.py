@@ -53,9 +53,14 @@ class OptionsAnalyticsRun(Base):
     assumptions_json = Column(JSON, nullable=True)
     warnings_json = Column(JSON, nullable=True)
     diagnostics_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     updated_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
     completed_at = Column(DateTime(timezone=True), nullable=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
@@ -115,6 +120,16 @@ class OptionsAnalyticsRunItem(Base):
     realized_volatility = Column(Float, nullable=True)
     vrp = Column(Float, nullable=True)
     activity_intensity = Column(Float, nullable=True)
+    iv_percentile = Column(Float, nullable=True)
+    iv_rank = Column(Float, nullable=True)
+    max_pain_change_5 = Column(Float, nullable=True)
+    net_gex_change_5 = Column(Float, nullable=True)
+    gamma_flip_change_5 = Column(Float, nullable=True)
+    atm_iv_change_5 = Column(Float, nullable=True)
+    skew_25_delta_change_5 = Column(Float, nullable=True)
+    realized_volatility_change_5 = Column(Float, nullable=True)
+    vrp_change_5 = Column(Float, nullable=True)
+    activity_intensity_change_5 = Column(Float, nullable=True)
     activity_rank = Column(Integer, nullable=True)
     call_open_interest = Column(BigInteger, nullable=True)
     put_open_interest = Column(BigInteger, nullable=True)
@@ -139,7 +154,9 @@ class OptionsAnalyticsRunItem(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("run_id", "security_symbol", name="uq_options_run_item_symbol"),
+        UniqueConstraint(
+            "run_id", "security_symbol", name="uq_options_run_item_symbol"
+        ),
         Index(
             "ix_options_items_run_kind_activity",
             "run_id",
@@ -187,5 +204,8 @@ class OptionsAnalyticsPointer(Base):
         nullable=False,
     )
     updated_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )

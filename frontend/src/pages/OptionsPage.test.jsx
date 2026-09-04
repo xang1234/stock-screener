@@ -7,10 +7,15 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import OptionsPage from './OptionsPage';
 import { commandCenterFixture } from '../features/options/__fixtures__/optionsResponses';
 import * as optionsApi from '../api/optionsAnalytics';
+import * as tasksApi from '../api/tasks';
 
 vi.mock('../api/optionsAnalytics', () => ({
   getOptionsCommandCenter: vi.fn(),
   refreshOptionsAnalytics: vi.fn(),
+}));
+
+vi.mock('../api/tasks', () => ({
+  getTaskStatus: vi.fn(),
 }));
 
 vi.mock('../features/options/OptionsCommandCenterView', () => ({
@@ -23,6 +28,7 @@ describe('OptionsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     optionsApi.getOptionsCommandCenter.mockResolvedValue(commandCenterFixture);
+    tasksApi.getTaskStatus.mockResolvedValue({ status: 'running' });
   });
 
   it('loads the published run and URL-encodes row navigation', async () => {
@@ -53,11 +59,63 @@ describe('OptionsPage', () => {
     await screen.findByRole('button', { name: 'Open AAPL' });
     await user.click(screen.getByRole('button', { name: 'Refresh options analytics' }));
     expect(optionsApi.refreshOptionsAnalytics).toHaveBeenCalledTimes(1);
+    expect(optionsApi.refreshOptionsAnalytics).toHaveBeenCalledWith({
+      sourceRunId: null,
+      force: true,
+    });
     expect(await screen.findByText(/Accepted as task task-1/i)).toBeInTheDocument();
 
     optionsApi.getOptionsCommandCenter.mockResolvedValue({ ...commandCenterFixture, run_id: 8 });
     await waitFor(() => expect(screen.queryByText(/Accepted as task task-1/i)).not.toBeInTheDocument(), {
       timeout: 7000,
     });
+  });
+
+  it('offers refresh before the first options snapshot exists', async () => {
+    const user = userEvent.setup();
+    optionsApi.getOptionsCommandCenter.mockRejectedValue({ response: { status: 404 } });
+    optionsApi.refreshOptionsAnalytics.mockResolvedValue({ status: 'accepted', task_id: 'task-bootstrap' });
+
+    renderWithProviders(<MemoryRouter><OptionsPage /></MemoryRouter>);
+
+    await screen.findByText(/No published options snapshot yet/i);
+    await user.click(screen.getByRole('button', { name: 'Refresh options analytics' }));
+
+    expect(optionsApi.refreshOptionsAnalytics).toHaveBeenCalledWith({
+      sourceRunId: null,
+      force: true,
+    });
+  });
+
+  it.each(['failed_quality', 'cancelled', 'skipped'])(
+    'clears accepted state when the refresh finishes as %s',
+    async (resultStatus) => {
+      const user = userEvent.setup();
+      optionsApi.refreshOptionsAnalytics.mockResolvedValue({ status: 'accepted', task_id: 'task-terminal' });
+      tasksApi.getTaskStatus.mockResolvedValue({
+        status: 'completed',
+        result: { status: resultStatus, reason_codes: ['test_reason'] },
+      });
+      renderWithProviders(<MemoryRouter><OptionsPage /></MemoryRouter>);
+
+      await screen.findByRole('button', { name: 'Open AAPL' });
+      await user.click(screen.getByRole('button', { name: 'Refresh options analytics' }));
+
+      expect(await screen.findByText(new RegExp(resultStatus.replace('_', ' '), 'i'))).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh options analytics' })).toBeEnabled());
+    },
+  );
+
+  it('clears accepted state when task polling fails', async () => {
+    const user = userEvent.setup();
+    optionsApi.refreshOptionsAnalytics.mockResolvedValue({ status: 'accepted', task_id: 'task-error' });
+    tasksApi.getTaskStatus.mockRejectedValue(new Error('status unavailable'));
+    renderWithProviders(<MemoryRouter><OptionsPage /></MemoryRouter>);
+
+    await screen.findByRole('button', { name: 'Open AAPL' });
+    await user.click(screen.getByRole('button', { name: 'Refresh options analytics' }));
+
+    expect(await screen.findByText(/could not confirm refresh status/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh options analytics' })).toBeEnabled();
   });
 });

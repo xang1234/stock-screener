@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable
 
 from app.domain.options_analytics.expiration import select_monthly_expiration
 from app.domain.options_analytics.history import (
@@ -14,6 +14,7 @@ from app.domain.options_analytics.metrics.aggregate import (
     ChainMetrics,
     calculate_chain_metrics,
 )
+from app.domain.options_analytics.metrics.history import calculate_historical_metrics
 from app.domain.options_analytics.models import (
     ChainObservation,
     ObservationState,
@@ -23,6 +24,7 @@ from app.domain.options_analytics.ports import (
     OptionsProvider,
     OptionsProviderError,
     SessionCalendar,
+    ThrottledOptionsProviderError,
     TransientOptionsProviderError,
 )
 from app.domain.options_analytics.quality import has_core_chain_coverage
@@ -35,6 +37,7 @@ from .analysis_models import (
 )
 from .analysis_projection import (
     dividend_assumption,
+    historical_metric_evidence,
     metric_evidence,
     metric_values,
     quality_evidence,
@@ -44,30 +47,19 @@ from .analysis_projection import (
 )
 
 
-class SymbolHistoryReader:
-    def analysis_history(
-        self,
-        symbol: str,
-        *,
-        market: str,
-        calculation_version: str,
-    ) -> Sequence[HistoricalObservation]:
-        raise NotImplementedError
-
-
 class OptionsCandidateAnalyzer:
     def __init__(
         self,
         *,
         provider: OptionsProvider,
-        history_reader: SymbolHistoryReader,
         calendar: SessionCalendar,
         calculation_version: str,
+        throttle_backoff: Callable[[int], None] = lambda _attempt: None,
     ) -> None:
         self._provider = provider
-        self._history_reader = history_reader
         self._calendar = calendar
         self._calculation_version = calculation_version
+        self._throttle_backoff = throttle_backoff
 
     def analyze(
         self,
@@ -139,6 +131,16 @@ class OptionsCandidateAnalyzer:
                     attempt - 1,
                     dividend_yield,
                 )
+            except ThrottledOptionsProviderError:
+                if attempt == 3:
+                    return self._unavailable(
+                        candidate,
+                        ("provider_unavailable",),
+                        assumptions,
+                        warnings,
+                        2,
+                    )
+                self._throttle_backoff(attempt)
             except TransientOptionsProviderError:
                 if attempt == 3:
                     return self._unavailable(
@@ -170,7 +172,8 @@ class OptionsCandidateAnalyzer:
         dividend_yield: float,
     ) -> AvailableCandidateAnalysis:
         core_valid = has_core_chain_coverage(observation)
-        historical = (*self._historical_observations(candidate, context),)
+        values = metric_values(metrics, observation)
+        historical = context.historical_observations
         historical = (
             *historical,
             HistoricalObservation(
@@ -181,11 +184,25 @@ class OptionsCandidateAnalyzer:
                     if core_valid
                     else ObservationState.INSUFFICIENT_QUALITY
                 ),
+                max_pain=values.max_pain,
+                net_gex=values.net_gex,
+                gamma_flip=values.gamma_flip,
+                atm_iv=values.atm_iv,
+                skew_25_delta=values.skew_25_delta,
+                realized_volatility=values.realized_volatility,
+                vrp=values.vrp,
+                activity_intensity=values.activity_intensity,
             ),
         )
+        trailing_sessions = self._calendar.sessions_ending_on(context.as_of_date, 30)
         readiness = history_readiness(
             historical,
-            self._calendar.sessions_ending_on(context.as_of_date, 30),
+            trailing_sessions,
+            calculation_version=self._calculation_version,
+        )
+        historical_metrics = calculate_historical_metrics(
+            historical,
+            trailing_sessions,
             calculation_version=self._calculation_version,
         )
         reasons = list(readiness.reason_codes)
@@ -197,14 +214,18 @@ class OptionsCandidateAnalyzer:
             observation=observation,
             metrics=metrics,
             core_valid=core_valid,
-            metric_values=metric_values(metrics, observation),
+            metric_values=values,
+            historical_metrics=historical_metrics,
             strike_points=strike_points(
                 observation,
                 as_of_date=context.as_of_date,
                 risk_free_rate=context.risk_free_rate,
                 dividend_yield=dividend_yield,
             ),
-            evidence=metric_evidence(metrics, quality=quality),
+            evidence={
+                **metric_evidence(metrics, quality=quality),
+                **historical_metric_evidence(historical_metrics),
+            },
             assumptions={
                 "risk_free_rate": context.risk_free_rate,
                 **assumptions,
@@ -222,18 +243,6 @@ class OptionsCandidateAnalyzer:
             retry_count=retry_count,
             history_readiness=readiness,
         )
-
-    def _historical_observations(
-        self,
-        candidate: OptionCandidate,
-        context: AnalysisContext,
-    ) -> tuple[HistoricalObservation, ...]:
-        rows = self._history_reader.analysis_history(
-            candidate.symbol,
-            market=context.market,
-            calculation_version=self._calculation_version,
-        )
-        return tuple(rows)
 
     @staticmethod
     def _unavailable(

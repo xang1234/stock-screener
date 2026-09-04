@@ -5,13 +5,14 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from pydantic import ValidationError
+
 from app.database import get_db
 from app.main import app
 from app.schemas.options_analytics import (
     OptionsCommandCenterResponse,
     OptionsMetricResponse,
 )
-from pydantic import ValidationError
 
 
 def _item(symbol: str, *, kind="current", state="available", core_valid=None):
@@ -35,6 +36,16 @@ def _item(symbol: str, *, kind="current", state="available", core_valid=None):
         realized_volatility=0.20,
         vrp=0.05,
         activity_intensity=0.8,
+        iv_percentile=None,
+        iv_rank=None,
+        max_pain_change_5=None,
+        net_gex_change_5=None,
+        gamma_flip_change_5=None,
+        atm_iv_change_5=None,
+        skew_25_delta_change_5=None,
+        realized_volatility_change_5=None,
+        vrp_change_5=None,
+        activity_intensity_change_5=None,
         activity_rank=1,
         call_open_interest=1000,
         put_open_interest=900,
@@ -66,11 +77,13 @@ def _item(symbol: str, *, kind="current", state="available", core_valid=None):
                 "label": "Estimated Gamma Flip",
                 "reason_codes": ["gamma_crossing_unavailable"],
                 "evidence": {},
-            }
+            },
         },
         assumptions_json={"risk_free_rate": 0.04},
         warnings_json=[],
-        reasons_json=["building_history"] if state == "available" else ["provider_unavailable"],
+        reasons_json=["building_history"]
+        if state == "available"
+        else ["provider_unavailable"],
         strike_points=[],
     )
 
@@ -105,7 +118,9 @@ def _run():
     )
 
 
-def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity() -> None:
+def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity() -> (
+    None
+):
     payload = OptionsCommandCenterResponse.from_run(_run())
 
     assert payload.run_id == 17
@@ -116,6 +131,9 @@ def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity(
         "gamma_crossing_unavailable"
     ]
     assert payload.items[0].quality_evidence.provider_spot_price == 101.0
+    assert payload.items[0].historical_metrics.iv_percentile.reason_codes == [
+        "building_history"
+    ]
     assert payload.items[1].state == "unavailable"
 
 
@@ -139,7 +157,9 @@ def test_non_core_observation_is_distinct_from_provider_unavailable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_reads_return_typed_404_and_refresh_is_immediate(monkeypatch) -> None:
+async def test_live_reads_return_typed_404_and_refresh_is_immediate(
+    monkeypatch,
+) -> None:
     from app.api.v1 import options_analytics as api
     from app.services import server_auth
 
@@ -157,7 +177,9 @@ async def test_live_reads_return_typed_404_and_refresh_is_immediate(monkeypatch)
     app.dependency_overrides[get_db] = lambda: object()
     transport = httpx.ASGITransport(app=app)
     try:
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
             missing = await client.get("/api/v1/options-analytics/command-center")
             accepted = await client.post(
                 "/api/v1/options-analytics/refresh",

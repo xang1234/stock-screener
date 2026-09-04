@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from app.database import Base
 from app.domain.options_analytics.selection import select_current_candidates
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
 from app.models.stock import StockFundamental, StockPrice
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 
 def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs() -> (
@@ -32,6 +34,7 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
             as_of_date=as_of,
             run_type="daily_snapshot",
             status="published",
+            config_json={"universe": {"market": "US"}},
         )
     )
     rows = []
@@ -144,6 +147,7 @@ def test_candidate_source_preserves_both_ranks_for_overlap() -> None:
             as_of_date=date(2026, 9, 4),
             run_type="daily_snapshot",
             status="published",
+            config_json={"universe": {"market": "US"}},
         )
     )
     session.add(
@@ -196,6 +200,7 @@ def test_current_liquidity_uses_feature_run_snapshot_not_mutable_fundamentals() 
             as_of_date=as_of,
             run_type="daily_snapshot",
             status="published",
+            config_json={"universe": {"market": "US"}},
         )
     )
     session.add(
@@ -223,6 +228,28 @@ def test_current_liquidity_uses_feature_run_snapshot_not_mutable_fundamentals() 
     )
     assert [row.symbol for row in current] == ["AAPL"]
     assert current[0].daily_dollar_volume == 150_000_000
+    session.close()
+    engine.dispose()
+
+
+def test_candidate_source_rejects_a_published_non_us_feature_run() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[FeatureRun.__table__])
+    session = sessionmaker(bind=engine)()
+    session.add(
+        FeatureRun(
+            id=10,
+            as_of_date=date(2026, 9, 4),
+            run_type="daily_snapshot",
+            status="published",
+            config_json={"universe": {"market": "HK"}},
+        )
+    )
+    session.commit()
+
+    with pytest.raises(LookupError, match="Published US feature run"):
+        SqlOptionsCandidateSource(session).read(10)
+
     session.close()
     engine.dispose()
 

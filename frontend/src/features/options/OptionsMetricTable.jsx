@@ -13,6 +13,18 @@ export function UnavailableMetric({ metric }) {
 }
 
 export default function OptionsMetricTable({ metrics }) {
+  const percentageMetrics = new Set([
+    'atm_iv',
+    'skew_25_delta',
+    'realized_volatility',
+    'vrp',
+    'iv_percentile',
+    'iv_rank',
+    'atm_iv_change_5',
+    'skew_25_delta_change_5',
+    'realized_volatility_change_5',
+    'vrp_change_5',
+  ]);
   return (
     <TableContainer>
       <Table size="small" aria-label="Options metrics">
@@ -23,7 +35,7 @@ export default function OptionsMetricTable({ metrics }) {
               <TableCell align="right">
                 {metric.available
                   ? formatOptionsMetric(metric, {
-                      percent: ['atm_iv', 'skew_25_delta', 'realized_volatility', 'vrp'].includes(name),
+                      percent: percentageMetrics.has(name),
                     })
                   : <UnavailableMetric metric={metric} />}
               </TableCell>

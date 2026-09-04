@@ -10,6 +10,7 @@ from typing import Any
 from app.domain.options_analytics.expiration import retain_contracts_for_persistence
 from app.domain.options_analytics.metrics.aggregate import ChainMetrics
 from app.domain.options_analytics.metrics.gex import estimate_contract_gex
+from app.domain.options_analytics.metrics.history import HistoricalMetrics
 from app.domain.options_analytics.models import (
     ChainObservation,
     MetricValue,
@@ -131,6 +132,18 @@ def metric_evidence(
     }
     evidence["quality"] = quality
     return evidence
+
+
+def historical_metric_evidence(metrics: HistoricalMetrics) -> dict[str, Any]:
+    return {
+        name: {
+            "available": metric.available,
+            "label": metric.label,
+            "reason_codes": list(metric.reason_codes),
+            "evidence": dict(metric.evidence),
+        }
+        for name, metric in vars(metrics).items()
+    }
 
 
 def unavailable_quality_evidence(candidate: OptionCandidate) -> dict[str, Any]:

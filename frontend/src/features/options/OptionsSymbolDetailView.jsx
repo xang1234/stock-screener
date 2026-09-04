@@ -68,13 +68,19 @@ export default function OptionsSymbolDetailView({ data, onBack }) {
       </Grid>
       <OptionsStrikeCharts points={data.strike_points} spotPrice={item.spot_price} />
       <Grid container spacing={2} sx={{ mt: 0 }}>
-        <Grid item xs={12} md={5}>
+        <Grid item xs={12} md={6}>
           <Paper variant="outlined" sx={{ mt: 2 }}>
-            <Typography variant="subtitle2" sx={{ px: 2, pt: 1.5 }}>Metrics</Typography>
+            <Typography variant="subtitle2" sx={{ px: 2, pt: 1.5 }}>Current snapshot metrics</Typography>
             <OptionsMetricTable metrics={item.metrics} />
           </Paper>
         </Grid>
-        <Grid item xs={12} md={7}>
+        <Grid item xs={12} md={6}>
+          <Paper variant="outlined" sx={{ mt: 2 }}>
+            <Typography variant="subtitle2" sx={{ px: 2, pt: 1.5 }}>Historical context</Typography>
+            <OptionsMetricTable metrics={item.historical_metrics} />
+          </Paper>
+        </Grid>
+        <Grid item xs={12}>
           <OptionsHistoryChart history={data.history} />
         </Grid>
       </Grid>
