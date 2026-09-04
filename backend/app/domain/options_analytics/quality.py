@@ -2,17 +2,58 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Set
+import math
+from collections.abc import Iterable
 
-from .models import CandidateKind, OptionCandidate, PublicationDecision
+from .models import (
+    CandidateKind,
+    ChainObservation,
+    OptionCandidate,
+    OptionSide,
+    PublicationDecision,
+)
 
 MIN_CURRENT_COVERAGE = 0.90
+
+
+def has_core_chain_coverage(observation: ChainObservation) -> bool:
+    if (
+        not math.isfinite(float(observation.source_spot_price))
+        or observation.source_spot_price <= 0
+    ):
+        return False
+    by_side = {
+        side: [contract for contract in observation.contracts if contract.side is side]
+        for side in (OptionSide.CALL, OptionSide.PUT)
+    }
+    if any(len(contracts) < 5 for contracts in by_side.values()):
+        return False
+    for contracts in by_side.values():
+        total_open_interest = sum(
+            contract.open_interest
+            for contract in contracts
+            if contract.open_interest is not None
+            and math.isfinite(float(contract.open_interest))
+            and contract.open_interest >= 0
+        )
+        if total_open_interest <= 0:
+            return False
+    usable_strikes = {
+        float(contract.strike)
+        for contract in observation.contracts
+        if math.isfinite(float(contract.strike))
+        and contract.strike > 0
+        and contract.open_interest is not None
+        and math.isfinite(float(contract.open_interest))
+        and contract.open_interest >= 0
+    }
+    return len(usable_strikes) >= 3
 
 
 def evaluate_publication(
     cohort: Iterable[OptionCandidate],
     *,
-    core_valid_symbols: Set[str],
+    core_valid_symbols: set[str],
 ) -> PublicationDecision:
     current = [row for row in cohort if row.kind is CandidateKind.CURRENT]
     current_symbols = {row.symbol for row in current}
@@ -35,4 +76,3 @@ def evaluate_publication(
         coverage=coverage,
         reason_codes=() if publish else ("insufficient_core_coverage",),
     )
-

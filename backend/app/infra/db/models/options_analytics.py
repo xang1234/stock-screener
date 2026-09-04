@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     Date,
@@ -11,7 +14,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -101,6 +103,7 @@ class OptionsAnalyticsRunItem(Base):
     spot_price = Column(Float, nullable=True)
     expiration = Column(Date, nullable=True)
     observation_state = Column(String(32), nullable=False)
+    core_valid = Column(Boolean, nullable=False, default=False)
     observation_at = Column(DateTime(timezone=True), nullable=True)
     max_pain = Column(Float, nullable=True)
     net_gex = Column(Float, nullable=True)
@@ -113,6 +116,12 @@ class OptionsAnalyticsRunItem(Base):
     vrp = Column(Float, nullable=True)
     activity_intensity = Column(Float, nullable=True)
     activity_rank = Column(Integer, nullable=True)
+    call_open_interest = Column(BigInteger, nullable=True)
+    put_open_interest = Column(BigInteger, nullable=True)
+    call_volume = Column(BigInteger, nullable=True)
+    put_volume = Column(BigInteger, nullable=True)
+    volume_oi_ratio = Column(Float, nullable=True)
+    near_spot_volume_concentration = Column(Float, nullable=True)
     short_history_observation_count = Column(Integer, nullable=False, default=0)
     iv_history_observation_count = Column(Integer, nullable=False, default=0)
     lifetime_observation_count = Column(Integer, nullable=False, default=0)

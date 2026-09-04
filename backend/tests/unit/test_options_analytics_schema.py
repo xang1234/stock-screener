@@ -35,9 +35,21 @@ def test_options_models_define_run_item_strike_and_pointer_identity() -> None:
 def test_options_models_keep_sortable_metrics_typed_and_diagnostics_json() -> None:
     columns = OptionsAnalyticsRunItem.__table__.columns
 
-    for name in ("max_pain", "net_gex", "gamma_flip", "atm_iv", "vrp", "activity_intensity"):
+    for name in (
+        "max_pain",
+        "net_gex",
+        "gamma_flip",
+        "atm_iv",
+        "vrp",
+        "activity_intensity",
+        "volume_oi_ratio",
+        "near_spot_volume_concentration",
+    ):
         assert isinstance(columns[name].type, sa.Float)
+    for name in ("call_open_interest", "put_open_interest", "call_volume", "put_volume"):
+        assert isinstance(columns[name].type, sa.BigInteger)
     assert isinstance(columns["activity_rank"].type, sa.Integer)
+    assert isinstance(columns["core_valid"].type, sa.Boolean)
     for name in ("evidence_json", "assumptions_json", "warnings_json", "reasons_json"):
         assert isinstance(columns[name].type, sa.JSON)
 

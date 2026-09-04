@@ -1,7 +1,18 @@
 from __future__ import annotations
 
-from app.domain.options_analytics.models import CandidateKind, OptionCandidateInput
-from app.domain.options_analytics.quality import evaluate_publication
+from datetime import date, datetime, timezone
+
+from app.domain.options_analytics.models import (
+    CandidateKind,
+    ChainObservation,
+    NormalizedOptionContract,
+    OptionCandidateInput,
+    OptionSide,
+)
+from app.domain.options_analytics.quality import (
+    evaluate_publication,
+    has_core_chain_coverage,
+)
 from app.domain.options_analytics.selection import CandidateHistoryInput, build_candidate_cohort
 
 
@@ -65,3 +76,39 @@ def test_continuity_never_enters_publication_denominator() -> None:
     assert decision.coverage == 1.0
     assert decision.publish is True
 
+
+def test_core_chain_requires_five_contracts_per_side_positive_oi_and_three_strikes() -> None:
+    def observation(calls=5, puts=5, strikes=(95, 100, 105), put_oi=10):
+        contracts = []
+        for side, count, oi in (
+            (OptionSide.CALL, calls, 10),
+            (OptionSide.PUT, puts, put_oi),
+        ):
+            for index in range(count):
+                contracts.append(
+                    NormalizedOptionContract(
+                        side=side,
+                        strike=strikes[index % len(strikes)],
+                        bid=1,
+                        ask=2,
+                        last_price=1.5,
+                        volume=10,
+                        open_interest=oi,
+                        implied_volatility=0.25,
+                        last_trade_at=None,
+                        contract_size="REGULAR",
+                        multiplier=100,
+                    )
+                )
+        return ChainObservation(
+            symbol="AAPL",
+            expiration=date(2026, 9, 18),
+            source_spot_price=100,
+            fetched_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
+            contracts=tuple(contracts),
+        )
+
+    assert has_core_chain_coverage(observation()) is True
+    assert has_core_chain_coverage(observation(calls=4)) is False
+    assert has_core_chain_coverage(observation(put_oi=0)) is False
+    assert has_core_chain_coverage(observation(strikes=(100,))) is False

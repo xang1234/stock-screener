@@ -40,10 +40,10 @@ def _candidate(symbol: str, kind=CandidateKind.CURRENT) -> OptionCandidate:
 
 
 def _observation(symbol: str) -> ChainObservation:
-    def contract(side, iv):
+    def contract(side, iv, strike):
         return NormalizedOptionContract(
             side=side,
-            strike=100,
+            strike=strike,
             bid=1,
             ask=2,
             last_price=1.5,
@@ -60,7 +60,11 @@ def _observation(symbol: str) -> ChainObservation:
         expiration=date(2026, 9, 18),
         source_spot_price=100,
         fetched_at=datetime(2026, 9, 4, 1, tzinfo=timezone.utc),
-        contracts=(contract(OptionSide.CALL, 0.25), contract(OptionSide.PUT, 0.30)),
+        contracts=tuple(
+            contract(side, iv, strike)
+            for side, iv in ((OptionSide.CALL, 0.25), (OptionSide.PUT, 0.30))
+            for strike in (90, 95, 100, 105, 110)
+        ),
     )
 
 
@@ -163,6 +167,7 @@ class _Repository:
                         security_symbol=symbol,
                         candidate_kind=candidate.kind.value,
                         observation_state="available",
+                        core_valid=self.saved[symbol].get("core_valid", True),
                         max_pain=metric_values.get("max_pain"),
                         atm_iv=metric_values.get("atm_iv"),
                         activity_intensity=metric_values.get("activity_intensity"),
@@ -175,6 +180,7 @@ class _Repository:
                         security_symbol=symbol,
                         candidate_kind=candidate.kind.value,
                         observation_state="unavailable",
+                        core_valid=False,
                         max_pain=None,
                         atm_iv=None,
                         activity_intensity=None,
@@ -361,6 +367,8 @@ def test_transient_symbol_retries_three_times_but_saves_one_observation() -> Non
     assert provider.fetch_counts["AAPL"] == 3
     assert list(repo.saved) == ["AAPL"]
     assert repo.saved["AAPL"]["retry_count"] == 2
+    assert repo.saved["AAPL"]["metric_values"]["call_open_interest"] == 1000
+    assert repo.saved["AAPL"]["metric_values"]["put_open_interest"] == 1000
     strike = repo.saved["AAPL"]["strike_points"][0]
     assert strike["estimated_call_gex"] > 0
     assert strike["estimated_put_gex"] < 0

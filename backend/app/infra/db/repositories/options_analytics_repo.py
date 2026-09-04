@@ -36,6 +36,12 @@ _METRIC_COLUMNS = {
     "realized_volatility",
     "vrp",
     "activity_intensity",
+    "call_open_interest",
+    "put_open_interest",
+    "call_volume",
+    "put_volume",
+    "volume_oi_ratio",
+    "near_spot_volume_concentration",
 }
 
 
@@ -119,6 +125,7 @@ class SqlOptionsAnalyticsRepository:
                 leader_rank=candidate.leader_rank,
                 spot_price=candidate.spot_price,
                 observation_state="pending",
+                core_valid=False,
                 short_history_observation_count=0,
                 iv_history_observation_count=0,
                 lifetime_observation_count=0,
@@ -149,12 +156,15 @@ class SqlOptionsAnalyticsRepository:
         reason_codes: Sequence[str] = (),
         retry_count: int = 0,
         history_readiness: HistoryReadiness | None = None,
+        core_valid: bool | None = None,
     ) -> OptionsAnalyticsRunItem:
         item = self._get_item(run_id, symbol)
         item.spot_price = observation.source_spot_price
         item.expiration = observation.expiration
         item.observation_at = observation.fetched_at
         item.observation_state = ObservationState.AVAILABLE.value
+        if core_valid is not None:
+            item.core_valid = core_valid
         item.retry_count = retry_count
         item.evidence_json = dict(evidence or {})
         item.assumptions_json = dict(assumptions or {})
@@ -201,6 +211,7 @@ class SqlOptionsAnalyticsRepository:
     ) -> OptionsAnalyticsRunItem:
         item = self._get_item(run_id, symbol)
         item.observation_state = ObservationState.UNAVAILABLE.value
+        item.core_valid = False
         item.reasons_json = list(reason_codes)
         item.retry_count = retry_count
         self._session.flush()

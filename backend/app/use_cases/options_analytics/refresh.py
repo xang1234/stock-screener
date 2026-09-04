@@ -29,6 +29,7 @@ from app.domain.options_analytics.models import (
     MetricValue,
     ObservationState,
     OptionCandidate,
+    OptionSide,
     OptionsRunStatus,
     OptionsRunSummary,
 )
@@ -36,7 +37,10 @@ from app.domain.options_analytics.ports import (
     OptionsProviderError,
     TransientOptionsProviderError,
 )
-from app.domain.options_analytics.quality import evaluate_publication
+from app.domain.options_analytics.quality import (
+    evaluate_publication,
+    has_core_chain_coverage,
+)
 from app.domain.options_analytics.selection import (
     CandidateHistoryInput,
     build_candidate_cohort,
@@ -63,6 +67,8 @@ class _FetchResult:
     def core_valid(self) -> bool:
         return bool(
             self.metrics
+            and self.observation
+            and has_core_chain_coverage(self.observation)
             and self.metrics.max_pain.available
             and self.metrics.atm_iv.available
         )
@@ -210,7 +216,10 @@ class RefreshOptionsAnalyticsUseCase:
                 run.id,
                 candidate.symbol,
                 observation=result.observation,
-                metric_values=self._metric_values(result.metrics),
+                core_valid=result.core_valid,
+                metric_values=self._metric_values(
+                    result.metrics, result.observation
+                ),
                 strike_points=self._strike_points(
                     result.observation,
                     as_of_date=source.as_of_date,
@@ -233,8 +242,7 @@ class RefreshOptionsAnalyticsUseCase:
             for item in persisted_items
             if item.candidate_kind == CandidateKind.CURRENT.value
             and item.observation_state == ObservationState.AVAILABLE.value
-            and item.max_pain is not None
-            and item.atm_iv is not None
+            and item.core_valid
         }
         activity_values = {
             item.security_symbol: (
@@ -388,7 +396,18 @@ class RefreshOptionsAnalyticsUseCase:
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _metric_values(metrics: ChainMetrics) -> dict[str, float | None]:
+    def _metric_values(
+        metrics: ChainMetrics, observation: ChainObservation
+    ) -> dict[str, float | int | None]:
+        def total(side: OptionSide, field: str) -> int:
+            return sum(
+                int(value)
+                for contract in observation.contracts
+                if contract.side is side
+                and (value := getattr(contract, field)) is not None
+                and value >= 0
+            )
+
         return {
             "max_pain": metrics.max_pain.value,
             "net_gex": metrics.net_gex.value,
@@ -400,6 +419,14 @@ class RefreshOptionsAnalyticsUseCase:
             "realized_volatility": metrics.realized_volatility.value,
             "vrp": metrics.vrp.value,
             "activity_intensity": metrics.activity.activity_intensity.value,
+            "call_open_interest": total(OptionSide.CALL, "open_interest"),
+            "put_open_interest": total(OptionSide.PUT, "open_interest"),
+            "call_volume": total(OptionSide.CALL, "volume"),
+            "put_volume": total(OptionSide.PUT, "volume"),
+            "volume_oi_ratio": metrics.activity.volume_oi_ratio.value,
+            "near_spot_volume_concentration": (
+                metrics.activity.near_spot_volume_concentration.value
+            ),
         }
 
     @staticmethod
