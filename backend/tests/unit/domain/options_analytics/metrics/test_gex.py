@@ -110,6 +110,26 @@ def test_gamma_flip_is_unavailable_when_profile_never_crosses_zero() -> None:
     assert result.reason_codes == ("gamma_crossing_unavailable",)
 
 
+def test_gamma_flip_is_unavailable_for_a_flat_zero_profile() -> None:
+    result = estimate_gamma_flip(
+        (
+            _contract(OptionSide.CALL, 90, oi=100),
+            _contract(OptionSide.PUT, 90, oi=100),
+            _contract(OptionSide.CALL, 100, oi=100),
+            _contract(OptionSide.PUT, 100, oi=100),
+            _contract(OptionSide.CALL, 110, oi=100),
+            _contract(OptionSide.PUT, 110, oi=100),
+        ),
+        pinned_spot=100,
+        time_years=0.25,
+        rate=0.04,
+        dividend_yield=0.01,
+    )
+
+    assert result.available is False
+    assert result.reason_codes == ("gamma_crossing_unavailable",)
+
+
 def test_walls_use_absolute_estimated_side_gex_not_raw_open_interest() -> None:
     call_wall, put_wall = estimate_gex_walls(
         (

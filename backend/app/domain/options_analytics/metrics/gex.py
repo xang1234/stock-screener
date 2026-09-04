@@ -108,8 +108,18 @@ def _interpolate_gamma_crossing(
             if math.isfinite(float(x)) and math.isfinite(float(y))
         }
     )
-    for x, y in finite_points:
-        if y == 0:
+    for index, (x, y) in enumerate(finite_points):
+        if y != 0:
+            continue
+        left = next(
+            (value for _, value in reversed(finite_points[:index]) if value != 0),
+            None,
+        )
+        right = next(
+            (value for _, value in finite_points[index + 1 :] if value != 0),
+            None,
+        )
+        if left is not None and right is not None and left * right < 0:
             return x
     for (left_x, left_y), (right_x, right_y) in pairwise(finite_points):
         if left_y * right_y < 0:

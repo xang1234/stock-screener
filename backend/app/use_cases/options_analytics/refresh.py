@@ -157,6 +157,11 @@ class RefreshOptionsAnalyticsUseCase:
             as_of_date=source.as_of_date,
             force=command.force,
         )
+        if (
+            run.status == OptionsRunStatus.PUBLISHED.value
+            and not command.force
+        ):
+            return self._existing_run_result(run)
         self._repository.stage_candidates(run.id, cohort)
         self._repository.commit()
         if self._cancellation.is_cancelled():
@@ -203,6 +208,9 @@ class RefreshOptionsAnalyticsUseCase:
                 )
                 self._repository.commit()
                 continue
+            dividend_yield, dividend_source, dividend_warning = (
+                self._dividend_assumption(candidate)
+            )
             historical = self._historical_observations(
                 self._repository.symbol_history(
                     candidate.symbol,
@@ -242,7 +250,7 @@ class RefreshOptionsAnalyticsUseCase:
                     result.observation,
                     as_of_date=source.as_of_date,
                     risk_free_rate=risk_free_rate,
-                    dividend_yield=candidate.dividend_yield or 0.0,
+                    dividend_yield=dividend_yield,
                 ),
                 evidence=self._metric_evidence(
                     result.metrics,
@@ -250,13 +258,18 @@ class RefreshOptionsAnalyticsUseCase:
                 ),
                 assumptions={
                     "risk_free_rate": risk_free_rate,
-                    "dividend_yield": candidate.dividend_yield or 0.0,
+                    "dividend_yield": dividend_yield,
+                    "dividend_source": dividend_source,
                 },
                 reason_codes=tuple(item_reason_codes),
                 warnings=self._quality_warnings(
                     result.observation,
                     as_of_date=source.as_of_date,
-                    run_warning=risk_free_warning,
+                    run_warnings=tuple(
+                        warning
+                        for warning in (risk_free_warning, dividend_warning)
+                        if warning is not None
+                    ),
                 ),
                 retry_count=result.retry_count,
                 history_readiness=readiness,
@@ -385,7 +398,7 @@ class RefreshOptionsAnalyticsUseCase:
                     observation,
                     as_of_date=as_of_date,
                     risk_free_rate=risk_free_rate,
-                    dividend_yield=candidate.dividend_yield or 0.0,
+                    dividend_yield=self._dividend_assumption(candidate)[0],
                     closes=candidate.price_closes,
                 )
                 return _FetchResult(candidate, observation, metrics, attempt - 1)
@@ -435,6 +448,30 @@ class RefreshOptionsAnalyticsUseCase:
             f"{candidate.symbol}:{candidate.kind.value}" for candidate in cohort
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _existing_run_result(run: Any) -> dict[str, Any]:
+        return {
+            "run_id": run.id,
+            "source_run_id": run.source_feature_run_id,
+            "status": run.status,
+            "expected_count": run.expected_count,
+            "completed_count": run.completed_count,
+            "core_valid_current_count": run.core_valid_current_count,
+            "failed_count": run.failed_count,
+            "retried_count": run.retried_count,
+            "coverage": run.coverage,
+            "reason_codes": list(run.warnings_json or []),
+        }
+
+    @staticmethod
+    def _dividend_assumption(
+        candidate: OptionCandidate,
+    ) -> tuple[float, str, str | None]:
+        value = candidate.dividend_yield
+        if value is None or not math.isfinite(float(value)) or float(value) < 0:
+            return 0.0, "zero_assumption", "zero_dividend_assumption"
+        return float(value), "pinned_feature_run", None
 
     @staticmethod
     def _metric_values(
@@ -543,8 +580,9 @@ class RefreshOptionsAnalyticsUseCase:
 
     @staticmethod
     def _quality_evidence(observation: ChainObservation) -> dict[str, Any]:
+        contracts = tuple(observation.contracts)
         retained = retain_contracts_for_persistence(
-            observation.contracts,
+            contracts,
             spot_price=observation.source_spot_price,
         )
         trade_times = [
@@ -553,11 +591,51 @@ class RefreshOptionsAnalyticsUseCase:
             if contract.last_trade_at is not None
         ]
         latest_trade = max(trade_times) if trade_times else None
+        total = len(contracts)
+
+        def coverage(predicate: Any) -> float:
+            if total == 0:
+                return 0.0
+            return sum(bool(predicate(contract)) for contract in contracts) / total
+
         evidence: dict[str, Any] = {
             "source_spot_price": observation.source_spot_price,
             "provider_spot_price": observation.provider_spot_price,
             "latest_contract_trade_at": (
                 latest_trade.isoformat() if latest_trade is not None else None
+            ),
+            "normalized_call_count": sum(
+                contract.side is OptionSide.CALL for contract in contracts
+            ),
+            "normalized_put_count": sum(
+                contract.side is OptionSide.PUT for contract in contracts
+            ),
+            "distinct_strike_count": len(
+                {
+                    contract.strike
+                    for contract in contracts
+                    if math.isfinite(float(contract.strike)) and contract.strike > 0
+                }
+            ),
+            "open_interest_coverage": coverage(
+                lambda contract: contract.open_interest is not None
+                and contract.open_interest >= 0
+            ),
+            "iv_coverage": coverage(
+                lambda contract: contract.implied_volatility is not None
+                and math.isfinite(float(contract.implied_volatility))
+                and contract.implied_volatility > 0
+            ),
+            "volume_coverage": coverage(
+                lambda contract: contract.volume is not None and contract.volume >= 0
+            ),
+            "two_sided_quote_coverage": coverage(
+                lambda contract: contract.bid is not None
+                and math.isfinite(float(contract.bid))
+                and contract.bid >= 0
+                and contract.ask is not None
+                and math.isfinite(float(contract.ask))
+                and contract.ask >= 0
             ),
         }
         if (
@@ -576,10 +654,10 @@ class RefreshOptionsAnalyticsUseCase:
         observation: ChainObservation,
         *,
         as_of_date: date,
-        run_warning: str | None,
+        run_warnings: tuple[str, ...],
     ) -> tuple[str, ...]:
         evidence = self._quality_evidence(observation)
-        warnings = [run_warning] if run_warning else []
+        warnings = list(run_warnings)
         disagreement = evidence.get("spot_disagreement_ratio")
         if disagreement is not None and disagreement > 0.02:
             warnings.append("provider_spot_disagreement")

@@ -5,13 +5,14 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from pydantic import ValidationError
+
 from app.database import get_db
 from app.main import app
 from app.schemas.options_analytics import (
     OptionsCommandCenterResponse,
     OptionsMetricResponse,
 )
-from pydantic import ValidationError
 
 
 def _item(symbol: str, *, kind="current", state="available", core_valid=None):
@@ -47,6 +48,11 @@ def _item(symbol: str, *, kind="current", state="available", core_valid=None):
         lifetime_observation_count=3,
         retry_count=0,
         evidence_json={
+            "quality": {
+                "provider_spot_price": 101.0,
+                "normalized_call_count": 5,
+                "normalized_put_count": 5,
+            },
             "gamma_flip": {
                 "available": False,
                 "label": "Estimated Gamma Flip",
@@ -101,6 +107,7 @@ def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity(
     assert payload.items[0].metrics.gamma_flip.reason_codes == [
         "gamma_crossing_unavailable"
     ]
+    assert payload.items[0].quality_evidence["provider_spot_price"] == 101.0
     assert payload.items[1].state == "unavailable"
 
 

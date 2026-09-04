@@ -31,6 +31,7 @@ describe('OptionsSymbolDetailView', () => {
     expect(screen.getByText(/dealer_proxy/i)).not.toBeVisible();
     await user.click(disclosure);
     expect(await screen.findByText(/dealer_proxy/i)).toBeVisible();
+    expect(screen.getByText(/provider spot price: 201/i)).toBeVisible();
     expect(screen.getAllByText(/building history/i).some((element) => element.offsetParent !== null || element.getAttribute('aria-hidden') !== 'true')).toBe(true);
   });
 });

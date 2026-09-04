@@ -89,6 +89,7 @@ const validateItem = (item, location) => {
   requireArray(item.source_badges, `${location}.source_badges`);
   requireInteger(item.candidate_rank, `${location}.candidate_rank`, { nullable: true });
   requireInteger(item.leader_rank, `${location}.leader_rank`, { nullable: true });
+  requireRecord(item.quality_evidence, `${location}.quality_evidence`);
   requireRecord(item.metrics, `${location}.metrics`);
   METRIC_NAMES.forEach((name) => validateMetric(item.metrics[name], `${location}.metrics.${name}`));
   requireArray(item.warnings, `${location}.warnings`);

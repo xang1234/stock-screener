@@ -118,7 +118,20 @@ class _Provider:
 
 class _Repository:
     def __init__(self, memberships=None, history=()):
-        self.run = SimpleNamespace(id=17, market="US", calculation_version="v1")
+        self.run = SimpleNamespace(
+            id=17,
+            market="US",
+            calculation_version="v1",
+            status="staged",
+            source_feature_run_id=33,
+            expected_count=0,
+            completed_count=0,
+            core_valid_current_count=0,
+            failed_count=0,
+            retried_count=0,
+            coverage=0.0,
+            warnings_json=[],
+        )
         self.memberships = dict(memberships or {})
         self.history = tuple(history)
         self.staged = {}
@@ -620,7 +633,67 @@ def test_quality_evidence_keeps_provider_spot_and_stale_trade_warning() -> None:
     assert saved["evidence"]["quality"]["latest_contract_trade_at"].startswith(
         "2026-08-28"
     )
+    assert saved["evidence"]["quality"]["normalized_call_count"] == 5
+    assert saved["evidence"]["quality"]["normalized_put_count"] == 5
+    assert saved["evidence"]["quality"]["distinct_strike_count"] == 5
+    assert saved["evidence"]["quality"]["open_interest_coverage"] == 1.0
+    assert saved["evidence"]["quality"]["iv_coverage"] == 1.0
+    assert saved["evidence"]["quality"]["volume_coverage"] == 1.0
+    assert saved["evidence"]["quality"]["two_sided_quote_coverage"] == 1.0
     assert set(saved["warnings"]) == {
         "provider_spot_disagreement",
         "stale_contract_trades",
     }
+
+
+def test_missing_or_invalid_dividend_uses_disclosed_zero_assumption() -> None:
+    repo = _Repository()
+
+    _use_case(
+        [replace(_candidate("AAPL"), dividend_yield=float("nan"))],
+        repo=repo,
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    saved = repo.saved["AAPL"]
+    assert saved["assumptions"]["dividend_yield"] == 0.0
+    assert saved["assumptions"]["dividend_source"] == "zero_assumption"
+    assert "zero_dividend_assumption" in saved["warnings"]
+
+
+def test_repeated_delivery_of_published_run_returns_without_mutation() -> None:
+    repo = _Repository()
+    repo.run = SimpleNamespace(
+        id=17,
+        market="US",
+        calculation_version="v1",
+        status="published",
+        source_feature_run_id=33,
+        expected_count=1,
+        completed_count=1,
+        core_valid_current_count=1,
+        failed_count=0,
+        retried_count=0,
+        coverage=1.0,
+        warnings_json=[],
+    )
+    provider = _Provider()
+
+    result = _use_case(
+        [_candidate("AAPL")], repo=repo, provider=provider
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert result == {
+        "run_id": 17,
+        "source_run_id": 33,
+        "status": "published",
+        "expected_count": 1,
+        "completed_count": 1,
+        "core_valid_current_count": 1,
+        "failed_count": 0,
+        "retried_count": 0,
+        "coverage": 1.0,
+        "reason_codes": [],
+    }
+    assert repo.staged == {}
+    assert repo.run_assumptions is None
+    assert provider.risk_free_calls == 0

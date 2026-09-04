@@ -24,6 +24,7 @@ describe('options contract', () => {
     expect(aapl.metrics.net_gex.label).toBe('Estimated Net GEX');
     expect(aapl.metrics.skew_25_delta.value).toBeNull();
     expect(aapl.metrics.skew_25_delta.reason_codes).toEqual(['building_history']);
+    expect(aapl.quality_evidence.provider_spot_price).toBe(201);
   });
 
   it('keys command and symbol reads by mode, run, path, and symbol identity', () => {

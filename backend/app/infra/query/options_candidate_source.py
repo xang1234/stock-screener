@@ -50,19 +50,15 @@ class SqlOptionsCandidateSource:
                 f"Published feature run {source_feature_run_id} does not exist"
             )
         rows = (
-            self._session.query(StockFeatureDaily, StockFundamental)
-            .outerjoin(
-                StockFundamental,
-                StockFundamental.symbol == StockFeatureDaily.symbol,
-            )
+            self._session.query(StockFeatureDaily)
             .filter(StockFeatureDaily.run_id == source_feature_run_id)
             .all()
         )
-        symbols = [feature.symbol for feature, _ in rows]
+        symbols = [feature.symbol for feature in rows]
         closes = self._price_closes(symbols, run.as_of_date)
         candidates: list[OptionCandidateInput] = []
         leaders: list[OptionCandidateInput] = []
-        for feature, fundamental in rows:
+        for feature in rows:
             details = _details(feature.details_json)
             dollar_volume = _number(details.get("avg_dollar_volume"))
             item = OptionCandidateInput(
@@ -70,11 +66,7 @@ class SqlOptionsCandidateSource:
                 composite_score=_number(feature.composite_score),
                 daily_dollar_volume=_number(dollar_volume),
                 spot_price=_number(details.get("current_price")),
-                dividend_yield=(
-                    _number(fundamental.dividend_yield)
-                    if fundamental is not None
-                    else None
-                ),
+                dividend_yield=_number(details.get("dividend_yield")),
                 price_closes=closes.get(feature.symbol.strip().upper(), ()),
             )
             candidates.append(item)

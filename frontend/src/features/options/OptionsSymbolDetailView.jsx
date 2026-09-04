@@ -87,6 +87,16 @@ export default function OptionsSymbolDetailView({ data, onBack }) {
           {Object.entries(item.assumptions).map(([key, value]) => (
             <Chip key={key} size="small" variant="outlined" label={`${humanize(key)}: ${String(value)}`} sx={{ mr: 1, mt: 1 }} />
           ))}
+          <Typography variant="subtitle2" sx={{ mt: 2 }}>Quality evidence</Typography>
+          {Object.entries(item.quality_evidence).map(([key, value]) => (
+            <Chip
+              key={key}
+              size="small"
+              variant="outlined"
+              label={`${humanize(key)}: ${value ?? 'Unavailable'}`}
+              sx={{ mr: 1, mt: 1 }}
+            />
+          ))}
           <Typography variant="subtitle2" sx={{ mt: 2 }}>Reasons and warnings</Typography>
           <Typography variant="body2">
             {[...item.reason_codes, ...item.warnings].map(humanize).join(' · ') || 'No additional warnings'}

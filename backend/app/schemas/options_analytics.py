@@ -60,6 +60,7 @@ class OptionsCommandCenterItemResponse(_StrictModel):
     iv_history_observation_count: int
     lifetime_observation_count: int
     retry_count: int
+    quality_evidence: dict[str, Any] = Field(default_factory=dict)
     metrics: OptionsMetricsResponse
     assumptions: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
@@ -259,6 +260,7 @@ def _item_response(item: Any) -> OptionsCommandCenterItemResponse:
         iv_history_observation_count=item.iv_history_observation_count,
         lifetime_observation_count=item.lifetime_observation_count,
         retry_count=item.retry_count,
+        quality_evidence=dict((item.evidence_json or {}).get("quality") or {}),
         metrics=OptionsMetricsResponse(
             **{name: _metric(item, name) for name in _LABELS}
         ),
