@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+
 from app.domain.options_analytics.metrics.activity import (
     calculate_activity_metrics,
     rank_activity,
@@ -53,6 +54,37 @@ def test_activity_below_100_contracts_is_unavailable() -> None:
 
     assert metrics.activity_intensity.available is False
     assert metrics.activity_intensity.reason_codes == ("activity_volume_floor_not_met",)
+
+
+@pytest.mark.parametrize("volumes", [(None, None), (120, None)])
+def test_activity_rejects_incomplete_volume_totals(
+    volumes: tuple[int | None, int | None],
+) -> None:
+    metrics = calculate_activity_metrics(
+        tuple(
+            _contract(strike, volume, 200)
+            for strike, volume in zip((100, 105), volumes, strict=True)
+        ),
+        spot=100,
+    )
+
+    assert metrics.volume_oi_ratio.available is False
+    assert metrics.volume_oi_ratio.reason_codes == ("activity_totals_incomplete",)
+    assert metrics.near_spot_volume_concentration.available is False
+    assert metrics.activity_intensity.available is False
+    assert metrics.qualifying_volume is None
+
+
+def test_activity_rejects_incomplete_open_interest_total() -> None:
+    metrics = calculate_activity_metrics(
+        (_contract(100, 120, 200), _contract(105, 80, None)),
+        spot=100,
+    )
+
+    assert metrics.volume_oi_ratio.available is False
+    assert metrics.volume_oi_ratio.reason_codes == ("activity_totals_incomplete",)
+    assert metrics.near_spot_volume_concentration.available is True
+    assert metrics.activity_intensity.available is False
 
 
 def test_cross_sectional_activity_rank_is_stable_and_skips_unavailable() -> None:

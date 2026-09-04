@@ -34,14 +34,17 @@ def metric_values(
     metrics: ChainMetrics,
     observation: ChainObservation,
 ) -> OptionsMetricValues:
-    def total(side: OptionSide, field: str) -> int:
-        return sum(
-            int(value)
-            for contract in observation.contracts
-            if contract.side is side
-            and (value := getattr(contract, field)) is not None
-            and value >= 0
+    def total(side: OptionSide, field: str) -> int | None:
+        side_contracts = tuple(
+            contract for contract in observation.contracts if contract.side is side
         )
+        values = tuple(getattr(contract, field) for contract in side_contracts)
+        if not values or any(
+            value is None or not math.isfinite(float(value)) or value < 0
+            for value in values
+        ):
+            return None
+        return sum(int(value) for value in values if value is not None)
 
     return OptionsMetricValues(
         max_pain=metrics.max_pain.value,

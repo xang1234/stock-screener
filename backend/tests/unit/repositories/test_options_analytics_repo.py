@@ -298,16 +298,22 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
     assert item.strike_points[0].call_open_interest == 250
 
 
-def test_resume_returns_only_nonterminal_items(session) -> None:
+def test_resume_retries_failed_items_but_preserves_successful_items(session) -> None:
     repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(
         run.id, [_candidate("AAPL"), _candidate("MSFT"), _candidate("NVDA")]
     )
-    repo.save_item_result(run.id, "AAPL", observation=_observation("AAPL"))
+    repo.save_item_result(
+        run.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        core_valid=True,
+    )
     repo.save_unavailable(run.id, "MSFT", reason_codes=("expiration_unavailable",))
+    repo.mark_failed_quality(run.id, reason_codes=("insufficient_core_coverage",))
 
-    assert repo.incomplete_symbols(run.id) == ("NVDA",)
+    assert repo.incomplete_symbols(run.id) == ("MSFT", "NVDA")
     assert [item.security_symbol for item in repo.items_for_run(run.id)] == [
         "AAPL",
         "MSFT",

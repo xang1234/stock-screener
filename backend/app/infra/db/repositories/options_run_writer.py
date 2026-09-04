@@ -129,17 +129,21 @@ class SqlOptionsRunWriter:
         self._session.commit()
 
     def incomplete_symbols(self, run_id: int) -> tuple[str, ...]:
+        run = self._get_run(run_id)
+        completed_states = (
+            (
+                ObservationState.AVAILABLE.value,
+                ObservationState.UNAVAILABLE.value,
+                ObservationState.INSUFFICIENT_QUALITY.value,
+            )
+            if run.status == OptionsRunStatus.PUBLISHED.value
+            else (ObservationState.AVAILABLE.value,)
+        )
         rows = (
             self._session.query(OptionsAnalyticsRunItem.security_symbol)
             .filter(
                 OptionsAnalyticsRunItem.run_id == run_id,
-                ~OptionsAnalyticsRunItem.observation_state.in_(
-                    (
-                        ObservationState.AVAILABLE.value,
-                        ObservationState.UNAVAILABLE.value,
-                        ObservationState.INSUFFICIENT_QUALITY.value,
-                    )
-                ),
+                ~OptionsAnalyticsRunItem.observation_state.in_(completed_states),
             )
             .order_by(OptionsAnalyticsRunItem.security_symbol)
             .all()

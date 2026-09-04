@@ -16,7 +16,7 @@ class ActivityMetrics:
     volume_oi_ratio: MetricValue
     near_spot_volume_concentration: MetricValue
     activity_intensity: MetricValue
-    qualifying_volume: int
+    qualifying_volume: int | None
 
 
 def _non_negative(value: int | None) -> int | None:
@@ -25,25 +25,37 @@ def _non_negative(value: int | None) -> int | None:
     return int(value)
 
 
+def _complete_total(
+    contracts: tuple[NormalizedOptionContract, ...],
+    field: str,
+) -> int | None:
+    values = tuple(_non_negative(getattr(row, field)) for row in contracts)
+    if any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
+
+
 def calculate_activity_metrics(
     contracts: tuple[NormalizedOptionContract, ...], *, spot: float
 ) -> ActivityMetrics:
-    volumes = [
-        value for row in contracts if (value := _non_negative(row.volume)) is not None
-    ]
-    open_interests = [
-        value
-        for row in contracts
-        if (value := _non_negative(row.open_interest)) is not None
-    ]
-    total_volume = sum(volumes)
-    total_open_interest = sum(open_interests)
-    if total_open_interest == 0:
+    total_volume = _complete_total(contracts, "volume")
+    total_open_interest = _complete_total(contracts, "open_interest")
+    if total_volume is None or total_open_interest is None:
+        ratio = MetricValue(
+            available=False,
+            reason_codes=("activity_totals_incomplete",),
+        )
+    elif total_open_interest == 0:
         ratio = MetricValue(available=False, reason_codes=("open_interest_zero",))
     else:
         ratio = MetricValue(available=True, value=total_volume / total_open_interest)
 
-    if total_volume == 0 or not math.isfinite(float(spot)) or spot <= 0:
+    if total_volume is None:
+        concentration = MetricValue(
+            available=False,
+            reason_codes=("volume_total_incomplete",),
+        )
+    elif total_volume == 0 or not math.isfinite(float(spot)) or spot <= 0:
         concentration = MetricValue(
             available=False,
             reason_codes=("volume_concentration_unavailable",),
@@ -57,7 +69,12 @@ def calculate_activity_metrics(
         )
         concentration = MetricValue(available=True, value=near_volume / total_volume)
 
-    if total_volume < ACTIVITY_VOLUME_FLOOR:
+    if total_volume is None:
+        intensity = MetricValue(
+            available=False,
+            reason_codes=("activity_totals_incomplete",),
+        )
+    elif total_volume < ACTIVITY_VOLUME_FLOOR:
         intensity = MetricValue(
             available=False,
             reason_codes=("activity_volume_floor_not_met",),
