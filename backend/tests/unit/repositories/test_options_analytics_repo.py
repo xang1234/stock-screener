@@ -3,16 +3,12 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
     HistoryReadiness,
     NormalizedOptionContract,
-    ObservationState,
     OptionCandidate,
     OptionSide,
     OptionsRunStatus,
@@ -25,8 +21,14 @@ from app.infra.db.models.options_analytics import (
     OptionsAnalyticsRunItem,
     OptionsAnalyticsStrikePoint,
 )
-from app.infra.db.repositories.options_analytics_repo import SqlOptionsAnalyticsRepository
+from app.infra.db.repositories.options_analytics_repo import (
+    SqlOptionsAnalyticsRepository,
+)
 from app.infra.db.uow import SqlUnitOfWork
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+
+from ..test_options_history_transfer import _observation as _transfer_observation
 
 
 @pytest.fixture
@@ -376,3 +378,43 @@ def test_unit_of_work_exposes_options_repository(session) -> None:
 
     with SqlUnitOfWork(factory) as uow:
         assert isinstance(uow.options_analytics, SqlOptionsAnalyticsRepository)
+
+
+def test_history_transfer_import_is_idempotent_and_never_moves_pointer(session) -> None:
+    repo = SqlOptionsAnalyticsRepository(session)
+    local = _start(repo, "local-published")
+    repo.stage_candidates(local.id, [_candidate("MSFT")])
+    repo.save_item_result(local.id, "MSFT", observation=_observation("MSFT"))
+    repo.publish(local.id, _published_summary())
+    session.commit()
+
+    row = _transfer_observation(as_of_date="2026-09-01")
+    first = repo.import_history_transfer(
+        (row,),
+        market="US",
+        calculation_version="v1",
+        schema_version="options-history-transfer-v1",
+    )
+    second = repo.import_history_transfer(
+        (row,),
+        market="US",
+        calculation_version="v1",
+        schema_version="options-history-transfer-v1",
+    )
+    session.commit()
+
+    pointer = session.get(OptionsAnalyticsPointer, ("US", "v1"))
+    transferred = (
+        session.query(OptionsAnalyticsRun)
+        .filter(OptionsAnalyticsRun.origin == "history_transfer")
+        .one()
+    )
+    assert first["imported_observations"] == 1
+    assert second["imported_observations"] == 0
+    assert pointer.run_id == local.id
+    assert transferred.source_feature_run_id is None
+    assert transferred.external_source_feature_run_key == row[
+        "external_source_feature_run_key"
+    ]
+    assert transferred.items[0].security_symbol == "AAPL"
+    assert transferred.items[0].strike_points == []

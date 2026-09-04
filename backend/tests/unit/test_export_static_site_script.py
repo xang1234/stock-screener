@@ -2853,6 +2853,33 @@ def test_main_passes_independent_options_roots_to_combine(monkeypatch, tmp_path)
     assert captured["fallback_options_artifacts_dir"] == fallback_options_dir
 
 
+def test_static_options_refresh_runs_in_process_and_reports_failure(monkeypatch):
+    from app.interfaces.tasks import options_analytics_tasks
+
+    captured = []
+    monkeypatch.setattr(
+        options_analytics_tasks.refresh_options_analytics,
+        "run",
+        lambda **kwargs: captured.append(kwargs)
+        or {"status": "published", "run_id": 8},
+    )
+
+    assert export_script._run_static_options_refresh(44) == {
+        "status": "published",
+        "run_id": 8,
+    }
+    assert captured == [{"source_run_id": 44, "market": "US"}]
+
+    monkeypatch.setattr(
+        options_analytics_tasks.refresh_options_analytics,
+        "run",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("Yahoo unavailable")),
+    )
+    failed = export_script._run_static_options_refresh(44)
+    assert failed["status"] == "failed"
+    assert failed["reason_codes"] == ["options_refresh_failed"]
+
+
 def test_main_combines_with_independent_per_market_rs_formula_policy(
     monkeypatch,
     tmp_path,

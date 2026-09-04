@@ -25,6 +25,10 @@ from app.services.static_market_artifact_contract import (
     market_from_static_market_artifact_name,
     read_static_market_manifest,
 )
+from app.services.static_options_contract import (
+    StaticOptionsArtifactError,
+    validate_static_options_artifact,
+)
 
 
 def warn(message: str) -> None:
@@ -297,6 +301,30 @@ def downloaded_market_as_of_date(target_dir: Path) -> date | None:
     return _coerce_manifest_date(value)
 
 
+def find_options_artifact_dir(base: Path) -> Path | None:
+    candidates = [base]
+    if base.exists():
+        candidates.extend(path.parent for path in base.rglob("manifest.json"))
+    for candidate in candidates:
+        try:
+            validate_static_options_artifact(candidate)
+        except StaticOptionsArtifactError:
+            continue
+        return candidate
+    return None
+
+
+def downloaded_options_as_of_date(target_dir: Path) -> date | None:
+    options_dir = find_options_artifact_dir(target_dir)
+    if options_dir is None:
+        return None
+    try:
+        manifest = validate_static_options_artifact(options_dir)
+    except StaticOptionsArtifactError:
+        return None
+    return _coerce_manifest_date(manifest.get("source_as_of_date"))
+
+
 def _candidate_is_newer(
     candidate_date: date | None,
     incumbent_date: date | None,
@@ -359,6 +387,8 @@ def download_fallback_artifacts(
     current_dir: Path,
     fallback_dir: Path,
     required_formula_by_market: Mapping[str, str] | None = None,
+    current_options_dir: Path | None = None,
+    fallback_options_dir: Path | None = None,
 ) -> set[str]:
     fallback_dir.mkdir(parents=True, exist_ok=True)
     formula_requirements = {
@@ -400,6 +430,11 @@ def download_fallback_artifacts(
     current_markets = collect_current_markets(current_dir)
     fallback_markets: set[str] = set()
     fallback_dates_by_market: dict[str, date | None] = {}
+    fallback_options_date: date | None = None
+    if current_options_dir is not None and find_options_artifact_dir(
+        current_options_dir
+    ) is not None:
+        print("Current run already has a compatible static US options artifact.")
     if current_markets:
         print(
             f"Current run already has market artifacts: {', '.join(sorted(current_markets))}.",
@@ -439,6 +474,61 @@ def download_fallback_artifacts(
             for artifact in artifacts
             if not artifact.get("expired")
         }
+
+        options_artifact = artifacts_by_name.get("static-options-US")
+        if options_artifact is not None and fallback_options_dir is not None:
+            artifact_name = "static-options-US"
+            candidate_wrapper = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{artifact_name}.candidate-{run_id}-",
+                    dir=fallback_dir,
+                )
+            )
+            try:
+                subprocess.run(
+                    [
+                        "gh",
+                        "run",
+                        "download",
+                        str(run_id),
+                        "--repo",
+                        repo,
+                        "--name",
+                        artifact_name,
+                        "--dir",
+                        str(candidate_wrapper),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                warn(
+                    f"{artifact_name} from run {run_id} failed to download "
+                    f"with exit {exc.returncode}.{command_error_detail(exc)}"
+                )
+                shutil.rmtree(candidate_wrapper, ignore_errors=True)
+            else:
+                candidate_options = find_options_artifact_dir(candidate_wrapper)
+                candidate_date = downloaded_options_as_of_date(candidate_wrapper)
+                if candidate_options is None:
+                    warn(
+                        f"{artifact_name} from run {run_id} is not a compatible "
+                        "static options artifact."
+                    )
+                elif _candidate_is_newer(candidate_date, fallback_options_date):
+                    fallback_options_dir.parent.mkdir(parents=True, exist_ok=True)
+                    _install_market_candidate(
+                        target_dir=fallback_options_dir,
+                        candidate_dir=candidate_options,
+                    )
+                    fallback_options_date = candidate_date
+                    print(
+                        f"Using fallback artifact {artifact_name} from Static Site "
+                        f"run {run_id} on {branch_name}.",
+                        flush=True,
+                    )
+                shutil.rmtree(candidate_wrapper, ignore_errors=True)
 
         for artifact_name in sorted(artifacts_by_name):
             market = market_from_static_market_artifact_name(artifact_name)
@@ -578,6 +668,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=parse_formula_requirements,
         default={},
     )
+    parser.add_argument("--current-options-dir", type=Path)
+    parser.add_argument("--fallback-options-dir", type=Path)
     args = parser.parse_args(argv)
 
     if not args.repo:
@@ -590,6 +682,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         current_dir=args.current_dir,
         fallback_dir=args.fallback_dir,
         required_formula_by_market=args.fallback_rs_formula_overrides_json,
+        current_options_dir=args.current_options_dir,
+        fallback_options_dir=args.fallback_options_dir,
     )
     return 0
 

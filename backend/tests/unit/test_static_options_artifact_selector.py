@@ -129,3 +129,22 @@ def test_combine_mode_selects_options_independently_and_advertises_page(
     assert result.manifest["features"]["options"] is True
     assert result.manifest["pages"]["options"] == {"path": "options/manifest.json"}
     assert (output / "options" / "manifest.json").is_file()
+
+
+def test_fallback_and_validation_scripts_recognize_nested_options_artifact(tmp_path):
+    from app.scripts.download_static_market_fallbacks import (
+        downloaded_options_as_of_date,
+        find_options_artifact_dir,
+    )
+    from app.scripts.validate_static_market_artifacts import (
+        validate_optional_options_artifacts,
+    )
+
+    nested = tmp_path / "static-options-US" / "options"
+    _export(nested, source_run_id=44)
+
+    assert find_options_artifact_dir(tmp_path) == nested
+    assert downloaded_options_as_of_date(tmp_path) == date(2026, 9, 4)
+    assert validate_optional_options_artifacts(tmp_path, None)[
+        "source_feature_run_id"
+    ] == 44

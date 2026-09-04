@@ -286,6 +286,27 @@ def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts
     assert "static-site-v3" not in fallback_step
 
 
+def test_static_site_preserves_and_publishes_us_options_history() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "static-site.yml").read_text()
+    build_job = _build_market_job()
+    combine_job = _combine_and_build_job()
+
+    assert "options-analytics-data" in workflow
+    assert "OPTIONS_ANALYTICS_ENABLED" in build_job
+    assert "matrix.market == 'US'" in build_job
+    assert "python -m app.scripts.import_options_history" in build_job
+    assert "python -m app.scripts.export_options_history" in build_job
+    assert "--require-run-id" in build_job
+    assert "name: static-options-US" in build_job
+    assert "--current-options-dir /tmp/static-options-current" in combine_job
+    assert "--fallback-options-dir /tmp/static-options-fallback" in combine_job
+    assert "--options-artifacts-dir /tmp/static-options-current" in combine_job
+    assert (
+        "--fallback-options-artifacts-dir /tmp/static-options-fallback"
+        in combine_job
+    )
+
+
 def test_static_site_validation_uses_python_module_not_inline_control_plane() -> None:
     combine_job = _combine_and_build_job()
     validation_step = combine_job.split("      - name: Validate market artifacts\n", 1)[1].split(
