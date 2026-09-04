@@ -127,6 +127,7 @@ class RefreshOptionsAnalyticsUseCase:
             candidate_input = replace(
                 candidate_input,
                 dividend_yield=getattr(membership, "dividend_yield", None),
+                dividend_source=getattr(membership, "dividend_source", None),
             )
             continuity.append(
                 CandidateHistoryInput(
@@ -488,6 +489,8 @@ class RefreshOptionsAnalyticsUseCase:
     ) -> tuple[float, str, str | None]:
         value = candidate.dividend_yield
         if value is None or not math.isfinite(float(value)) or float(value) < 0:
+            return 0.0, "zero_assumption", "zero_dividend_assumption"
+        if candidate.dividend_source == "zero_assumption":
             return 0.0, "zero_assumption", "zero_dividend_assumption"
         return float(value), "pinned_feature_run", None
 

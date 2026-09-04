@@ -43,6 +43,7 @@ class OptionCandidateInput:
     spot_price: float | None
     dividend_yield: float | None = None
     price_closes: tuple[float, ...] = ()
+    dividend_source: str | None = None
 
     def __post_init__(self) -> None:
         symbol = self.symbol.strip().upper()
@@ -61,6 +62,7 @@ class OptionCandidate:
     spot_price: float | None
     dividend_yield: float | None = None
     price_closes: tuple[float, ...] = ()
+    dividend_source: str | None = None
     candidate_rank: int | None = None
     leader_rank: int | None = None
     sessions_since_current: int = 0

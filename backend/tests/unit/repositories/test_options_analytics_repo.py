@@ -344,7 +344,10 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
         current_run.id,
         "AAPL",
         observation=_observation("AAPL"),
-        assumptions={"dividend_yield": 0.012},
+        assumptions={
+            "dividend_yield": 0.0,
+            "dividend_source": "zero_assumption",
+        },
     )
     repo.publish(current_run.id, _published_summary())
     continuity_run = _start(repo, "continuity", as_of=date(2026, 9, 2))
@@ -356,7 +359,8 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
 
     assert memberships["AAPL"].as_of_date == date(2026, 9, 1)
     assert memberships["AAPL"].prior_best_rank == 1
-    assert memberships["AAPL"].dividend_yield == 0.012
+    assert memberships["AAPL"].dividend_yield == 0.0
+    assert memberships["AAPL"].dividend_source == "zero_assumption"
 
 
 def test_rollback_removes_uncommitted_pointer_and_observation(session) -> None:

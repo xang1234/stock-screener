@@ -80,6 +80,7 @@ class LastCurrentMembership:
     as_of_date: date
     prior_best_rank: int
     dividend_yield: float | None
+    dividend_source: str | None
 
 
 class SqlOptionsAnalyticsRepository:
@@ -441,6 +442,7 @@ class SqlOptionsAnalyticsRepository:
                 as_of_date=as_of_date,
                 prior_best_rank=min(ranks) if ranks else 10_000,
                 dividend_yield=(item.assumptions_json or {}).get("dividend_yield"),
+                dividend_source=(item.assumptions_json or {}).get("dividend_source"),
             )
         return memberships
 

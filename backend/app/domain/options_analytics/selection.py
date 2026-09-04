@@ -54,6 +54,7 @@ def _as_current(
         spot_price=source.spot_price,
         dividend_yield=source.dividend_yield,
         price_closes=source.price_closes,
+        dividend_source=source.dividend_source,
         candidate_rank=candidate_rank,
         leader_rank=leader_rank,
     )
@@ -119,6 +120,7 @@ def build_candidate_cohort(
             spot_price=row.candidate.spot_price,
             dividend_yield=row.candidate.dividend_yield,
             price_closes=row.candidate.price_closes,
+            dividend_source=row.candidate.dividend_source,
             sessions_since_current=row.sessions_since_current,
             prior_best_rank=row.prior_best_rank,
         )

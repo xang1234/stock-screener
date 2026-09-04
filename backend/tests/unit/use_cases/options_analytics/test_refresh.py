@@ -590,7 +590,8 @@ def test_continuity_is_derived_from_last_current_membership_and_expires_after_fi
                 symbol="RECENT",
                 as_of_date=date(2026, 8, 28),
                 prior_best_rank=2,
-                dividend_yield=0.012,
+                dividend_yield=0.0,
+                dividend_source="zero_assumption",
             ),
             "EXPIRED": SimpleNamespace(
                 symbol="EXPIRED", as_of_date=date(2026, 8, 27), prior_best_rank=1
@@ -608,7 +609,10 @@ def test_continuity_is_derived_from_last_current_membership_and_expires_after_fi
 
     assert repo.staged["RECENT"].kind is CandidateKind.CONTINUITY
     assert repo.staged["RECENT"].sessions_since_current == 5
-    assert repo.staged["RECENT"].dividend_yield == 0.012
+    assert repo.staged["RECENT"].dividend_yield == 0.0
+    assert repo.staged["RECENT"].dividend_source == "zero_assumption"
+    assert repo.saved["RECENT"]["assumptions"]["dividend_source"] == "zero_assumption"
+    assert "zero_dividend_assumption" in repo.saved["RECENT"]["warnings"]
     assert "EXPIRED" not in repo.staged
     assert repo.activity_ranks == {"AAPL": 1}
 

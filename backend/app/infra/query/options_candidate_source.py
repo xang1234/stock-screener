@@ -66,15 +66,19 @@ class SqlOptionsCandidateSource:
         for feature in rows:
             details = _details(feature.details_json)
             dollar_volume = _number(details.get("avg_dollar_volume"))
+            dividend_yield = _percentage_points_to_decimal(
+                details.get("dividend_yield")
+            )
             item = OptionCandidateInput(
                 symbol=feature.symbol,
                 composite_score=_number(feature.composite_score),
                 daily_dollar_volume=_number(dollar_volume),
                 spot_price=_number(details.get("current_price")),
-                dividend_yield=_percentage_points_to_decimal(
-                    details.get("dividend_yield")
-                ),
+                dividend_yield=dividend_yield,
                 price_closes=closes.get(feature.symbol.strip().upper(), ()),
+                dividend_source=(
+                    "pinned_feature_run" if dividend_yield is not None else None
+                ),
             )
             candidates.append(item)
             rs_rating = _number(details.get("rs_rating"))

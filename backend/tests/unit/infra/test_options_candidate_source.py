@@ -109,6 +109,7 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
     assert first.symbol == "C00"
     assert first.spot_price == 100
     assert first.dividend_yield == 0.01
+    assert first.dividend_source == "pinned_feature_run"
     assert first.price_closes == tuple(float(value) for value in range(100, 121))
 
     session.close()
