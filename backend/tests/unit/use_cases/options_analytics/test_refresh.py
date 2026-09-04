@@ -285,7 +285,6 @@ def _use_case(
         repository=repo or _Repository(),
         provider=provider or _Provider(),
         calendar=_Calendar(),
-        clock=lambda: datetime(2026, 9, 4, 2, tzinfo=timezone.utc),
         cancellation=cancellation or _Cancellation(),
         calculation_version="v1",
         schema_version="v1",

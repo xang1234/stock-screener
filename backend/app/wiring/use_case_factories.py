@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
@@ -165,15 +164,12 @@ def get_refresh_options_analytics_use_case(
         rate_limiter=lambda: runtime.rate_limiter().wait(
             "yfinance:options", min_interval_s=1.0 / requests_per_second
         ),
-        # The use case owns the three-attempt symbol budget.
-        max_attempts=1,
     )
     return RefreshOptionsAnalyticsUseCase(
         candidate_source=SqlOptionsCandidateSource(session),
         repository=SqlOptionsAnalyticsRepository(session),
         provider=provider,
         calendar=calendar,
-        clock=lambda: datetime.now(timezone.utc),
         cancellation=cancellation or NeverCancelledToken(),
         calculation_version=OPTIONS_ANALYTICS_CALCULATION_VERSION,
         schema_version=OPTIONS_ANALYTICS_SCHEMA_VERSION,

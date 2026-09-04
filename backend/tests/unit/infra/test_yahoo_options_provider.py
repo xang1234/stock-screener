@@ -15,6 +15,7 @@ from app.infra.providers.yahoo_options import (
     ThrottledOptionsProviderError,
     YahooOptionsProvider,
 )
+from app.domain.options_analytics.ports import TransientOptionsProviderError
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "options" / "yahoo_chain_normalized_source.json"
 NOW = datetime(2026, 9, 4, 1, 2, 3, tzinfo=timezone.utc)
@@ -125,7 +126,6 @@ def test_missing_required_columns_raise_typed_schema_error(missing) -> None:
         ticker_factory=lambda _symbol: _Ticker(calls=calls, puts=puts),
         rate_limiter=lambda: None,
         clock=lambda: NOW,
-        max_attempts=1,
     )
 
     with pytest.raises(OptionsSchemaError, match=missing):
@@ -137,40 +137,34 @@ def test_empty_both_sides_raise_typed_schema_error() -> None:
         ticker_factory=lambda _symbol: _Ticker(calls=pd.DataFrame(), puts=pd.DataFrame()),
         rate_limiter=lambda: None,
         clock=lambda: NOW,
-        max_attempts=1,
     )
 
     with pytest.raises(OptionsSchemaError, match="empty"):
         provider.fetch_chain("AAPL", date(2026, 9, 18), source_spot_price=100)
 
 
-def test_retry_waits_before_each_attempt_and_stops_after_first_success() -> None:
-    calls, puts = _frames()
+def test_provider_attempts_once_and_leaves_retry_budget_to_the_use_case() -> None:
     attempts = []
-    ticker = _Ticker(calls=calls, puts=puts)
 
     def factory(_symbol):
         attempts.append("attempt")
-        if len(attempts) < 3:
-            raise TimeoutError("temporary")
-        return ticker
+        raise TimeoutError("temporary")
 
     waits = []
     provider = YahooOptionsProvider(
         ticker_factory=factory,
         rate_limiter=lambda: waits.append("wait"),
         clock=lambda: NOW,
-        max_attempts=3,
     )
 
-    provider.fetch_chain("AAPL", date(2026, 9, 18), source_spot_price=100)
+    with pytest.raises(TransientOptionsProviderError):
+        provider.fetch_chain("AAPL", date(2026, 9, 18), source_spot_price=100)
 
-    assert attempts == ["attempt", "attempt", "attempt"]
-    assert waits == ["wait", "wait", "wait"]
-    assert ticker.chain_calls == 1
+    assert attempts == ["attempt"]
+    assert waits == ["wait"]
 
 
-def test_throttling_never_exceeds_three_attempts() -> None:
+def test_throttling_is_classified_after_one_provider_attempt() -> None:
     attempts = []
 
     def factory(_symbol):
@@ -185,7 +179,7 @@ def test_throttling_never_exceeds_three_attempts() -> None:
 
     with pytest.raises(ThrottledOptionsProviderError):
         provider.list_expirations("AAPL")
-    assert len(attempts) == 3
+    assert len(attempts) == 1
 
 
 def test_irx_rate_uses_latest_close_on_or_before_pinned_date() -> None:

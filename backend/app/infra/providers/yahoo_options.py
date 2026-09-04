@@ -87,12 +87,10 @@ class YahooOptionsProvider:
         ticker_factory: Callable[[str], Any] = yf.Ticker,
         rate_limiter: Callable[[], None] = lambda: None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-        max_attempts: int = 3,
     ) -> None:
         self._ticker_factory = ticker_factory
         self._rate_limiter = rate_limiter
         self._clock = clock
-        self._max_attempts = min(max(int(max_attempts), 1), 3)
 
     def list_expirations(self, symbol: str) -> tuple[date, ...]:
         def operation() -> tuple[date, ...]:
@@ -160,16 +158,14 @@ class YahooOptionsProvider:
         return self._attempt(operation)
 
     def _attempt(self, operation: Callable[[], _T]) -> _T:
-        last_error: Exception | None = None
-        for _attempt_number in range(1, self._max_attempts + 1):
-            self._rate_limiter()
-            try:
-                return operation()
-            except (OptionsSchemaError, OptionsUnavailableError):
-                raise
-            except Exception as exc:  # noqa: BLE001 - provider clients vary
-                last_error = exc
-        message = str(last_error or "Yahoo options request failed")
+        self._rate_limiter()
+        try:
+            return operation()
+        except (OptionsSchemaError, OptionsUnavailableError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - provider clients vary
+            last_error = exc
+        message = str(last_error)
         if "429" in message or "too many requests" in message.lower():
             raise ThrottledOptionsProviderError(message) from last_error
         raise TransientOptionsProviderError(message) from last_error
