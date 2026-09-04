@@ -94,4 +94,3 @@ def test_options_migration_upgrades_checks_source_identity_and_downgrades(tmp_pa
     assert expected.isdisjoint(sa.inspect(engine).get_table_names())
     assert "feature_runs" in sa.inspect(engine).get_table_names()
     engine.dispose()
-

@@ -151,4 +151,3 @@ class HistoryReadiness:
     iv_observation_count: int
     lifetime_observation_count: int
     reason_codes: tuple[str, ...] = ()
-

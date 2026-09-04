@@ -71,4 +71,3 @@ def test_persistence_keeps_anchor_plus_at_most_30_strikes_each_side() -> None:
     assert [contract.strike for contract in retained] == [
         float(strike) for strike in range(70, 131)
     ]
-

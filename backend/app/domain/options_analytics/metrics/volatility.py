@@ -112,4 +112,3 @@ def calculate_volatility_risk_premium(
         value=float(atm_iv) - float(realized_volatility),
         label="Volatility Risk Premium",
     )
-

@@ -90,4 +90,3 @@ def rank_activity(values: Mapping[str, MetricValue]) -> dict[str, int | None]:
         symbol.strip().upper(): ranks.get(symbol.strip().upper())
         for symbol in values
     }
-

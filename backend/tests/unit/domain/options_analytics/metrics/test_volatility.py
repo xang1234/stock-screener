@@ -90,4 +90,3 @@ def test_vrp_is_atm_iv_minus_realized_volatility() -> None:
     result = calculate_volatility_risk_premium(atm_iv=0.30, realized_volatility=0.20)
 
     assert result.value == pytest.approx(0.10)
-

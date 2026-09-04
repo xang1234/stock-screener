@@ -125,4 +125,3 @@ def build_candidate_cohort(
         for row in selected_history
     ]
     return (current + continuity_candidates)[:TOTAL_COHORT_LIMIT]
-

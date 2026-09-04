@@ -40,4 +40,3 @@ def test_max_pain_is_unavailable_without_non_negative_open_interest() -> None:
 
     assert result.available is False
     assert result.reason_codes == ("open_interest_unavailable",)
-

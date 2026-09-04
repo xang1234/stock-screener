@@ -63,4 +63,3 @@ def test_cross_sectional_activity_rank_is_stable_and_skips_unavailable() -> None
     )
 
     assert ranked == {"NVDA": 1, "AAPL": 2, "MSFT": 3, "NONE": None}
-

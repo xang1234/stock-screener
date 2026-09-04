@@ -106,4 +106,3 @@ def test_open_interest_walls_are_estimates_with_stable_lower_strike_ties() -> No
     assert call_wall.label == "Estimated Call Wall"
     assert put_wall.value == 80
     assert put_wall.label == "Estimated Put Wall"
-

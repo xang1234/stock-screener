@@ -118,4 +118,3 @@ def calculate_chain_metrics(
     )
     result.assert_json_finite()
     return result
-

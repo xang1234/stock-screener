@@ -48,4 +48,3 @@ def history_readiness(
         lifetime_observation_count=len(compatible_sessions),
         reason_codes=() if short_ready and iv_ready else ("building_history",),
     )
-

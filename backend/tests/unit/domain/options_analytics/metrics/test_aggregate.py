@@ -87,4 +87,3 @@ def test_aggregate_preserves_partial_metric_availability() -> None:
     assert result.realized_volatility.available is False
     assert result.activity.volume_oi_ratio.available is False
     result.assert_json_finite()
-

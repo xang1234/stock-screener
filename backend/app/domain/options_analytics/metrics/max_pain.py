@@ -44,4 +44,3 @@ def calculate_max_pain(contracts: Iterable[NormalizedOptionContract]) -> MetricV
 
     best_strike = min(settlement_strikes, key=lambda strike: (payout(strike), strike))
     return MetricValue(available=True, value=float(best_strike), label="Max Pain")
-

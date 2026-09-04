@@ -164,4 +164,3 @@ def estimate_open_interest_walls(
 ) -> tuple[MetricValue, MetricValue]:
     rows = tuple(contracts)
     return _wall(rows, OptionSide.CALL), _wall(rows, OptionSide.PUT)
-

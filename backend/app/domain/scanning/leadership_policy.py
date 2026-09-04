@@ -25,4 +25,3 @@ def leadership_order_key(row: object) -> tuple[float, str]:
         numeric_score = float("-inf")
     symbol = str(_value(row, "symbol") or "").strip().upper()
     return (-numeric_score, symbol)
-
