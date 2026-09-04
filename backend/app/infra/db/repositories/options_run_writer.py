@@ -27,6 +27,38 @@ from app.use_cases.options_analytics.analysis_models import (
     UnavailableCandidateAnalysis,
 )
 
+_OBSERVATION_VALUE_FIELDS = (
+    "expiration",
+    "observation_at",
+    "max_pain",
+    "net_gex",
+    "gamma_flip",
+    "call_wall",
+    "put_wall",
+    "atm_iv",
+    "skew_25_delta",
+    "realized_volatility",
+    "vrp",
+    "activity_intensity",
+    "iv_percentile",
+    "iv_rank",
+    "max_pain_change_5",
+    "net_gex_change_5",
+    "gamma_flip_change_5",
+    "atm_iv_change_5",
+    "skew_25_delta_change_5",
+    "realized_volatility_change_5",
+    "vrp_change_5",
+    "activity_intensity_change_5",
+    "activity_rank",
+    "call_open_interest",
+    "put_open_interest",
+    "call_volume",
+    "put_volume",
+    "volume_oi_ratio",
+    "near_spot_volume_concentration",
+)
+
 
 class SqlOptionsRunWriter:
     def __init__(self, session: Session) -> None:
@@ -280,11 +312,17 @@ class SqlOptionsRunWriter:
         item.near_spot_volume_concentration = values.near_spot_volume_concentration
         self._replace_strike_points(item, analysis.strike_points)
 
-    @staticmethod
     def _apply_unavailable(
+        self,
         item: OptionsAnalyticsRunItem,
         analysis: UnavailableCandidateAnalysis,
     ) -> None:
+        for field in _OBSERVATION_VALUE_FIELDS:
+            setattr(item, field, None)
+        item.short_history_observation_count = 0
+        item.iv_history_observation_count = 0
+        item.lifetime_observation_count = 0
+        self._replace_strike_points(item, ())
         item.observation_state = ObservationState.UNAVAILABLE.value
         item.core_valid = False
         item.reasons_json = list(analysis.reason_codes)

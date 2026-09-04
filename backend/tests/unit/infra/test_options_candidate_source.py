@@ -50,7 +50,7 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
                 details_json={
                     "current_price": 100 + index,
                     "avg_dollar_volume": 200_000_000,
-                    "dividend_yield": 1.0,
+                    "dividend_yield": -1.0 if index == 1 else 1.0,
                     "rs_rating": 70,
                     "ibd_group_rank": 80,
                 },
@@ -124,6 +124,11 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
     assert first.dividend_yield == 0.01
     assert first.dividend_source == "pinned_feature_run"
     assert first.price_closes == tuple(float(value) for value in range(100, 121))
+    invalid_dividend = next(
+        row for row in result.top_candidate_inputs if row.symbol == "C01"
+    )
+    assert invalid_dividend.dividend_yield is None
+    assert invalid_dividend.dividend_source is None
 
     session.close()
     engine.dispose()

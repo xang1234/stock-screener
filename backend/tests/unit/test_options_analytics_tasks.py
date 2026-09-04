@@ -80,6 +80,19 @@ def test_options_task_runs_us_use_case_in_process(monkeypatch) -> None:
     assert "coverage=92.5%" in completed[1]["message"]
 
 
+def test_failed_optional_activity_write_rolls_back_session() -> None:
+    from app.interfaces.tasks import options_analytics_tasks as module
+
+    db = MagicMock()
+
+    def fail(_db, **_values):
+        raise RuntimeError("activity write failed")
+
+    module._mark_activity_safely(fail, db, market="US")
+
+    db.rollback.assert_called_once_with()
+
+
 def test_options_task_resolves_published_us_pointer_when_run_is_omitted(
     monkeypatch,
 ) -> None:

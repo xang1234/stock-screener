@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import Any
 
@@ -32,7 +33,9 @@ def _number(value: Any) -> float | None:
 
 def _percentage_points_to_decimal(value: Any) -> float | None:
     number = _number(value)
-    return None if number is None else number / 100.0
+    if number is None or not math.isfinite(number) or number < 0:
+        return None
+    return number / 100.0
 
 
 class SqlOptionsCandidateSource:

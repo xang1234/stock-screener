@@ -30,6 +30,13 @@ def _mark_activity_safely(function, db, **values) -> None:
         function(db, **values)
     except Exception:
         logger.warning("Could not publish Options Analytics activity", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            logger.warning(
+                "Could not roll back failed Options Analytics activity",
+                exc_info=True,
+            )
 
 
 @serialized_data_fetch_task(

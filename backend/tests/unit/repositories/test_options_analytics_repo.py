@@ -298,6 +298,51 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
     assert item.strike_points[0].call_open_interest == 250
 
 
+def test_unavailable_retry_clears_prior_observation_values(session) -> None:
+    repo = _Repositories(session)
+    run = _start(repo)
+    repo.stage_candidates(run.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        run.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={
+            "max_pain": 100,
+            "activity_intensity": 0.5,
+            "call_open_interest": 200,
+        },
+        core_valid=False,
+        strike_points=[{"strike": 100, "call_open_interest": 200}],
+        history_readiness=HistoryReadiness(
+            short_history_available=True,
+            iv_history_available=True,
+            short_observation_count=5,
+            iv_observation_count=20,
+            lifetime_observation_count=20,
+        ),
+    )
+    repo.save_activity_ranks(run.id, {"AAPL": 1})
+
+    item = repo.save_unavailable(
+        run.id,
+        "AAPL",
+        reason_codes=("provider_unavailable",),
+        retry_count=2,
+    )
+
+    assert item.observation_state == ObservationState.UNAVAILABLE.value
+    assert item.expiration is None
+    assert item.observation_at is None
+    assert item.max_pain is None
+    assert item.activity_intensity is None
+    assert item.call_open_interest is None
+    assert item.short_history_observation_count == 0
+    assert item.iv_history_observation_count == 0
+    assert item.lifetime_observation_count == 0
+    assert item.activity_rank is None
+    assert item.strike_points == []
+
+
 def test_resume_retries_failed_items_but_preserves_successful_items(session) -> None:
     repo = _Repositories(session)
     run = _start(repo)
