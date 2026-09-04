@@ -132,6 +132,13 @@ class StaticOptionsSection:
             equity_entry=us_entry,
         )
         if not selected:
+            self._unadvertise(us_entry)
+            self._write_combined_manifests(
+                output_dir=Path(output_dir),
+                manifest=manifest,
+                us_entry=us_entry,
+                market_metadata_path=market_metadata_path,
+            )
             warnings = (
                 ("No compatible static US options artifact was available",)
                 if current_options_dir is not None or fallback_options_dir is not None
@@ -140,10 +147,26 @@ class StaticOptionsSection:
             return StaticOptionsSectionResult(False, warnings)
 
         self._advertise(us_entry)
+        self._write_combined_manifests(
+            output_dir=Path(output_dir),
+            manifest=manifest,
+            us_entry=us_entry,
+            market_metadata_path=market_metadata_path,
+        )
+        return StaticOptionsSectionResult(selected=True)
+
+    def _write_combined_manifests(
+        self,
+        *,
+        output_dir: Path,
+        manifest: dict[str, Any],
+        us_entry: dict[str, Any],
+        market_metadata_path: Path | None,
+    ) -> None:
         if manifest.get("default_market") == "US":
             for section in ("features", "pages", "assets"):
                 manifest[section] = dict(us_entry[section])
-        self._write_json(Path(output_dir) / "manifest.json", manifest)
+        self._write_json(output_dir / "manifest.json", manifest)
 
         if market_metadata_path is not None and Path(market_metadata_path).is_file():
             metadata = json.loads(
@@ -151,7 +174,6 @@ class StaticOptionsSection:
             )
             metadata["entry"] = us_entry
             self._write_json(Path(market_metadata_path), metadata)
-        return StaticOptionsSectionResult(selected=True)
 
     def _select(
         self,
@@ -175,6 +197,13 @@ class StaticOptionsSection:
         entry.setdefault("features", {})["options"] = True
         for section in ("pages", "assets"):
             entry.setdefault(section, {})["options"] = {"path": "options/manifest.json"}
+
+    @staticmethod
+    def _unadvertise(entry: dict[str, Any]) -> None:
+        for section in ("features", "pages", "assets"):
+            values = entry.get(section)
+            if isinstance(values, dict):
+                values.pop("options", None)
 
 
 __all__ = ["StaticOptionsSection", "StaticOptionsSectionResult"]

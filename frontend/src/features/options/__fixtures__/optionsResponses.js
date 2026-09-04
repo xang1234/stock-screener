@@ -17,6 +17,7 @@ const availableMetrics = () => ({
   realized_volatility: unavailableMetric('Realized Volatility'),
   vrp: unavailableMetric('Volatility Risk Premium'),
   activity_intensity: { available: true, value: 0.75, label: 'Activity Intensity', reason_codes: [], evidence: {} },
+  call_put_volume_ratio: { available: true, value: 1.2, label: 'Call / Put Volume', reason_codes: [], evidence: {} },
   volume_oi_ratio: { available: true, value: 0.305, label: 'Volume / Open Interest', reason_codes: [], evidence: {} },
   near_spot_volume_concentration: { available: true, value: 0.6, label: 'Near-Spot Volume Concentration', reason_codes: [], evidence: {} },
 });

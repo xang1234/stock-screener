@@ -20,6 +20,9 @@ describe('OptionsCommandCenterView', () => {
     await user.click(screen.getByRole('button', { name: 'Volatility' }));
     expect(screen.getByRole('columnheader', { name: /ATM IV/i })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: /Estimated Net GEX/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+    expect(screen.getByRole('columnheader', { name: /Call \/ Put Volume/i })).toBeInTheDocument();
   });
 
   it('keeps every current symbol visible and ranks only available metric values', () => {

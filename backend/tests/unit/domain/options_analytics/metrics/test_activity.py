@@ -13,9 +13,15 @@ from app.domain.options_analytics.models import (
 )
 
 
-def _contract(strike: float, volume: int | None, oi: int | None):
+def _contract(
+    strike: float,
+    volume: int | None,
+    oi: int | None,
+    *,
+    side: OptionSide = OptionSide.CALL,
+):
     return NormalizedOptionContract(
-        side=OptionSide.CALL,
+        side=side,
         strike=strike,
         bid=1,
         ask=2,
@@ -27,6 +33,64 @@ def _contract(strike: float, volume: int | None, oi: int | None):
         contract_size="REGULAR",
         multiplier=100,
     )
+
+
+def test_activity_calculates_call_put_volume_ratio() -> None:
+    metrics = calculate_activity_metrics(
+        (
+            _contract(100, 120, 200),
+            _contract(100, 80, 200, side=OptionSide.PUT),
+        ),
+        spot=100,
+    )
+
+    assert metrics.call_put_volume_ratio.value == pytest.approx(1.5)
+
+
+def test_call_put_volume_ratio_rejects_incomplete_side_volume() -> None:
+    metrics = calculate_activity_metrics(
+        (
+            _contract(100, 120, 200),
+            _contract(100, None, 200, side=OptionSide.PUT),
+        ),
+        spot=100,
+    )
+
+    assert metrics.call_put_volume_ratio.available is False
+    assert metrics.call_put_volume_ratio.reason_codes == ("side_volume_incomplete",)
+
+
+def test_call_put_volume_ratio_rejects_an_absent_side() -> None:
+    metrics = calculate_activity_metrics((_contract(100, 120, 200),), spot=100)
+
+    assert metrics.call_put_volume_ratio.available is False
+    assert metrics.call_put_volume_ratio.reason_codes == ("side_volume_incomplete",)
+
+
+def test_call_put_volume_ratio_rejects_zero_put_volume() -> None:
+    metrics = calculate_activity_metrics(
+        (
+            _contract(100, 120, 200),
+            _contract(100, 0, 200, side=OptionSide.PUT),
+        ),
+        spot=100,
+    )
+
+    assert metrics.call_put_volume_ratio.available is False
+    assert metrics.call_put_volume_ratio.reason_codes == ("put_volume_zero",)
+
+
+def test_call_put_volume_ratio_preserves_zero_call_volume() -> None:
+    metrics = calculate_activity_metrics(
+        (
+            _contract(100, 0, 200),
+            _contract(100, 80, 200, side=OptionSide.PUT),
+        ),
+        spot=100,
+    )
+
+    assert metrics.call_put_volume_ratio.available is True
+    assert metrics.call_put_volume_ratio.value == 0
 
 
 def test_activity_handles_zero_open_interest_without_division() -> None:

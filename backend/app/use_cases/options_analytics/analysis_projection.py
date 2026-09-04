@@ -73,6 +73,7 @@ def metric_values(
         put_open_interest=total(OptionSide.PUT, "open_interest"),
         call_volume=total(OptionSide.CALL, "volume"),
         put_volume=total(OptionSide.PUT, "volume"),
+        call_put_volume_ratio=metrics.activity.call_put_volume_ratio.value,
         volume_oi_ratio=metrics.activity.volume_oi_ratio.value,
         near_spot_volume_concentration=(
             metrics.activity.near_spot_volume_concentration.value
@@ -148,6 +149,7 @@ def metric_evidence(
         "realized_volatility": metrics.realized_volatility,
         "vrp": metrics.vrp,
         "activity_intensity": metrics.activity.activity_intensity,
+        "call_put_volume_ratio": metrics.activity.call_put_volume_ratio,
         "volume_oi_ratio": metrics.activity.volume_oi_ratio,
         "near_spot_volume_concentration": metrics.activity.near_spot_volume_concentration,
     }

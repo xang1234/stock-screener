@@ -40,6 +40,7 @@ const LENSES = {
   ],
   activity: [
     { name: 'activity_intensity' },
+    { name: 'call_put_volume_ratio' },
     { name: 'volume_oi_ratio' },
     { name: 'near_spot_volume_concentration', percent: true },
   ],

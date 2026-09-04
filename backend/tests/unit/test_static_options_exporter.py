@@ -22,6 +22,7 @@ METRICS = (
     "realized_volatility",
     "vrp",
     "activity_intensity",
+    "call_put_volume_ratio",
     "volume_oi_ratio",
     "near_spot_volume_concentration",
 )

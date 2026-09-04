@@ -55,6 +55,7 @@ _OBSERVATION_VALUE_FIELDS = (
     "put_open_interest",
     "call_volume",
     "put_volume",
+    "call_put_volume_ratio",
     "volume_oi_ratio",
     "near_spot_volume_concentration",
 )
@@ -308,6 +309,7 @@ class SqlOptionsRunWriter:
         item.put_open_interest = values.put_open_interest
         item.call_volume = values.call_volume
         item.put_volume = values.put_volume
+        item.call_put_volume_ratio = values.call_put_volume_ratio
         item.volume_oi_ratio = values.volume_oi_ratio
         item.near_spot_volume_concentration = values.near_spot_volume_concentration
         self._replace_strike_points(item, analysis.strike_points)

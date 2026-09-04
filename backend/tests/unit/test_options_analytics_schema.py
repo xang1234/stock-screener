@@ -54,6 +54,7 @@ def test_options_models_keep_sortable_metrics_typed_and_diagnostics_json() -> No
         "iv_rank",
         "max_pain_change_5",
         "activity_intensity_change_5",
+        "call_put_volume_ratio",
         "volume_oi_ratio",
         "near_spot_volume_concentration",
     ):

@@ -53,6 +53,7 @@ class OptionsHistoryObservation(BaseModel):
     put_open_interest: int | None = Field(default=None, ge=0)
     call_volume: int | None = Field(default=None, ge=0)
     put_volume: int | None = Field(default=None, ge=0)
+    call_put_volume_ratio: float | None = Field(default=None, ge=0)
     volume_oi_ratio: float | None = Field(default=None, ge=0)
     near_spot_volume_concentration: float | None = Field(
         default=None,

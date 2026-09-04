@@ -76,6 +76,7 @@ class OptionsMetricsResponse(_StrictModel):
     realized_volatility: OptionsMetricResponse
     vrp: OptionsMetricResponse
     activity_intensity: OptionsMetricResponse
+    call_put_volume_ratio: OptionsMetricResponse
     volume_oi_ratio: OptionsMetricResponse
     near_spot_volume_concentration: OptionsMetricResponse
 
@@ -298,6 +299,7 @@ _LABELS = {
     "realized_volatility": "Realized Volatility",
     "vrp": "Volatility Risk Premium",
     "activity_intensity": "Activity Intensity",
+    "call_put_volume_ratio": "Call / Put Volume",
     "volume_oi_ratio": "Volume / Open Interest",
     "near_spot_volume_concentration": "Near-Spot Volume Concentration",
 }

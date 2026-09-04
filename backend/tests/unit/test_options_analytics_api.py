@@ -51,6 +51,7 @@ def _item(symbol: str, *, kind="current", state="available", core_valid=None):
         put_open_interest=900,
         call_volume=300,
         put_volume=250,
+        call_put_volume_ratio=1.2,
         volume_oi_ratio=550 / 1900,
         near_spot_volume_concentration=0.7,
         short_history_observation_count=3,
@@ -127,6 +128,7 @@ def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity(
     assert [row.symbol for row in payload.items] == ["AAPL", "MSFT"]
     assert payload.items[0].source_badges == ["candidate", "leader"]
     assert payload.items[0].metrics.net_gex.label == "Estimated Net GEX"
+    assert payload.items[0].metrics.call_put_volume_ratio.value == 1.2
     assert payload.items[0].metrics.gamma_flip.reason_codes == [
         "gamma_crossing_unavailable"
     ]

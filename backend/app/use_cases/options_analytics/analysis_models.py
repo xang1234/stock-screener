@@ -32,6 +32,7 @@ class OptionsMetricValues:
     put_open_interest: int | None = None
     call_volume: int | None = None
     put_volume: int | None = None
+    call_put_volume_ratio: float | None = None
     volume_oi_ratio: float | None = None
     near_spot_volume_concentration: float | None = None
 

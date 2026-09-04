@@ -96,6 +96,7 @@ class _Repositories(
             "put_open_interest": None,
             "call_volume": None,
             "put_volume": None,
+            "call_put_volume_ratio": None,
             "volume_oi_ratio": None,
             "near_spot_volume_concentration": None,
         }
@@ -283,7 +284,7 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
         run.id,
         "AAPL",
         observation=_observation("AAPL"),
-        metric_values={"atm_iv": 0.26},
+        metric_values={"atm_iv": 0.26, "call_put_volume_ratio": 1.2},
         strike_points=[{"strike": 100, "call_open_interest": 250}],
     )
 
@@ -291,6 +292,7 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
     assert session.query(OptionsAnalyticsStrikePoint).count() == 1
     item = session.query(OptionsAnalyticsRunItem).one()
     assert item.atm_iv == 0.26
+    assert item.call_put_volume_ratio == 1.2
     assert item.core_valid is True
     assert item.observation_at.replace(tzinfo=timezone.utc) == datetime(
         2026, 9, 4, tzinfo=timezone.utc

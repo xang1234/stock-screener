@@ -135,6 +135,7 @@ class OptionsAnalyticsRunItem(Base):
     put_open_interest = Column(BigInteger, nullable=True)
     call_volume = Column(BigInteger, nullable=True)
     put_volume = Column(BigInteger, nullable=True)
+    call_put_volume_ratio = Column(Float, nullable=True)
     volume_oi_ratio = Column(Float, nullable=True)
     near_spot_volume_concentration = Column(Float, nullable=True)
     short_history_observation_count = Column(Integer, nullable=False, default=0)

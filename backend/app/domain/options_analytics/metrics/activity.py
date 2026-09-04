@@ -6,13 +6,14 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from ..models import MetricValue, NormalizedOptionContract
+from ..models import MetricValue, NormalizedOptionContract, OptionSide
 
 ACTIVITY_VOLUME_FLOOR = 100
 
 
 @dataclass(frozen=True)
 class ActivityMetrics:
+    call_put_volume_ratio: MetricValue
     volume_oi_ratio: MetricValue
     near_spot_volume_concentration: MetricValue
     activity_intensity: MetricValue
@@ -29,6 +30,8 @@ def _complete_total(
     contracts: tuple[NormalizedOptionContract, ...],
     field: str,
 ) -> int | None:
+    if not contracts:
+        return None
     values = tuple(_non_negative(getattr(row, field)) for row in contracts)
     if any(value is None for value in values):
         return None
@@ -38,6 +41,33 @@ def _complete_total(
 def calculate_activity_metrics(
     contracts: tuple[NormalizedOptionContract, ...], *, spot: float
 ) -> ActivityMetrics:
+    call_volume = _complete_total(
+        tuple(row for row in contracts if row.side is OptionSide.CALL),
+        "volume",
+    )
+    put_volume = _complete_total(
+        tuple(row for row in contracts if row.side is OptionSide.PUT),
+        "volume",
+    )
+    if call_volume is None or put_volume is None:
+        call_put_ratio = MetricValue(
+            available=False,
+            reason_codes=("side_volume_incomplete",),
+            label="Call / Put Volume",
+        )
+    elif put_volume == 0:
+        call_put_ratio = MetricValue(
+            available=False,
+            reason_codes=("put_volume_zero",),
+            label="Call / Put Volume",
+        )
+    else:
+        call_put_ratio = MetricValue(
+            available=True,
+            value=call_volume / put_volume,
+            label="Call / Put Volume",
+        )
+
     total_volume = _complete_total(contracts, "volume")
     total_open_interest = _complete_total(contracts, "open_interest")
     if total_volume is None or total_open_interest is None:
@@ -88,6 +118,7 @@ def calculate_activity_metrics(
             label="Activity Intensity",
         )
     return ActivityMetrics(
+        call_put_volume_ratio=call_put_ratio,
         volume_oi_ratio=ratio,
         near_spot_volume_concentration=concentration,
         activity_intensity=intensity,

@@ -314,6 +314,9 @@
             "atm_iv": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
+            "call_put_volume_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
             "call_wall": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
@@ -356,6 +359,7 @@
             "realized_volatility",
             "vrp",
             "activity_intensity",
+            "call_put_volume_ratio",
             "volume_oi_ratio",
             "near_spot_volume_concentration"
           ],
@@ -1344,6 +1348,9 @@
             "atm_iv": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
+            "call_put_volume_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
             "call_wall": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
@@ -1386,6 +1393,7 @@
             "realized_volatility",
             "vrp",
             "activity_intensity",
+            "call_put_volume_ratio",
             "volume_oi_ratio",
             "near_spot_volume_concentration"
           ],

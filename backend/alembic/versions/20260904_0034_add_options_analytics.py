@@ -7,6 +7,7 @@ Revises: 20260829_0033
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260904_0034"
@@ -105,6 +106,7 @@ def upgrade() -> None:
         sa.Column("put_open_interest", sa.BigInteger(), nullable=True),
         sa.Column("call_volume", sa.BigInteger(), nullable=True),
         sa.Column("put_volume", sa.BigInteger(), nullable=True),
+        sa.Column("call_put_volume_ratio", sa.Float(), nullable=True),
         sa.Column("volume_oi_ratio", sa.Float(), nullable=True),
         sa.Column("near_spot_volume_concentration", sa.Float(), nullable=True),
         sa.Column("short_history_observation_count", sa.Integer(), nullable=False, server_default="0"),
