@@ -3,13 +3,52 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+
+class StaticOptionsSymbolReference(_StrictModel):
+    key: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+
+
+class StaticOptionsManifest(_StrictModel):
+    schema_version: Literal["static-options-v1"]
+    data_schema_version: Literal["options-analytics-v1"]
+    calculation_version: Literal["options-analytics-v1"]
+    published_run_id: int
+    source_feature_run_id: int | None = None
+    source_as_of_date: date
+    market: Literal["US"]
+    provider: str = Field(min_length=1)
+    generated_at: datetime
+    latest_observation_at: datetime | None = None
+    coverage: float = Field(ge=0, le=1)
+    stale: bool
+    stale_relative_to_equity: bool
+    equity_feature_run_id: int | None = None
+    equity_as_of_date: date | None = None
+    reason_codes: list[str]
+    command_center_path: str = Field(min_length=1)
+    symbols: dict[str, StaticOptionsSymbolReference] = Field(max_length=80)
+
+    @model_validator(mode="after")
+    def validate_manifest_consistency(self):
+        if self.stale_relative_to_equity and (
+            not self.stale or "stale_relative_to_equity" not in self.reason_codes
+        ):
+            raise ValueError("Invalid stale options metadata")
+        if any(symbol != symbol.upper() or not symbol for symbol in self.symbols):
+            raise ValueError("Options symbol-map keys must be uppercase")
+        paths = [entry.path for entry in self.symbols.values()]
+        if len(paths) != len(set(paths)):
+            raise ValueError("Options symbol-detail paths must be unique")
+        return self
 
 
 class OptionsMetricResponse(_StrictModel):
@@ -165,7 +204,9 @@ class OptionsSymbolDetailResponse(OptionsRunMetadataResponse):
                         for field in OptionsStrikePointResponse.model_fields
                     }
                 )
-                for point in sorted(result.item.strike_points, key=lambda row: row.strike)
+                for point in sorted(
+                    result.item.strike_points, key=lambda row: row.strike
+                )
             ],
             history=[
                 OptionsHistoryPointResponse(
@@ -313,5 +354,7 @@ def _run_metadata(run: Any, *, stale: bool = False) -> dict[str, Any]:
 
 
 def _item_order_key(item: OptionsCommandCenterItemResponse) -> tuple[int, str]:
-    ranks = [rank for rank in (item.candidate_rank, item.leader_rank) if rank is not None]
+    ranks = [
+        rank for rank in (item.candidate_rank, item.leader_rank) if rank is not None
+    ]
     return (min(ranks) if ranks else 10_000, item.symbol)

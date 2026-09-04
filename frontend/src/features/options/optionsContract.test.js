@@ -45,6 +45,10 @@ describe('options contract', () => {
       ...optionsManifestFixture,
       command_center_path: '../secret.json',
     })).toThrow(/path/i);
+    expect(() => normalizeOptionsCommandCenter({
+      ...commandCenterFixture,
+      unexpected_root_field: true,
+    })).toThrow(/contract/i);
   });
 
   it('rejects incomplete or mistyped quality evidence', () => {
