@@ -45,16 +45,15 @@ class SqlOptionsHistoryRepository:
             .all()
         )
         observations: list[OptionsHistoryObservation] = []
-        seen_sessions: set[tuple[date, str]] = set()
+        seen_sessions: set[date] = set()
         for run in runs:
+            if run.as_of_date in seen_sessions:
+                continue
+            seen_sessions.add(run.as_of_date)
             external_key = run.external_source_feature_run_key or (
                 f"{run.market}:{run.as_of_date.isoformat()}:{run.input_signature}"
             )
             for item in sorted(run.items, key=lambda row: row.security_symbol):
-                session_symbol = (run.as_of_date, item.security_symbol)
-                if session_symbol in seen_sessions:
-                    continue
-                seen_sessions.add(session_symbol)
                 observations.append(self._to_observation(run, item, external_key))
         return tuple(observations)
 

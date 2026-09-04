@@ -162,14 +162,14 @@ def test_exporter_writes_complete_current_only_artifact_with_history_gaps(tmp_pa
     continuity = _item("OLD", kind="continuity")
     history = (
         SimpleNamespace(
-            run=SimpleNamespace(as_of_date=date(2026, 8, 31)),
+            as_of_date=date(2026, 8, 31),
             observation_state="available",
             **{
                 name: getattr(current, name) for name in (*METRICS, *HISTORICAL_METRICS)
             },
         ),
         SimpleNamespace(
-            run=SimpleNamespace(as_of_date=date(2026, 9, 4)),
+            as_of_date=date(2026, 9, 4),
             observation_state="available",
             **{
                 name: getattr(current, name) for name in (*METRICS, *HISTORICAL_METRICS)

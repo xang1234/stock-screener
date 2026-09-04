@@ -234,7 +234,7 @@ class OptionsSymbolDetailResponse(OptionsRunMetadataResponse):
             ],
             history=[
                 OptionsHistoryPointResponse(
-                    as_of_date=row.run.as_of_date,
+                    as_of_date=row.as_of_date,
                     state=row.observation_state,
                     max_pain=row.max_pain,
                     net_gex=row.net_gex,

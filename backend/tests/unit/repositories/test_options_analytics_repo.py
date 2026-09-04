@@ -523,10 +523,13 @@ def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) 
 
     history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
 
-    assert [row.run.as_of_date for row in history] == [
+    assert [row.as_of_date for row in history] == [
         date(2026, 9, 1),
+        date(2026, 9, 2),
         date(2026, 9, 3),
     ]
+    assert history[1].observation_state == ObservationState.UNAVAILABLE.value
+    assert history[1].atm_iv is None
 
     analysis_history = repo.analysis_history(
         "AAPL",
@@ -612,6 +615,38 @@ def test_history_keeps_only_newest_run_for_each_trading_session(session) -> None
     assert history[0].atm_iv == 0.30
     assert len(exported) == 1
     assert exported[0].atm_iv == 0.30
+
+
+def test_history_export_uses_only_authoritative_same_session_cohort(session) -> None:
+    repo = _Repositories(session)
+    first = _start(repo, "first-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(first.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        first.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        core_valid=True,
+    )
+    repo.publish(first.id, _published_summary())
+
+    newest = _start(repo, "new-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(newest.id, [_candidate("MSFT")])
+    repo.save_item_result(
+        newest.id,
+        "MSFT",
+        observation=_observation("MSFT"),
+        core_valid=True,
+    )
+    repo.publish(newest.id, _published_summary())
+    session.commit()
+
+    exported = repo.export_history_observations("US", "v1")
+
+    assert [row.symbol for row in exported] == ["MSFT"]
+    assert (
+        exported[0].external_source_feature_run_key
+        == "US:2026-09-04:new-feature-run"
+    )
 
 
 def test_newest_invalid_same_session_item_supersedes_older_valid_history(session) -> None:

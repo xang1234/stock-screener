@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
@@ -14,6 +15,33 @@ from app.domain.options_analytics.models import (
 from app.domain.options_analytics.ports import LastCurrentMembership
 
 from .analysis_models import CandidateAnalysis
+
+
+@dataclass(frozen=True)
+class OptionsHistoryRecord:
+    run_id: int
+    as_of_date: date
+    calculation_version: str
+    observation_state: str
+    core_valid: bool
+    max_pain: float | None = None
+    net_gex: float | None = None
+    gamma_flip: float | None = None
+    atm_iv: float | None = None
+    skew_25_delta: float | None = None
+    realized_volatility: float | None = None
+    vrp: float | None = None
+    activity_intensity: float | None = None
+    iv_percentile: float | None = None
+    iv_rank: float | None = None
+    max_pain_change_5: float | None = None
+    net_gex_change_5: float | None = None
+    gamma_flip_change_5: float | None = None
+    atm_iv_change_5: float | None = None
+    skew_25_delta_change_5: float | None = None
+    realized_volatility_change_5: float | None = None
+    vrp_change_5: float | None = None
+    activity_intensity_change_5: float | None = None
 
 
 class OptionsRunRecord(Protocol):
@@ -130,7 +158,7 @@ class PublishedOptionsReader(Protocol):
         *,
         market: str,
         calculation_version: str,
-    ) -> Sequence[OptionsRunItemRecord]: ...
+    ) -> Sequence[OptionsHistoryRecord]: ...
 
 
 class OptionsRetention(Protocol):
@@ -143,6 +171,7 @@ class OptionsRetention(Protocol):
 
 
 __all__ = [
+    "OptionsHistoryRecord",
     "OptionsRetention",
     "OptionsRunItemRecord",
     "OptionsRunRecord",

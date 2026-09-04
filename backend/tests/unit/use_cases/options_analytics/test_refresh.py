@@ -389,6 +389,24 @@ def test_exactly_90_percent_current_coverage_publishes_and_prunes() -> None:
     )
 
 
+def test_retention_failure_does_not_fail_an_already_published_refresh() -> None:
+    repo = _Repository()
+
+    def fail_prune(**_kwargs):
+        repo.events.append("prune")
+        raise RuntimeError("temporary retention failure")
+
+    repo.prune = fail_prune
+
+    result = _use_case([_candidate("AAPL")], repo=repo).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
+
+    assert repo.published is not None
+    assert result["status"] == "published"
+    assert repo.events == ["publish", "prune"]
+
+
 def test_below_90_percent_keeps_pointer_unpublished_and_skips_retention() -> None:
     candidates = [_candidate(f"S{index}") for index in range(9)]
     repo = _Repository()

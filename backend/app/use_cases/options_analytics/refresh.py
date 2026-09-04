@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
@@ -40,6 +41,7 @@ from .ports import (
 )
 
 RefreshOptionsAnalyticsResult = dict[str, object]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -284,7 +286,13 @@ class RefreshOptionsAnalyticsUseCase:
         if decision.publish:
             self._run_writer.publish(run_id, summary)
             sessions = self._calendar.sessions_ending_on(cohort.as_of_date, 252)
-            self._retention.prune(aggregate_before=sessions[0])
+            try:
+                self._retention.prune(aggregate_before=sessions[0])
+            except Exception:
+                logger.exception(
+                    "Options retention cleanup failed after publishing run %s",
+                    run_id,
+                )
         else:
             self._run_writer.mark_failed_quality(
                 run_id,

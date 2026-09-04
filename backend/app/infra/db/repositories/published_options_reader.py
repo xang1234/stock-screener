@@ -20,6 +20,7 @@ from app.infra.db.models.options_analytics import (
     OptionsAnalyticsRun,
     OptionsAnalyticsRunItem,
 )
+from app.use_cases.options_analytics.ports import OptionsHistoryRecord
 
 
 class SqlPublishedOptionsReader:
@@ -87,13 +88,11 @@ class SqlPublishedOptionsReader:
         *,
         market: str,
         calculation_version: str,
-    ) -> tuple[OptionsAnalyticsRunItem, ...]:
-        rows = (
-            self._session.query(OptionsAnalyticsRunItem)
-            .join(OptionsAnalyticsRun)
-            .options(selectinload(OptionsAnalyticsRunItem.run))
+    ) -> tuple[OptionsHistoryRecord, ...]:
+        runs = (
+            self._session.query(OptionsAnalyticsRun)
+            .options(selectinload(OptionsAnalyticsRun.items))
             .filter(
-                OptionsAnalyticsRunItem.security_symbol == symbol.strip().upper(),
                 OptionsAnalyticsRun.market == market.strip().upper(),
                 OptionsAnalyticsRun.calculation_version == calculation_version,
                 OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
@@ -105,15 +104,70 @@ class SqlPublishedOptionsReader:
             )
             .all()
         )
-        history: list[OptionsAnalyticsRunItem] = []
+        canonical_symbol = symbol.strip().upper()
+        history: list[OptionsHistoryRecord] = []
         seen_sessions: set[date] = set()
-        for item in rows:
-            run = item.run
+        history_started = False
+        for run in runs:
             if run.as_of_date in seen_sessions:
                 continue
             seen_sessions.add(run.as_of_date)
-            history.append(item)
+            item = next(
+                (
+                    candidate
+                    for candidate in run.items
+                    if candidate.security_symbol == canonical_symbol
+                ),
+                None,
+            )
+            if item is None:
+                if history_started:
+                    history.append(self._history_gap(run))
+                continue
+            history_started = True
+            history.append(self._history_record(run, item))
         return tuple(history)
+
+    @staticmethod
+    def _history_record(
+        run: OptionsAnalyticsRun,
+        item: OptionsAnalyticsRunItem,
+    ) -> OptionsHistoryRecord:
+        return OptionsHistoryRecord(
+            run_id=run.id,
+            as_of_date=run.as_of_date,
+            calculation_version=run.calculation_version,
+            observation_state=item.observation_state,
+            core_valid=item.core_valid,
+            max_pain=item.max_pain,
+            net_gex=item.net_gex,
+            gamma_flip=item.gamma_flip,
+            atm_iv=item.atm_iv,
+            skew_25_delta=item.skew_25_delta,
+            realized_volatility=item.realized_volatility,
+            vrp=item.vrp,
+            activity_intensity=item.activity_intensity,
+            iv_percentile=item.iv_percentile,
+            iv_rank=item.iv_rank,
+            max_pain_change_5=item.max_pain_change_5,
+            net_gex_change_5=item.net_gex_change_5,
+            gamma_flip_change_5=item.gamma_flip_change_5,
+            atm_iv_change_5=item.atm_iv_change_5,
+            skew_25_delta_change_5=item.skew_25_delta_change_5,
+            realized_volatility_change_5=item.realized_volatility_change_5,
+            vrp_change_5=item.vrp_change_5,
+            activity_intensity_change_5=item.activity_intensity_change_5,
+        )
+
+    @staticmethod
+    def _history_gap(run: OptionsAnalyticsRun) -> OptionsHistoryRecord:
+        return OptionsHistoryRecord(
+            run_id=run.id,
+            as_of_date=run.as_of_date,
+            calculation_version=run.calculation_version,
+            observation_state=ObservationState.UNAVAILABLE.value,
+            core_valid=False,
+        )
 
     def analysis_history(
         self,
@@ -124,8 +178,8 @@ class SqlPublishedOptionsReader:
     ) -> tuple[HistoricalObservation, ...]:
         return tuple(
             HistoricalObservation(
-                session=item.run.as_of_date,
-                calculation_version=item.run.calculation_version,
+                session=item.as_of_date,
+                calculation_version=item.calculation_version,
                 state=ObservationState(item.observation_state),
                 max_pain=item.max_pain,
                 net_gex=item.net_gex,
