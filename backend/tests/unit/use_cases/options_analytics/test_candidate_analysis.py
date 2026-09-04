@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from app.domain.options_analytics.metrics.aggregate import calculate_chain_metrics
+from app.domain.options_analytics.metrics.gex import estimate_contract_gex
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
@@ -14,7 +15,10 @@ from app.use_cases.options_analytics.analysis_models import (
     OptionsMetricValues,
     OptionsStrikePoint,
 )
-from app.use_cases.options_analytics.analysis_projection import metric_values
+from app.use_cases.options_analytics.analysis_projection import (
+    metric_values,
+    strike_points,
+)
 from app.use_cases.options_analytics.candidate_analysis import (
     AnalysisContext,
     OptionsCandidateAnalyzer,
@@ -128,3 +132,64 @@ def test_persistence_projection_preserves_incomplete_side_totals_as_missing() ->
     assert values.call_open_interest == 500
     assert values.put_volume == 0
     assert values.put_open_interest is None
+
+
+def test_strike_projection_aggregates_duplicate_side_contracts() -> None:
+    contracts = (
+        NormalizedOptionContract(
+            side=OptionSide.CALL,
+            strike=100,
+            bid=1,
+            ask=2,
+            last_price=1.5,
+            volume=50,
+            open_interest=200,
+            implied_volatility=0.20,
+            last_trade_at=None,
+            contract_size="REGULAR",
+            multiplier=100,
+        ),
+        NormalizedOptionContract(
+            side=OptionSide.CALL,
+            strike=100,
+            bid=1,
+            ask=2,
+            last_price=1.5,
+            volume=70,
+            open_interest=300,
+            implied_volatility=0.30,
+            last_trade_at=None,
+            contract_size="REGULAR",
+            multiplier=100,
+        ),
+    )
+    observation = ChainObservation(
+        symbol="AAPL",
+        expiration=date(2026, 9, 18),
+        source_spot_price=100,
+        fetched_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
+        contracts=contracts,
+    )
+
+    points = strike_points(
+        observation,
+        as_of_date=date(2026, 9, 4),
+        risk_free_rate=0.04,
+        dividend_yield=0.0,
+    )
+    expected_gex = sum(
+        estimate_contract_gex(
+            contract,
+            spot=100,
+            time_years=14 / 365,
+            rate=0.04,
+            dividend_yield=0.0,
+        ).value
+        for contract in contracts
+    )
+
+    assert len(points) == 1
+    assert points[0].call_open_interest == 500
+    assert points[0].call_volume == 120
+    assert points[0].call_iv == 0.26
+    assert points[0].estimated_call_gex == expected_gex

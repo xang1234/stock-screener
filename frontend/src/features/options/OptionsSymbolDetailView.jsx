@@ -42,7 +42,9 @@ export default function OptionsSymbolDetailView({ data, onBack }) {
         <Grid item xs={12} md={4}>
           <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
             <Typography variant="subtitle2">Contract snapshot</Typography>
-            <Typography variant="h6">${item.spot_price?.toLocaleString()}</Typography>
+            <Typography variant="h6">
+              {item.spot_price == null ? '—' : `$${item.spot_price.toLocaleString()}`}
+            </Typography>
             <Typography variant="body2">Expiration {item.expiration || 'Unavailable'}</Typography>
             <Typography variant="caption" color="text.secondary">
               {item.call_open_interest?.toLocaleString() ?? '—'} call OI · {item.put_open_interest?.toLocaleString() ?? '—'} put OI

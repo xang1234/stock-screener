@@ -129,12 +129,29 @@ class RefreshOptionsAnalyticsUseCase:
         if self._cancellation.is_cancelled():
             return self._cancel_run(run.id)
 
-        risk_free_rate, risk_free_source, run_warnings = self._resolve_risk_free(cohort)
-        self._run_writer.save_run_assumptions(
-            run.id,
-            risk_free_rate=risk_free_rate,
-            assumptions={"risk_free_source": risk_free_source},
+        persisted_assumptions = getattr(run, "assumptions_json", None)
+        persisted_source = (
+            persisted_assumptions.get("risk_free_source")
+            if isinstance(persisted_assumptions, dict)
+            else None
         )
+        if isinstance(persisted_source, str) and persisted_source:
+            risk_free_rate = getattr(run, "risk_free_rate", None)
+            risk_free_source = persisted_source
+            run_warnings = (
+                ("risk_free_rate_unavailable",)
+                if risk_free_rate is None
+                else ()
+            )
+        else:
+            risk_free_rate, risk_free_source, run_warnings = self._resolve_risk_free(
+                cohort
+            )
+            self._run_writer.save_run_assumptions(
+                run.id,
+                risk_free_rate=risk_free_rate,
+                assumptions={"risk_free_source": risk_free_source},
+            )
         results, cancelled = self._collect_analyses(
             run.id,
             cohort,

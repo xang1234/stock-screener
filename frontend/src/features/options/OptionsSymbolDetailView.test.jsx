@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -35,5 +35,16 @@ describe('OptionsSymbolDetailView', () => {
     expect(await screen.findByText(/dealer_proxy/i)).toBeVisible();
     expect(screen.getByText(/provider spot price: 201/i)).toBeVisible();
     expect(screen.getAllByText(/building history/i).some((element) => element.offsetParent !== null || element.getAttribute('aria-hidden') !== 'true')).toBe(true);
+  });
+
+  it('renders a missing spot price with a neutral marker', () => {
+    const data = structuredClone(symbolDetailFixture);
+    data.item.spot_price = null;
+
+    renderWithProviders(<OptionsSymbolDetailView data={data} onBack={() => {}} />);
+
+    const card = screen.getByText('Contract snapshot').parentElement;
+    expect(within(card).getByText('—')).toBeInTheDocument();
+    expect(within(card).queryByText('$')).not.toBeInTheDocument();
   });
 });

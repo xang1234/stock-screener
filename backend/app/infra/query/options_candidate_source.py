@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date
 from typing import Any
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.options_analytics.models import OptionCandidateInput
 from app.domain.options_analytics.ports import CandidateSourceSnapshot
+from app.domain.options_analytics.selection import select_current_candidates
 from app.domain.scanning.leadership_policy import (
     LEADERS_MAX_GROUP_RANK,
     LEADERS_MIN_RS_RATING,
@@ -53,8 +55,6 @@ class SqlOptionsCandidateSource:
             .filter(StockFeatureDaily.run_id == source_feature_run_id)
             .all()
         )
-        symbols = [feature.symbol for feature in rows]
-        closes = self._price_closes(symbols, run.as_of_date)
         candidates: list[OptionCandidateInput] = []
         leaders: list[OptionCandidateInput] = []
         for feature in rows:
@@ -69,7 +69,6 @@ class SqlOptionsCandidateSource:
                 daily_dollar_volume=_number(dollar_volume),
                 spot_price=_number(details.get("current_price")),
                 dividend_yield=dividend_yield,
-                price_closes=closes.get(feature.symbol.strip().upper(), ()),
                 dividend_source=(
                     "pinned_feature_run" if dividend_yield is not None else None
                 ),
@@ -84,11 +83,30 @@ class SqlOptionsCandidateSource:
                 and group_rank <= LEADERS_MAX_GROUP_RANK
             ):
                 leaders.append(item)
+        selected = select_current_candidates(candidates, leaders)
+        candidate_symbols = {
+            item.symbol for item in selected if item.candidate_rank is not None
+        }
+        leader_symbols = {
+            item.symbol for item in selected if item.leader_rank is not None
+        }
+        selected_symbols = sorted(candidate_symbols | leader_symbols)
+        closes = self._price_closes(selected_symbols, run.as_of_date)
+
+        def with_history(item: OptionCandidateInput) -> OptionCandidateInput:
+            return replace(item, price_closes=closes.get(item.symbol, ()))
+
         return CandidateSourceSnapshot(
             source_feature_run_id=run.id,
             as_of_date=run.as_of_date,
-            top_candidate_inputs=tuple(candidates),
-            leader_inputs=tuple(leaders),
+            top_candidate_inputs=tuple(
+                with_history(item)
+                for item in candidates
+                if item.symbol in candidate_symbols
+            ),
+            leader_inputs=tuple(
+                with_history(item) for item in leaders if item.symbol in leader_symbols
+            ),
         )
 
     def _price_closes(

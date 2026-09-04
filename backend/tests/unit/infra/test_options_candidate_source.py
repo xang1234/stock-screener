@@ -13,9 +13,9 @@ from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
 from app.models.stock import StockFundamental, StockPrice
 
 
-def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs() -> (
-    None
-):
+def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs(
+    monkeypatch,
+) -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -106,7 +106,16 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
     session.add_all(rows + fundamentals)
     session.commit()
 
-    result = SqlOptionsCandidateSource(session).read(7)
+    source = SqlOptionsCandidateSource(session)
+    original_price_closes = source._price_closes
+    requested_history_symbols = []
+
+    def capture_price_closes(symbols, history_as_of):
+        requested_history_symbols.extend(symbols)
+        return original_price_closes(symbols, history_as_of)
+
+    monkeypatch.setattr(source, "_price_closes", capture_price_closes)
+    result = source.read(7)
 
     assert result.source_feature_run_id == 7
     assert result.as_of_date == as_of
@@ -129,6 +138,8 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
     )
     assert invalid_dividend.dividend_yield is None
     assert invalid_dividend.dividend_source is None
+    assert len(set(requested_history_symbols)) == 80
+    assert "EXACT" not in requested_history_symbols
 
     session.close()
     engine.dispose()

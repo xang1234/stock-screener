@@ -27,6 +27,8 @@ class OptionsRunRecord(Protocol):
     retried_count: int
     coverage: float
     warnings_json: Sequence[str] | None
+    risk_free_rate: float | None
+    assumptions_json: Mapping[str, object] | None
 
 
 class OptionsRunItemRecord(Protocol):

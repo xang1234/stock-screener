@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import date
 from typing import Any
 
@@ -13,12 +13,50 @@ from app.domain.options_analytics.metrics.gex import estimate_contract_gex
 from app.domain.options_analytics.metrics.history import HistoricalMetrics
 from app.domain.options_analytics.models import (
     ChainObservation,
-    MetricValue,
+    NormalizedOptionContract,
     OptionCandidate,
     OptionSide,
 )
 
 from .analysis_models import OptionsMetricValues, OptionsStrikePoint
+
+
+def _complete_total(
+    contracts: Sequence[NormalizedOptionContract],
+    field: str,
+) -> int | None:
+    values = tuple(getattr(contract, field) for contract in contracts)
+    if not values or any(
+        value is None or not math.isfinite(float(value)) or value < 0
+        for value in values
+    ):
+        return None
+    return sum(int(value) for value in values if value is not None)
+
+
+def _aggregate_iv(contracts: Sequence[NormalizedOptionContract]) -> float | None:
+    values = tuple(contract.implied_volatility for contract in contracts)
+    if not values or any(
+        value is None or not math.isfinite(float(value)) or value <= 0
+        for value in values
+    ):
+        return None
+    ivs = tuple(float(value) for value in values if value is not None)
+    open_interests = tuple(contract.open_interest for contract in contracts)
+    if all(
+        value is not None and math.isfinite(float(value)) and value >= 0
+        for value in open_interests
+    ):
+        total_open_interest = sum(
+            int(value) for value in open_interests if value is not None
+        )
+        if total_open_interest > 0:
+            return sum(
+                iv * int(open_interest)
+                for iv, open_interest in zip(ivs, open_interests, strict=True)
+                if open_interest is not None
+            ) / total_open_interest
+    return sum(ivs) / len(ivs)
 
 
 def dividend_assumption(candidate: OptionCandidate) -> tuple[float, str, str | None]:
@@ -35,16 +73,14 @@ def metric_values(
     observation: ChainObservation,
 ) -> OptionsMetricValues:
     def total(side: OptionSide, field: str) -> int | None:
-        side_contracts = tuple(
-            contract for contract in observation.contracts if contract.side is side
+        return _complete_total(
+            tuple(
+                contract
+                for contract in observation.contracts
+                if contract.side is side
+            ),
+            field,
         )
-        values = tuple(getattr(contract, field) for contract in side_contracts)
-        if not values or any(
-            value is None or not math.isfinite(float(value)) or value < 0
-            for value in values
-        ):
-            return None
-        return sum(int(value) for value in values if value is not None)
 
     return OptionsMetricValues(
         max_pain=metrics.max_pain.value,
@@ -80,29 +116,44 @@ def strike_points(
         spot_price=observation.source_spot_price,
     )
     time_years = (observation.expiration - as_of_date).days / 365
-    points: dict[float, dict[str, Any]] = {}
+    grouped: dict[float, dict[OptionSide, list[NormalizedOptionContract]]] = {}
     for contract in retained:
-        point = points.setdefault(contract.strike, {"strike": contract.strike})
-        prefix = "call" if contract.side is OptionSide.CALL else "put"
-        point[f"{prefix}_open_interest"] = contract.open_interest
-        point[f"{prefix}_volume"] = contract.volume
-        point[f"{prefix}_iv"] = contract.implied_volatility
-        gex = (
-            estimate_contract_gex(
-                contract,
-                spot=observation.source_spot_price,
-                time_years=time_years,
-                rate=risk_free_rate,
-                dividend_yield=dividend_yield,
-            )
-            if risk_free_rate is not None
-            else MetricValue(
-                available=False,
-                reason_codes=("risk_free_rate_unavailable",),
-            )
+        grouped.setdefault(contract.strike, {}).setdefault(contract.side, []).append(
+            contract
         )
-        point[f"estimated_{prefix}_gex"] = gex.value if gex.available else None
-    return tuple(OptionsStrikePoint(**points[strike]) for strike in sorted(points))
+    points: list[OptionsStrikePoint] = []
+    for strike in sorted(grouped):
+        point: dict[str, Any] = {"strike": strike}
+        for side, contracts in grouped[strike].items():
+            rows = tuple(contracts)
+            prefix = "call" if side is OptionSide.CALL else "put"
+            point[f"{prefix}_open_interest"] = _complete_total(
+                rows, "open_interest"
+            )
+            point[f"{prefix}_volume"] = _complete_total(rows, "volume")
+            point[f"{prefix}_iv"] = _aggregate_iv(rows)
+            gex_values = []
+            if risk_free_rate is not None:
+                gex_values = [
+                    estimate_contract_gex(
+                        contract,
+                        spot=observation.source_spot_price,
+                        time_years=time_years,
+                        rate=risk_free_rate,
+                        dividend_yield=dividend_yield,
+                    )
+                    for contract in rows
+                ]
+            available_gex = [
+                float(value.value)
+                for value in gex_values
+                if value.available and value.value is not None
+            ]
+            point[f"estimated_{prefix}_gex"] = (
+                sum(available_gex) if available_gex else None
+            )
+        points.append(OptionsStrikePoint(**point))
+    return tuple(points)
 
 
 def metric_evidence(

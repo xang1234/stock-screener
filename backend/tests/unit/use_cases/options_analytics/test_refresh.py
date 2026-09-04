@@ -135,6 +135,8 @@ class _Repository:
             retried_count=0,
             coverage=0.0,
             warnings_json=[],
+            risk_free_rate=None,
+            assumptions_json=None,
         )
         self.memberships = dict(memberships or {})
         self.history = tuple(history)
@@ -245,6 +247,8 @@ class _Repository:
 
     def save_run_assumptions(self, _run_id, *, risk_free_rate, assumptions):
         self.run_assumptions = (risk_free_rate, assumptions)
+        self.run.risk_free_rate = risk_free_rate
+        self.run.assumptions_json = dict(assumptions)
 
     def publish(self, _run_id, summary):
         self.events.append("publish")
@@ -582,6 +586,25 @@ def test_risk_free_failure_only_makes_model_dependent_metrics_unavailable() -> N
     assert repo.saved["AAPL"]["metric_values"].net_gex is None
     assert repo.saved["AAPL"]["metric_values"].atm_iv == 0.275
     assert repo.run_assumptions[0] is None
+
+
+def test_resumed_run_reuses_persisted_risk_free_assumption() -> None:
+    repo = _Repository()
+    repo.run.status = "failed_quality"
+    repo.run.risk_free_rate = 0.031
+    repo.run.assumptions_json = {"risk_free_source": "persisted ^IRX close"}
+    repo.saved["AAPL"] = {"core_valid": True}
+    provider = _Provider()
+
+    _use_case(
+        [_candidate("AAPL"), _candidate("MSFT")],
+        repo=repo,
+        provider=provider,
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert provider.risk_free_calls == 0
+    assert repo.run_assumptions is None
+    assert repo.saved["MSFT"]["assumptions"]["risk_free_rate"] == 0.031
 
 
 def test_fetches_at_most_two_concurrently_but_persists_on_caller_thread() -> None:
