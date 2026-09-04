@@ -230,7 +230,7 @@ def _gex_wall(
             reason_codes=("gex_inputs_unavailable",),
             label=label,
         )
-    usable = []
+    gex_by_strike: dict[float, float] = {}
     for contract in contracts:
         if contract.side is not side:
             continue
@@ -242,21 +242,28 @@ def _gex_wall(
             dividend_yield=dividend_yield,
         )
         if metric.available:
-            usable.append((contract, abs(float(metric.value))))
-    if not usable:
+            strike = float(contract.strike)
+            gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + float(
+                metric.value
+            )
+    if not gex_by_strike:
         return MetricValue(
             available=False,
             reason_codes=("open_interest_unavailable",),
             label=label,
         )
-    selected, magnitude = min(usable, key=lambda row: (-row[1], row[0].strike))
+    selected_strike, aggregate_gex = min(
+        gex_by_strike.items(),
+        key=lambda row: (-abs(row[1]), row[0]),
+    )
     return MetricValue(
         available=True,
-        value=float(selected.strike),
+        value=selected_strike,
         label=label,
         evidence={
             "method": "maximum_absolute_estimated_side_gex",
-            "absolute_estimated_gex": magnitude,
+            "aggregation": "sum_by_strike",
+            "absolute_estimated_gex": abs(aggregate_gex),
         },
     )
 

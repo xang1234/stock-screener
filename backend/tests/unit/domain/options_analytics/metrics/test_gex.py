@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+
 from app.domain.options_analytics.metrics.gex import (
     black_scholes_unit_gamma,
     estimate_contract_gex,
@@ -148,3 +149,20 @@ def test_walls_use_absolute_estimated_side_gex_not_raw_open_interest() -> None:
     assert call_wall.evidence["method"] == "maximum_absolute_estimated_side_gex"
     assert put_wall.value == 100
     assert put_wall.label == "Estimated Put Wall"
+
+
+def test_walls_aggregate_duplicate_contract_gex_by_strike() -> None:
+    call_wall, _put_wall = estimate_gex_walls(
+        (
+            _contract(OptionSide.CALL, 100, oi=100),
+            _contract(OptionSide.CALL, 105, oi=60),
+            _contract(OptionSide.CALL, 105, oi=60),
+        ),
+        spot=100,
+        time_years=0.25,
+        rate=0.04,
+        dividend_yield=0.01,
+    )
+
+    assert call_wall.value == 105
+    assert call_wall.evidence["aggregation"] == "sum_by_strike"
