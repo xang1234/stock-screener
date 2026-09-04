@@ -79,6 +79,7 @@ class LastCurrentMembership:
     symbol: str
     as_of_date: date
     prior_best_rank: int
+    dividend_yield: float | None
 
 
 class SqlOptionsAnalyticsRepository:
@@ -240,12 +241,16 @@ class SqlOptionsAnalyticsRepository:
         symbol: str,
         *,
         reason_codes: Sequence[str],
+        evidence: Mapping[str, Any] | None = None,
+        assumptions: Mapping[str, Any] | None = None,
         retry_count: int = 0,
     ) -> OptionsAnalyticsRunItem:
         item = self._get_item(run_id, symbol)
         item.observation_state = ObservationState.UNAVAILABLE.value
         item.core_valid = False
         item.reasons_json = list(reason_codes)
+        item.evidence_json = dict(evidence or {})
+        item.assumptions_json = dict(assumptions or {})
         item.retry_count = retry_count
         self._session.flush()
         return item
@@ -433,6 +438,7 @@ class SqlOptionsAnalyticsRepository:
                 symbol=item.security_symbol,
                 as_of_date=as_of_date,
                 prior_best_rank=min(ranks) if ranks else 10_000,
+                dividend_yield=(item.assumptions_json or {}).get("dividend_yield"),
             )
         return memberships
 

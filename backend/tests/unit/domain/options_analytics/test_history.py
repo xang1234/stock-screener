@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from app.domain.options_analytics.history import HistoricalObservation, history_readiness
+from app.domain.options_analytics.history import (
+    HistoricalObservation,
+    history_readiness,
+)
 from app.domain.options_analytics.models import ObservationState
 
 

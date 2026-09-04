@@ -49,9 +49,18 @@ def _item(symbol: str, *, kind="current", state="available", core_valid=None):
         retry_count=0,
         evidence_json={
             "quality": {
+                "source_spot_price": 100.0,
                 "provider_spot_price": 101.0,
+                "spot_disagreement_ratio": 0.01,
+                "latest_contract_trade_at": "2026-09-04T01:30:00+00:00",
+                "days_to_expiration": 14,
                 "normalized_call_count": 5,
                 "normalized_put_count": 5,
+                "distinct_strike_count": 5,
+                "open_interest_coverage": 1.0,
+                "iv_coverage": 1.0,
+                "volume_coverage": 1.0,
+                "two_sided_quote_coverage": 1.0,
             },
             "gamma_flip": {
                 "available": False,
@@ -107,13 +116,18 @@ def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity(
     assert payload.items[0].metrics.gamma_flip.reason_codes == [
         "gamma_crossing_unavailable"
     ]
-    assert payload.items[0].quality_evidence["provider_spot_price"] == 101.0
+    assert payload.items[0].quality_evidence.provider_spot_price == 101.0
     assert payload.items[1].state == "unavailable"
 
 
 def test_public_contract_rejects_extra_and_non_finite_values() -> None:
     with pytest.raises(ValidationError):
         OptionsMetricResponse(available=True, value=float("nan"), surprise=True)
+
+    run = _run()
+    del run.items[0].evidence_json["quality"]["days_to_expiration"]
+    with pytest.raises(ValidationError, match="days_to_expiration"):
+        OptionsCommandCenterResponse.from_run(run)
 
 
 def test_non_core_observation_is_distinct_from_provider_unavailable() -> None:

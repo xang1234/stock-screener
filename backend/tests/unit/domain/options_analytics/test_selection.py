@@ -126,4 +126,4 @@ def test_current_membership_overrides_continuity_and_total_is_bounded() -> None:
     assert len(cohort) == 100
     assert sum(row.kind is CandidateKind.CURRENT for row in cohort) == 80
     assert sum(row.kind is CandidateKind.CONTINUITY for row in cohort) == 20
-    assert [row for row in cohort if row.symbol == "C000"][0].kind is CandidateKind.CURRENT
+    assert next(row for row in cohort if row.symbol == "C000").kind is CandidateKind.CURRENT

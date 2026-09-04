@@ -37,6 +37,20 @@ def _item(symbol: str, *, kind: str = "current", rank: int = 1):
         }
         for name in METRICS
     }
+    evidence["quality"] = {
+        "source_spot_price": 200.0,
+        "provider_spot_price": 201.0,
+        "spot_disagreement_ratio": 0.005,
+        "latest_contract_trade_at": "2026-09-04T20:00:00+00:00",
+        "days_to_expiration": 42,
+        "normalized_call_count": 30,
+        "normalized_put_count": 30,
+        "distinct_strike_count": 30,
+        "open_interest_coverage": 1.0,
+        "iv_coverage": 0.95,
+        "volume_coverage": 0.9,
+        "two_sided_quote_coverage": 0.85,
+    }
     return SimpleNamespace(
         security_symbol=symbol,
         candidate_kind=kind,

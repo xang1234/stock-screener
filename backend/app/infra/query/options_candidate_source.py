@@ -16,7 +16,7 @@ from app.domain.scanning.leadership_policy import (
     LEADERS_MIN_RS_RATING,
 )
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
-from app.models.stock import StockFundamental, StockPrice
+from app.models.stock import StockPrice
 
 
 @dataclass(frozen=True)
@@ -120,31 +120,18 @@ class SqlOptionsCandidateSource:
         canonical_symbols = sorted({symbol.strip().upper() for symbol in symbols})
         if not canonical_symbols:
             return {}
-        fundamentals = {
-            row.symbol.strip().upper(): row
-            for row in self._session.query(StockFundamental)
-            .filter(func.upper(StockFundamental.symbol).in_(canonical_symbols))
-            .all()
-        }
         closes = self._price_closes(canonical_symbols, as_of_date)
         result: dict[str, OptionCandidateInput] = {}
         for symbol in canonical_symbols:
             price_closes = closes.get(symbol, ())
             if not price_closes:
                 continue
-            fundamental = fundamentals.get(symbol)
             result[symbol] = OptionCandidateInput(
                 symbol=symbol,
                 composite_score=None,
-                daily_dollar_volume=(
-                    _number(fundamental.adv_usd) if fundamental is not None else None
-                ),
+                daily_dollar_volume=None,
                 spot_price=price_closes[-1],
-                dividend_yield=(
-                    _number(fundamental.dividend_yield)
-                    if fundamental is not None
-                    else None
-                ),
+                dividend_yield=None,
                 price_closes=price_closes,
             )
         return result

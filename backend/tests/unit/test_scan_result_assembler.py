@@ -21,6 +21,7 @@ def test_assembler_preserves_result_contract_and_projects_opportunity_state():
         fundamentals={
             "market_cap": 4_000_000_000_000,
             "avg_volume": 2_000_000,
+            "dividend_yield": 0.006,
         },
     )
     screener_results = {
@@ -67,5 +68,6 @@ def test_assembler_preserves_result_contract_and_projects_opportunity_state():
     assert result["rs_rating"] == 95.0
     assert result["market_cap"] == 4_000_000_000_000
     assert result["avg_dollar_volume"] == 240_000_000
+    assert result["dividend_yield"] == 0.006
     assert result["opportunity_state"]["schema_version"] == 1
     assert projection_calls[0][1] is stock_data

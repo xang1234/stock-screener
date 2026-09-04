@@ -54,6 +54,48 @@ const requireString = (value, location) => {
   if (typeof value !== 'string' || value.length === 0) fail(`${location} must be a string`);
 };
 
+const requireNumber = (value, location, { min, max, nullable = false } = {}) => {
+  if (nullable && value === null) return;
+  if (typeof value !== 'number' || !Number.isFinite(value)) fail(`${location} must be a number`);
+  if (min !== undefined && value < min) fail(`${location} must be at least ${min}`);
+  if (max !== undefined && value > max) fail(`${location} must be at most ${max}`);
+};
+
+const validateQualityEvidence = (evidence, location) => {
+  requireRecord(evidence, location);
+  requireNumber(evidence.source_spot_price, `${location}.source_spot_price`, {
+    min: 0,
+    nullable: true,
+  });
+  if (evidence.source_spot_price === 0) fail(`${location}.source_spot_price must be positive`);
+  requireNumber(evidence.provider_spot_price, `${location}.provider_spot_price`, { nullable: true });
+  requireNumber(evidence.spot_disagreement_ratio, `${location}.spot_disagreement_ratio`, {
+    min: 0,
+    nullable: true,
+  });
+  if (evidence.latest_contract_trade_at !== null) {
+    requireString(evidence.latest_contract_trade_at, `${location}.latest_contract_trade_at`);
+  }
+  requireInteger(evidence.days_to_expiration, `${location}.days_to_expiration`, { nullable: true });
+  if (evidence.days_to_expiration !== null && evidence.days_to_expiration < 0) {
+    fail(`${location}.days_to_expiration must be non-negative`);
+  }
+  [
+    'normalized_call_count',
+    'normalized_put_count',
+    'distinct_strike_count',
+  ].forEach((field) => {
+    requireInteger(evidence[field], `${location}.${field}`);
+    if (evidence[field] < 0) fail(`${location}.${field} must be non-negative`);
+  });
+  [
+    'open_interest_coverage',
+    'iv_coverage',
+    'volume_coverage',
+    'two_sided_quote_coverage',
+  ].forEach((field) => requireNumber(evidence[field], `${location}.${field}`, { min: 0, max: 1 }));
+};
+
 const requireSafeOptionsPath = (path, location) => {
   requireString(path, location);
   const segments = path.split('/');
@@ -89,7 +131,7 @@ const validateItem = (item, location) => {
   requireArray(item.source_badges, `${location}.source_badges`);
   requireInteger(item.candidate_rank, `${location}.candidate_rank`, { nullable: true });
   requireInteger(item.leader_rank, `${location}.leader_rank`, { nullable: true });
-  requireRecord(item.quality_evidence, `${location}.quality_evidence`);
+  validateQualityEvidence(item.quality_evidence, `${location}.quality_evidence`);
   requireRecord(item.metrics, `${location}.metrics`);
   METRIC_NAMES.forEach((name) => validateMetric(item.metrics[name], `${location}.metrics.${name}`));
   requireArray(item.warnings, `${location}.warnings`);

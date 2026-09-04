@@ -299,6 +299,7 @@ class ScanResultAssembler:
             ("market_cap", "market_cap"),
             ("market_cap_usd", "market_cap_usd"),
             ("eps_rating", "eps_rating"),
+            ("dividend_yield", "dividend_yield"),
         ):
             if fundamentals.get(source) is not None:
                 result[target] = fundamentals[source]

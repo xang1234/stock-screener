@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, timedelta
-from typing import Iterable
 
 from .models import NormalizedOptionContract
 
@@ -56,7 +56,7 @@ def retain_contracts_for_persistence(
     anchor = min(strikes, key=lambda strike: (abs(strike - spot_price), strike))
     lower = [strike for strike in strikes if strike < anchor][-STRIKES_PER_SIDE:]
     higher = [strike for strike in strikes if strike > anchor][:STRIKES_PER_SIDE]
-    retained = set((*lower, anchor, *higher))
+    retained = {*lower, anchor, *higher}
     return tuple(
         sorted(
             (row for row in rows if row.strike in retained),

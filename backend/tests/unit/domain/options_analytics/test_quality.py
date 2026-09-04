@@ -13,7 +13,10 @@ from app.domain.options_analytics.quality import (
     evaluate_publication,
     has_core_chain_coverage,
 )
-from app.domain.options_analytics.selection import CandidateHistoryInput, build_candidate_cohort
+from app.domain.options_analytics.selection import (
+    CandidateHistoryInput,
+    build_candidate_cohort,
+)
 
 
 def _input(symbol: str) -> OptionCandidateInput:

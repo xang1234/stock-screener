@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
@@ -124,6 +124,10 @@ class RefreshOptionsAnalyticsUseCase:
             candidate_input = continuity_inputs.get(symbol)
             if candidate_input is None:
                 continue
+            candidate_input = replace(
+                candidate_input,
+                dividend_yield=getattr(membership, "dividend_yield", None),
+            )
             continuity.append(
                 CandidateHistoryInput(
                     candidate=candidate_input,
@@ -200,10 +204,20 @@ class RefreshOptionsAnalyticsUseCase:
         for result in results:
             candidate = result.candidate
             if result.observation is None or result.metrics is None:
+                dividend_yield, dividend_source, _ = self._dividend_assumption(
+                    candidate
+                )
                 self._repository.save_unavailable(
                     run.id,
                     candidate.symbol,
                     reason_codes=result.reason_codes,
+                    evidence={
+                        "quality": self._unavailable_quality_evidence(candidate)
+                    },
+                    assumptions={
+                        "dividend_yield": dividend_yield,
+                        "dividend_source": dividend_source,
+                    },
                     retry_count=result.retry_count,
                 )
                 self._repository.commit()
@@ -254,7 +268,10 @@ class RefreshOptionsAnalyticsUseCase:
                 ),
                 evidence=self._metric_evidence(
                     result.metrics,
-                    quality=self._quality_evidence(result.observation),
+                    quality=self._quality_evidence(
+                        result.observation,
+                        as_of_date=source.as_of_date,
+                    ),
                 ),
                 assumptions={
                     "risk_free_rate": risk_free_rate,
@@ -579,7 +596,33 @@ class RefreshOptionsAnalyticsUseCase:
         return evidence
 
     @staticmethod
-    def _quality_evidence(observation: ChainObservation) -> dict[str, Any]:
+    def _unavailable_quality_evidence(candidate: OptionCandidate) -> dict[str, Any]:
+        source_spot = candidate.spot_price
+        if (
+            source_spot is None
+            or not math.isfinite(float(source_spot))
+            or source_spot <= 0
+        ):
+            source_spot = None
+        return {
+            "source_spot_price": source_spot,
+            "provider_spot_price": None,
+            "spot_disagreement_ratio": None,
+            "latest_contract_trade_at": None,
+            "days_to_expiration": None,
+            "normalized_call_count": 0,
+            "normalized_put_count": 0,
+            "distinct_strike_count": 0,
+            "open_interest_coverage": 0.0,
+            "iv_coverage": 0.0,
+            "volume_coverage": 0.0,
+            "two_sided_quote_coverage": 0.0,
+        }
+
+    @staticmethod
+    def _quality_evidence(
+        observation: ChainObservation, *, as_of_date: date
+    ) -> dict[str, Any]:
         contracts = tuple(observation.contracts)
         retained = retain_contracts_for_persistence(
             contracts,
@@ -604,6 +647,7 @@ class RefreshOptionsAnalyticsUseCase:
             "latest_contract_trade_at": (
                 latest_trade.isoformat() if latest_trade is not None else None
             ),
+            "days_to_expiration": (observation.expiration - as_of_date).days,
             "normalized_call_count": sum(
                 contract.side is OptionSide.CALL for contract in contracts
             ),
@@ -656,7 +700,7 @@ class RefreshOptionsAnalyticsUseCase:
         as_of_date: date,
         run_warnings: tuple[str, ...],
     ) -> tuple[str, ...]:
-        evidence = self._quality_evidence(observation)
+        evidence = self._quality_evidence(observation, as_of_date=as_of_date)
         warnings = list(run_warnings)
         disagreement = evidence.get("spot_disagreement_ratio")
         if disagreement is not None and disagreement > 0.02:

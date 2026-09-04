@@ -41,6 +41,21 @@ class OptionsMetricsResponse(_StrictModel):
     near_spot_volume_concentration: OptionsMetricResponse
 
 
+class OptionsQualityEvidenceResponse(_StrictModel):
+    source_spot_price: float | None = Field(gt=0)
+    provider_spot_price: float | None
+    spot_disagreement_ratio: float | None = Field(ge=0)
+    latest_contract_trade_at: datetime | None
+    days_to_expiration: int | None = Field(ge=0)
+    normalized_call_count: int = Field(ge=0)
+    normalized_put_count: int = Field(ge=0)
+    distinct_strike_count: int = Field(ge=0)
+    open_interest_coverage: float = Field(ge=0, le=1)
+    iv_coverage: float = Field(ge=0, le=1)
+    volume_coverage: float = Field(ge=0, le=1)
+    two_sided_quote_coverage: float = Field(ge=0, le=1)
+
+
 class OptionsCommandCenterItemResponse(_StrictModel):
     symbol: str
     source_badges: list[str]
@@ -60,7 +75,7 @@ class OptionsCommandCenterItemResponse(_StrictModel):
     iv_history_observation_count: int
     lifetime_observation_count: int
     retry_count: int
-    quality_evidence: dict[str, Any] = Field(default_factory=dict)
+    quality_evidence: OptionsQualityEvidenceResponse
     metrics: OptionsMetricsResponse
     assumptions: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

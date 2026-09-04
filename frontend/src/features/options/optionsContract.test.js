@@ -46,4 +46,14 @@ describe('options contract', () => {
       command_center_path: '../secret.json',
     })).toThrow(/path/i);
   });
+
+  it('rejects incomplete or mistyped quality evidence', () => {
+    const missingDte = structuredClone(commandCenterFixture);
+    delete missingDte.items[0].quality_evidence.days_to_expiration;
+    expect(() => normalizeOptionsCommandCenter(missingDte)).toThrow(/days_to_expiration/i);
+
+    const invalidCoverage = structuredClone(commandCenterFixture);
+    invalidCoverage.items[0].quality_evidence.iv_coverage = 1.1;
+    expect(() => normalizeOptionsCommandCenter(invalidCoverage)).toThrow(/iv_coverage/i);
+  });
 });

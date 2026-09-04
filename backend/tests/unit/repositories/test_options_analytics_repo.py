@@ -340,6 +340,12 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
     repo = SqlOptionsAnalyticsRepository(session)
     current_run = _start(repo, "current", as_of=date(2026, 9, 1))
     repo.stage_candidates(current_run.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        current_run.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        assumptions={"dividend_yield": 0.012},
+    )
     repo.publish(current_run.id, _published_summary())
     continuity_run = _start(repo, "continuity", as_of=date(2026, 9, 2))
     repo.stage_candidates(continuity_run.id, [_candidate("AAPL", CandidateKind.CONTINUITY)])
@@ -350,6 +356,7 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
 
     assert memberships["AAPL"].as_of_date == date(2026, 9, 1)
     assert memberships["AAPL"].prior_best_rank == 1
+    assert memberships["AAPL"].dividend_yield == 0.012
 
 
 def test_rollback_removes_uncommitted_pointer_and_observation(session) -> None:

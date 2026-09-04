@@ -201,7 +201,7 @@ def test_current_liquidity_uses_feature_run_snapshot_not_mutable_fundamentals() 
     engine.dispose()
 
 
-def test_continuity_inputs_use_current_fundamentals_and_latest_pinned_close() -> None:
+def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_close() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -232,7 +232,7 @@ def test_continuity_inputs_use_current_fundamentals_and_latest_pinned_close() ->
     assert set(inputs) == {"AAPL"}
     assert inputs["AAPL"].spot_price == 201
     assert inputs["AAPL"].price_closes == (199.0, 201.0)
-    assert inputs["AAPL"].daily_dollar_volume == 250_000_000
-    assert inputs["AAPL"].dividend_yield == 0.012
+    assert inputs["AAPL"].daily_dollar_volume is None
+    assert inputs["AAPL"].dividend_yield is None
     session.close()
     engine.dispose()

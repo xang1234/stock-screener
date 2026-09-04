@@ -404,6 +404,24 @@ def test_non_transient_provider_error_is_not_retried() -> None:
 
     assert provider.fetch_counts == {"AAPL": 1}
     assert repo.unavailable["AAPL"]["reason_codes"] == ("provider_unavailable",)
+    assert repo.unavailable["AAPL"]["evidence"]["quality"] == {
+        "source_spot_price": 100,
+        "provider_spot_price": None,
+        "spot_disagreement_ratio": None,
+        "latest_contract_trade_at": None,
+        "days_to_expiration": None,
+        "normalized_call_count": 0,
+        "normalized_put_count": 0,
+        "distinct_strike_count": 0,
+        "open_interest_coverage": 0.0,
+        "iv_coverage": 0.0,
+        "volume_coverage": 0.0,
+        "two_sided_quote_coverage": 0.0,
+    }
+    assert repo.unavailable["AAPL"]["assumptions"] == {
+        "dividend_yield": 0.01,
+        "dividend_source": "pinned_feature_run",
+    }
 
 
 def test_missing_source_spot_is_unavailable_without_calling_provider() -> None:
@@ -569,7 +587,10 @@ def test_continuity_is_derived_from_last_current_membership_and_expires_after_fi
     repo = _Repository(
         memberships={
             "RECENT": SimpleNamespace(
-                symbol="RECENT", as_of_date=date(2026, 8, 28), prior_best_rank=2
+                symbol="RECENT",
+                as_of_date=date(2026, 8, 28),
+                prior_best_rank=2,
+                dividend_yield=0.012,
             ),
             "EXPIRED": SimpleNamespace(
                 symbol="EXPIRED", as_of_date=date(2026, 8, 27), prior_best_rank=1
@@ -587,6 +608,7 @@ def test_continuity_is_derived_from_last_current_membership_and_expires_after_fi
 
     assert repo.staged["RECENT"].kind is CandidateKind.CONTINUITY
     assert repo.staged["RECENT"].sessions_since_current == 5
+    assert repo.staged["RECENT"].dividend_yield == 0.012
     assert "EXPIRED" not in repo.staged
     assert repo.activity_ranks == {"AAPL": 1}
 
@@ -630,6 +652,7 @@ def test_quality_evidence_keeps_provider_spot_and_stale_trade_warning() -> None:
     saved = repo.saved["AAPL"]
     assert saved["evidence"]["quality"]["provider_spot_price"] == 103
     assert saved["evidence"]["quality"]["spot_disagreement_ratio"] == 0.03
+    assert saved["evidence"]["quality"]["days_to_expiration"] == 14
     assert saved["evidence"]["quality"]["latest_contract_trade_at"].startswith(
         "2026-08-28"
     )

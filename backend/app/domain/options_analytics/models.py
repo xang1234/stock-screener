@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
 
 class CandidateKind(str, Enum):
