@@ -68,7 +68,7 @@ class _Repository:
     def import_history_transfer(self, observations, **identity):
         added = 0
         for row in observations:
-            key = (row["external_source_feature_run_key"], row["symbol"])
+            key = (row.external_source_feature_run_key, row.symbol)
             if key not in self.imported:
                 self.imported.add(key)
                 added += 1
@@ -88,9 +88,7 @@ def test_transfer_bundle_is_checksummed_and_contains_aggregate_history_only():
     assert bundle["calculation_version"] == "options-analytics-v1"
     assert bundle["market"] == "US"
     assert len(bundle["payload_checksum"]) == 64
-    assert bundle["last_current_memberships"] == [
-        {"symbol": "AAPL", "as_of_date": "2026-09-04", "prior_best_rank": 1}
-    ]
+    assert "last_current_memberships" not in bundle
     encoded = repr(bundle)
     assert "strike_points" not in encoded
     assert "raw_contract" not in encoded

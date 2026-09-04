@@ -41,6 +41,7 @@ from app.use_cases.options_analytics.analysis_models import (
     OptionsStrikePoint,
     UnavailableCandidateAnalysis,
 )
+from app.schemas.options_history_transfer import OptionsHistoryObservation
 
 from ..test_options_history_transfer import _observation as _transfer_observation
 
@@ -537,7 +538,9 @@ def test_history_transfer_import_is_idempotent_and_never_moves_pointer(session) 
     repo.publish(local.id, _published_summary())
     session.commit()
 
-    row = _transfer_observation(as_of_date="2026-09-01")
+    row = OptionsHistoryObservation.model_validate(
+        _transfer_observation(as_of_date="2026-09-01")
+    )
     first = repo.import_history_transfer(
         (row,),
         market="US",
@@ -562,8 +565,9 @@ def test_history_transfer_import_is_idempotent_and_never_moves_pointer(session) 
     assert second["imported_observations"] == 0
     assert pointer.run_id == local.id
     assert transferred.source_feature_run_id is None
-    assert transferred.external_source_feature_run_key == row[
-        "external_source_feature_run_key"
-    ]
+    assert (
+        transferred.external_source_feature_run_key
+        == row.external_source_feature_run_key
+    )
     assert transferred.items[0].security_symbol == "AAPL"
     assert transferred.items[0].strike_points == []
