@@ -215,12 +215,23 @@ class RefreshOptionsAnalyticsUseCase:
                 )
                 for symbol in incomplete_symbols
             }
+            first_error: Exception | None = None
             for future in as_completed(futures):
-                self._persist_analysis(run_id, future.result())
+                try:
+                    analysis = future.result()
+                except Exception as exc:  # noqa: BLE001 - re-raised after draining
+                    if first_error is None:
+                        first_error = exc
+                else:
+                    self._persist_analysis(run_id, analysis)
                 if self._cancellation.is_cancelled():
                     for pending in futures:
                         pending.cancel()
+                    if first_error is not None:
+                        raise first_error
                     return True
+            if first_error is not None:
+                raise first_error
             return False
 
     def _persist_analysis(self, run_id: int, analysis: CandidateAnalysis) -> None:

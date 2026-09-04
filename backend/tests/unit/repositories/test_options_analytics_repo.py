@@ -644,7 +644,9 @@ def test_newest_invalid_same_session_item_supersedes_older_valid_history(session
         calculation_version="v1",
     )
 
-    assert history == ()
+    assert len(history) == 1
+    assert history[0].run_id == newest.id
+    assert history[0].observation_state == ObservationState.UNAVAILABLE.value
     assert analysis_history == ()
 
 
@@ -679,7 +681,7 @@ def test_history_export_keeps_only_the_newest_published_forced_attempt(session) 
     assert exported[0].atm_iv == 0.30
 
 
-def test_history_excludes_published_insufficient_quality_observations(session) -> None:
+def test_history_keeps_published_insufficient_quality_as_display_gap(session) -> None:
     repo = _Repositories(session)
     run = _start(repo, "invalid-history")
     repo.stage_candidates(run.id, [_candidate("AAPL")])
@@ -694,7 +696,16 @@ def test_history_excludes_published_insufficient_quality_observations(session) -
 
     item = session.query(OptionsAnalyticsRunItem).one()
     assert item.observation_state == "insufficient_quality"
-    assert repo.symbol_history("AAPL", market="US", calculation_version="v1") == ()
+    history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
+    analysis_history = repo.analysis_history(
+        "AAPL",
+        market="US",
+        calculation_version="v1",
+    )
+
+    assert len(history) == 1
+    assert history[0].observation_state == ObservationState.INSUFFICIENT_QUALITY.value
+    assert analysis_history == ()
 
 
 def test_last_current_membership_ignores_later_continuity_only_rows(session) -> None:
@@ -724,6 +735,22 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
     assert memberships["AAPL"].prior_best_rank == 1
     assert memberships["AAPL"].dividend_yield == 0.0
     assert memberships["AAPL"].dividend_source == "zero_assumption"
+
+
+def test_last_current_memberships_ignore_superseded_same_session_cohort(session) -> None:
+    repo = _Repositories(session)
+    first = _start(repo, "first-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(first.id, [_candidate("AAPL")])
+    repo.publish(first.id, _published_summary())
+
+    newest = _start(repo, "new-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(newest.id, [_candidate("MSFT")])
+    repo.publish(newest.id, _published_summary())
+    session.commit()
+
+    memberships = repo.last_current_memberships("US", "v1")
+
+    assert set(memberships) == {"MSFT"}
 
 
 def test_named_repository_operations_commit_complete_state_transitions(session) -> None:

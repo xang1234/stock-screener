@@ -112,11 +112,6 @@ class SqlPublishedOptionsReader:
             if run.as_of_date in seen_sessions:
                 continue
             seen_sessions.add(run.as_of_date)
-            if (
-                item.observation_state != ObservationState.AVAILABLE.value
-                or not item.core_valid
-            ):
-                continue
             history.append(item)
         return tuple(history)
 
@@ -146,6 +141,8 @@ class SqlPublishedOptionsReader:
                 market=market,
                 calculation_version=calculation_version,
             )
+            if item.observation_state == ObservationState.AVAILABLE.value
+            and item.core_valid
         )
 
     def last_current_memberships(
@@ -153,37 +150,50 @@ class SqlPublishedOptionsReader:
         market: str,
         calculation_version: str,
     ) -> dict[str, LastCurrentMembership]:
-        rows = (
-            self._session.query(OptionsAnalyticsRunItem, OptionsAnalyticsRun.as_of_date)
-            .join(OptionsAnalyticsRun)
+        runs = (
+            self._session.query(OptionsAnalyticsRun)
+            .options(selectinload(OptionsAnalyticsRun.items))
             .filter(
                 OptionsAnalyticsRun.market == market.strip().upper(),
                 OptionsAnalyticsRun.calculation_version == calculation_version,
                 OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
-                OptionsAnalyticsRunItem.candidate_kind == CandidateKind.CURRENT.value,
             )
             .order_by(
                 OptionsAnalyticsRun.as_of_date.desc(),
+                OptionsAnalyticsRun.attempt_number.desc(),
                 OptionsAnalyticsRun.id.desc(),
             )
             .all()
         )
         memberships: dict[str, LastCurrentMembership] = {}
-        for item, as_of_date in rows:
-            if item.security_symbol in memberships:
+        seen_sessions: set[date] = set()
+        for run in runs:
+            if run.as_of_date in seen_sessions:
                 continue
-            ranks = [rank for rank in (item.candidate_rank, item.leader_rank) if rank]
-            memberships[item.security_symbol] = LastCurrentMembership(
-                symbol=item.security_symbol,
-                as_of_date=as_of_date,
-                prior_best_rank=min(ranks) if ranks else 10_000,
-                dividend_yield=(item.assumptions_json or {}).get("dividend_yield"),
-                dividend_source=(
-                    DividendSource(source)
-                    if (source := (item.assumptions_json or {}).get("dividend_source"))
-                    else None
-                ),
-            )
+            seen_sessions.add(run.as_of_date)
+            for item in run.items:
+                if item.candidate_kind != CandidateKind.CURRENT.value:
+                    continue
+                if item.security_symbol in memberships:
+                    continue
+                ranks = [
+                    rank for rank in (item.candidate_rank, item.leader_rank) if rank
+                ]
+                memberships[item.security_symbol] = LastCurrentMembership(
+                    symbol=item.security_symbol,
+                    as_of_date=run.as_of_date,
+                    prior_best_rank=min(ranks) if ranks else 10_000,
+                    dividend_yield=(item.assumptions_json or {}).get("dividend_yield"),
+                    dividend_source=(
+                        DividendSource(source)
+                        if (
+                            source := (item.assumptions_json or {}).get(
+                                "dividend_source"
+                            )
+                        )
+                        else None
+                    ),
+                )
         return memberships
 
 

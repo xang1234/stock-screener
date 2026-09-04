@@ -683,6 +683,29 @@ def test_completed_symbol_is_persisted_before_later_worker_exception(monkeypatch
     assert tuple(repo.saved) == ("AAPL",)
 
 
+def test_completed_workers_are_drained_when_another_worker_fails_first(
+    monkeypatch,
+) -> None:
+    repo = _Repository()
+    use_case = _use_case([_candidate("AAPL"), _candidate("MSFT")], repo=repo)
+    failure_started = threading.Event()
+    original_analyze = use_case._analyzer.analyze
+
+    def analyze(candidate, context):
+        if candidate.symbol == "MSFT":
+            failure_started.set()
+            raise RuntimeError("unexpected candidate failure")
+        assert failure_started.wait(timeout=1)
+        return original_analyze(candidate, context)
+
+    monkeypatch.setattr(use_case._analyzer, "analyze", analyze)
+
+    with pytest.raises(RuntimeError, match="unexpected candidate failure"):
+        use_case.execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert tuple(repo.saved) == ("AAPL",)
+
+
 def test_resume_counts_previously_saved_items_toward_publication() -> None:
     repo = _Repository()
     repo.saved = {"AAPL": {}}
