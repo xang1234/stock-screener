@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain.options_analytics.models import OptionCandidate, OptionCandidateInput
@@ -78,7 +79,7 @@ class SqlOptionsCandidateSource:
                     if fundamental is not None
                     else None
                 ),
-                price_closes=closes.get(feature.symbol, ()),
+                price_closes=closes.get(feature.symbol.strip().upper(), ()),
             )
             candidates.append(item)
             rs_rating = _number(details.get("rs_rating"))
@@ -102,12 +103,13 @@ class SqlOptionsCandidateSource:
     def _price_closes(
         self, symbols: list[str], as_of_date: date
     ) -> dict[str, tuple[float, ...]]:
-        if not symbols:
+        canonical_symbols = sorted({symbol.strip().upper() for symbol in symbols})
+        if not canonical_symbols:
             return {}
         rows = (
             self._session.query(StockPrice.symbol, StockPrice.close)
             .filter(
-                StockPrice.symbol.in_(symbols),
+                func.upper(StockPrice.symbol).in_(canonical_symbols),
                 StockPrice.date <= as_of_date,
                 StockPrice.close.isnot(None),
             )
@@ -116,7 +118,7 @@ class SqlOptionsCandidateSource:
         )
         newest_first: dict[str, list[float]] = {}
         for symbol, close in rows:
-            values = newest_first.setdefault(symbol, [])
+            values = newest_first.setdefault(symbol.strip().upper(), [])
             if len(values) < 21:
                 values.append(float(close))
         return {
@@ -124,3 +126,37 @@ class SqlOptionsCandidateSource:
             for symbol, values in newest_first.items()
         }
 
+    def read_continuity_inputs(
+        self, symbols: list[str] | tuple[str, ...], as_of_date: date
+    ) -> dict[str, OptionCandidateInput]:
+        canonical_symbols = sorted({symbol.strip().upper() for symbol in symbols})
+        if not canonical_symbols:
+            return {}
+        fundamentals = {
+            row.symbol.strip().upper(): row
+            for row in self._session.query(StockFundamental)
+            .filter(func.upper(StockFundamental.symbol).in_(canonical_symbols))
+            .all()
+        }
+        closes = self._price_closes(canonical_symbols, as_of_date)
+        result: dict[str, OptionCandidateInput] = {}
+        for symbol in canonical_symbols:
+            price_closes = closes.get(symbol, ())
+            if not price_closes:
+                continue
+            fundamental = fundamentals.get(symbol)
+            result[symbol] = OptionCandidateInput(
+                symbol=symbol,
+                composite_score=None,
+                daily_dollar_volume=(
+                    _number(fundamental.adv_usd) if fundamental is not None else None
+                ),
+                spot_price=price_closes[-1],
+                dividend_yield=(
+                    _number(fundamental.dividend_yield)
+                    if fundamental is not None
+                    else None
+                ),
+                price_closes=price_closes,
+            )
+        return result

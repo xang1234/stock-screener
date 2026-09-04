@@ -112,6 +112,7 @@ class OptionsAnalyticsRunItem(Base):
     realized_volatility = Column(Float, nullable=True)
     vrp = Column(Float, nullable=True)
     activity_intensity = Column(Float, nullable=True)
+    activity_rank = Column(Integer, nullable=True)
     short_history_observation_count = Column(Integer, nullable=False, default=0)
     iv_history_observation_count = Column(Integer, nullable=False, default=0)
     lifetime_observation_count = Column(Integer, nullable=False, default=0)
@@ -134,7 +135,7 @@ class OptionsAnalyticsRunItem(Base):
             "ix_options_items_run_kind_activity",
             "run_id",
             "candidate_kind",
-            "activity_intensity",
+            "activity_rank",
         ),
     )
 
@@ -179,4 +180,3 @@ class OptionsAnalyticsPointer(Base):
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
-

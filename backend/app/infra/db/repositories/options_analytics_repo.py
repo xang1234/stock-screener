@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from sqlalchemy.orm import Session, selectinload
 
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
+    HistoryReadiness,
     ObservationState,
     OptionCandidate,
     OptionsRunStatus,
@@ -47,6 +49,9 @@ class LastCurrentMembership:
 class SqlOptionsAnalyticsRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def commit(self) -> None:
+        self._session.commit()
 
     def start_or_reuse(
         self,
@@ -143,6 +148,7 @@ class SqlOptionsAnalyticsRepository:
         warnings: Sequence[str] = (),
         reason_codes: Sequence[str] = (),
         retry_count: int = 0,
+        history_readiness: HistoryReadiness | None = None,
     ) -> OptionsAnalyticsRunItem:
         item = self._get_item(run_id, symbol)
         item.spot_price = observation.source_spot_price
@@ -154,6 +160,14 @@ class SqlOptionsAnalyticsRepository:
         item.assumptions_json = dict(assumptions or {})
         item.warnings_json = list(warnings)
         item.reasons_json = list(reason_codes)
+        if history_readiness is not None:
+            item.short_history_observation_count = (
+                history_readiness.short_observation_count
+            )
+            item.iv_history_observation_count = history_readiness.iv_observation_count
+            item.lifetime_observation_count = (
+                history_readiness.lifetime_observation_count
+            )
         for name, value in (metric_values or {}).items():
             if name not in _METRIC_COLUMNS:
                 raise ValueError(f"Unsupported options metric column: {name}")
@@ -205,6 +219,41 @@ class SqlOptionsAnalyticsRepository:
             .all()
         )
         return tuple(row[0] for row in rows)
+
+    def items_for_run(self, run_id: int) -> tuple[OptionsAnalyticsRunItem, ...]:
+        return tuple(
+            self._session.query(OptionsAnalyticsRunItem)
+            .filter(OptionsAnalyticsRunItem.run_id == run_id)
+            .order_by(OptionsAnalyticsRunItem.security_symbol)
+            .all()
+        )
+
+    def save_activity_ranks(
+        self, run_id: int, ranks: Mapping[str, int | None]
+    ) -> None:
+        items = {
+            item.security_symbol: item
+            for item in self._session.query(OptionsAnalyticsRunItem)
+            .filter(OptionsAnalyticsRunItem.run_id == run_id)
+            .all()
+        }
+        for symbol, rank in ranks.items():
+            item = items.get(symbol.strip().upper())
+            if item is not None:
+                item.activity_rank = rank
+        self._session.flush()
+
+    def save_run_assumptions(
+        self,
+        run_id: int,
+        *,
+        risk_free_rate: float,
+        assumptions: Mapping[str, Any],
+    ) -> None:
+        run = self._get_run(run_id)
+        run.risk_free_rate = risk_free_rate
+        run.assumptions_json = dict(assumptions)
+        self._session.flush()
 
     def publish(
         self, run_id: int, summary: OptionsRunSummary
@@ -260,6 +309,21 @@ class SqlOptionsAnalyticsRepository:
             )
             .one_or_none()
         )
+
+    def get_published_symbol_detail(
+        self, symbol: str, market: str, calculation_version: str
+    ) -> OptionsAnalyticsRunItem | None:
+        run = self.get_published_run(market, calculation_version)
+        if run is None:
+            return None
+        canonical = symbol.strip().upper()
+        return next(
+            (item for item in run.items if item.security_symbol == canonical),
+            None,
+        )
+
+    def get_run_diagnostics(self, run_id: int) -> OptionsAnalyticsRun | None:
+        return self._session.get(OptionsAnalyticsRun, run_id)
 
     def symbol_history(
         self, symbol: str, *, market: str, calculation_version: str

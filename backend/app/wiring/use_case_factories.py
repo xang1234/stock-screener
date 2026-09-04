@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy.orm import Session
 
 from app.wiring.runtime_context import resolve_runtime_services
 
@@ -22,6 +25,28 @@ if TYPE_CHECKING:
     from app.use_cases.scanning.get_setup_details import GetSetupDetailsUseCase
     from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
     from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
+
+
+class _NeverCancelled:
+    def is_cancelled(self) -> bool:
+        return False
+
+
+class _UsOptionsSessionCalendar:
+    def __init__(self, calendar_service: Any) -> None:
+        self._calendar_service = calendar_service
+
+    def is_session(self, value: date) -> bool:
+        return self._calendar_service.is_trading_day("US", value)
+
+    def sessions_ending_on(self, value: date, count: int) -> tuple[date, ...]:
+        start = value - timedelta(days=count * 3 + 30)
+        sessions = self._calendar_service.trading_days("US", start, value)
+        if len(sessions) < count:
+            raise ValueError(
+                f"Only {len(sessions)} US sessions available; {count} required"
+            )
+        return tuple(sessions[-count:])
 
 
 def get_create_scan_use_case() -> CreateScanUseCase:
@@ -136,6 +161,61 @@ def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
     )
 
 
+def get_refresh_options_analytics_use_case(
+    session: Session,
+    *,
+    cancellation: Any | None = None,
+):
+    from app.config import settings
+    from app.infra.db.repositories.options_analytics_repo import (
+        SqlOptionsAnalyticsRepository,
+    )
+    from app.infra.providers.yahoo_options import YahooOptionsProvider
+    from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
+    from app.use_cases.options_analytics import (
+        OPTIONS_ANALYTICS_CALCULATION_VERSION,
+        OPTIONS_ANALYTICS_SCHEMA_VERSION,
+        RefreshOptionsAnalyticsUseCase,
+    )
+
+    runtime = resolve_runtime_services()
+    calendar = _UsOptionsSessionCalendar(runtime.market_calendar_service())
+    requests_per_second = max(float(settings.yfinance_rate_limit), 0.01)
+    provider = YahooOptionsProvider(
+        rate_limiter=lambda: runtime.rate_limiter().wait(
+            "yfinance:options", min_interval_s=1.0 / requests_per_second
+        ),
+        # The use case owns the three-attempt symbol budget.
+        max_attempts=1,
+    )
+    return RefreshOptionsAnalyticsUseCase(
+        candidate_source=SqlOptionsCandidateSource(session),
+        repository=SqlOptionsAnalyticsRepository(session),
+        provider=provider,
+        calendar=calendar,
+        clock=lambda: datetime.now(timezone.utc),
+        cancellation=cancellation or _NeverCancelled(),
+        calculation_version=OPTIONS_ANALYTICS_CALCULATION_VERSION,
+        schema_version=OPTIONS_ANALYTICS_SCHEMA_VERSION,
+        max_workers=2,
+    )
+
+
+def get_options_analytics_queries(session: Session):
+    from app.infra.db.repositories.options_analytics_repo import (
+        SqlOptionsAnalyticsRepository,
+    )
+    from app.use_cases.options_analytics import (
+        OPTIONS_ANALYTICS_CALCULATION_VERSION,
+        OptionsAnalyticsQueries,
+    )
+
+    return OptionsAnalyticsQueries(
+        SqlOptionsAnalyticsRepository(session),
+        calculation_version=OPTIONS_ANALYTICS_CALCULATION_VERSION,
+    )
+
+
 __all__ = [
     "get_build_daily_snapshot_use_case",
     "get_compare_feature_runs_use_case",
@@ -150,5 +230,7 @@ __all__ = [
     "get_get_setup_details_use_case",
     "get_get_single_result_use_case",
     "get_list_feature_runs_use_case",
+    "get_options_analytics_queries",
+    "get_refresh_options_analytics_use_case",
     "get_run_bulk_scan_use_case",
 ]

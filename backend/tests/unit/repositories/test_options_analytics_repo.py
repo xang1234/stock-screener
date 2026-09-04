@@ -10,6 +10,7 @@ from app.database import Base
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
+    HistoryReadiness,
     NormalizedOptionContract,
     ObservationState,
     OptionCandidate,
@@ -175,6 +176,65 @@ def test_resume_returns_only_nonterminal_items(session) -> None:
     repo.save_unavailable(run.id, "MSFT", reason_codes=("expiration_unavailable",))
 
     assert repo.incomplete_symbols(run.id) == ("NVDA",)
+    assert [item.security_symbol for item in repo.items_for_run(run.id)] == [
+        "AAPL",
+        "MSFT",
+        "NVDA",
+    ]
+
+
+def test_activity_ranks_are_persisted_for_available_values_only(session) -> None:
+    repo = SqlOptionsAnalyticsRepository(session)
+    run = _start(repo)
+    repo.stage_candidates(run.id, [_candidate("AAPL"), _candidate("MSFT")])
+
+    repo.save_activity_ranks(run.id, {"AAPL": 1, "MSFT": None})
+
+    items = {
+        item.security_symbol: item
+        for item in session.query(OptionsAnalyticsRunItem).all()
+    }
+    assert items["AAPL"].activity_rank == 1
+    assert items["MSFT"].activity_rank is None
+
+
+def test_run_level_assumptions_are_persisted_once(session) -> None:
+    repo = SqlOptionsAnalyticsRepository(session)
+    run = _start(repo)
+
+    repo.save_run_assumptions(
+        run.id,
+        risk_free_rate=0.041,
+        assumptions={"risk_free_source": "Yahoo ^IRX close"},
+    )
+
+    assert run.risk_free_rate == 0.041
+    assert run.assumptions_json == {"risk_free_source": "Yahoo ^IRX close"}
+
+
+def test_save_records_history_readiness_counts_without_filling_gaps(session) -> None:
+    repo = SqlOptionsAnalyticsRepository(session)
+    run = _start(repo)
+    repo.stage_candidates(run.id, [_candidate("AAPL")])
+
+    repo.save_item_result(
+        run.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        history_readiness=HistoryReadiness(
+            short_history_available=True,
+            iv_history_available=False,
+            short_observation_count=5,
+            iv_observation_count=12,
+            lifetime_observation_count=14,
+            reason_codes=("building_history",),
+        ),
+    )
+
+    item = session.query(OptionsAnalyticsRunItem).one()
+    assert item.short_history_observation_count == 5
+    assert item.iv_history_observation_count == 12
+    assert item.lifetime_observation_count == 14
 
 
 def test_publish_advances_pointer_atomically_and_failed_quality_does_not(session) -> None:
@@ -191,6 +251,28 @@ def test_publish_advances_pointer_atomically_and_failed_quality_does_not(session
     pointer = session.get(OptionsAnalyticsPointer, ("US", "v1"))
     assert pointer.run_id == first.id
     assert repo.get_published_run("US", "v1").id == first.id
+
+
+def test_published_symbol_detail_and_run_diagnostics_use_repository_state(session) -> None:
+    repo = SqlOptionsAnalyticsRepository(session)
+    run = _start(repo)
+    repo.stage_candidates(run.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        run.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        strike_points=[{"strike": 100, "call_open_interest": 200}],
+    )
+    repo.publish(run.id, _published_summary())
+    session.commit()
+
+    detail = repo.get_published_symbol_detail("AAPL", "US", "v1")
+    diagnostics = repo.get_run_diagnostics(run.id)
+
+    assert detail.security_symbol == "AAPL"
+    assert [point.strike for point in detail.strike_points] == [100]
+    assert diagnostics.id == run.id
+    assert diagnostics.status == "published"
 
 
 def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) -> None:

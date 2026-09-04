@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 from .models import ChainObservation, OptionCandidate, OptionsRunSummary
+
+
+class OptionsProviderError(RuntimeError):
+    """A non-retryable provider or payload failure for one symbol."""
+
+
+class TransientOptionsProviderError(OptionsProviderError):
+    """A provider failure that may be retried within the symbol budget."""
 
 
 class OptionsProvider(Protocol):

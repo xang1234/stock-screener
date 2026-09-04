@@ -89,6 +89,7 @@ def upgrade() -> None:
         sa.Column("realized_volatility", sa.Float(), nullable=True),
         sa.Column("vrp", sa.Float(), nullable=True),
         sa.Column("activity_intensity", sa.Float(), nullable=True),
+        sa.Column("activity_rank", sa.Integer(), nullable=True),
         sa.Column("short_history_observation_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("iv_history_observation_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("lifetime_observation_count", sa.Integer(), nullable=False, server_default="0"),
@@ -105,7 +106,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_options_items_run_kind_activity",
         "options_analytics_run_items",
-        ["run_id", "candidate_kind", "activity_intensity"],
+        ["run_id", "candidate_kind", "activity_rank"],
     )
 
     op.create_table(

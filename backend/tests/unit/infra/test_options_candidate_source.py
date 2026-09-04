@@ -131,3 +131,40 @@ def test_candidate_source_preserves_both_ranks_for_overlap() -> None:
     assert result.current_candidates[0].leader_rank == 1
     session.close()
     engine.dispose()
+
+
+def test_continuity_inputs_use_current_fundamentals_and_latest_pinned_close() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[StockFundamental.__table__, StockPrice.__table__],
+    )
+    session = sessionmaker(bind=engine)()
+    as_of = date(2026, 9, 4)
+    session.add(
+        StockFundamental(
+            symbol="aapl",
+            adv_usd=250_000_000,
+            dividend_yield=0.012,
+        )
+    )
+    session.add_all(
+        [
+            StockPrice(symbol="aapl", date=as_of - timedelta(days=1), close=199, volume=1),
+            StockPrice(symbol="aapl", date=as_of, close=201, volume=1),
+            StockPrice(symbol="aapl", date=as_of + timedelta(days=1), close=999, volume=1),
+        ]
+    )
+    session.commit()
+
+    inputs = SqlOptionsCandidateSource(session).read_continuity_inputs(
+        ["AAPL", "MISSING"], as_of
+    )
+
+    assert set(inputs) == {"AAPL"}
+    assert inputs["AAPL"].spot_price == 201
+    assert inputs["AAPL"].price_closes == (199.0, 201.0)
+    assert inputs["AAPL"].daily_dollar_volume == 250_000_000
+    assert inputs["AAPL"].dividend_yield == 0.012
+    session.close()
+    engine.dispose()

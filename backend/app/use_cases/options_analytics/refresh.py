@@ -1,0 +1,463 @@
+"""Bounded refresh orchestration with atomic quality-gated publication."""
+
+from __future__ import annotations
+
+import hashlib
+import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import date
+from typing import Any
+
+from app.domain.options_analytics.expiration import (
+    retain_contracts_for_persistence,
+    select_monthly_expiration,
+)
+from app.domain.options_analytics.history import (
+    HistoricalObservation,
+    history_readiness,
+)
+from app.domain.options_analytics.metrics.activity import rank_activity
+from app.domain.options_analytics.metrics.aggregate import (
+    ChainMetrics,
+    calculate_chain_metrics,
+)
+from app.domain.options_analytics.metrics.gex import estimate_contract_gex
+from app.domain.options_analytics.models import (
+    CandidateKind,
+    ChainObservation,
+    MetricValue,
+    ObservationState,
+    OptionCandidate,
+    OptionsRunStatus,
+    OptionsRunSummary,
+)
+from app.domain.options_analytics.ports import (
+    OptionsProviderError,
+    TransientOptionsProviderError,
+)
+from app.domain.options_analytics.quality import evaluate_publication
+from app.domain.options_analytics.selection import (
+    CandidateHistoryInput,
+    build_candidate_cohort,
+)
+
+
+@dataclass(frozen=True)
+class RefreshOptionsAnalyticsCommand:
+    source_run_id: int
+    market: str = "US"
+    enabled: bool = True
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class _FetchResult:
+    candidate: OptionCandidate
+    observation: ChainObservation | None
+    metrics: ChainMetrics | None
+    retry_count: int
+    reason_codes: tuple[str, ...] = ()
+
+    @property
+    def core_valid(self) -> bool:
+        return bool(
+            self.metrics
+            and self.metrics.max_pain.available
+            and self.metrics.atm_iv.available
+        )
+
+
+class RefreshOptionsAnalyticsUseCase:
+    def __init__(
+        self,
+        *,
+        candidate_source: Any,
+        repository: Any,
+        provider: Any,
+        calendar: Any,
+        clock: Any,
+        cancellation: Any,
+        calculation_version: str,
+        schema_version: str,
+        max_workers: int = 2,
+    ) -> None:
+        self._candidate_source = candidate_source
+        self._repository = repository
+        self._provider = provider
+        self._calendar = calendar
+        self._clock = clock
+        self._cancellation = cancellation
+        self._calculation_version = calculation_version
+        self._schema_version = schema_version
+        self._max_workers = min(max(int(max_workers), 1), 2)
+
+    def execute(self, command: RefreshOptionsAnalyticsCommand) -> dict[str, Any]:
+        market = command.market.strip().upper()
+        if not command.enabled:
+            return {"status": "skipped", "reason_codes": ["options_analytics_disabled"]}
+        if market != "US":
+            return {"status": "skipped", "reason_codes": ["market_unsupported"]}
+        source = self._candidate_source.read(command.source_run_id)
+        current = tuple(source.current_candidates)
+        current_symbols = {candidate.symbol for candidate in current}
+        memberships = self._repository.last_current_memberships(
+            market, self._calculation_version
+        )
+        recent_sessions = tuple(
+            self._calendar.sessions_ending_on(source.as_of_date, 6)
+        )
+        continuity_inputs = self._candidate_source.read_continuity_inputs(
+            tuple(memberships), source.as_of_date
+        )
+        continuity = []
+        for symbol, membership in memberships.items():
+            if symbol in current_symbols or membership.as_of_date not in recent_sessions:
+                continue
+            sessions_since_current = sum(
+                session > membership.as_of_date for session in recent_sessions
+            )
+            candidate_input = continuity_inputs.get(symbol)
+            if candidate_input is None:
+                continue
+            continuity.append(
+                CandidateHistoryInput(
+                    candidate=candidate_input,
+                    sessions_since_current=sessions_since_current,
+                    prior_best_rank=membership.prior_best_rank,
+                )
+            )
+        cohort = tuple(
+            build_candidate_cohort(
+                source.top_candidate_inputs,
+                source.leader_inputs,
+                continuity=continuity,
+            )
+        )
+        current = tuple(
+            candidate for candidate in cohort if candidate.kind is CandidateKind.CURRENT
+        )
+        signature = self._input_signature(source.source_feature_run_id, cohort)
+        run = self._repository.start_or_reuse(
+            market=market,
+            source_feature_run_id=source.source_feature_run_id,
+            calculation_version=self._calculation_version,
+            schema_version=self._schema_version,
+            provider="yahoo",
+            input_signature=signature,
+            as_of_date=source.as_of_date,
+            force=command.force,
+        )
+        self._repository.stage_candidates(run.id, cohort)
+        self._repository.commit()
+        if self._cancellation.is_cancelled():
+            return {"run_id": run.id, "status": "cancelled", "coverage": 0.0}
+
+        risk_free_rate = self._provider.risk_free_rate(source.as_of_date)
+        self._repository.save_run_assumptions(
+            run.id,
+            risk_free_rate=risk_free_rate,
+            assumptions={
+                "risk_free_source": "Yahoo ^IRX close on or before source date"
+            },
+        )
+        self._repository.commit()
+        candidates_by_symbol = {candidate.symbol: candidate for candidate in cohort}
+        incomplete = self._repository.incomplete_symbols(run.id)
+        results: list[_FetchResult] = []
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._fetch_candidate,
+                    candidates_by_symbol[symbol],
+                    source.as_of_date,
+                    risk_free_rate,
+                ): symbol
+                for symbol in incomplete
+            }
+            for future in as_completed(futures):
+                results.append(future.result())
+
+        for result in results:
+            candidate = result.candidate
+            if result.observation is None or result.metrics is None:
+                self._repository.save_unavailable(
+                    run.id,
+                    candidate.symbol,
+                    reason_codes=result.reason_codes,
+                    retry_count=result.retry_count,
+                )
+                self._repository.commit()
+                continue
+            historical = self._historical_observations(
+                self._repository.symbol_history(
+                    candidate.symbol,
+                    market=market,
+                    calculation_version=self._calculation_version,
+                )
+            )
+            historical = (*historical, HistoricalObservation(
+                session=source.as_of_date,
+                calculation_version=self._calculation_version,
+                state=ObservationState.AVAILABLE,
+            ))
+            readiness = history_readiness(
+                historical,
+                self._calendar.sessions_ending_on(source.as_of_date, 30),
+                calculation_version=self._calculation_version,
+            )
+            self._repository.save_item_result(
+                run.id,
+                candidate.symbol,
+                observation=result.observation,
+                metric_values=self._metric_values(result.metrics),
+                strike_points=self._strike_points(
+                    result.observation,
+                    as_of_date=source.as_of_date,
+                    risk_free_rate=risk_free_rate,
+                    dividend_yield=candidate.dividend_yield or 0.0,
+                ),
+                evidence=self._metric_evidence(result.metrics),
+                assumptions={
+                    "risk_free_rate": risk_free_rate,
+                    "dividend_yield": candidate.dividend_yield or 0.0,
+                },
+                reason_codes=readiness.reason_codes,
+                retry_count=result.retry_count,
+                history_readiness=readiness,
+            )
+            self._repository.commit()
+        persisted_items = self._repository.items_for_run(run.id)
+        core_valid_symbols = {
+            item.security_symbol
+            for item in persisted_items
+            if item.candidate_kind == CandidateKind.CURRENT.value
+            and item.observation_state == ObservationState.AVAILABLE.value
+            and item.max_pain is not None
+            and item.atm_iv is not None
+        }
+        activity_values = {
+            item.security_symbol: (
+                MetricValue(available=True, value=item.activity_intensity)
+                if item.activity_intensity is not None
+                else MetricValue(
+                    available=False, reason_codes=("activity_unavailable",)
+                )
+            )
+            for item in persisted_items
+        }
+        self._repository.save_activity_ranks(run.id, rank_activity(activity_values))
+        self._repository.commit()
+
+        decision = evaluate_publication(current, core_valid_symbols=core_valid_symbols)
+        terminal_states = {
+            ObservationState.AVAILABLE.value,
+            ObservationState.UNAVAILABLE.value,
+        }
+        completed = sum(
+            item.observation_state in terminal_states for item in persisted_items
+        )
+        failed = sum(
+            item.observation_state == ObservationState.UNAVAILABLE.value
+            for item in persisted_items
+        )
+        retried = sum(item.retry_count for item in persisted_items)
+        summary = OptionsRunSummary(
+            status=(
+                OptionsRunStatus.PUBLISHED
+                if decision.publish
+                else OptionsRunStatus.FAILED_QUALITY
+            ),
+            expected_count=len(cohort),
+            completed_count=completed,
+            core_valid_current_count=decision.core_valid_current_count,
+            failed_count=failed,
+            retried_count=retried,
+            coverage=decision.coverage,
+            reason_codes=decision.reason_codes,
+        )
+        if decision.publish:
+            self._repository.publish(run.id, summary)
+            self._repository.commit()
+            sessions = self._calendar.sessions_ending_on(source.as_of_date, 252)
+            self._repository.prune(aggregate_before=sessions[0])
+            self._repository.commit()
+            status = OptionsRunStatus.PUBLISHED.value
+        else:
+            self._repository.mark_failed_quality(
+                run.id, reason_codes=decision.reason_codes
+            )
+            self._repository.commit()
+            status = OptionsRunStatus.FAILED_QUALITY.value
+        return {
+            "run_id": run.id,
+            "source_run_id": source.source_feature_run_id,
+            "status": status,
+            "expected_count": len(cohort),
+            "completed_count": completed,
+            "core_valid_current_count": decision.core_valid_current_count,
+            "failed_count": failed,
+            "retried_count": retried,
+            "coverage": decision.coverage,
+            "reason_codes": list(decision.reason_codes),
+        }
+
+    def _fetch_candidate(
+        self, candidate: OptionCandidate, as_of_date: date, risk_free_rate: float
+    ) -> _FetchResult:
+        if (
+            candidate.spot_price is None
+            or not math.isfinite(float(candidate.spot_price))
+            or candidate.spot_price <= 0
+        ):
+            return _FetchResult(
+                candidate,
+                None,
+                None,
+                0,
+                ("source_spot_unavailable",),
+            )
+        for attempt in range(1, 4):
+            try:
+                expirations = self._provider.list_expirations(candidate.symbol)
+                expiration = select_monthly_expiration(
+                    as_of_date=as_of_date,
+                    listed_expirations=expirations,
+                    calendar=self._calendar,
+                )
+                if expiration is None:
+                    return _FetchResult(
+                        candidate,
+                        None,
+                        None,
+                        attempt - 1,
+                        ("expiration_unavailable",),
+                    )
+                observation = self._provider.fetch_chain(
+                    candidate.symbol,
+                    expiration,
+                    source_spot_price=float(candidate.spot_price),
+                )
+                metrics = calculate_chain_metrics(
+                    observation,
+                    as_of_date=as_of_date,
+                    risk_free_rate=risk_free_rate,
+                    dividend_yield=candidate.dividend_yield or 0.0,
+                    closes=candidate.price_closes,
+                )
+                return _FetchResult(candidate, observation, metrics, attempt - 1)
+            except TransientOptionsProviderError:
+                if attempt == 3:
+                    return _FetchResult(
+                        candidate,
+                        None,
+                        None,
+                        2,
+                        ("provider_unavailable",),
+                    )
+            except OptionsProviderError:
+                return _FetchResult(
+                    candidate,
+                    None,
+                    None,
+                    attempt - 1,
+                    ("provider_unavailable",),
+                )
+        raise AssertionError("unreachable")
+
+    def _historical_observations(self, rows: Any) -> tuple[HistoricalObservation, ...]:
+        observations = []
+        for row in rows:
+            if isinstance(row, HistoricalObservation):
+                observations.append(row)
+                continue
+            observations.append(
+                HistoricalObservation(
+                    session=row.run.as_of_date,
+                    calculation_version=row.run.calculation_version,
+                    state=ObservationState(row.observation_state),
+                )
+            )
+        return tuple(observations)
+
+    @staticmethod
+    def _input_signature(source_run_id: int, cohort: tuple[OptionCandidate, ...]) -> str:
+        material = f"{source_run_id}:" + ",".join(
+            f"{candidate.symbol}:{candidate.kind.value}" for candidate in cohort
+        )
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _metric_values(metrics: ChainMetrics) -> dict[str, float | None]:
+        return {
+            "max_pain": metrics.max_pain.value,
+            "net_gex": metrics.net_gex.value,
+            "gamma_flip": metrics.gamma_flip.value,
+            "call_wall": metrics.call_wall.value,
+            "put_wall": metrics.put_wall.value,
+            "atm_iv": metrics.atm_iv.value,
+            "skew_25_delta": metrics.skew_25_delta.value,
+            "realized_volatility": metrics.realized_volatility.value,
+            "vrp": metrics.vrp.value,
+            "activity_intensity": metrics.activity.activity_intensity.value,
+        }
+
+    @staticmethod
+    def _strike_points(
+        observation: ChainObservation,
+        *,
+        as_of_date: date,
+        risk_free_rate: float,
+        dividend_yield: float,
+    ) -> list[dict[str, Any]]:
+        retained = retain_contracts_for_persistence(
+            observation.contracts,
+            spot_price=observation.source_spot_price,
+        )
+        time_years = (observation.expiration - as_of_date).days / 365
+        points: dict[float, dict[str, Any]] = {}
+        for contract in retained:
+            point = points.setdefault(contract.strike, {"strike": contract.strike})
+            prefix = "call" if contract.side.value == "call" else "put"
+            point[f"{prefix}_open_interest"] = contract.open_interest
+            point[f"{prefix}_volume"] = contract.volume
+            point[f"{prefix}_iv"] = contract.implied_volatility
+            estimated_gex = estimate_contract_gex(
+                contract,
+                spot=observation.source_spot_price,
+                time_years=time_years,
+                rate=risk_free_rate,
+                dividend_yield=dividend_yield,
+            )
+            point[f"estimated_{prefix}_gex"] = (
+                estimated_gex.value if estimated_gex.available else None
+            )
+        return [points[strike] for strike in sorted(points)]
+
+    @staticmethod
+    def _metric_evidence(metrics: ChainMetrics) -> dict[str, Any]:
+        values = {
+            "max_pain": metrics.max_pain,
+            "net_gex": metrics.net_gex,
+            "gamma_flip": metrics.gamma_flip,
+            "call_wall": metrics.call_wall,
+            "put_wall": metrics.put_wall,
+            "atm_iv": metrics.atm_iv,
+            "skew_25_delta": metrics.skew_25_delta,
+            "realized_volatility": metrics.realized_volatility,
+            "vrp": metrics.vrp,
+            "activity_intensity": metrics.activity.activity_intensity,
+            "volume_oi_ratio": metrics.activity.volume_oi_ratio,
+            "near_spot_volume_concentration": (
+                metrics.activity.near_spot_volume_concentration
+            ),
+        }
+        return {
+            name: {
+                "available": metric.available,
+                "label": metric.label,
+                "reason_codes": list(metric.reason_codes),
+                "evidence": dict(metric.evidence),
+            }
+            for name, metric in values.items()
+        }

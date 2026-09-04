@@ -37,6 +37,7 @@ def test_options_models_keep_sortable_metrics_typed_and_diagnostics_json() -> No
 
     for name in ("max_pain", "net_gex", "gamma_flip", "atm_iv", "vrp", "activity_intensity"):
         assert isinstance(columns[name].type, sa.Float)
+    assert isinstance(columns["activity_rank"].type, sa.Integer)
     for name in ("evidence_json", "assumptions_json", "warnings_json", "reasons_json"):
         assert isinstance(columns[name].type, sa.JSON)
 
@@ -65,4 +66,3 @@ def test_options_migration_extends_the_verified_single_head() -> None:
 
     assert migration.revision == "20260904_0034"
     assert migration.down_revision == "20260829_0033"
-

@@ -15,14 +15,10 @@ from app.domain.options_analytics.models import (
     NormalizedOptionContract,
     OptionSide,
 )
-
-
-class OptionsProviderError(RuntimeError):
-    """Base error for truthful provider failures."""
-
-
-class TransientOptionsProviderError(OptionsProviderError):
-    pass
+from app.domain.options_analytics.ports import (
+    OptionsProviderError,
+    TransientOptionsProviderError,
+)
 
 
 class ThrottledOptionsProviderError(TransientOptionsProviderError):
@@ -133,7 +129,7 @@ class YahooOptionsProvider:
                 source_spot_price=float(source_spot_price),
                 provider_spot_price=provider_spot,
                 fetched_at=self._clock().astimezone(timezone.utc),
-                contracts=tuple((*calls, *puts)),
+                contracts=(*calls, *puts),
             )
 
         return self._attempt(operation)
@@ -171,7 +167,7 @@ class YahooOptionsProvider:
                 return operation()
             except (OptionsSchemaError, OptionsUnavailableError):
                 raise
-            except Exception as exc:  # provider clients expose heterogeneous errors
+            except Exception as exc:  # noqa: BLE001 - provider clients vary
                 last_error = exc
         message = str(last_error or "Yahoo options request failed")
         if "429" in message or "too many requests" in message.lower():
@@ -215,4 +211,3 @@ class YahooOptionsProvider:
                 )
             )
         return tuple(contracts)
-
