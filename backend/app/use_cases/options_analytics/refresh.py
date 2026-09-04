@@ -152,15 +152,13 @@ class RefreshOptionsAnalyticsUseCase:
                 risk_free_rate=risk_free_rate,
                 assumptions={"risk_free_source": risk_free_source},
             )
-        results, cancelled = self._collect_analyses(
+        cancelled = self._analyze_and_persist(
             run.id,
             cohort,
             market=market,
             risk_free_rate=risk_free_rate,
             run_warnings=run_warnings,
         )
-        for analysis in results:
-            self._persist_analysis(run.id, analysis)
         if cancelled:
             return self._cancel_run(run.id)
         return self._finish_run(run.id, cohort)
@@ -178,7 +176,7 @@ class RefreshOptionsAnalyticsUseCase:
         except OptionsProviderError:
             return None, "unavailable", ("risk_free_rate_unavailable",)
 
-    def _collect_analyses(
+    def _analyze_and_persist(
         self,
         run_id: int,
         cohort: OptionsCohortSnapshot,
@@ -186,7 +184,7 @@ class RefreshOptionsAnalyticsUseCase:
         market: str,
         risk_free_rate: float | None,
         run_warnings: tuple[str, ...],
-    ) -> tuple[tuple[CandidateAnalysis, ...], bool]:
+    ) -> bool:
         by_symbol = {candidate.symbol: candidate for candidate in cohort.candidates}
         base_context = AnalysisContext(
             as_of_date=cohort.as_of_date,
@@ -217,14 +215,13 @@ class RefreshOptionsAnalyticsUseCase:
                 )
                 for symbol in incomplete_symbols
             }
-            results: list[CandidateAnalysis] = []
             for future in as_completed(futures):
-                results.append(future.result())
+                self._persist_analysis(run_id, future.result())
                 if self._cancellation.is_cancelled():
                     for pending in futures:
                         pending.cancel()
-                    return tuple(results), True
-            return tuple(results), False
+                    return True
+            return False
 
     def _persist_analysis(self, run_id: int, analysis: CandidateAnalysis) -> None:
         self._run_writer.save_analysis(run_id, analysis)

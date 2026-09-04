@@ -97,9 +97,6 @@ class SqlPublishedOptionsReader:
                 OptionsAnalyticsRun.market == market.strip().upper(),
                 OptionsAnalyticsRun.calculation_version == calculation_version,
                 OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
-                OptionsAnalyticsRunItem.observation_state
-                == ObservationState.AVAILABLE.value,
-                OptionsAnalyticsRunItem.core_valid.is_(True),
             )
             .order_by(
                 OptionsAnalyticsRun.as_of_date.asc(),
@@ -115,6 +112,11 @@ class SqlPublishedOptionsReader:
             if run.as_of_date in seen_sessions:
                 continue
             seen_sessions.add(run.as_of_date)
+            if (
+                item.observation_state != ObservationState.AVAILABLE.value
+                or not item.core_valid
+            ):
+                continue
             history.append(item)
         return tuple(history)
 

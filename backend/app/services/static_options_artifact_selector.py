@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +25,14 @@ def _validated(path: Path | None) -> tuple[Path, dict[str, Any]] | None:
         return None
 
 
-def _stale_order_key(artifact: tuple[Path, dict[str, Any]]) -> tuple[date, int]:
+def _stale_order_key(artifact: tuple[Path, dict[str, Any]]) -> tuple[date, datetime]:
     manifest = artifact[1]
+    generated_at = datetime.fromisoformat(manifest["generated_at"])
+    if generated_at.tzinfo is None:
+        generated_at = generated_at.replace(tzinfo=UTC)
     return (
         date.fromisoformat(manifest["source_as_of_date"]),
-        int(manifest["published_run_id"]),
+        generated_at.astimezone(UTC),
     )
 
 
@@ -104,7 +107,13 @@ class StaticOptionsArtifactSelector:
                 artifact for artifact in (fallback, current) if artifact is not None
             )
             selected = (
-                max(stale_candidates, key=_stale_order_key)
+                max(
+                    stale_candidates,
+                    key=lambda artifact: (
+                        *_stale_order_key(artifact),
+                        artifact is current,
+                    ),
+                )
                 if stale_candidates
                 else None
             )

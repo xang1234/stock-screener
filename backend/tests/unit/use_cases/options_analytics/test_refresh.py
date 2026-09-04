@@ -6,6 +6,8 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.models import (
     CandidateKind,
@@ -660,6 +662,25 @@ def test_cancellation_during_collection_persists_completed_work_then_cancels() -
     assert repo.failed_quality is None
     assert repo.cancelled is True
     assert result["status"] == "cancelled"
+
+
+def test_completed_symbol_is_persisted_before_later_worker_exception(monkeypatch) -> None:
+    repo = _Repository()
+    use_case = _use_case([_candidate("AAPL"), _candidate("MSFT")], repo=repo)
+    original_analyze = use_case._analyzer.analyze
+
+    def analyze(candidate, context):
+        if candidate.symbol == "MSFT":
+            raise RuntimeError("unexpected candidate failure")
+        return original_analyze(candidate, context)
+
+    monkeypatch.setattr(use_case._analyzer, "analyze", analyze)
+    use_case._max_workers = 1
+
+    with pytest.raises(RuntimeError, match="unexpected candidate failure"):
+        use_case.execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert tuple(repo.saved) == ("AAPL",)
 
 
 def test_resume_counts_previously_saved_items_toward_publication() -> None:

@@ -614,6 +614,40 @@ def test_history_keeps_only_newest_run_for_each_trading_session(session) -> None
     assert exported[0].atm_iv == 0.30
 
 
+def test_newest_invalid_same_session_item_supersedes_older_valid_history(session) -> None:
+    repo = _Repositories(session)
+    first = _start(repo, "first-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(first.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        first.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        metric_values={"atm_iv": 0.20},
+        core_valid=True,
+    )
+    repo.publish(first.id, _published_summary())
+
+    newest = _start(repo, "new-feature-run", as_of=date(2026, 9, 4))
+    repo.stage_candidates(newest.id, [_candidate("AAPL")])
+    repo.save_unavailable(
+        newest.id,
+        "AAPL",
+        reason_codes=("provider_unavailable",),
+    )
+    repo.publish(newest.id, _published_summary())
+    session.commit()
+
+    history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
+    analysis_history = repo.analysis_history(
+        "AAPL",
+        market="US",
+        calculation_version="v1",
+    )
+
+    assert history == ()
+    assert analysis_history == ()
+
+
 def test_history_export_keeps_only_the_newest_published_forced_attempt(session) -> None:
     repo = _Repositories(session)
     first = _start(repo, "same-input")
