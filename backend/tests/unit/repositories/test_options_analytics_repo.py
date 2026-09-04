@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -24,12 +25,122 @@ from app.infra.db.models.options_analytics import (
     OptionsAnalyticsRunItem,
     OptionsAnalyticsStrikePoint,
 )
-from app.infra.db.repositories.options_analytics_repo import (
-    SqlOptionsAnalyticsRepository,
+from app.infra.db.repositories.options_history_repository import (
+    SqlOptionsHistoryRepository,
+)
+from app.infra.db.repositories.options_retention import (
+    SqlOptionsRetentionRepository,
+)
+from app.infra.db.repositories.options_run_writer import SqlOptionsRunWriter
+from app.infra.db.repositories.published_options_reader import (
+    SqlPublishedOptionsReader,
 )
 from app.infra.db.uow import SqlUnitOfWork
+from app.use_cases.options_analytics.analysis_models import (
+    OptionsMetricValues,
+    OptionsStrikePoint,
+    UnavailableCandidateAnalysis,
+)
 
 from ..test_options_history_transfer import _observation as _transfer_observation
+
+
+class _Repositories(
+    SqlOptionsRunWriter,
+    SqlPublishedOptionsReader,
+    SqlOptionsHistoryRepository,
+    SqlOptionsRetentionRepository,
+):
+    """Test-only bundle retaining the old fixture's compact call style."""
+
+    def __init__(self, session) -> None:
+        self._session = session
+
+    def commit(self) -> None:
+        self._session.commit()
+
+    def save_item_result(
+        self,
+        run_id,
+        symbol,
+        *,
+        observation,
+        metric_values=None,
+        strike_points=(),
+        evidence=None,
+        assumptions=None,
+        warnings=(),
+        reason_codes=(),
+        retry_count=0,
+        history_readiness=None,
+        core_valid=None,
+    ):
+        metrics = {
+            "max_pain": None,
+            "net_gex": None,
+            "gamma_flip": None,
+            "call_wall": None,
+            "put_wall": None,
+            "atm_iv": None,
+            "skew_25_delta": None,
+            "realized_volatility": None,
+            "vrp": None,
+            "activity_intensity": None,
+            "call_open_interest": None,
+            "put_open_interest": None,
+            "call_volume": None,
+            "put_volume": None,
+            "volume_oi_ratio": None,
+            "near_spot_volume_concentration": None,
+        }
+        metrics.update(metric_values or {})
+        readiness = history_readiness or HistoryReadiness(
+            short_history_available=False,
+            iv_history_available=False,
+            short_observation_count=0,
+            iv_observation_count=0,
+            lifetime_observation_count=0,
+        )
+        existing = self._get_item(run_id, symbol)
+        analysis = SimpleNamespace(
+            candidate=_candidate(symbol),
+            observation=observation,
+            core_valid=existing.core_valid if core_valid is None else core_valid,
+            metric_values=OptionsMetricValues(**metrics),
+            strike_points=tuple(OptionsStrikePoint(**point) for point in strike_points),
+            evidence=dict(evidence or {}),
+            assumptions=dict(assumptions or {}),
+            warnings=tuple(warnings),
+            reason_codes=tuple(reason_codes),
+            retry_count=retry_count,
+            history_readiness=readiness,
+        )
+        self.save_analysis(run_id, analysis)
+        return self._get_item(run_id, symbol)
+
+    def save_unavailable(
+        self,
+        run_id,
+        symbol,
+        *,
+        reason_codes,
+        evidence=None,
+        assumptions=None,
+        warnings=(),
+        retry_count=0,
+    ):
+        self.save_analysis(
+            run_id,
+            UnavailableCandidateAnalysis(
+                candidate=_candidate(symbol),
+                reason_codes=tuple(reason_codes),
+                evidence=dict(evidence or {}),
+                assumptions=dict(assumptions or {}),
+                warnings=tuple(warnings),
+                retry_count=retry_count,
+            ),
+        )
+        return self._get_item(run_id, symbol)
 
 
 @pytest.fixture
@@ -130,7 +241,7 @@ def _published_summary() -> OptionsRunSummary:
 
 
 def test_start_reuses_signature_unless_forced_attempt_is_requested(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
 
     first = _start(repo)
     reused = _start(repo)
@@ -143,7 +254,7 @@ def test_start_reuses_signature_unless_forced_attempt_is_requested(session) -> N
 
 
 def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(run.id, [_candidate("AAPL"), _candidate("AAPL")])
 
@@ -175,7 +286,7 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
 
 
 def test_resume_returns_only_nonterminal_items(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(run.id, [_candidate("AAPL"), _candidate("MSFT"), _candidate("NVDA")])
     repo.save_item_result(run.id, "AAPL", observation=_observation("AAPL"))
@@ -190,7 +301,7 @@ def test_resume_returns_only_nonterminal_items(session) -> None:
 
 
 def test_activity_ranks_are_persisted_for_available_values_only(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(run.id, [_candidate("AAPL"), _candidate("MSFT")])
 
@@ -205,7 +316,7 @@ def test_activity_ranks_are_persisted_for_available_values_only(session) -> None
 
 
 def test_run_level_assumptions_are_persisted_once(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     run = _start(repo)
 
     repo.save_run_assumptions(
@@ -219,7 +330,7 @@ def test_run_level_assumptions_are_persisted_once(session) -> None:
 
 
 def test_latest_source_run_identity_is_market_scoped(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     session.add(FeatureRunPointer(key="latest_published_market:US", run_id=1))
     session.flush()
 
@@ -228,7 +339,7 @@ def test_latest_source_run_identity_is_market_scoped(session) -> None:
 
 
 def test_save_records_history_readiness_counts_without_filling_gaps(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(run.id, [_candidate("AAPL")])
 
@@ -253,7 +364,7 @@ def test_save_records_history_readiness_counts_without_filling_gaps(session) -> 
 
 
 def test_publish_advances_pointer_atomically_and_failed_quality_does_not(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     first = _start(repo, "first")
     repo.stage_candidates(first.id, [_candidate("AAPL")])
     repo.publish(first.id, _published_summary())
@@ -269,7 +380,7 @@ def test_publish_advances_pointer_atomically_and_failed_quality_does_not(session
 
 
 def test_published_symbol_detail_and_run_diagnostics_use_repository_state(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(run.id, [_candidate("AAPL")])
     repo.save_item_result(
@@ -291,7 +402,7 @@ def test_published_symbol_detail_and_run_diagnostics_use_repository_state(sessio
 
 
 def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     for index, (day, version, present) in enumerate(
         ((1, "v1", True), (2, "v1", False), (3, "v1", True), (4, "v2", True)),
         start=1,
@@ -319,7 +430,7 @@ def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) 
 
 
 def test_history_excludes_published_insufficient_quality_observations(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     run = _start(repo, "invalid-history")
     repo.stage_candidates(run.id, [_candidate("AAPL")])
     repo.save_item_result(
@@ -337,7 +448,7 @@ def test_history_excludes_published_insufficient_quality_observations(session) -
 
 
 def test_last_current_membership_ignores_later_continuity_only_rows(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     current_run = _start(repo, "current", as_of=date(2026, 9, 1))
     repo.stage_candidates(current_run.id, [_candidate("AAPL")])
     repo.save_item_result(
@@ -363,8 +474,8 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
     assert memberships["AAPL"].dividend_source == "zero_assumption"
 
 
-def test_rollback_removes_uncommitted_pointer_and_observation(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+def test_named_repository_operations_commit_complete_state_transitions(session) -> None:
+    repo = _Repositories(session)
     run = _start(repo)
     repo.stage_candidates(run.id, [_candidate("AAPL")])
     repo.save_item_result(run.id, "AAPL", observation=_observation("AAPL"))
@@ -372,13 +483,13 @@ def test_rollback_removes_uncommitted_pointer_and_observation(session) -> None:
 
     session.rollback()
 
-    assert session.query(OptionsAnalyticsRun).count() == 0
-    assert session.query(OptionsAnalyticsRunItem).count() == 0
-    assert session.query(OptionsAnalyticsPointer).count() == 0
+    assert session.query(OptionsAnalyticsRun).count() == 1
+    assert session.query(OptionsAnalyticsRunItem).count() == 1
+    assert session.query(OptionsAnalyticsPointer).count() == 1
 
 
 def test_retention_prunes_old_aggregates_and_keeps_only_30_runs_of_strikes(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     first_date = date(2026, 1, 5)
     for index in range(32):
         run = _start(
@@ -408,15 +519,18 @@ def test_retention_prunes_old_aggregates_and_keeps_only_30_runs_of_strikes(sessi
     assert session.query(OptionsAnalyticsStrikePoint).count() == 30
 
 
-def test_unit_of_work_exposes_options_repository(session) -> None:
+def test_unit_of_work_exposes_focused_options_repositories(session) -> None:
     factory = sessionmaker(bind=session.bind, expire_on_commit=False)
 
     with SqlUnitOfWork(factory) as uow:
-        assert isinstance(uow.options_analytics, SqlOptionsAnalyticsRepository)
+        assert isinstance(uow.options_run_writer, SqlOptionsRunWriter)
+        assert isinstance(uow.published_options, SqlPublishedOptionsReader)
+        assert isinstance(uow.options_history, SqlOptionsHistoryRepository)
+        assert isinstance(uow.options_retention, SqlOptionsRetentionRepository)
 
 
 def test_history_transfer_import_is_idempotent_and_never_moves_pointer(session) -> None:
-    repo = SqlOptionsAnalyticsRepository(session)
+    repo = _Repositories(session)
     local = _start(repo, "local-published")
     repo.stage_candidates(local.id, [_candidate("MSFT")])
     repo.save_item_result(local.id, "MSFT", observation=_observation("MSFT"))

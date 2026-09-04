@@ -17,8 +17,15 @@ from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreReposito
 from app.infra.db.repositories.opportunity_summary_repo import (
     SqlOpportunityStateSummaryRepository,
 )
-from app.infra.db.repositories.options_analytics_repo import (
-    SqlOptionsAnalyticsRepository,
+from app.infra.db.repositories.options_history_repository import (
+    SqlOptionsHistoryRepository,
+)
+from app.infra.db.repositories.options_retention import (
+    SqlOptionsRetentionRepository,
+)
+from app.infra.db.repositories.options_run_writer import SqlOptionsRunWriter
+from app.infra.db.repositories.published_options_reader import (
+    SqlPublishedOptionsReader,
 )
 from app.infra.db.repositories.scan_repo import SqlScanRepository
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
@@ -39,7 +46,10 @@ class SqlUnitOfWork(UnitOfWork):
         self.universe = SqlUniverseRepository(self.session)
         self.feature_runs = SqlFeatureRunRepository(self.session)
         self.feature_store = SqlFeatureStoreRepository(self.session)
-        self.options_analytics = SqlOptionsAnalyticsRepository(self.session)
+        self.options_run_writer = SqlOptionsRunWriter(self.session)
+        self.published_options = SqlPublishedOptionsReader(self.session)
+        self.options_history = SqlOptionsHistoryRepository(self.session)
+        self.options_retention = SqlOptionsRetentionRepository(self.session)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

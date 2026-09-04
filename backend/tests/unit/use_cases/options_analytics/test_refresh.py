@@ -139,6 +139,7 @@ class _Repository:
         self.unavailable = {}
         self.published = None
         self.failed_quality = None
+        self.cancelled = False
         self.prune_calls = 0
         self.persistence_threads = []
         self.activity_ranks = None
@@ -168,6 +169,28 @@ class _Repository:
     def save_unavailable(self, _run_id, symbol, **values):
         self.persistence_threads.append(threading.get_ident())
         self.unavailable[symbol] = values
+
+    def save_analysis(self, run_id, analysis):
+        values = {
+            "evidence": analysis.evidence,
+            "assumptions": analysis.assumptions,
+            "warnings": analysis.warnings,
+            "reason_codes": analysis.reason_codes,
+            "retry_count": analysis.retry_count,
+        }
+        if hasattr(analysis, "observation"):
+            self.save_item_result(
+                run_id,
+                analysis.candidate.symbol,
+                observation=analysis.observation,
+                core_valid=analysis.core_valid,
+                metric_values=analysis.metric_values,
+                strike_points=analysis.strike_points,
+                history_readiness=analysis.history_readiness,
+                **values,
+            )
+        else:
+            self.save_unavailable(run_id, analysis.candidate.symbol, **values)
 
     def items_for_run(self, _run_id):
         rows = []
@@ -219,6 +242,10 @@ class _Repository:
 
     def mark_failed_quality(self, _run_id, *, reason_codes):
         self.failed_quality = tuple(reason_codes)
+
+    def cancel(self, _run_id):
+        self.cancelled = True
+        self.run.status = "cancelled"
 
     def prune(self, **_kwargs):
         self.events.append("prune")
@@ -280,9 +307,12 @@ def _use_case(
     cancellation=None,
     continuity_inputs=None,
 ):
+    repositories = repo or _Repository()
     return RefreshOptionsAnalyticsUseCase(
         candidate_source=_Source(candidates, continuity_inputs),
-        repository=repo or _Repository(),
+        run_writer=repositories,
+        published_reader=repositories,
+        retention=repositories,
         provider=provider or _Provider(),
         calendar=_Calendar(),
         cancellation=cancellation or _Cancellation(),
@@ -321,7 +351,7 @@ def test_exactly_90_percent_current_coverage_publishes_and_prunes() -> None:
     assert repo.prune_calls == 1
     publish_index = repo.events.index("publish")
     prune_index = repo.events.index("prune")
-    assert "commit" in repo.events[publish_index + 1 : prune_index]
+    assert publish_index < prune_index
     assert "OLD" in repo.unavailable
     assert result["status"] == "published"
     assert result["coverage"] == 0.9
@@ -529,7 +559,7 @@ def test_fetches_at_most_two_concurrently_but_persists_on_caller_thread() -> Non
     assert repo.persistence_threads == [caller_thread, caller_thread, caller_thread]
 
 
-def test_resume_skips_successful_items_and_cancellation_leaves_staged_run() -> None:
+def test_resume_skips_successful_items_and_cancellation_persists_terminal_state() -> None:
     repo = _Repository()
     repo.staged = {"AAPL": _candidate("AAPL")}
     repo.saved = {"AAPL": {}}
@@ -545,8 +575,9 @@ def test_resume_skips_successful_items_and_cancellation_leaves_staged_run() -> N
     assert provider.fetch_counts == {}
     assert repo.published is None
     assert repo.failed_quality is None
+    assert repo.cancelled is True
+    assert repo.run.status == "cancelled"
     assert result["status"] == "cancelled"
-    assert repo.commit_count == 1
 
 
 def test_resume_counts_previously_saved_items_toward_publication() -> None:

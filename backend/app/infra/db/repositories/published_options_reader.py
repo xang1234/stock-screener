@@ -1,0 +1,138 @@
+"""Read-only SQL queries for published options analytics."""
+
+from __future__ import annotations
+
+from sqlalchemy.orm import Session, selectinload
+
+from app.domain.options_analytics.models import CandidateKind, ObservationState, OptionsRunStatus
+from app.domain.options_analytics.ports import LastCurrentMembership
+from app.infra.db.models.feature_store import FeatureRunPointer
+from app.infra.db.models.options_analytics import (
+    OptionsAnalyticsPointer,
+    OptionsAnalyticsRun,
+    OptionsAnalyticsRunItem,
+)
+
+
+class SqlPublishedOptionsReader:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_published_run(
+        self,
+        market: str,
+        calculation_version: str,
+    ) -> OptionsAnalyticsRun | None:
+        pointer = self._session.get(
+            OptionsAnalyticsPointer,
+            (market.strip().upper(), calculation_version),
+        )
+        if pointer is None:
+            return None
+        return (
+            self._session.query(OptionsAnalyticsRun)
+            .options(
+                selectinload(OptionsAnalyticsRun.items).selectinload(
+                    OptionsAnalyticsRunItem.strike_points
+                )
+            )
+            .filter(
+                OptionsAnalyticsRun.id == pointer.run_id,
+                OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
+            )
+            .one_or_none()
+        )
+
+    def get_published_symbol_detail(
+        self,
+        symbol: str,
+        market: str,
+        calculation_version: str,
+    ) -> OptionsAnalyticsRunItem | None:
+        run = self.get_published_run(market, calculation_version)
+        if run is None:
+            return None
+        canonical = symbol.strip().upper()
+        return next(
+            (
+                item
+                for item in run.items
+                if item.security_symbol == canonical
+                and item.candidate_kind == CandidateKind.CURRENT.value
+            ),
+            None,
+        )
+
+    def get_run_diagnostics(self, run_id: int) -> OptionsAnalyticsRun | None:
+        return self._session.get(OptionsAnalyticsRun, run_id)
+
+    def latest_source_feature_run_id(self, market: str) -> int | None:
+        pointer = self._session.get(
+            FeatureRunPointer,
+            f"latest_published_market:{market.strip().upper()}",
+        )
+        return pointer.run_id if pointer is not None else None
+
+    def symbol_history(
+        self,
+        symbol: str,
+        *,
+        market: str,
+        calculation_version: str,
+    ) -> tuple[OptionsAnalyticsRunItem, ...]:
+        return tuple(
+            self._session.query(OptionsAnalyticsRunItem)
+            .join(OptionsAnalyticsRun)
+            .options(selectinload(OptionsAnalyticsRunItem.run))
+            .filter(
+                OptionsAnalyticsRunItem.security_symbol == symbol.strip().upper(),
+                OptionsAnalyticsRun.market == market.strip().upper(),
+                OptionsAnalyticsRun.calculation_version == calculation_version,
+                OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
+                OptionsAnalyticsRunItem.observation_state
+                == ObservationState.AVAILABLE.value,
+                OptionsAnalyticsRunItem.core_valid.is_(True),
+            )
+            .order_by(
+                OptionsAnalyticsRun.as_of_date.asc(),
+                OptionsAnalyticsRun.id.asc(),
+            )
+            .all()
+        )
+
+    def last_current_memberships(
+        self,
+        market: str,
+        calculation_version: str,
+    ) -> dict[str, LastCurrentMembership]:
+        rows = (
+            self._session.query(OptionsAnalyticsRunItem, OptionsAnalyticsRun.as_of_date)
+            .join(OptionsAnalyticsRun)
+            .filter(
+                OptionsAnalyticsRun.market == market.strip().upper(),
+                OptionsAnalyticsRun.calculation_version == calculation_version,
+                OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
+                OptionsAnalyticsRunItem.candidate_kind == CandidateKind.CURRENT.value,
+            )
+            .order_by(
+                OptionsAnalyticsRun.as_of_date.desc(),
+                OptionsAnalyticsRun.id.desc(),
+            )
+            .all()
+        )
+        memberships: dict[str, LastCurrentMembership] = {}
+        for item, as_of_date in rows:
+            if item.security_symbol in memberships:
+                continue
+            ranks = [rank for rank in (item.candidate_rank, item.leader_rank) if rank]
+            memberships[item.security_symbol] = LastCurrentMembership(
+                symbol=item.security_symbol,
+                as_of_date=as_of_date,
+                prior_best_rank=min(ranks) if ranks else 10_000,
+                dividend_yield=(item.assumptions_json or {}).get("dividend_yield"),
+                dividend_source=(item.assumptions_json or {}).get("dividend_source"),
+            )
+        return memberships
+
+
+__all__ = ["SqlPublishedOptionsReader"]

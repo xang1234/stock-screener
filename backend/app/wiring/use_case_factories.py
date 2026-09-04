@@ -144,8 +144,12 @@ def get_refresh_options_analytics_use_case(
     cancellation: Any | None = None,
 ):
     from app.config import settings
-    from app.infra.db.repositories.options_analytics_repo import (
-        SqlOptionsAnalyticsRepository,
+    from app.infra.db.repositories.options_retention import (
+        SqlOptionsRetentionRepository,
+    )
+    from app.infra.db.repositories.options_run_writer import SqlOptionsRunWriter
+    from app.infra.db.repositories.published_options_reader import (
+        SqlPublishedOptionsReader,
     )
     from app.infra.providers.yahoo_options import YahooOptionsProvider
     from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
@@ -165,9 +169,13 @@ def get_refresh_options_analytics_use_case(
             "yfinance:options", min_interval_s=1.0 / requests_per_second
         ),
     )
+    run_writer = SqlOptionsRunWriter(session)
+    published_reader = SqlPublishedOptionsReader(session)
     return RefreshOptionsAnalyticsUseCase(
         candidate_source=SqlOptionsCandidateSource(session),
-        repository=SqlOptionsAnalyticsRepository(session),
+        run_writer=run_writer,
+        published_reader=published_reader,
+        retention=SqlOptionsRetentionRepository(session),
         provider=provider,
         calendar=calendar,
         cancellation=cancellation or NeverCancelledToken(),
@@ -178,8 +186,8 @@ def get_refresh_options_analytics_use_case(
 
 
 def get_options_analytics_queries(session: Session):
-    from app.infra.db.repositories.options_analytics_repo import (
-        SqlOptionsAnalyticsRepository,
+    from app.infra.db.repositories.published_options_reader import (
+        SqlPublishedOptionsReader,
     )
     from app.use_cases.options_analytics import (
         OPTIONS_ANALYTICS_CALCULATION_VERSION,
@@ -187,7 +195,7 @@ def get_options_analytics_queries(session: Session):
     )
 
     return OptionsAnalyticsQueries(
-        SqlOptionsAnalyticsRepository(session),
+        SqlPublishedOptionsReader(session),
         calculation_version=OPTIONS_ANALYTICS_CALCULATION_VERSION,
     )
 

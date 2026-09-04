@@ -28,10 +28,10 @@ from app.domain.options_analytics.quality import evaluate_publication
 from .analysis_models import (
     AnalysisContext,
     CandidateAnalysis,
-    UnavailableCandidateAnalysis,
 )
 from .candidate_analysis import OptionsCandidateAnalyzer
 from .cohort import OptionsCandidateCohortBuilder, OptionsCohortSnapshot
+from .ports import OptionsRetention, OptionsRunItemRecord, OptionsRunWriter, PublishedOptionsReader
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,9 @@ class RefreshOptionsAnalyticsUseCase:
         self,
         *,
         candidate_source: OptionsCandidateSource,
-        repository: Any,
+        run_writer: OptionsRunWriter,
+        published_reader: PublishedOptionsReader,
+        retention: OptionsRetention,
         provider: OptionsProvider,
         calendar: SessionCalendar,
         cancellation: CancellationToken,
@@ -63,7 +65,8 @@ class RefreshOptionsAnalyticsUseCase:
         schema_version: str,
         max_workers: int = 2,
     ) -> None:
-        self._repository = repository
+        self._run_writer = run_writer
+        self._retention = retention
         self._provider = provider
         self._calendar = calendar
         self._cancellation = cancellation
@@ -72,13 +75,13 @@ class RefreshOptionsAnalyticsUseCase:
         self._max_workers = min(max(int(max_workers), 1), 2)
         self._cohort_builder = OptionsCandidateCohortBuilder(
             candidate_source=candidate_source,
-            membership_reader=repository,
+            membership_reader=published_reader,
             calendar=calendar,
             calculation_version=calculation_version,
         )
         self._analyzer = OptionsCandidateAnalyzer(
             provider=provider,
-            history_reader=repository,
+            history_reader=published_reader,
             calendar=calendar,
             calculation_version=calculation_version,
         )
@@ -91,7 +94,7 @@ class RefreshOptionsAnalyticsUseCase:
             return {"status": "skipped", "reason_codes": ["market_unsupported"]}
 
         cohort = self._cohort_builder.build(command.source_run_id, market=market)
-        run = self._repository.start_or_reuse(
+        run = self._run_writer.start_or_reuse(
             market=market,
             source_feature_run_id=cohort.source_feature_run_id,
             calculation_version=self._calculation_version,
@@ -109,20 +112,19 @@ class RefreshOptionsAnalyticsUseCase:
         if run.status == OptionsRunStatus.PUBLISHED.value and not command.force:
             return self._existing_run_result(run)
 
-        self._repository.stage_candidates(run.id, cohort.candidates)
-        self._repository.commit()
+        self._run_writer.stage_candidates(run.id, cohort.candidates)
         if self._cancellation.is_cancelled():
+            self._run_writer.cancel(run.id)
             return {"run_id": run.id, "status": "cancelled", "coverage": 0.0}
 
         risk_free_rate, risk_free_source, run_warnings = self._resolve_risk_free(
             cohort
         )
-        self._repository.save_run_assumptions(
+        self._run_writer.save_run_assumptions(
             run.id,
             risk_free_rate=risk_free_rate,
             assumptions={"risk_free_source": risk_free_source},
         )
-        self._repository.commit()
         results = self._collect_analyses(
             run.id,
             cohort,
@@ -166,44 +168,19 @@ class RefreshOptionsAnalyticsUseCase:
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {
                 executor.submit(self._analyzer.analyze, by_symbol[symbol], context)
-                for symbol in self._repository.incomplete_symbols(run_id)
+                for symbol in self._run_writer.incomplete_symbols(run_id)
             }
             return tuple(future.result() for future in as_completed(futures))
 
     def _persist_analysis(self, run_id: int, analysis: CandidateAnalysis) -> None:
-        if isinstance(analysis, UnavailableCandidateAnalysis):
-            self._repository.save_unavailable(
-                run_id,
-                analysis.candidate.symbol,
-                reason_codes=analysis.reason_codes,
-                evidence=analysis.evidence,
-                assumptions=analysis.assumptions,
-                warnings=analysis.warnings,
-                retry_count=analysis.retry_count,
-            )
-        else:
-            self._repository.save_item_result(
-                run_id,
-                analysis.candidate.symbol,
-                observation=analysis.observation,
-                core_valid=analysis.core_valid,
-                metric_values=analysis.metric_values,
-                strike_points=analysis.strike_points,
-                evidence=analysis.evidence,
-                assumptions=analysis.assumptions,
-                reason_codes=analysis.reason_codes,
-                warnings=analysis.warnings,
-                retry_count=analysis.retry_count,
-                history_readiness=analysis.history_readiness,
-            )
-        self._repository.commit()
+        self._run_writer.save_analysis(run_id, analysis)
 
     def _finish_run(
         self,
         run_id: int,
         cohort: OptionsCohortSnapshot,
     ) -> dict[str, Any]:
-        items = self._repository.items_for_run(run_id)
+        items = self._run_writer.items_for_run(run_id)
         counts = self._counts(items)
         activity_values = {
             item.security_symbol: (
@@ -217,8 +194,7 @@ class RefreshOptionsAnalyticsUseCase:
             for item in items
             if item.candidate_kind == CandidateKind.CURRENT.value
         }
-        self._repository.save_activity_ranks(run_id, rank_activity(activity_values))
-        self._repository.commit()
+        self._run_writer.save_activity_ranks(run_id, rank_activity(activity_values))
 
         decision = evaluate_publication(
             cohort.current,
@@ -240,17 +216,14 @@ class RefreshOptionsAnalyticsUseCase:
             reason_codes=decision.reason_codes,
         )
         if decision.publish:
-            self._repository.publish(run_id, summary)
-            self._repository.commit()
+            self._run_writer.publish(run_id, summary)
             sessions = self._calendar.sessions_ending_on(cohort.as_of_date, 252)
-            self._repository.prune(aggregate_before=sessions[0])
-            self._repository.commit()
+            self._retention.prune(aggregate_before=sessions[0])
         else:
-            self._repository.mark_failed_quality(
+            self._run_writer.mark_failed_quality(
                 run_id,
                 reason_codes=decision.reason_codes,
             )
-            self._repository.commit()
         return {
             "run_id": run_id,
             "source_run_id": cohort.source_feature_run_id,
@@ -265,7 +238,7 @@ class RefreshOptionsAnalyticsUseCase:
         }
 
     @staticmethod
-    def _counts(items: tuple[object, ...]) -> _RunCounts:
+    def _counts(items: Sequence[OptionsRunItemRecord]) -> _RunCounts:
         terminal = {
             ObservationState.AVAILABLE.value,
             ObservationState.UNAVAILABLE.value,

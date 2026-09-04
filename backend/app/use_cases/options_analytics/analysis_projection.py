@@ -16,6 +16,7 @@ from app.domain.options_analytics.models import (
     OptionCandidate,
     OptionSide,
 )
+from .analysis_models import OptionsMetricValues, OptionsStrikePoint
 
 
 def dividend_assumption(candidate: OptionCandidate) -> tuple[float, str, str | None]:
@@ -30,7 +31,7 @@ def dividend_assumption(candidate: OptionCandidate) -> tuple[float, str, str | N
 def metric_values(
     metrics: ChainMetrics,
     observation: ChainObservation,
-) -> dict[str, float | int | None]:
+) -> OptionsMetricValues:
     def total(side: OptionSide, field: str) -> int:
         return sum(
             int(value)
@@ -40,26 +41,26 @@ def metric_values(
             and value >= 0
         )
 
-    return {
-        "max_pain": metrics.max_pain.value,
-        "net_gex": metrics.net_gex.value,
-        "gamma_flip": metrics.gamma_flip.value,
-        "call_wall": metrics.call_wall.value,
-        "put_wall": metrics.put_wall.value,
-        "atm_iv": metrics.atm_iv.value,
-        "skew_25_delta": metrics.skew_25_delta.value,
-        "realized_volatility": metrics.realized_volatility.value,
-        "vrp": metrics.vrp.value,
-        "activity_intensity": metrics.activity.activity_intensity.value,
-        "call_open_interest": total(OptionSide.CALL, "open_interest"),
-        "put_open_interest": total(OptionSide.PUT, "open_interest"),
-        "call_volume": total(OptionSide.CALL, "volume"),
-        "put_volume": total(OptionSide.PUT, "volume"),
-        "volume_oi_ratio": metrics.activity.volume_oi_ratio.value,
-        "near_spot_volume_concentration": (
+    return OptionsMetricValues(
+        max_pain=metrics.max_pain.value,
+        net_gex=metrics.net_gex.value,
+        gamma_flip=metrics.gamma_flip.value,
+        call_wall=metrics.call_wall.value,
+        put_wall=metrics.put_wall.value,
+        atm_iv=metrics.atm_iv.value,
+        skew_25_delta=metrics.skew_25_delta.value,
+        realized_volatility=metrics.realized_volatility.value,
+        vrp=metrics.vrp.value,
+        activity_intensity=metrics.activity.activity_intensity.value,
+        call_open_interest=total(OptionSide.CALL, "open_interest"),
+        put_open_interest=total(OptionSide.PUT, "open_interest"),
+        call_volume=total(OptionSide.CALL, "volume"),
+        put_volume=total(OptionSide.PUT, "volume"),
+        volume_oi_ratio=metrics.activity.volume_oi_ratio.value,
+        near_spot_volume_concentration=(
             metrics.activity.near_spot_volume_concentration.value
         ),
-    }
+    )
 
 
 def strike_points(
@@ -68,7 +69,7 @@ def strike_points(
     as_of_date: date,
     risk_free_rate: float | None,
     dividend_yield: float,
-) -> tuple[dict[str, Any], ...]:
+) -> tuple[OptionsStrikePoint, ...]:
     retained = retain_contracts_for_persistence(
         observation.contracts,
         spot_price=observation.source_spot_price,
@@ -96,7 +97,7 @@ def strike_points(
             )
         )
         point[f"estimated_{prefix}_gex"] = gex.value if gex.available else None
-    return tuple(points[strike] for strike in sorted(points))
+    return tuple(OptionsStrikePoint(**points[strike]) for strike in sorted(points))
 
 
 def metric_evidence(

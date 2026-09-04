@@ -12,8 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from app.database import SessionLocal
-from app.infra.db.repositories.options_analytics_repo import (
-    SqlOptionsAnalyticsRepository,
+from app.infra.db.repositories.options_history_repository import (
+    SqlOptionsHistoryRepository,
+)
+from app.infra.db.repositories.published_options_reader import (
+    SqlPublishedOptionsReader,
 )
 from app.scripts._runtime import prepare_runtime
 from app.services.options_history_transfer import OptionsHistoryTransfer
@@ -51,7 +54,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare_runtime()
     with SessionLocal() as db:
         bundle = OptionsHistoryTransfer(
-            SqlOptionsAnalyticsRepository(db)
+            SqlOptionsHistoryRepository(db),
+            published_reader=SqlPublishedOptionsReader(db),
         ).export_bundle(required_published_run_id=args.require_run_id)
     write_history_bundle(args.output, bundle)
     print(json.dumps({"status": "exported", "output": str(args.output)}))

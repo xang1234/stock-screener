@@ -3,27 +3,40 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from app.use_cases.options_analytics.ports import (
+    OptionsRunItemRecord,
+    OptionsRunRecord,
+    PublishedOptionsReader,
+)
 
 
 @dataclass(frozen=True)
 class PublishedOptionsSymbolDetail:
-    run: Any
-    item: Any
-    history: tuple[Any, ...]
+    run: OptionsRunRecord
+    item: OptionsRunItemRecord
+    history: tuple[OptionsRunItemRecord, ...]
 
 
 class OptionsAnalyticsQueries:
-    def __init__(self, repository: Any, *, calculation_version: str) -> None:
+    def __init__(
+        self,
+        repository: PublishedOptionsReader,
+        *,
+        calculation_version: str,
+    ) -> None:
         self._repository = repository
         self._calculation_version = calculation_version
 
-    def get_published_command_center(self, market: str) -> Any:
+    def get_published_command_center(self, market: str) -> OptionsRunRecord | None:
         return self._repository.get_published_run(
             market.strip().upper(), self._calculation_version
         )
 
-    def get_published_symbol_detail(self, symbol: str, market: str) -> Any:
+    def get_published_symbol_detail(
+        self,
+        symbol: str,
+        market: str,
+    ) -> PublishedOptionsSymbolDetail | None:
         canonical_symbol = symbol.strip().upper()
         canonical_market = market.strip().upper()
         item = self._repository.get_published_symbol_detail(
@@ -43,10 +56,10 @@ class OptionsAnalyticsQueries:
             ),
         )
 
-    def get_run_diagnostics(self, run_id: int) -> Any:
+    def get_run_diagnostics(self, run_id: int) -> OptionsRunRecord | None:
         return self._repository.get_run_diagnostics(run_id)
 
-    def is_stale(self, run: Any, market: str) -> bool:
+    def is_stale(self, run: OptionsRunRecord, market: str) -> bool:
         latest_source_run_id = self._repository.latest_source_feature_run_id(
             market.strip().upper()
         )

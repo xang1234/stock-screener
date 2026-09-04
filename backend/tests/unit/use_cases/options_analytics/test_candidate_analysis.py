@@ -8,6 +8,10 @@ from app.use_cases.options_analytics.candidate_analysis import (
     OptionsCandidateAnalyzer,
     UnavailableCandidateAnalysis,
 )
+from app.use_cases.options_analytics.analysis_models import (
+    OptionsMetricValues,
+    OptionsStrikePoint,
+)
 
 
 class Calendar:
@@ -64,3 +68,13 @@ def test_missing_spot_returns_a_distinct_unavailable_result_without_provider_io(
         "dividend_source": "zero_assumption",
     }
     assert provider.calls == 0
+
+
+def test_persistence_projection_has_closed_metric_and_strike_fields() -> None:
+    metrics = OptionsMetricValues(atm_iv=0.25, call_volume=120)
+    point = OptionsStrikePoint(strike=100, call_open_interest=200)
+
+    assert metrics.atm_iv == 0.25
+    assert metrics["call_volume"] == 120
+    assert point.call_open_interest == 200
+    assert point["strike"] == 100

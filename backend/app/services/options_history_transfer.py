@@ -63,10 +63,12 @@ class OptionsHistoryTransfer:
         self,
         repository: Any,
         *,
+        published_reader: Any | None = None,
         market: str = "US",
         calculation_version: str = OPTIONS_ANALYTICS_CALCULATION_VERSION,
     ) -> None:
         self._repository = repository
+        self._published_reader = published_reader or repository
         self._market = market.strip().upper()
         self._calculation_version = calculation_version
 
@@ -77,7 +79,7 @@ class OptionsHistoryTransfer:
         required_published_run_id: int | None = None,
     ) -> dict[str, Any]:
         if required_published_run_id is not None:
-            published = self._repository.get_published_run(
+            published = self._published_reader.get_published_run(
                 self._market,
                 self._calculation_version,
             )

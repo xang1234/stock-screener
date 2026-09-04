@@ -15,6 +15,48 @@ from app.domain.options_analytics.models import (
 
 
 @dataclass(frozen=True)
+class OptionsMetricValues:
+    max_pain: float | None = None
+    net_gex: float | None = None
+    gamma_flip: float | None = None
+    call_wall: float | None = None
+    put_wall: float | None = None
+    atm_iv: float | None = None
+    skew_25_delta: float | None = None
+    realized_volatility: float | None = None
+    vrp: float | None = None
+    activity_intensity: float | None = None
+    call_open_interest: int | None = None
+    put_open_interest: int | None = None
+    call_volume: int | None = None
+    put_volume: int | None = None
+    volume_oi_ratio: float | None = None
+    near_spot_volume_concentration: float | None = None
+
+    def __getitem__(self, name: str) -> float | int | None:
+        return getattr(self, name)
+
+    def get(self, name: str, default=None):
+        return getattr(self, name, default)
+
+
+@dataclass(frozen=True)
+class OptionsStrikePoint:
+    strike: float
+    call_open_interest: int | None = None
+    put_open_interest: int | None = None
+    call_volume: int | None = None
+    put_volume: int | None = None
+    call_iv: float | None = None
+    put_iv: float | None = None
+    estimated_call_gex: float | None = None
+    estimated_put_gex: float | None = None
+
+    def __getitem__(self, name: str) -> float | int | None:
+        return getattr(self, name)
+
+
+@dataclass(frozen=True)
 class AnalysisContext:
     as_of_date: date
     market: str
@@ -38,8 +80,8 @@ class AvailableCandidateAnalysis:
     observation: ChainObservation
     metrics: ChainMetrics
     core_valid: bool
-    metric_values: dict[str, float | int | None]
-    strike_points: tuple[dict[str, Any], ...]
+    metric_values: OptionsMetricValues
+    strike_points: tuple[OptionsStrikePoint, ...]
     evidence: dict[str, Any]
     assumptions: dict[str, Any]
     reason_codes: tuple[str, ...]
@@ -55,5 +97,7 @@ __all__ = [
     "AnalysisContext",
     "AvailableCandidateAnalysis",
     "CandidateAnalysis",
+    "OptionsMetricValues",
+    "OptionsStrikePoint",
     "UnavailableCandidateAnalysis",
 ]

@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from app.database import SessionLocal
-from app.infra.db.repositories.options_analytics_repo import (
-    SqlOptionsAnalyticsRepository,
+from app.infra.db.repositories.options_history_repository import (
+    SqlOptionsHistoryRepository,
 )
 from app.scripts._runtime import prepare_runtime
 from app.services.options_history_transfer import OptionsHistoryTransfer
@@ -46,9 +46,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare_runtime()
     with SessionLocal() as db:
         result = OptionsHistoryTransfer(
-            SqlOptionsAnalyticsRepository(db)
+            SqlOptionsHistoryRepository(db)
         ).import_bundle(payload)
-        db.commit()
     print(json.dumps({"status": "imported", **result}, default=str))
     return 0
 
