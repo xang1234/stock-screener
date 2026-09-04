@@ -1,0 +1,28 @@
+{
+  "calls": [
+    {
+      "strike": 100.0,
+      "bid": 4.1,
+      "ask": 4.3,
+      "lastPrice": 4.2,
+      "volume": 0,
+      "openInterest": 1250,
+      "impliedVolatility": 0.285,
+      "lastTradeDate": "2026-09-03T19:45:00Z",
+      "contractSize": "REGULAR"
+    }
+  ],
+  "puts": [
+    {
+      "strike": 100.0,
+      "bid": 3.8,
+      "ask": 4.0,
+      "lastPrice": 3.9,
+      "volume": 420,
+      "openInterest": 980,
+      "impliedVolatility": 0.305,
+      "lastTradeDate": "2026-09-03T19:44:00-04:00",
+      "contractSize": "MINI"
+    }
+  ]
+}
