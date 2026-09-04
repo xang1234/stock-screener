@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
@@ -25,28 +25,6 @@ if TYPE_CHECKING:
     from app.use_cases.scanning.get_setup_details import GetSetupDetailsUseCase
     from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
     from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
-
-
-class _NeverCancelled:
-    def is_cancelled(self) -> bool:
-        return False
-
-
-class _UsOptionsSessionCalendar:
-    def __init__(self, calendar_service: Any) -> None:
-        self._calendar_service = calendar_service
-
-    def is_session(self, value: date) -> bool:
-        return self._calendar_service.is_trading_day("US", value)
-
-    def sessions_ending_on(self, value: date, count: int) -> tuple[date, ...]:
-        start = value - timedelta(days=count * 3 + 30)
-        sessions = self._calendar_service.trading_days("US", start, value)
-        if len(sessions) < count:
-            raise ValueError(
-                f"Only {len(sessions)} US sessions available; {count} required"
-            )
-        return tuple(sessions[-count:])
 
 
 def get_create_scan_use_case() -> CreateScanUseCase:
@@ -172,6 +150,8 @@ def get_refresh_options_analytics_use_case(
     )
     from app.infra.providers.yahoo_options import YahooOptionsProvider
     from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
+    from app.domain.scanning.ports import NeverCancelledToken
+    from app.services.market_session_lag import MarketSessionWindow
     from app.use_cases.options_analytics import (
         OPTIONS_ANALYTICS_CALCULATION_VERSION,
         OPTIONS_ANALYTICS_SCHEMA_VERSION,
@@ -179,7 +159,7 @@ def get_refresh_options_analytics_use_case(
     )
 
     runtime = resolve_runtime_services()
-    calendar = _UsOptionsSessionCalendar(runtime.market_calendar_service())
+    calendar = MarketSessionWindow(runtime.market_calendar_service(), market="US")
     requests_per_second = max(float(settings.yfinance_rate_limit), 0.01)
     provider = YahooOptionsProvider(
         rate_limiter=lambda: runtime.rate_limiter().wait(
@@ -194,7 +174,7 @@ def get_refresh_options_analytics_use_case(
         provider=provider,
         calendar=calendar,
         clock=lambda: datetime.now(timezone.utc),
-        cancellation=cancellation or _NeverCancelled(),
+        cancellation=cancellation or NeverCancelledToken(),
         calculation_version=OPTIONS_ANALYTICS_CALCULATION_VERSION,
         schema_version=OPTIONS_ANALYTICS_SCHEMA_VERSION,
         max_workers=2,

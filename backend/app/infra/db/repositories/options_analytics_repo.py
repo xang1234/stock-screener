@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -19,6 +18,7 @@ from app.domain.options_analytics.models import (
     OptionsRunStatus,
     OptionsRunSummary,
 )
+from app.domain.options_analytics.ports import LastCurrentMembership
 from app.infra.db.models.feature_store import FeatureRunPointer
 from app.infra.db.models.options_analytics import (
     OptionsAnalyticsPointer,
@@ -72,15 +72,6 @@ _TRANSFER_ITEM_COLUMNS = (
     "lifetime_observation_count",
     "retry_count",
 )
-
-
-@dataclass(frozen=True)
-class LastCurrentMembership:
-    symbol: str
-    as_of_date: date
-    prior_best_rank: int
-    dividend_yield: float | None
-    dividend_source: str | None
 
 
 class SqlOptionsAnalyticsRepository:

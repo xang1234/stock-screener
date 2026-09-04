@@ -15,6 +15,25 @@ class CandidateKind(str, Enum):
     CONTINUITY = "continuity"
 
 
+class DividendSource(str, Enum):
+    PINNED_FEATURE_RUN = "pinned_feature_run"
+    ZERO_ASSUMPTION = "zero_assumption"
+
+
+def _normalize_dividend(
+    value: float | None,
+    source: DividendSource | str | None,
+) -> tuple[float | None, DividendSource | None]:
+    normalized_source = DividendSource(source) if source is not None else None
+    if normalized_source is DividendSource.ZERO_ASSUMPTION:
+        return 0.0, normalized_source
+    if normalized_source is DividendSource.PINNED_FEATURE_RUN and (
+        value is None or not math.isfinite(float(value)) or float(value) < 0
+    ):
+        raise ValueError("Pinned dividend source requires a finite non-negative value")
+    return value, normalized_source
+
+
 class OptionSide(str, Enum):
     CALL = "call"
     PUT = "put"
@@ -43,7 +62,7 @@ class OptionCandidateInput:
     spot_price: float | None
     dividend_yield: float | None = None
     price_closes: tuple[float, ...] = ()
-    dividend_source: str | None = None
+    dividend_source: DividendSource | None = None
 
     def __post_init__(self) -> None:
         symbol = self.symbol.strip().upper()
@@ -51,6 +70,12 @@ class OptionCandidateInput:
             raise ValueError("Candidate symbol is required")
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "price_closes", tuple(self.price_closes))
+        dividend_yield, dividend_source = _normalize_dividend(
+            self.dividend_yield,
+            self.dividend_source,
+        )
+        object.__setattr__(self, "dividend_yield", dividend_yield)
+        object.__setattr__(self, "dividend_source", dividend_source)
 
 
 @dataclass(frozen=True)
@@ -62,11 +87,24 @@ class OptionCandidate:
     spot_price: float | None
     dividend_yield: float | None = None
     price_closes: tuple[float, ...] = ()
-    dividend_source: str | None = None
+    dividend_source: DividendSource | None = None
     candidate_rank: int | None = None
     leader_rank: int | None = None
     sessions_since_current: int = 0
     prior_best_rank: int | None = None
+
+    def __post_init__(self) -> None:
+        symbol = self.symbol.strip().upper()
+        if not symbol:
+            raise ValueError("Candidate symbol is required")
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "price_closes", tuple(self.price_closes))
+        dividend_yield, dividend_source = _normalize_dividend(
+            self.dividend_yield,
+            self.dividend_source,
+        )
+        object.__setattr__(self, "dividend_yield", dividend_yield)
+        object.__setattr__(self, "dividend_source", dividend_source)
 
     @property
     def is_candidate(self) -> bool:

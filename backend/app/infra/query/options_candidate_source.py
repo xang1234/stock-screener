@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -10,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain.options_analytics.models import OptionCandidate, OptionCandidateInput
+from app.domain.options_analytics.ports import CandidateSourceSnapshot
 from app.domain.options_analytics.selection import select_current_candidates
 from app.domain.scanning.leadership_policy import (
     LEADERS_MAX_GROUP_RANK,
@@ -17,15 +17,6 @@ from app.domain.scanning.leadership_policy import (
 )
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.stock import StockPrice
-
-
-@dataclass(frozen=True)
-class CandidateSourceSnapshot:
-    source_feature_run_id: int
-    as_of_date: date
-    top_candidate_inputs: tuple[OptionCandidateInput, ...]
-    leader_inputs: tuple[OptionCandidateInput, ...]
-    current_candidates: tuple[OptionCandidate, ...]
 
 
 def _details(value: Any) -> dict[str, Any]:
