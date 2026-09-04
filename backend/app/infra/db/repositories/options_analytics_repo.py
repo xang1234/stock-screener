@@ -18,6 +18,7 @@ from app.domain.options_analytics.models import (
     OptionsRunStatus,
     OptionsRunSummary,
 )
+from app.infra.db.models.feature_store import FeatureRunPointer
 from app.infra.db.models.options_analytics import (
     OptionsAnalyticsPointer,
     OptionsAnalyticsRun,
@@ -329,12 +330,24 @@ class SqlOptionsAnalyticsRepository:
             return None
         canonical = symbol.strip().upper()
         return next(
-            (item for item in run.items if item.security_symbol == canonical),
+            (
+                item
+                for item in run.items
+                if item.security_symbol == canonical
+                and item.candidate_kind == CandidateKind.CURRENT.value
+            ),
             None,
         )
 
     def get_run_diagnostics(self, run_id: int) -> OptionsAnalyticsRun | None:
         return self._session.get(OptionsAnalyticsRun, run_id)
+
+    def latest_source_feature_run_id(self, market: str) -> int | None:
+        pointer = self._session.get(
+            FeatureRunPointer,
+            f"latest_published_market:{market.strip().upper()}",
+        )
+        return pointer.run_id if pointer is not None else None
 
     def symbol_history(
         self, symbol: str, *, market: str, calculation_version: str

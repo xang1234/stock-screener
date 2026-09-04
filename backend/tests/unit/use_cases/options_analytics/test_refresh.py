@@ -407,6 +407,23 @@ def test_missing_source_spot_is_unavailable_without_calling_provider() -> None:
     )
 
 
+def test_successful_but_thin_chain_is_saved_as_insufficient_core_quality() -> None:
+    class ThinProvider(_Provider):
+        def fetch_chain(self, symbol, _expiration, *, source_spot_price):
+            full = _observation(symbol)
+            return replace(full, contracts=full.contracts[:2])
+
+    repo = _Repository()
+
+    result = _use_case(
+        [_candidate("AAPL")], repo=repo, provider=ThinProvider()
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert result["status"] == "failed_quality"
+    assert repo.saved["AAPL"]["core_valid"] is False
+    assert "insufficient_core_quality" in repo.saved["AAPL"]["reason_codes"]
+
+
 def test_fetches_at_most_two_concurrently_but_persists_on_caller_thread() -> None:
     provider = _Provider(delay=0.02)
     repo = _Repository()

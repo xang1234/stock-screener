@@ -18,7 +18,7 @@ from app.domain.options_analytics.models import (
     OptionsRunStatus,
     OptionsRunSummary,
 )
-from app.infra.db.models.feature_store import FeatureRun
+from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.models.options_analytics import (
     OptionsAnalyticsPointer,
     OptionsAnalyticsRun,
@@ -41,6 +41,7 @@ def session():
         engine,
         tables=[
             FeatureRun.__table__,
+            FeatureRunPointer.__table__,
             OptionsAnalyticsRun.__table__,
             OptionsAnalyticsRunItem.__table__,
             OptionsAnalyticsStrikePoint.__table__,
@@ -212,6 +213,15 @@ def test_run_level_assumptions_are_persisted_once(session) -> None:
 
     assert run.risk_free_rate == 0.041
     assert run.assumptions_json == {"risk_free_source": "Yahoo ^IRX close"}
+
+
+def test_latest_source_run_identity_is_market_scoped(session) -> None:
+    repo = SqlOptionsAnalyticsRepository(session)
+    session.add(FeatureRunPointer(key="latest_published_market:US", run_id=1))
+    session.flush()
+
+    assert repo.latest_source_feature_run_id("US") == 1
+    assert repo.latest_source_feature_run_id("HK") is None
 
 
 def test_save_records_history_readiness_counts_without_filling_gaps(session) -> None:

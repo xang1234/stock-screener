@@ -46,6 +46,11 @@ _include("strategy_profiles", prefix="/strategy-profiles", tags=["strategy-profi
 _include("ticker_validation", prefix="/ticker-validation", tags=["ticker-validation"])
 _include("filter_presets", prefix="/filter-presets", tags=["filter-presets"])
 _include("features", prefix="/features", tags=["features"])
+_include(
+    "options_analytics",
+    prefix="/options-analytics",
+    tags=["options-analytics"],
+)
 
 _include("cache", tags=["cache"])
 _include("fundamentals", tags=["fundamentals"])

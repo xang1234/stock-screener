@@ -212,6 +212,9 @@ class RefreshOptionsAnalyticsUseCase:
                 self._calendar.sessions_ending_on(source.as_of_date, 30),
                 calculation_version=self._calculation_version,
             )
+            item_reason_codes = list(readiness.reason_codes)
+            if not result.core_valid:
+                item_reason_codes.append("insufficient_core_quality")
             self._repository.save_item_result(
                 run.id,
                 candidate.symbol,
@@ -231,7 +234,7 @@ class RefreshOptionsAnalyticsUseCase:
                     "risk_free_rate": risk_free_rate,
                     "dividend_yield": candidate.dividend_yield or 0.0,
                 },
-                reason_codes=readiness.reason_codes,
+                reason_codes=tuple(item_reason_codes),
                 retry_count=result.retry_count,
                 history_readiness=readiness,
             )
