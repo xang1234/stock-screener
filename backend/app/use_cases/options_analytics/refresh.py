@@ -204,8 +204,8 @@ class RefreshOptionsAnalyticsUseCase:
         for result in results:
             candidate = result.candidate
             if result.observation is None or result.metrics is None:
-                dividend_yield, dividend_source, _ = self._dividend_assumption(
-                    candidate
+                dividend_yield, dividend_source, dividend_warning = (
+                    self._dividend_assumption(candidate)
                 )
                 self._repository.save_unavailable(
                     run.id,
@@ -218,6 +218,7 @@ class RefreshOptionsAnalyticsUseCase:
                         "dividend_yield": dividend_yield,
                         "dividend_source": dividend_source,
                     },
+                    warnings=((dividend_warning,) if dividend_warning else ()),
                     retry_count=result.retry_count,
                 )
                 self._repository.commit()
@@ -635,6 +636,13 @@ class RefreshOptionsAnalyticsUseCase:
         ]
         latest_trade = max(trade_times) if trade_times else None
         total = len(contracts)
+        provider_spot = observation.provider_spot_price
+        if (
+            provider_spot is None
+            or not math.isfinite(float(provider_spot))
+            or provider_spot <= 0
+        ):
+            provider_spot = None
 
         def coverage(predicate: Any) -> float:
             if total == 0:
@@ -643,7 +651,8 @@ class RefreshOptionsAnalyticsUseCase:
 
         evidence: dict[str, Any] = {
             "source_spot_price": observation.source_spot_price,
-            "provider_spot_price": observation.provider_spot_price,
+            "provider_spot_price": provider_spot,
+            "spot_disagreement_ratio": None,
             "latest_contract_trade_at": (
                 latest_trade.isoformat() if latest_trade is not None else None
             ),
@@ -683,13 +692,11 @@ class RefreshOptionsAnalyticsUseCase:
             ),
         }
         if (
-            observation.provider_spot_price is not None
-            and math.isfinite(float(observation.provider_spot_price))
+            provider_spot is not None
             and observation.source_spot_price > 0
         ):
             evidence["spot_disagreement_ratio"] = abs(
-                float(observation.provider_spot_price)
-                - observation.source_spot_price
+                float(provider_spot) - observation.source_spot_price
             ) / observation.source_spot_price
         return evidence
 

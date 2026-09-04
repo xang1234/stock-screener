@@ -669,6 +669,18 @@ def test_quality_evidence_keeps_provider_spot_and_stale_trade_warning() -> None:
     }
 
 
+def test_quality_evidence_keeps_explicit_null_when_provider_spot_is_missing() -> None:
+    repo = _Repository()
+
+    _use_case([_candidate("AAPL")], repo=repo).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
+
+    quality = repo.saved["AAPL"]["evidence"]["quality"]
+    assert quality["provider_spot_price"] is None
+    assert quality["spot_disagreement_ratio"] is None
+
+
 def test_missing_or_invalid_dividend_uses_disclosed_zero_assumption() -> None:
     repo = _Repository()
 
@@ -681,6 +693,23 @@ def test_missing_or_invalid_dividend_uses_disclosed_zero_assumption() -> None:
     assert saved["assumptions"]["dividend_yield"] == 0.0
     assert saved["assumptions"]["dividend_source"] == "zero_assumption"
     assert "zero_dividend_assumption" in saved["warnings"]
+
+
+def test_unavailable_row_keeps_zero_dividend_warning() -> None:
+    repo = _Repository()
+    candidate = replace(
+        _candidate("AAPL"),
+        spot_price=None,
+        dividend_yield=float("nan"),
+    )
+
+    _use_case([candidate], repo=repo).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
+
+    assert repo.unavailable["AAPL"]["warnings"] == (
+        "zero_dividend_assumption",
+    )
 
 
 def test_repeated_delivery_of_published_run_returns_without_mutation() -> None:

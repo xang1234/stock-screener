@@ -45,7 +45,7 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
                 details_json={
                     "current_price": 100 + index,
                     "avg_dollar_volume": 200_000_000,
-                    "dividend_yield": 0.01,
+                    "dividend_yield": 1.0,
                     "rs_rating": 70,
                     "ibd_group_rank": 80,
                 },
@@ -63,7 +63,7 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
                 details_json={
                     "current_price": 50 + index,
                     "avg_dollar_volume": 200_000_000,
-                    "dividend_yield": 0.02,
+                    "dividend_yield": 2.0,
                     "rs_rating": 90,
                     "ibd_group_rank": 10,
                 },

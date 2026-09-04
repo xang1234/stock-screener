@@ -39,6 +39,11 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _percentage_points_to_decimal(value: Any) -> float | None:
+    number = _number(value)
+    return None if number is None else number / 100.0
+
+
 class SqlOptionsCandidateSource:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -66,7 +71,9 @@ class SqlOptionsCandidateSource:
                 composite_score=_number(feature.composite_score),
                 daily_dollar_volume=_number(dollar_volume),
                 spot_price=_number(details.get("current_price")),
-                dividend_yield=_number(details.get("dividend_yield")),
+                dividend_yield=_percentage_points_to_decimal(
+                    details.get("dividend_yield")
+                ),
                 price_closes=closes.get(feature.symbol.strip().upper(), ()),
             )
             candidates.append(item)

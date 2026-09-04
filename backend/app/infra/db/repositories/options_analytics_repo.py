@@ -243,6 +243,7 @@ class SqlOptionsAnalyticsRepository:
         reason_codes: Sequence[str],
         evidence: Mapping[str, Any] | None = None,
         assumptions: Mapping[str, Any] | None = None,
+        warnings: Sequence[str] = (),
         retry_count: int = 0,
     ) -> OptionsAnalyticsRunItem:
         item = self._get_item(run_id, symbol)
@@ -251,6 +252,7 @@ class SqlOptionsAnalyticsRepository:
         item.reasons_json = list(reason_codes)
         item.evidence_json = dict(evidence or {})
         item.assumptions_json = dict(assumptions or {})
+        item.warnings_json = list(warnings)
         item.retry_count = retry_count
         self._session.flush()
         return item
