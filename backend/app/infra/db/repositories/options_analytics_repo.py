@@ -191,7 +191,11 @@ class SqlOptionsAnalyticsRepository:
         item.spot_price = observation.source_spot_price
         item.expiration = observation.expiration
         item.observation_at = observation.fetched_at
-        item.observation_state = ObservationState.AVAILABLE.value
+        item.observation_state = (
+            ObservationState.INSUFFICIENT_QUALITY.value
+            if core_valid is False
+            else ObservationState.AVAILABLE.value
+        )
         if core_valid is not None:
             item.core_valid = core_valid
         item.retry_count = retry_count
@@ -252,7 +256,11 @@ class SqlOptionsAnalyticsRepository:
             .filter(
                 OptionsAnalyticsRunItem.run_id == run_id,
                 ~OptionsAnalyticsRunItem.observation_state.in_(
-                    (ObservationState.AVAILABLE.value, ObservationState.UNAVAILABLE.value)
+                    (
+                        ObservationState.AVAILABLE.value,
+                        ObservationState.UNAVAILABLE.value,
+                        ObservationState.INSUFFICIENT_QUALITY.value,
+                    )
                 ),
             )
             .order_by(OptionsAnalyticsRunItem.security_symbol)
@@ -287,7 +295,7 @@ class SqlOptionsAnalyticsRepository:
         self,
         run_id: int,
         *,
-        risk_free_rate: float,
+        risk_free_rate: float | None,
         assumptions: Mapping[str, Any],
     ) -> None:
         run = self._get_run(run_id)
@@ -391,6 +399,7 @@ class SqlOptionsAnalyticsRepository:
                 OptionsAnalyticsRun.status == OptionsRunStatus.PUBLISHED.value,
                 OptionsAnalyticsRunItem.observation_state
                 == ObservationState.AVAILABLE.value,
+                OptionsAnalyticsRunItem.core_valid.is_(True),
             )
             .order_by(
                 OptionsAnalyticsRun.as_of_date.asc(),
@@ -518,7 +527,11 @@ class SqlOptionsAnalyticsRepository:
             )
             completed_count = sum(
                 row["observation_state"]
-                in (ObservationState.AVAILABLE.value, ObservationState.UNAVAILABLE.value)
+                in (
+                    ObservationState.AVAILABLE.value,
+                    ObservationState.UNAVAILABLE.value,
+                    ObservationState.INSUFFICIENT_QUALITY.value,
+                )
                 for row in rows
             )
             core_valid_count = sum(
@@ -549,7 +562,11 @@ class SqlOptionsAnalyticsRepository:
                 completed_count=completed_count,
                 core_valid_current_count=core_valid_count,
                 failed_count=sum(
-                    row["observation_state"] == ObservationState.UNAVAILABLE.value
+                    row["observation_state"]
+                    in (
+                        ObservationState.UNAVAILABLE.value,
+                        ObservationState.INSUFFICIENT_QUALITY.value,
+                    )
                     for row in rows
                 ),
                 retried_count=sum(int(row.get("retry_count") or 0) for row in rows),

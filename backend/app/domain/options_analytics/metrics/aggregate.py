@@ -13,7 +13,7 @@ from .gex import (
     DEALER_PROXY_SIGN,
     estimate_contract_gex,
     estimate_gamma_flip,
-    estimate_open_interest_walls,
+    estimate_gex_walls,
 )
 from .max_pain import calculate_max_pain
 from .volatility import (
@@ -59,22 +59,27 @@ def calculate_chain_metrics(
     observation: ChainObservation,
     *,
     as_of_date: date,
-    risk_free_rate: float,
+    risk_free_rate: float | None,
     dividend_yield: float,
     closes: tuple[float | None, ...],
 ) -> ChainMetrics:
     contracts = observation.contracts
     time_years = (observation.expiration - as_of_date).days / 365
-    gex_values = [
-        (contract, estimate_contract_gex(
-            contract,
-            spot=observation.source_spot_price,
-            time_years=time_years,
-            rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-        ))
-        for contract in contracts
-    ]
+    gex_values = []
+    if risk_free_rate is not None:
+        gex_values = [
+            (
+                contract,
+                estimate_contract_gex(
+                    contract,
+                    spot=observation.source_spot_price,
+                    time_years=time_years,
+                    rate=risk_free_rate,
+                    dividend_yield=dividend_yield,
+                ),
+            )
+            for contract in contracts
+        ]
     usable_gex = [(contract, metric) for contract, metric in gex_values if metric.available]
     if usable_gex:
         net_gex = MetricValue(
@@ -95,17 +100,35 @@ def calculate_chain_metrics(
             metric.value
         )
     gex_by_strike = tuple(sorted(by_strike.items()))
-    call_wall, put_wall = estimate_open_interest_walls(contracts)
+    call_wall, put_wall = estimate_gex_walls(
+        contracts,
+        spot=observation.source_spot_price,
+        time_years=time_years,
+        rate=risk_free_rate,
+        dividend_yield=dividend_yield,
+    )
     atm_iv = calculate_atm_iv(contracts, spot=observation.source_spot_price)
     realized = calculate_realized_volatility(closes)
     result = ChainMetrics(
         max_pain=calculate_max_pain(contracts),
         net_gex=net_gex,
-        gamma_flip=estimate_gamma_flip(gex_by_strike),
+        gamma_flip=estimate_gamma_flip(
+            contracts,
+            pinned_spot=observation.source_spot_price,
+            time_years=time_years,
+            rate=risk_free_rate,
+            dividend_yield=dividend_yield,
+        ),
         call_wall=call_wall,
         put_wall=put_wall,
         atm_iv=atm_iv,
-        skew_25_delta=calculate_25_delta_skew(contracts),
+        skew_25_delta=calculate_25_delta_skew(
+            contracts,
+            spot=observation.source_spot_price,
+            time_years=time_years,
+            rate=risk_free_rate,
+            dividend_yield=dividend_yield,
+        ),
         realized_volatility=realized,
         vrp=calculate_volatility_risk_premium(
             atm_iv=atm_iv.value if atm_iv.available else None,

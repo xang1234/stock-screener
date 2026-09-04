@@ -43,22 +43,63 @@ def calculate_atm_iv(
 
 def calculate_25_delta_skew(
     contracts: Iterable[NormalizedOptionContract],
+    *,
+    spot: float | None = None,
+    time_years: float | None = None,
+    rate: float | None = None,
+    dividend_yield: float = 0.0,
 ) -> MetricValue:
+    model_inputs_available = (
+        spot is not None
+        and time_years is not None
+        and rate is not None
+        and all(
+            math.isfinite(float(value))
+            for value in (spot, time_years, rate, dividend_yield)
+        )
+        and spot > 0
+        and time_years > 0
+    )
+
+    def delta_for(contract: NormalizedOptionContract) -> float | None:
+        if model_inputs_available and _valid_iv(contract.implied_volatility):
+            volatility = float(contract.implied_volatility)
+            sqrt_time = math.sqrt(float(time_years))
+            d1 = (
+                math.log(float(spot) / contract.strike)
+                + (
+                    float(rate)
+                    - dividend_yield
+                    + volatility * volatility / 2
+                )
+                * float(time_years)
+            ) / (volatility * sqrt_time)
+            normal_cdf = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
+            discounted = math.exp(-dividend_yield * float(time_years))
+            return (
+                discounted * normal_cdf
+                if contract.side is OptionSide.CALL
+                else discounted * (normal_cdf - 1.0)
+            )
+        if contract.delta is None or not math.isfinite(float(contract.delta)):
+            return None
+        return float(contract.delta)
+
     selected: dict[OptionSide, NormalizedOptionContract] = {}
+    selected_delta: dict[OptionSide, float] = {}
     for side in (OptionSide.CALL, OptionSide.PUT):
         eligible = [
-            contract
+            (contract, delta)
             for contract in contracts
             if contract.side is side
-            and contract.delta is not None
-            and math.isfinite(float(contract.delta))
-            and 0.20 <= abs(float(contract.delta)) <= 0.30
+            and (delta := delta_for(contract)) is not None
+            and 0.20 <= abs(delta) <= 0.30
             and _valid_iv(contract.implied_volatility)
         ]
         if eligible:
-            selected[side] = min(
+            selected[side], selected_delta[side] = min(
                 eligible,
-                key=lambda row: (abs(abs(float(row.delta)) - 0.25), row.strike),
+                key=lambda row: (abs(abs(row[1]) - 0.25), row[0].strike),
             )
     if set(selected) != {OptionSide.CALL, OptionSide.PUT}:
         return MetricValue(
@@ -68,7 +109,18 @@ def calculate_25_delta_skew(
     value = float(selected[OptionSide.PUT].implied_volatility) - float(
         selected[OptionSide.CALL].implied_volatility
     )
-    return MetricValue(available=True, value=value, label="25-Delta Put-Call IV Skew")
+    return MetricValue(
+        available=True,
+        value=value,
+        label="25-Delta Put-Call IV Skew",
+        evidence={
+            "delta_source": (
+                "black_scholes_model" if model_inputs_available else "provider"
+            ),
+            "call_delta": selected_delta[OptionSide.CALL],
+            "put_delta": selected_delta[OptionSide.PUT],
+        },
+    )
 
 
 def calculate_realized_volatility(closes: Sequence[float | None]) -> MetricValue:

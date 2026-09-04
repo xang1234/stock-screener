@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
+
 from app.services.static_options_artifact_selector import StaticOptionsArtifactSelector
 from app.services.static_options_contract import validate_static_options_artifact
 from app.services.static_options_exporter import StaticOptionsExporter
@@ -180,6 +181,22 @@ def test_exporter_keeps_previous_directory_if_staged_write_fails(tmp_path):
         )
 
     assert (destination / "sentinel.txt").read_text() == "last-good"
+
+
+def test_exporter_does_not_delete_an_unrelated_fixed_name_sibling(tmp_path):
+    destination = tmp_path / "options"
+    destination.mkdir()
+    (destination / "old.txt").write_text("old")
+    unrelated = tmp_path / ".options-previous"
+    unrelated.mkdir()
+    (unrelated / "operator.txt").write_text("keep")
+
+    StaticOptionsExporter(_Queries(_run(_item("AAPL")))).export(
+        destination,
+        generated_at="2026-09-04T22:00:00Z",
+    )
+
+    assert (unrelated / "operator.txt").read_text() == "keep"
 
 
 def test_static_site_composition_advertises_options_only_after_selection(tmp_path):

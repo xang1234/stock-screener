@@ -42,7 +42,12 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
                 symbol=symbol,
                 as_of_date=as_of,
                 composite_score=200 - index,
-                details_json={"current_price": 100 + index, "rs_rating": 70, "ibd_group_rank": 80},
+                details_json={
+                    "current_price": 100 + index,
+                    "avg_dollar_volume": 200_000_000,
+                    "rs_rating": 70,
+                    "ibd_group_rank": 80,
+                },
             )
         )
         fundamentals.append(StockFundamental(symbol=symbol, adv_usd=200_000_000, dividend_yield=0.01))
@@ -54,7 +59,12 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
                 symbol=symbol,
                 as_of_date=as_of,
                 composite_score=100 - index,
-                details_json={"current_price": 50 + index, "rs_rating": 90, "ibd_group_rank": 10},
+                details_json={
+                    "current_price": 50 + index,
+                    "avg_dollar_volume": 200_000_000,
+                    "rs_rating": 90,
+                    "ibd_group_rank": 10,
+                },
             )
         )
         fundamentals.append(StockFundamental(symbol=symbol, adv_usd=200_000_000, dividend_yield=0.02))
@@ -64,7 +74,12 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs()
             symbol="EXACT",
             as_of_date=as_of,
             composite_score=999,
-            details_json={"current_price": 10, "rs_rating": 99, "ibd_group_rank": 1},
+            details_json={
+                "current_price": 10,
+                "avg_dollar_volume": 100_000_000,
+                "rs_rating": 99,
+                "ibd_group_rank": 1,
+            },
         )
     )
     fundamentals.append(StockFundamental(symbol="EXACT", adv_usd=100_000_000))
@@ -117,7 +132,12 @@ def test_candidate_source_preserves_both_ranks_for_overlap() -> None:
             symbol="aapl",
             as_of_date=date(2026, 9, 4),
             composite_score=99,
-            details_json={"current_price": 200, "rs_rating": 95, "ibd_group_rank": 2},
+            details_json={
+                "current_price": 200,
+                "avg_dollar_volume": 500_000_000,
+                "rs_rating": 95,
+                "ibd_group_rank": 2,
+            },
         )
     )
     session.add(StockFundamental(symbol="aapl", adv_usd=500_000_000))
@@ -129,6 +149,52 @@ def test_candidate_source_preserves_both_ranks_for_overlap() -> None:
     assert result.current_candidates[0].symbol == "AAPL"
     assert result.current_candidates[0].candidate_rank == 1
     assert result.current_candidates[0].leader_rank == 1
+    session.close()
+    engine.dispose()
+
+
+def test_current_liquidity_uses_feature_run_snapshot_not_mutable_fundamentals() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+            StockFundamental.__table__,
+            StockPrice.__table__,
+        ],
+    )
+    session = sessionmaker(bind=engine)()
+    as_of = date(2026, 9, 4)
+    session.add(
+        FeatureRun(
+            id=9,
+            as_of_date=as_of,
+            run_type="daily_snapshot",
+            status="published",
+        )
+    )
+    session.add(
+        StockFeatureDaily(
+            run_id=9,
+            symbol="AAPL",
+            as_of_date=as_of,
+            composite_score=99,
+            details_json={
+                "current_price": 200,
+                "avg_dollar_volume": 150_000_000,
+                "rs_rating": 95,
+                "ibd_group_rank": 2,
+            },
+        )
+    )
+    session.add(StockFundamental(symbol="AAPL", adv_usd=50_000_000))
+    session.commit()
+
+    result = SqlOptionsCandidateSource(session).read(9)
+
+    assert [row.symbol for row in result.current_candidates] == ["AAPL"]
+    assert result.current_candidates[0].daily_dollar_volume == 150_000_000
     session.close()
     engine.dispose()
 

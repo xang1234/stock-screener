@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+
 from app.database import Base
 from app.domain.options_analytics.models import (
     CandidateKind,
@@ -25,8 +28,6 @@ from app.infra.db.repositories.options_analytics_repo import (
     SqlOptionsAnalyticsRepository,
 )
 from app.infra.db.uow import SqlUnitOfWork
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
 
 from ..test_options_history_transfer import _observation as _transfer_observation
 
@@ -303,13 +304,36 @@ def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) 
         )
         if present:
             repo.stage_candidates(run.id, [_candidate("AAPL")])
-            repo.save_item_result(run.id, "AAPL", observation=_observation("AAPL", day))
+            repo.save_item_result(
+                run.id,
+                "AAPL",
+                observation=_observation("AAPL", day),
+                core_valid=True,
+            )
         repo.publish(run.id, _published_summary())
     session.commit()
 
     history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
 
     assert [row.run.as_of_date for row in history] == [date(2026, 9, 1), date(2026, 9, 3)]
+
+
+def test_history_excludes_published_insufficient_quality_observations(session) -> None:
+    repo = SqlOptionsAnalyticsRepository(session)
+    run = _start(repo, "invalid-history")
+    repo.stage_candidates(run.id, [_candidate("AAPL")])
+    repo.save_item_result(
+        run.id,
+        "AAPL",
+        observation=_observation("AAPL"),
+        core_valid=False,
+    )
+    repo.publish(run.id, _published_summary())
+    session.commit()
+
+    item = session.query(OptionsAnalyticsRunItem).one()
+    assert item.observation_state == "insufficient_quality"
+    assert repo.symbol_history("AAPL", market="US", calculation_version="v1") == ()
 
 
 def test_last_current_membership_ignores_later_continuity_only_rows(session) -> None:

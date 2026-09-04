@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from ..models import MetricValue, NormalizedOptionContract
 
@@ -60,12 +60,10 @@ def calculate_activity_metrics(
         )
     elif not ratio.available:
         intensity = MetricValue(available=False, reason_codes=ratio.reason_codes)
-    elif not concentration.available:
-        intensity = MetricValue(available=False, reason_codes=concentration.reason_codes)
     else:
         intensity = MetricValue(
             available=True,
-            value=float(ratio.value) * float(concentration.value),
+            value=float(ratio.value),
             label="Activity Intensity",
         )
     return ActivityMetrics(

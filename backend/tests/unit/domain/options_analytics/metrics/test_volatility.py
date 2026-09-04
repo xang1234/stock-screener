@@ -71,6 +71,23 @@ def test_25_delta_skew_requires_both_sides_inside_delta_band() -> None:
     assert invalid.reason_codes == ("twenty_five_delta_pair_unavailable",)
 
 
+def test_25_delta_skew_models_missing_provider_delta_from_chain_assumptions() -> None:
+    result = calculate_25_delta_skew(
+        (
+            _contract(OptionSide.CALL, 108, 0.22),
+            _contract(OptionSide.PUT, 94, 0.31),
+        ),
+        spot=100,
+        time_years=0.25,
+        rate=0.04,
+        dividend_yield=0.01,
+    )
+
+    assert result.available is True
+    assert result.value == pytest.approx(0.09)
+    assert result.evidence["delta_source"] == "black_scholes_model"
+
+
 def test_realized_volatility_uses_20_unfilled_returns_and_sqrt_252() -> None:
     result = calculate_realized_volatility(tuple(float(close) for close in range(100, 121)))
 

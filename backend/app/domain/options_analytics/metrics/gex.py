@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from itertools import pairwise
 
 from ..models import MetricValue, NormalizedOptionContract, OptionSide
 
@@ -97,7 +98,9 @@ def estimate_contract_gex(
     )
 
 
-def estimate_gamma_flip(points: Iterable[tuple[float, float]]) -> MetricValue:
+def _interpolate_gamma_crossing(
+    points: Iterable[tuple[float, float]],
+) -> float | None:
     finite_points = sorted(
         {
             (float(x), float(y))
@@ -107,23 +110,91 @@ def estimate_gamma_flip(points: Iterable[tuple[float, float]]) -> MetricValue:
     )
     for x, y in finite_points:
         if y == 0:
-            return MetricValue(
-                available=True,
-                value=x,
-                label="Estimated Gamma Flip",
-                evidence={"method": "linear_interpolation"},
-            )
-    for (left_x, left_y), (right_x, right_y) in zip(
-        finite_points, finite_points[1:]
-    ):
+            return x
+    for (left_x, left_y), (right_x, right_y) in pairwise(finite_points):
         if left_y * right_y < 0:
-            crossing = left_x + (-left_y) * (right_x - left_x) / (right_y - left_y)
-            return MetricValue(
-                available=True,
-                value=crossing,
-                label="Estimated Gamma Flip",
-                evidence={"method": "linear_interpolation"},
+            return left_x + (-left_y) * (right_x - left_x) / (right_y - left_y)
+    return None
+
+
+def estimate_gamma_flip(
+    contracts: Iterable[NormalizedOptionContract],
+    *,
+    pinned_spot: float,
+    time_years: float,
+    rate: float | None,
+    dividend_yield: float,
+) -> MetricValue:
+    rows = tuple(contracts)
+    if not _finite_positive(pinned_spot) or rate is None or not math.isfinite(rate):
+        return MetricValue(
+            available=False,
+            reason_codes=("gex_inputs_unavailable",),
+            label="Estimated Gamma Flip",
+        )
+    usable_strikes = sorted(
+        {
+            float(row.strike)
+            for row in rows
+            if _finite_positive(row.strike)
+            and _finite_positive(row.implied_volatility)
+            and row.open_interest is not None
+            and row.open_interest >= 0
+            and row.contract_size == "REGULAR"
+            and row.multiplier == 100
+        }
+    )
+    if not usable_strikes:
+        return MetricValue(
+            available=False,
+            reason_codes=("gamma_crossing_unavailable",),
+            label="Estimated Gamma Flip",
+        )
+    lower = max(usable_strikes[0], pinned_spot * 0.80)
+    upper = min(usable_strikes[-1], pinned_spot * 1.20)
+    if lower > upper:
+        return MetricValue(
+            available=False,
+            reason_codes=("gamma_crossing_unavailable",),
+            label="Estimated Gamma Flip",
+        )
+    step = pinned_spot * 0.01
+    grid = {lower, upper}
+    cursor = lower
+    while cursor <= upper:
+        grid.add(cursor)
+        cursor += step
+    grid.update(strike for strike in usable_strikes if lower <= strike <= upper)
+    profile = []
+    for hypothetical_spot in sorted(grid):
+        total = 0.0
+        available = False
+        for contract in rows:
+            metric = estimate_contract_gex(
+                contract,
+                spot=hypothetical_spot,
+                time_years=time_years,
+                rate=rate,
+                dividend_yield=dividend_yield,
             )
+            if metric.available:
+                total += float(metric.value)
+                available = True
+        if available:
+            profile.append((hypothetical_spot, total))
+    crossing = _interpolate_gamma_crossing(profile)
+    if crossing is not None:
+        return MetricValue(
+            available=True,
+            value=crossing,
+            label="Estimated Gamma Flip",
+            evidence={
+                "method": "chain_repricing_linear_interpolation",
+                "grid_step": step,
+                "range_low": lower,
+                "range_high": upper,
+            },
+        )
     return MetricValue(
         available=False,
         reason_codes=("gamma_crossing_unavailable",),
@@ -131,36 +202,69 @@ def estimate_gamma_flip(points: Iterable[tuple[float, float]]) -> MetricValue:
     )
 
 
-def _wall(
+def _gex_wall(
     contracts: Iterable[NormalizedOptionContract],
     side: OptionSide,
+    *,
+    spot: float,
+    time_years: float,
+    rate: float | None,
+    dividend_yield: float,
 ) -> MetricValue:
-    usable = [
-        contract
-        for contract in contracts
-        if contract.side is side
-        and contract.open_interest is not None
-        and math.isfinite(float(contract.open_interest))
-        and contract.open_interest >= 0
-    ]
     label = f"Estimated {'Call' if side is OptionSide.CALL else 'Put'} Wall"
+    if rate is None or not math.isfinite(rate):
+        return MetricValue(
+            available=False,
+            reason_codes=("gex_inputs_unavailable",),
+            label=label,
+        )
+    usable = []
+    for contract in contracts:
+        if contract.side is not side:
+            continue
+        metric = estimate_contract_gex(
+            contract,
+            spot=spot,
+            time_years=time_years,
+            rate=rate,
+            dividend_yield=dividend_yield,
+        )
+        if metric.available:
+            usable.append((contract, abs(float(metric.value))))
     if not usable:
         return MetricValue(
             available=False,
             reason_codes=("open_interest_unavailable",),
             label=label,
         )
-    selected = min(usable, key=lambda row: (-float(row.open_interest), row.strike))
+    selected, magnitude = min(usable, key=lambda row: (-row[1], row[0].strike))
     return MetricValue(
         available=True,
         value=float(selected.strike),
         label=label,
-        evidence={"method": "maximum_open_interest"},
+        evidence={
+            "method": "maximum_absolute_estimated_side_gex",
+            "absolute_estimated_gex": magnitude,
+        },
     )
 
 
-def estimate_open_interest_walls(
+def estimate_gex_walls(
     contracts: Iterable[NormalizedOptionContract],
+    *,
+    spot: float,
+    time_years: float,
+    rate: float | None,
+    dividend_yield: float,
 ) -> tuple[MetricValue, MetricValue]:
     rows = tuple(contracts)
-    return _wall(rows, OptionSide.CALL), _wall(rows, OptionSide.PUT)
+    inputs = {
+        "spot": spot,
+        "time_years": time_years,
+        "rate": rate,
+        "dividend_yield": dividend_yield,
+    }
+    return (
+        _gex_wall(rows, OptionSide.CALL, **inputs),
+        _gex_wall(rows, OptionSide.PUT, **inputs),
+    )

@@ -132,8 +132,10 @@ class _Repository:
         self.run_assumptions = None
         self.commit_count = 0
         self.events = []
+        self.start_kwargs = None
 
-    def start_or_reuse(self, **_kwargs):
+    def start_or_reuse(self, **kwargs):
+        self.start_kwargs = kwargs
         return self.run
 
     def last_current_memberships(self, _market, _calculation_version):
@@ -424,6 +426,64 @@ def test_successful_but_thin_chain_is_saved_as_insufficient_core_quality() -> No
     assert "insufficient_core_quality" in repo.saved["AAPL"]["reason_codes"]
 
 
+def test_structurally_valid_chain_without_atm_iv_remains_core_valid() -> None:
+    class MissingIvProvider(_Provider):
+        def fetch_chain(self, symbol, _expiration, *, source_spot_price):
+            full = _observation(symbol)
+            return replace(
+                full,
+                contracts=tuple(
+                    replace(contract, implied_volatility=None)
+                    for contract in full.contracts
+                ),
+            )
+
+    repo = _Repository()
+
+    result = _use_case(
+        [_candidate("AAPL")], repo=repo, provider=MissingIvProvider()
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert result["status"] == "published"
+    assert repo.saved["AAPL"]["core_valid"] is True
+    assert repo.saved["AAPL"]["metric_values"]["atm_iv"] is None
+
+
+def test_invalid_observation_does_not_increment_compatible_history() -> None:
+    class ThinProvider(_Provider):
+        def fetch_chain(self, symbol, _expiration, *, source_spot_price):
+            full = _observation(symbol)
+            return replace(full, contracts=full.contracts[:2])
+
+    repo = _Repository()
+
+    _use_case([_candidate("AAPL")], repo=repo, provider=ThinProvider()).execute(
+        RefreshOptionsAnalyticsCommand(source_run_id=33)
+    )
+
+    readiness = repo.saved["AAPL"]["history_readiness"]
+    assert readiness.lifetime_observation_count == 0
+    assert readiness.short_observation_count == 0
+
+
+def test_risk_free_failure_only_makes_model_dependent_metrics_unavailable() -> None:
+    class MissingRateProvider(_Provider):
+        def risk_free_rate(self, _as_of):
+            self.risk_free_calls += 1
+            raise OptionsProviderError("IRX unavailable")
+
+    repo = _Repository()
+
+    result = _use_case(
+        [_candidate("AAPL")], repo=repo, provider=MissingRateProvider()
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert result["status"] == "published"
+    assert repo.saved["AAPL"]["metric_values"]["net_gex"] is None
+    assert repo.saved["AAPL"]["metric_values"]["atm_iv"] == 0.275
+    assert repo.run_assumptions[0] is None
+
+
 def test_fetches_at_most_two_concurrently_but_persists_on_caller_thread() -> None:
     provider = _Provider(delay=0.02)
     repo = _Repository()
@@ -515,4 +575,52 @@ def test_continuity_is_derived_from_last_current_membership_and_expires_after_fi
     assert repo.staged["RECENT"].kind is CandidateKind.CONTINUITY
     assert repo.staged["RECENT"].sessions_since_current == 5
     assert "EXPIRED" not in repo.staged
-    assert repo.activity_ranks == {"AAPL": 1, "RECENT": 2}
+    assert repo.activity_ranks == {"AAPL": 1}
+
+
+def test_input_signature_changes_with_calculation_or_schema_version() -> None:
+    cohort = (_candidate("AAPL"),)
+
+    first = RefreshOptionsAnalyticsUseCase._input_signature(
+        33, cohort, calculation_version="calc-v1", schema_version="schema-v1"
+    )
+    changed_calculation = RefreshOptionsAnalyticsUseCase._input_signature(
+        33, cohort, calculation_version="calc-v2", schema_version="schema-v1"
+    )
+    changed_schema = RefreshOptionsAnalyticsUseCase._input_signature(
+        33, cohort, calculation_version="calc-v1", schema_version="schema-v2"
+    )
+
+    assert len({first, changed_calculation, changed_schema}) == 3
+
+
+def test_quality_evidence_keeps_provider_spot_and_stale_trade_warning() -> None:
+    class DisagreementProvider(_Provider):
+        def fetch_chain(self, symbol, _expiration, *, source_spot_price):
+            full = _observation(symbol)
+            stale_time = datetime(2026, 8, 28, 20, tzinfo=timezone.utc)
+            return replace(
+                full,
+                provider_spot_price=103,
+                contracts=tuple(
+                    replace(contract, last_trade_at=stale_time)
+                    for contract in full.contracts
+                ),
+            )
+
+    repo = _Repository()
+
+    _use_case(
+        [_candidate("AAPL")], repo=repo, provider=DisagreementProvider()
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    saved = repo.saved["AAPL"]
+    assert saved["evidence"]["quality"]["provider_spot_price"] == 103
+    assert saved["evidence"]["quality"]["spot_disagreement_ratio"] == 0.03
+    assert saved["evidence"]["quality"]["latest_contract_trade_at"].startswith(
+        "2026-08-28"
+    )
+    assert set(saved["warnings"]) == {
+        "provider_spot_disagreement",
+        "stale_contract_trades",
+    }

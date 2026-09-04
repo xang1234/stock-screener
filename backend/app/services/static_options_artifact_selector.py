@@ -95,7 +95,10 @@ class StaticOptionsArtifactSelector:
         stage = Path(
             tempfile.mkdtemp(prefix=".options-select-", dir=str(output.parent))
         )
-        backup = output.with_name(".options-selected-previous")
+        backup = Path(
+            tempfile.mkdtemp(prefix=".options-select-backup-", dir=str(output.parent))
+        )
+        backup.rmdir()
         try:
             shutil.copytree(selected[0], stage, dirs_exist_ok=True)
             if stale:
@@ -111,8 +114,6 @@ class StaticOptionsArtifactSelector:
                 manifest["equity_as_of_date"] = equity_as_of_date.isoformat()
                 _write_json(manifest_path, manifest)
             validate_static_options_artifact(stage)
-            if backup.exists():
-                shutil.rmtree(backup)
             if output.exists():
                 output.rename(backup)
             try:
@@ -127,6 +128,8 @@ class StaticOptionsArtifactSelector:
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
+            if backup.exists():
+                shutil.rmtree(backup)
 
 
 __all__ = ["StaticOptionsArtifactSelector"]

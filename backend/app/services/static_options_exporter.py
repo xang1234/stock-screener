@@ -56,7 +56,10 @@ class StaticOptionsExporter:
         stage = Path(
             tempfile.mkdtemp(prefix=".options-stage-", dir=str(destination.parent))
         )
-        backup = destination.with_name(".options-previous")
+        backup = Path(
+            tempfile.mkdtemp(prefix=".options-backup-", dir=str(destination.parent))
+        )
+        backup.rmdir()
         try:
             symbol_map: dict[str, dict[str, str]] = {}
             for item in command.items:
@@ -96,8 +99,6 @@ class StaticOptionsExporter:
             _write_json(stage / "manifest.json", manifest)
             validate_static_options_artifact(stage)
 
-            if backup.exists():
-                shutil.rmtree(backup)
             if destination.exists():
                 destination.rename(backup)
             try:
@@ -112,6 +113,8 @@ class StaticOptionsExporter:
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
+            if backup.exists():
+                shutil.rmtree(backup)
 
 
 __all__ = ["StaticOptionsExporter", "StaticOptionsUnavailable", "url_safe_symbol_key"]

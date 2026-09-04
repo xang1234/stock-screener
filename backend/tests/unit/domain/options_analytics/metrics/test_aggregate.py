@@ -36,12 +36,12 @@ def test_aggregate_calculates_from_full_chain_and_is_json_finite() -> None:
         source_spot_price=100,
         fetched_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
         contracts=(
-            _contract(OptionSide.CALL, 95, iv=0.24, volume=120, oi=300, delta=0.70),
-            _contract(OptionSide.PUT, 95, iv=0.31, volume=130, oi=400, delta=-0.25),
+            _contract(OptionSide.CALL, 96, iv=0.24, volume=120, oi=300, delta=0.70),
+            _contract(OptionSide.PUT, 96, iv=0.31, volume=130, oi=400, delta=-0.25),
             _contract(OptionSide.CALL, 100, iv=0.20, volume=200, oi=500, delta=0.50),
             _contract(OptionSide.PUT, 100, iv=0.30, volume=200, oi=600, delta=-0.50),
-            _contract(OptionSide.CALL, 105, iv=0.22, volume=140, oi=700, delta=0.25),
-            _contract(OptionSide.PUT, 105, iv=0.32, volume=110, oi=200, delta=-0.70),
+            _contract(OptionSide.CALL, 104, iv=0.22, volume=140, oi=700, delta=0.25),
+            _contract(OptionSide.PUT, 104, iv=0.32, volume=110, oi=200, delta=-0.70),
         ),
     )
 

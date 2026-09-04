@@ -69,8 +69,6 @@ class _FetchResult:
             self.metrics
             and self.observation
             and has_core_chain_coverage(self.observation)
-            and self.metrics.max_pain.available
-            and self.metrics.atm_iv.available
         )
 
 
@@ -143,7 +141,12 @@ class RefreshOptionsAnalyticsUseCase:
         current = tuple(
             candidate for candidate in cohort if candidate.kind is CandidateKind.CURRENT
         )
-        signature = self._input_signature(source.source_feature_run_id, cohort)
+        signature = self._input_signature(
+            source.source_feature_run_id,
+            cohort,
+            calculation_version=self._calculation_version,
+            schema_version=self._schema_version,
+        )
         run = self._repository.start_or_reuse(
             market=market,
             source_feature_run_id=source.source_feature_run_id,
@@ -159,13 +162,18 @@ class RefreshOptionsAnalyticsUseCase:
         if self._cancellation.is_cancelled():
             return {"run_id": run.id, "status": "cancelled", "coverage": 0.0}
 
-        risk_free_rate = self._provider.risk_free_rate(source.as_of_date)
+        risk_free_warning: str | None = None
+        try:
+            risk_free_rate = self._provider.risk_free_rate(source.as_of_date)
+            risk_free_source = "Yahoo ^IRX close on or before source date"
+        except OptionsProviderError:
+            risk_free_rate = None
+            risk_free_source = "unavailable"
+            risk_free_warning = "risk_free_rate_unavailable"
         self._repository.save_run_assumptions(
             run.id,
             risk_free_rate=risk_free_rate,
-            assumptions={
-                "risk_free_source": "Yahoo ^IRX close on or before source date"
-            },
+            assumptions={"risk_free_source": risk_free_source},
         )
         self._repository.commit()
         candidates_by_symbol = {candidate.symbol: candidate for candidate in cohort}
@@ -202,11 +210,18 @@ class RefreshOptionsAnalyticsUseCase:
                     calculation_version=self._calculation_version,
                 )
             )
-            historical = (*historical, HistoricalObservation(
-                session=source.as_of_date,
-                calculation_version=self._calculation_version,
-                state=ObservationState.AVAILABLE,
-            ))
+            historical = (
+                *historical,
+                HistoricalObservation(
+                    session=source.as_of_date,
+                    calculation_version=self._calculation_version,
+                    state=(
+                        ObservationState.AVAILABLE
+                        if result.core_valid
+                        else ObservationState.INSUFFICIENT_QUALITY
+                    ),
+                ),
+            )
             readiness = history_readiness(
                 historical,
                 self._calendar.sessions_ending_on(source.as_of_date, 30),
@@ -229,12 +244,20 @@ class RefreshOptionsAnalyticsUseCase:
                     risk_free_rate=risk_free_rate,
                     dividend_yield=candidate.dividend_yield or 0.0,
                 ),
-                evidence=self._metric_evidence(result.metrics),
+                evidence=self._metric_evidence(
+                    result.metrics,
+                    quality=self._quality_evidence(result.observation),
+                ),
                 assumptions={
                     "risk_free_rate": risk_free_rate,
                     "dividend_yield": candidate.dividend_yield or 0.0,
                 },
                 reason_codes=tuple(item_reason_codes),
+                warnings=self._quality_warnings(
+                    result.observation,
+                    as_of_date=source.as_of_date,
+                    run_warning=risk_free_warning,
+                ),
                 retry_count=result.retry_count,
                 history_readiness=readiness,
             )
@@ -256,6 +279,7 @@ class RefreshOptionsAnalyticsUseCase:
                 )
             )
             for item in persisted_items
+            if item.candidate_kind == CandidateKind.CURRENT.value
         }
         self._repository.save_activity_ranks(run.id, rank_activity(activity_values))
         self._repository.commit()
@@ -264,12 +288,17 @@ class RefreshOptionsAnalyticsUseCase:
         terminal_states = {
             ObservationState.AVAILABLE.value,
             ObservationState.UNAVAILABLE.value,
+            ObservationState.INSUFFICIENT_QUALITY.value,
         }
         completed = sum(
             item.observation_state in terminal_states for item in persisted_items
         )
         failed = sum(
-            item.observation_state == ObservationState.UNAVAILABLE.value
+            item.observation_state
+            in {
+                ObservationState.UNAVAILABLE.value,
+                ObservationState.INSUFFICIENT_QUALITY.value,
+            }
             for item in persisted_items
         )
         retried = sum(item.retry_count for item in persisted_items)
@@ -314,7 +343,10 @@ class RefreshOptionsAnalyticsUseCase:
         }
 
     def _fetch_candidate(
-        self, candidate: OptionCandidate, as_of_date: date, risk_free_rate: float
+        self,
+        candidate: OptionCandidate,
+        as_of_date: date,
+        risk_free_rate: float | None,
     ) -> _FetchResult:
         if (
             candidate.spot_price is None
@@ -392,8 +424,14 @@ class RefreshOptionsAnalyticsUseCase:
         return tuple(observations)
 
     @staticmethod
-    def _input_signature(source_run_id: int, cohort: tuple[OptionCandidate, ...]) -> str:
-        material = f"{source_run_id}:" + ",".join(
+    def _input_signature(
+        source_run_id: int,
+        cohort: tuple[OptionCandidate, ...],
+        *,
+        calculation_version: str,
+        schema_version: str,
+    ) -> str:
+        material = f"{calculation_version}:{schema_version}:{source_run_id}:" + ",".join(
             f"{candidate.symbol}:{candidate.kind.value}" for candidate in cohort
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -437,7 +475,7 @@ class RefreshOptionsAnalyticsUseCase:
         observation: ChainObservation,
         *,
         as_of_date: date,
-        risk_free_rate: float,
+        risk_free_rate: float | None,
         dividend_yield: float,
     ) -> list[dict[str, Any]]:
         retained = retain_contracts_for_persistence(
@@ -452,12 +490,19 @@ class RefreshOptionsAnalyticsUseCase:
             point[f"{prefix}_open_interest"] = contract.open_interest
             point[f"{prefix}_volume"] = contract.volume
             point[f"{prefix}_iv"] = contract.implied_volatility
-            estimated_gex = estimate_contract_gex(
-                contract,
-                spot=observation.source_spot_price,
-                time_years=time_years,
-                rate=risk_free_rate,
-                dividend_yield=dividend_yield,
+            estimated_gex = (
+                estimate_contract_gex(
+                    contract,
+                    spot=observation.source_spot_price,
+                    time_years=time_years,
+                    rate=risk_free_rate,
+                    dividend_yield=dividend_yield,
+                )
+                if risk_free_rate is not None
+                else MetricValue(
+                    available=False,
+                    reason_codes=("risk_free_rate_unavailable",),
+                )
             )
             point[f"estimated_{prefix}_gex"] = (
                 estimated_gex.value if estimated_gex.available else None
@@ -465,7 +510,9 @@ class RefreshOptionsAnalyticsUseCase:
         return [points[strike] for strike in sorted(points)]
 
     @staticmethod
-    def _metric_evidence(metrics: ChainMetrics) -> dict[str, Any]:
+    def _metric_evidence(
+        metrics: ChainMetrics, *, quality: dict[str, Any]
+    ) -> dict[str, Any]:
         values = {
             "max_pain": metrics.max_pain,
             "net_gex": metrics.net_gex,
@@ -482,7 +529,7 @@ class RefreshOptionsAnalyticsUseCase:
                 metrics.activity.near_spot_volume_concentration
             ),
         }
-        return {
+        evidence = {
             name: {
                 "available": metric.available,
                 "label": metric.label,
@@ -491,3 +538,53 @@ class RefreshOptionsAnalyticsUseCase:
             }
             for name, metric in values.items()
         }
+        evidence["quality"] = quality
+        return evidence
+
+    @staticmethod
+    def _quality_evidence(observation: ChainObservation) -> dict[str, Any]:
+        retained = retain_contracts_for_persistence(
+            observation.contracts,
+            spot_price=observation.source_spot_price,
+        )
+        trade_times = [
+            contract.last_trade_at
+            for contract in retained
+            if contract.last_trade_at is not None
+        ]
+        latest_trade = max(trade_times) if trade_times else None
+        evidence: dict[str, Any] = {
+            "source_spot_price": observation.source_spot_price,
+            "provider_spot_price": observation.provider_spot_price,
+            "latest_contract_trade_at": (
+                latest_trade.isoformat() if latest_trade is not None else None
+            ),
+        }
+        if (
+            observation.provider_spot_price is not None
+            and math.isfinite(float(observation.provider_spot_price))
+            and observation.source_spot_price > 0
+        ):
+            evidence["spot_disagreement_ratio"] = abs(
+                float(observation.provider_spot_price)
+                - observation.source_spot_price
+            ) / observation.source_spot_price
+        return evidence
+
+    def _quality_warnings(
+        self,
+        observation: ChainObservation,
+        *,
+        as_of_date: date,
+        run_warning: str | None,
+    ) -> tuple[str, ...]:
+        evidence = self._quality_evidence(observation)
+        warnings = [run_warning] if run_warning else []
+        disagreement = evidence.get("spot_disagreement_ratio")
+        if disagreement is not None and disagreement > 0.02:
+            warnings.append("provider_spot_disagreement")
+        latest_trade = evidence.get("latest_contract_trade_at")
+        recent_sessions = set(self._calendar.sessions_ending_on(as_of_date, 2))
+        if latest_trade is None or date.fromisoformat(latest_trade[:10]) not in recent_sessions:
+            warnings.append("stale_contract_trades")
+        return tuple(warnings)

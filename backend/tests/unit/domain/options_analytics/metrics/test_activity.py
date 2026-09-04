@@ -6,7 +6,11 @@ from app.domain.options_analytics.metrics.activity import (
     calculate_activity_metrics,
     rank_activity,
 )
-from app.domain.options_analytics.models import MetricValue, NormalizedOptionContract, OptionSide
+from app.domain.options_analytics.models import (
+    MetricValue,
+    NormalizedOptionContract,
+    OptionSide,
+)
 
 
 def _contract(strike: float, volume: int | None, oi: int | None):
@@ -41,7 +45,7 @@ def test_activity_uses_five_percent_concentration_and_100_contract_floor() -> No
 
     assert metrics.volume_oi_ratio.value == pytest.approx(0.5)
     assert metrics.near_spot_volume_concentration.value == pytest.approx(0.6)
-    assert metrics.activity_intensity.value == pytest.approx(0.3)
+    assert metrics.activity_intensity.value == pytest.approx(0.5)
     assert metrics.qualifying_volume == 200
 
 

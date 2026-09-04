@@ -64,11 +64,7 @@ class SqlOptionsCandidateSource:
         leaders: list[OptionCandidateInput] = []
         for feature, fundamental in rows:
             details = _details(feature.details_json)
-            dollar_volume = (
-                fundamental.adv_usd if fundamental is not None else None
-            )
-            if dollar_volume is None:
-                dollar_volume = _number(details.get("avg_dollar_volume"))
+            dollar_volume = _number(details.get("avg_dollar_volume"))
             item = OptionCandidateInput(
                 symbol=feature.symbol,
                 composite_score=_number(feature.composite_score),

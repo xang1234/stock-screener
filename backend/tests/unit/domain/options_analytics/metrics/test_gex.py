@@ -6,7 +6,7 @@ from app.domain.options_analytics.metrics.gex import (
     black_scholes_unit_gamma,
     estimate_contract_gex,
     estimate_gamma_flip,
-    estimate_open_interest_walls,
+    estimate_gex_walls,
 )
 from app.domain.options_analytics.models import NormalizedOptionContract, OptionSide
 
@@ -78,31 +78,54 @@ def test_non_regular_multiplier_makes_gex_unavailable() -> None:
     assert result.reason_codes == ("contract_multiplier_unavailable",)
 
 
-def test_gamma_flip_interpolates_a_real_sign_crossing() -> None:
-    result = estimate_gamma_flip(((90.0, -20.0), (100.0, 20.0), (110.0, 30.0)))
+def test_gamma_flip_reprices_the_chain_across_hypothetical_spot_levels() -> None:
+    contracts = (
+        _contract(OptionSide.CALL, 90, oi=1_000),
+        _contract(OptionSide.PUT, 110, oi=1_000),
+    )
+    result = estimate_gamma_flip(
+        contracts,
+        pinned_spot=100,
+        time_years=0.25,
+        rate=0.04,
+        dividend_yield=0.01,
+    )
 
-    assert result.value == pytest.approx(95.0)
+    assert 90 < result.value < 110
     assert result.label == "Estimated Gamma Flip"
+    assert result.evidence["method"] == "chain_repricing_linear_interpolation"
+    assert result.evidence["grid_step"] == 1.0
 
 
 def test_gamma_flip_is_unavailable_when_profile_never_crosses_zero() -> None:
-    result = estimate_gamma_flip(((90.0, 10.0), (100.0, 20.0)))
+    result = estimate_gamma_flip(
+        (_contract(OptionSide.CALL, 90, oi=1_000),),
+        pinned_spot=100,
+        time_years=0.25,
+        rate=0.04,
+        dividend_yield=0.01,
+    )
 
     assert result.available is False
     assert result.reason_codes == ("gamma_crossing_unavailable",)
 
 
-def test_open_interest_walls_are_estimates_with_stable_lower_strike_ties() -> None:
-    call_wall, put_wall = estimate_open_interest_walls(
+def test_walls_use_absolute_estimated_side_gex_not_raw_open_interest() -> None:
+    call_wall, put_wall = estimate_gex_walls(
         (
-            _contract(OptionSide.CALL, 100, oi=50),
-            _contract(OptionSide.CALL, 110, oi=50),
-            _contract(OptionSide.PUT, 90, oi=60),
-            _contract(OptionSide.PUT, 80, oi=60),
-        )
+            _contract(OptionSide.CALL, 100, oi=100),
+            _contract(OptionSide.CALL, 130, oi=500),
+            _contract(OptionSide.PUT, 100, oi=100),
+            _contract(OptionSide.PUT, 70, oi=500),
+        ),
+        spot=100,
+        time_years=0.25,
+        rate=0.04,
+        dividend_yield=0.01,
     )
 
     assert call_wall.value == 100
     assert call_wall.label == "Estimated Call Wall"
-    assert put_wall.value == 80
+    assert call_wall.evidence["method"] == "maximum_absolute_estimated_side_gex"
+    assert put_wall.value == 100
     assert put_wall.label == "Estimated Put Wall"
