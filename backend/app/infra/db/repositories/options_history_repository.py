@@ -165,6 +165,7 @@ class SqlOptionsHistoryRepository:
             near_spot_open_interest_concentration=(
                 item.near_spot_open_interest_concentration
             ),
+            highest_contract_activity_ratio=item.highest_contract_activity_ratio,
             short_history_observation_count=item.short_history_observation_count,
             iv_history_observation_count=item.iv_history_observation_count,
             lifetime_observation_count=item.lifetime_observation_count,
@@ -280,6 +281,7 @@ class SqlOptionsHistoryRepository:
             near_spot_open_interest_concentration=(
                 row.near_spot_open_interest_concentration
             ),
+            highest_contract_activity_ratio=row.highest_contract_activity_ratio,
             short_history_observation_count=row.short_history_observation_count,
             iv_history_observation_count=row.iv_history_observation_count,
             lifetime_observation_count=row.lifetime_observation_count,

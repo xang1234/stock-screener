@@ -55,6 +55,7 @@ def _item(symbol: str, *, kind="current", state="available", core_valid=None):
         volume_oi_ratio=550 / 1900,
         near_spot_volume_concentration=0.7,
         near_spot_open_interest_concentration=0.65,
+        highest_contract_activity_ratio=2.0,
         short_history_observation_count=3,
         iv_history_observation_count=3,
         lifetime_observation_count=3,
@@ -131,6 +132,7 @@ def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity(
     assert payload.items[0].metrics.net_gex.label == "Estimated Net GEX"
     assert payload.items[0].metrics.call_put_volume_ratio.value == 1.2
     assert payload.items[0].metrics.near_spot_open_interest_concentration.value == 0.65
+    assert payload.items[0].metrics.highest_contract_activity_ratio.value == 2.0
     assert payload.items[0].metrics.gamma_flip.reason_codes == [
         "gamma_crossing_unavailable"
     ]

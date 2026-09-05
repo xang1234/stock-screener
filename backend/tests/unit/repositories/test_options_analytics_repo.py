@@ -100,6 +100,7 @@ class _Repositories(
             "volume_oi_ratio": None,
             "near_spot_volume_concentration": None,
             "near_spot_open_interest_concentration": None,
+            "highest_contract_activity_ratio": None,
         }
         metrics.update(metric_values or {})
         readiness = history_readiness or HistoryReadiness(
@@ -195,10 +196,18 @@ def session():
         engine.dispose()
 
 
-def _start(repo, signature="sig", *, version="v1", as_of=date(2026, 9, 4), force=False):
+def _start(
+    repo,
+    signature="sig",
+    *,
+    version="v1",
+    as_of=date(2026, 9, 4),
+    source_feature_run_id=1,
+    force=False,
+):
     return repo.start_or_reuse(
         market="US",
-        source_feature_run_id=1,
+        source_feature_run_id=source_feature_run_id,
         calculation_version=version,
         schema_version="v1",
         provider="yahoo",
@@ -289,6 +298,7 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
             "atm_iv": 0.26,
             "call_put_volume_ratio": 1.2,
             "near_spot_open_interest_concentration": 0.55,
+            "highest_contract_activity_ratio": 2.0,
         },
         strike_points=[{"strike": 100, "call_open_interest": 250}],
     )
@@ -299,6 +309,7 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
     assert item.atm_iv == 0.26
     assert item.call_put_volume_ratio == 1.2
     assert item.near_spot_open_interest_concentration == 0.55
+    assert item.highest_contract_activity_ratio == 2.0
     assert item.core_valid is True
     assert item.observation_at.replace(tzinfo=timezone.utc) == datetime(
         2026, 9, 4, tzinfo=timezone.utc
@@ -480,6 +491,42 @@ def test_publish_advances_pointer_atomically_and_failed_quality_does_not(
     pointer = session.get(OptionsAnalyticsPointer, ("US", "v1"))
     assert pointer.run_id == first.id
     assert repo.get_published_run("US", "v1").id == first.id
+
+
+def test_publish_does_not_roll_pointer_back_to_an_older_source_date(session) -> None:
+    repo = _Repositories(session)
+    newer = _start(repo, "newer", as_of=date(2026, 9, 4))
+    repo.publish(newer.id, _published_summary())
+    older = _start(repo, "older", as_of=date(2026, 9, 3))
+
+    repo.publish(older.id, _published_summary())
+
+    pointer = session.get(OptionsAnalyticsPointer, ("US", "v1"))
+    assert older.status == OptionsRunStatus.PUBLISHED.value
+    assert pointer.run_id == newer.id
+
+
+def test_publish_does_not_roll_pointer_back_to_an_older_same_date_source(
+    session,
+) -> None:
+    session.add(
+        FeatureRun(
+            id=2,
+            as_of_date=date(2026, 9, 4),
+            run_type="daily_snapshot",
+            status="published",
+        )
+    )
+    session.commit()
+    repo = _Repositories(session)
+    newer = _start(repo, "newer-source", source_feature_run_id=2)
+    repo.publish(newer.id, _published_summary())
+    older = _start(repo, "older-source", source_feature_run_id=1)
+
+    repo.publish(older.id, _published_summary())
+
+    pointer = session.get(OptionsAnalyticsPointer, ("US", "v1"))
+    assert pointer.run_id == newer.id
 
 
 def test_published_symbol_detail_and_run_diagnostics_use_repository_state(

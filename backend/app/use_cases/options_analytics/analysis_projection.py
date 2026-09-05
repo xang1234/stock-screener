@@ -81,6 +81,9 @@ def metric_values(
         near_spot_open_interest_concentration=(
             metrics.activity.near_spot_open_interest_concentration.value
         ),
+        highest_contract_activity_ratio=(
+            metrics.activity.highest_contract_activity_ratio.value
+        ),
     )
 
 
@@ -157,6 +160,9 @@ def metric_evidence(
         "near_spot_volume_concentration": metrics.activity.near_spot_volume_concentration,
         "near_spot_open_interest_concentration": (
             metrics.activity.near_spot_open_interest_concentration
+        ),
+        "highest_contract_activity_ratio": (
+            metrics.activity.highest_contract_activity_ratio
         ),
     }
     evidence = {

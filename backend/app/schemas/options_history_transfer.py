@@ -65,6 +65,7 @@ class OptionsHistoryObservation(BaseModel):
         ge=0,
         le=1,
     )
+    highest_contract_activity_ratio: float | None = Field(default=None, ge=0)
     short_history_observation_count: int = Field(ge=0)
     iv_history_observation_count: int = Field(ge=0)
     lifetime_observation_count: int = Field(ge=0)

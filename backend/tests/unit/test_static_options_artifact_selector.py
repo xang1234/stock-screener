@@ -113,6 +113,49 @@ def test_selector_uses_newest_valid_stale_artifact(tmp_path):
     assert selected["source_as_of_date"] == "2026-09-04"
 
 
+def test_selector_rejects_options_artifacts_newer_than_equity(tmp_path):
+    current = tmp_path / "current" / "options"
+    fallback = tmp_path / "fallback" / "options"
+    output = tmp_path / "output" / "options"
+    _export(current, source_as_of_date=date(2026, 9, 6))
+    _export(fallback, source_as_of_date=date(2026, 9, 7))
+
+    selected = StaticOptionsArtifactSelector().select(
+        current_options_dir=current,
+        fallback_options_dir=fallback,
+        output_options_dir=output,
+        equity_feature_run_id=44,
+        equity_as_of_date=date(2026, 9, 5),
+    )
+
+    assert selected is None
+    assert not output.exists()
+
+
+def test_selector_prefers_older_fallback_over_future_current(tmp_path):
+    current = tmp_path / "current" / "options"
+    fallback = tmp_path / "fallback" / "options"
+    output = tmp_path / "output" / "options"
+    _export(current, source_run_id=45, source_as_of_date=date(2026, 9, 6))
+    fallback_manifest = _export(
+        fallback,
+        source_run_id=43,
+        source_as_of_date=date(2026, 9, 4),
+    )
+
+    selected = StaticOptionsArtifactSelector().select(
+        current_options_dir=current,
+        fallback_options_dir=fallback,
+        output_options_dir=output,
+        equity_feature_run_id=44,
+        equity_as_of_date=date(2026, 9, 5),
+    )
+
+    assert selected is not None
+    assert selected["published_run_id"] == fallback_manifest["published_run_id"]
+    assert selected["source_as_of_date"] == "2026-09-04"
+
+
 def test_selector_uses_cross_build_timestamp_as_stale_artifact_date_tiebreaker(
     tmp_path,
 ):

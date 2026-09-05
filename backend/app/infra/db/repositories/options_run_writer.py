@@ -59,6 +59,7 @@ _OBSERVATION_VALUE_FIELDS = (
     "volume_oi_ratio",
     "near_spot_volume_concentration",
     "near_spot_open_interest_concentration",
+    "highest_contract_activity_ratio",
 )
 
 
@@ -224,7 +225,15 @@ class SqlOptionsRunWriter:
         run.completed_at = datetime.now(timezone.utc)
         run.published_at = run.completed_at
         key = (run.market, run.calculation_version)
-        pointer = self._session.get(OptionsAnalyticsPointer, key)
+        pointer = (
+            self._session.query(OptionsAnalyticsPointer)
+            .filter(
+                OptionsAnalyticsPointer.market == key[0],
+                OptionsAnalyticsPointer.calculation_version == key[1],
+            )
+            .with_for_update()
+            .one_or_none()
+        )
         if pointer is None:
             self._session.add(
                 OptionsAnalyticsPointer(
@@ -234,7 +243,17 @@ class SqlOptionsRunWriter:
                 )
             )
         else:
-            pointer.run_id = run.id
+            pointed_run = self._get_run(pointer.run_id)
+            candidate_identity = (
+                run.as_of_date,
+                run.source_feature_run_id or -1,
+            )
+            pointed_identity = (
+                pointed_run.as_of_date,
+                pointed_run.source_feature_run_id or -1,
+            )
+            if candidate_identity >= pointed_identity:
+                pointer.run_id = run.id
         self._session.commit()
         return run
 
@@ -316,6 +335,7 @@ class SqlOptionsRunWriter:
         item.near_spot_open_interest_concentration = (
             values.near_spot_open_interest_concentration
         )
+        item.highest_contract_activity_ratio = values.highest_contract_activity_ratio
         self._replace_strike_points(item, analysis.strike_points)
 
     def _apply_unavailable(

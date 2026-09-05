@@ -18,6 +18,7 @@ describe('OptionsSymbolDetailView', () => {
     expect(screen.getByText(/missing sessions are not filled/i)).toBeInTheDocument();
     expect(screen.getByText(/8 lifetime observations/i)).toBeInTheDocument();
     expect(screen.getByText('Estimated Net GEX')).toBeInTheDocument();
+    expect(screen.getByText('Highest Contract Activity Ratio')).toBeInTheDocument();
     expect(screen.getByText('Historical context')).toBeInTheDocument();
     expect(screen.getByText('ATM IV Percentile')).toBeInTheDocument();
     expect(screen.getByText('Max Pain')).toBeInTheDocument();

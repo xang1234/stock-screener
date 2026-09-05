@@ -21,6 +21,7 @@ const availableMetrics = () => ({
   volume_oi_ratio: { available: true, value: 0.305, label: 'Volume / Open Interest', reason_codes: [], evidence: {} },
   near_spot_volume_concentration: { available: true, value: 0.6, label: 'Near-Spot Volume Concentration', reason_codes: [], evidence: {} },
   near_spot_open_interest_concentration: { available: true, value: 0.55, label: 'Near-Spot Open Interest Concentration', reason_codes: [], evidence: {} },
+  highest_contract_activity_ratio: { available: true, value: 2, label: 'Highest Contract Activity Ratio', reason_codes: [], evidence: {} },
 });
 
 const buildingHistoricalMetrics = () => ({

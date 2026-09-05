@@ -105,7 +105,7 @@ def test_activity_handles_zero_open_interest_without_division() -> None:
     assert metrics.activity_intensity.available is False
 
 
-def test_activity_uses_five_percent_concentration_and_100_contract_floor() -> None:
+def test_activity_uses_five_percent_concentration() -> None:
     metrics = calculate_activity_metrics(
         (_contract(100, 80, 100), _contract(104, 40, 100), _contract(110, 80, 200)),
         spot=100,
@@ -115,14 +115,38 @@ def test_activity_uses_five_percent_concentration_and_100_contract_floor() -> No
     assert metrics.near_spot_volume_concentration.value == pytest.approx(0.6)
     assert metrics.near_spot_open_interest_concentration.value == pytest.approx(0.5)
     assert metrics.activity_intensity.value == pytest.approx(0.5)
-    assert metrics.qualifying_volume == 200
+    assert metrics.highest_contract_activity_ratio.available is False
 
 
-def test_activity_below_100_contracts_is_unavailable() -> None:
+def test_activity_below_100_contracts_keeps_aggregate_intensity_available() -> None:
     metrics = calculate_activity_metrics((_contract(100, 99, 100),), spot=100)
 
-    assert metrics.activity_intensity.available is False
-    assert metrics.activity_intensity.reason_codes == ("activity_volume_floor_not_met",)
+    assert metrics.activity_intensity.available is True
+    assert metrics.activity_intensity.value == pytest.approx(0.99)
+    assert metrics.highest_contract_activity_ratio.available is False
+    assert metrics.highest_contract_activity_ratio.reason_codes == (
+        "contract_volume_floor_not_met",
+    )
+
+
+def test_contract_activity_floor_is_not_satisfied_by_dispersed_volume() -> None:
+    metrics = calculate_activity_metrics(
+        (_contract(100, 60, 100), _contract(105, 60, 100)),
+        spot=100,
+    )
+
+    assert metrics.activity_intensity.value == pytest.approx(0.6)
+    assert metrics.highest_contract_activity_ratio.available is False
+
+
+def test_contract_activity_reports_highest_qualifying_volume_oi_ratio() -> None:
+    metrics = calculate_activity_metrics(
+        (_contract(100, 120, 200), _contract(105, 200, 100)),
+        spot=100,
+    )
+
+    assert metrics.highest_contract_activity_ratio.available is True
+    assert metrics.highest_contract_activity_ratio.value == pytest.approx(2.0)
 
 
 @pytest.mark.parametrize("volumes", [(None, None), (120, None)])
@@ -141,7 +165,6 @@ def test_activity_rejects_incomplete_volume_totals(
     assert metrics.volume_oi_ratio.reason_codes == ("activity_totals_incomplete",)
     assert metrics.near_spot_volume_concentration.available is False
     assert metrics.activity_intensity.available is False
-    assert metrics.qualifying_volume is None
 
 
 def test_activity_rejects_incomplete_open_interest_total() -> None:

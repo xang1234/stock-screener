@@ -134,6 +134,7 @@ def test_persistence_projection_preserves_incomplete_side_totals_as_missing() ->
     assert values.put_open_interest is None
     assert values.call_put_volume_ratio is None
     assert values.near_spot_open_interest_concentration is None
+    assert values.highest_contract_activity_ratio is None
 
 
 def test_strike_projection_aggregates_duplicate_side_contracts() -> None:

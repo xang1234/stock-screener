@@ -323,6 +323,9 @@
             "gamma_flip": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
+            "highest_contract_activity_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
             "max_pain": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
@@ -365,7 +368,8 @@
             "call_put_volume_ratio",
             "volume_oi_ratio",
             "near_spot_volume_concentration",
-            "near_spot_open_interest_concentration"
+            "near_spot_open_interest_concentration",
+            "highest_contract_activity_ratio"
           ],
           "title": "OptionsMetricsResponse",
           "type": "object"
@@ -1361,6 +1365,9 @@
             "gamma_flip": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
+            "highest_contract_activity_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
             "max_pain": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
@@ -1403,7 +1410,8 @@
             "call_put_volume_ratio",
             "volume_oi_ratio",
             "near_spot_volume_concentration",
-            "near_spot_open_interest_concentration"
+            "near_spot_open_interest_concentration",
+            "highest_contract_activity_ratio"
           ],
           "title": "OptionsMetricsResponse",
           "type": "object"

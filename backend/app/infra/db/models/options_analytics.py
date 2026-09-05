@@ -139,6 +139,7 @@ class OptionsAnalyticsRunItem(Base):
     volume_oi_ratio = Column(Float, nullable=True)
     near_spot_volume_concentration = Column(Float, nullable=True)
     near_spot_open_interest_concentration = Column(Float, nullable=True)
+    highest_contract_activity_ratio = Column(Float, nullable=True)
     short_history_observation_count = Column(Integer, nullable=False, default=0)
     iv_history_observation_count = Column(Integer, nullable=False, default=0)
     lifetime_observation_count = Column(Integer, nullable=False, default=0)

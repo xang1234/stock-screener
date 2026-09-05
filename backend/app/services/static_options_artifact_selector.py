@@ -104,7 +104,10 @@ class StaticOptionsArtifactSelector:
                 selected = current
         if selected is None:
             stale_candidates = tuple(
-                artifact for artifact in (fallback, current) if artifact is not None
+                artifact
+                for artifact in (fallback, current)
+                if artifact is not None
+                and _stale_order_key(artifact)[0] <= equity_as_of_date
             )
             selected = (
                 max(

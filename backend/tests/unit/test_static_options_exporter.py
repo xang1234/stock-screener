@@ -26,6 +26,7 @@ METRICS = (
     "volume_oi_ratio",
     "near_spot_volume_concentration",
     "near_spot_open_interest_concentration",
+    "highest_contract_activity_ratio",
 )
 
 HISTORICAL_METRICS = (

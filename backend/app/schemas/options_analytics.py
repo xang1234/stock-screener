@@ -80,6 +80,7 @@ class OptionsMetricsResponse(_StrictModel):
     volume_oi_ratio: OptionsMetricResponse
     near_spot_volume_concentration: OptionsMetricResponse
     near_spot_open_interest_concentration: OptionsMetricResponse
+    highest_contract_activity_ratio: OptionsMetricResponse
 
 
 class OptionsHistoricalMetricsResponse(_StrictModel):
@@ -304,6 +305,7 @@ _LABELS = {
     "volume_oi_ratio": "Volume / Open Interest",
     "near_spot_volume_concentration": "Near-Spot Volume Concentration",
     "near_spot_open_interest_concentration": "Near-Spot Open Interest Concentration",
+    "highest_contract_activity_ratio": "Highest Contract Activity Ratio",
 }
 
 _HISTORICAL_LABELS = {
