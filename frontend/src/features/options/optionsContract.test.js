@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   normalizeOptionsCommandCenter,
@@ -14,6 +14,16 @@ import {
 } from './__fixtures__/optionsResponses';
 
 describe('options contract', () => {
+  it('validates command-center payloads when dynamic function construction is blocked', () => {
+    vi.stubGlobal('Function', undefined);
+
+    try {
+      expect(normalizeOptionsCommandCenter(commandCenterFixture)).toBe(commandCenterFixture);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('preserves truthful metric states, model labels, ranks, zero, and null', () => {
     const result = normalizeOptionsCommandCenter(commandCenterFixture);
     const aapl = result.items[0];

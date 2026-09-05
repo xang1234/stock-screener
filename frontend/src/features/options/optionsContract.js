@@ -1,26 +1,22 @@
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
-
 import optionsSchema from './optionsSchema.json';
+import {
+  commandCenter as validateCommandCenter,
+  manifest as validateManifest,
+  symbolDetail as validateSymbolDetail,
+} from 'virtual:options-validators';
 
-const { manifest, command_center: commandCenter, symbol_detail: symbolDetail } = optionsSchema.models;
+const { manifest } = optionsSchema.models;
 
 export const OPTIONS_ANALYTICS_SCHEMA_VERSION = manifest.properties.data_schema_version.const;
 export const STATIC_OPTIONS_SCHEMA_VERSION = manifest.properties.schema_version.const;
 
-const ajv = new Ajv2020({ allErrors: true, strict: true });
-addFormats(ajv);
-
-const validators = new Map();
-
-const getValidator = (name, schema) => {
-  if (!validators.has(name)) validators.set(name, ajv.compile(schema));
-  return validators.get(name);
-};
-
 const fail = (message) => {
   throw new Error(`Invalid options analytics contract: ${message}`);
 };
+
+const validationErrorsText = (errors) => (errors || [])
+  .map((error) => `${error.instancePath || 'data'} ${error.message}`)
+  .join('; ');
 
 const rejectNonFiniteNumbers = (value) => {
   if (typeof value === 'number' && !Number.isFinite(value)) fail('non-finite number');
@@ -33,7 +29,7 @@ const rejectNonFiniteNumbers = (value) => {
 const validateShape = (validator, payload, label) => {
   rejectNonFiniteNumbers(payload);
   if (!validator(payload)) {
-    fail(`${label}: ${ajv.errorsText(validator.errors, { separator: '; ' })}`);
+    fail(`${label}: ${validationErrorsText(validator.errors)}`);
   }
 };
 
@@ -82,7 +78,7 @@ const validateItemSemantics = (item, location) => {
 };
 
 export const normalizeOptionsManifest = (payload) => {
-  validateShape(getValidator('manifest', manifest), payload, 'manifest');
+  validateShape(validateManifest, payload, 'manifest');
   requireSafeOptionsPath(payload.command_center_path, 'command_center_path');
   const paths = new Set();
   Object.entries(payload.symbols).forEach(([symbol, entry]) => {
@@ -101,7 +97,7 @@ export const normalizeOptionsManifest = (payload) => {
 };
 
 export const normalizeOptionsCommandCenter = (payload, context = {}) => {
-  validateShape(getValidator('commandCenter', commandCenter), payload, 'command center');
+  validateShape(validateCommandCenter, payload, 'command center');
   validateRunIdentity(payload, context);
   if (payload.current_count !== payload.items.length) fail('current count does not match items');
   const symbols = new Set();
@@ -114,7 +110,7 @@ export const normalizeOptionsCommandCenter = (payload, context = {}) => {
 };
 
 export const normalizeOptionsSymbolDetail = (payload, context = {}) => {
-  validateShape(getValidator('symbolDetail', symbolDetail), payload, 'symbol detail');
+  validateShape(validateSymbolDetail, payload, 'symbol detail');
   validateRunIdentity(payload, context);
   validateItemSemantics(payload.item, 'item');
   if (context.expectedSymbol && payload.item.symbol !== context.expectedSymbol) {
