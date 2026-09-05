@@ -121,6 +121,12 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "RRG History Data" \
             --notes "Rolling compact weekly group-rank history for static RRG builds."
+          gh release view options-analytics-data \
+            --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+          gh release create options-analytics-data \
+            --repo "${{ github.repository }}" \
+            --title "Options Analytics History" \
+            --notes "Checksummed aggregate-only US options history for ephemeral static builds."
           gh release view breadth-contributor-metadata-data \
             --repo "${{ github.repository }}" >/dev/null 2>&1 || \
           gh release create breadth-contributor-metadata-data \
@@ -158,6 +164,7 @@ jobs:
       # ignore these (the policy looks up settings.<provider>_<key>_<market>).
       YFINANCE_BATCH_SIZE_IN: "25"
       YFINANCE_BATCH_RATE_LIMIT_IN: "0.1"
+      OPTIONS_ANALYTICS_ENABLED: ${{ matrix.market == 'US' && 'true' || 'false' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -208,6 +215,48 @@ jobs:
           python -m app.scripts.sync_daily_price_bundle_from_github \
             --market "${{ matrix.market }}" \
             --allow-stale
+
+      - name: Restore US options history
+        id: restore-options-history
+        if: ${{ matrix.market == 'US' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/options-history
+          rm -f /tmp/options-history/options-history-us-v1.json.gz
+          cd backend
+          alembic upgrade head
+          RESTORE_STATUS=failed
+          SAFE_TO_PUBLISH=false
+          if ASSET_PRESENT="$(gh release view options-analytics-data \
+            --repo "${{ github.repository }}" \
+            --json assets \
+            --jq 'any(.assets[]; .name == "options-history-us-v1.json.gz")')"; then
+            if [ "$ASSET_PRESENT" = "true" ]; then
+              if gh release download options-analytics-data \
+                --repo "${{ github.repository }}" \
+                --pattern options-history-us-v1.json.gz \
+                --dir /tmp/options-history \
+                && python -m app.scripts.import_options_history \
+                  --input /tmp/options-history/options-history-us-v1.json.gz; then
+                RESTORE_STATUS=restored
+                SAFE_TO_PUBLISH=true
+              fi
+            else
+              RESTORE_STATUS=missing
+              SAFE_TO_PUBLISH=true
+            fi
+          fi
+          echo "restore_status=$RESTORE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "safe_to_publish=$SAFE_TO_PUBLISH" >> "$GITHUB_OUTPUT"
+          if [ "$RESTORE_STATUS" = "restored" ]; then
+            echo "Restored US options history."
+          elif [ "$RESTORE_STATUS" = "missing" ]; then
+            echo "No prior US options history asset exists; starting fresh."
+          else
+            echo "Unable to restore US options history; history publication will be skipped." >&2
+          fi
 
       - name: Plan rolling RRG history
         id: rrg-history
@@ -342,6 +391,7 @@ jobs:
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             echo "has_price_bundle=false" >> "$GITHUB_OUTPUT"
             echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
+            echo "has_options_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -eq 79 ]; then
@@ -350,6 +400,7 @@ jobs:
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             echo "has_price_bundle=$has_price_bundle" >> "$GITHUB_OUTPUT"
             echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
+            echo "has_options_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -ne 0 ]; then
@@ -366,7 +417,13 @@ jobs:
             echo "Rolling RRG history restore failed for ${{ matrix.market }}; current output will not replace the last good market artifact."
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
+            echo "has_options_artifact=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if [ "${{ matrix.market }}" = "US" ] && [ -f /tmp/static-data/options/manifest.json ]; then
+            echo "has_options_artifact=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_options_artifact=false" >> "$GITHUB_OUTPUT"
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
 
@@ -499,6 +556,37 @@ jobs:
           path: /tmp/static-data/markets/${{ env.MARKET_LOWER }}
           if-no-files-found: error
 
+      - name: Upload current US options artifact
+        if: ${{ steps.export-market.outputs.has_options_artifact == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-options-US
+          path: /tmp/static-data/options
+          if-no-files-found: error
+
+      - name: Publish US options history
+        if: ${{ steps.export-market.outputs.has_options_artifact == 'true' && steps.restore-options-history.outputs.safe_to_publish == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID="$(jq -r '.published_run_id' /tmp/static-data/options/manifest.json)"
+          cd backend
+          python -m app.scripts.export_options_history \
+            --output /tmp/options-history-us-v1.json.gz \
+            --require-run-id "$RUN_ID"
+          for attempt in 1 2 3; do
+            if gh release upload options-analytics-data \
+              /tmp/options-history-us-v1.json.gz --clobber; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "Unable to advance options history; the current static artifact remains valid." >&2
+          exit 1
+
       - name: Publish rolling RRG history
         if: ${{ steps.export-market.outputs.has_artifact == 'true' && (steps.breadth-contributor-metadata.outputs.enabled != 'true' || steps.publish-breadth-contributor-metadata.outputs.metadata_state_published == 'true') && steps.export-market.outputs.rrg_history_publishable == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.safe_to_publish == 'true' }}
         continue-on-error: true
@@ -563,6 +651,13 @@ jobs:
           path: /tmp/static-market-artifacts-current
           merge-multiple: false
 
+      - name: Download current US options artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: static-options-US
+          path: /tmp/static-options-current
+
       - name: Download per-market fallback artifacts
         continue-on-error: true
         env:
@@ -576,6 +671,8 @@ jobs:
           python -m app.scripts.download_static_market_fallbacks \
             --current-dir /tmp/static-market-artifacts-current \
             --fallback-dir /tmp/static-market-artifacts-fallback \
+            --current-options-dir /tmp/static-options-current \
+            --fallback-options-dir /tmp/static-options-fallback \
             --fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
 
       - name: Validate market artifacts
@@ -587,6 +684,8 @@ jobs:
           python -m app.scripts.validate_static_market_artifacts \
             --current-dir /tmp/static-market-artifacts-current \
             --fallback-dir /tmp/static-market-artifacts-fallback \
+            --current-options-dir /tmp/static-options-current \
+            --fallback-options-dir /tmp/static-options-fallback \
             --selected-markets "${SELECTED_MARKETS}"
 
       - name: Combine static data bundle
@@ -598,6 +697,8 @@ jobs:
             --output-dir ../frontend/public/static-data \
             --combine-artifacts-dir /tmp/static-market-artifacts-current \
             --fallback-artifacts-dir /tmp/static-market-artifacts-fallback \
+            --options-artifacts-dir /tmp/static-options-current \
+            --fallback-options-artifacts-dir /tmp/static-options-fallback \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
 
       - name: Build static frontend

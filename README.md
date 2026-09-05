@@ -27,6 +27,7 @@ See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in s
 - **Theme discovery** - AI theme identification from RSS, Twitter/X, and news feeds; tracks trending vs. emerging themes and alerts on momentum shifts.
 - **AI research chatbot** - LLM powered chatbot with optional web search and persistent conversation history.
 - **Operations** -  startup data bootstrap, runtime status, and Operations console for queues/jobs/telemetry.
+- **Options Command Center** - opt-in US-only options context for the current top Candidates and Leaders, with focused gamma, volatility, skew, and activity views plus ticker history.
 - **Backtest** -  Backtest page that validates published scan picks and theme alerts against price history.
 
 ![Market Health and Exposure](docs/screenshots/health-exposure.jpg)
@@ -95,6 +96,8 @@ Optional web-search keys (`TAVILY_API_KEY`, `SERPER_API_KEY`) enable the chatbot
 | `/chatbot` | Assistant | Feature-gated AI research assistant with web search and watchlist actions |
 | `/stocks/:ticker` | Stock Detail | Charts, fundamentals, themes, watchlist actions, validation history |
 | `/operations` | Operations | Runtime activity, queue/job inventory, telemetry alerts, safe job controls |
+| `/options` | Options Command Center | Feature-gated US Candidate/Leader options analytics; also available read-only when advertised by the static snapshot |
+| `/options/:symbol` | Options Detail | Strike structure, model-estimate GEX, IV smile, and discontinuous observed history for one current symbol |
 
 ## Tech stack
 

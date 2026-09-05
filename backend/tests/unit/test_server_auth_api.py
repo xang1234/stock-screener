@@ -118,6 +118,21 @@ async def test_admin_api_key_does_not_authenticate_general_server_routes(client,
 
 
 @pytest.mark.asyncio
+async def test_options_analytics_routes_require_server_session(client, monkeypatch):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
+    monkeypatch.setattr(server_auth.settings, "server_auth_password", "server-secret")
+    monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "signing-secret")
+
+    read = await client.get("/api/v1/options-analytics/command-center")
+    refresh = await client.post("/api/v1/options-analytics/refresh", json={})
+
+    assert read.status_code == 401
+    assert refresh.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_admin_api_key_alone_does_not_configure_server_auth(client, monkeypatch):
     from app.services import server_auth
 

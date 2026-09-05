@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     feature_chatbot: bool = True
     feature_tasks: bool = True
     feature_grouped_scan_filters: bool = False
+    options_analytics_enabled: bool = False
 
     # Database
     database_url: str = ""
@@ -865,6 +866,7 @@ class Settings(BaseSettings):
             "chatbot": self.feature_chatbot,
             "tasks": self.feature_tasks,
             "grouped_scan_filters": self.feature_grouped_scan_filters,
+            "options_analytics": self.options_analytics_enabled,
             "ui_snapshots": True,
         }
 

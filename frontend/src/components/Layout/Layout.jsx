@@ -27,8 +27,10 @@ import { ColorModeContext } from '../../contexts/ColorModeContext';
 import MarketSelector from './MarketSelector';
 import RuntimeActivityStatusButton from './RuntimeActivityStatusButton';
 import { useRuntime } from '../../contexts/RuntimeContext';
+import { useMarket } from '../../contexts/MarketContext';
 import { usePipeline } from '../../contexts/usePipeline';
 import { useStrategyProfile, useStrategyProfileData } from '../../contexts/StrategyProfileContext';
+import { isLiveOptionsAvailable } from '../../features/options/optionsAvailability';
 
 const AssistantDrawerContent = lazy(() => import('../AssistantChat/AssistantDrawerContent'));
 const PipelineProgressCard = lazy(() => import('../PipelineProgressCard'));
@@ -161,11 +163,18 @@ function Layout({ children }) {
   const location = useLocation();
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
-  const { auth, features, isLoggingOut, logout } = useRuntime();
+  const { auth, features, isLoggingOut, logout, marketCatalog, primaryMarket } = useRuntime();
+  const { selectedMarket } = useMarket();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   const assistantAvailable = features.chatbot && (!auth?.required || auth?.authenticated);
+  const optionsAvailable = isLiveOptionsAvailable({
+    features,
+    marketCatalog,
+    selectedMarket,
+    primaryMarket,
+  });
 
   const navItems = [
     { path: '/', label: 'Daily' },
@@ -173,6 +182,7 @@ function Layout({ children }) {
     { path: '/breadth', label: 'Breadth' },
     { path: '/groups', label: 'Groups' },
     { path: '/validation', label: 'Backtest' },
+    ...(optionsAvailable ? [{ path: '/options', label: 'Options', matchPrefix: true }] : []),
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Assistant' }] : []),
   ];
@@ -191,7 +201,9 @@ function Layout({ children }) {
           <TickerSearch />
           <Box sx={{ flexGrow: 1 }} />
           {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
+            const isActive = item.matchPrefix
+              ? location.pathname.startsWith(item.path)
+              : location.pathname === item.path;
             return (
               <Button
                 key={item.path}

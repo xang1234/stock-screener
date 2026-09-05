@@ -45,6 +45,7 @@ class MarketCapabilitiesResponse(BaseModel):
     feature_snapshot: bool = False
     official_universe: bool = False
     finviz_screening: bool = False
+    options_analytics: bool = False
 
 
 class MicFactsResponse(BaseModel):

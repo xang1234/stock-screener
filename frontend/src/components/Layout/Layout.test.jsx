@@ -9,6 +9,8 @@ import { renderWithProviders } from '../../test/renderWithProviders';
 const runtimeState = {
   auth: { required: false, authenticated: true },
   features: { chatbot: false, themes: false, tasks: false },
+  marketCatalog: { markets: [] },
+  primaryMarket: 'US',
   isLoggingOut: false,
   logout: vi.fn(),
 };
@@ -40,6 +42,9 @@ vi.mock('../../hooks/useRuntimeActivity', () => ({
 describe('Layout', () => {
   beforeEach(() => {
     useRuntimeActivityMock.mockReset();
+    runtimeState.features = { chatbot: false, themes: false, tasks: false };
+    runtimeState.marketCatalog = { markets: [] };
+    runtimeState.primaryMarket = 'US';
   });
 
   it('defers the header runtime activity request until after initial paint', () => {
@@ -164,5 +169,28 @@ describe('Layout', () => {
     expect(screen.getByText('Bootstrapping US')).toBeInTheDocument();
     expect(screen.getByText('Universe Refresh')).toBeInTheDocument();
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
+  it('shows Options only for an enabled US market capability and keeps detail active', () => {
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+    runtimeState.features = { ...runtimeState.features, options_analytics: true };
+    runtimeState.marketCatalog = {
+      markets: [{ code: 'US', capabilities: { options_analytics: true } }],
+    };
+
+    const { rerender } = renderWithProviders(
+      <MemoryRouter initialEntries={['/options/AAPL']}>
+        <Layout><div>content</div></Layout>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('link', { name: 'Options' })).toHaveStyle({ fontWeight: '600' });
+
+    runtimeState.primaryMarket = 'HK';
+    rerender(
+      <MemoryRouter initialEntries={['/options/AAPL']}>
+        <Layout><div>content</div></Layout>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('link', { name: 'Options' })).not.toBeInTheDocument();
   });
 });

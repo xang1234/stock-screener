@@ -8,8 +8,10 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -24,6 +26,10 @@ from app.services.static_market_artifact_contract import (
     expected_market_from_static_market_manifest_path,
     market_from_static_market_artifact_name,
     read_static_market_manifest,
+)
+from app.services.static_options_contract import (
+    StaticOptionsArtifactError,
+    validate_static_options_artifact,
 )
 
 
@@ -141,7 +147,9 @@ def collect_current_markets(current_dir: Path) -> set[str]:
             TypeError,
             StaticMarketArtifactContractError,
         ) as exc:
-            warn(f"Current artifact metadata at {metadata_path} could not be read ({exc}).")
+            warn(
+                f"Current artifact metadata at {metadata_path} could not be read ({exc})."
+            )
             continue
         if market:
             current_markets.add(market)
@@ -157,7 +165,9 @@ def downloaded_market_is_compatible(
 ) -> bool:
     metadata_paths = sorted(target_dir.rglob(STATIC_MARKET_METADATA_FILENAME))
     if not metadata_paths:
-        warn(f"{artifact_name} from run {run_id} has no {STATIC_MARKET_METADATA_FILENAME}.")
+        warn(
+            f"{artifact_name} from run {run_id} has no {STATIC_MARKET_METADATA_FILENAME}."
+        )
         return False
     if len(metadata_paths) != 1:
         warn(
@@ -170,9 +180,7 @@ def downloaded_market_is_compatible(
     try:
         read_static_market_manifest(metadata_path, expected_market=market)
     except (OSError, json.JSONDecodeError, TypeError) as exc:
-        warn(
-            f"{artifact_name} metadata at {metadata_path} could not be read ({exc})."
-        )
+        warn(f"{artifact_name} metadata at {metadata_path} could not be read ({exc}).")
         return False
     except StaticMarketArtifactContractError as exc:
         warn(str(exc))
@@ -214,7 +222,9 @@ def downloaded_market_has_advertised_assets(
         StaticMarketArtifactContractError,
         StaticArtifactFormulaError,
     ) as exc:
-        warn(f"{artifact_name} from run {run_id} has invalid advertised assets ({exc}).")
+        warn(
+            f"{artifact_name} from run {run_id} has invalid advertised assets ({exc})."
+        )
         return False
     return True
 
@@ -297,6 +307,30 @@ def downloaded_market_as_of_date(target_dir: Path) -> date | None:
     return _coerce_manifest_date(value)
 
 
+def find_options_artifact_dir(base: Path) -> Path | None:
+    candidates = [base]
+    if base.exists():
+        candidates.extend(path.parent for path in base.rglob("manifest.json"))
+    for candidate in candidates:
+        try:
+            validate_static_options_artifact(candidate)
+        except StaticOptionsArtifactError:
+            continue
+        return candidate
+    return None
+
+
+def downloaded_options_as_of_date(target_dir: Path) -> date | None:
+    options_dir = find_options_artifact_dir(target_dir)
+    if options_dir is None:
+        return None
+    try:
+        manifest = validate_static_options_artifact(options_dir)
+    except StaticOptionsArtifactError:
+        return None
+    return _coerce_manifest_date(manifest.get("source_as_of_date"))
+
+
 def _candidate_is_newer(
     candidate_date: date | None,
     incumbent_date: date | None,
@@ -331,24 +365,108 @@ def _install_market_candidate(
     target_dir: Path,
     candidate_dir: Path,
 ) -> None:
-    backup_dir: Path | None = None
-    if target_dir.exists() or target_dir.is_symlink():
-        backup_dir = Path(
-            tempfile.mkdtemp(
-                prefix=f".{target_dir.name}.previous-",
-                dir=target_dir.parent,
-            )
+    from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
+
+    AtomicDirectoryPublisher().publish(
+        target_dir,
+        lambda stage: shutil.copytree(candidate_dir, stage, dirs_exist_ok=True),
+    )
+    shutil.rmtree(candidate_dir)
+
+
+@dataclass(frozen=True)
+class _DownloadedCandidate:
+    wrapper_dir: Path
+    artifact_dir: Path
+    as_of_date: date | None
+
+
+def _download_candidate(
+    *,
+    repo: str,
+    run_id: int,
+    artifact_name: str,
+    parent_dir: Path,
+    finder: Callable[[Path], Path | None],
+    date_reader: Callable[[Path], date | None],
+    missing_warning: str | None = None,
+) -> _DownloadedCandidate | None:
+    wrapper = Path(
+        tempfile.mkdtemp(
+            prefix=f".{artifact_name}.candidate-{run_id}-",
+            dir=parent_dir,
         )
-        shutil.rmtree(backup_dir)
-        target_dir.rename(backup_dir)
+    )
     try:
-        candidate_dir.rename(target_dir)
-    except Exception:
-        if backup_dir is not None and backup_dir.exists() and not target_dir.exists():
-            backup_dir.rename(target_dir)
-        raise
-    if backup_dir is not None and backup_dir.exists():
-        shutil.rmtree(backup_dir)
+        subprocess.run(
+            [
+                "gh",
+                "run",
+                "download",
+                str(run_id),
+                "--repo",
+                repo,
+                "--name",
+                artifact_name,
+                "--dir",
+                str(wrapper),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        warn(
+            f"{artifact_name} from run {run_id} failed to download "
+            f"with exit {exc.returncode}.{command_error_detail(exc)}"
+        )
+        shutil.rmtree(wrapper, ignore_errors=True)
+        return None
+
+    artifact_dir = finder(wrapper)
+    if artifact_dir is None:
+        if missing_warning:
+            warn(missing_warning)
+        shutil.rmtree(wrapper, ignore_errors=True)
+        return None
+    return _DownloadedCandidate(
+        wrapper_dir=wrapper,
+        artifact_dir=artifact_dir,
+        as_of_date=date_reader(wrapper),
+    )
+
+
+def _find_compatible_market_candidate(
+    wrapper: Path,
+    *,
+    market: str,
+    artifact_name: str,
+    run_id: int,
+    formula_requirements: Mapping[str, str],
+) -> Path | None:
+    if not downloaded_market_is_compatible(
+        wrapper,
+        market=market,
+        artifact_name=artifact_name,
+        run_id=run_id,
+    ):
+        return None
+    if not downloaded_market_has_advertised_assets(
+        wrapper,
+        market=market,
+        artifact_name=artifact_name,
+        run_id=run_id,
+    ):
+        return None
+    if not downloaded_market_matches_required_formula(
+        wrapper,
+        market=market,
+        artifact_name=artifact_name,
+        run_id=run_id,
+        required_formula_by_market=formula_requirements,
+    ):
+        return None
+    return wrapper
 
 
 def download_fallback_artifacts(
@@ -359,6 +477,8 @@ def download_fallback_artifacts(
     current_dir: Path,
     fallback_dir: Path,
     required_formula_by_market: Mapping[str, str] | None = None,
+    current_options_dir: Path | None = None,
+    fallback_options_dir: Path | None = None,
 ) -> set[str]:
     fallback_dir.mkdir(parents=True, exist_ok=True)
     formula_requirements = {
@@ -400,6 +520,12 @@ def download_fallback_artifacts(
     current_markets = collect_current_markets(current_dir)
     fallback_markets: set[str] = set()
     fallback_dates_by_market: dict[str, date | None] = {}
+    fallback_options_date: date | None = None
+    if (
+        current_options_dir is not None
+        and find_options_artifact_dir(current_options_dir) is not None
+    ):
+        print("Current run already has a compatible static US options artifact.")
     if current_markets:
         print(
             f"Current run already has market artifacts: {', '.join(sorted(current_markets))}.",
@@ -428,7 +554,9 @@ def download_fallback_artifacts(
             )
             continue
         except json.JSONDecodeError as exc:
-            warn(f"Artifact list API response for run {run_id} was not valid JSON ({exc}).")
+            warn(
+                f"Artifact list API response for run {run_id} was not valid JSON ({exc})."
+            )
             continue
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             warn(f"Artifact list API response for run {run_id} was invalid: {exc}")
@@ -439,6 +567,36 @@ def download_fallback_artifacts(
             for artifact in artifacts
             if not artifact.get("expired")
         }
+
+        options_artifact = artifacts_by_name.get("static-options-US")
+        if options_artifact is not None and fallback_options_dir is not None:
+            artifact_name = "static-options-US"
+            candidate = _download_candidate(
+                repo=repo,
+                run_id=int(run_id),
+                artifact_name=artifact_name,
+                parent_dir=fallback_dir,
+                finder=find_options_artifact_dir,
+                date_reader=downloaded_options_as_of_date,
+                missing_warning=(
+                    f"{artifact_name} from run {run_id} is not a compatible "
+                    "static options artifact."
+                ),
+            )
+            if candidate is not None:
+                if _candidate_is_newer(candidate.as_of_date, fallback_options_date):
+                    fallback_options_dir.parent.mkdir(parents=True, exist_ok=True)
+                    _install_market_candidate(
+                        target_dir=fallback_options_dir,
+                        candidate_dir=candidate.artifact_dir,
+                    )
+                    fallback_options_date = candidate.as_of_date
+                    print(
+                        f"Using fallback artifact {artifact_name} from Static Site "
+                        f"run {run_id} on {branch_name}.",
+                        flush=True,
+                    )
+                shutil.rmtree(candidate.wrapper_dir, ignore_errors=True)
 
         for artifact_name in sorted(artifacts_by_name):
             market = market_from_static_market_artifact_name(artifact_name)
@@ -453,86 +611,42 @@ def download_fallback_artifacts(
             ):
                 continue
             target_dir = fallback_dir / artifact_name
-            candidate_dir = Path(
-                tempfile.mkdtemp(
-                    prefix=f".{artifact_name}.candidate-{run_id}-",
-                    dir=fallback_dir,
-                )
+            candidate = _download_candidate(
+                repo=repo,
+                run_id=int(run_id),
+                artifact_name=artifact_name,
+                parent_dir=fallback_dir,
+                finder=partial(
+                    _find_compatible_market_candidate,
+                    market=market,
+                    artifact_name=artifact_name,
+                    run_id=int(run_id),
+                    formula_requirements=formula_requirements,
+                ),
+                date_reader=downloaded_market_as_of_date,
             )
-
-            try:
-                subprocess.run(
-                    [
-                        "gh",
-                        "run",
-                        "download",
-                        str(run_id),
-                        "--repo",
-                        repo,
-                        "--name",
-                        artifact_name,
-                        "--dir",
-                        str(candidate_dir),
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as exc:
-                warn(
-                    f"{artifact_name} from run {run_id} failed to download "
-                    f"with exit {exc.returncode}.{command_error_detail(exc)}"
-                )
-                shutil.rmtree(candidate_dir, ignore_errors=True)
+            if candidate is None:
                 continue
 
-            if not downloaded_market_is_compatible(
-                candidate_dir,
-                market=market,
-                artifact_name=artifact_name,
-                run_id=int(run_id),
-            ):
-                shutil.rmtree(candidate_dir, ignore_errors=True)
-                continue
-
-            if not downloaded_market_has_advertised_assets(
-                candidate_dir,
-                market=market,
-                artifact_name=artifact_name,
-                run_id=int(run_id),
-            ):
-                shutil.rmtree(candidate_dir, ignore_errors=True)
-                continue
-
-            if not downloaded_market_matches_required_formula(
-                candidate_dir,
-                market=market,
-                artifact_name=artifact_name,
-                run_id=int(run_id),
-                required_formula_by_market=formula_requirements,
-            ):
-                shutil.rmtree(candidate_dir, ignore_errors=True)
-                continue
-
-            candidate_date = downloaded_market_as_of_date(candidate_dir)
+            candidate_date = candidate.as_of_date
             if market in fallback_markets and not _candidate_is_newer(
                 candidate_date,
                 fallback_dates_by_market.get(market),
             ):
-                shutil.rmtree(candidate_dir, ignore_errors=True)
+                shutil.rmtree(candidate.wrapper_dir, ignore_errors=True)
                 continue
 
             try:
                 _install_market_candidate(
                     target_dir=target_dir,
-                    candidate_dir=candidate_dir,
+                    candidate_dir=candidate.artifact_dir,
                 )
             except OSError as exc:
                 warn(
                     f"{artifact_name} from run {run_id} could not replace "
                     f"the incumbent fallback artifact ({exc})."
                 )
-                shutil.rmtree(candidate_dir, ignore_errors=True)
+                shutil.rmtree(candidate.wrapper_dir, ignore_errors=True)
                 continue
             fallback_markets.add(market)
             fallback_dates_by_market[market] = candidate_date
@@ -571,13 +685,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--current-dir", type=Path, required=True)
     parser.add_argument("--fallback-dir", type=Path, required=True)
     parser.add_argument("--repo", default=os.environ.get("REPOSITORY", ""))
-    parser.add_argument("--current-run-id", default=os.environ.get("CURRENT_RUN_ID", "0"))
+    parser.add_argument(
+        "--current-run-id", default=os.environ.get("CURRENT_RUN_ID", "0")
+    )
     parser.add_argument("--branch", default=os.environ.get("BRANCH_NAME", "main"))
     parser.add_argument(
         "--fallback-rs-formula-overrides-json",
         type=parse_formula_requirements,
         default={},
     )
+    parser.add_argument("--current-options-dir", type=Path)
+    parser.add_argument("--fallback-options-dir", type=Path)
     args = parser.parse_args(argv)
 
     if not args.repo:
@@ -590,6 +708,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         current_dir=args.current_dir,
         fallback_dir=args.fallback_dir,
         required_formula_by_market=args.fallback_rs_formula_overrides_json,
+        current_options_dir=args.current_options_dir,
+        fallback_options_dir=args.fallback_options_dir,
     )
     return 0
 

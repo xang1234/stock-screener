@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy.orm import Session
 
 from app.wiring.runtime_context import resolve_runtime_services
 
@@ -136,6 +138,84 @@ def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
     )
 
 
+def get_refresh_options_analytics_use_case(
+    session: Session,
+    *,
+    cancellation: Any | None = None,
+):
+    import time
+
+    from app.config import settings
+    from app.domain.scanning.ports import NeverCancelledToken
+    from app.infra.db.repositories.options_retention import (
+        SqlOptionsRetentionRepository,
+    )
+    from app.infra.db.repositories.options_run_writer import SqlOptionsRunWriter
+    from app.infra.db.repositories.published_options_reader import (
+        SqlPublishedOptionsReader,
+    )
+    from app.infra.providers.yahoo_options import YahooOptionsProvider
+    from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
+    from app.services.market_session_lag import MarketSessionWindow
+    from app.services.rate_budget_policy import get_rate_budget_policy
+    from app.use_cases.options_analytics import (
+        OPTIONS_ANALYTICS_CALCULATION_VERSION,
+        OPTIONS_ANALYTICS_SCHEMA_VERSION,
+        RefreshOptionsAnalyticsUseCase,
+    )
+
+    runtime = resolve_runtime_services()
+    calendar = MarketSessionWindow(runtime.market_calendar_service(), market="US")
+    requests_per_second = max(float(settings.yfinance_rate_limit), 0.01)
+    provider = YahooOptionsProvider(
+        rate_limiter=lambda: runtime.rate_limiter().wait(
+            "yfinance:options", min_interval_s=1.0 / requests_per_second
+        ),
+    )
+    rate_budget_policy = get_rate_budget_policy()
+    backoff = rate_budget_policy.get_backoff_params("yfinance", "US")
+
+    def throttle_backoff(attempt: int) -> None:
+        wait_seconds = min(
+            float(backoff["base_s"]) * float(backoff["factor"]) ** (attempt - 1),
+            float(backoff["max_s"]),
+        )
+        rate_budget_policy.record_429("yfinance", "US")
+        rate_budget_policy.record_throttle_wait("yfinance", "US", wait_seconds)
+        time.sleep(wait_seconds)
+
+    run_writer = SqlOptionsRunWriter(session)
+    published_reader = SqlPublishedOptionsReader(session)
+    return RefreshOptionsAnalyticsUseCase(
+        candidate_source=SqlOptionsCandidateSource(session),
+        run_writer=run_writer,
+        published_reader=published_reader,
+        retention=SqlOptionsRetentionRepository(session),
+        provider=provider,
+        calendar=calendar,
+        cancellation=cancellation or NeverCancelledToken(),
+        calculation_version=OPTIONS_ANALYTICS_CALCULATION_VERSION,
+        schema_version=OPTIONS_ANALYTICS_SCHEMA_VERSION,
+        max_workers=2,
+        throttle_backoff=throttle_backoff,
+    )
+
+
+def get_options_analytics_queries(session: Session):
+    from app.infra.db.repositories.published_options_reader import (
+        SqlPublishedOptionsReader,
+    )
+    from app.use_cases.options_analytics import (
+        OPTIONS_ANALYTICS_CALCULATION_VERSION,
+        OptionsAnalyticsQueries,
+    )
+
+    return OptionsAnalyticsQueries(
+        SqlPublishedOptionsReader(session),
+        calculation_version=OPTIONS_ANALYTICS_CALCULATION_VERSION,
+    )
+
+
 __all__ = [
     "get_build_daily_snapshot_use_case",
     "get_compare_feature_runs_use_case",
@@ -150,5 +230,7 @@ __all__ = [
     "get_get_setup_details_use_case",
     "get_get_single_result_use_case",
     "get_list_feature_runs_use_case",
+    "get_options_analytics_queries",
+    "get_refresh_options_analytics_use_case",
     "get_run_bulk_scan_use_case",
 ]

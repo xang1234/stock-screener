@@ -70,6 +70,7 @@ const staticPayloads = {
           scan: { path: 'markets/us/scan/manifest.json' },
           breadth: { path: 'markets/us/breadth.json' },
           groups: { path: 'markets/us/groups.json' },
+          options: { path: 'options/manifest.json' },
         },
         assets: {
           charts: { path: 'markets/us/charts/index.json' },
@@ -358,6 +359,16 @@ describe('App static mode', () => {
     });
   }, 10000);
 
+  it('advertises Options only for a US manifest entry that provides it', async () => {
+    await renderStaticAppAtHash('#/');
+
+    expect(await screen.findByRole(
+      'tab',
+      { name: 'Options' },
+      { timeout: 10000 },
+    )).toBeInTheDocument();
+  }, 10000);
+
   it('offers 1M and 3M ranges on the breadth page in the static route', async () => {
     await renderStaticAppAtHash('#/breadth');
 
@@ -385,5 +396,6 @@ describe('App static mode', () => {
 
     expect(await screen.findByRole('heading', { name: 'Hong Kong Group Rankings' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Static market selector' })).toHaveTextContent('Hong Kong');
+    expect(screen.queryByRole('tab', { name: 'Options' })).not.toBeInTheDocument();
   }, 10000);
 });

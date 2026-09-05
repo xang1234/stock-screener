@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from pydantic import ValidationError
+
+from app.database import get_db
+from app.main import app
+from app.schemas.options_analytics import (
+    OptionsCommandCenterResponse,
+    OptionsMetricResponse,
+)
+
+
+def _item(symbol: str, *, kind="current", state="available", core_valid=None):
+    return SimpleNamespace(
+        security_symbol=symbol,
+        candidate_kind=kind,
+        candidate_rank=1 if symbol == "AAPL" else None,
+        leader_rank=1 if symbol == "AAPL" else 2,
+        spot_price=100.0,
+        expiration=date(2026, 9, 18),
+        observation_state=state,
+        core_valid=(state == "available" if core_valid is None else core_valid),
+        observation_at=datetime(2026, 9, 4, 2, tzinfo=timezone.utc),
+        max_pain=100.0 if state == "available" else None,
+        net_gex=2500.0 if state == "available" else None,
+        gamma_flip=None,
+        call_wall=105.0,
+        put_wall=95.0,
+        atm_iv=0.25 if state == "available" else None,
+        skew_25_delta=None,
+        realized_volatility=0.20,
+        vrp=0.05,
+        activity_intensity=0.8,
+        iv_percentile=None,
+        iv_rank=None,
+        max_pain_change_5=None,
+        net_gex_change_5=None,
+        gamma_flip_change_5=None,
+        atm_iv_change_5=None,
+        skew_25_delta_change_5=None,
+        realized_volatility_change_5=None,
+        vrp_change_5=None,
+        activity_intensity_change_5=None,
+        activity_rank=1,
+        call_open_interest=1000,
+        put_open_interest=900,
+        call_volume=300,
+        put_volume=250,
+        call_put_volume_ratio=1.2,
+        volume_oi_ratio=550 / 1900,
+        near_spot_volume_concentration=0.7,
+        near_spot_open_interest_concentration=0.65,
+        highest_contract_activity_ratio=2.0,
+        short_history_observation_count=3,
+        iv_history_observation_count=3,
+        lifetime_observation_count=3,
+        retry_count=0,
+        evidence_json={
+            "quality": {
+                "source_spot_price": 100.0,
+                "provider_spot_price": 101.0,
+                "spot_disagreement_ratio": 0.01,
+                "latest_contract_trade_at": "2026-09-04T01:30:00+00:00",
+                "days_to_expiration": 14,
+                "normalized_call_count": 5,
+                "normalized_put_count": 5,
+                "distinct_strike_count": 5,
+                "open_interest_coverage": 1.0,
+                "iv_coverage": 1.0,
+                "volume_coverage": 1.0,
+                "two_sided_quote_coverage": 1.0,
+            },
+            "gamma_flip": {
+                "available": False,
+                "label": "Estimated Gamma Flip",
+                "reason_codes": ["gamma_crossing_unavailable"],
+                "evidence": {},
+            },
+        },
+        assumptions_json={"risk_free_rate": 0.04},
+        warnings_json=[],
+        reasons_json=["building_history"]
+        if state == "available"
+        else ["provider_unavailable"],
+        strike_points=[],
+    )
+
+
+def _run():
+    return SimpleNamespace(
+        id=17,
+        market="US",
+        source_feature_run_id=33,
+        calculation_version="options-analytics-v1",
+        schema_version="options-analytics-v1",
+        provider="yahoo",
+        as_of_date=date(2026, 9, 4),
+        created_at=datetime(2026, 9, 4, 1, tzinfo=timezone.utc),
+        published_at=datetime(2026, 9, 4, 3, tzinfo=timezone.utc),
+        expected_count=3,
+        current_count=2,
+        continuity_count=1,
+        completed_count=3,
+        core_valid_current_count=1,
+        failed_count=1,
+        retried_count=0,
+        coverage=0.5,
+        warnings_json=[],
+        diagnostics_json={},
+        assumptions_json={"risk_free_source": "Yahoo ^IRX close"},
+        items=[
+            _item("AAPL"),
+            _item("MSFT", state="unavailable"),
+            _item("OLD", kind="continuity"),
+        ],
+    )
+
+
+def test_command_center_contract_keeps_all_current_rows_and_excludes_continuity() -> (
+    None
+):
+    payload = OptionsCommandCenterResponse.from_run(_run())
+
+    assert payload.run_id == 17
+    assert [row.symbol for row in payload.items] == ["AAPL", "MSFT"]
+    assert payload.items[0].source_badges == ["candidate", "leader"]
+    assert payload.items[0].metrics.net_gex.label == "Estimated Net GEX"
+    assert payload.items[0].metrics.call_put_volume_ratio.value == 1.2
+    assert payload.items[0].metrics.near_spot_open_interest_concentration.value == 0.65
+    assert payload.items[0].metrics.highest_contract_activity_ratio.value == 2.0
+    assert payload.items[0].metrics.gamma_flip.reason_codes == [
+        "gamma_crossing_unavailable"
+    ]
+    assert payload.items[0].quality_evidence.provider_spot_price == 101.0
+    assert payload.items[0].historical_metrics.iv_percentile.reason_codes == [
+        "building_history"
+    ]
+    assert payload.items[1].state == "unavailable"
+
+
+def test_public_contract_rejects_extra_and_non_finite_values() -> None:
+    with pytest.raises(ValidationError):
+        OptionsMetricResponse(available=True, value=float("nan"), surprise=True)
+
+    run = _run()
+    del run.items[0].evidence_json["quality"]["days_to_expiration"]
+    with pytest.raises(ValidationError, match="days_to_expiration"):
+        OptionsCommandCenterResponse.from_run(run)
+
+
+def test_non_core_observation_is_distinct_from_provider_unavailable() -> None:
+    run = _run()
+    run.items = [_item("AAPL", core_valid=False)]
+
+    payload = OptionsCommandCenterResponse.from_run(run)
+
+    assert payload.items[0].state == "insufficient_quality"
+
+
+@pytest.mark.asyncio
+async def test_live_reads_return_typed_404_and_refresh_is_immediate(
+    monkeypatch,
+) -> None:
+    from app.api.v1 import options_analytics as api
+    from app.services import server_auth
+
+    class Queries:
+        def get_published_command_center(self, market):
+            assert market == "US"
+
+    monkeypatch.setattr(api, "get_options_analytics_queries", lambda _db: Queries())
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(
+        api,
+        "dispatch_options_refresh",
+        lambda **values: {"task_id": "task-7", "run_id": None, **values},
+    )
+    app.dependency_overrides[get_db] = lambda: object()
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            missing = await client.get("/api/v1/options-analytics/command-center")
+            accepted = await client.post(
+                "/api/v1/options-analytics/refresh",
+                json={"source_run_id": 33, "force": False},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["code"] == "options_analytics_unavailable"
+    assert accepted.status_code == 202
+    assert accepted.json() == {
+        "status": "accepted",
+        "task_id": "task-7",
+        "run_id": None,
+        "source_run_id": 33,
+    }
+
+
+def test_dispatch_refresh_scopes_task_to_us_market(monkeypatch) -> None:
+    from app.api.v1 import options_analytics as api
+
+    dispatched = {}
+
+    class Task:
+        @staticmethod
+        def apply_async(*, kwargs, queue):
+            dispatched.update(kwargs=kwargs, queue=queue)
+            return SimpleNamespace(id="task-us")
+
+    monkeypatch.setattr(
+        "app.interfaces.tasks.options_analytics_tasks.refresh_options_analytics",
+        Task(),
+    )
+
+    result = api.dispatch_options_refresh(source_run_id=None, force=True)
+
+    assert dispatched == {
+        "kwargs": {"source_run_id": None, "market": "US", "force": True},
+        "queue": "data_fetch_us",
+    }
+    assert result["task_id"] == "task-us"
+
+
+@pytest.mark.asyncio
+async def test_options_refresh_status_is_available_without_tasks_router(
+    monkeypatch,
+) -> None:
+    from app.api.v1 import options_analytics as api
+    from app.services import server_auth
+
+    class Service:
+        def get_task_status(self, task_name, task_id, db):
+            assert task_name == "daily-us-options-analytics"
+            assert task_id == "task-7"
+            assert db is not None
+            return {
+                "task_id": task_id,
+                "task_name": task_name,
+                "status": "completed",
+                "celery_state": "SUCCESS",
+                "result": {"status": "published", "run_id": 81},
+            }
+
+    monkeypatch.setattr(api, "get_task_registry_service", lambda: Service())
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    app.dependency_overrides[get_db] = lambda: object()
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/options-analytics/refresh/task-7/status"
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"status": "published", "run_id": 81}
