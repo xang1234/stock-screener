@@ -285,8 +285,8 @@ class RefreshOptionsAnalyticsUseCase:
         )
         if decision.publish:
             self._run_writer.publish(run_id, summary)
-            sessions = self._calendar.sessions_ending_on(cohort.as_of_date, 252)
             try:
+                sessions = self._calendar.sessions_ending_on(cohort.as_of_date, 252)
                 self._retention.prune(aggregate_before=sessions[0])
             except Exception:
                 logger.exception(

@@ -217,21 +217,46 @@ jobs:
             --allow-stale
 
       - name: Restore US options history
+        id: restore-options-history
         if: ${{ matrix.market == 'US' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/options-history
-          gh release download options-analytics-data \
-            --repo "${{ github.repository }}" \
-            --pattern options-history-us-v1.json.gz \
-            --dir /tmp/options-history || true
+          rm -f /tmp/options-history/options-history-us-v1.json.gz
           cd backend
           alembic upgrade head
-          python -m app.scripts.import_options_history \
-            --input /tmp/options-history/options-history-us-v1.json.gz \
-            --allow-missing
+          RESTORE_STATUS=failed
+          SAFE_TO_PUBLISH=false
+          if ASSET_PRESENT="$(gh release view options-analytics-data \
+            --repo "${{ github.repository }}" \
+            --json assets \
+            --jq 'any(.assets[]; .name == "options-history-us-v1.json.gz")')"; then
+            if [ "$ASSET_PRESENT" = "true" ]; then
+              if gh release download options-analytics-data \
+                --repo "${{ github.repository }}" \
+                --pattern options-history-us-v1.json.gz \
+                --dir /tmp/options-history \
+                && python -m app.scripts.import_options_history \
+                  --input /tmp/options-history/options-history-us-v1.json.gz; then
+                RESTORE_STATUS=restored
+                SAFE_TO_PUBLISH=true
+              fi
+            else
+              RESTORE_STATUS=missing
+              SAFE_TO_PUBLISH=true
+            fi
+          fi
+          echo "restore_status=$RESTORE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "safe_to_publish=$SAFE_TO_PUBLISH" >> "$GITHUB_OUTPUT"
+          if [ "$RESTORE_STATUS" = "restored" ]; then
+            echo "Restored US options history."
+          elif [ "$RESTORE_STATUS" = "missing" ]; then
+            echo "No prior US options history asset exists; starting fresh."
+          else
+            echo "Unable to restore US options history; history publication will be skipped." >&2
+          fi
 
       - name: Plan rolling RRG history
         id: rrg-history
@@ -540,7 +565,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish US options history
-        if: ${{ steps.export-market.outputs.has_options_artifact == 'true' }}
+        if: ${{ steps.export-market.outputs.has_options_artifact == 'true' && steps.restore-options-history.outputs.safe_to_publish == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

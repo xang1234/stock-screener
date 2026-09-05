@@ -353,6 +353,8 @@ def test_static_site_preserves_and_publishes_us_options_history() -> None:
     assert "OPTIONS_ANALYTICS_ENABLED" in build_job
     assert "matrix.market == 'US'" in build_job
     assert "python -m app.scripts.import_options_history" in build_job
+    assert "id: restore-options-history" in build_job
+    assert "--allow-missing" not in build_job
     assert "python -m app.scripts.export_options_history" in build_job
     assert "--require-run-id" in build_job
     assert "name: static-options-US" in build_job
@@ -361,6 +363,13 @@ def test_static_site_preserves_and_publishes_us_options_history() -> None:
     assert "--options-artifacts-dir /tmp/static-options-current" in combine_job
     assert (
         "--fallback-options-artifacts-dir /tmp/static-options-fallback" in combine_job
+    )
+    publish_history = build_job.split(
+        "      - name: Publish US options history\n", 1
+    )[1].split("      - name:", 1)[0]
+    assert (
+        "steps.restore-options-history.outputs.safe_to_publish == 'true'"
+        in publish_history
     )
 
 

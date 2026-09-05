@@ -331,6 +331,7 @@ def _use_case(
     provider=None,
     cancellation=None,
     continuity_inputs=None,
+    calendar=None,
     throttle_backoff=lambda _attempt: None,
 ):
     repositories = repo or _Repository()
@@ -340,7 +341,7 @@ def _use_case(
         published_reader=repositories,
         retention=repositories,
         provider=provider or _Provider(),
-        calendar=_Calendar(),
+        calendar=calendar or _Calendar(),
         cancellation=cancellation or _Cancellation(),
         calculation_version="v1",
         schema_version="v1",
@@ -405,6 +406,26 @@ def test_retention_failure_does_not_fail_an_already_published_refresh() -> None:
     assert repo.published is not None
     assert result["status"] == "published"
     assert repo.events == ["publish", "prune"]
+
+
+def test_retention_session_lookup_failure_does_not_fail_published_refresh() -> None:
+    class _ShortCalendar(_Calendar):
+        def sessions_ending_on(self, value, count):
+            if count == 252:
+                raise RuntimeError("calendar coverage unavailable")
+            return super().sessions_ending_on(value, count)
+
+    repo = _Repository()
+
+    result = _use_case(
+        [_candidate("AAPL")],
+        repo=repo,
+        calendar=_ShortCalendar(),
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert repo.published is not None
+    assert result["status"] == "published"
+    assert repo.events == ["publish"]
 
 
 def test_below_90_percent_keeps_pointer_unpublished_and_skips_retention() -> None:
