@@ -60,6 +60,11 @@ class OptionsHistoryObservation(BaseModel):
         ge=0,
         le=1,
     )
+    near_spot_open_interest_concentration: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+    )
     short_history_observation_count: int = Field(ge=0)
     iv_history_observation_count: int = Field(ge=0)
     lifetime_observation_count: int = Field(ge=0)

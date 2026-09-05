@@ -99,6 +99,7 @@ class _Repositories(
             "call_put_volume_ratio": None,
             "volume_oi_ratio": None,
             "near_spot_volume_concentration": None,
+            "near_spot_open_interest_concentration": None,
         }
         metrics.update(metric_values or {})
         readiness = history_readiness or HistoryReadiness(
@@ -284,7 +285,11 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
         run.id,
         "AAPL",
         observation=_observation("AAPL"),
-        metric_values={"atm_iv": 0.26, "call_put_volume_ratio": 1.2},
+        metric_values={
+            "atm_iv": 0.26,
+            "call_put_volume_ratio": 1.2,
+            "near_spot_open_interest_concentration": 0.55,
+        },
         strike_points=[{"strike": 100, "call_open_interest": 250}],
     )
 
@@ -293,6 +298,7 @@ def test_staging_and_strike_save_are_idempotent_per_symbol(session) -> None:
     item = session.query(OptionsAnalyticsRunItem).one()
     assert item.atm_iv == 0.26
     assert item.call_put_volume_ratio == 1.2
+    assert item.near_spot_open_interest_concentration == 0.55
     assert item.core_valid is True
     assert item.observation_at.replace(tzinfo=timezone.utc) == datetime(
         2026, 9, 4, tzinfo=timezone.utc

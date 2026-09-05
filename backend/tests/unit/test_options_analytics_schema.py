@@ -57,6 +57,7 @@ def test_options_models_keep_sortable_metrics_typed_and_diagnostics_json() -> No
         "call_put_volume_ratio",
         "volume_oi_ratio",
         "near_spot_volume_concentration",
+        "near_spot_open_interest_concentration",
     ):
         assert isinstance(columns[name].type, sa.Float)
     for name in (

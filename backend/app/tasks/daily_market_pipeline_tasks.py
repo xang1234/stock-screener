@@ -224,9 +224,11 @@ def guard_snapshot_result(result: dict | None = None, *, market: str) -> dict:
             "stage": "scan",
             "auto_scan_id": result["auto_scan_id"],
         }
-        for key in ("run_id", "as_of_date"):
-            if result.get(key) is not None:
-                guarded[key] = result[key]
+        run_id = result.get("run_id") or result.get("existing_run_id")
+        if run_id is not None:
+            guarded["run_id"] = run_id
+        if result.get("as_of_date") is not None:
+            guarded["as_of_date"] = result["as_of_date"]
         return guarded
     raise RuntimeError(f"Daily market scan did not publish for {market}: {result}")
 

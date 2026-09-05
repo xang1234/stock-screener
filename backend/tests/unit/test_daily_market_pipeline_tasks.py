@@ -291,6 +291,29 @@ def test_options_follow_on_is_fire_and_report(monkeypatch):
     assert dispatched[0]["queue"] == "data_fetch_us"
 
 
+def test_options_follow_on_uses_already_published_snapshot_identity(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    dispatched = []
+    monkeypatch.setattr(
+        "app.interfaces.tasks.options_analytics_tasks.refresh_options_analytics.apply_async",
+        lambda **values: dispatched.append(values) or SimpleNamespace(id="options-1"),
+    )
+    guarded = module.guard_snapshot_result.run(
+        {
+            "status": "skipped",
+            "reason": "already_published",
+            "existing_run_id": 123,
+            "auto_scan_id": 456,
+        },
+        market="US",
+    )
+
+    module.dispatch_options_after_snapshot.run(guarded, market="US")
+
+    assert dispatched[0]["kwargs"] == {"source_run_id": 123, "market": "US"}
+
+
 def test_guard_price_refresh_accepts_high_coverage_partial_result():
     from app.tasks import daily_market_pipeline_tasks as module
 
@@ -379,6 +402,7 @@ def test_guard_snapshot_result_accepts_already_published_scan_result():
         "market": "HK",
         "stage": "scan",
         "auto_scan_id": 456,
+        "run_id": 123,
     }
 
 

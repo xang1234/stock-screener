@@ -16,6 +16,7 @@ class ActivityMetrics:
     call_put_volume_ratio: MetricValue
     volume_oi_ratio: MetricValue
     near_spot_volume_concentration: MetricValue
+    near_spot_open_interest_concentration: MetricValue
     activity_intensity: MetricValue
     qualifying_volume: int | None
 
@@ -36,6 +37,28 @@ def _complete_total(
     if any(value is None for value in values):
         return None
     return sum(value for value in values if value is not None)
+
+
+def _near_spot_concentration(
+    contracts: tuple[NormalizedOptionContract, ...],
+    *,
+    field: str,
+    spot: float,
+    incomplete_reason: str,
+    unavailable_reason: str,
+) -> MetricValue:
+    total = _complete_total(contracts, field)
+    if total is None:
+        return MetricValue(available=False, reason_codes=(incomplete_reason,))
+    if total == 0 or not math.isfinite(float(spot)) or spot <= 0:
+        return MetricValue(available=False, reason_codes=(unavailable_reason,))
+    near_total = sum(
+        value
+        for row in contracts
+        if abs(row.strike - spot) / spot <= 0.05
+        and (value := _non_negative(getattr(row, field))) is not None
+    )
+    return MetricValue(available=True, value=near_total / total)
 
 
 def calculate_activity_metrics(
@@ -80,24 +103,20 @@ def calculate_activity_metrics(
     else:
         ratio = MetricValue(available=True, value=total_volume / total_open_interest)
 
-    if total_volume is None:
-        concentration = MetricValue(
-            available=False,
-            reason_codes=("volume_total_incomplete",),
-        )
-    elif total_volume == 0 or not math.isfinite(float(spot)) or spot <= 0:
-        concentration = MetricValue(
-            available=False,
-            reason_codes=("volume_concentration_unavailable",),
-        )
-    else:
-        near_volume = sum(
-            value
-            for row in contracts
-            if abs(row.strike - spot) / spot <= 0.05
-            and (value := _non_negative(row.volume)) is not None
-        )
-        concentration = MetricValue(available=True, value=near_volume / total_volume)
+    volume_concentration = _near_spot_concentration(
+        contracts,
+        field="volume",
+        spot=spot,
+        incomplete_reason="volume_total_incomplete",
+        unavailable_reason="volume_concentration_unavailable",
+    )
+    open_interest_concentration = _near_spot_concentration(
+        contracts,
+        field="open_interest",
+        spot=spot,
+        incomplete_reason="open_interest_total_incomplete",
+        unavailable_reason="open_interest_concentration_unavailable",
+    )
 
     if total_volume is None:
         intensity = MetricValue(
@@ -120,7 +139,8 @@ def calculate_activity_metrics(
     return ActivityMetrics(
         call_put_volume_ratio=call_put_ratio,
         volume_oi_ratio=ratio,
-        near_spot_volume_concentration=concentration,
+        near_spot_volume_concentration=volume_concentration,
+        near_spot_open_interest_concentration=open_interest_concentration,
         activity_intensity=intensity,
         qualifying_volume=total_volume,
     )

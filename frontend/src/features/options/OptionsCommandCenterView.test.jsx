@@ -23,6 +23,7 @@ describe('OptionsCommandCenterView', () => {
 
     await user.click(screen.getByRole('button', { name: 'Activity' }));
     expect(screen.getByRole('columnheader', { name: /Call \/ Put Volume/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Near-Spot Open Interest Concentration/i })).toBeInTheDocument();
   });
 
   it('keeps every current symbol visible and ranks only available metric values', () => {

@@ -326,6 +326,9 @@
             "max_pain": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
+            "near_spot_open_interest_concentration": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
             "near_spot_volume_concentration": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
@@ -361,7 +364,8 @@
             "activity_intensity",
             "call_put_volume_ratio",
             "volume_oi_ratio",
-            "near_spot_volume_concentration"
+            "near_spot_volume_concentration",
+            "near_spot_open_interest_concentration"
           ],
           "title": "OptionsMetricsResponse",
           "type": "object"
@@ -1360,6 +1364,9 @@
             "max_pain": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
+            "near_spot_open_interest_concentration": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
             "near_spot_volume_concentration": {
               "$ref": "#/$defs/OptionsMetricResponse"
             },
@@ -1395,7 +1402,8 @@
             "activity_intensity",
             "call_put_volume_ratio",
             "volume_oi_ratio",
-            "near_spot_volume_concentration"
+            "near_spot_volume_concentration",
+            "near_spot_open_interest_concentration"
           ],
           "title": "OptionsMetricsResponse",
           "type": "object"

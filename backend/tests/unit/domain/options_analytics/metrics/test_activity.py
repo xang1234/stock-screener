@@ -98,6 +98,10 @@ def test_activity_handles_zero_open_interest_without_division() -> None:
 
     assert metrics.volume_oi_ratio.available is False
     assert metrics.volume_oi_ratio.reason_codes == ("open_interest_zero",)
+    assert metrics.near_spot_open_interest_concentration.available is False
+    assert metrics.near_spot_open_interest_concentration.reason_codes == (
+        "open_interest_concentration_unavailable",
+    )
     assert metrics.activity_intensity.available is False
 
 
@@ -109,6 +113,7 @@ def test_activity_uses_five_percent_concentration_and_100_contract_floor() -> No
 
     assert metrics.volume_oi_ratio.value == pytest.approx(0.5)
     assert metrics.near_spot_volume_concentration.value == pytest.approx(0.6)
+    assert metrics.near_spot_open_interest_concentration.value == pytest.approx(0.5)
     assert metrics.activity_intensity.value == pytest.approx(0.5)
     assert metrics.qualifying_volume == 200
 
@@ -148,7 +153,24 @@ def test_activity_rejects_incomplete_open_interest_total() -> None:
     assert metrics.volume_oi_ratio.available is False
     assert metrics.volume_oi_ratio.reason_codes == ("activity_totals_incomplete",)
     assert metrics.near_spot_volume_concentration.available is True
+    assert metrics.near_spot_open_interest_concentration.available is False
+    assert metrics.near_spot_open_interest_concentration.reason_codes == (
+        "open_interest_total_incomplete",
+    )
     assert metrics.activity_intensity.available is False
+
+
+def test_open_interest_concentration_preserves_zero_near_spot_interest() -> None:
+    metrics = calculate_activity_metrics(
+        (
+            _contract(110, 120, 200),
+            _contract(115, 80, 100, side=OptionSide.PUT),
+        ),
+        spot=100,
+    )
+
+    assert metrics.near_spot_open_interest_concentration.available is True
+    assert metrics.near_spot_open_interest_concentration.value == 0
 
 
 def test_cross_sectional_activity_rank_is_stable_and_skips_unavailable() -> None:

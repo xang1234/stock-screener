@@ -162,6 +162,9 @@ class SqlOptionsHistoryRepository:
             call_put_volume_ratio=item.call_put_volume_ratio,
             volume_oi_ratio=item.volume_oi_ratio,
             near_spot_volume_concentration=item.near_spot_volume_concentration,
+            near_spot_open_interest_concentration=(
+                item.near_spot_open_interest_concentration
+            ),
             short_history_observation_count=item.short_history_observation_count,
             iv_history_observation_count=item.iv_history_observation_count,
             lifetime_observation_count=item.lifetime_observation_count,
@@ -274,6 +277,9 @@ class SqlOptionsHistoryRepository:
             call_put_volume_ratio=row.call_put_volume_ratio,
             volume_oi_ratio=row.volume_oi_ratio,
             near_spot_volume_concentration=row.near_spot_volume_concentration,
+            near_spot_open_interest_concentration=(
+                row.near_spot_open_interest_concentration
+            ),
             short_history_observation_count=row.short_history_observation_count,
             iv_history_observation_count=row.iv_history_observation_count,
             lifetime_observation_count=row.lifetime_observation_count,

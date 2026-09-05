@@ -79,6 +79,7 @@ class OptionsMetricsResponse(_StrictModel):
     call_put_volume_ratio: OptionsMetricResponse
     volume_oi_ratio: OptionsMetricResponse
     near_spot_volume_concentration: OptionsMetricResponse
+    near_spot_open_interest_concentration: OptionsMetricResponse
 
 
 class OptionsHistoricalMetricsResponse(_StrictModel):
@@ -302,6 +303,7 @@ _LABELS = {
     "call_put_volume_ratio": "Call / Put Volume",
     "volume_oi_ratio": "Volume / Open Interest",
     "near_spot_volume_concentration": "Near-Spot Volume Concentration",
+    "near_spot_open_interest_concentration": "Near-Spot Open Interest Concentration",
 }
 
 _HISTORICAL_LABELS = {

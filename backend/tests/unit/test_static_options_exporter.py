@@ -25,6 +25,7 @@ METRICS = (
     "call_put_volume_ratio",
     "volume_oi_ratio",
     "near_spot_volume_concentration",
+    "near_spot_open_interest_concentration",
 )
 
 HISTORICAL_METRICS = (

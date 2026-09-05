@@ -49,6 +49,7 @@ def _observation(*, symbol="AAPL", as_of_date="2026-09-04"):
         "call_put_volume_ratio": 1.2,
         "volume_oi_ratio": 0.305,
         "near_spot_volume_concentration": 0.6,
+        "near_spot_open_interest_concentration": 0.55,
         "short_history_observation_count": 5,
         "iv_history_observation_count": 5,
         "lifetime_observation_count": 8,
@@ -96,6 +97,7 @@ def test_transfer_bundle_is_checksummed_and_contains_aggregate_history_only():
     assert "strike_points" not in encoded
     assert "raw_contract" not in encoded
     assert bundle["observations"][0]["call_put_volume_ratio"] == 1.2
+    assert bundle["observations"][0]["near_spot_open_interest_concentration"] == 0.55
 
 
 def test_import_is_idempotent_through_repository():

@@ -43,6 +43,7 @@ const LENSES = {
     { name: 'call_put_volume_ratio' },
     { name: 'volume_oi_ratio' },
     { name: 'near_spot_volume_concentration', percent: true },
+    { name: 'near_spot_open_interest_concentration', percent: true },
   ],
 };
 

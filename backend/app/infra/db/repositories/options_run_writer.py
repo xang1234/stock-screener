@@ -58,6 +58,7 @@ _OBSERVATION_VALUE_FIELDS = (
     "call_put_volume_ratio",
     "volume_oi_ratio",
     "near_spot_volume_concentration",
+    "near_spot_open_interest_concentration",
 )
 
 
@@ -312,6 +313,9 @@ class SqlOptionsRunWriter:
         item.call_put_volume_ratio = values.call_put_volume_ratio
         item.volume_oi_ratio = values.volume_oi_ratio
         item.near_spot_volume_concentration = values.near_spot_volume_concentration
+        item.near_spot_open_interest_concentration = (
+            values.near_spot_open_interest_concentration
+        )
         self._replace_strike_points(item, analysis.strike_points)
 
     def _apply_unavailable(

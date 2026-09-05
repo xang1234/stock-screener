@@ -35,6 +35,7 @@ class OptionsMetricValues:
     call_put_volume_ratio: float | None = None
     volume_oi_ratio: float | None = None
     near_spot_volume_concentration: float | None = None
+    near_spot_open_interest_concentration: float | None = None
 
 
 @dataclass(frozen=True)

@@ -109,6 +109,7 @@ def upgrade() -> None:
         sa.Column("call_put_volume_ratio", sa.Float(), nullable=True),
         sa.Column("volume_oi_ratio", sa.Float(), nullable=True),
         sa.Column("near_spot_volume_concentration", sa.Float(), nullable=True),
+        sa.Column("near_spot_open_interest_concentration", sa.Float(), nullable=True),
         sa.Column("short_history_observation_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("iv_history_observation_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("lifetime_observation_count", sa.Integer(), nullable=False, server_default="0"),

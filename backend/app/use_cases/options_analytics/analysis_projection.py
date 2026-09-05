@@ -78,6 +78,9 @@ def metric_values(
         near_spot_volume_concentration=(
             metrics.activity.near_spot_volume_concentration.value
         ),
+        near_spot_open_interest_concentration=(
+            metrics.activity.near_spot_open_interest_concentration.value
+        ),
     )
 
 
@@ -152,6 +155,9 @@ def metric_evidence(
         "call_put_volume_ratio": metrics.activity.call_put_volume_ratio,
         "volume_oi_ratio": metrics.activity.volume_oi_ratio,
         "near_spot_volume_concentration": metrics.activity.near_spot_volume_concentration,
+        "near_spot_open_interest_concentration": (
+            metrics.activity.near_spot_open_interest_concentration
+        ),
     }
     evidence = {
         name: {
