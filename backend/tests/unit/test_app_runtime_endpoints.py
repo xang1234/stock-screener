@@ -11,6 +11,7 @@ import pytest_asyncio
 from pydantic import ValidationError
 
 from app.database import get_db
+from app.config.settings import Settings
 from app.domain.markets.catalog import get_market_catalog
 from app.domain.scanning.defaults import get_default_scan_profile
 from app.main import app
@@ -111,6 +112,50 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
     assert market_catalog["US"]["mic_facts"][0]["mic"] == "XNYS"
     assert market_catalog["HK"]["capabilities"]["finviz_screening"] is False
     assert data["api_base_path"] == "/api"
+
+
+def test_options_analytics_runtime_setting_defaults_disabled(monkeypatch):
+    monkeypatch.delenv("OPTIONS_ANALYTICS_ENABLED", raising=False)
+
+    configured = Settings(_env_file=None)
+
+    assert configured.options_analytics_enabled is False
+    assert configured.capability_flags()["options_analytics"] is False
+
+
+@pytest.mark.asyncio
+async def test_app_capabilities_separates_deployment_flag_from_us_support(
+    client, monkeypatch
+):
+    from app.api.v1 import app_runtime as module
+
+    monkeypatch.setattr(module.settings, "options_analytics_enabled", False)
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_ui_snapshot_service",
+        lambda: _FakeUISnapshotService(),
+    )
+    monkeypatch.setattr(
+        module, "get_runtime_bootstrap_status", lambda _db: _FakeBootstrapStatus()
+    )
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        response = await client.get("/api/v1/app-capabilities")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    markets = {
+        market["code"]: market for market in payload["market_catalog"]["markets"]
+    }
+    assert payload["features"]["options_analytics"] is False
+    assert markets["US"]["capabilities"]["options_analytics"] is True
+    assert all(
+        market["capabilities"]["options_analytics"] is False
+        for code, market in markets.items()
+        if code != "US"
+    )
 
 
 @pytest.mark.asyncio

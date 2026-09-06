@@ -53,6 +53,7 @@ celery_app = Celery(
         'app.tasks.runtime_bootstrap_tasks',  # Local-default first-run bootstrap orchestration
         'app.tasks.static_export_tasks',  # Scheduled static-data bundle export
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
+        'app.interfaces.tasks.options_analytics_tasks',  # US options follow-on
     ]
 )
 celery_app.loader.override_backends = {
@@ -318,6 +319,7 @@ _MARKET_JOB_TASKS = (
     'app.tasks.daily_market_pipeline_tasks.guard_breadth_result',
     'app.tasks.daily_market_pipeline_tasks.guard_group_result',
     'app.tasks.daily_market_pipeline_tasks.guard_snapshot_result',
+    'app.tasks.daily_market_pipeline_tasks.dispatch_options_after_snapshot',
 )
 
 # Default route = shared queue. Beat entries and .apply_async() callers override
@@ -326,6 +328,9 @@ celery_app.conf.task_routes = {
     task_name: {'queue': SHARED_DATA_FETCH_QUEUE}
     for task_name in _MARKET_SCOPED_DATA_FETCH_TASKS
 }
+celery_app.conf.task_routes[
+    'app.interfaces.tasks.options_analytics_tasks.refresh_options_analytics'
+] = {'queue': data_fetch_queue_for_market('US')}
 celery_app.conf.task_routes.update({
     task_name: {'queue': market_jobs_queue_for_market("US")}
     for task_name in _MARKET_JOB_TASKS

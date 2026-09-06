@@ -18,3 +18,7 @@ def test_collection_routes_support_slash_and_no_slash_forms():
     assert "/api/v1/filter-presets/" in paths
     assert "/api/v1/strategy-profiles" in paths
     assert "/api/v1/strategy-profiles/" in paths
+    assert "/api/v1/options-analytics/command-center" in paths
+    assert "/api/v1/options-analytics/symbols/{symbol}" in paths
+    assert "/api/v1/options-analytics/runs/{run_id}/diagnostics" in paths
+    assert "/api/v1/options-analytics/refresh" in paths

@@ -24,6 +24,8 @@
     "@tanstack/react-query-persist-client": "^5.101.0",
     "@tanstack/react-table": "^8.11.6",
     "@tanstack/react-virtual": "^3.13.18",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "axios": "1.13.2",
     "date-fns": "^4.1.0",
     "lightweight-charts": "^5.1.0",

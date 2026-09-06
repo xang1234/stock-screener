@@ -61,6 +61,17 @@ def test_docker_compose_forwards_opendart_api_key_to_app_env():
     assert "OPENDART_API_KEY: ${OPENDART_API_KEY:-}" in compose
 
 
+def test_docker_compose_forwards_options_analytics_flag_to_app_env():
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    app_env = compose.split("x-app-env: &app-env", maxsplit=1)[1].split(
+        "x-celery-env: &celery-env", maxsplit=1
+    )[0]
+
+    assert (
+        "OPTIONS_ANALYTICS_ENABLED: ${OPTIONS_ANALYTICS_ENABLED:-false}" in app_env
+    )
+
+
 def test_local_celery_script_consumes_every_supported_market_queue():
     script = (ROOT / "backend" / "start_celery.sh").read_text(encoding="utf-8")
 

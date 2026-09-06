@@ -15,6 +15,10 @@ from app.services.static_market_artifact_contract import (
     read_static_market_manifest,
 )
 from app.services.static_market_publish_policy import OPTIONAL_STATIC_MARKETS
+from app.services.static_options_contract import (
+    StaticOptionsArtifactError,
+    validate_static_options_artifact,
+)
 
 
 class StaticMarketArtifactValidationError(RuntimeError):
@@ -271,11 +275,29 @@ def _format_market_list(markets: Iterable[str]) -> str:
     return ", ".join(values) if values else "(none)"
 
 
+def validate_optional_options_artifacts(
+    current_dir: Path | None,
+    fallback_dir: Path | None,
+) -> dict | None:
+    for source in (current_dir, fallback_dir):
+        if source is None or not source.exists():
+            continue
+        candidates = [source, *(path.parent for path in source.rglob("manifest.json"))]
+        for candidate in candidates:
+            try:
+                return validate_static_options_artifact(candidate)
+            except StaticOptionsArtifactError:
+                continue
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--current-dir", type=Path, required=True)
     parser.add_argument("--fallback-dir", type=Path, required=True)
     parser.add_argument("--selected-markets", default="[]")
+    parser.add_argument("--current-options-dir", type=Path)
+    parser.add_argument("--fallback-options-dir", type=Path)
     args = parser.parse_args(argv)
 
     try:
@@ -284,6 +306,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             current_dir=args.current_dir,
             fallback_dir=args.fallback_dir,
             selected_markets=selected_markets,
+        )
+        options_manifest = validate_optional_options_artifacts(
+            args.current_options_dir,
+            args.fallback_options_dir,
         )
     except (json.JSONDecodeError, StaticMarketArtifactValidationError) as exc:
         print(f"::error::{exc}", flush=True)
@@ -312,6 +338,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Required market artifacts present; static site is publishable.")
     else:
         print("All supported markets present; static site is complete.")
+    if options_manifest is None:
+        print("::warning::No compatible static options artifact is available.")
+    else:
+        print(
+            "Compatible static options artifact present for run "
+            f"{options_manifest['published_run_id']}."
+        )
     return 0
 
 

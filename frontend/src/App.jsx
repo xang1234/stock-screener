@@ -20,6 +20,7 @@ import { STATIC_SITE_MODE } from './config/runtimeMode';
 import Layout from './components/Layout/Layout';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { MarketProvider } from './contexts/MarketContext';
+import { useMarket } from './contexts/MarketContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
 import { StrategyProfileProvider } from './contexts/StrategyProfileContext';
 import { ColorModeContext } from './contexts/ColorModeContext';
@@ -27,6 +28,7 @@ import {
   PERSISTED_QUERY_CACHE_BUSTER,
   shouldDehydratePersistedQuery,
 } from './appQueryPersistence';
+import { isLiveOptionsAvailable } from './features/options/optionsAvailability';
 
 // All pages are lazy-loaded so the initial bundle stays free of heavy
 // page-specific chunks (MarketScanPage alone pulls in recharts, ~400KB).
@@ -41,7 +43,22 @@ const ValidationPage = lazy(() => import('./pages/ValidationPage'));
 const ThemesPage = lazy(() => import('./pages/ThemesPage'));
 const ChatbotPage = lazy(() => import('./pages/ChatbotPage'));
 const OperationsPage = lazy(() => import('./pages/OperationsPage'));
+const OptionsPage = lazy(() => import('./pages/OptionsPage'));
+const OptionsSymbolPage = lazy(() => import('./pages/OptionsSymbolPage'));
 const StaticAppShell = lazy(() => import('./static/StaticAppShell'));
+
+function LiveOptionsRoute({ detail = false }) {
+  const { features, marketCatalog, primaryMarket } = useRuntime();
+  const { selectedMarket } = useMarket();
+  const available = isLiveOptionsAvailable({
+    features,
+    marketCatalog,
+    selectedMarket,
+    primaryMarket,
+  });
+  if (!available) return <Navigate to="/" replace />;
+  return detail ? <OptionsSymbolPage /> : <OptionsPage />;
+}
 
 // In-app fallback for lazy page transitions (Layout chrome is already mounted,
 // so a spinner in the content area is the right scope).
@@ -396,6 +413,8 @@ function AppShell() {
               <Route path="/validation" element={<ValidationPage />} />
               {features.themes && <Route path="/themes" element={<ThemesPage />} />}
               {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
+              <Route path="/options" element={<LiveOptionsRoute />} />
+              <Route path="/options/:symbol" element={<LiveOptionsRoute detail />} />
               <Route path="/stocks/:ticker" element={<StockDetails />} />
               <Route path="/operations" element={<OperationsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />

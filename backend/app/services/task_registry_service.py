@@ -87,6 +87,18 @@ SCHEDULED_TASKS = {
     },
     # ===== WEEKDAYS (After Market Close) =====
     **_daily_market_pipeline_task_definitions(),
+    'daily-us-options-analytics': {
+        'task_function': (
+            'app.interfaces.tasks.options_analytics_tasks.refresh_options_analytics'
+        ),
+        'display_name': 'Daily US Options Analytics',
+        'description': 'Refreshes the bounded Options Command Center cohort',
+        'schedule_description': 'After the published US daily equity snapshot',
+        'manual_dispatch_kwargs': {'market': 'US'},
+        'manual_dispatch_headers': {'origin': 'manual'},
+        'manual_dispatch_options': {'queue': 'data_fetch_us'},
+        'enabled_setting': 'options_analytics_enabled',
+    },
 
     # ===== FRIDAY =====
     'weekly-fundamental-refresh': {
@@ -162,7 +174,12 @@ class TaskRegistryService:
                 'task_function': task_info['task_function'],
                 'description': task_info['description'],
                 'schedule_description': task_info['schedule_description'],
-                'is_enabled': settings.cache_warmup_enabled,
+                'is_enabled': bool(
+                    getattr(
+                        settings,
+                        task_info.get('enabled_setting', 'cache_warmup_enabled'),
+                    )
+                ),
                 'last_run': None,
             }
 

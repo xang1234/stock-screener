@@ -199,6 +199,22 @@ When the tasks feature is enabled, the header settings icon opens **Scheduled Ta
 
 The dialog shows each task's display name and description, schedule, last run time and duration, last status, and a run-now action (with polling while a task is active). Tasks are feature-gated; deployments without task support do not show this control.
 
+## Options Command Center Operations
+
+Options analytics are US-only and opt in with `OPTIONS_ANALYTICS_ENABLED=true`; the default is `false`. Disabled deployments do not schedule Yahoo option-chain work and do not advertise Options navigation. The job follows a successfully published daily US Feature snapshot on the existing `data_fetch_us` queue, so the normal US data-fetch worker must be running. It does not add another worker or queue family and cannot make the already-published equity pipeline fail.
+
+The bounded cohort is the independently ranked top 40 scan Candidates plus top 40 Leaders after requiring daily USD volume strictly above $100 million. Overlap keeps both source ranks. Up to 20 recently dropped symbols remain in collection for five US sessions, while only current symbols appear in the Command Center. A normal full 100-symbol cohort uses one `^IRX` history request plus one expiration-list and one selected-chain request per symbol (201 Yahoo operations). With the three-attempt per-symbol retry budget, the hard ceiling is 601 operations. Fetch concurrency is capped at two and uses the shared yfinance limiter.
+
+In Operations, look for **Daily US Options Analytics** and the **Options Analytics** runtime stage. Its final message reports expected, completed, core-valid, failed, retried, and coverage counts. A manual canary can be started from Scheduled Tasks or the live Command Center Refresh action. Start with a source Feature run whose current cohort contains no more than three symbols; inspect the selected monthly expiration (14–45 DTE), observation timestamp, request/retry counts, coverage, unavailable reasons, and the recorded `^IRX` risk-free/dividend assumptions before testing the full cohort.
+
+Publication is atomic. At least 90% of current symbols must have core-valid chains; otherwise the attempted run is retained for diagnostics but the published pointer does not move. Readers continue to receive the prior published run. A static build similarly keeps fresh equity output and may copy the last compatible options bundle with `stale_relative_to_equity` shown in its manifest, command-center payload, and symbol payloads.
+
+Aggregate published observations are retained for roughly 252 US sessions. Strike detail is retained for the latest 30 published runs. The Pages workflow transfers aggregate history through the versioned `options-history-us-v1.json.gz` release asset, so a ticker that drops out and later returns keeps its compatible lifetime history; missing sessions remain gaps and counters do not reset. Raw contracts and strike points are not included in that portable history asset.
+
+To roll back, set `OPTIONS_ANALYTICS_ENABLED=false` and recreate the API/workers. This stops collection and removes live navigation without deleting stored runs or history. Static navigation disappears when the root manifest no longer advertises `pages.options`; an already-published static bundle remains an auditable artifact.
+
+Yahoo is an unofficial, best-effort source. Chains may omit Greeks, open interest, volume, quotes, or expirations and can be delayed or throttled. The UI shows explicit unavailable reasons rather than fabricating replacements. Net GEX, gamma flip, call wall, and put wall are labeled **Estimated** because they are model outputs, not observed dealer positions. Activity metrics are descriptive and must not be interpreted as premium inflow, buying/selling, or a directional signal.
+
 ## Balanced Market RS Rollout
 
 `balanced-horizon-percentile-v2` is activated independently for each Market. Its five same-set excess-return percentiles are weighted **1M 20%**, **3M 30%**, **6M 20%**, **9M 15%**, and **12M 15%** before the composite is re-ranked. Keep the prior `legacy-linear-v1` Market formula pointer and legacy Feature-run ID until the rollout is accepted.

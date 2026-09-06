@@ -279,7 +279,13 @@ def test_bootstrap_includes_every_daily_pipeline_compute_step():
     daily = {
         s.task for s in _build_daily_market_pipeline_signatures("US", date(2026, 6, 1))
     }
-    daily_compute = {t for t in daily if "guard" not in t and "smart_refresh" not in t}
+    daily_compute = {
+        task
+        for task in daily
+        if "guard" not in task
+        and "smart_refresh" not in task
+        and "dispatch_options_after_snapshot" not in task
+    }
 
     plan = build_bootstrap_plan(
         primary_market="US", enabled_markets=["US"]

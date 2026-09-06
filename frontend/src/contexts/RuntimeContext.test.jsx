@@ -317,6 +317,12 @@ describe('RuntimeProvider', () => {
   });
 });
 
+describe('fallback capabilities', () => {
+  it('keeps options analytics disabled until the backend opts in', () => {
+    expect(DEFAULT_CAPABILITIES.features.options_analytics).toBe(false);
+  });
+});
+
 describe('mergeBootstrapCapabilities', () => {
   it('falls back to the default supported markets when bootstrap omits them', () => {
     const merged = mergeBootstrapCapabilities(null, {

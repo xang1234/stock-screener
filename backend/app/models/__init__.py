@@ -54,6 +54,12 @@ from app.infra.db.models.relative_strength import (
     MarketRsRun,
     StockRsSnapshot,
 )
+from app.infra.db.models.options_analytics import (
+    OptionsAnalyticsPointer,
+    OptionsAnalyticsRun,
+    OptionsAnalyticsRunItem,
+    OptionsAnalyticsStrikePoint,
+)
 
 __all__ = [
     "StockPrice",
@@ -136,4 +142,8 @@ __all__ = [
     "MarketRsRun",
     "StockRsSnapshot",
     "MarketRsFormulaPointer",
+    "OptionsAnalyticsRun",
+    "OptionsAnalyticsRunItem",
+    "OptionsAnalyticsStrikePoint",
+    "OptionsAnalyticsPointer",
 ]

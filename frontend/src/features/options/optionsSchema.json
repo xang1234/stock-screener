@@ -1,0 +1,1810 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "models": {
+    "command_center": {
+      "$defs": {
+        "OptionsCommandCenterItemResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_rank": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Rank"
+            },
+            "assumptions": {
+              "title": "Assumptions",
+              "type": "object"
+            },
+            "call_open_interest": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call Open Interest"
+            },
+            "call_volume": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call Volume"
+            },
+            "candidate_rank": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Rank"
+            },
+            "core_valid": {
+              "title": "Core Valid",
+              "type": "boolean"
+            },
+            "expiration": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expiration"
+            },
+            "historical_metrics": {
+              "$ref": "#/$defs/OptionsHistoricalMetricsResponse"
+            },
+            "iv_history_observation_count": {
+              "title": "Iv History Observation Count",
+              "type": "integer"
+            },
+            "leader_rank": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Leader Rank"
+            },
+            "lifetime_observation_count": {
+              "title": "Lifetime Observation Count",
+              "type": "integer"
+            },
+            "metrics": {
+              "$ref": "#/$defs/OptionsMetricsResponse"
+            },
+            "observation_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observation At"
+            },
+            "put_open_interest": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Put Open Interest"
+            },
+            "put_volume": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Put Volume"
+            },
+            "quality_evidence": {
+              "$ref": "#/$defs/OptionsQualityEvidenceResponse"
+            },
+            "reason_codes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Reason Codes",
+              "type": "array"
+            },
+            "retry_count": {
+              "title": "Retry Count",
+              "type": "integer"
+            },
+            "short_history_observation_count": {
+              "title": "Short History Observation Count",
+              "type": "integer"
+            },
+            "source_badges": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Badges",
+              "type": "array"
+            },
+            "spot_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Spot Price"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "symbol": {
+              "title": "Symbol",
+              "type": "string"
+            },
+            "warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Warnings",
+              "type": "array"
+            }
+          },
+          "required": [
+            "symbol",
+            "source_badges",
+            "state",
+            "core_valid",
+            "short_history_observation_count",
+            "iv_history_observation_count",
+            "lifetime_observation_count",
+            "retry_count",
+            "quality_evidence",
+            "metrics",
+            "historical_metrics"
+          ],
+          "title": "OptionsCommandCenterItemResponse",
+          "type": "object"
+        },
+        "OptionsHistoricalMetricsResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_intensity_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "atm_iv_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "gamma_flip_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_percentile": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_rank": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "max_pain_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "net_gex_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "realized_volatility_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "skew_25_delta_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "vrp_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            }
+          },
+          "required": [
+            "iv_percentile",
+            "iv_rank",
+            "max_pain_change_5",
+            "net_gex_change_5",
+            "gamma_flip_change_5",
+            "atm_iv_change_5",
+            "skew_25_delta_change_5",
+            "realized_volatility_change_5",
+            "vrp_change_5",
+            "activity_intensity_change_5"
+          ],
+          "title": "OptionsHistoricalMetricsResponse",
+          "type": "object"
+        },
+        "OptionsMetricResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "available": {
+              "title": "Available",
+              "type": "boolean"
+            },
+            "evidence": {
+              "title": "Evidence",
+              "type": "object"
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Label"
+            },
+            "reason_codes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Reason Codes",
+              "type": "array"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Value"
+            }
+          },
+          "required": [
+            "available"
+          ],
+          "title": "OptionsMetricResponse",
+          "type": "object"
+        },
+        "OptionsMetricsResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_intensity": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "atm_iv": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "call_put_volume_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "call_wall": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "gamma_flip": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "highest_contract_activity_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "max_pain": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "near_spot_open_interest_concentration": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "near_spot_volume_concentration": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "net_gex": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "put_wall": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "realized_volatility": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "skew_25_delta": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "volume_oi_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "vrp": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            }
+          },
+          "required": [
+            "max_pain",
+            "net_gex",
+            "gamma_flip",
+            "call_wall",
+            "put_wall",
+            "atm_iv",
+            "skew_25_delta",
+            "realized_volatility",
+            "vrp",
+            "activity_intensity",
+            "call_put_volume_ratio",
+            "volume_oi_ratio",
+            "near_spot_volume_concentration",
+            "near_spot_open_interest_concentration",
+            "highest_contract_activity_ratio"
+          ],
+          "title": "OptionsMetricsResponse",
+          "type": "object"
+        },
+        "OptionsQualityEvidenceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "days_to_expiration": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Days To Expiration"
+            },
+            "distinct_strike_count": {
+              "minimum": 0,
+              "title": "Distinct Strike Count",
+              "type": "integer"
+            },
+            "iv_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Iv Coverage",
+              "type": "number"
+            },
+            "latest_contract_trade_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Latest Contract Trade At"
+            },
+            "normalized_call_count": {
+              "minimum": 0,
+              "title": "Normalized Call Count",
+              "type": "integer"
+            },
+            "normalized_put_count": {
+              "minimum": 0,
+              "title": "Normalized Put Count",
+              "type": "integer"
+            },
+            "open_interest_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Open Interest Coverage",
+              "type": "number"
+            },
+            "provider_spot_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider Spot Price"
+            },
+            "source_spot_price": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Spot Price"
+            },
+            "spot_disagreement_ratio": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spot Disagreement Ratio"
+            },
+            "two_sided_quote_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Two Sided Quote Coverage",
+              "type": "number"
+            },
+            "volume_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Volume Coverage",
+              "type": "number"
+            }
+          },
+          "required": [
+            "source_spot_price",
+            "provider_spot_price",
+            "spot_disagreement_ratio",
+            "latest_contract_trade_at",
+            "days_to_expiration",
+            "normalized_call_count",
+            "normalized_put_count",
+            "distinct_strike_count",
+            "open_interest_coverage",
+            "iv_coverage",
+            "volume_coverage",
+            "two_sided_quote_coverage"
+          ],
+          "title": "OptionsQualityEvidenceResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "title": "Assumptions",
+          "type": "object"
+        },
+        "calculation_version": {
+          "title": "Calculation Version",
+          "type": "string"
+        },
+        "completed_count": {
+          "title": "Completed Count",
+          "type": "integer"
+        },
+        "continuity_count": {
+          "title": "Continuity Count",
+          "type": "integer"
+        },
+        "core_valid_current_count": {
+          "title": "Core Valid Current Count",
+          "type": "integer"
+        },
+        "coverage": {
+          "title": "Coverage",
+          "type": "number"
+        },
+        "current_count": {
+          "title": "Current Count",
+          "type": "integer"
+        },
+        "expected_count": {
+          "title": "Expected Count",
+          "type": "integer"
+        },
+        "failed_count": {
+          "title": "Failed Count",
+          "type": "integer"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/OptionsCommandCenterItemResponse"
+          },
+          "maxItems": 80,
+          "title": "Items",
+          "type": "array"
+        },
+        "latest_observation_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latest Observation At"
+        },
+        "market": {
+          "title": "Market",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "published_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Published At"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "retried_count": {
+          "title": "Retried Count",
+          "type": "integer"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "integer"
+        },
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_as_of_date": {
+          "format": "date",
+          "title": "Source As Of Date",
+          "type": "string"
+        },
+        "source_feature_run_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Feature Run Id"
+        },
+        "stale": {
+          "default": false,
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "calculation_version",
+        "run_id",
+        "source_as_of_date",
+        "market",
+        "provider",
+        "started_at",
+        "expected_count",
+        "current_count",
+        "continuity_count",
+        "completed_count",
+        "core_valid_current_count",
+        "failed_count",
+        "retried_count",
+        "coverage",
+        "items"
+      ],
+      "title": "OptionsCommandCenterResponse",
+      "type": "object"
+    },
+    "manifest": {
+      "$defs": {
+        "StaticOptionsSymbolReference": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "minLength": 1,
+              "title": "Key",
+              "type": "string"
+            },
+            "path": {
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "path"
+          ],
+          "title": "StaticOptionsSymbolReference",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "calculation_version": {
+          "const": "options-analytics-v1",
+          "title": "Calculation Version"
+        },
+        "command_center_path": {
+          "minLength": 1,
+          "title": "Command Center Path",
+          "type": "string"
+        },
+        "coverage": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Coverage",
+          "type": "number"
+        },
+        "data_schema_version": {
+          "const": "options-analytics-v1",
+          "title": "Data Schema Version"
+        },
+        "equity_as_of_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Equity As Of Date"
+        },
+        "equity_feature_run_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Equity Feature Run Id"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "latest_observation_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latest Observation At"
+        },
+        "market": {
+          "const": "US",
+          "title": "Market"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "published_run_id": {
+          "title": "Published Run Id",
+          "type": "integer"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "static-options-v1",
+          "title": "Schema Version"
+        },
+        "source_as_of_date": {
+          "format": "date",
+          "title": "Source As Of Date",
+          "type": "string"
+        },
+        "source_feature_run_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Feature Run Id"
+        },
+        "stale": {
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "stale_relative_to_equity": {
+          "title": "Stale Relative To Equity",
+          "type": "boolean"
+        },
+        "symbols": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StaticOptionsSymbolReference"
+          },
+          "maxProperties": 80,
+          "title": "Symbols",
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema_version",
+        "data_schema_version",
+        "calculation_version",
+        "published_run_id",
+        "source_as_of_date",
+        "market",
+        "provider",
+        "generated_at",
+        "coverage",
+        "stale",
+        "stale_relative_to_equity",
+        "reason_codes",
+        "command_center_path",
+        "symbols"
+      ],
+      "title": "StaticOptionsManifest",
+      "type": "object"
+    },
+    "symbol_detail": {
+      "$defs": {
+        "OptionsCommandCenterItemResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_rank": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Rank"
+            },
+            "assumptions": {
+              "title": "Assumptions",
+              "type": "object"
+            },
+            "call_open_interest": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call Open Interest"
+            },
+            "call_volume": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call Volume"
+            },
+            "candidate_rank": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Rank"
+            },
+            "core_valid": {
+              "title": "Core Valid",
+              "type": "boolean"
+            },
+            "expiration": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expiration"
+            },
+            "historical_metrics": {
+              "$ref": "#/$defs/OptionsHistoricalMetricsResponse"
+            },
+            "iv_history_observation_count": {
+              "title": "Iv History Observation Count",
+              "type": "integer"
+            },
+            "leader_rank": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Leader Rank"
+            },
+            "lifetime_observation_count": {
+              "title": "Lifetime Observation Count",
+              "type": "integer"
+            },
+            "metrics": {
+              "$ref": "#/$defs/OptionsMetricsResponse"
+            },
+            "observation_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observation At"
+            },
+            "put_open_interest": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Put Open Interest"
+            },
+            "put_volume": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Put Volume"
+            },
+            "quality_evidence": {
+              "$ref": "#/$defs/OptionsQualityEvidenceResponse"
+            },
+            "reason_codes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Reason Codes",
+              "type": "array"
+            },
+            "retry_count": {
+              "title": "Retry Count",
+              "type": "integer"
+            },
+            "short_history_observation_count": {
+              "title": "Short History Observation Count",
+              "type": "integer"
+            },
+            "source_badges": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Badges",
+              "type": "array"
+            },
+            "spot_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Spot Price"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "symbol": {
+              "title": "Symbol",
+              "type": "string"
+            },
+            "warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Warnings",
+              "type": "array"
+            }
+          },
+          "required": [
+            "symbol",
+            "source_badges",
+            "state",
+            "core_valid",
+            "short_history_observation_count",
+            "iv_history_observation_count",
+            "lifetime_observation_count",
+            "retry_count",
+            "quality_evidence",
+            "metrics",
+            "historical_metrics"
+          ],
+          "title": "OptionsCommandCenterItemResponse",
+          "type": "object"
+        },
+        "OptionsHistoricalMetricsResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_intensity_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "atm_iv_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "gamma_flip_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_percentile": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "iv_rank": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "max_pain_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "net_gex_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "realized_volatility_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "skew_25_delta_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "vrp_change_5": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            }
+          },
+          "required": [
+            "iv_percentile",
+            "iv_rank",
+            "max_pain_change_5",
+            "net_gex_change_5",
+            "gamma_flip_change_5",
+            "atm_iv_change_5",
+            "skew_25_delta_change_5",
+            "realized_volatility_change_5",
+            "vrp_change_5",
+            "activity_intensity_change_5"
+          ],
+          "title": "OptionsHistoricalMetricsResponse",
+          "type": "object"
+        },
+        "OptionsHistoryPointResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_intensity": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Intensity"
+            },
+            "activity_intensity_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Intensity Change 5"
+            },
+            "as_of_date": {
+              "format": "date",
+              "title": "As Of Date",
+              "type": "string"
+            },
+            "atm_iv": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Atm Iv"
+            },
+            "atm_iv_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Atm Iv Change 5"
+            },
+            "gamma_flip": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gamma Flip"
+            },
+            "gamma_flip_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gamma Flip Change 5"
+            },
+            "iv_percentile": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Iv Percentile"
+            },
+            "iv_rank": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Iv Rank"
+            },
+            "max_pain": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Pain"
+            },
+            "max_pain_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Pain Change 5"
+            },
+            "net_gex": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Net Gex"
+            },
+            "net_gex_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Net Gex Change 5"
+            },
+            "realized_volatility": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Realized Volatility"
+            },
+            "realized_volatility_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Realized Volatility Change 5"
+            },
+            "skew_25_delta": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skew 25 Delta"
+            },
+            "skew_25_delta_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skew 25 Delta Change 5"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "vrp": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vrp"
+            },
+            "vrp_change_5": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vrp Change 5"
+            }
+          },
+          "required": [
+            "as_of_date",
+            "state"
+          ],
+          "title": "OptionsHistoryPointResponse",
+          "type": "object"
+        },
+        "OptionsMetricResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "available": {
+              "title": "Available",
+              "type": "boolean"
+            },
+            "evidence": {
+              "title": "Evidence",
+              "type": "object"
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Label"
+            },
+            "reason_codes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Reason Codes",
+              "type": "array"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Value"
+            }
+          },
+          "required": [
+            "available"
+          ],
+          "title": "OptionsMetricResponse",
+          "type": "object"
+        },
+        "OptionsMetricsResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_intensity": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "atm_iv": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "call_put_volume_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "call_wall": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "gamma_flip": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "highest_contract_activity_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "max_pain": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "near_spot_open_interest_concentration": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "near_spot_volume_concentration": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "net_gex": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "put_wall": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "realized_volatility": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "skew_25_delta": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "volume_oi_ratio": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            },
+            "vrp": {
+              "$ref": "#/$defs/OptionsMetricResponse"
+            }
+          },
+          "required": [
+            "max_pain",
+            "net_gex",
+            "gamma_flip",
+            "call_wall",
+            "put_wall",
+            "atm_iv",
+            "skew_25_delta",
+            "realized_volatility",
+            "vrp",
+            "activity_intensity",
+            "call_put_volume_ratio",
+            "volume_oi_ratio",
+            "near_spot_volume_concentration",
+            "near_spot_open_interest_concentration",
+            "highest_contract_activity_ratio"
+          ],
+          "title": "OptionsMetricsResponse",
+          "type": "object"
+        },
+        "OptionsQualityEvidenceResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "days_to_expiration": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Days To Expiration"
+            },
+            "distinct_strike_count": {
+              "minimum": 0,
+              "title": "Distinct Strike Count",
+              "type": "integer"
+            },
+            "iv_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Iv Coverage",
+              "type": "number"
+            },
+            "latest_contract_trade_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Latest Contract Trade At"
+            },
+            "normalized_call_count": {
+              "minimum": 0,
+              "title": "Normalized Call Count",
+              "type": "integer"
+            },
+            "normalized_put_count": {
+              "minimum": 0,
+              "title": "Normalized Put Count",
+              "type": "integer"
+            },
+            "open_interest_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Open Interest Coverage",
+              "type": "number"
+            },
+            "provider_spot_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider Spot Price"
+            },
+            "source_spot_price": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Spot Price"
+            },
+            "spot_disagreement_ratio": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spot Disagreement Ratio"
+            },
+            "two_sided_quote_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Two Sided Quote Coverage",
+              "type": "number"
+            },
+            "volume_coverage": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Volume Coverage",
+              "type": "number"
+            }
+          },
+          "required": [
+            "source_spot_price",
+            "provider_spot_price",
+            "spot_disagreement_ratio",
+            "latest_contract_trade_at",
+            "days_to_expiration",
+            "normalized_call_count",
+            "normalized_put_count",
+            "distinct_strike_count",
+            "open_interest_coverage",
+            "iv_coverage",
+            "volume_coverage",
+            "two_sided_quote_coverage"
+          ],
+          "title": "OptionsQualityEvidenceResponse",
+          "type": "object"
+        },
+        "OptionsStrikePointResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "call_iv": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call Iv"
+            },
+            "call_open_interest": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call Open Interest"
+            },
+            "call_volume": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Call Volume"
+            },
+            "estimated_call_gex": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Estimated Call Gex"
+            },
+            "estimated_put_gex": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Estimated Put Gex"
+            },
+            "put_iv": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Put Iv"
+            },
+            "put_open_interest": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Put Open Interest"
+            },
+            "put_volume": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Put Volume"
+            },
+            "strike": {
+              "title": "Strike",
+              "type": "number"
+            }
+          },
+          "required": [
+            "strike"
+          ],
+          "title": "OptionsStrikePointResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "title": "Assumptions",
+          "type": "object"
+        },
+        "calculation_version": {
+          "title": "Calculation Version",
+          "type": "string"
+        },
+        "completed_count": {
+          "title": "Completed Count",
+          "type": "integer"
+        },
+        "continuity_count": {
+          "title": "Continuity Count",
+          "type": "integer"
+        },
+        "core_valid_current_count": {
+          "title": "Core Valid Current Count",
+          "type": "integer"
+        },
+        "coverage": {
+          "title": "Coverage",
+          "type": "number"
+        },
+        "current_count": {
+          "title": "Current Count",
+          "type": "integer"
+        },
+        "expected_count": {
+          "title": "Expected Count",
+          "type": "integer"
+        },
+        "failed_count": {
+          "title": "Failed Count",
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "$ref": "#/$defs/OptionsHistoryPointResponse"
+          },
+          "title": "History",
+          "type": "array"
+        },
+        "item": {
+          "$ref": "#/$defs/OptionsCommandCenterItemResponse"
+        },
+        "latest_observation_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latest Observation At"
+        },
+        "market": {
+          "title": "Market",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "published_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Published At"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "retried_count": {
+          "title": "Retried Count",
+          "type": "integer"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "integer"
+        },
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_as_of_date": {
+          "format": "date",
+          "title": "Source As Of Date",
+          "type": "string"
+        },
+        "source_feature_run_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Feature Run Id"
+        },
+        "stale": {
+          "default": false,
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "strike_points": {
+          "items": {
+            "$ref": "#/$defs/OptionsStrikePointResponse"
+          },
+          "title": "Strike Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "calculation_version",
+        "run_id",
+        "source_as_of_date",
+        "market",
+        "provider",
+        "started_at",
+        "expected_count",
+        "current_count",
+        "continuity_count",
+        "completed_count",
+        "core_valid_current_count",
+        "failed_count",
+        "retried_count",
+        "coverage",
+        "item",
+        "strike_points",
+        "history"
+      ],
+      "title": "OptionsSymbolDetailResponse",
+      "type": "object"
+    }
+  },
+  "schema_version": "options-wire-schema-v1"
+}

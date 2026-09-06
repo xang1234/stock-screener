@@ -2,24 +2,24 @@ from __future__ import annotations
 
 import json
 import shutil
-import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
+from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
+from app.services.static_breadth_contributor_asset_validator import (
+    StaticBreadthContributorAssetError,
+    validate_static_breadth_contributor_asset,
+)
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     expected_market_from_static_market_manifest_path,
     read_static_market_manifest,
 )
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
-from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
-from app.services.static_breadth_contributor_asset_validator import (
-    StaticBreadthContributorAssetError,
-    validate_static_breadth_contributor_asset,
-)
 
 
 @dataclass(frozen=True)
@@ -124,7 +124,9 @@ class StaticArtifactCombiner:
         entries: dict[str, dict[str, Any]] = {}
         for market, artifact in selected.items():
             entries[market] = artifact["entry"]
-            warnings.extend(str(item) for item in artifact["metadata"].get("warnings", []))
+            warnings.extend(
+                str(item) for item in artifact["metadata"].get("warnings", [])
+            )
             if artifact["source_label"] == "fallback":
                 if fallback_reasons.get(market) == "newer":
                     warnings.append(
@@ -136,7 +138,9 @@ class StaticArtifactCombiner:
                         f"{market} reused from a previous static-site market artifact "
                         "because the current run produced no artifact."
                     )
-        optional_missing = sorted(market for market in optional if market not in entries)
+        optional_missing = sorted(
+            market for market in optional if market not in entries
+        )
         warnings.extend(
             f"Static export market {market} was omitted from the combined bundle "
             "because no current or fallback artifact was available."
@@ -365,8 +369,13 @@ class StaticArtifactCombiner:
         *, market: str, source_label: str, entry: dict, market_dir: Path
     ) -> list[str]:
         warnings: list[str] = []
-        features = entry.get("features") if isinstance(entry.get("features"), dict) else {}
-        for feature, filename in (("groups", "groups.json"), ("rrg", "groups_rrg.json")):
+        features = (
+            entry.get("features") if isinstance(entry.get("features"), dict) else {}
+        )
+        for feature, filename in (
+            ("groups", "groups.json"),
+            ("rrg", "groups_rrg.json"),
+        ):
             if features.get(feature) and not (market_dir / filename).is_file():
                 raise StaticArtifactFormulaError(
                     f"{market} {source_label} artifact advertises "
@@ -374,9 +383,7 @@ class StaticArtifactCombiner:
                 )
         assets = entry.get("assets")
         contributor_asset = (
-            assets.get("breadth_contributors")
-            if isinstance(assets, dict)
-            else None
+            assets.get("breadth_contributors") if isinstance(assets, dict) else None
         )
         if contributor_asset is not None:
             try:
@@ -394,9 +401,7 @@ class StaticArtifactCombiner:
             ) as exc:
                 entry["assets"] = dict(assets)
                 entry["assets"].pop("breadth_contributors", None)
-                warnings.append(
-                    f"{market} breadth contributor asset ignored: {exc}"
-                )
+                warnings.append(f"{market} breadth contributor asset ignored: {exc}")
         return warnings
 
     @staticmethod
@@ -429,7 +434,9 @@ class StaticArtifactCombiner:
         if not isinstance(entry, dict):
             raise RuntimeError(f"{market} {source_label} metadata has no Market entry")
         observed = {"market entry": entry.get("rs_formula_version")}
-        features = entry.get("features") if isinstance(entry.get("features"), dict) else {}
+        features = (
+            entry.get("features") if isinstance(entry.get("features"), dict) else {}
+        )
         scan_manifest_path = market_dir / "scan" / "manifest.json"
         if features.get("scan") and not scan_manifest_path.is_file():
             raise StaticArtifactFormulaError(
@@ -445,9 +452,7 @@ class StaticArtifactCombiner:
                 advertised_path = str(chunk_ref.get("path") or "").strip()
                 relative_path = Path(advertised_path)
                 try:
-                    relative_path = relative_path.relative_to(
-                        published_market_prefix
-                    )
+                    relative_path = relative_path.relative_to(published_market_prefix)
                 except ValueError:
                     # Older manifests may already advertise paths relative to
                     # the per-market artifact root.
@@ -514,7 +519,9 @@ class StaticArtifactCombiner:
         entry = metadata.get("entry")
         if not isinstance(entry, dict):
             raise RuntimeError(f"{market} {source_label} metadata has no Market entry")
-        features = entry.get("features") if isinstance(entry.get("features"), dict) else {}
+        features = (
+            entry.get("features") if isinstance(entry.get("features"), dict) else {}
+        )
         if not features.get("breadth"):
             return entry
 
@@ -583,14 +590,7 @@ class StaticArtifactCombiner:
         manifest: dict[str, Any],
         clean: bool,
     ) -> None:
-        output_dir.parent.mkdir(parents=True, exist_ok=True)
-        stage = Path(
-            tempfile.mkdtemp(prefix=f".{output_dir.name}.stage-", dir=output_dir.parent)
-        )
-        backup = output_dir.parent / f".{output_dir.name}.previous"
-        try:
-            if not clean and output_dir.exists():
-                shutil.copytree(output_dir, stage, dirs_exist_ok=True)
+        def populate(stage: Path) -> None:
             for market in omitted_markets:
                 omitted_dir = stage / "markets" / market.lower()
                 if omitted_dir.exists() or omitted_dir.is_symlink():
@@ -605,18 +605,9 @@ class StaticArtifactCombiner:
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            if backup.exists():
-                shutil.rmtree(backup)
-            if output_dir.exists():
-                output_dir.rename(backup)
-            try:
-                stage.rename(output_dir)
-            except Exception:
-                if backup.exists() and not output_dir.exists():
-                    backup.rename(output_dir)
-                raise
-            if backup.exists():
-                shutil.rmtree(backup)
-        finally:
-            if stage.exists():
-                shutil.rmtree(stage)
+
+        AtomicDirectoryPublisher().publish(
+            output_dir,
+            populate,
+            clean=clean,
+        )

@@ -1,3 +1,4 @@
+import { lazy } from 'react';
 import { HashRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import StaticLayout from './StaticLayout';
 import StaticHomePage from './pages/StaticHomePage';
@@ -6,6 +7,9 @@ import StaticBreadthPage from './pages/StaticBreadthPage';
 import StaticGroupsPage from './pages/StaticGroupsPage';
 import { StaticMarketProvider } from './StaticMarketContext';
 import { getStaticSupportedMarkets, useStaticManifest } from './dataClient';
+
+const StaticOptionsPage = lazy(() => import('./pages/StaticOptionsPage'));
+const StaticOptionsSymbolPage = lazy(() => import('./pages/StaticOptionsSymbolPage'));
 
 function StaticAppContent() {
   const manifestQuery = useStaticManifest();
@@ -23,6 +27,8 @@ function StaticAppContent() {
           <Route path="/scan" element={<StaticScanPage />} />
           <Route path="/breadth" element={<StaticBreadthPage />} />
           <Route path="/groups" element={<StaticGroupsPage />} />
+          <Route path="/options" element={<StaticOptionsPage />} />
+          <Route path="/options/:symbol" element={<StaticOptionsSymbolPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </StaticLayout>

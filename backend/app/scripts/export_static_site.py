@@ -260,6 +260,22 @@ def _snapshot_skipped_not_trading_day(snapshot: dict[str, Any] | None) -> bool:
     return snapshot.get("status") == "skipped" and snapshot.get("reason") == "not_trading_day"
 
 
+def _run_static_options_refresh(source_run_id: int) -> dict[str, Any]:
+    from app.interfaces.tasks.options_analytics_tasks import refresh_options_analytics
+
+    try:
+        return refresh_options_analytics.run(
+            source_run_id=source_run_id,
+            market="US",
+        )
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "reason_codes": ["options_refresh_failed"],
+            "error": str(exc),
+        }
+
+
 def _write_market_diagnostics(output_dir: Path, market: str, snapshot: Mapping[str, Any]) -> Path:
     diagnostics_dir = output_dir / "diagnostics" / market.lower()
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -1169,6 +1185,14 @@ def _run_daily_refresh(
                     "pointer_key": "latest_published",
                     "run_id": default_run_id,
                 }
+                if settings.options_analytics_enabled:
+                    options_result = _run_static_options_refresh(int(default_run_id))
+                    results["options_analytics"] = options_result
+                    if options_result.get("status") != "published":
+                        warnings.append(
+                            "Static US Options Analytics did not publish; "
+                            "last-good options may be used independently."
+                        )
             elif default_run_id is not None:
                 warnings.append(
                     f"{STATIC_DEFAULT_MARKET} feature snapshot returned status "
@@ -1207,6 +1231,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--fallback-artifacts-dir",
         help="Optional previous-run market artifacts directory used to fill markets missing from --combine-artifacts-dir.",
+    )
+    parser.add_argument(
+        "--options-artifacts-dir",
+        help="Optional current options directory selected independently in combine mode.",
+    )
+    parser.add_argument(
+        "--fallback-options-artifacts-dir",
+        help="Optional last-good options directory selected independently in combine mode.",
     )
     parser.add_argument(
         "--build-mode",
@@ -1274,6 +1306,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
     if args.fallback_artifacts_dir and not args.combine_artifacts_dir:
         raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
+    if (
+        args.options_artifacts_dir or args.fallback_options_artifacts_dir
+    ) and not args.combine_artifacts_dir:
+        raise SystemExit("options artifact directories require --combine-artifacts-dir")
     if args.rrg_history_dir and not args.market:
         raise SystemExit("--rrg-history-dir requires --market")
     if args.combine_artifacts_dir and args.rrg_history_dir:
@@ -1303,6 +1339,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     refresh_warnings: list[str] = []
     selected_market_non_publishable_snapshot: dict[str, Any] | None = None
     if args.combine_artifacts_dir:
+        options_combine_kwargs: dict[str, Path] = {}
+        if args.options_artifacts_dir:
+            options_combine_kwargs["options_artifacts_dir"] = Path(
+                args.options_artifacts_dir
+            )
+        if args.fallback_options_artifacts_dir:
+            options_combine_kwargs["fallback_options_artifacts_dir"] = Path(
+                args.fallback_options_artifacts_dir
+            )
         result = StaticSiteExportService.combine_market_artifacts(
             Path(args.combine_artifacts_dir),
             Path(args.output_dir),
@@ -1317,6 +1362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # explicit operator override constrains a fallback publication.
             fallback_rs_formula_version_overrides=args.rs_formula_overrides_json,
             optional_markets=OPTIONAL_STATIC_MARKETS,
+            **options_combine_kwargs,
         )
     else:
         prepare_runtime()

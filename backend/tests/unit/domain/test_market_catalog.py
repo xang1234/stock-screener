@@ -106,6 +106,18 @@ def test_market_catalog_filters_market_codes_by_capability_in_runtime_order() ->
     )
 
 
+def test_options_analytics_market_capability_is_us_only() -> None:
+    catalog = get_market_catalog()
+
+    assert catalog.market_codes_with_capability("options_analytics") == ("US",)
+    assert catalog.get("US").capabilities.options_analytics is True
+    assert all(
+        catalog.get(market).capabilities.options_analytics is False
+        for market in catalog.supported_market_codes()
+        if market != "US"
+    )
+
+
 def test_market_catalog_rejects_unknown_capability_filter() -> None:
     catalog = get_market_catalog()
 
@@ -298,5 +310,6 @@ def test_market_catalog_runtime_payload_is_frontend_ready() -> None:
             "feature_snapshot": True,
             "official_universe": False,
             "finviz_screening": True,
+            "options_analytics": True,
         },
     }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -50,7 +50,8 @@ def test_fundamentals_snapshot_reuses_ticker_for_authoritative_calendar_observat
 ):
     service = _service()
     service._extract_eps_rating_data = lambda _ticker: {}
-    earnings_at = datetime(2026, 9, 3, 20, 0, tzinfo=UTC)
+    earnings_date = datetime.now(UTC).date() + timedelta(days=7)
+    earnings_at = datetime.combine(earnings_date, time(20), tzinfo=UTC)
     ticker = SimpleNamespace(
         info={"symbol": "AAPL"},
         earnings_dates=pd.DataFrame(
@@ -69,7 +70,7 @@ def test_fundamentals_snapshot_reuses_ticker_for_authoritative_calendar_observat
     observed_after = datetime.now(UTC).date()
 
     assert result is not None
-    assert result["next_earnings_date"] == date(2026, 9, 3)
+    assert result["next_earnings_date"] == earnings_date
     assert result["event_calendar_as_of_date"] in {
         observed_before,
         observed_after,

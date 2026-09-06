@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from celery.exceptions import Retry
 
@@ -546,6 +546,8 @@ def serialized_data_fetch_task(
     task_name: str,
     *,
     base: type[Any] | None = None,
+    enabled: Callable[[], bool] | None = None,
+    disabled_reason: str = "task_disabled",
     **task_options: Any,
 ):
     """Register a serialized Celery task with parent-process lease recovery."""
@@ -562,6 +564,16 @@ def serialized_data_fetch_task(
 
     def decorator(func):
         wrapped = _serialized_data_fetch(task_name)(func)
-        return celery_app.task(bind=True, base=task_base, **task_options)(wrapped)
+
+        @wraps(func)
+        def prechecked(*args, **kwargs):
+            if enabled is not None and not enabled():
+                return {
+                    "status": "skipped",
+                    "reason_codes": [disabled_reason],
+                }
+            return wrapped(*args, **kwargs)
+
+        return celery_app.task(bind=True, base=task_base, **task_options)(prechecked)
 
     return decorator

@@ -38,6 +38,10 @@ get_get_setup_details_use_case = _use_case_factories.get_get_setup_details_use_c
 get_get_single_result_use_case = _use_case_factories.get_get_single_result_use_case
 get_list_feature_runs_use_case = _use_case_factories.get_list_feature_runs_use_case
 get_run_bulk_scan_use_case = _use_case_factories.get_run_bulk_scan_use_case
+get_refresh_options_analytics_use_case = (
+    _use_case_factories.get_refresh_options_analytics_use_case
+)
+get_options_analytics_queries = _use_case_factories.get_options_analytics_queries
 
 if TYPE_CHECKING:
     from app.domain.scanning.ports import MarketRsReader

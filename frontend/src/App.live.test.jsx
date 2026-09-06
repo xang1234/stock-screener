@@ -24,16 +24,26 @@ vi.mock('./components/App/BootstrapSetupScreen', () => ({
   default: ({ primaryMarket }) => <div>Bootstrap Setup {primaryMarket}</div>,
 }));
 
+vi.mock('./components/Layout/Layout', () => ({ default: ({ children }) => <div>{children}</div> }));
+vi.mock('./contexts/StrategyProfileContext', () => ({
+  StrategyProfileProvider: ({ children }) => <>{children}</>,
+}));
+vi.mock('./pages/MarketScanPage', () => ({ default: () => <div>Live Market Scan Page</div> }));
+vi.mock('./pages/OptionsPage', () => ({ default: () => <div>Live Options Page</div> }));
+vi.mock('./pages/OptionsSymbolPage', () => ({ default: () => <div>Live Options Symbol Page</div> }));
+
 const baseRuntimeState = () => ({
   auth: { required: false, authenticated: true, configured: true },
   bootstrapRequired: false,
   bootstrapState: null,
   enabledMarkets: ['US'],
-  features: { themes: true, chatbot: true },
+  features: { themes: true, chatbot: true, options_analytics: true },
   isLoggingIn: false,
   isStartingBootstrap: false,
   login: vi.fn(),
-  marketCatalog: [],
+  marketCatalog: {
+    markets: [{ code: 'US', capabilities: { options_analytics: true } }],
+  },
   primaryMarket: 'US',
   loginError: null,
   runtimeReady: true,
@@ -45,6 +55,7 @@ const baseRuntimeState = () => ({
 describe('App live mode shell', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.history.pushState({}, '', '/');
     runtimeMock.state = baseRuntimeState();
   });
 
@@ -52,6 +63,7 @@ describe('App live mode shell', () => {
     cleanup();
     vi.clearAllMocks();
     window.localStorage.clear();
+    window.history.pushState({}, '', '/');
   });
 
   it('lazy-loads the server login screen only when auth blocks the app', async () => {
@@ -74,5 +86,20 @@ describe('App live mode shell', () => {
     render(<App />);
 
     expect(await screen.findByText('Bootstrap Setup US')).toBeInTheDocument();
+  });
+
+  it('lazy-loads Options only when the feature and selected US capability are enabled', async () => {
+    window.history.pushState({}, '', '/options');
+    render(<App />);
+    expect(await screen.findByText('Live Options Page')).toBeInTheDocument();
+
+    cleanup();
+    runtimeMock.state = {
+      ...baseRuntimeState(),
+      features: { ...baseRuntimeState().features, options_analytics: false },
+    };
+    render(<App />);
+    expect(await screen.findByText('Live Market Scan Page')).toBeInTheDocument();
+    expect(screen.queryByText('Live Options Page')).not.toBeInTheDocument();
   });
 });

@@ -9,7 +9,37 @@ SESSION_WINDOW_LOOKBACK_SAFETY_DAYS = 30
 
 
 class MarketSessionCalendar(Protocol):
+    def is_trading_day(self, market: str, value: date) -> bool: ...
+
     def trading_days(self, market: str, start: date, end: date) -> list[date]: ...
+
+
+class MarketSessionWindow:
+    """Adapt the shared market calendar to bounded session-window queries."""
+
+    def __init__(self, calendar_service: MarketSessionCalendar, *, market: str) -> None:
+        self._calendar_service = calendar_service
+        self._market = market.strip().upper()
+
+    def is_session(self, value: date) -> bool:
+        return self._calendar_service.is_trading_day(self._market, value)
+
+    def sessions_ending_on(self, value: date, count: int) -> tuple[date, ...]:
+        requested = max(0, int(count))
+        if requested == 0:
+            return ()
+        start = value - timedelta(
+            days=requested * 3 + SESSION_WINDOW_LOOKBACK_SAFETY_DAYS
+        )
+        sessions = tuple(
+            self._calendar_service.trading_days(self._market, start, value)
+        )
+        if len(sessions) < requested:
+            raise ValueError(
+                f"Only {len(sessions)} {self._market} sessions available; "
+                f"{requested} required"
+            )
+        return sessions[-requested:]
 
 
 def session_window_start(
@@ -69,6 +99,7 @@ def market_session_lag(
 
 __all__ = [
     "MarketSessionCalendar",
+    "MarketSessionWindow",
     "market_session_lag",
     "session_window_start",
 ]
