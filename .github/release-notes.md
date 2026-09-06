@@ -38,6 +38,7 @@ Set `APP_IMAGE_TAG=v1.6.0` in the deployment environment, pull the images, and r
 
 - Apply the included database migrations through revision `0034` using the normal deployment migration process. Revision `0033` adds breadth-contributor snapshots; revision `0034` adds Options Command Center persistence.
 - Live options analytics are disabled by default. Set `OPTIONS_ANALYTICS_ENABLED=true` and recreate the API and workers to enable them.
+- Options analytics are US-only and do not change the existing multi-market first-run bootstrap.
 - The options job follows a successfully published daily US Feature snapshot on the existing `data_fetch_us` queue. No additional worker family is required, but the normal US data-fetch worker must be running.
 - Historical options changes require five usable observations; IV percentile and rank require at least 20. The interface reports **Building history** until those thresholds are met.
 - Yahoo options data is unofficial and best effort. It may be delayed, incomplete, or throttled and should be treated as research context rather than execution data.
