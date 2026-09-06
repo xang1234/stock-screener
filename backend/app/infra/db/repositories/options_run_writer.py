@@ -345,9 +345,10 @@ class SqlOptionsRunWriter:
     ) -> None:
         for field in _OBSERVATION_VALUE_FIELDS:
             setattr(item, field, None)
-        item.short_history_observation_count = 0
-        item.iv_history_observation_count = 0
-        item.lifetime_observation_count = 0
+        readiness = analysis.history_readiness
+        item.short_history_observation_count = readiness.short_observation_count
+        item.iv_history_observation_count = readiness.iv_observation_count
+        item.lifetime_observation_count = readiness.lifetime_observation_count
         self._replace_strike_points(item, ())
         item.observation_state = ObservationState.UNAVAILABLE.value
         item.core_valid = False

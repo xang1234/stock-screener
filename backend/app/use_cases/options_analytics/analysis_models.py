@@ -69,6 +69,7 @@ class UnavailableCandidateAnalysis:
     assumptions: dict[str, Any]
     warnings: tuple[str, ...]
     retry_count: int
+    history_readiness: HistoryReadiness
 
 
 @dataclass(frozen=True)

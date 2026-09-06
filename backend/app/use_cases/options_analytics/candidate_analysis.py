@@ -83,13 +83,13 @@ class OptionsCandidateAnalyzer:
             or not math.isfinite(float(candidate.spot_price))
             or candidate.spot_price <= 0
         ):
-            return UnavailableCandidateAnalysis(
-                candidate=candidate,
-                reason_codes=("source_spot_unavailable",),
-                evidence={"quality": unavailable_quality_evidence(candidate)},
-                assumptions=assumptions,
-                warnings=warnings,
-                retry_count=0,
+            return self._unavailable(
+                candidate,
+                ("source_spot_unavailable",),
+                assumptions,
+                warnings,
+                0,
+                context,
             )
 
         for attempt in range(1, 4):
@@ -108,6 +108,7 @@ class OptionsCandidateAnalyzer:
                         assumptions,
                         warnings,
                         attempt - 1,
+                        context,
                     )
                 observation = self._provider.fetch_chain(
                     candidate.symbol,
@@ -139,6 +140,7 @@ class OptionsCandidateAnalyzer:
                         assumptions,
                         warnings,
                         2,
+                        context,
                     )
                 self._throttle_backoff(attempt)
             except TransientOptionsProviderError:
@@ -149,6 +151,7 @@ class OptionsCandidateAnalyzer:
                         assumptions,
                         warnings,
                         2,
+                        context,
                     )
             except OptionsProviderError:
                 return self._unavailable(
@@ -157,6 +160,7 @@ class OptionsCandidateAnalyzer:
                     assumptions,
                     warnings,
                     attempt - 1,
+                    context,
                 )
         raise AssertionError("unreachable")
 
@@ -244,14 +248,16 @@ class OptionsCandidateAnalyzer:
             history_readiness=readiness,
         )
 
-    @staticmethod
     def _unavailable(
+        self,
         candidate: OptionCandidate,
         reasons: tuple[str, ...],
         assumptions: dict[str, object],
         warnings: tuple[str, ...],
         retry_count: int,
+        context: AnalysisContext,
     ) -> UnavailableCandidateAnalysis:
+        trailing_sessions = self._calendar.sessions_ending_on(context.as_of_date, 30)
         return UnavailableCandidateAnalysis(
             candidate=candidate,
             reason_codes=reasons,
@@ -259,6 +265,11 @@ class OptionsCandidateAnalyzer:
             assumptions=assumptions,
             warnings=warnings,
             retry_count=retry_count,
+            history_readiness=history_readiness(
+                context.historical_observations,
+                trailing_sessions,
+                calculation_version=self._calculation_version,
+            ),
         )
 
 

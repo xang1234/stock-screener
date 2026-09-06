@@ -362,9 +362,7 @@ def test_candidate_source_rejects_a_published_non_us_feature_run() -> None:
     engine.dispose()
 
 
-def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_close() -> (
-    None
-):
+def test_continuity_inputs_require_a_close_on_the_pinned_session_for_spot() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -390,6 +388,13 @@ def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_clo
             ),
             StockPrice(symbol="aapl", date=as_of, close=201, adj_close=201, volume=1),
             StockPrice(
+                symbol="msft",
+                date=as_of - timedelta(days=1),
+                close=301,
+                adj_close=301,
+                volume=1,
+            ),
+            StockPrice(
                 symbol="aapl",
                 date=as_of + timedelta(days=1),
                 close=999,
@@ -401,13 +406,17 @@ def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_clo
     session.commit()
 
     inputs = SqlOptionsCandidateSource(session).read_continuity_inputs(
-        ["AAPL", "MISSING"], as_of
+        ["AAPL", "MSFT", "MISSING"], as_of
     )
 
-    assert set(inputs) == {"AAPL"}
+    assert set(inputs) == {"AAPL", "MSFT", "MISSING"}
     assert inputs["AAPL"].spot_price == 201
     assert inputs["AAPL"].price_closes == (199.0, 201.0)
     assert inputs["AAPL"].daily_dollar_volume is None
     assert inputs["AAPL"].dividend_yield is None
+    assert inputs["MSFT"].spot_price is None
+    assert inputs["MSFT"].price_closes == (301.0,)
+    assert inputs["MISSING"].spot_price is None
+    assert inputs["MISSING"].price_closes == ()
     session.close()
     engine.dispose()

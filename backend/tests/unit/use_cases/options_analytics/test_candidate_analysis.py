@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
+from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.metrics.aggregate import calculate_chain_metrics
 from app.domain.options_analytics.metrics.gex import estimate_contract_gex
 from app.domain.options_analytics.models import (
     CandidateKind,
     ChainObservation,
     NormalizedOptionContract,
+    ObservationState,
     OptionCandidate,
     OptionSide,
 )
@@ -77,6 +79,47 @@ def test_missing_spot_returns_a_distinct_unavailable_result_without_provider_io(
         "dividend_yield": 0.0,
         "dividend_source": "zero_assumption",
     }
+    assert provider.calls == 0
+
+
+def test_unavailable_result_preserves_compatible_history_readiness() -> None:
+    provider = Provider()
+    analyzer = OptionsCandidateAnalyzer(
+        provider=provider,
+        calendar=Calendar(),
+        calculation_version="v1",
+    )
+    as_of = date(2026, 9, 4)
+    history = tuple(
+        HistoricalObservation(
+            session=as_of - timedelta(days=offset),
+            calculation_version="v1",
+            state=ObservationState.AVAILABLE,
+            atm_iv=0.20 + offset / 100,
+        )
+        for offset in range(1, 6)
+    )
+
+    result = analyzer.analyze(
+        OptionCandidate(
+            symbol="AAPL",
+            kind=CandidateKind.CURRENT,
+            composite_score=99,
+            daily_dollar_volume=200_000_001,
+            spot_price=None,
+        ),
+        AnalysisContext(
+            as_of_date=as_of,
+            market="US",
+            risk_free_rate=0.04,
+            historical_observations=history,
+        ),
+    )
+
+    assert isinstance(result, UnavailableCandidateAnalysis)
+    assert result.history_readiness.short_observation_count == 5
+    assert result.history_readiness.iv_observation_count == 5
+    assert result.history_readiness.lifetime_observation_count == 5
     assert provider.calls == 0
 
 

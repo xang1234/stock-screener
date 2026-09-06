@@ -113,11 +113,21 @@ class SqlOptionsCandidateSource:
     def _price_closes(
         self, symbols: list[str], as_of_date: date
     ) -> dict[str, tuple[float, ...]]:
+        closes, _ = self._price_history(symbols, as_of_date)
+        return closes
+
+    def _price_history(
+        self, symbols: list[str], as_of_date: date
+    ) -> tuple[dict[str, tuple[float, ...]], dict[str, date]]:
         canonical_symbols = sorted({symbol.strip().upper() for symbol in symbols})
         if not canonical_symbols:
-            return {}
+            return {}, {}
         rows = (
-            self._session.query(StockPrice.symbol, StockPrice.adj_close)
+            self._session.query(
+                StockPrice.symbol,
+                StockPrice.date,
+                StockPrice.adj_close,
+            )
             .filter(
                 func.upper(StockPrice.symbol).in_(canonical_symbols),
                 StockPrice.date <= as_of_date,
@@ -127,16 +137,20 @@ class SqlOptionsCandidateSource:
             .all()
         )
         newest_first: dict[str, list[float]] = {}
-        for symbol, adjusted_close in rows:
+        latest_dates: dict[str, date] = {}
+        for symbol, close_date, adjusted_close in rows:
             value = _number(adjusted_close)
             if value is None or value <= 0:
                 continue
-            values = newest_first.setdefault(symbol.strip().upper(), [])
+            canonical_symbol = symbol.strip().upper()
+            latest_dates.setdefault(canonical_symbol, close_date)
+            values = newest_first.setdefault(canonical_symbol, [])
             if len(values) < 21:
                 values.append(value)
-        return {
+        closes = {
             symbol: tuple(reversed(values)) for symbol, values in newest_first.items()
         }
+        return closes, latest_dates
 
     def read_continuity_inputs(
         self, symbols: list[str] | tuple[str, ...], as_of_date: date
@@ -144,17 +158,19 @@ class SqlOptionsCandidateSource:
         canonical_symbols = sorted({symbol.strip().upper() for symbol in symbols})
         if not canonical_symbols:
             return {}
-        closes = self._price_closes(canonical_symbols, as_of_date)
+        closes, latest_dates = self._price_history(canonical_symbols, as_of_date)
         result: dict[str, OptionCandidateInput] = {}
         for symbol in canonical_symbols:
             price_closes = closes.get(symbol, ())
-            if not price_closes:
-                continue
             result[symbol] = OptionCandidateInput(
                 symbol=symbol,
                 composite_score=None,
                 daily_dollar_volume=None,
-                spot_price=price_closes[-1],
+                spot_price=(
+                    price_closes[-1]
+                    if price_closes and latest_dates.get(symbol) == as_of_date
+                    else None
+                ),
                 dividend_yield=None,
                 price_closes=price_closes,
             )

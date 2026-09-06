@@ -143,6 +143,7 @@ class _Repositories(
         assumptions=None,
         warnings=(),
         retry_count=0,
+        history_readiness=None,
     ):
         self.save_analysis(
             run_id,
@@ -153,6 +154,14 @@ class _Repositories(
                 assumptions=dict(assumptions or {}),
                 warnings=tuple(warnings),
                 retry_count=retry_count,
+                history_readiness=history_readiness
+                or HistoryReadiness(
+                    short_history_available=False,
+                    iv_history_available=False,
+                    short_observation_count=0,
+                    iv_observation_count=0,
+                    lifetime_observation_count=0,
+                ),
             ),
         )
         return self._get_item(run_id, symbol)
@@ -359,6 +368,29 @@ def test_unavailable_retry_clears_prior_observation_values(session) -> None:
     assert item.lifetime_observation_count == 0
     assert item.activity_rank is None
     assert item.strike_points == []
+
+
+def test_unavailable_observation_persists_prior_history_readiness(session) -> None:
+    repo = _Repositories(session)
+    run = _start(repo)
+    repo.stage_candidates(run.id, [_candidate("AAPL")])
+
+    item = repo.save_unavailable(
+        run.id,
+        "AAPL",
+        reason_codes=("provider_unavailable",),
+        history_readiness=HistoryReadiness(
+            short_history_available=True,
+            iv_history_available=True,
+            short_observation_count=5,
+            iv_observation_count=20,
+            lifetime_observation_count=24,
+        ),
+    )
+
+    assert item.short_history_observation_count == 5
+    assert item.iv_history_observation_count == 20
+    assert item.lifetime_observation_count == 24
 
 
 def test_resume_retries_failed_items_but_preserves_successful_items(session) -> None:
