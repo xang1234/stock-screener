@@ -1,93 +1,58 @@
-# Stock Scanner v1.5.0
+# Stock Scanner v1.6.0
 
-Stock Scanner v1.5.0 delivers a shared revision-2 market-breadth engine, balanced relative-strength parity across live and static applications, stronger multi-market calendar and publishing controls, and more resilient background data refreshes.
+Stock Scanner v1.6.0 introduces the Options Command Center: a focused view of options positioning, volatility, skew, and activity for liquid stocks already leading the equity scans. This release also expands market-breadth attribution, adds an RS heatmap to group rankings, and improves watchlist and static-site reliability.
 
 ## Highlights
 
-### One canonical market-breadth calculation layer
+### Options Command Center
 
-- Replaces duplicated live, static, backfill, and rebuild formulas with one revision-2 breadth engine for every breadth-enabled market.
-- Adds StockBee primary and secondary breadth metrics, today-inclusive 5-day and 10-day ratios, advance/decline and new-high/new-low context, T2108, ATR extension, and per-formula eligibility counts.
-- Uses point-in-time common-stock universes and historical FX conversion for non-US liquidity tests while keeping the existing flat breadth API backward compatible.
-- Adds a validated shadow rebuild, atomic cutover tooling, rollback guidance, and revision-aware consumers so old and new breadth data cannot be silently mixed.
-- Redesigns the live and static breadth views with health bars, significance-based color intensity, compact Primary/Secondary/Context history sections, formula-source tooltips, benchmark overlays, and US industry-group attribution.
+- Selects the top 40 US Candidates and top 40 US Leaders independently, requires daily dollar volume above $100 million, and merges duplicate tickers while preserving both source ranks.
+- Organizes the cohort into Gamma, Volatility, Skew, and Activity views, with sortable metrics and ticker-level strike charts, history, assumptions, and quality evidence.
+- Calculates max pain, estimated net gamma exposure and gamma flip, call and put walls, ATM implied volatility, 25-delta skew, realized volatility, volatility risk premium, and contract-activity measures.
+- Uses the earliest standard monthly Yahoo expiration 14–45 days away and publishes only when at least 90% of current symbols have core-valid chains.
+- Preserves ticker history across temporary leadership gaps and reports unavailable or still-building metrics explicitly instead of substituting values.
+- Supports opt-in live collection and a read-only static-site snapshot with history carried across deployments.
 
-### Relative strength and group analytics
+### Market breadth and contributor attribution
 
-- Standardizes balanced market relative strength across live and static workflows and activates it correctly during fresh bootstrap.
-- Hydrates benchmark anchors and RRG history before validation, preventing empty or incomplete first-run bootstrap relative-strength views.
-- Repairs static and live group-ranking history, backfill ordering, point-in-time universes, and RRG startup behavior.
-- Adds short-horizon group relative-strength columns and populates live group history and RRG data during bootstrap.
+- Moves breadth calculations to market-calibrated, local-currency thresholds and provides a revision-3 rebuild, validation, cutover, and rollback path.
+- Adds live and static contributor drilldowns so users can inspect the stocks and industry groups behind breadth readings.
+- Persists contributor snapshots with calculation provenance and retains last-good static metadata across refreshes and deployments.
+- Aligns static contributor inputs with the canonical breadth calculation and finalizes exports only after their source data is hydrated.
 
-### Static-site and multi-market reliability
+### Group rankings and watchlists
 
-- Adds provider-aware exchange calendars, audited session invariants, and packaged calendar data for Docker deployments.
-- Aligns static coverage gates, breadth history refreshes, market exposure, benchmark anchors, and stale-artifact rejection across supported markets.
-- Reduces memory usage in snapshot and market-RS bootstrap workflows and makes enabled-market Celery Beat scheduling explicit.
-- Recovers data-fetch work after worker loss and strengthens cache-only execution while market refresh guards are active.
-
-### Screening and operator workflows
-
-- Adds guided grouped filters for scan results.
-- Adds the correction-survivor action-state workflow and supporting scan metadata.
-- Improves Windows deployment guidance and clarifies Celery Beat timezone configuration.
+- Adds an RS heatmap to group rankings, with tones derived from the values displayed in each cell.
+- Shows a stock's existing watchlist memberships in the detail view and keeps membership state synchronized after single or bulk changes.
 
 ## Deployment
 
-Release images are published to GHCR under the `v1.5.0` tag:
+Release images are published to GHCR under the `v1.6.0` tag:
 
-- `ghcr.io/<owner>/stockscreenclaude-backend:v1.5.0`
-- `ghcr.io/<owner>/stockscreenclaude-frontend:v1.5.0`
+- `ghcr.io/<owner>/stockscreenclaude-backend:v1.6.0`
+- `ghcr.io/<owner>/stockscreenclaude-frontend:v1.6.0`
 
-Set `APP_IMAGE_TAG=v1.5.0` in the deployment environment, pull the images, and recreate the application services using the normal Docker Compose deployment command.
+Set `APP_IMAGE_TAG=v1.6.0` in the deployment environment, pull the images, and recreate the application services using the normal Docker Compose deployment command.
 
 ## Upgrade notes
 
-- Apply the included database migrations through revision `0032` using the normal deployment migration process.
-- Existing breadth rows are not silently rewritten. Follow `docs/runbooks/market-breadth-revision-2-cutover.md` to rebuild, validate, activate, monitor, and, if necessary, roll back revision-2 breadth data.
-- Regenerate static market artifacts after the breadth cutover so static pages do not retain revision-1 breadth snapshots.
-- Non-US breadth liquidity calculations now require aligned historical FX coverage. Missing FX data is treated as an explicit calculation failure rather than silently falling back.
-- Packaged calendar manifests are now authoritative inputs for supported markets; custom deployments should retain the bundled `backend/data/market_calendars` data.
+- Apply the included database migrations through revision `0034` using the normal deployment migration process. Revision `0033` adds breadth-contributor snapshots; revision `0034` adds Options Command Center persistence.
+- Live options analytics are disabled by default. Set `OPTIONS_ANALYTICS_ENABLED=true` and recreate the API and workers to enable them.
+- The options job follows a successfully published daily US Feature snapshot on the existing `data_fetch_us` queue. No additional worker family is required, but the normal US data-fetch worker must be running.
+- Historical options changes require five usable observations; IV percentile and rank require at least 20. The interface reports **Building history** until those thresholds are met.
+- Yahoo options data is unofficial and best effort. It may be delayed, incomplete, or throttled and should be treated as research context rather than execution data.
+- Existing breadth data is not silently converted to revision 3. Follow `docs/runbooks/market-breadth-revision-3-cutover.md` to rebuild, validate, activate, monitor, or roll back the new market-calibrated policy.
 
 ## What's Changed
 
-- Add guided grouped scan-result filters by @xang1234 in https://github.com/xang1234/stock-screener/pull/302
-- Make refresh-guarded breadth and group rankings cache-only by @xang1234 in https://github.com/xang1234/stock-screener/pull/303
-- Standardize balanced RS across live and static apps by @xang1234 in https://github.com/xang1234/stock-screener/pull/307
-- Align bootstrap derived-data readiness by @xang1234 in https://github.com/xang1234/stock-screener/pull/308
-- Fix CA static-site fallback threshold by @xang1234 in https://github.com/xang1234/stock-screener/pull/309
-- Fix bootstrap reset after premature daily pipeline by @xang1234 in https://github.com/xang1234/stock-screener/pull/310
-- Fix bootstrap reference seeding and Finviz ticker parsing by @xang1234 in https://github.com/xang1234/stock-screener/pull/311
-- Fix Finviz provider snapshot ticker parsing by @xang1234 in https://github.com/xang1234/stock-screener/pull/313
-- Fix CN weekly-reference NaN-volume crash by @xang1234 in https://github.com/xang1234/stock-screener/pull/314
-- Fix Asia static-site publish blockers by @xang1234 in https://github.com/xang1234/stock-screener/pull/315
-- Reject failed optional-market exports by @xang1234 in https://github.com/xang1234/stock-screener/pull/316
-- Hydrate static RRG startup price history by @xang1234 in https://github.com/xang1234/stock-screener/pull/317
-- Clarify Celery Beat timezone configuration by @kjpou1 in https://github.com/xang1234/stock-screener/pull/298
-- Bootstrap static RRG history with the current universe by @xang1234 in https://github.com/xang1234/stock-screener/pull/319
-- Hydrate static RS benchmark anchors before validation by @xang1234 in https://github.com/xang1234/stock-screener/pull/320
-- Fix static group rankings and historical rank data by @xang1234 in https://github.com/xang1234/stock-screener/pull/321
-- Fix static group-rank history backfill ordering by @xang1234 in https://github.com/xang1234/stock-screener/pull/322
-- Fix static group-history universe bootstrap by @xang1234 in https://github.com/xang1234/stock-screener/pull/323
-- Populate live group history and RRG during bootstrap by @xang1234 in https://github.com/xang1234/stock-screener/pull/324
-- Harden static-site no-current-artifact policy by @xang1234 in https://github.com/xang1234/stock-screener/pull/326
-- Manage Beat scheduling for enabled markets by @xang1234 in https://github.com/xang1234/stock-screener/pull/327
-- Activate balanced market RS on fresh bootstrap by @xang1234 in https://github.com/xang1234/stock-screener/pull/328
-- Fix fresh-bootstrap RS activation by @xang1234 in https://github.com/xang1234/stock-screener/pull/329
-- Fix fresh-bootstrap classification after seed imports by @xang1234 in https://github.com/xang1234/stock-screener/pull/330
-- Reduce memory usage during daily snapshot builds by @xang1234 in https://github.com/xang1234/stock-screener/pull/331
-- Add provider-aware market calendars and session invariants by @xang1234 in https://github.com/xang1234/stock-screener/pull/332
-- Reduce market-RS bootstrap memory use by @xang1234 in https://github.com/xang1234/stock-screener/pull/333
-- Fix static exposure/breadth parity by @xang1234 in https://github.com/xang1234/stock-screener/pull/334
-- Expand static price refresh to cover breadth history by @xang1234 in https://github.com/xang1234/stock-screener/pull/335
-- Keep static market exports from falling back to stale data by @xang1234 in https://github.com/xang1234/stock-screener/pull/336
-- Add short-horizon group RS columns by @xang1234 in https://github.com/xang1234/stock-screener/pull/337
-- Align static coverage gates across static market workflows by @xang1234 in https://github.com/xang1234/stock-screener/pull/338
-- Fix non-US static sites with verified calendars and historical breadth by @xang1234 in https://github.com/xang1234/stock-screener/pull/340
-- Fix Docker market-calendar packaging by @xang1234 in https://github.com/xang1234/stock-screener/pull/341
-- Update Windows deployment guidance by @xang1234 in https://github.com/xang1234/stock-screener/pull/343
-- Add the correction-survivor action-state workflow by @xang1234 in https://github.com/xang1234/stock-screener/pull/345
-- Recover data-fetch tasks after worker loss by @xang1234 in https://github.com/xang1234/stock-screener/pull/346
-- Unify market-breadth calculations and migration by @xang1234 in https://github.com/xang1234/stock-screener/pull/347
+- Use market-calibrated local thresholds for breadth by @xang1234 in https://github.com/xang1234/stock-screener/pull/349
+- Add RS heatmap to group rankings by @xang1234 in https://github.com/xang1234/stock-screener/pull/350
+- Add breadth contributor drilldowns by @xang1234 in https://github.com/xang1234/stock-screener/pull/351
+- Fix static breadth contributor input parity by @xang1234 in https://github.com/xang1234/stock-screener/pull/352
+- Export persisted breadth contributors by @xang1234 in https://github.com/xang1234/stock-screener/pull/354
+- Fix stock-detail watchlist membership state by @xang1234 in https://github.com/xang1234/stock-screener/pull/355
+- Fix static breadth contributor metadata retention by @xang1234 in https://github.com/xang1234/stock-screener/pull/356
+- Add the Options Command Center by @xang1234 in https://github.com/xang1234/stock-screener/pull/358
+- Document the Options Command Center by @xang1234 in https://github.com/xang1234/stock-screener/pull/360
 
-**Full changelog:** https://github.com/xang1234/stock-screener/compare/v1.4.0...v1.5.0
+**Full changelog:** https://github.com/xang1234/stock-screener/compare/v1.5.0...v1.6.0
