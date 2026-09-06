@@ -86,17 +86,17 @@ def _highest_contract_activity_ratio(
             available=False,
             reason_codes=("contract_open_interest_incomplete",),
         )
-    if any(value == 0 for value in open_interest):
+    valid_ratios = tuple(
+        volume / value
+        for (_, volume), value in zip(qualifying, open_interest, strict=True)
+        if value is not None and value > 0
+    )
+    if not valid_ratios:
         return MetricValue(
             available=False,
             reason_codes=("contract_open_interest_zero",),
         )
-    ratios = (
-        volume / value
-        for (_, volume), value in zip(qualifying, open_interest, strict=True)
-        if value is not None
-    )
-    return MetricValue(available=True, value=max(ratios))
+    return MetricValue(available=True, value=max(valid_ratios))
 
 
 def calculate_activity_metrics(

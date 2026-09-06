@@ -149,6 +149,16 @@ def test_contract_activity_reports_highest_qualifying_volume_oi_ratio() -> None:
     assert metrics.highest_contract_activity_ratio.value == pytest.approx(2.0)
 
 
+def test_contract_activity_ignores_zero_oi_when_another_ratio_is_valid() -> None:
+    metrics = calculate_activity_metrics(
+        (_contract(100, 300, 0), _contract(105, 200, 100)),
+        spot=100,
+    )
+
+    assert metrics.highest_contract_activity_ratio.available is True
+    assert metrics.highest_contract_activity_ratio.value == pytest.approx(2.0)
+
+
 @pytest.mark.parametrize("volumes", [(None, None), (120, None)])
 def test_activity_rejects_incomplete_volume_totals(
     volumes: tuple[int | None, int | None],
