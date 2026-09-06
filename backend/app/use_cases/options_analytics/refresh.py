@@ -108,6 +108,22 @@ class RefreshOptionsAnalyticsUseCase:
         if market != "US":
             return {"status": "skipped", "reason_codes": ["market_unsupported"]}
 
+        latest_source_run_id = self._published_reader.latest_source_feature_run_id(
+            market
+        )
+        if latest_source_run_id is None:
+            return {
+                "status": "skipped",
+                "source_run_id": command.source_run_id,
+                "reason_codes": ["source_run_unavailable"],
+            }
+        if command.source_run_id != latest_source_run_id:
+            return {
+                "status": "skipped",
+                "source_run_id": command.source_run_id,
+                "reason_codes": ["source_run_not_latest"],
+            }
+
         cohort = self._cohort_builder.build(command.source_run_id, market=market)
         run = self._run_writer.start_or_reuse(
             market=market,
@@ -141,9 +157,7 @@ class RefreshOptionsAnalyticsUseCase:
             risk_free_rate = getattr(run, "risk_free_rate", None)
             risk_free_source = persisted_source
             run_warnings = (
-                ("risk_free_rate_unavailable",)
-                if risk_free_rate is None
-                else ()
+                ("risk_free_rate_unavailable",) if risk_free_rate is None else ()
             )
         else:
             risk_free_rate, risk_free_source, run_warnings = self._resolve_risk_free(

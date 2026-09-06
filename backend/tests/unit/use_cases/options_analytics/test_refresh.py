@@ -7,7 +7,6 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-
 from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.models import (
     CandidateKind,
@@ -163,6 +162,9 @@ class _Repository:
 
     def last_current_memberships(self, _market, _calculation_version):
         return self.memberships
+
+    def latest_source_feature_run_id(self, _market):
+        return 33
 
     def stage_candidates(self, _run_id, candidates):
         self.staged = {candidate.symbol: candidate for candidate in candidates}
@@ -466,6 +468,26 @@ def test_empty_current_cohort_fails_quality_even_with_continuity() -> None:
     assert result["coverage"] == 0.0
 
 
+def test_backdated_source_is_rejected_before_cohort_or_provider_io() -> None:
+    provider = _Provider()
+    repo = _Repository()
+
+    result = _use_case(
+        [_candidate("AAPL")],
+        repo=repo,
+        provider=provider,
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=32))
+
+    assert result == {
+        "status": "skipped",
+        "source_run_id": 32,
+        "reason_codes": ["source_run_not_latest"],
+    }
+    assert repo.start_kwargs is None
+    assert provider.risk_free_calls == 0
+    assert provider.fetch_counts == {}
+
+
 def test_transient_symbol_retries_three_times_but_saves_one_observation() -> None:
     provider = _Provider(failures={"AAPL": 2})
     repo = _Repository()
@@ -703,7 +725,9 @@ def test_cancellation_during_collection_persists_completed_work_then_cancels() -
     assert result["status"] == "cancelled"
 
 
-def test_completed_symbol_is_persisted_before_later_worker_exception(monkeypatch) -> None:
+def test_completed_symbol_is_persisted_before_later_worker_exception(
+    monkeypatch,
+) -> None:
     repo = _Repository()
     use_case = _use_case([_candidate("AAPL"), _candidate("MSFT")], repo=repo)
     original_analyze = use_case._analyzer.analyze
