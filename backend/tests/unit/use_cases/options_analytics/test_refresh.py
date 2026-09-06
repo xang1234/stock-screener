@@ -155,6 +155,8 @@ class _Repository:
         self.commit_count = 0
         self.events = []
         self.start_kwargs = None
+        self.latest_source_run_ids = [33]
+        self.source_lock_current = True
 
     def start_or_reuse(self, **kwargs):
         self.start_kwargs = kwargs
@@ -164,7 +166,12 @@ class _Repository:
         return self.memberships
 
     def latest_source_feature_run_id(self, _market):
-        return 33
+        if len(self.latest_source_run_ids) > 1:
+            return self.latest_source_run_ids.pop(0)
+        return self.latest_source_run_ids[0]
+
+    def lock_source_if_latest(self, _market, _source_run_id):
+        return self.source_lock_current
 
     def stage_candidates(self, _run_id, candidates):
         self.staged = {candidate.symbol: candidate for candidate in candidates}
@@ -486,6 +493,52 @@ def test_backdated_source_is_rejected_before_cohort_or_provider_io() -> None:
     assert repo.start_kwargs is None
     assert provider.risk_free_calls == 0
     assert provider.fetch_counts == {}
+
+
+def test_source_advance_before_provider_fetch_cancels_the_staged_run() -> None:
+    provider = _Provider()
+    repo = _Repository()
+    repo.latest_source_run_ids = [33, 34]
+
+    result = _use_case(
+        [_candidate("AAPL")],
+        repo=repo,
+        provider=provider,
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert result == {
+        "run_id": 17,
+        "source_run_id": 33,
+        "status": "cancelled",
+        "coverage": 0.0,
+        "reason_codes": ["source_run_superseded"],
+    }
+    assert repo.cancelled is True
+    assert provider.risk_free_calls == 0
+    assert provider.fetch_counts == {}
+
+
+def test_source_advance_during_fetch_cannot_publish_the_completed_run() -> None:
+    provider = _Provider()
+    repo = _Repository()
+    repo.source_lock_current = False
+
+    result = _use_case(
+        [_candidate("AAPL")],
+        repo=repo,
+        provider=provider,
+    ).execute(RefreshOptionsAnalyticsCommand(source_run_id=33))
+
+    assert result == {
+        "run_id": 17,
+        "source_run_id": 33,
+        "status": "cancelled",
+        "coverage": 0.0,
+        "reason_codes": ["source_run_superseded"],
+    }
+    assert provider.fetch_counts == {"AAPL": 1}
+    assert repo.cancelled is True
+    assert repo.published is None
 
 
 def test_transient_symbol_retries_three_times_but_saves_one_observation() -> None:

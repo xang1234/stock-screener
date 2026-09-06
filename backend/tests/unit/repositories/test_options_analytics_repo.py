@@ -43,7 +43,7 @@ from app.use_cases.options_analytics.analysis_models import (
     OptionsStrikePoint,
     UnavailableCandidateAnalysis,
 )
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 from ..test_options_history_transfer import _observation as _transfer_observation
@@ -452,6 +452,44 @@ def test_latest_source_run_identity_is_market_scoped(session) -> None:
 
     assert repo.latest_source_feature_run_id("US") == 1
     assert repo.latest_source_feature_run_id("HK") is None
+
+
+def test_source_lock_accepts_only_the_latest_published_market_run(session) -> None:
+    repo = _Repositories(session)
+    session.add(FeatureRunPointer(key="latest_published_market:US", run_id=1))
+    session.commit()
+
+    assert repo.lock_source_if_latest("US", 1) is True
+    assert repo.lock_source_if_latest("US", 2) is False
+
+
+def test_latest_source_lookup_refreshes_a_cached_pointer(session) -> None:
+    repo = _Repositories(session)
+    session.add(
+        FeatureRun(
+            id=2,
+            as_of_date=date(2026, 9, 5),
+            run_type="daily_snapshot",
+            status="published",
+        )
+    )
+    session.add(FeatureRunPointer(key="latest_published_market:US", run_id=1))
+    session.commit()
+    cached_pointer = session.get(
+        FeatureRunPointer,
+        "latest_published_market:US",
+    )
+    assert cached_pointer.run_id == 1
+    assert repo.latest_source_feature_run_id("US") == 1
+
+    session.execute(
+        text(
+            "UPDATE feature_run_pointers SET run_id = 2 "
+            "WHERE key = 'latest_published_market:US'"
+        )
+    )
+
+    assert repo.latest_source_feature_run_id("US") == 2
 
 
 def test_save_records_history_readiness_counts_without_filling_gaps(session) -> None:

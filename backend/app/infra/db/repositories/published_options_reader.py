@@ -76,9 +76,14 @@ class SqlPublishedOptionsReader:
         return self._session.get(OptionsAnalyticsRun, run_id)
 
     def latest_source_feature_run_id(self, market: str) -> int | None:
-        pointer = self._session.get(
-            FeatureRunPointer,
-            f"latest_published_market:{market.strip().upper()}",
+        pointer = (
+            self._session.query(FeatureRunPointer)
+            .filter(
+                FeatureRunPointer.key
+                == f"latest_published_market:{market.strip().upper()}"
+            )
+            .populate_existing()
+            .one_or_none()
         )
         return pointer.run_id if pointer is not None else None
 

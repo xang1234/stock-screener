@@ -460,6 +460,57 @@ def test_static_site_fallback_run_bound_allows_next_day_session_dates() -> None:
     )
 
 
+def test_options_fallback_skips_runs_that_cannot_beat_the_incumbent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runs = [
+        {"id": 333, "created_at": "2026-09-05T00:00:00Z"},
+        {"id": 222, "created_at": "2026-09-01T00:00:00Z"},
+    ]
+
+    def fake_gh_json(args):
+        if "actions/workflows/static-site.yml/runs" in args[-1]:
+            return {"workflow_runs": runs}
+        return {"artifacts": [{"name": "static-options-US", "expired": False}]}
+
+    downloaded_runs = []
+
+    def fake_download_candidate(*, run_id, artifact_name, parent_dir, **_kwargs):
+        downloaded_runs.append(run_id)
+        wrapper = parent_dir / f"candidate-{run_id}"
+        artifact = wrapper / "options"
+        artifact.mkdir(parents=True)
+        return fallback_script._DownloadedCandidate(
+            wrapper_dir=wrapper,
+            artifact_dir=artifact,
+            as_of_date=date(2026, 9, 4) if run_id == 333 else date(2026, 8, 29),
+        )
+
+    monkeypatch.setattr(fallback_script, "gh_json", fake_gh_json)
+    monkeypatch.setattr(
+        fallback_script,
+        "_download_candidate",
+        fake_download_candidate,
+    )
+    monkeypatch.setattr(
+        fallback_script,
+        "_install_market_candidate",
+        lambda **_kwargs: None,
+    )
+
+    fallback_script.download_fallback_artifacts(
+        repo="xang1234/stock-screener",
+        current_run_id=999,
+        branch_name="main",
+        current_dir=tmp_path / "current",
+        fallback_dir=tmp_path / "fallback",
+        fallback_options_dir=tmp_path / "selected-options",
+    )
+
+    assert downloaded_runs == [333]
+
+
 def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_market(
     tmp_path,
 ) -> None:

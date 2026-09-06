@@ -146,6 +146,11 @@ class RefreshOptionsAnalyticsUseCase:
         self._run_writer.stage_candidates(run.id, cohort.candidates)
         if self._cancellation.is_cancelled():
             return self._cancel_run(run.id)
+        if (
+            self._published_reader.latest_source_feature_run_id(market)
+            != cohort.source_feature_run_id
+        ):
+            return self._cancel_superseded_run(run.id, cohort.source_feature_run_id)
 
         persisted_assumptions = getattr(run, "assumptions_json", None)
         persisted_source = (
@@ -257,6 +262,20 @@ class RefreshOptionsAnalyticsUseCase:
         self._run_writer.cancel(run_id)
         return {"run_id": run_id, "status": "cancelled", "coverage": 0.0}
 
+    def _cancel_superseded_run(
+        self,
+        run_id: int,
+        source_run_id: int,
+    ) -> RefreshOptionsAnalyticsResult:
+        self._run_writer.cancel(run_id)
+        return {
+            "run_id": run_id,
+            "source_run_id": source_run_id,
+            "status": "cancelled",
+            "coverage": 0.0,
+            "reason_codes": ["source_run_superseded"],
+        }
+
     def _finish_run(
         self,
         run_id: int,
@@ -298,6 +317,14 @@ class RefreshOptionsAnalyticsUseCase:
             reason_codes=decision.reason_codes,
         )
         if decision.publish:
+            if not self._run_writer.lock_source_if_latest(
+                "US",
+                cohort.source_feature_run_id,
+            ):
+                return self._cancel_superseded_run(
+                    run_id,
+                    cohort.source_feature_run_id,
+                )
             self._run_writer.publish(run_id, summary)
             try:
                 sessions = self._calendar.sessions_ending_on(cohort.as_of_date, 252)

@@ -14,6 +14,7 @@ from app.domain.options_analytics.models import (
     OptionsRunStatus,
     OptionsRunSummary,
 )
+from app.infra.db.models.feature_store import FeatureRunPointer
 from app.infra.db.models.options_analytics import (
     OptionsAnalyticsPointer,
     OptionsAnalyticsRun,
@@ -217,6 +218,19 @@ class SqlOptionsRunWriter:
             if item is not None:
                 item.activity_rank = rank
         self._session.commit()
+
+    def lock_source_if_latest(self, market: str, source_run_id: int) -> bool:
+        pointer = (
+            self._session.query(FeatureRunPointer)
+            .filter(
+                FeatureRunPointer.key
+                == f"latest_published_market:{market.strip().upper()}"
+            )
+            .populate_existing()
+            .with_for_update()
+            .one_or_none()
+        )
+        return pointer is not None and pointer.run_id == source_run_id
 
     def publish(self, run_id: int, summary: OptionsRunSummary) -> OptionsAnalyticsRun:
         run = self._get_run(run_id)

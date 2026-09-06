@@ -120,9 +120,17 @@ class StaticOptionsSection:
         fallback_options_dir: Path | None,
         market_metadata_path: Path | None,
     ) -> StaticOptionsSectionResult:
-        if not self._enabled:
-            return StaticOptionsSectionResult(selected=False)
         us_entry = (manifest.get("markets") or {}).get("US")
+        if not self._enabled:
+            if us_entry is not None:
+                self._unadvertise(us_entry)
+                self._write_combined_manifests(
+                    output_dir=Path(output_dir),
+                    manifest=manifest,
+                    us_entry=us_entry,
+                    market_metadata_path=market_metadata_path,
+                )
+            return StaticOptionsSectionResult(selected=False)
         if us_entry is None or us_entry.get("feature_run_id") is None:
             return StaticOptionsSectionResult(selected=False)
 

@@ -569,7 +569,14 @@ def download_fallback_artifacts(
         }
 
         options_artifact = artifacts_by_name.get("static-options-US")
-        if options_artifact is not None and fallback_options_dir is not None:
+        if (
+            options_artifact is not None
+            and fallback_options_dir is not None
+            and not _run_cannot_beat_incumbent(
+                run_upper_bound=run_upper_bound,
+                incumbent_date=fallback_options_date,
+            )
+        ):
             artifact_name = "static-options-US"
             candidate = _download_candidate(
                 repo=repo,
