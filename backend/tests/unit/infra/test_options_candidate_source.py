@@ -3,14 +3,13 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base
 from app.domain.options_analytics.selection import select_current_candidates
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.query.options_candidate_source import SqlOptionsCandidateSource
 from app.models.stock import StockFundamental, StockPrice
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs(
@@ -100,6 +99,7 @@ def test_candidate_source_uses_pinned_run_and_domain_caps_with_complete_inputs(
                 symbol="C00",
                 date=as_of - timedelta(days=20 - offset),
                 close=100 + offset,
+                adj_close=100 + offset,
                 volume=1_000_000,
             )
         )
@@ -292,6 +292,54 @@ def test_candidate_source_normalizes_non_finite_spot_price_to_none() -> None:
     engine.dispose()
 
 
+def test_price_history_uses_only_finite_adjusted_closes() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[StockPrice.__table__])
+    session = sessionmaker(bind=engine)()
+    as_of = date(2026, 9, 4)
+    session.add_all(
+        [
+            StockPrice(
+                symbol="AAPL",
+                date=as_of - timedelta(days=2),
+                close=100,
+                adj_close=100,
+                volume=1,
+            ),
+            StockPrice(
+                symbol="AAPL",
+                date=as_of - timedelta(days=1),
+                close=50,
+                adj_close=101,
+                volume=1,
+            ),
+            StockPrice(
+                symbol="AAPL",
+                date=as_of,
+                close=51,
+                adj_close=float("inf"),
+                volume=1,
+            ),
+            StockPrice(
+                symbol="AAPL",
+                date=as_of + timedelta(days=1),
+                close=52,
+                adj_close=0,
+                volume=1,
+            ),
+        ]
+    )
+    session.commit()
+
+    closes = SqlOptionsCandidateSource(session)._price_closes(
+        ["AAPL"], as_of + timedelta(days=1)
+    )
+
+    assert closes == {"AAPL": (100.0, 101.0)}
+    session.close()
+    engine.dispose()
+
+
 def test_candidate_source_rejects_a_published_non_us_feature_run() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[FeatureRun.__table__])
@@ -334,11 +382,19 @@ def test_continuity_inputs_ignore_mutable_fundamentals_and_use_latest_pinned_clo
     session.add_all(
         [
             StockPrice(
-                symbol="aapl", date=as_of - timedelta(days=1), close=199, volume=1
+                symbol="aapl",
+                date=as_of - timedelta(days=1),
+                close=199,
+                adj_close=199,
+                volume=1,
             ),
-            StockPrice(symbol="aapl", date=as_of, close=201, volume=1),
+            StockPrice(symbol="aapl", date=as_of, close=201, adj_close=201, volume=1),
             StockPrice(
-                symbol="aapl", date=as_of + timedelta(days=1), close=999, volume=1
+                symbol="aapl",
+                date=as_of + timedelta(days=1),
+                close=999,
+                adj_close=999,
+                volume=1,
             ),
         ]
     )

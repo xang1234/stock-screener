@@ -54,6 +54,25 @@ def test_selector_prefers_current_artifact_matching_fresh_equity(tmp_path):
     assert (unrelated / "operator.txt").read_text() == "keep"
 
 
+def test_selector_treats_matching_fallback_artifact_as_fresh(tmp_path):
+    fallback = tmp_path / "fallback" / "options"
+    output = tmp_path / "output" / "options"
+    _export(fallback, source_run_id=44)
+
+    selected = StaticOptionsArtifactSelector().select(
+        current_options_dir=None,
+        fallback_options_dir=fallback,
+        output_options_dir=output,
+        equity_feature_run_id=44,
+        equity_as_of_date=date(2026, 9, 4),
+        equity_generated_at="2026-09-04T22:00:00Z",
+    )
+
+    assert selected is not None
+    assert selected["source_feature_run_id"] == 44
+    assert selected["stale_relative_to_equity"] is False
+
+
 def test_selector_uses_compatible_last_good_and_marks_every_file_stale(tmp_path):
     current = tmp_path / "current" / "options"
     fallback = tmp_path / "fallback" / "options"

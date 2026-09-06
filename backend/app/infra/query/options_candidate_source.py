@@ -117,20 +117,23 @@ class SqlOptionsCandidateSource:
         if not canonical_symbols:
             return {}
         rows = (
-            self._session.query(StockPrice.symbol, StockPrice.close)
+            self._session.query(StockPrice.symbol, StockPrice.adj_close)
             .filter(
                 func.upper(StockPrice.symbol).in_(canonical_symbols),
                 StockPrice.date <= as_of_date,
-                StockPrice.close.isnot(None),
+                StockPrice.adj_close.isnot(None),
             )
             .order_by(StockPrice.symbol, StockPrice.date.desc())
             .all()
         )
         newest_first: dict[str, list[float]] = {}
-        for symbol, close in rows:
+        for symbol, adjusted_close in rows:
+            value = _number(adjusted_close)
+            if value is None or value <= 0:
+                continue
             values = newest_first.setdefault(symbol.strip().upper(), [])
             if len(values) < 21:
-                values.append(float(close))
+                values.append(value)
         return {
             symbol: tuple(reversed(values)) for symbol, values in newest_first.items()
         }

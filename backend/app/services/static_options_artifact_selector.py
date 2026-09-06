@@ -94,16 +94,19 @@ class StaticOptionsArtifactSelector:
         fallback = _validated(fallback_options_dir)
         selected: tuple[Path, dict[str, Any]] | None = None
         stale = False
-        if current is not None:
-            current_manifest = current[1]
+        for artifact in (current, fallback):
+            if artifact is None:
+                continue
+            candidate_manifest = artifact[1]
             if (
-                current_manifest["source_feature_run_id"] == equity_feature_run_id
-                and current_manifest["source_as_of_date"]
+                candidate_manifest["source_feature_run_id"] == equity_feature_run_id
+                and candidate_manifest["source_as_of_date"]
                 == equity_as_of_date.isoformat()
-                and current_manifest["generated_at"] == equity_generated_at
-                and not current_manifest["stale"]
+                and candidate_manifest["generated_at"] == equity_generated_at
+                and not candidate_manifest["stale"]
             ):
-                selected = current
+                selected = artifact
+                break
         if selected is None:
             stale_candidates = tuple(
                 artifact
