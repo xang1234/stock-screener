@@ -248,6 +248,50 @@ def test_current_liquidity_uses_feature_run_snapshot_not_mutable_fundamentals() 
     engine.dispose()
 
 
+def test_candidate_source_normalizes_non_finite_spot_price_to_none() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+            StockPrice.__table__,
+        ],
+    )
+    session = sessionmaker(bind=engine)()
+    as_of = date(2026, 9, 4)
+    session.add(
+        FeatureRun(
+            id=11,
+            as_of_date=as_of,
+            run_type="daily_snapshot",
+            status="published",
+            config_json={"universe": {"market": "US"}},
+        )
+    )
+    session.add(
+        StockFeatureDaily(
+            run_id=11,
+            symbol="AAPL",
+            as_of_date=as_of,
+            composite_score=99,
+            details_json={
+                "current_price": "NaN",
+                "avg_dollar_volume": 150_000_000,
+                "rs_rating": 95,
+                "ibd_group_rank": 2,
+            },
+        )
+    )
+    session.commit()
+
+    result = SqlOptionsCandidateSource(session).read(11)
+
+    assert result.top_candidate_inputs[0].spot_price is None
+    session.close()
+    engine.dispose()
+
+
 def test_candidate_source_rejects_a_published_non_us_feature_run() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[FeatureRun.__table__])

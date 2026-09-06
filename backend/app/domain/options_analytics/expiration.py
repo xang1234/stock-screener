@@ -36,10 +36,11 @@ def select_monthly_expiration(
         dte = (expiration - as_of_date).days
         if not MIN_EXPIRATION_DTE <= dte <= MAX_EXPIRATION_DTE:
             continue
+        third_friday = _third_friday(expiration.year, expiration.month)
         expected = _standard_monthly_expiration(
             expiration.year, expiration.month, calendar
         )
-        if expiration == expected:
+        if expiration in {third_friday - timedelta(days=1), third_friday, expected}:
             eligible.append(expiration)
     return min(eligible) if eligible else None
 

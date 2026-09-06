@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import pytest
+
 from app.domain.options_analytics.expiration import (
     retain_contracts_for_persistence,
     select_monthly_expiration,
@@ -51,6 +53,26 @@ def test_monthly_expiration_moves_to_thursday_for_friday_holiday() -> None:
     )
 
     assert selected == date(2025, 4, 17)
+
+
+@pytest.mark.parametrize(
+    ("listed_expiration", "holidays"),
+    [
+        (date(2025, 4, 18), {date(2025, 4, 18)}),
+        (date(2026, 4, 16), set()),
+    ],
+)
+def test_accepts_provider_representation_of_thursday_or_friday_in_monthly_week(
+    listed_expiration: date,
+    holidays: set[date],
+) -> None:
+    selected = select_monthly_expiration(
+        as_of_date=date(listed_expiration.year, 3, 20),
+        listed_expirations=[listed_expiration],
+        calendar=_SessionCalendar(holidays),
+    )
+
+    assert selected == listed_expiration
 
 
 def test_weeklies_and_out_of_window_expirations_are_rejected() -> None:

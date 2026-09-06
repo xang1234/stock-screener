@@ -28,14 +28,15 @@ def _details(value: Any) -> dict[str, Any]:
 
 def _number(value: Any) -> float | None:
     try:
-        return None if value is None else float(value)
+        number = None if value is None else float(value)
+        return number if number is None or math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
 
 def _percentage_points_to_decimal(value: Any) -> float | None:
     number = _number(value)
-    if number is None or not math.isfinite(number) or number < 0:
+    if number is None or number < 0:
         return None
     return number / 100.0
 
