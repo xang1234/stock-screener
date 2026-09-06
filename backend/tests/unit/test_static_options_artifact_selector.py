@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from app.services.static_options_artifact_selector import StaticOptionsArtifactSelector
 from app.services.static_options_exporter import StaticOptionsExporter
+from app.services.static_options_section import StaticOptionsSection
 
 from .test_static_options_exporter import _item, _Queries, _run
 
@@ -44,6 +45,7 @@ def test_selector_prefers_current_artifact_matching_fresh_equity(tmp_path):
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 4),
+        equity_generated_at="2026-09-04T22:00:00Z",
     )
 
     assert selected is not None
@@ -69,6 +71,7 @@ def test_selector_uses_compatible_last_good_and_marks_every_file_stale(tmp_path)
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
 
     assert selected is not None
@@ -106,6 +109,7 @@ def test_selector_uses_newest_valid_stale_artifact(tmp_path):
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
 
     assert selected is not None
@@ -126,6 +130,7 @@ def test_selector_rejects_options_artifacts_newer_than_equity(tmp_path):
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
 
     assert selected is None
@@ -149,6 +154,7 @@ def test_selector_prefers_older_fallback_over_future_current(tmp_path):
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
 
     assert selected is not None
@@ -181,6 +187,7 @@ def test_selector_uses_cross_build_timestamp_as_stale_artifact_date_tiebreaker(
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
 
     assert selected is not None
@@ -201,6 +208,7 @@ def test_selector_prefers_current_stale_artifact_when_identities_tie(tmp_path):
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
 
     assert selected is not None
@@ -215,6 +223,7 @@ def test_selector_absence_does_not_create_an_options_directory(tmp_path):
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
     assert selected is None
     assert not output.exists()
@@ -251,6 +260,17 @@ def test_combine_mode_selects_options_independently_and_advertises_page(
 
         def combine(self, **_kwargs):
             output.mkdir(parents=True)
+            metadata_path = output / "markets" / "us" / "manifest.market.json"
+            metadata_path.parent.mkdir(parents=True)
+            metadata_path.write_text(
+                json.dumps(
+                    {
+                        "generated_at": "2026-09-04T22:00:00Z",
+                        "entry": us_entry,
+                    }
+                ),
+                encoding="utf-8",
+            )
             return SimpleNamespace(
                 output_dir=output,
                 generated_at="2026-09-04T22:00:00Z",
@@ -270,6 +290,58 @@ def test_combine_mode_selects_options_independently_and_advertises_page(
     assert result.manifest["features"]["options"] is True
     assert result.manifest["pages"]["options"] == {"path": "options/manifest.json"}
     assert (output / "options" / "manifest.json").is_file()
+    selected = json.loads((output / "options" / "manifest.json").read_text())
+    assert selected["stale_relative_to_equity"] is False
+
+
+def test_combined_section_marks_matching_local_run_from_another_build_stale(
+    tmp_path,
+):
+    current = tmp_path / "current-options" / "options"
+    output = tmp_path / "output"
+    _export(
+        current,
+        source_run_id=44,
+        generated_at="2026-09-04T22:00:00Z",
+    )
+    us_entry = {
+        "market": "US",
+        "feature_run_id": 44,
+        "as_of_date": "2026-09-04",
+        "features": {"scan": True},
+        "pages": {},
+        "assets": {},
+    }
+    manifest = {
+        "default_market": "US",
+        "features": {"scan": True},
+        "pages": {},
+        "assets": {},
+        "markets": {"US": us_entry},
+    }
+    metadata_path = output / "markets" / "us" / "manifest.market.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-09-04T23:00:00Z",
+                "entry": us_entry,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = StaticOptionsSection(enabled=True).compose_combined(
+        output_dir=output,
+        manifest=manifest,
+        current_options_dir=current,
+        fallback_options_dir=None,
+        market_metadata_path=metadata_path,
+    )
+
+    assert result.selected is True
+    selected = json.loads((output / "options" / "manifest.json").read_text())
+    assert selected["stale_relative_to_equity"] is True
 
 
 def test_fallback_and_validation_scripts_recognize_nested_options_artifact(tmp_path):
@@ -286,6 +358,7 @@ def test_fallback_and_validation_scripts_recognize_nested_options_artifact(tmp_p
 
     assert find_options_artifact_dir(tmp_path) == nested
     assert downloaded_options_as_of_date(tmp_path) == date(2026, 9, 4)
-    assert validate_optional_options_artifacts(tmp_path, None)[
-        "source_feature_run_id"
-    ] == 44
+    assert (
+        validate_optional_options_artifacts(tmp_path, None)["source_feature_run_id"]
+        == 44
+    )

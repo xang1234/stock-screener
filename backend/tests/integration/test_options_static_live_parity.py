@@ -50,6 +50,7 @@ def test_fresh_equity_uses_the_prior_valid_options_bundle_as_explicitly_stale(tm
         output_options_dir=output,
         equity_feature_run_id=44,
         equity_as_of_date=date(2026, 9, 5),
+        equity_generated_at="2026-09-05T22:00:00Z",
     )
 
     assert selected["source_feature_run_id"] == 33

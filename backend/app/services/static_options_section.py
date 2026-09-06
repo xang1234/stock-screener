@@ -99,6 +99,7 @@ class StaticOptionsSection:
                 fallback_options_dir=fallback_options_dir,
                 output_dir=root,
                 equity_entry=equity_entry,
+                equity_generated_at=generated_at,
             )
         finally:
             if candidate_root.exists():
@@ -125,11 +126,21 @@ class StaticOptionsSection:
         if us_entry is None or us_entry.get("feature_run_id") is None:
             return StaticOptionsSectionResult(selected=False)
 
+        equity_generated_at = None
+        if market_metadata_path is not None and Path(market_metadata_path).is_file():
+            metadata = json.loads(
+                Path(market_metadata_path).read_text(encoding="utf-8")
+            )
+            value = metadata.get("generated_at")
+            if isinstance(value, str):
+                equity_generated_at = value
+
         selected = self._select(
             current_options_dir=current_options_dir,
             fallback_options_dir=fallback_options_dir,
             output_dir=Path(output_dir),
             equity_entry=us_entry,
+            equity_generated_at=equity_generated_at,
         )
         if not selected:
             self._unadvertise(us_entry)
@@ -182,6 +193,7 @@ class StaticOptionsSection:
         fallback_options_dir: Path | None,
         output_dir: Path,
         equity_entry: dict[str, Any],
+        equity_generated_at: str | None,
     ) -> bool:
         selected = self._selector.select(
             current_options_dir=current_options_dir,
@@ -189,6 +201,7 @@ class StaticOptionsSection:
             output_options_dir=output_dir / "options",
             equity_feature_run_id=int(equity_entry["feature_run_id"]),
             equity_as_of_date=date.fromisoformat(equity_entry["as_of_date"]),
+            equity_generated_at=equity_generated_at,
         )
         return selected is not None
 

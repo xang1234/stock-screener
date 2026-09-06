@@ -17,6 +17,8 @@ from app.domain.options_analytics.ports import (
     SessionCalendar,
 )
 from app.domain.options_analytics.selection import (
+    CONTINUITY_CANDIDATE_LIMIT,
+    CONTINUITY_SESSION_LIMIT,
     CandidateHistoryInput,
     build_candidate_cohort,
     select_current_candidates,
@@ -80,17 +82,28 @@ class OptionsCandidateCohortBuilder:
             self._calculation_version,
         )
         recent_sessions = tuple(self._calendar.sessions_ending_on(source.as_of_date, 6))
-        inputs = self._candidate_source.read_continuity_inputs(
-            tuple(memberships),
-            source.as_of_date,
-        )
-        continuity: list[CandidateHistoryInput] = []
+        recent_memberships = []
         for symbol, membership in memberships.items():
+            sessions_since_current = sum(
+                session > membership.as_of_date for session in recent_sessions
+            )
             if (
                 symbol in current_symbols
                 or membership.as_of_date not in recent_sessions
+                or not 1 <= sessions_since_current <= CONTINUITY_SESSION_LIMIT
             ):
                 continue
+            recent_memberships.append((symbol, membership, sessions_since_current))
+        recent_memberships.sort(
+            key=lambda row: (row[2], row[1].prior_best_rank, row[0])
+        )
+        recent_memberships = recent_memberships[:CONTINUITY_CANDIDATE_LIMIT]
+        inputs = self._candidate_source.read_continuity_inputs(
+            tuple(symbol for symbol, _, _ in recent_memberships),
+            source.as_of_date,
+        )
+        continuity: list[CandidateHistoryInput] = []
+        for symbol, membership, sessions_since_current in recent_memberships:
             candidate_input = inputs.get(symbol)
             if candidate_input is None:
                 continue
@@ -101,9 +114,7 @@ class OptionsCandidateCohortBuilder:
                         dividend_yield=membership.dividend_yield,
                         dividend_source=membership.dividend_source,
                     ),
-                    sessions_since_current=sum(
-                        session > membership.as_of_date for session in recent_sessions
-                    ),
+                    sessions_since_current=sessions_since_current,
                     prior_best_rank=membership.prior_best_rank,
                 )
             )

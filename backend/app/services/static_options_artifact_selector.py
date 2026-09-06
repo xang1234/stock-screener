@@ -88,6 +88,7 @@ class StaticOptionsArtifactSelector:
         output_options_dir: Path,
         equity_feature_run_id: int,
         equity_as_of_date: date,
+        equity_generated_at: str | None,
     ) -> dict[str, Any] | None:
         current = _validated(current_options_dir)
         fallback = _validated(fallback_options_dir)
@@ -99,6 +100,7 @@ class StaticOptionsArtifactSelector:
                 current_manifest["source_feature_run_id"] == equity_feature_run_id
                 and current_manifest["source_as_of_date"]
                 == equity_as_of_date.isoformat()
+                and current_manifest["generated_at"] == equity_generated_at
                 and not current_manifest["stale"]
             ):
                 selected = current
