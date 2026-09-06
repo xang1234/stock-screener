@@ -29,9 +29,9 @@ The calculations use the selected chain, the latest `^IRX` rate on or before the
 |---|---|
 | Max Pain | The settlement strike that minimizes total intrinsic payout across call and put open interest. |
 | Estimated Net GEX | Sum of Black-Scholes unit gamma × open interest × contract multiplier × spot² × 1%. Calls are treated as positive and puts as negative. |
-| Estimated Gamma Flip | Reprices chain GEX from 80% to 120% of spot and linearly interpolates the point where net GEX changes sign. |
+| Estimated Gamma Flip | Reprices chain GEX across the selected chain, bounded below by the greater of its lowest usable strike and 80% of spot, and above by the lesser of its highest usable strike and 120% of spot. It linearly interpolates the point where net GEX changes sign. |
 | Estimated Call / Put Wall | The strike with the largest absolute aggregate estimated GEX for that option side. |
-| ATM IV | Average call and put IV at the nearest strike with both sides. Contract IV is open-interest weighted when complete; otherwise it uses a simple mean. |
+| ATM IV | At the nearest strike with both sides, duplicate contracts are first aggregated within each side. That side-level IV uses open-interest weighting only when open interest is complete with a positive total; otherwise it uses a simple mean. The resulting call and put IVs are then averaged with equal weight. |
 | 25-Delta Put-Call IV Skew | IV of the put nearest −0.25 delta minus IV of the call nearest +0.25 delta. Eligible absolute deltas are 0.20–0.30. |
 | 20-Return Realized Volatility | Standard deviation of the latest 20 daily log returns, annualized by √252. |
 | Volatility Risk Premium | ATM IV minus realized volatility. |
