@@ -45,6 +45,9 @@ See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in s
 
 ![Market Breadth recent-history heatmap](docs/screenshots/breadth-history.jpg)
 
+![Options Command Center — current liquid Candidates and Leaders ranked by estimated gamma exposure](docs/screenshots/options-command-center.png)
+*Options Command Center: switch between Gamma, Volatility, Skew, and Activity views without scanning an entire option universe. See the **[Options Command Center Guide](docs/OPTIONS_COMMAND_CENTER.md)**.*
+
 **Typical flow:** sign in → bootstrap markets → review the Daily dashboard → run a Scan → drill into a stock → monitor Operations → validate outcomes on Backtest. For the full page-by-page tour, see the **[Live App Guide](docs/LIVE_APP_GUIDE.md)**.
 
 ## Quickstart (Docker)
@@ -112,6 +115,7 @@ Optional web-search keys (`TAVILY_API_KEY`, `SERPER_API_KEY`) enable the chatbot
 | [Live App Guide](docs/LIVE_APP_GUIDE.md) | Users of the server-backed live application |
 | [Operations Guide](docs/OPERATIONS.md) | Live-app operators and maintainers |
 | [Static Site Guide](docs/STATIC_SITE.md) | Static demo users and maintainers |
+| [Options Command Center](docs/OPTIONS_COMMAND_CENTER.md) | Understanding the options cohort, metrics, history, and limitations |
 | [Docker Deployment](docs/INSTALL_DOCKER.md) | Server, homelab, VPS users |
 | [Development Guide](docs/DEVELOPMENT.md) | Contributors, developers |
 | [Architecture](docs/ARCHITECTURE.md) | Understanding the system design |
