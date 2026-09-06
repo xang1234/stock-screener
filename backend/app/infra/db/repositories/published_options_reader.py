@@ -89,9 +89,9 @@ class SqlPublishedOptionsReader:
         market: str,
         calculation_version: str,
     ) -> tuple[OptionsHistoryRecord, ...]:
+        canonical_symbol = symbol.strip().upper()
         runs = (
             self._session.query(OptionsAnalyticsRun)
-            .options(selectinload(OptionsAnalyticsRun.items))
             .filter(
                 OptionsAnalyticsRun.market == market.strip().upper(),
                 OptionsAnalyticsRun.calculation_version == calculation_version,
@@ -104,7 +104,15 @@ class SqlPublishedOptionsReader:
             )
             .all()
         )
-        canonical_symbol = symbol.strip().upper()
+        items_by_run_id = {
+            item.run_id: item
+            for item in self._session.query(OptionsAnalyticsRunItem)
+            .filter(
+                OptionsAnalyticsRunItem.run_id.in_(tuple(run.id for run in runs)),
+                OptionsAnalyticsRunItem.security_symbol == canonical_symbol,
+            )
+            .all()
+        }
         history: list[OptionsHistoryRecord] = []
         seen_sessions: set[date] = set()
         history_started = False
@@ -112,14 +120,7 @@ class SqlPublishedOptionsReader:
             if run.as_of_date in seen_sessions:
                 continue
             seen_sessions.add(run.as_of_date)
-            item = next(
-                (
-                    candidate
-                    for candidate in run.items
-                    if candidate.security_symbol == canonical_symbol
-                ),
-                None,
-            )
+            item = items_by_run_id.get(run.id)
             if item is None:
                 if history_started:
                     history.append(self._history_gap(run))

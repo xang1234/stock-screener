@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -60,6 +60,34 @@ class SqlOptionsRetentionRepository:
             )
             self._session.query(OptionsAnalyticsStrikePoint).filter(
                 OptionsAnalyticsStrikePoint.item_id.in_(stale_item_ids)
+            ).delete(synchronize_session=False)
+
+        abandoned_before = datetime.now(UTC) - timedelta(days=30)
+        removable_statuses = (
+            OptionsRunStatus.STAGED.value,
+            OptionsRunStatus.FAILED_QUALITY.value,
+            OptionsRunStatus.CANCELLED.value,
+        )
+        abandoned_run_ids = {
+            run_id
+            for (run_id,) in self._session.query(OptionsAnalyticsRun.id).filter(
+                OptionsAnalyticsRun.status.in_(removable_statuses),
+                OptionsAnalyticsRun.created_at < abandoned_before,
+                ~OptionsAnalyticsRun.id.in_(pointed_run_ids or {-1}),
+            )
+        }
+        if abandoned_run_ids:
+            abandoned_item_ids = self._session.query(OptionsAnalyticsRunItem.id).filter(
+                OptionsAnalyticsRunItem.run_id.in_(abandoned_run_ids)
+            )
+            self._session.query(OptionsAnalyticsStrikePoint).filter(
+                OptionsAnalyticsStrikePoint.item_id.in_(abandoned_item_ids)
+            ).delete(synchronize_session=False)
+            self._session.query(OptionsAnalyticsRunItem).filter(
+                OptionsAnalyticsRunItem.run_id.in_(abandoned_run_ids)
+            ).delete(synchronize_session=False)
+            self._session.query(OptionsAnalyticsRun).filter(
+                OptionsAnalyticsRun.id.in_(abandoned_run_ids)
             ).delete(synchronize_session=False)
         self._session.commit()
 

@@ -10,7 +10,6 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-
 from app.scripts import download_static_market_fallbacks as fallback_script
 from app.scripts.download_static_market_fallbacks import (
     collect_current_markets,
@@ -364,12 +363,19 @@ def test_static_site_preserves_and_publishes_us_options_history() -> None:
     assert (
         "--fallback-options-artifacts-dir /tmp/static-options-fallback" in combine_job
     )
-    publish_history = build_job.split(
-        "      - name: Publish US options history\n", 1
-    )[1].split("      - name:", 1)[0]
+    publish_history = build_job.split("      - name: Publish US options history\n", 1)[
+        1
+    ].split("      - name:", 1)[0]
     assert (
         "steps.restore-options-history.outputs.safe_to_publish == 'true'"
         in publish_history
+    )
+    assert "options-history-us-v1.previous.json.gz" in build_job
+    assert "source_asset_name" in build_job
+    assert "SOURCE_ASSET_NAME" in publish_history
+    assert 'cp "$RESTORED_PATH" "$PREVIOUS_PATH"' in publish_history
+    assert publish_history.index('$PREVIOUS_PATH" --clobber') < publish_history.index(
+        "/tmp/options-history-us-v1.json.gz --clobber"
     )
 
 

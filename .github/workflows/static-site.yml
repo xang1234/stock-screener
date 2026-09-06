@@ -224,32 +224,43 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/options-history
-          rm -f /tmp/options-history/options-history-us-v1.json.gz
+          ASSET_NAME="options-history-us-v1.json.gz"
+          PREVIOUS_ASSET_NAME="options-history-us-v1.previous.json.gz"
+          rm -f "/tmp/options-history/$ASSET_NAME" "/tmp/options-history/$PREVIOUS_ASSET_NAME"
           cd backend
           alembic upgrade head
           RESTORE_STATUS=failed
           SAFE_TO_PUBLISH=false
-          if ASSET_PRESENT="$(gh release view options-analytics-data \
+          SOURCE_ASSET_NAME=""
+          if ASSETS_JSON="$(gh release view options-analytics-data \
             --repo "${{ github.repository }}" \
-            --json assets \
-            --jq 'any(.assets[]; .name == "options-history-us-v1.json.gz")')"; then
-            if [ "$ASSET_PRESENT" = "true" ]; then
-              if gh release download options-analytics-data \
-                --repo "${{ github.repository }}" \
-                --pattern options-history-us-v1.json.gz \
-                --dir /tmp/options-history \
-                && python -m app.scripts.import_options_history \
-                  --input /tmp/options-history/options-history-us-v1.json.gz; then
-                RESTORE_STATUS=restored
-                SAFE_TO_PUBLISH=true
+            --json assets)"; then
+            HISTORY_ASSET_PRESENT=false
+            for CANDIDATE_ASSET_NAME in "$ASSET_NAME" "$PREVIOUS_ASSET_NAME"; do
+              if jq -e --arg name "$CANDIDATE_ASSET_NAME" \
+                'any(.assets[]; .name == $name)' <<< "$ASSETS_JSON" >/dev/null; then
+                HISTORY_ASSET_PRESENT=true
+                if gh release download options-analytics-data \
+                  --repo "${{ github.repository }}" \
+                  --pattern "$CANDIDATE_ASSET_NAME" \
+                  --dir /tmp/options-history \
+                  && python -m app.scripts.import_options_history \
+                    --input "/tmp/options-history/$CANDIDATE_ASSET_NAME"; then
+                  RESTORE_STATUS=restored
+                  SAFE_TO_PUBLISH=true
+                  SOURCE_ASSET_NAME="$CANDIDATE_ASSET_NAME"
+                  break
+                fi
               fi
-            else
+            done
+            if [ "$HISTORY_ASSET_PRESENT" = "false" ]; then
               RESTORE_STATUS=missing
               SAFE_TO_PUBLISH=true
             fi
           fi
           echo "restore_status=$RESTORE_STATUS" >> "$GITHUB_OUTPUT"
           echo "safe_to_publish=$SAFE_TO_PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "source_asset_name=$SOURCE_ASSET_NAME" >> "$GITHUB_OUTPUT"
           if [ "$RESTORE_STATUS" = "restored" ]; then
             echo "Restored US options history."
           elif [ "$RESTORE_STATUS" = "missing" ]; then
@@ -569,12 +580,36 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          ASSET_NAME: options-history-us-v1.json.gz
+          PREVIOUS_ASSET_NAME: options-history-us-v1.previous.json.gz
+          RESTORED_PATH: /tmp/options-history/options-history-us-v1.json.gz
+          PREVIOUS_PATH: /tmp/options-history-us-v1.previous.json.gz
+          RESTORE_STATUS: ${{ steps.restore-options-history.outputs.restore_status }}
+          SOURCE_ASSET_NAME: ${{ steps.restore-options-history.outputs.source_asset_name }}
         run: |
           RUN_ID="$(jq -r '.published_run_id' /tmp/static-data/options/manifest.json)"
           cd backend
           python -m app.scripts.export_options_history \
             --output /tmp/options-history-us-v1.json.gz \
             --require-run-id "$RUN_ID"
+          if [ "$RESTORE_STATUS" = "restored" ] && [ "$SOURCE_ASSET_NAME" = "$ASSET_NAME" ]; then
+            cp "$RESTORED_PATH" "$PREVIOUS_PATH"
+            previous_published=false
+            for attempt in 1 2 3; do
+              if gh release upload options-analytics-data \
+                "$PREVIOUS_PATH" --clobber; then
+                previous_published=true
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            if [ "$previous_published" != "true" ]; then
+              echo "Unable to preserve last-good options history; canonical replacement was not attempted." >&2
+              exit 1
+            fi
+          fi
           for attempt in 1 2 3; do
             if gh release upload options-analytics-data \
               /tmp/options-history-us-v1.json.gz --clobber; then

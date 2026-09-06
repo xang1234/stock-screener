@@ -4,9 +4,6 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base
 from app.domain.options_analytics.history import HistoricalObservation
 from app.domain.options_analytics.metrics.history import HistoricalMetrics
@@ -46,6 +43,8 @@ from app.use_cases.options_analytics.analysis_models import (
     OptionsStrikePoint,
     UnavailableCandidateAnalysis,
 )
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
 
 from ..test_options_history_transfer import _observation as _transfer_observation
 
@@ -605,6 +604,42 @@ def test_history_crosses_absent_cohort_gaps_and_ignores_other_versions(session) 
     )
 
 
+def test_symbol_history_filters_run_items_by_requested_symbol_in_sql(session) -> None:
+    repo = _Repositories(session)
+    run = _start(repo, "filtered-history", as_of=date(2026, 9, 4))
+    repo.stage_candidates(run.id, [_candidate("AAPL"), _candidate("MSFT")])
+    for symbol in ("AAPL", "MSFT"):
+        repo.save_item_result(
+            run.id,
+            symbol,
+            observation=_observation(symbol),
+            core_valid=True,
+        )
+    repo.publish(run.id, _published_summary())
+    session.commit()
+    statements: list[str] = []
+
+    def capture_statement(
+        _connection, _cursor, statement, _parameters, _context, _many
+    ):
+        statements.append(statement)
+
+    event.listen(session.bind, "before_cursor_execute", capture_statement)
+    try:
+        history = repo.symbol_history("AAPL", market="US", calculation_version="v1")
+    finally:
+        event.remove(session.bind, "before_cursor_execute", capture_statement)
+
+    assert [record.run_id for record in history] == [run.id]
+    item_queries = [
+        statement
+        for statement in statements
+        if "FROM options_analytics_run_items" in statement
+    ]
+    assert len(item_queries) == 1
+    assert "options_analytics_run_items.security_symbol =" in item_queries[0]
+
+
 def test_symbol_history_keeps_only_the_newest_published_forced_attempt(session) -> None:
     repo = _Repositories(session)
     first = _start(repo, "same-input")
@@ -699,12 +734,13 @@ def test_history_export_uses_only_authoritative_same_session_cohort(session) -> 
 
     assert [row.symbol for row in exported] == ["MSFT"]
     assert (
-        exported[0].external_source_feature_run_key
-        == "US:2026-09-04:new-feature-run"
+        exported[0].external_source_feature_run_key == "US:2026-09-04:new-feature-run"
     )
 
 
-def test_newest_invalid_same_session_item_supersedes_older_valid_history(session) -> None:
+def test_newest_invalid_same_session_item_supersedes_older_valid_history(
+    session,
+) -> None:
     repo = _Repositories(session)
     first = _start(repo, "first-feature-run", as_of=date(2026, 9, 4))
     repo.stage_candidates(first.id, [_candidate("AAPL")])
@@ -827,7 +863,9 @@ def test_last_current_membership_ignores_later_continuity_only_rows(session) -> 
     assert memberships["AAPL"].dividend_source == "zero_assumption"
 
 
-def test_last_current_memberships_ignore_superseded_same_session_cohort(session) -> None:
+def test_last_current_memberships_ignore_superseded_same_session_cohort(
+    session,
+) -> None:
     repo = _Repositories(session)
     first = _start(repo, "first-feature-run", as_of=date(2026, 9, 4))
     repo.stage_candidates(first.id, [_candidate("AAPL")])
@@ -890,6 +928,58 @@ def test_retention_prunes_old_aggregates_and_keeps_only_30_runs_of_strikes(
     ).as_of_date == first_date + timedelta(days=31)
     assert session.query(OptionsAnalyticsRunItem).count() == 31
     assert session.query(OptionsAnalyticsStrikePoint).count() == 30
+
+
+def test_retention_removes_old_non_published_runs_but_keeps_active_attempts(
+    session,
+) -> None:
+    repo = _Repositories(session)
+    old_created_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+    failed = _start(repo, "old-failed")
+    repo.stage_candidates(failed.id, [_candidate("FAILED")])
+    repo.save_item_result(
+        failed.id,
+        "FAILED",
+        observation=_observation("FAILED"),
+        strike_points=[{"strike": 100}],
+    )
+    repo.mark_failed_quality(failed.id, reason_codes=("insufficient_coverage",))
+    failed.created_at = old_created_at
+
+    abandoned = _start(repo, "old-staged")
+    repo.stage_candidates(abandoned.id, [_candidate("ABANDONED")])
+    repo.save_item_result(
+        abandoned.id,
+        "ABANDONED",
+        observation=_observation("ABANDONED"),
+        strike_points=[{"strike": 100}],
+    )
+    abandoned.created_at = old_created_at
+
+    running = _start(repo, "old-running")
+    repo.stage_candidates(running.id, [_candidate("RUNNING")])
+    repo.save_item_result(
+        running.id,
+        "RUNNING",
+        observation=_observation("RUNNING"),
+        strike_points=[{"strike": 100}],
+    )
+    running.status = OptionsRunStatus.RUNNING.value
+    running.created_at = old_created_at
+
+    recent = _start(repo, "recent-staged")
+    repo.stage_candidates(recent.id, [_candidate("RECENT")])
+    session.commit()
+
+    repo.prune(aggregate_before=date(2026, 1, 1))
+
+    remaining_ids = {
+        run_id for (run_id,) in session.query(OptionsAnalyticsRun.id).all()
+    }
+    assert remaining_ids == {running.id, recent.id}
+    assert session.query(OptionsAnalyticsRunItem).count() == 2
+    assert session.query(OptionsAnalyticsStrikePoint).count() == 1
 
 
 def test_unit_of_work_exposes_focused_options_repositories(session) -> None:
