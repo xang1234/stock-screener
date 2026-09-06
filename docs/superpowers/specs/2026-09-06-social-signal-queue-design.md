@@ -40,7 +40,8 @@ official X API remains the compliant provider option.
 
 ## Goals
 
-- Combine two installation-wide X lists into one ranked research queue:
+- Combine installation-managed X lists into one ranked research queue, seeded
+  with:
   - `1522014550211457024`
   - `1986290701492232693`
 - Support resolved securities in the US, HK, CN, JP, and TW Markets.
@@ -61,7 +62,8 @@ official X API remains the compliant provider option.
 
 ## Non-goals
 
-- User-configured X sources or user-specific queues.
+- Ordinary-user-configured X sources or user-specific queues. Administrators
+  manage the installation-wide source set.
 - Static-site Social Signals.
 - Embedded X images, video, or article bodies.
 - Posting, liking, following, bookmarking, direct messaging, or any other X
@@ -205,19 +207,50 @@ as operator instruction.
 
 ## Sources and collection policy
 
-The two approved list URLs are seeded as shared Social Sources assigned to the
+The two initial list URLs are seeded as shared Social Sources assigned to the
 existing technical extraction pipeline. They are not editable by ordinary
-users. Administrators may enable or disable a source but v1 does not allow
-adding arbitrary X lists through the Social Signals UI.
+users. Administrators manage the installation-wide source registry from
+Operations without rebuilding the application or private worker image.
 
-Disabling either approved source prevents new publication and marks collection
-partial; it does not turn a one-list result into a complete run. This makes
-source maintenance reversible without changing the agreed two-source product.
+Adding a source requires a 1-100-character human-readable display name plus an
+X list URL or a 1-32-digit numeric list ID. The list ID is the immutable
+external identity; the local display name may be edited later. Saving performs
+syntax and duplicate validation only, stores the canonical
+`https://x.com/i/lists/{id}` URL, and creates the source in `pending` state. It
+does not contact X automatically.
 
-The first successful run attempts a fourteen-day backfill capped at 1,000 posts
-per list. A cap-truncated source is incomplete and cannot silently claim full
-coverage. Later runs use provider checkpoints and overlapping incremental
-reads, retaining overlap so recent engagement observations can be refreshed.
+An explicit `Test List` action asynchronously dispatches a provider read of at
+most five posts through the configured social worker. The source shows
+`queued`, `running`, and completed test status while the UI polls the admin
+projection. This action may consume official API
+credits or create X UI traffic, so the UI states that consequence before the
+administrator runs it. A successful test records the provider, result time,
+sample count, and redacted outcome, after which the source may be enabled. A
+pending or disabled source's test pass is valid only when it matches the
+provider selected at enable time. Already-enabled sources are validated by the
+next complete refresh after a deployment changes provider. The test neither
+stores queue evidence nor publishes a Social Signal Run.
+
+At least two Social Sources must remain enabled. An administrator cannot
+disable or archive a source if that would leave fewer than two enabled sources;
+a replacement must be tested and enabled first. Every enabled source must
+complete successfully for a refresh to publish. Pending, disabled, and
+archived sources are not part of the pinned run source set.
+
+Removing a source archives it rather than deleting it. Archival stops future
+collection and hides the source from normal controls while preserving source
+membership, evidence badges, run inputs, and audit history. All add, rename,
+test, enable, disable, and archive operations require administrator
+authorization and create immutable audit events for both request and
+completion.
+
+Each source's first enabled run attempts a fourteen-day backfill capped at
+1,000 posts. A newly enabled source therefore joins the pinned set only after
+its explicit test, then must prove full initial coverage before that run may
+publish. A cap-truncated source is incomplete and cannot silently claim full
+coverage. Later source reads use provider checkpoints and overlapping
+incremental reads, retaining overlap so recent engagement observations can be
+refreshed.
 
 The scorer uses 1-day, 7-day, and 14-day windows based on post publication time
 in UTC. Market-session dates are used only for joining existing Market data;
@@ -229,9 +262,9 @@ trading sessions.
 ### Existing records
 
 `ContentSource` remains the configured-source record. It gains an explicit
-`contributes_to_theme_rankings` boolean, defaulting to true. The two
-Social Sources set it to false. Existing source behavior therefore remains
-unchanged unless explicitly opted out.
+`contributes_to_theme_rankings` boolean, defaulting to true. Every Social Source
+sets it to false. Existing source behavior therefore remains unchanged unless
+explicitly opted out.
 
 `ContentItem` remains the canonical post record and retains the existing
 `(source_type, external_id)` uniqueness behavior. Social extensions do not add
@@ -245,6 +278,19 @@ uses price/RS/breadth fields, not mention velocity or a momentum score that
 mixes social evidence back into confirmation.
 
 ### New records
+
+**SocialSourceConfiguration** is the one-to-one social lifecycle extension for
+a ContentSource. It stores the immutable X list ID, lifecycle state
+`pending|enabled|disabled|archived`, test execution state, last tested provider,
+last test outcome and time, archive time, and optimistic version. The ContentSource retains the
+human-readable name and canonical list URL. The two original lists are seeded
+as enabled with `system_seed` provenance; later sources must pass the explicit
+test-before-enable flow.
+
+**SocialSourceAuditEvent** is an immutable administrator action record. It
+stores the Social Source, action, actor, timestamp, and redacted before/after
+state. It never stores provider credentials, session paths, post content, raw
+provider responses, or response headers.
 
 **SocialPostSource** is the many-to-many membership between a ContentItem and a
 Social Source. It records first-seen and last-seen times and has a unique key on
@@ -322,7 +368,7 @@ stored source records and component inputs determine every numeric score.
 | Unique authors | 15% | Percentile of capped distinct authors in the selected 1D, 7D, or 14D window |
 | Engagement | 15% | Percentile of the summed, winsorized per-post engagement value defined below |
 | Recency | 5% | Exponential decay from the latest qualifying mention, with a 48-hour half-life |
-| Cross-list confirmation | 5% | Full component credit when both approved lists independently mention the ticker; zero when only one does |
+| Cross-list confirmation | 5% | Full component credit when distinct qualifying posts from at least two enabled lists mention the ticker; zero when fewer than two do |
 
 The Social Score renormalizes these five Queue weights to 0-100. Component
 percentiles are calculated within the selected Market. When fewer than 20
@@ -346,8 +392,10 @@ The engagement component is unavailable unless likes, reposts, and replies are
 all observed. Quotes, bookmarks, and views contribute only when observed. The
 per-post value is winsorized at the 95th percentile of the normalization cohort
 before ticker-level summation. Cross-list confirmation requires qualifying
-posts with different provider post IDs in both approved lists; one duplicated
-post present in both lists does not earn the bonus.
+posts with different provider post IDs from at least two enabled lists; one
+duplicated post present in multiple lists does not earn the bonus. The score is
+binary and does not increase above full credit when three or more lists mention
+the ticker. The UI still shows the observed list count, such as `3 of 5`.
 
 ### Confirmation Score
 
@@ -419,7 +467,8 @@ state with clear missing-data and exclusion reasons.
 ## Run and publication flow
 
 1. Acquire the singleton social-ingestion lease.
-2. Create an immutable Social Signal Run and pin provider, source set, source
+2. Create an immutable Social Signal Run and pin provider, the complete enabled
+   source set, source
    checkpoints, formula version, and current time.
 3. Read each Social Source independently through the selected adapter.
 4. Validate and normalize provider records.
@@ -432,7 +481,8 @@ state with clear missing-data and exclusion reasons.
    group ranks, liquidity, and non-social theme confirmation.
 10. Calculate and persist immutable Social Signal Snapshots.
 11. Evaluate publication quality and atomically advance the published pointer
-    only after both sources have complete valid outcomes.
+    only when at least two sources were enabled and every pinned source has a
+    complete valid outcome.
 12. Release the lease and expose the run outcome to Operations.
 
 A partial or failed attempt is retained for diagnosis but cannot replace the
@@ -454,8 +504,9 @@ The provider-neutral live API supplies:
 - source coverage and degraded-state metadata; and
 - related listing and unresolved evidence where applicable.
 
-Provider configuration, authentication health, run history, source enablement,
-and manual refresh require administrator authorization. API responses and logs
+Provider configuration, authentication health, run history, source creation,
+rename, test, enablement, disablement, archival, and manual refresh require
+administrator authorization. API responses and logs
 must not reveal bearer tokens, filesystem paths to session state, cookies,
 headers, raw provider debug payloads, or private package installation details.
 
@@ -471,7 +522,7 @@ as an isolated visual system.
 ### Daily Snapshot card
 
 The compact card shows the top five Published Social Signal candidates for the
-selected Market, dominant linked themes, current Market posture, two-source
+selected Market, dominant linked themes, current Market posture, enabled-source
 coverage, last successful refresh time, and stale/degraded status. It links to
 the full Social Signals tab.
 
@@ -510,8 +561,10 @@ but that field cannot affect Theme ordering or stored Theme momentum. Queue
 theme links navigate into the existing Theme detail experience.
 
 Provider health, last run, source coverage, reauthentication requirements,
-rate-limit state, and the admin refresh control live in Operations/settings,
-not in the ordinary user's queue controls.
+rate-limit state, source management, and the admin refresh control live in
+Operations/settings, not in the ordinary user's queue controls. The source
+panel shows required display name, canonical list ID/URL, lifecycle state,
+tested provider/time/outcome, last successful collection, and archive history.
 
 Static mode does not render the Daily card, Social tab, social API calls, or
 Social Pulse. Static exporters contain no social rows, excerpts, metrics, or
@@ -573,7 +626,7 @@ credentials are not needed to run a prebuilt image.
   tie-break tests.
 - Deterministic replay: identical normalized inputs produce byte-equivalent
   scoring payloads for the same formula version.
-- Cross-list deduplication retains both source memberships.
+- Cross-list deduplication retains every source membership.
 - One-author caps and repost/quote deduplication prevent inflated scores.
 - Listing resolution covers explicit US/HK/CN/JP/TW symbols, company aliases,
   ADR relationships, ambiguity, and unresolved evidence.
@@ -591,6 +644,10 @@ credentials are not needed to run a prebuilt image.
   unknown or malformed structures.
 - Provider caps, 429 handling, authentication failures, challenge signals, and
   non-fallback behavior are deterministic.
+- Source-management tests cover duplicate IDs, required names, pending creation,
+  explicit five-post tests, provider-change invalidation, the two-enabled
+  minimum, all-enabled publication, optimistic concurrent edits, archival, and
+  immutable redacted audit events.
 - Tests contain no session state, cookies, bearer tokens, or live X reads.
 
 ### Persistence and publication tests
@@ -625,7 +682,7 @@ credentials are not needed to run a prebuilt image.
 4. Add Daily, queue, evidence, Theme Social Pulse, and Operations UI.
 5. Build the private multi-architecture worker and verify local Docker with a
    dedicated automation profile.
-6. Run a fourteen-day two-list backfill without publication and compare source
+6. Run a fourteen-day all-enabled-source backfill without publication and compare source
    coverage, deduplication, mappings, and rankings with the research artifacts.
 7. Publish only after the quality gate passes, then enable Social Signals for
    authenticated users.
@@ -641,12 +698,19 @@ changing existing Theme identities.
 - A disabled installation schedules no X traffic and renders no ordinary-user
   Social Signals surface.
 - Both enabled providers satisfy the same normalized record contract.
+- Administrators can add, rename, test, enable, disable, and archive lists
+  without an application or worker-image rebuild; ordinary users cannot.
+- New lists remain pending until an explicit five-post-or-fewer test succeeds
+  for the currently selected provider.
+- At least two lists remain enabled and publication requires every enabled list
+  to complete successfully.
 - Identical pinned inputs and formula version produce identical scores and
   ordering.
-- Cross-list posts are deduplicated without losing list attribution.
+- Cross-list posts are deduplicated without losing list attribution; distinct
+  evidence from any two enabled lists earns the same full binary credit.
 - Existing Theme rankings are unchanged by Social Sources.
-- Healthy installations publish a complete two-source snapshot at least every
-  seven hours.
+- Healthy installations publish a complete all-enabled-source snapshot at
+  least every seven hours.
 - Failed and partial runs preserve the last complete published snapshot and
   expose an accurate health state.
 - Pure Social ordering excludes technical inputs while continuing to display
