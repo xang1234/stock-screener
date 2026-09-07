@@ -87,6 +87,13 @@ function normalizeScanWarnings(warnings) {
   return Array.isArray(warnings) ? warnings : [];
 }
 
+function importedSymbolList(value) {
+  return [...new Set(String(value || '').split(',')
+    .map((symbol) => symbol.trim().replace(/^\$+/, '').toUpperCase())
+    .filter((symbol) => /^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(symbol)))]
+    .slice(0, 500);
+}
+
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults, universeOptions, features } = useRuntime();
   const { selectedMarket: globalMarket } = useMarket();
@@ -100,6 +107,10 @@ function ScanPage() {
   globalMarketRef.current = globalMarket;
   const scanHistoryRef = useRef([]);
   const queryClient = useQueryClient();
+  const [importedSymbols, setImportedSymbols] = useState(() => {
+    if (typeof window === 'undefined') return [];
+    return importedSymbolList(new URLSearchParams(window.location.search).get('symbols'));
+  });
 
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
@@ -497,7 +508,9 @@ function ScanPage() {
     if (refreshConflict) {
       return;
     }
-    const universeDef = buildUniverseDef(universeMarket, universeScope, universeSelections);
+    const universeDef = importedSymbols.length
+      ? { type: 'custom', symbols: importedSymbols }
+      : buildUniverseDef(universeMarket, universeScope, universeSelections);
     if (!universeDef) {
       return;
     }
@@ -699,6 +712,14 @@ function ScanPage() {
         refreshStaleDataPending={refreshScanCacheMutation.isPending}
         refreshStaleDataError={refreshScanCacheMutation.error}
         scanWarnings={scanWarnings}
+        customSymbols={importedSymbols}
+        onClearCustomSymbols={() => {
+          const next = new URLSearchParams(window.location.search);
+          next.delete('symbols');
+          const search = next.toString();
+          window.history.replaceState(null, '', `${window.location.pathname}${search ? `?${search}` : ''}`);
+          setImportedSymbols([]);
+        }}
       />
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (

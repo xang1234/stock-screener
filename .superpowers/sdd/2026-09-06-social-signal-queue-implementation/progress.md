@@ -94,8 +94,8 @@ Ruling: Private image publication and real-X/paid-LLM validation are operator ga
   - [x] Task 9B: Current replay generation/immutable Market context
   - [x] Task 9C: Refresh orchestration/production factory
 - [x] Task 10: Celery Scheduling, Lease, and Operations Visibility
-- [ ] Task 11: Authenticated Social API
-- [ ] Task 12: Social Queue and Evidence Drawer UI
+- [x] Task 11: Authenticated Social API
+- [x] Task 12: Social Queue and Evidence Drawer UI
 - [ ] Task 13: Daily Card, Theme Social Pulse, and Admin Health UI
 - [ ] Task 14: Prove Live-Only Static Isolation
 - [ ] Task 15: Local Docker and Private Worker Image
@@ -314,3 +314,4 @@ Ruling: Trim Task 7's generated brief to its exact heading section before Task 7
 
 Ruling: Full verification excludes existing live_service/server-required integration tests unless explicitly fixture-isolated; run new fixture-only integration files separately — the task does not authorize calls/mutations against an already-running production-like backend or paid providers — cost if wrong: operator-only integration paths remain unverified until deployment validation.
 Task 11: complete inline (user requested no subagents); authenticated published-run public API, admin runtime/source/health/validation/analysis/association/identity/refresh API, legacy Theme mutation fence and live effective membership. Focused 23 passed; broad affected 561 passed; final import/diff/compile clean. Report task-11-report.md.
+Task 12: complete inline (user requested no subagents); capability-gated dense queue, frozen evidence drawer, Blended/Pure Social and section controls, truthful availability/coverage states, existing chart/watchlist reuse, and URL-safe custom Scan handoff. Frontend 28 passed, lint 0 errors/4 inherited warnings, production build passed; backend frozen-context regression 15 passed. Report task-12-report.md. Commit pending.

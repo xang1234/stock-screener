@@ -7,6 +7,7 @@ import MarketScanPage from './MarketScanPage';
 const runtimeState = {
   features: {
     themes: false,
+    social_signals: false,
   },
 };
 const keyMarketsRenderSpy = vi.hoisted(() => vi.fn());
@@ -38,10 +39,28 @@ vi.mock('../components/MarketScan/StockbeeMmTab', () => ({
   default: () => <div>stockbee-tab</div>,
 }));
 
+vi.mock('../features/socialSignals/SocialSignalsTab', () => ({
+  default: () => <div>social-signals-tab</div>,
+}));
+
 describe('MarketScanPage capability gating', () => {
   beforeEach(() => {
     keyMarketsRenderSpy.mockClear();
-    runtimeState.features = { themes: false };
+    runtimeState.features = { themes: false, social_signals: false };
+  });
+
+  it('shows Social Signals directly after Daily only when enabled', async () => {
+    runtimeState.features = { themes: false, social_signals: true };
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <MarketScanPage />
+      </ThemeProvider>
+    );
+
+    const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
+    expect(tabs.slice(0, 3)).toEqual(['Daily Snapshot', 'Social Signals', 'Key Markets']);
+    fireEvent.click(screen.getByRole('tab', { name: 'Social Signals' }));
+    expect(await screen.findByText('social-signals-tab')).toBeInTheDocument();
   });
 
   it('removes the Themes tab when themes are disabled', () => {

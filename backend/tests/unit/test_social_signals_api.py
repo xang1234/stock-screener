@@ -27,7 +27,7 @@ async def _request(db_session, method, path, **kwargs):
         app.dependency_overrides.pop(get_db, None)
 
 
-def _publish_rows(db, records, *, observations=None):
+def _publish_rows(db, records, *, observations=None, context=None):
     from app.infra.db.models.social_signals import (
         SocialSignalRun, SocialSignalRunPointer, SocialSignalSnapshot,
     )
@@ -46,7 +46,9 @@ def _publish_rows(db, records, *, observations=None):
                 "2": {"list_id": "222", "name": "Two", "version": 1},
             },
             "observations": observations or {"1": {}, "2": {}},
-            "prepared": {"context": {"formula_version": "social-signal-v1"}},
+            "prepared": {"context": context or {
+                "formula_version": "social-signal-v1",
+            }},
         },
         feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
         created_at=records[0].latest_mention,
@@ -241,6 +243,74 @@ async def test_published_queue_keeps_rank_modes_and_unranked_sections_separate(
     )
     assert [item["canonical_symbol"] for item in context.json()["items"]] == ["SPY"]
     assert [item["canonical_symbol"] for item in unresolved.json()["items"]] == ["$ZZZ"]
+
+
+@pytest.mark.asyncio
+async def test_published_queue_exposes_frozen_candidate_context(
+    db_session, social_runtime, monkeypatch
+):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from app.domain.social_signals.records import SocialSnapshotRecord
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    record = SocialSnapshotRecord(
+        "published-1", "US:AAA", "AAA", "US", "actionable",
+        Decimal("82"), Decimal("79"), Decimal("81"),
+        (("state_reasons", "legacy_reason"),), (), now, "AAA", "US:AAA",
+        7, 4, 2, 2,
+    )
+    context = {
+        "formula_version": "social-signal-v1",
+        "candidates": [{
+            "candidate_key": "US:AAA",
+            "window_days": 7,
+            "state_input": {
+                "security_kind": "stock", "setup_score": "77",
+                "setup_ready": True,
+            },
+            "state_decision": {"reasons": ["setup_ready", "theme_confirmed"]},
+            "social_result": {
+                "components": [["authors", {"value": "80"}]],
+                "acceleration": "2.5", "post_memberships": ["111"],
+            },
+            "confirmation": {"components": [
+                ["setup", {"value": "77"}],
+                ["rs", {"value": "91"}],
+                ["group", {"value": "88"}],
+                ["theme", {
+                    "value": "83", "selected_key": "ai_infrastructure",
+                }],
+            ]},
+        }],
+        "market_batches": [{"inputs": [{
+            "candidate_key": "US:AAA", "rs_rating_1m": "89",
+            "rs_rating_3m": "93", "group_rank": 4,
+        }]}],
+    }
+    _publish_rows(db_session, (record,), context=context)
+
+    response = await _request(
+        db_session, "GET",
+        "/api/v1/social-signals/queue?market=US&window=7d",
+    )
+
+    assert response.status_code == 200
+    explanation = response.json()["items"][0]["explanation"]
+    assert explanation["state_reasons"] == ["setup_ready", "theme_confirmed"]
+    assert explanation["security_kind"] == "stock"
+    assert explanation["setup_score"] == "77"
+    assert explanation["readiness"] == "ready"
+    assert explanation["rs_rating_1m"] == "89"
+    assert explanation["rs_rating_3m"] == "93"
+    assert explanation["group_rank"] == 4
+    assert explanation["theme"] == "ai_infrastructure"
+    assert explanation["acceleration"] == "2.5"
+    assert explanation["post_memberships"] == ["111"]
 
 
 @pytest.mark.asyncio

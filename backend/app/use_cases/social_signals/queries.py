@@ -57,7 +57,51 @@ class SocialSignalQueries:
         return self.db.get(SocialSignalRun, pointer.run_id) if pointer else None
 
     @staticmethod
-    def _item(record):
+    def _candidate_explanation(run, candidate_key, window_days):
+        prepared = run.application_progress_json.get("prepared", {}) if run else {}
+        context = prepared.get("context") or {}
+        candidate = next((value for value in context.get("candidates", ())
+                          if value.get("candidate_key") == candidate_key
+                          and value.get("window_days") == window_days), None)
+        if candidate is None:
+            return {}
+        state_input = candidate.get("state_input") or {}
+        social = candidate.get("social_result") or {}
+        confirmation = candidate.get("confirmation") or {}
+        confirmation_components = dict(confirmation.get("components", ()))
+        social_components = dict(social.get("components", ()))
+        market_input = None
+        for batch in context.get("market_batches", ()):
+            market_input = next((value for value in batch.get("inputs", ())
+                                 if value.get("candidate_key") == candidate_key), None)
+            if market_input:
+                break
+        theme_component = confirmation_components.get("theme") or {}
+        return {
+            "state_reasons": list((candidate.get("state_decision") or {}).get("reasons", ())),
+            "security_kind": state_input.get("security_kind"),
+            "setup_score": state_input.get("setup_score"),
+            "readiness": ("ready" if state_input.get("setup_ready") is True else
+                          "not ready" if state_input.get("setup_ready") is False else None),
+            "rs_rating_1m": (market_input or {}).get("rs_rating_1m"),
+            "rs_rating_3m": (market_input or {}).get("rs_rating_3m"),
+            "group_rank": (market_input or {}).get("group_rank"),
+            "theme": theme_component.get("selected_key"),
+            "confirmation_components": confirmation_components,
+            "social_components": social_components,
+            "acceleration": social.get("acceleration"),
+            "post_memberships": social.get("post_memberships", []),
+        }
+
+    @classmethod
+    def _item(cls, record, run=None):
+        pinned = dict(record.pinned_inputs)
+        reasons = pinned.get("state_reasons")
+        if isinstance(reasons, str):
+            pinned["state_reasons"] = [value for value in reasons.split(",") if value]
+        pinned.update(cls._candidate_explanation(
+            run, record.candidate_key, record.window_days
+        ))
         return {
             "candidate_key": record.candidate_key,
             "canonical_symbol": record.canonical_symbol,
@@ -73,7 +117,7 @@ class SocialSignalQueries:
             "normalization_scope": record.normalization_scope,
             "formula_version": record.formula_version,
             "coverage": list(record.coverage),
-            "explanation": dict(record.pinned_inputs),
+            "explanation": pinned,
         }
 
     def queue(self, *, market, window, view, rank_mode, page, page_size):
@@ -99,7 +143,7 @@ class SocialSignalQueries:
             "available": True,
             "reason_code": None,
             "total": result.total,
-            "items": [self._item(item) for item in result.items],
+            "items": [self._item(item, run) for item in result.items],
             "run_id": run.id,
             "generated_at": generated_at,
             "published_at": published_at,
@@ -165,7 +209,7 @@ class SocialSignalQueries:
         from app.domain.social_signals.records import SocialSnapshotRecord
         for field in ("social_score", "confirmation_score", "queue_score"):
             data[field] = Decimal(data[field]) if data[field] is not None else None
-        item = self._item(SocialSnapshotRecord(**data))
+        item = self._item(SocialSnapshotRecord(**data), run)
         content_ids = set(self.db.scalars(select(SocialPostTicker.content_item_id).where(
             SocialPostTicker.candidate_key == candidate_key
         )))
