@@ -4,7 +4,9 @@ Loads environment variables and provides application settings.
 """
 import logging
 import os
+from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -98,6 +100,22 @@ class Settings(BaseSettings):
     x_api_max_results_per_page: int = 50
     xui_limit_per_source: int = 50
     twitter_request_delay: float = 5.0  # Delay between twitter source fetches (seconds)
+    # Social Signals is a distinct, fail-closed pipeline. Keep x_ingest_provider
+    # above for the legacy generic theme ingestion path.
+    social_signals_mode: str = "off"
+    social_ingest_provider: str = "disabled"
+    social_refresh_hours: int = 6
+    social_manual_refresh_cooldown_seconds: int = 3600
+    social_stale_after_hours: int = 7
+    social_initial_backfill_days: int = 14
+    social_initial_backfill_limit_per_source: int = 1000
+    social_incremental_limit_per_source: int = 200
+    social_xui_config_path: str = "/app/data/xui-reader/config.toml"
+    social_xui_profile: str = "automation"
+    social_official_daily_post_limit: int = 2000
+    social_llm_daily_budget_usd: Decimal = Decimal("2.00")
+    social_llm_budget_timezone: str = "Asia/Singapore"
+    social_market_close_grace_minutes: int = 120
     benzinga_api_key: str = ""  # For Benzinga news API (optional)
     tavily_api_key: str = ""  # For web search (primary)
     serper_api_key: str = ""  # For web search (fallback)
@@ -745,6 +763,39 @@ class Settings(BaseSettings):
             )
         return normalized
 
+    @field_validator("social_signals_mode")
+    @classmethod
+    def validate_social_signals_mode(cls, v: str) -> str:
+        normalized = str(v or "").strip().lower()
+        if normalized not in {"off", "validation", "live"}:
+            raise ValueError(
+                "social_signals_mode must be 'off', 'validation', or 'live', "
+                f"got {v!r}"
+            )
+        return normalized
+
+    @field_validator("social_ingest_provider")
+    @classmethod
+    def validate_social_ingest_provider(cls, v: str) -> str:
+        normalized = str(v or "").strip().lower()
+        if normalized not in {"disabled", "official", "xui"}:
+            raise ValueError(
+                "social_ingest_provider must be 'disabled', 'official', or 'xui', "
+                f"got {v!r}"
+            )
+        return normalized
+
+    @field_validator("social_llm_budget_timezone")
+    @classmethod
+    def validate_social_llm_budget_timezone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (TypeError, ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(
+                f"Invalid social_llm_budget_timezone: {v!r}. Use an IANA timezone"
+            ) from exc
+        return v
+
     @field_validator("x_api_max_pages_per_source", "x_api_max_results_per_page")
     @classmethod
     def validate_positive_x_api_settings(cls, v: int) -> int:
@@ -867,6 +918,10 @@ class Settings(BaseSettings):
             "tasks": self.feature_tasks,
             "grouped_scan_filters": self.feature_grouped_scan_filters,
             "options_analytics": self.options_analytics_enabled,
+            "social_signals": (
+                self.social_signals_mode == "live"
+                and self.social_ingest_provider != "disabled"
+            ),
             "ui_snapshots": True,
         }
 

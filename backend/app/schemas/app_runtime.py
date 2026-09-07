@@ -165,7 +165,11 @@ class BootstrapStageResponse(BaseModel):
 class AppCapabilitiesResponse(BaseModel):
     """Feature/capability flags exposed to the frontend."""
 
-    features: dict[str, bool]
+    features: dict[str, bool] = Field(
+        description=(
+            "Deployment feature flags, including fail-closed social_signals availability."
+        )
+    )
     ui_snapshots: dict[str, bool] = Field(default_factory=dict)
     scan_defaults: ScanDefaultsResponse
     bootstrap_required: bool = False

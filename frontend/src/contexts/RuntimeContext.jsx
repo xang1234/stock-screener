@@ -158,6 +158,7 @@ export const DEFAULT_CAPABILITIES = {
     tasks: true,
     grouped_scan_filters: false,
     options_analytics: false,
+    social_signals: false,
   },
   auth: {
     required: false,

@@ -75,7 +75,12 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
     monkeypatch.setattr(
         type(module.settings),
         "capability_flags",
-        lambda _self: {"themes": True, "chatbot": True, "tasks": True},
+        lambda _self: {
+            "themes": True,
+            "chatbot": True,
+            "tasks": True,
+            "social_signals": False,
+        },
     )
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_ui_snapshot_service",
@@ -95,7 +100,12 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
     data = response.json()
     assert data["scan_defaults"] == get_default_scan_profile("US")
     assert data["ui_snapshots"] == _FakeUISnapshotService().ui_snapshot_flags()
-    assert data["features"] == {"themes": True, "chatbot": True, "tasks": True}
+    assert data["features"] == {
+        "themes": True,
+        "chatbot": True,
+        "tasks": True,
+        "social_signals": False,
+    }
     assert data["bootstrap_required"] is True
     assert data["primary_market"] == "US"
     assert data["enabled_markets"] == ["US", "HK"]
@@ -121,6 +131,16 @@ def test_options_analytics_runtime_setting_defaults_disabled(monkeypatch):
 
     assert configured.options_analytics_enabled is False
     assert configured.capability_flags()["options_analytics"] is False
+
+
+def test_social_signals_runtime_capability_is_fail_closed():
+    configured = Settings(
+        _env_file=None,
+        social_signals_mode="validation",
+        social_ingest_provider="official",
+    )
+
+    assert configured.capability_flags()["social_signals"] is False
 
 
 @pytest.mark.asyncio
