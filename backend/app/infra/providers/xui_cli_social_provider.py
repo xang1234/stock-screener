@@ -70,7 +70,8 @@ class XuiCliSocialProvider:
         if not self._authenticated(auth_payload, auth_result.returncode):
             return self._failed(request, "reauthentication_required", cooldown=True)
 
-        effective_limit = min(request.limit, 5) if request.intent == "test" else request.limit
+        intent_cap = {"initial": 1000, "incremental": 200, "test": 5}[request.intent]
+        effective_limit = min(request.limit, intent_cap)
         read_result = self._execute([
             "xui", "read", "--path", self._config_path, "--profile", self._profile,
             "--limit", str(effective_limit), "--json", "--sources", f"list:{request.list_id}",
@@ -130,6 +131,10 @@ class XuiCliSocialProvider:
             or len(outcomes) != 1
         ):
             raise ValueError("summary")
+        for field in ("page_loads", "scroll_rounds", "seen_items"):
+            value = payload[field]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("envelope_count")
         outcome = outcomes[0]
         expected_source = f"list:{request.list_id}"
         if (
@@ -146,6 +151,13 @@ class XuiCliSocialProvider:
         for field in ("error", "html_artifact_path", "selector_report_path"):
             if outcome.get(field) is not None and not isinstance(outcome.get(field), str):
                 raise ValueError("outcome_detail")
+        documented_totals = {
+            "page_loads": "page_loads",
+            "scroll_rounds": "scroll_rounds",
+            "seen_items": "observed_ids",
+        }
+        if any(payload[total] != outcome[component] for total, component in documented_totals.items()):
+            raise ValueError("envelope_total")
         is_success = outcome["ok"] is True
         if (succeeded, failed) != ((1, 0) if is_success else (0, 1)):
             raise ValueError("summary_coherence")

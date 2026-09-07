@@ -83,6 +83,24 @@ def test_test_intent_caps_cli_limit_at_five_and_never_uses_application_progress(
     assert batch.outcome.proposed_progress is None
 
 
+@pytest.mark.parametrize(("intent", "requested", "expected"), [
+    ("initial", 999, "999"),
+    ("initial", 1000, "1000"),
+    ("initial", 1001, "1000"),
+    ("incremental", 199, "199"),
+    ("incremental", 200, "200"),
+    ("incremental", 201, "200"),
+    ("test", 4, "4"),
+    ("test", 5, "5"),
+    ("test", 6, "5"),
+])
+def test_intent_limits_respect_smaller_requests_and_enforce_hard_caps(intent, requested, expected):
+    runner = SyntheticRunner(auth(), completed(json.loads(FIXTURE.read_text())))
+    provider(runner).read_source(request(intent=intent, limit=requested))
+    command = runner.calls[1][0]
+    assert command[command.index("--limit") + 1] == expected
+
+
 def test_identical_retries_are_repeatable_and_do_not_claim_progress():
     payload = json.loads(FIXTURE.read_text())
     runner = SyntheticRunner(auth(), completed(payload), auth(), completed(payload))
@@ -113,6 +131,30 @@ def test_incoherent_summary_and_malformed_nested_values_fail_closed(mutation):
         payload["outcomes"][0].pop("observed_ids")
     else:
         payload["items"][0]["is_repost"] = "false"
+    batch = provider(SyntheticRunner(auth(), completed(payload))).read_source(request())
+    assert batch.outcome.error_code == "invalid_provider_schema"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("page_loads", True), ("page_loads", -1), ("page_loads", "1"),
+    ("scroll_rounds", True), ("scroll_rounds", -1), ("scroll_rounds", "1"),
+    ("seen_items", True), ("seen_items", -1), ("seen_items", "2"),
+])
+def test_required_envelope_counters_are_nonnegative_integers(field, value):
+    payload = json.loads(FIXTURE.read_text())
+    payload[field] = value
+    batch = provider(SyntheticRunner(auth(), completed(payload))).read_source(request())
+    assert batch.outcome.error_code == "invalid_provider_schema"
+
+
+@pytest.mark.parametrize(("envelope_field", "outcome_field"), [
+    ("page_loads", "page_loads"),
+    ("scroll_rounds", "scroll_rounds"),
+    ("seen_items", "observed_ids"),
+])
+def test_single_source_envelope_counters_match_the_documented_outcome_totals(envelope_field, outcome_field):
+    payload = json.loads(FIXTURE.read_text())
+    payload[envelope_field] = payload["outcomes"][0][outcome_field] + 1
     batch = provider(SyntheticRunner(auth(), completed(payload))).read_source(request())
     assert batch.outcome.error_code == "invalid_provider_schema"
 
