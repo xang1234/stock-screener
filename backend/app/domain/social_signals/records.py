@@ -469,6 +469,19 @@ class ThemeMarketEvidence:
     components: tuple[tuple[str, Decimal | None], ...]
     measured_company_counts: tuple[tuple[str, int], ...]
     reasons: tuple[tuple[str, str], ...]
+    membership: tuple[EffectiveThemeMembership, ...] = ()
+    identity_version: int = 0
+    identity_policy_version: str = ""
+    registry_version: int = 0
+    input_sessions: tuple[tuple[str, date | None], ...] = ()
+    feature_run_ids: tuple[tuple[str, int | None], ...] = ()
+    selected_listings: tuple[tuple[str, str, str], ...] = ()
+    price_sessions: tuple[tuple[str, date | None], ...] = ()
+    company_observations: tuple[tuple[str, str, str, tuple[Decimal, ...]], ...] = ()
+    benchmark_return_1m: Decimal | None = None
+    benchmark_candidates: tuple[str, ...] = ()
+    benchmark_registry_version: str = ""
+    benchmark_selection: str = ""
 
     def __post_init__(self) -> None:
         for field in ("theme_key", "benchmark_symbol", "basket_version"):
@@ -478,6 +491,8 @@ class ThemeMarketEvidence:
             raise ValueError("invalid_session_date")
         if self.accepted_company_count < 0:
             raise ValueError("negative_accepted_company_count")
+        for field in ("membership", "input_sessions", "feature_run_ids", "selected_listings", "price_sessions", "company_observations", "benchmark_candidates"):
+            _deeply_immutable(getattr(self, field), field)
         for field in ("components", "measured_company_counts", "reasons"):
             values = getattr(self, field)
             _deeply_immutable(values, field)

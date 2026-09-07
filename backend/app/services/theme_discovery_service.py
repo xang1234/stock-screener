@@ -38,6 +38,21 @@ from .theme_lifecycle_service import apply_lifecycle_transition
 logger = logging.getLogger(__name__)
 
 VALID_LIFECYCLE_STATES = {"candidate", "active", "dormant", "reactivated", "retired"}
+
+
+def theme_relative_return_score(basket_return: float, benchmark_return: float) -> float:
+    """Shared one-month price confirmation scale; callers establish validity."""
+    return max(0, min(100, 50 + (basket_return - benchmark_return) * 500))
+
+
+def compound_theme_returns(series: pd.Series, periods: int) -> float | None:
+    """Compound a complete daily window; missing history is not a zero return."""
+    window = series.tail(periods)
+    if len(window) != periods or window.isna().any():
+        return None
+    return float((1 + window).prod() - 1)
+
+
 LIFECYCLE_RANK_WEIGHTS = {
     "candidate": 0.78,
     "active": 1.0,
@@ -353,9 +368,8 @@ class ThemeDiscoveryService:
 
         def _compound_return(series: pd.Series, periods: int) -> float:
             window = series.tail(periods).dropna()
-            if len(window) < periods:
-                return 0
-            return (1 + window).prod() - 1
+            value = compound_theme_returns(window, periods)
+            return value if value is not None else 0
 
         # Calculate period returns (compounded)
         basket_return_1d = basket_returns.iloc[-1] if len(basket_returns) > 0 else 0
@@ -364,11 +378,8 @@ class ThemeDiscoveryService:
 
         # Calculate RS vs SPY (1-month compounded)
         spy_return_1m = _compound_return(spy_returns, 21)
-        relative_return = basket_return_1m - spy_return_1m
-
         # Convert to RS rating (0-100 scale, 50 = market, 100 = +10% outperformance)
-        basket_rs_vs_spy = 50 + (relative_return * 500)  # +1% = 55, +10% = 100
-        basket_rs_vs_spy = max(0, min(100, basket_rs_vs_spy))
+        basket_rs_vs_spy = theme_relative_return_score(basket_return_1m, spy_return_1m)
 
         # Breadth metrics
         num_above_50ma = sum(1 for s, p in current_prices.items() if s in ma_50 and p > ma_50[s])
