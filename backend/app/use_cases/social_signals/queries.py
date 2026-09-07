@@ -83,6 +83,7 @@ class SocialSignalQueries:
             "setup_score": state_input.get("setup_score"),
             "readiness": ("ready" if state_input.get("setup_ready") is True else
                           "not ready" if state_input.get("setup_ready") is False else None),
+            "market_exposure": state_input.get("market_exposure"),
             "rs_rating_1m": (market_input or {}).get("rs_rating_1m"),
             "rs_rating_3m": (market_input or {}).get("rs_rating_3m"),
             "group_rank": (market_input or {}).get("group_rank"),

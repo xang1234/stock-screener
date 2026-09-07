@@ -33,6 +33,7 @@ import { useMarket } from '../../contexts/MarketContext';
 import { marketFlag } from '../../utils/marketFlags';
 import { formatLocalCurrency } from '../../utils/formatUtils';
 import { formatSnapshotFreshnessLabel } from '../../utils/snapshotFreshness';
+import DailySocialSignalsCard from '../../features/socialSignals/DailySocialSignalsCard';
 
 const EMPTY_ROWS = [];
 const DEFAULT_TOP_RESULTS = 20;
@@ -45,7 +46,7 @@ function formatNumber(value, digits = 0) {
   });
 }
 
-function DailyMarketSnapshotTab() {
+function DailyMarketSnapshotTab({ showSocialSignals = false, onOpenSocialSignals }) {
   const { selectedMarket } = useMarket();
   const snapshotQuery = useQuery({
     queryKey: ['dailySnapshot', selectedMarket],
@@ -214,6 +215,10 @@ function DailyMarketSnapshotTab() {
       </Grid>
 
       <MarketHealthExposure exposure={snapshot?.market_health_exposure} />
+
+      {showSocialSignals ? (
+        <DailySocialSignalsCard market={selectedMarket} onOpen={onOpenSocialSignals} />
+      ) : null}
 
       {snapshot?.correction_survivors?.available === true && (
         <CorrectionSurvivorsPanel

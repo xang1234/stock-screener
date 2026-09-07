@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...database import get_db
@@ -80,7 +81,12 @@ def list_content_sources(
             if pipeline in normalize_pipelines(source.pipelines)
         ]
 
-    return [ContentSourceResponse.model_validate(source) for source in sources]
+    social_ids = set(db.scalars(select(
+        SocialSourceConfiguration.content_source_id
+    )).all())
+    return [ContentSourceResponse.model_validate(source).model_copy(
+        update={"social_managed": source.id in social_ids}
+    ) for source in sources]
 
 
 @router.post("/sources", response_model=ContentSourceResponse)

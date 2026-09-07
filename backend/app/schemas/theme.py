@@ -71,6 +71,7 @@ class ContentSourceResponse(BaseModel):
     total_items_fetched: int
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
+    social_managed: bool = False
 
     @field_validator("pipelines", mode="before")
     @classmethod

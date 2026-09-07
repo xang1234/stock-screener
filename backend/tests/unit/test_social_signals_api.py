@@ -27,7 +27,10 @@ async def _request(db_session, method, path, **kwargs):
         app.dependency_overrides.pop(get_db, None)
 
 
-def _publish_rows(db, records, *, observations=None, context=None):
+def _publish_rows(
+    db, records, *, observations=None, context=None,
+    theme_evidence=None, projection=None,
+):
     from app.infra.db.models.social_signals import (
         SocialSignalRun, SocialSignalRunPointer, SocialSignalSnapshot,
     )
@@ -46,9 +49,11 @@ def _publish_rows(db, records, *, observations=None, context=None):
                 "2": {"list_id": "222", "name": "Two", "version": 1},
             },
             "observations": observations or {"1": {}, "2": {}},
-            "prepared": {"context": context or {
-                "formula_version": "social-signal-v1",
-            }},
+            "prepared": {
+                "context": context or {"formula_version": "social-signal-v1"},
+                "theme_evidence": theme_evidence or [],
+                "projection": projection or {},
+            },
         },
         feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
         created_at=records[0].latest_mention,
@@ -271,7 +276,7 @@ async def test_published_queue_exposes_frozen_candidate_context(
             "window_days": 7,
             "state_input": {
                 "security_kind": "stock", "setup_score": "77",
-                "setup_ready": True,
+                "setup_ready": True, "market_exposure": "65",
             },
             "state_decision": {"reasons": ["setup_ready", "theme_confirmed"]},
             "social_result": {
@@ -305,12 +310,72 @@ async def test_published_queue_exposes_frozen_candidate_context(
     assert explanation["security_kind"] == "stock"
     assert explanation["setup_score"] == "77"
     assert explanation["readiness"] == "ready"
+    assert explanation["market_exposure"] == "65"
     assert explanation["rs_rating_1m"] == "89"
     assert explanation["rs_rating_3m"] == "93"
     assert explanation["group_rank"] == 4
     assert explanation["theme"] == "ai_infrastructure"
     assert explanation["acceleration"] == "2.5"
     assert explanation["post_memberships"] == ["111"]
+
+
+@pytest.mark.asyncio
+async def test_theme_pulse_keeps_social_and_market_strength_distinct(
+    db_session, social_runtime, monkeypatch
+):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from app.domain.social_signals.records import SocialSnapshotRecord
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    record = SocialSnapshotRecord(
+        "published-1", "HK:0700", "0700", "HK", "watch",
+        Decimal("84"), Decimal("71"), Decimal("78.8"), (), (), now,
+        "0700", "HK:0700", 7, 2, 2, 2,
+    )
+    context = {"formula_version": "social-signal-v1", "candidates": [{
+        "candidate_key": "HK:0700", "window_days": 7,
+        "social_result": {"social_score": "84", "components": []},
+        "confirmation": {"components": []}, "state_input": {},
+        "state_decision": {"reasons": []},
+    }]}
+    evidence = [{
+        "theme_key": "ai_datacentres", "market": "HK",
+        "benchmark_symbol": "HSI", "accepted_company_count": 5,
+        "components": [["basket_rs_vs_benchmark", "70"], ["avg_rs_rating", "72"]],
+        "measured_company_counts": [["basket_rs_vs_benchmark", 4], ["avg_rs_rating", 4]],
+        "reasons": [], "membership": [{"canonical_symbol": "0700"}],
+    }]
+    projection = {"proposals": [
+        {"theme_key": "ai_datacentres"}, {"theme_key": "robotics"},
+    ], "resolutions": [
+        {"market": "HK", "symbol": "0700", "company_count_eligible": True,
+         "company_id": "tencent"},
+        {"market": "HK", "symbol": "9988", "company_count_eligible": True,
+         "company_id": "alibaba"},
+    ]}
+    _publish_rows(
+        db_session, (record,), context=context,
+        theme_evidence=evidence, projection=projection,
+    )
+
+    response = await _request(
+        db_session, "GET", "/api/v1/social-signals/theme-pulse?market=HK"
+    )
+
+    assert response.status_code == 200
+    by_key = {item["theme_key"]: item for item in response.json()["items"]}
+    assert by_key["ai_datacentres"]["social_strength"] == 84.0
+    assert by_key["ai_datacentres"]["market_strength"] == 71.0
+    assert by_key["ai_datacentres"]["measured_company_count"] == 4
+    assert by_key["ai_datacentres"]["benchmark_symbol"] == "HSI"
+    assert by_key["robotics"]["status"] == "discovering"
+    assert by_key["robotics"]["social_strength"] is None
+    assert by_key["robotics"]["market_strength"] is None
 
 
 @pytest.mark.asyncio

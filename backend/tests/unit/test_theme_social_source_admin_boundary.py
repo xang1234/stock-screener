@@ -118,6 +118,24 @@ async def test_ordinary_theme_source_operations_remain_available(
 
 
 @pytest.mark.asyncio
+async def test_legacy_source_inventory_marks_social_rows_as_managed_elsewhere(
+    db_session, social_sources, monkeypatch
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    _, rows = social_sources
+
+    response = await _request(
+        db_session, "GET", "/api/v1/themes/sources?active_only=false"
+    )
+
+    assert response.status_code == 200
+    by_id = {row["id"]: row for row in response.json()}
+    assert all(by_id[int(row.source_id)]["social_managed"] is True for row in rows)
+
+
+@pytest.mark.asyncio
 async def test_live_theme_detail_unions_legacy_and_accepted_social_membership(
     db_session, social_sources, monkeypatch
 ):

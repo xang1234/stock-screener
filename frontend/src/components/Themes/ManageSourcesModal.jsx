@@ -333,7 +333,9 @@ export function ManageSourcesContent() {
                     }}
                   >
                     <TableCell>
-                      {editingId === source.id ? (
+                      {source.social_managed ? (
+                        <Chip size="small" color="info" label="Managed in Operations → Social Sources" />
+                      ) : editingId === source.id ? (
                         <Box display="flex" gap={0.5}>
                           <IconButton
                             size="small"

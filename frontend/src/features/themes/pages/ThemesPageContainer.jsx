@@ -30,6 +30,8 @@ import ThemeInsightsCards from '../components/ThemeInsightsCards';
 import ThemesFiltersPanel from '../components/ThemesFiltersPanel';
 import ThemesPageHeader from '../components/ThemesPageHeader';
 import ThemesRankingsTable from '../components/ThemesRankingsTable';
+import SocialThemePulse from '../../socialSignals/SocialThemePulse';
+import { useMarket } from '../../../contexts/MarketContext';
 
 const PAGE_SIZE = 50;
 const VALID_THEME_VIEWS = new Set(['grouped', 'flat']);
@@ -57,7 +59,8 @@ function ThemesPage() {
   const [bootstrapSettledVariants, setBootstrapSettledVariants] = useState({});
   const [dismissingAlertId, setDismissingAlertId] = useState(null);
 
-  const { runtimeReady, uiSnapshots } = useRuntime();
+  const { runtimeReady, uiSnapshots, features = {} } = useRuntime();
+  const { selectedMarket } = useMarket();
   const { isPipelineRunning, startPipeline } = usePipeline();
   const queryClient = useQueryClient();
 
@@ -404,6 +407,8 @@ function ThemesPage() {
         onDismissAlert={handleDismissAlert}
         dismissingAlertId={dismissingAlertId}
       />
+
+      <SocialThemePulse enabled={Boolean(features.social_signals)} market={selectedMarket} />
 
       <ThemesFiltersPanel
         themeView={themeView}

@@ -161,6 +161,37 @@ def test_social_signal_operations_snapshot_uses_db_runtime_and_shared_ttls(db_se
 
     assert (payload["mode"], payload["provider"]) == ("validation", "official")
     assert (payload["source_count"], payload["enabled_source_count"]) == (2, 2)
+    assert payload["archived_source_count"] == 0
+    assert payload["participating_source_count"] == 0
+    assert payload["unknown_company_identity_count"] == 0
     assert payload["provider_lease_ttl_seconds"] == 30
     assert payload["manual_cooldown_ttl_seconds"] == 60
     assert payload["provider_cooldown_ttl_seconds"] == 90
+    assert payload["budget"]["limit_usd"] == "2"
+    assert payload["budget"]["timezone"] == "Asia/Singapore"
+    assert payload["budget"]["pricing_status"] == "absent"
+
+
+def test_social_signal_health_reports_pricing_blocks_without_secret_configuration(db_session):
+    from app.models.app_settings import AppSetting
+    from app.services.social_signal_operations_service import SocialSignalOperationsService
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    SocialSourceAdminService(db_session).ensure_seed_sources()
+    db_session.add_all([
+        AppSetting(key="social_llm_daily_limit_usd", value="2", category="social"),
+        AppSetting(key="social_llm_budget_timezone", value="Asia/Singapore", category="social"),
+        AppSetting(key="social_llm_pricing", category="social", value='{"version":"v2","models":{"small":{"provider":"openai","actual_models":["small"],"input_usd_per_million":"1","output_usd_per_million":"2"}}}'),
+        AppSetting(key="social_llm_pricing_blocks", category="social", value='{"small":{"versions":{"v2":"billing_mismatch"}}}'),
+    ])
+    db_session.commit()
+
+    payload = SocialSignalOperationsService(
+        redis_client=False,
+        clock=lambda: datetime(2026, 9, 7, 12, tzinfo=timezone.utc),
+    ).snapshot(db_session)
+
+    assert payload["budget"]["pricing_status"] == "configured_with_blocks"
+    assert payload["budget"]["pricing_version"] == "v2"
+    assert payload["budget"]["blocked_models"] == ["small"]
+    assert "billing_mismatch" not in str(payload)

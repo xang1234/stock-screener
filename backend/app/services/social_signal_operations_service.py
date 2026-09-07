@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+import json
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import settings
-from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMBudgetDay
+from app.infra.db.models.social_analysis import (
+    SocialExtractionWork, SocialLLMBudgetDay, SocialThemeAssociation,
+)
 from app.infra.db.models.social_signals import (
     SocialSignalRun, SocialSourceConfiguration, SocialSourceRegistry,
 )
+from app.models.app_settings import AppSetting
 from app.services.social_signal_runtime_gate import (
     MANUAL_COOLDOWN_KEY,
     PROVIDER_COOLDOWN_KEY,
@@ -74,6 +80,54 @@ class SocialSignalOperationsService:
         source_outcomes = run.source_outcomes_json if run else {}
         prepared = run.application_progress_json.get("prepared", {}) if run else {}
         context = prepared.get("context") or {}
+        unknown_identity_count = db.scalar(select(func.count()).select_from(
+            SocialThemeAssociation
+        ).where(
+            SocialThemeAssociation.company_key.is_(None),
+            SocialThemeAssociation.state == "proposed",
+        )) or 0
+        policy_rows = db.scalars(select(AppSetting).where(AppSetting.key.in_({
+            "social_llm_daily_limit_usd", "social_llm_budget_timezone",
+            "social_llm_pricing", "social_llm_pricing_blocks",
+        }))).all()
+        policy = {row.key: row.value for row in policy_rows}
+        budget_limit = policy.get(
+            "social_llm_daily_limit_usd", str(budget.limit_usd) if budget else "2"
+        )
+        budget_timezone = policy.get(
+            "social_llm_budget_timezone", budget.timezone if budget else "Asia/Singapore"
+        )
+        pricing_status, pricing_version, blocked_models = "absent", None, []
+        if "social_llm_pricing" in policy:
+            try:
+                pricing = json.loads(policy["social_llm_pricing"])
+                if (not isinstance(pricing.get("version"), str)
+                        or not isinstance(pricing.get("models"), dict)):
+                    raise ValueError("invalid_pricing")
+                pricing_status, pricing_version = "configured", pricing["version"]
+                blocks = json.loads(policy.get("social_llm_pricing_blocks", "{}"))
+                blocked_models = sorted(
+                    model for model, value in blocks.items()
+                    if isinstance(value, dict) and (
+                        value.get("version") == pricing_version
+                        or (isinstance(value.get("versions"), dict)
+                            and pricing_version in value["versions"])
+                    )
+                )
+                if blocked_models:
+                    pricing_status = "configured_with_blocks"
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pricing_status, pricing_version, blocked_models = "invalid", None, []
+        next_reset_at = _utc(budget.period_end_utc) if budget else None
+        if next_reset_at is None:
+            try:
+                local = now.astimezone(ZoneInfo(budget_timezone))
+                next_day = local.date() + timedelta(days=1)
+                next_reset_at = datetime.combine(
+                    next_day, time.min, ZoneInfo(budget_timezone)
+                ).astimezone(timezone.utc)
+            except (ValueError, KeyError):
+                next_reset_at = None
 
         def ttl(key):
             if not self.redis:
@@ -83,7 +137,10 @@ class SocialSignalOperationsService:
 
         spent = budget.actual_usd if budget else 0
         reserved = budget.reserved_usd if budget else 0
-        limit = budget.limit_usd if budget else 0
+        try:
+            limit = budget.limit_usd if budget else Decimal(str(budget_limit))
+        except (InvalidOperation, ValueError):
+            limit = Decimal(0)
         return {
             "generated_at": now.isoformat(),
             "mode": registry.mode if registry else "off",
@@ -94,17 +151,24 @@ class SocialSignalOperationsService:
             "collection_status": "complete" if run and set(observations) == set(run.application_progress_json.get("sources", {})) else "incomplete",
             "processing_status": "complete" if run and run.status in {"staged", "completed", "published"} else "pending",
             "history_by_source": {key: value.get("history_status", "unknown") for key, value in source_outcomes.items()},
-            "source_count": len(sources),
+            "source_count": sum(row.lifecycle_state != "archived" for row in sources),
+            "archived_source_count": sum(row.lifecycle_state == "archived" for row in sources),
             "enabled_source_count": sum(row.lifecycle_state == "enabled" for row in sources),
+            "participating_source_count": len(observations),
+            "unknown_company_identity_count": unknown_identity_count,
             "last_collection_at": last_collection.isoformat() if last_collection else None,
             "social_fresh": bool(last_collection and (now - last_collection).total_seconds() <= settings.social_stale_after_hours * 3600),
             "formula_version": context.get("formula_version"),
             "extraction_versions": context.get("extraction_versions", []),
             "model_labels": sorted({row.actual_model or row.selected_model for row in work}),
             "budget": {
+                "limit_usd": str(budget_limit), "timezone": budget_timezone,
                 "spent_usd": str(spent), "reserved_usd": str(reserved),
                 "remaining_usd": str(max(0, limit - spent - reserved)),
-                "next_reset_at": _utc(budget.period_end_utc).isoformat() if budget else None,
+                "next_reset_at": next_reset_at.isoformat() if next_reset_at else None,
+                "pricing_status": pricing_status,
+                "pricing_version": pricing_version,
+                "blocked_models": blocked_models,
             },
             "backlog": {
                 "waiting": len(waiting),

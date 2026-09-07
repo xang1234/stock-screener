@@ -35,7 +35,10 @@ function MarketScanPage() {
   // Markets mounts the TradingView widget (~180 external requests) — only
   // pay that cost when the user opens that tab.
   const subTabs = useMemo(() => ([
-    { id: 'daily_snapshot', label: 'Daily Snapshot', render: () => <DailyMarketSnapshotTab /> },
+    { id: 'daily_snapshot', label: 'Daily Snapshot', render: () => (
+      <DailyMarketSnapshotTab showSocialSignals={features.social_signals}
+        onOpenSocialSignals={() => setSelectedTab(1)} />
+    ) },
     ...(features.social_signals
       ? [{ id: 'social_signals', label: 'Social Signals', render: () => renderLazyTab(SocialSignalsTab) }]
       : []),

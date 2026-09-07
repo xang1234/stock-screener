@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import apiClient from './client';
 import {
+  createSocialSource, getSocialAdminHealth, getSocialAdminSources,
   getSocialContext, getSocialEvidence, getSocialQueue, getSocialUnresolved,
+  testSocialSource,
   socialQueueKey,
 } from './socialSignals';
 
@@ -49,6 +51,27 @@ describe('Social Signal read client', () => {
       ['/v1/social-signals/candidates/JP%3A6758%2Fprimary/evidence', {
         params: { window: '1d' },
       }],
+    ]);
+  });
+
+  it('sends the admin key only on administrator calls', async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    apiClient.post = vi.fn().mockResolvedValue({ data: {} });
+    await getSocialAdminHealth('secret');
+    await getSocialAdminSources('secret', true);
+    await createSocialSource('secret', { name: 'Readable', list_ref: '123' });
+    await testSocialSource('secret', 9, 3);
+    expect(apiClient.get.mock.calls).toEqual([
+      ['/v1/social-signals/admin/health', { headers: { 'X-Admin-Key': 'secret' } }],
+      ['/v1/social-signals/admin/sources', {
+        params: { include_archived: true }, headers: { 'X-Admin-Key': 'secret' },
+      }],
+    ]);
+    expect(apiClient.post.mock.calls).toEqual([
+      ['/v1/social-signals/admin/sources', { name: 'Readable', list_ref: '123' },
+        { headers: { 'X-Admin-Key': 'secret' } }],
+      ['/v1/social-signals/admin/sources/9/test', { expected_version: 3 },
+        { headers: { 'X-Admin-Key': 'secret' } }],
     ]);
   });
 });

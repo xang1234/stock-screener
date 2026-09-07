@@ -117,23 +117,80 @@ def theme_pulse(market: MarketCode = Query(...), db: Session = Depends(get_db)):
         return {"supported": True, "available": False,
                 "reason_code": "no_published_run", "market": market, "items": []}
     run = db.get(SocialSignalRun, pointer.run_id)
-    frozen = run.application_progress_json.get("prepared", {}).get("theme_evidence", [])
+    prepared = run.application_progress_json.get("prepared", {})
+    frozen = prepared.get("theme_evidence", [])
+    context = prepared.get("context") or {}
+    projection = prepared.get("projection") or {}
+    proposals_by_theme = {}
+    theme_names = {}
+    for claim, resolution in zip(
+        projection.get("proposals", []), projection.get("resolutions", [])
+    ):
+        if resolution.get("market") != market:
+            continue
+        theme_key = claim.get("theme_key")
+        if not isinstance(theme_key, str) or not theme_key:
+            continue
+        proposals_by_theme.setdefault(theme_key, []).append(resolution)
+        theme_names.setdefault(theme_key, claim.get("raw_theme"))
+
+    def number(value):
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def social_strength(theme_key):
+        values = []
+        symbols = {resolution.get("symbol") for resolution in proposals_by_theme.get(theme_key, [])}
+        for candidate in context.get("candidates", []):
+            confirmation = dict((candidate.get("confirmation") or {}).get("components", ()))
+            selected_theme = (confirmation.get("theme") or {}).get("selected_key")
+            candidate_market, _, symbol = candidate.get("candidate_key", "").partition(":")
+            if (candidate.get("window_days") != 7 or candidate_market != market
+                    or (selected_theme != theme_key and symbol not in symbols)):
+                continue
+            score = number((candidate.get("social_result") or {}).get("social_score"))
+            if score is not None:
+                values.append(score)
+        return sum(values) / len(values) if values else None
+
     items = []
+    observed_keys = set()
     for evidence in frozen:
         if evidence.get("market") != market:
             continue
+        observed_keys.add(evidence["theme_key"])
         components = dict(evidence.get("components", ()))
         members = evidence.get("membership", ())
+        market_values = [number(value) for value in components.values()]
+        market_values = [value for value in market_values if value is not None]
+        measured_counts = dict(evidence.get("measured_company_counts", ()))
         items.append({
             "theme_key": evidence["theme_key"],
-            "name": evidence["theme_key"].replace("_", " ").title(),
-            "status": "confirmed" if any(value is not None for value in components.values())
+            "name": theme_names.get(evidence["theme_key"])
+                    or evidence["theme_key"].replace("_", " ").title(),
+            "status": "confirmed" if market_values
                       else "insufficient_market_data",
+            "social_strength": social_strength(evidence["theme_key"]),
+            "market_strength": sum(market_values) / len(market_values) if market_values else None,
             "accepted_company_count": evidence.get("accepted_company_count", 0),
+            "measured_company_count": max(measured_counts.values(), default=0),
+            "benchmark_symbol": evidence.get("benchmark_symbol"),
             "components": components,
-            "measured_company_counts": dict(evidence.get("measured_company_counts", ())),
+            "measured_company_counts": measured_counts,
             "reasons": dict(evidence.get("reasons", ())),
             "accepted_symbols": sorted({item["canonical_symbol"] for item in members}),
+        })
+    for theme_key in sorted(set(proposals_by_theme) - observed_keys):
+        items.append({
+            "theme_key": theme_key,
+            "name": theme_names.get(theme_key) or theme_key.replace("_", " ").title(),
+            "status": "discovering", "social_strength": social_strength(theme_key),
+            "market_strength": None, "accepted_company_count": 0,
+            "measured_company_count": 0, "benchmark_symbol": None,
+            "components": {}, "measured_company_counts": {},
+            "reasons": {"state": "candidate_theme"}, "accepted_symbols": [],
         })
     items.sort(key=lambda item: item["theme_key"])
     return {"supported": True, "available": True, "reason_code": None,
