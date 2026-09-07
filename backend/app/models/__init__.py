@@ -61,7 +61,16 @@ from app.infra.db.models.options_analytics import (
     OptionsAnalyticsStrikePoint,
 )
 
+from app.infra.db.models.social_signals import (
+    ContentPipelineEligibility, SocialSourceRegistry, SocialSourceConfiguration,
+    SocialSourceAuditEvent, SocialPostSource, SocialContentMetrics,
+    SocialPostTicker, SocialSignalRun, SocialSignalSnapshot, SocialSignalRunPointer,
+)
+
 __all__ = [
+    "ContentPipelineEligibility", "SocialSourceRegistry", "SocialSourceConfiguration",
+    "SocialSourceAuditEvent", "SocialPostSource", "SocialContentMetrics",
+    "SocialPostTicker", "SocialSignalRun", "SocialSignalSnapshot", "SocialSignalRunPointer",
     "StockPrice",
     "StockFundamental",
     "StockTechnical",

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models.theme import ThemeCluster, ThemeMention
+from app.models.theme import ThemeCluster, ThemeMention, ContentSource, ContentItem
+from app.services.theme_evidence_eligibility_service import grant_eligibility
 from app.services.theme_discovery_service import ThemeDiscoveryService
 
 
@@ -28,8 +29,15 @@ def test_twitter_source_quality_weight_remains_0_70() -> None:
     db.add(cluster)
     db.commit()
 
+    source = ContentSource(name="@alice", source_type="twitter", is_active=True)
+    db.add(source)
+    db.flush()
+    item = ContentItem(source_id=source.id, source_type="twitter")
+    db.add(item)
+    db.flush()
+    grant_eligibility(db, item.id, "technical", "legacy", source.id, datetime.now(timezone.utc))
     mention = ThemeMention(
-        content_item_id=1,
+        content_item_id=item.id,
         source_type="twitter",
         source_name="@alice",
         raw_theme="AI Infrastructure",

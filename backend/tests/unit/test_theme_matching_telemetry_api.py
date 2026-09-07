@@ -310,6 +310,19 @@ def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
 
 
 def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
+    from datetime import timezone
+    from app.models.theme import ContentItem, ContentSource
+    from app.services.theme_evidence_eligibility_service import grant_eligibility
+    def legacy_item(source_type):
+        source = ContentSource(name=source_type, source_type=source_type, is_active=True)
+        db_session.add(source)
+        db_session.flush()
+        item = ContentItem(source_id=source.id, source_type=source_type)
+        db_session.add(item)
+        db_session.flush()
+        grant_eligibility(db_session, item.id, "technical", "legacy", source.id, datetime.now(timezone.utc))
+        return item.id
+
     now = datetime.utcnow()
     candidate = ThemeCluster(
         name="AI Grid",
@@ -327,6 +340,7 @@ def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
     db_session.add_all(
         [
             ThemeMention(
+                content_item_id=legacy_item("news"),
                 source_type="news",
                 source_name="news",
                 raw_theme="AI Grid",
@@ -340,6 +354,7 @@ def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
                 mentioned_at=now - timedelta(days=1),
             ),
             ThemeMention(
+                content_item_id=legacy_item("substack"),
                 source_type="substack",
                 source_name="substack",
                 raw_theme="AI Grid",

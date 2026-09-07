@@ -22,6 +22,7 @@ from typing import Any, Optional
 import numpy as np
 from sqlalchemy import func, case, distinct, or_
 from sqlalchemy.orm import Session
+from .theme_evidence_eligibility_service import legacy_eligibility_exists
 
 from ..models.theme import (
     ThemeCluster,
@@ -878,6 +879,7 @@ class ThemeTaxonomyService:
         for theme in themes:
             mention_count = self.db.query(func.count(ThemeMention.id)).filter(
                 ThemeMention.theme_cluster_id == theme.id,
+                legacy_eligibility_exists(ThemeMention.content_item_id, theme.pipeline),
             ).scalar() or 0
             if mention_count > best_mentions:
                 best_mentions = mention_count
@@ -897,6 +899,7 @@ class ThemeTaxonomyService:
         for theme in noise_themes:
             mention_count = self.db.query(func.count(ThemeMention.id)).filter(
                 ThemeMention.theme_cluster_id == theme.id,
+                legacy_eligibility_exists(ThemeMention.content_item_id, theme.pipeline),
             ).scalar() or 0
 
             stock_count = self.db.query(func.count(ThemeConstituent.id)).filter(

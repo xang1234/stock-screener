@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session, aliased
+from .theme_evidence_eligibility_service import legacy_eligibility_exists, grant_eligibility, is_social_owned_source
+from ..infra.db.models.social_signals import ContentPipelineEligibility
 
 from ..models.theme import (
     ContentItem,
@@ -115,7 +117,7 @@ def reconcile_source_pipeline_change(
     added = sorted(new_set - old_set)
     removed = sorted(old_set - new_set)
 
-    if not added and not removed:
+    if (not added and not removed) or is_social_owned_source(db, source_id):
         return {
             "added_pipelines": [],
             "removed_pipelines": [],
@@ -131,7 +133,11 @@ def reconcile_source_pipeline_change(
     cursor = 0
     while True:
         chunk_rows = db.query(ContentItem.id).filter(
-            ContentItem.source_id == source_id,
+            db.query(ContentPipelineEligibility.content_item_id).filter(
+                ContentPipelineEligibility.content_item_id == ContentItem.id,
+                ContentPipelineEligibility.channel == "legacy",
+                ContentPipelineEligibility.originating_source_id == source_id,
+            ).exists(),
             ContentItem.id > cursor,
         ).order_by(ContentItem.id.asc()).limit(chunk_size).all()
         if not chunk_rows:
@@ -152,7 +158,13 @@ def reconcile_source_pipeline_change(
                 ).all()
             }
             for item_id in item_ids:
+                observed_at = db.query(ContentPipelineEligibility.observed_at).filter_by(
+                    content_item_id=item_id, channel="legacy", originating_source_id=source_id,
+                ).order_by(ContentPipelineEligibility.observed_at).first()[0]
+                if observed_at.tzinfo is None:
+                    observed_at = observed_at.replace(tzinfo=timezone.utc)
                 for pipeline in added:
+                    grant_eligibility(db, item_id, pipeline, "legacy", source_id, observed_at)
                     key = (item_id, pipeline)
                     if key in existing_pairs:
                         existing_conflicts += 1
@@ -421,6 +433,7 @@ def compute_pipeline_observability(
     ).filter(
         ThemeMention.pipeline == pipeline,
         ThemeMention.mentioned_at >= cutoff,
+        legacy_eligibility_exists(ThemeMention.content_item_id, pipeline),
     ).group_by(
         ThemeMention.match_method
     ).all()

@@ -19,6 +19,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from ..models.theme import ContentSource, ContentItem, ContentItemPipelineState
+from .theme_evidence_eligibility_service import grant_eligibility, is_social_owned_source, legacy_sources, legacy_eligibility_exists
 from ..models.app_settings import AppSetting
 from ..config import settings
 from .language_detection_service import build_detection_text, detect_language
@@ -307,6 +308,8 @@ class ContentIngestionService:
                 from the last N days. Used for backfilling gaps. When backfilling,
                 last_fetched_at is NOT updated so normal runs resume correctly.
         """
+        if is_social_owned_source(self.db, source):
+            return 0
         fetcher = self.get_fetcher(source.source_type)
 
         # Determine since date
@@ -369,6 +372,9 @@ class ContentIngestionService:
             else:
                 self._seed_pipeline_state_rows_for_item(existing, source_pipelines)
 
+            for pipeline in source_pipelines:
+                grant_eligibility(self.db, (existing or content_item).id, pipeline, "legacy", source_id, datetime.now(timezone.utc))
+
         # Commit all new items
         if new_count > 0:
             self.db.commit()
@@ -387,6 +393,12 @@ class ContentIngestionService:
 
         logger.info(f"Ingested {new_count} new items from {source.name}")
         return new_count
+
+    def fetch_source_by_id(self, source_id: int, lookback_days: int | None = None) -> int:
+        source = self.db.get(ContentSource, source_id)
+        if source is None:
+            return 0
+        return self.fetch_source(source, lookback_days=lookback_days)
 
     def _persist_twitter_since_id(self, source_id: int, items: list[dict]) -> None:
         candidate_ids = [
@@ -420,9 +432,9 @@ class ContentIngestionService:
             lookback_days: If set, re-fetch articles from the last N days
                 (backfill mode). Deduplication ensures no duplicates.
         """
-        sources = self.db.query(ContentSource).filter(
+        sources = legacy_sources(self.db, self.db.query(ContentSource).filter(
             ContentSource.is_active == True
-        ).order_by(ContentSource.priority.desc()).all()
+        ).order_by(ContentSource.priority.desc()))
 
         results = {
             "total_sources": len(sources),
@@ -480,7 +492,8 @@ class ContentIngestionService:
     def get_unprocessed_items(self, limit: int = 100) -> list[ContentItem]:
         """Get content items that haven't been processed by LLM yet"""
         return self.db.query(ContentItem).filter(
-            ContentItem.is_processed == False
+            ContentItem.is_processed == False,
+            legacy_eligibility_exists(ContentItem.id, "technical") | legacy_eligibility_exists(ContentItem.id, "fundamental"),
         ).order_by(
             ContentItem.published_at.desc()
         ).limit(limit).all()

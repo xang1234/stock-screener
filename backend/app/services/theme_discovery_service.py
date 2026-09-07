@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import case, func, and_, or_
 from sqlalchemy.orm import Session
+from app.services.theme_evidence_eligibility_service import legacy_eligibility_exists
+from app.infra.db.models.social_signals import ContentPipelineEligibility
 
 from ..models.theme import (
     ThemeCluster,
@@ -101,18 +103,19 @@ class ThemeDiscoveryService:
     def _count_active_ingestion_days(self, since: datetime, until: datetime) -> int:
         """Count distinct calendar days with at least one ContentItem ingested.
 
-        Uses ContentItem.fetched_at (when the pipeline ran), not published_at,
-        so it reflects actual pipeline uptime. Only counts items from active sources.
+        Uses the first independent legacy observation, so a Social insertion
+        cannot manufacture an ingestion day. Only active legacy origins count.
         This is theme-agnostic — pipeline downtime affects all themes equally.
         """
-        from sqlalchemy import cast, Date
         count = self.db.query(
-            func.count(func.distinct(cast(ContentItem.fetched_at, Date)))
+            func.count(func.distinct(func.date(ContentPipelineEligibility.observed_at)))
         ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
+            ContentSource, ContentPipelineEligibility.originating_source_id == ContentSource.id
         ).filter(
-            ContentItem.fetched_at >= since,
-            ContentItem.fetched_at <= until,
+            ContentPipelineEligibility.channel == "legacy",
+            ContentPipelineEligibility.pipeline == self.pipeline,
+            ContentPipelineEligibility.observed_at >= since,
+            ContentPipelineEligibility.observed_at <= until,
             ContentSource.is_active == True,
         ).scalar() or 0
         return count
@@ -172,30 +175,37 @@ class ThemeDiscoveryService:
         date_7d = as_of_date - timedelta(days=7)
         date_30d = as_of_date - timedelta(days=30)
 
-        rows = self.db.query(
+        # Multiple extraction channels/aliases may describe the same canonical
+        # post. Each post contributes once to legacy attention and sentiment.
+        posts = self.db.query(
             ThemeMention.theme_cluster_id,
-            func.sum(case((ThemeMention.mentioned_at >= date_1d, 1), else_=0)).label("mentions_1d"),
-            func.sum(case((ThemeMention.mentioned_at >= date_7d, 1), else_=0)).label("mentions_7d"),
-            func.count(ThemeMention.id).label("mentions_30d"),
-            func.sum(
+            ThemeMention.content_item_id,
+            func.max(ThemeMention.mentioned_at).label("mentioned_at"),
+            func.avg(
                 case(
                     (ThemeMention.sentiment == "bullish", ThemeMention.confidence),
                     (ThemeMention.sentiment == "bearish", -ThemeMention.confidence),
                     else_=0.0,
                 )
-            ).label("sentiment_weighted_sum"),
+            ).label("sentiment"),
         ).join(
             ContentItem, ThemeMention.content_item_id == ContentItem.id
-        ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
         ).filter(
             ThemeMention.theme_cluster_id.in_(cluster_ids),
             ThemeMention.mentioned_at >= date_30d,
             ThemeMention.mentioned_at <= as_of_date,
-            ContentSource.is_active == True,
+            legacy_eligibility_exists(ContentItem.id, self.pipeline, active_only=True),
+            ThemeMention.pipeline == self.pipeline,
         ).group_by(
-            ThemeMention.theme_cluster_id
-        ).all()
+            ThemeMention.theme_cluster_id, ThemeMention.content_item_id,
+        ).subquery()
+        rows = self.db.query(
+            posts.c.theme_cluster_id,
+            func.sum(case((posts.c.mentioned_at >= date_1d, 1), else_=0)).label("mentions_1d"),
+            func.sum(case((posts.c.mentioned_at >= date_7d, 1), else_=0)).label("mentions_7d"),
+            func.count(posts.c.content_item_id).label("mentions_30d"),
+            func.sum(posts.c.sentiment).label("sentiment_weighted_sum"),
+        ).group_by(posts.c.theme_cluster_id).all()
 
         metrics_by_cluster = {
             cluster_id: self._empty_mention_metrics()
@@ -1128,16 +1138,22 @@ class ThemeDiscoveryService:
         }
 
         mentions = self.db.query(
-            ThemeMention.mentioned_at,
-            ThemeMention.confidence,
-            ThemeMention.source_type,
-            ThemeMention.source_name,
-        ).filter(
+            func.max(ThemeMention.mentioned_at),
+            func.avg(ThemeMention.confidence),
+            ContentSource.source_type,
+            ContentSource.name,
+        ).join(
+            ContentPipelineEligibility,
+            and_(ContentPipelineEligibility.content_item_id == ThemeMention.content_item_id,
+                 ContentPipelineEligibility.pipeline == self.pipeline,
+                 ContentPipelineEligibility.channel == "legacy"),
+        ).join(ContentSource, ContentSource.id == ContentPipelineEligibility.originating_source_id).filter(
             ThemeMention.theme_cluster_id == theme_cluster_id,
             ThemeMention.pipeline == self.pipeline,
             ThemeMention.mentioned_at >= cutoff_30d,
             ThemeMention.mentioned_at <= now,
-        ).all()
+            legacy_eligibility_exists(ThemeMention.content_item_id, self.pipeline),
+        ).group_by(ThemeMention.content_item_id, ContentSource.source_type, ContentSource.name).all()
 
         mentions_7d = 0
         mentions_30d = 0

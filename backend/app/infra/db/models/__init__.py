@@ -1,4 +1,9 @@
 """Feature Store database models."""
+from .social_signals import (
+    ContentPipelineEligibility, SocialSourceRegistry, SocialSourceConfiguration,
+    SocialSourceAuditEvent, SocialPostSource, SocialContentMetrics,
+    SocialPostTicker, SocialSignalRun, SocialSignalSnapshot, SocialSignalRunPointer,
+)
 from .feature_store import (
     FeatureRun,
     FeatureRunPointer,
@@ -13,6 +18,9 @@ from .options_analytics import (
 )
 
 __all__ = [
+    "ContentPipelineEligibility", "SocialSourceRegistry", "SocialSourceConfiguration",
+    "SocialSourceAuditEvent", "SocialPostSource", "SocialContentMetrics",
+    "SocialPostTicker", "SocialSignalRun", "SocialSignalSnapshot", "SocialSignalRunPointer",
     "FeatureRun",
     "FeatureRunPointer",
     "FeatureRunUniverseSymbol",

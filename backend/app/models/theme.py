@@ -21,6 +21,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from ..database import Base
+from ..infra.db.models.social_signals import ContentPipelineEligibility
 
 
 class ContentSource(Base):

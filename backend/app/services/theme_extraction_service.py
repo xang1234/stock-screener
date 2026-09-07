@@ -31,6 +31,7 @@ from ..models.theme import (
 )
 from ..models.app_settings import AppSetting
 from .errors import ProviderQuotaServiceError, ProviderRateLimitServiceError
+from .theme_evidence_eligibility_service import legacy_eligibility_exists
 from .llm import LLMService, LLMError, LLMQuotaExceededError, LLMRateLimitError
 from .llm.config import is_model_supported_for_use_case
 from .security_master_service import SecurityMasterResolver, security_master_resolver
@@ -1157,7 +1158,10 @@ Example themes for this pipeline: {examples_str}
         the item was skipped because its pipeline state is not eligible.
         """
         item = self.db.query(ContentItem).filter(ContentItem.id == item_id).first()
-        if not item:
+        if not item or not self.db.query(ContentItem.id).filter(
+            ContentItem.id == item_id,
+            legacy_eligibility_exists(ContentItem.id, self.pipeline, active_only=True, source_ids=self._get_pipeline_source_ids()),
+        ).first():
             return False, 0
 
         if not self._claim_item_for_processing(item_id):
@@ -1632,8 +1636,7 @@ Example themes for this pipeline: {examples_str}
             ),
         )
 
-        if pipeline_source_ids:
-            query = query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+        query = query.filter(legacy_eligibility_exists(ContentItem.id, self.pipeline, active_only=True, source_ids=pipeline_source_ids))
 
         if item_ids is not None:
             query = query.filter(ContentItem.id.in_(item_ids))
@@ -1732,8 +1735,7 @@ Example themes for this pipeline: {examples_str}
             ContentItemPipelineState.status == "failed_retryable",
             ContentItem.published_at >= cutoff_date,
         )
-        if pipeline_source_ids:
-            query = query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+        query = query.filter(legacy_eligibility_exists(ContentItem.id, self.pipeline, active_only=True, source_ids=pipeline_source_ids))
 
         failed_items = query.order_by(
             ContentItem.published_at.desc()
@@ -1803,8 +1805,7 @@ Example themes for this pipeline: {examples_str}
             ContentItem.published_at >= cutoff_date,
             ~ContentItem.id.in_(self.db.query(mentioned_ids.c.content_item_id)),
         )
-        if pipeline_source_ids:
-            query = query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+        query = query.filter(legacy_eligibility_exists(ContentItem.id, self.pipeline, active_only=True, source_ids=pipeline_source_ids))
 
         silent_failures = query.all()
 

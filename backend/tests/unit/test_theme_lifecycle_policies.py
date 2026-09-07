@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import warnings
 
 import pytest
@@ -98,6 +98,8 @@ def _add_mention(
     )
     db_session.add(content)
     db_session.flush()
+    from app.services.theme_evidence_eligibility_service import grant_eligibility
+    grant_eligibility(db_session, content.id, "technical", "legacy", source.id, published_at.replace(tzinfo=timezone.utc))
     mention = ThemeMention(
         content_item_id=content.id,
         source_type=source.source_type,
