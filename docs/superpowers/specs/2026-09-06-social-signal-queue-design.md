@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-06
 
-**Status:** Approved in design review
+**Status:** Product decisions approved; consolidated after nine-finding review on 2026-09-07. Application implementation has not started.
 
 **Source intent:** Implement the Minervini X-list research and Social Signal
 Queue mockup as a live-only, provider-neutral feature. The July 2026 research
@@ -51,7 +51,7 @@ official X API remains the compliant provider option.
   the display.
 - Reuse existing ingestion, theme identity, SecurityMaster, scan-feature,
   Market-health, stock-detail, and watchlist capabilities.
-- Preserve X-derived theme evidence separately from existing Theme rankings.
+- Share theme discovery across sources while evaluating social attention and market confirmation separately.
 - Support `disabled`, official X API, and proprietary `xui` provider modes
   without changing downstream contracts.
 - Keep the public application buildable, testable, and runnable without the
@@ -73,15 +73,16 @@ official X API remains the compliant provider option.
 - Treating social options-flow claims as verified market data.
 - Historical strategy backtesting.
 - Silently falling back between providers.
-- Making social evidence alter existing Theme rank or momentum calculations.
+- Silently treating social engagement as market confirmation or blending it into legacy attention scores.
 
 ## Domain language
 
-Implementation will add the following terms to `CONTEXT.md`:
+The following terms form the shared implementation vocabulary:
 
 **Social Source**: One administrator-controlled X list supplying read-only
 evidence to the shared Social Signal Queue. A Social Source is represented by a
-`ContentSource` but does not contribute to existing Theme rankings.
+`ContentSource`; it can discover themes and propose company associations without
+feeding social engagement into legacy Theme attention scores.
 
 **Social Post**: One normalized X post stored as the canonical `ContentItem`,
 with separate source-membership, engagement, and ticker-resolution records.
@@ -98,7 +99,7 @@ acceleration, independent authors, engagement, recency, and cross-list
 confirmation.
 
 **Confirmation Score**: A deterministic 0-100 measure derived from existing
-Setup Engine, RS, group-strength, and non-social theme-price evidence.
+Setup Engine, RS, group-strength, and theme market-price evidence independent of engagement.
 
 **Queue Score**: The versioned `0.60 * Social Score + 0.40 * Confirmation Score`
 used by the default Blended ranking mode.
@@ -116,6 +117,17 @@ PostgreSQL and Redis with the public application but the web process never
 loads or exposes `xui-reader`. The public repository owns all provider-neutral
 models, use cases, APIs, UI, and tests. A private image adds the proprietary
 package and Playwright runtime.
+
+Collection ownership is explicit: a `ContentSource` with a
+`SocialSourceConfiguration` belongs exclusively to Social collection, regardless
+of lifecycle state. Existing Theme scheduled polling, bulk/manual ingestion,
+and direct-source ingestion must skip or reject these sources before any
+provider call. Only the dedicated social worker may collect them, including
+administrator-requested tests and refreshes. `SOCIAL_INGEST_PROVIDER=disabled`
+prevents all collection of these sources; the legacy Theme provider setting
+cannot override it. Existing non-social sources retain their current behavior.
+Collected posts may reuse Theme extraction, subject to the separate
+shared-discovery and score-separation requirements below.
 
 This provides the strongest public/private boundary while preserving the
 existing application pipeline.
@@ -164,10 +176,26 @@ image supports `linux/arm64` for Apple Silicon and `linux/amd64` for common
 Docker hosts.
 
 GHCR is not required for development. A documented Compose override can build
-the same worker locally from a checked-out private repository or with a
-BuildKit SSH secret. Neither repository credentials nor package source are
-copied into the public repository, Docker build context, image configuration,
-or image layers.
+the same worker locally using BuildKit SSH access to the pinned private package.
+Keep the private checkout outside the public repository and ordinary build
+context. Private package code must not enter public images, public caches, or
+public build artifacts. The private worker image necessarily contains installed
+xui-reader code; anyone allowed to pull it can extract that code. Restrict private
+image and private build-cache access to people trusted with the package itself.
+Repository credentials must not persist in any image layer or configuration;
+authentication/session data is mounted only at runtime, never baked into images.
+
+The public image supports the application and official X reader without xui.
+The private build installs the pinned reader, its matching Playwright browser,
+and required browser system libraries. Supply build-only Git/SSH tooling and a
+verified GitHub host key in the private build stage, using temporary BuildKit
+credentials. Perform privileged installation during the build, then run as the
+existing non-root worker with browser binaries in a readable, fixed location
+outside the mounted session/data directories. Keep the public/default target
+free of private dependencies even when the Dockerfile includes private targets.
+Verify non-root browser launch against local content, without X access or session
+credentials, on both linux/arm64 and linux/amd64. Package import alone is not a
+sufficient runtime smoke test.
 
 The X automation profile is created by a human login on the Mac and mounted
 from a dedicated, access-restricted Docker volume. It is never built into the
@@ -176,8 +204,36 @@ state can be refreshed; no other service mounts it.
 
 ### Scheduling
 
-Celery Beat dispatches a social refresh every six hours only when a provider is
-enabled. A provider-specific worker consumes the `social_ingestion` queue. A
+**Approved operating modes:** `SOCIAL_SIGNALS_MODE` is `off|validation|live`,
+defaulting to `off`, and replaces the previously proposed enabled boolean.
+Off schedules no collection or LLM processing. Validation performs real bounded
+collection and analysis, but results are administrator-only: no published Social
+pointer changes and no changes to user-facing themes, constituents, taxonomy,
+lifecycle, or rankings. Stage discovery/association proposals separately from
+the shared live catalog, using existing identities for read-only matching.
+Validation consumes X resources and the same US$2/day Social LLM allowance.
+Retain observations and extraction results for reuse by a newly evaluated live
+run; switching mode never blindly publishes an old validation snapshot.
+
+Live applies approved publication checks and can publish or apply eligible staged
+theme changes. Gate every user-visible mutation, not just the Social pointer.
+Pin mode/version per run and recheck before user-visible writes so changing to
+off/validation cannot be bypassed by an in-flight live run. Ordinary users see
+Social Signals only in live mode with a configured provider. Operations remains
+available to administrators for setup and validation. Explicit Test List remains
+a separately authorized bounded diagnostic when the provider is configured;
+provider `disabled` prevents reads in every operating mode. Never auto-promote
+validation to live based on elapsed time.
+
+Deployment environment settings initialize an empty installation's shared runtime
+policy. After initialization, administrators apply mode/provider changes through
+the versioned runtime control; workers read the same database policy and never
+overwrite it from stale startup environment values. Record runtime changes as
+redacted registry-scoped audit events. Credentials remain deployment secrets,
+not fields in this API. Keep deployment defaults aligned for disaster recovery.
+
+Celery Beat dispatches a social refresh every six hours only in validation/live
+mode with a configured provider. A provider-specific worker consumes the `social_ingestion` queue. A
 singleton Redis lease prevents overlapping Social Signal Runs, and stale queued
 refresh messages collapse into one current run instead of replaying a backlog.
 
@@ -212,6 +268,15 @@ existing technical extraction pipeline. They are not editable by ordinary
 users. Administrators manage the installation-wide source registry from
 Operations without rebuilding the application or private worker image.
 
+Social-owned sources may be changed only through the administrator-only
+Social Sources service and Operations panel. Legacy Theme source mutation
+endpoints reject changes to these sources, even for administrators, and direct
+them to Operations → Social Sources. Legacy controls show these sources as
+managed elsewhere rather than offering edit/disable/delete actions. Ownership
+checks apply in every lifecycle state, preserving testing requirements,
+minimum-enabled-source checks, and audit history. Ordinary Theme sources
+retain their existing management behavior.
+
 Adding a source requires a 1-100-character human-readable display name plus an
 X list URL or a 1-32-digit numeric list ID. The list ID is the immutable
 external identity; the local display name may be edited later. Saving performs
@@ -237,6 +302,16 @@ a replacement must be tested and enabled first. Every enabled source must
 complete successfully for a refresh to publish. Pending, disabled, and
 archived sources are not part of the pinned run source set.
 
+**Approved concurrent administration protection:** Serialize source-registry
+mutations with a shared database transaction lock. After acquiring it, read the
+current enabled count, validate the requested change and source version, then
+persist the change and audit event in that same transaction. Per-source versions
+alone cannot protect a rule spanning multiple sources. Concurrent attempts to
+disable different sources must recheck the updated registry; reject any change
+that would leave fewer than two enabled with guidance to enable a replacement
+first. Keep provider reads outside this short transaction and retain stale-edit
+checks. All registry mutation entry points use this same protection.
+
 Removing a source archives it rather than deleting it. Archival stops future
 collection and hides the source from normal controls while preserving source
 membership, evidence badges, run inputs, and audit history. All add, rename,
@@ -245,12 +320,43 @@ authorization and create immutable audit events for both request and
 completion.
 
 Each source's first enabled run attempts a fourteen-day backfill capped at
-1,000 posts. A newly enabled source therefore joins the pinned set only after
-its explicit test, then must prove full initial coverage before that run may
-publish. A cap-truncated source is incomplete and cannot silently claim full
-coverage. Later source reads use provider checkpoints and overlapping
-incremental reads, retaining overlap so recent engagement observations can be
-refreshed.
+1,000 posts. A newly enabled source joins the pinned set after its explicit test.
+Limited initial history, including a successful read reaching the cap, does not
+by itself block publication. Later source reads use bounded overlapping reads of recent posts,
+retaining previously observed posts so engagement observations can be refreshed.
+
+**Approved warming-up publication:** Separate successful participation and
+processing from historical coverage. Every enabled source must return a valid,
+successful bounded read, and collected posts included in the run must finish
+analysis before publication. A failed source or unfinished analysis still blocks
+replacement of the previous snapshot. Successfully processed bounded reads may
+publish with explicit per-source/window warming-up or limited-history metadata;
+they must not claim complete historical coverage. This applies both at startup
+and when an additional list joins.
+
+Record observed time bounds, known gaps, and limit/coverage reasons without
+inferring continuity from the oldest post or assuming a short response proves
+exhaustion. Missing history is not zero activity. Acceleration is unavailable
+where its comparison history cannot be supported; expose component coverage and
+do not silently report a normal full-history score. Subsequent six-hour reads
+build history, but elapsed time alone never clears a coverage limitation. Ongoing
+gaps and capped reads remain visible. Unknown provider outcomes are not successful
+limited-history reads. In this document a complete published run means complete
+processing of all pinned sources' declared inputs, not exhaustive X history.
+
+**Approved repeatable collection:** Do not use xui's new-only filtering or its
+automatic checkpoint advancement. The application owns durable collection
+progress, advancing it only after observations are committed to its database.
+Retries may return the same posts; idempotent post/source upserts prevent duplicate
+evidence while updating engagement. Unchanged content reuses persisted LLM
+extraction. Interrupted reads can retry the same bounded request without a
+reader-side checkpoint hiding previously returned items; this is not a guarantee
+of complete history if posts disappear or fall outside provider limits.
+The six-hour schedule is unchanged. Test List never advances production collection
+progress or inserts application evidence; private reader-local storage is not
+used as the application's progress authority. A production read must still return
+a post previously seen during a test. Official pagination/progress is likewise
+committed only with durable observations, retaining the approved overlap policy.
 
 The scorer uses 1-day, 7-day, and 14-day windows based on post publication time
 in UTC. Market-session dates are used only for joining existing Market data;
@@ -261,10 +367,16 @@ trading sessions.
 
 ### Existing records
 
-`ContentSource` remains the configured-source record. It gains an explicit
-`contributes_to_theme_rankings` boolean, defaulting to true. Every Social Source
-sets it to false. Existing source behavior therefore remains unchanged unless
-explicitly opted out.
+`ContentSource` remains the configured-source record. Social evidence remains
+separate from legacy Theme attention inputs; this separation must not prohibit
+theme discovery or accepted constituent contributions to market measurements.
+Use explicit content eligibility and association provenance instead of a blanket
+source ranking flag. A canonical post may have both Social and independently
+ingested legacy evidence. Record eligibility per content/pipeline/channel so the
+first source to insert a deduplicated ContentItem does not determine its use.
+Social collection alone must not enable legacy attention, ingestion-day counts,
+legacy extraction jobs, or static exports; an independent legacy observation may
+enable those uses once, without importing Social engagement.
 
 `ContentItem` remains the canonical post record and retains the existing
 `(source_type, external_id)` uniqueness behavior. Social extensions do not add
@@ -272,12 +384,195 @@ engagement JSON to this table.
 
 `ThemeMention` remains the canonical extracted-theme evidence. Technical theme
 extraction processes Social Posts and resolves the same pipeline-scoped
-`ThemeCluster` identities, but Theme metric calculations must exclude mentions
-whose source does not contribute to Theme rankings. Queue theme confirmation
-uses price/RS/breadth fields, not mention velocity or a momentum score that
-mixes social evidence back into confirmation.
+`ThemeCluster` identities and can create new candidates from an empty database.
+Queue theme confirmation uses price/RS/breadth fields, not mention velocity or
+a momentum score that mixes social evidence back into confirmation.
+
+### Shared discovery, separate evaluation — approved review decision
+
+One shared Theme Catalog serves Social Signals and Themes. Social posts can
+create candidate themes immediately and propose company associations, retaining
+source/post/author provenance. Non-social coverage is helpful but not mandatory.
+Reuse existing theme matching and candidate lifecycle concepts; do not create a
+parallel social-only catalog.
+
+Distinguish discovery evidence, social strength, and market strength. Deduplicate
+posts and count independent authors rather than treating duplicate list
+membership as independent evidence. Company associations are proposed or
+accepted; only accepted associations enter the measured stock basket. Acceptance
+assesses whether a company belongs, not whether its stock is rising.
+
+Association acceptance is automatic when the agreed evidence requirements are
+met, with administrator review reserved for exceptions. Evidence must explain
+the company's business connection to the theme; a bare ticker mention or price
+co-movement alone is insufficient. Reposts and duplicate list appearances do
+not provide corroboration. Ambiguous company identities and weak connections
+remain proposed and visible. Administrators can accept or reject associations
+with a recorded reason. Price performance never determines membership.
+
+The approved initial automatic-acceptance threshold is two qualifying posts
+from two distinct authors within a rolling fourteen-day window, each explaining
+the same resolved company's business connection to the same theme. Copied
+claims, reposts, and duplicate list appearances count once. Distinct authors
+are a practical corroboration check, not proof of independence. No minimum
+engagement, price strength, or presence in both lists is required. One useful
+post can create a visible proposal that an administrator may accept immediately.
+
+### Explicit LLM dependency
+
+Automated theme discovery and business-connection assessment require a configured
+LLM extraction provider. Reuse the existing `LLMService` extraction integration
+and configured extraction model; extend its structured output for relationship
+assessment rather than assuming the current theme/ticker output is sufficient.
+The X reader (`official` or `xui`) only collects posts and does not replace this
+dependency. Both reader modes use the same extraction contract.
+
+The LLM identifies candidate themes, company mentions, and explicit business
+relationships supported by the supplied text, with source excerpts and evidence
+references. It can flag copied/paraphrased claims as potential duplicates;
+uncertain corroboration stays proposed rather than counting as independent
+support. It must not invent business facts or certify a claim as externally
+verified. Securities are resolved against the application's security records.
+
+Application rules validate structured output and supporting excerpts, perform
+post/list deduplication, apply the two-author/fourteen-day threshold, and record
+acceptance decisions. The LLM cannot directly change baskets, publish runs,
+override administrator decisions, or compute numeric scores. Its semantic
+judgments influence eligibility, but scoring and acceptance-rule evaluation are
+deterministic for the same persisted extraction results and policy version.
+Fresh LLM calls are not assumed to reproduce identical judgments.
+
+Persist extraction results with actual model/provider and prompt/schema versions
+plus input identity, allowing reuse for unchanged content. Engagement-only updates
+must not trigger re-extraction. Missing configuration, quota exhaustion, invalid
+output, or provider failure leaves affected extraction pending/failed; it cannot
+silently mean no themes or successful qualification. Incomplete processing keeps
+the previous published Social snapshot under the existing publication policy.
+
+Setup and Operations must disclose the separate LLM configuration, that post text
+is sent to the configured provider (which may be external), possible usage charges,
+and extraction health. Credentials/session state and private reader code are not
+LLM inputs. Treat all post text as untrusted data, not instructions. Tests use
+stored/synthetic extraction fixtures, not live paid model calls.
+
+**Approved budget:** Start with a configurable US$2/day installation-wide budget
+for Social LLM processing, separate from other application LLM use and X API
+charges. Reserve estimated request cost before dispatch and reconcile reported
+usage afterward. Concurrent workers, retries, and any permitted fallback must
+share the same budget ledger; hidden retries cannot bypass it. A request that
+does not fit the remaining allowance is deferred, not sent. This is an
+application spending guardrail, not a guaranteed provider billing cap. If actual
+charges exceed the estimate, record them and stop further calls rather than
+hiding the excess or automatically increasing the allowance.
+
+**Approved budget-deferral workflow:** Keep collected
+posts and unfinished extraction in a durable database backlog, resume bounded
+batches after the daily reset, and reuse completed results. Six-hour X collection
+continues under its separate limits; deferred LLM processing does not re-read X.
+Keep the previous complete Social snapshot visible, marking it stale when due;
+a fresh installation shows processing pending until a complete run can publish.
+Operations shows budget usage, waiting-post count, oldest pending age, and next
+reset. Deferred batches do not imply a provider-specific Batch API or a discount.
+Sustained arrivals above daily processing capacity cause growing delay; expose
+that delay rather than silently dropping evidence or publishing incomplete results.
+
+**Approved backlog ordering and aging:** Process the oldest waiting posts still
+within the rolling fourteen-day signal window first, using post publication time
+rather than collection time. Posts older than fourteen days leave automatic LLM
+processing but remain stored and explicitly marked not analysed/outside signal
+window. An administrator can request later analysis under the same budget; this
+does not make an old post eligible for a current signal window. Completed results
+are retained. Aging out is not successful extraction and cannot satisfy a pinned
+historical run's completeness checks. Some historical theme discoveries may
+therefore remain unanalysed; expose skipped counts and do not claim full historical
+coverage.
+
+**Daily budget reset:** The shared Social allowance resets at midnight in the
+configurable IANA timezone `Asia/Singapore` by default. Every Mac/Docker worker
+uses the same installation setting and database ledger, not its host timezone.
+Store reservation/usage timestamps in UTC and derive the budget date and next
+reset from that setting. Reserve in the dispatch day's bucket; completion after
+midnight reconciles against that original bucket. Unused allowance does not
+accumulate. Preserve prior usage/reservations when configuration changes; changing
+timezone or worker restart must not grant a second allowance for the same period.
+
+Candidates appear in Social Signals and a Discovering view on Themes. When
+accepted constituents have sufficient market data, calculate market strength;
+otherwise display insufficient data, not zero. Socially strong but technically
+weak themes remain discoverable without being labeled market-confirmed.
+
+**Approved social-led candidate promotion:** Promote a candidate to active when
+it has at least three accepted companies and qualifying discussion on at least
+three distinct UTC calendar dates within the rolling fourteen-day window. Count
+different listings of one company once; duplicate posts, copied claims, and
+reposts do not add qualifying discussion. Neither rising prices nor non-social
+coverage is required. Before promotion the theme remains visible in Discovering.
+Active denotes an established research theme, not a buy signal or market
+confirmation. Apply this as an explicit social-led promotion policy rather than
+silently replacing the existing non-social lifecycle rules.
+
+**Approved market-strength coverage:** Evaluate each selected Market separately.
+Require usable, sufficiently fresh data for at least three distinct accepted
+companies and at least 70% of the theme's accepted companies in that Market before
+showing a market-strength score. Count multiple listings of one company once in
+both numerator and denominator. Show measured/accepted coverage explicitly, for
+example four of five companies. Do not pool US, HK, JP, or other Market baskets
+or benchmarks into one score. Below either threshold, show insufficient market
+data while retaining social strength and discovery evidence. Apply the session
+freshness policy below and reuse the existing feature engine's indicator-history
+validity rules; never synthesize unavailable moving averages or RS inputs.
+
+New themes and accepted associations may legitimately change Theme rankings.
+Social engagement must not silently alter legacy attention scoring or masquerade
+as technical confirmation. Preserve separately identifiable legacy scoring.
+Regression tests must cover discovery from an empty database, shared identities,
+provenance, proposed-versus-accepted basket membership, and score separation.
+
+### Persistence and projection boundaries
+
+Store extraction work/results separately from live Theme mutations. Work is keyed
+by content revision, prompt/schema version, and selected model configuration.
+A run pins work/result IDs and copied numeric inputs for reproducible scoring;
+provider/model provenance records the actual model used. Durable work status
+distinguishes pending, running, waiting_budget, succeeded, failed_retryable,
+failed_terminal, and outside_window. Successful empty extraction is distinct
+from failed extraction. Retain per-post completion and errors if batching calls.
+
+Budget-day and request-attempt rows hold atomic cost reservations, usage, status,
+and idempotency keys. Use a conservative input/output-token reservation and a
+configured pricing version. Unknown pricing pauses billable dispatch; ambiguous
+provider completion retains the reservation pending reconciliation rather than
+freeing it for duplicate spending. Do not auto-switch extraction models.
+
+Stage theme keys and supported company relations in extraction results. Only
+live publication materializes shared ThemeCluster/ThemeMention identities and
+proposed/accepted associations. Record association provenance, state/version, and
+immutable admin/system decisions. Existing constituents remain legacy-accepted;
+Social cannot erase independently supported legacy membership. Rejected admin
+decisions persist until explicitly changed by an admin. Association acceptance
+does not expire merely because the qualifying posts age out of scoring windows.
+
+Keep legacy attention/source-diversity/ingestion-day metrics on legacy-eligible
+evidence. Social discovery uses its own versioned lifecycle evidence without
+feeding engagement into those metrics. Social-only candidates must not be
+immediately demoted by legacy policies that cannot see their evidence. Apply
+existing lifecycle timing rules to the corresponding evidence channel; audit the
+policy and inputs. Shared accepted constituents can affect live market baskets,
+but proposed relations cannot. Static projections use legacy-eligible evidence
+and membership only, excluding social-only themes and additions.
+
+Theme market measurements are keyed by shared theme identity, Market, session,
+and basket version; reuse existing price calculations behind a Market-scoped
+projection and Market Benchmark Registry selection, not a global SPY basket.
+Run explanations freeze the selected basket, coverage, benchmark and component
+values. New social-discovered themes need not have a legacy ThemeMetrics row to
+become measurable. These are technical implementation boundaries for the
+approved shared-catalog policy, not additional scoring weights.
 
 ### New records
+
+**SocialSourceRegistry** is the singleton database lock/version record protecting
+cross-source administration invariants and shared runtime policy changes.
 
 **SocialSourceConfiguration** is the one-to-one social lifecycle extension for
 a ContentSource. It stores the immutable X list ID, lifecycle state
@@ -291,6 +586,10 @@ test-before-enable flow.
 stores the Social Source, action, actor, timestamp, and redacted before/after
 state. It never stores provider credentials, session paths, post content, raw
 provider responses, or response headers.
+
+Audit scope distinguishes source actions from runtime-policy actions: source
+events require a ContentSource reference; runtime events reference the shared
+registry and carry no fabricated source ID.
 
 **SocialPostSource** is the many-to-many membership between a ContentItem and a
 Social Source. It records first-seen and last-seen times and has a unique key on
@@ -343,9 +642,10 @@ eligible and display an ETF badge.
 
 ## Scoring policy v1
 
-Scoring is pure, deterministic, and versioned. No LLM participates in numeric
-ranking. AI may perform existing theme and evidence classification, but the
-stored source records and component inputs determine every numeric score.
+Scoring is pure, deterministic, and versioned. No LLM generates numeric
+scores or selects the final ordering. LLM extraction affects evidence eligibility;
+the persisted validated judgments and numeric inputs determine every score.
+Replay uses these saved judgments, not an assumption that a new LLM call is identical.
 
 ### Anti-manipulation preprocessing
 
@@ -361,6 +661,22 @@ stored source records and component inputs determine every numeric score.
   observed zero.
 
 ### Social Score
+
+**Approved missing-data behavior:** Preserve a usable Social Score when technical
+confirmation is unavailable, allowing ordinary Pure Social ordering. If all
+confirmation components are missing, Confirmation Score and Blended Queue Score
+are null and displayed as an em dash, never zero. In Blended mode, scored rows
+sort first; unscored rows follow in descending Social Score with the normal
+deterministic tie-breakers. Do not renormalize the top-level 60% social/40%
+confirmation blend to 100% social.
+
+When only some components are unavailable, renormalize available weights within
+their own social or confirmation portion and expose reduced component coverage.
+Keep absent fields/reasons in explanations. Missing required technical checks
+preclude Actionable, independently of rank mode. Reduced-coverage ranking is not
+evidence that all technical checks passed; Pure Social changes ordering, not
+eligibility. Missing social components during history warm-up follow the same
+within-portion rule, without treating missing history as observed zero.
 
 | Component | Queue weight | Definition |
 | --- | ---: | --- |
@@ -399,6 +715,20 @@ the ticker. The UI still shows the observed list count, such as `3 of 5`.
 
 ### Confirmation Score
 
+**Approved daily-data freshness:** Evaluate against the relevant exchange/MIC
+calendar, including holidays, weekends, and early closes. During trading, the
+previous completed session is the required daily-data session. After a session
+closes, allow a configurable two-hour update grace period; once it expires,
+require that newly completed session. Equivalently, the required session is the
+latest session whose close plus grace has passed. Show actual input session dates
+explicitly; this is daily snapshot freshness, not a claim of live quotes.
+Required technical inputs older than the required session, or with unverifiable
+freshness, preclude Actionable while social evidence stays visible. Calendar
+uncertainty must not silently assume a trading day. Apply the relevant Market
+calendar to Market-level inputs and the security's MIC calendar to listing-level
+inputs. Preserve coherent snapshot joins. Social snapshot staleness remains a
+separate seven-hour clock-time rule.
+
 | Component | Queue weight | Definition |
 | --- | ---: | --- |
 | Setup quality | 20% | Existing 0-100 `se_setup_score`; `se_setup_ready` controls Signal State rather than adding points |
@@ -415,7 +745,12 @@ Group-strength conversion is
 it is unavailable when fewer than two ranked groups exist. For each linked
 theme, Theme confirmation is the arithmetic mean of available
 `basket_rs_vs_spy`, `avg_rs_rating`, and `pct_above_50ma`, which are already
-0-100 fields. The ticker receives the highest linked-theme value, with
+0-100 values when supplied by the existing feature/metric engine. For non-US
+Markets, use the equivalent benchmark-relative component from the Market-specific
+projection rather than treating the legacy `basket_rs_vs_spy` name as permission
+to use SPY globally. Enforce the three-company/70% threshold per component before
+including it; absent valid history means that component is missing. The ticker
+receives the highest linked-theme value, with
 canonical theme key ascending as the stable tie-breaker. No `mentions_*`,
 `mention_velocity`, sentiment, or composite `momentum_score` value enters this
 component.
@@ -464,25 +799,42 @@ It never receives fabricated Market or technical data.
 The Actionable view includes only `actionable`. All Signals includes every
 state with clear missing-data and exclusion reasons.
 
+**Approved All Signals presentation:** Use three clearly separated sections.
+Ranked candidates contain resolved stocks and thematic ETFs in the selected
+Market, including those with missing technical data under the approved null-score
+rules. Market context contains broad-Market ETFs and macro evidence, unranked.
+Needs resolution contains ambiguous company mentions with their original post
+evidence, unranked and excluded from candidate score cohorts and top-five cards.
+When an unresolved item's Market cannot be established, expose it in an explicitly
+global Market unknown group accessible from every Market view. Never infer Market
+from the currently selected tab or duplicate the item into Market-specific scoring.
+Only scope evidence by Market when supported by its stored provenance; preserve
+unscoped macro context separately rather than assigning a fabricated Market.
+API responses and pagination must distinguish candidate rows from context and
+resolution groups so clients do not mix global evidence into ranked totals.
+
 ## Run and publication flow
 
 1. Acquire the singleton social-ingestion lease.
 2. Create an immutable Social Signal Run and pin provider, the complete enabled
-   source set, source
-   checkpoints, formula version, and current time.
+   source set, application-owned committed collection progress, operating mode/version,
+   formula/extraction policy versions, and current time.
 3. Read each Social Source independently through the selected adapter.
 4. Validate and normalize provider records.
 5. Upsert ContentItems, source memberships, and newer engagement observations
    transactionally per source.
-6. Seed existing technical extraction state and run theme/ticker extraction.
+6. Reuse or enqueue durable, budgeted Social extraction; retain staged discovery
+   and company-association evidence without calling live Theme mutation paths.
 7. Resolve ticker identities using SecurityMaster and the active Universe.
 8. Aggregate 1D/7D/14D evidence with anti-manipulation rules.
 9. Join one coherent current feature snapshot per Market plus Market posture,
-   group ranks, liquidity, and non-social theme confirmation.
+   group ranks, liquidity, and Market-scoped theme price confirmation.
 10. Calculate and persist immutable Social Signal Snapshots.
-11. Evaluate publication quality and atomically advance the published pointer
-    only when at least two sources were enabled and every pinned source has a
-    complete valid outcome.
+11. Evaluate quality against every pinned source's successful bounded read and
+    completed processing, carrying explicit historical-coverage limits. Validation
+    saves administrator-only output. Live rechecks operating mode/version and
+    atomically materializes eligible Theme changes plus advances the pointer.
+    Prepare heavy extraction/price work outside that short transaction.
 12. Release the lease and expose the run outcome to Operations.
 
 A partial or failed attempt is retained for diagnosis but cannot replace the
@@ -491,8 +843,9 @@ typed unavailable state rather than partial candidates.
 
 ## API and authorization
 
-All Social Signal read endpoints require an authenticated app user. Read
-responses expose only the Published Social Signal Run.
+Ordinary Social Signal read endpoints require an authenticated app user and live
+mode. Their responses expose only the Published Social Signal Run. Separate
+administrator-only projections expose validation results without publishing them.
 
 The provider-neutral live API supplies:
 
@@ -555,10 +908,12 @@ Drawer actions reuse existing application workflows:
 
 ### Themes and administration
 
-The existing Themes page, rankings, and terminology remain intact. It shows
-a separate `Social Pulse` field derived from the Published Social Signal Run,
-but that field cannot affect Theme ordering or stored Theme momentum. Queue
-theme links navigate into the existing Theme detail experience.
+The Themes page remains separate from Social Signals and gains a Discovering
+view for candidate themes plus a `Social Pulse` field derived from the Published
+Social Signal Run. Social Pulse does not directly feed legacy attention scoring.
+Shared discovery and accepted basket changes can affect rankings; social and
+market evaluations remain distinguishable. Queue theme links navigate into the
+same Theme detail experience.
 
 Provider health, last run, source coverage, reauthentication requirements,
 rate-limit state, source management, and the admin refresh control live in
@@ -572,8 +927,13 @@ run metadata.
 
 ## Failure handling and observability
 
-Health states are `disabled`, `healthy`, `partial`, `stale`,
-`reauthentication_required`, `rate_limited`, and `provider_error`.
+Expose independent status dimensions: operating mode; collection health
+(`disabled|healthy|partial|reauthentication_required|rate_limited|provider_error`);
+processing (`pending|running|waiting_budget|failed|complete`); history coverage
+(`warming_up|limited|observed_window`); and publication freshness (timestamp,
+stale boolean). A fresh limited-history snapshot and a budget-paused stale
+snapshot must both be representable. Observed-window coverage is not a promise
+that all X posts were available.
 
 - Missing provider configuration yields `disabled` and schedules no reads.
 - Missing or expired `xui` authentication yields
@@ -584,7 +944,9 @@ Health states are `disabled`, `healthy`, `partial`, `stale`,
 - Official API 429 responses respect the returned reset time and do not switch
   provider.
 - Invalid provider JSON fails that source with a stable schema reason.
-- Partial source coverage cannot replace a published complete snapshot.
+- Missing/failed source participation or unfinished processing cannot replace a
+  published snapshot; successful all-source processing with limited history can
+  publish with explicit warming-up/limited-history labels.
 - A published snapshot older than seven hours is `stale`, while remaining
   readable as last-known-good data.
 - Logs record run IDs, provider names, source IDs, counts, durations, and stable
@@ -633,8 +995,8 @@ credentials are not needed to run a prebuilt image.
 - Broad-Market and thematic ETF classification follows the stated policy.
 - Signal State tests cover stale data, liquidity, setup readiness, and
   Market-posture changes without score mutation.
-- Theme metric regression tests prove that opted-out Social Sources cannot
-  change existing Theme rankings.
+- Theme regressions prove empty-database discovery, shared identities, supported
+  basket changes, and separation of social attention from market confirmation.
 
 ### Provider contract tests
 
@@ -682,10 +1044,12 @@ credentials are not needed to run a prebuilt image.
 4. Add Daily, queue, evidence, Theme Social Pulse, and Operations UI.
 5. Build the private multi-architecture worker and verify local Docker with a
    dedicated automation profile.
-6. Run a fourteen-day all-enabled-source backfill without publication and compare source
-   coverage, deduplication, mappings, and rankings with the research artifacts.
-7. Publish only after the quality gate passes, then enable Social Signals for
-   authenticated users.
+6. Set `SOCIAL_SIGNALS_MODE=validation`, attempt the bounded fourteen-day
+   backfill and review admin-only coverage, deduplication, mappings, and rankings.
+   Confirm live Themes and the Social pointer stay unchanged; budgets still apply.
+7. Explicitly set `SOCIAL_SIGNALS_MODE=live`; a newly evaluated run reuses saved
+   results and publishes only after the agreed checks pass. No automatic mode
+   transition or blind publication of a validation snapshot.
 
 Rollback disables scheduling and the runtime capability and leaves the last
 published rows intact for audit. No rollback requires deleting ContentItems or
@@ -708,9 +1072,11 @@ changing existing Theme identities.
   ordering.
 - Cross-list posts are deduplicated without losing list attribution; distinct
   evidence from any two enabled lists earns the same full binary credit.
-- Existing Theme rankings are unchanged by Social Sources.
-- Healthy installations publish a complete all-enabled-source snapshot at
-  least every seven hours.
+- Social can discover new themes and support basket changes without social
+  engagement being counted as market confirmation.
+- With healthy collection, completed analysis, and available budgets, six-hour
+  runs target a published all-enabled-source snapshot less than seven hours old;
+  this is not guaranteed while processing is deferred or providers are failing.
 - Failed and partial runs preserve the last complete published snapshot and
   expose an accurate health state.
 - Pure Social ordering excludes technical inputs while continuing to display

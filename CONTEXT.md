@@ -116,7 +116,43 @@ _Avoid_: latest options run
 An options metric whose value depends on documented assumptions rather than an observed market fact, including estimated GEX, gamma flip, and call/put walls.
 _Avoid_: dealer position, market-maker fact
 
+### Theme discovery language
+
+**Theme Catalog**: The shared set of theme identities discovered through social posts, articles, or analyst research.
+
+**Discovery Evidence**: Source-attributed support for a theme or a company's association with it.
+
+**Proposed Theme Association**: An evidenced company-to-theme relationship not yet accepted into the theme's measured stock basket.
+
+**Accepted Theme Association**: A supported company-to-theme relationship eligible for the measured stock basket, independent of whether the stock price is rising.
+
+**Social Strength**: The strength of independent, persistent social discussion about a theme or security.
+
+**Market Strength**: Price-based strength and breadth measured from available market data, not social engagement.
+
+### Social research language
+
+**Social Source**: An administrator-managed X list with exclusive Social collection ownership.
+
+**Social Post**: A canonical X post with source memberships, observed engagement, and source-grounded extracted evidence.
+
+**Social Signal Run**: A pinned attempt to collect and analyse the enabled Social Sources and calculate versioned results.
+
+**Published Social Signal Run**: The live-selected, fully processed run whose historical coverage limitations remain explicit.
+
+**Social Score**: A deterministic measure of social attention from observed posts and persisted extraction judgments.
+
+**Confirmation Score**: A deterministic measure of available setup, relative-strength, group, and theme market evidence.
+
+**Queue Score**: The 60% Social Score and 40% Confirmation Score blend, unavailable when either entire portion is unavailable.
+
+**Signal State**: A research classification of actionable, watch, risk_off, context, or unresolved, independent of ranking mode.
+
 ## Relationships
+
+- Social posts can create candidates in the **Theme Catalog** without existing themes or non-social coverage.
+- **Discovery Evidence** supports proposed and accepted associations; **Social Strength** and **Market Strength** remain separately evaluated.
+- A **Proposed Theme Association** can be accepted automatically when business-connection evidence qualifies, or accepted/rejected by an administrator with a recorded reason; price performance is not a membership criterion.
 
 - A **Market Catalog** describes many **Markets**.
 - A **Market** has one or more **MICs**; one MIC is primary.
@@ -150,6 +186,10 @@ _Avoid_: dealer position, market-maker fact
 
 ## Example Dialogue
 
+> **Dev:** "Does accepting a company into a theme mean its stock is strong?"
+> **Domain expert:** "No. Membership needs business-connection evidence; Market Strength is measured separately. Social posts can discover the theme even on an empty installation."
+
+
 > **Dev:** "Should the frontend import the **Market Catalog** directly?"
 > **Domain expert:** "No. The backend owns the **Market Catalog** and exposes the current **Market** facts through runtime capabilities."
 >
@@ -161,6 +201,7 @@ _Avoid_: dealer position, market-maker fact
 
 ## Flagged Ambiguities
 
+- Separate Social Signals and Themes pages do not imply separate theme identities or prohibit social-led discovery; popularity is not market confirmation, and accepted membership does not imply rising prices.
 - "Market config" previously mixed stable **Market Catalog** facts with mutable **Market Workload** state. Resolution: stable facts belong to **Market Catalog**; operational state belongs to **Market Workload**.
 - Queue names are **Market Workload** implementation details derived from **Market** codes, not **Market Catalog** facts.
 - **Market Catalog** may include coarse provider capability facts, but provider routing policy remains behind provider-specific modules.
