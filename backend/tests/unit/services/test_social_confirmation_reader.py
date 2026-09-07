@@ -307,3 +307,27 @@ def test_batch_missing_listing_liquidity_and_rs_are_explicit(db_session, calenda
     assert fact.liquidity_eligible is None
     assert {"missing_setup_score", "missing_rs_rating_1m", "missing_rs_rating_3m", "missing_liquidity"} <= set(fact.reasons)
     assert "listing_mic_unknown" in dict(batch.facts)["UNKNOWN"].reasons
+
+
+def test_batch_nested_evidence_is_immutable_and_missing_pin_never_repins(db_session, calendar):
+    from dataclasses import FrozenInstanceError
+    from app.services.social_confirmation_reader import SocialConfirmationReader, PinnedFeatureRun
+    seed_batch(db_session)
+    reader = SocialConfirmationReader(db_session, calendar=calendar)
+    now = utc("2026-07-02T23:00:00")
+    batch = reader.read_market("US", ("AAA",), now)
+    with pytest.raises(FrozenInstanceError):
+        batch.market_context.exposure_score = 0
+    with pytest.raises(FrozenInstanceError):
+        batch.facts[0][1].reasons += ("changed",)
+    with pytest.raises(TypeError):
+        batch.group_context.cohort[0] = ("changed", 1)
+    with pytest.raises(FrozenInstanceError):
+        batch.inputs[0].setup_score = 0
+    missing = reader.read_market("US", ("AAA",), now, pinned_run=PinnedFeatureRun("US", None))
+    assert missing.pinned_run.run_id is None
+    assert missing.inputs[0].setup_score is None
+    assert missing.facts[0][1].feature_run_id is None
+    assert missing.market_context.exposure_score == 60
+    with pytest.raises(ValueError, match="pinned_feature_market_mismatch"):
+        reader.read_market("US", ("AAA",), now, pinned_run=PinnedFeatureRun("HK", batch.pinned_run.run_id))
