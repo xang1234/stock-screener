@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Mapping
 
@@ -103,6 +103,9 @@ class SocialPostRecord:
     canonical_url: str | None = None
     is_repost: bool = False
     quoted_text: str | None = None
+    # Saved extraction judgments. No scorer infers a thesis or a copied claim.
+    has_new_thesis: bool | None = None
+    canonical_claim_key: str | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in SUPPORTED_PROVIDERS:
@@ -125,6 +128,8 @@ class SocialPostRecord:
                 raise ValueError(f"negative_metric:{field}")
         if self.canonical_url is not None:
             _required(self.canonical_url, "canonical_url")
+        if self.canonical_claim_key is not None:
+            _required(self.canonical_claim_key, "canonical_claim_key")
 
     @classmethod
     def from_untrusted(
@@ -319,13 +324,52 @@ class SocialEvidenceInput:
     canonical_symbol: str
     market: str
     posts: tuple[SocialPostRecord, ...]
+    enabled_source_ids: tuple[str, ...] = ()
+    history_complete: bool = False
+    coverage_reasons: tuple[str, ...] = ()
+    resolved: bool = True
+    security_kind: str = "stock"
 
     def __post_init__(self) -> None:
         _deeply_immutable(self.posts, "posts")
+        _deeply_immutable(self.enabled_source_ids, "enabled_source_ids")
+        _deeply_immutable(self.coverage_reasons, "coverage_reasons")
+        _choice(self.security_kind, {"stock", "thematic_etf", "broad_etf", "macro"}, "security_kind")
         _required(self.candidate_key, "candidate_key")
         _required(self.canonical_symbol, "canonical_symbol")
         if self.market not in SUPPORTED_MARKETS:
             raise ValueError("unsupported_market")
+
+
+@dataclass(frozen=True, slots=True)
+class ThemeMarketEvidence:
+    """Frozen Market measurement supplied by the shared Theme projection."""
+
+    theme_key: str
+    market: str
+    session_date: date
+    benchmark_symbol: str
+    basket_version: str
+    accepted_company_count: int
+    components: tuple[tuple[str, Decimal | None], ...]
+    measured_company_counts: tuple[tuple[str, int], ...]
+    reasons: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        for field in ("theme_key", "benchmark_symbol", "basket_version"):
+            _required(getattr(self, field), field)
+        _choice(self.market, SUPPORTED_MARKETS, "market")
+        if not isinstance(self.session_date, date) or isinstance(self.session_date, datetime):
+            raise ValueError("invalid_session_date")
+        if self.accepted_company_count < 0:
+            raise ValueError("negative_accepted_company_count")
+        for field in ("components", "measured_company_counts", "reasons"):
+            values = getattr(self, field)
+            _deeply_immutable(values, field)
+            if len({k for k, _ in values}) != len(values):
+                raise ValueError(f"duplicate_keys:{field}")
+        if any(n < 0 or n > self.accepted_company_count for _, n in self.measured_company_counts):
+            raise ValueError("invalid_measured_company_count")
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,7 +382,8 @@ class ConfirmationInput:
     rs_rating_3m: Decimal | None = None
     group_rank: int | None = None
     market_group_count: int | None = None
-    theme_confirmations: tuple[tuple[str, Decimal | None], ...] = ()
+    theme_confirmations: tuple[ThemeMarketEvidence, ...] = ()
+    market_benchmark: str | None = None
 
     def __post_init__(self) -> None:
         _deeply_immutable(self.theme_confirmations, "theme_confirmations")
@@ -354,9 +399,30 @@ class ComponentScore:
     available_weight: Decimal
     total_weight: Decimal
     reasons: tuple[str, ...] = ()
+    observed_count: int = 0
+    input_count: int = 0
+    components: tuple[tuple[str, ComponentScore], ...] = ()
+    selected_key: str | None = None
 
     def __post_init__(self) -> None:
         _deeply_immutable(self.reasons, "reasons")
+        _deeply_immutable(self.components, "components")
+
+
+@dataclass(frozen=True, slots=True)
+class SignalStateInput:
+    """Saved required-check judgments; freshness is resolved by the calendar reader."""
+
+    resolved: bool
+    active: bool
+    market: str | None
+    security_kind: str = "stock"
+    feature_fresh: bool | None = None
+    market_fresh: bool | None = None
+    liquidity_eligible: bool | None = None
+    setup_ready: bool | None = None
+    setup_score: Decimal | None = None
+    market_exposure: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,9 +439,25 @@ class SocialScoreResult:
     social_score: Decimal | None
     components: tuple[tuple[str, ComponentScore], ...]
     state: SignalStateDecision
+    candidate_key: str = ""
+    canonical_symbol: str = ""
+    market: str | None = None
+    normalization_scope: str = "global_fallback"
+    latest_mention: datetime | None = None
+    mention_count: int = 0
+    observed_list_count: int = 0
+    enabled_list_count: int = 0
+    post_memberships: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    exclusions: tuple[tuple[str, str], ...] = ()
+    acceleration: Decimal | None = None
+    engagement_sum: float | None = None
+    formula_version: str = "social-signal-v1"
 
     def __post_init__(self) -> None:
         _deeply_immutable(self.components, "components")
+        _deeply_immutable(self.post_memberships, "post_memberships")
+        _deeply_immutable(self.exclusions, "exclusions")
+        _utc(self.latest_mention, "latest_mention", nullable=True)
 
 
 @dataclass(frozen=True, slots=True)
