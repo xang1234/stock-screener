@@ -13,6 +13,15 @@ SUPPORTED_MARKETS = frozenset({"US", "HK", "CN", "JP", "TW"})
 _MAX_CLOCK_SKEW = timedelta(minutes=5)
 
 
+@dataclass(frozen=True, slots=True)
+class BacklogResult:
+    succeeded: int
+    deferred: int
+    failed: int
+    outside_window: int
+    next_reset_at: datetime
+
+
 def _required(value: str, field: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"blank_{field}")

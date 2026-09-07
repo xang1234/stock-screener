@@ -61,6 +61,7 @@ from app.infra.db.models.options_analytics import (
     OptionsAnalyticsStrikePoint,
 )
 
+from app.infra.db.models.social_analysis import SocialExtractionWork, SocialRunWork, SocialLLMBudgetDay, SocialLLMAttempt
 from app.infra.db.models.social_signals import (
     ContentPipelineEligibility, SocialSourceRegistry, SocialSourceConfiguration,
     SocialSourceAuditEvent, SocialPostSource, SocialContentMetrics,
@@ -68,6 +69,7 @@ from app.infra.db.models.social_signals import (
 )
 
 __all__ = [
+    "SocialExtractionWork", "SocialRunWork", "SocialLLMBudgetDay", "SocialLLMAttempt",
     "ContentPipelineEligibility", "SocialSourceRegistry", "SocialSourceConfiguration",
     "SocialSourceAuditEvent", "SocialPostSource", "SocialContentMetrics",
     "SocialPostTicker", "SocialSignalRun", "SocialSignalSnapshot", "SocialSignalRunPointer",

@@ -145,6 +145,7 @@ class LLMService:
         response_format: Optional[Dict] = None,
         stream: bool = False,
         num_retries: int = 3,
+        metered: bool = False,
         **kwargs
     ) -> Any:
         """
@@ -165,6 +166,8 @@ class LLMService:
         Returns:
             ChatCompletion or AsyncGenerator if streaming
         """
+        if metered and (stream or allow_fallbacks or num_retries != 0):
+            raise LLMError("metered_completion_requires_single_nonstream_attempt")
         if stream:
             return self._completion_stream(
                 messages=messages,
@@ -200,6 +203,17 @@ class LLMService:
 
         if response_format:
             params["response_format"] = response_format
+
+        if metered:
+            # Both LiteLLM and its provider SDK have retry layers. This path is
+            # one reserved dispatch and must bypass the outer fallback/error logs.
+            params.update(num_retries=0, max_retries=0)
+            params["no-log"] = True
+            try:
+                self._apply_provider_overrides(params)
+                return await acompletion(**params)
+            except Exception:
+                raise LLMError("metered_provider_error") from None
 
         # Build fallback list
         fallback_models = self._resolve_fallback_models(
