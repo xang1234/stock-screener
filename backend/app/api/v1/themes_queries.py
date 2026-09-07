@@ -463,9 +463,31 @@ def get_theme_detail(
     service = ThemeDiscoveryService(db, pipeline=cluster.pipeline or "technical")
     relationships = service.get_theme_relationships(theme_id, limit=50)
 
+    constituent_payloads = [ThemeConstituentResponse.model_validate(c) for c in constituents]
+    from app.infra.db.models.social_signals import SocialSourceRegistry
+    registry = db.get(SocialSourceRegistry, 1)
+    if registry is not None and registry.mode == "live":
+        from app.services.social_theme_projection_service import SocialThemeProjectionService
+        effective = SocialThemeProjectionService(db).effective_live_membership(theme_id)
+        by_symbol = {item.symbol: item for item in constituent_payloads}
+        for member in effective:
+            current = by_symbol.get(member.canonical_symbol)
+            if current is None:
+                current = ThemeConstituentResponse(
+                    symbol=member.canonical_symbol, source="social", confidence=1.0,
+                    mention_count=0, correlation_to_theme=None,
+                    first_mentioned_at=None, last_mentioned_at=None,
+                )
+                constituent_payloads.append(current)
+                by_symbol[member.canonical_symbol] = current
+            current.market = member.market
+            current.company_key = member.company_key
+            current.company_count_eligible = member.company_count_eligible
+            current.origins = list(member.origins)
+
     return ThemeDetailResponse(
         theme=safe_theme_cluster_response(cluster),
-        constituents=[ThemeConstituentResponse.model_validate(c) for c in constituents],
+        constituents=constituent_payloads,
         metrics=ThemeMetricsResponse.model_validate(latest_metrics) if latest_metrics else None,
         relationships=[ThemeRelationshipResponse(**row) for row in relationships],
     )
