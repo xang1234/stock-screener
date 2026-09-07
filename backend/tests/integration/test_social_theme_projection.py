@@ -152,6 +152,34 @@ def test_unknown_identity_and_alternate_listings_do_not_inflate_gate(social_fixt
     assert next(a for a in f.associations() if a.canonical_symbol == "DDD").state == "proposed"
 
 
+def test_alternate_listing_acceptance_snapshots_only_qualifying_company_work(social_fixture):
+    from app.infra.db.models.social_analysis import SocialThemeDecision
+    f = social_fixture
+    primary = f.save(("AAA",), age=3, key="original")
+    alternate = f.save(("0005.HK",), age=2)
+    copied = f.save(("AAA",), age=1, key="original")
+    uncertain = f.save(("AAA",), age=1, support="uncertain")
+    unrelated = f.save(("BBB",), age=1)
+    f.apply(f.prepare([primary, alternate, copied, uncertain, unrelated]))
+    associations = {a.canonical_symbol: a for a in f.associations()}
+    assert associations["AAA"].state == associations["0005.HK"].state == "accepted"
+    assert associations["BBB"].state == "proposed"
+    assert associations["AAA"].evidence_work_ids == [primary, copied, uncertain]
+    assert associations["0005.HK"].evidence_work_ids == [alternate]
+    decisions = f.db.query(SocialThemeDecision).order_by(SocialThemeDecision.id).all()
+    assert len(decisions) == 2
+    assert {d.association_id for d in decisions} == {associations["AAA"].id, associations["0005.HK"].id}
+    assert [d.evidence_work_ids for d in decisions] == [[primary, alternate], [primary, alternate]]
+    original_snapshots = [(d.id, d.run_id, list(d.evidence_work_ids)) for d in decisions]
+
+    later = f.save(("AAA",), age=0)
+    f.apply(f.prepare([later]))
+    assert associations["AAA"].evidence_work_ids == [primary, copied, uncertain, later]
+    f.db.expire_all()
+    decisions = f.db.query(SocialThemeDecision).order_by(SocialThemeDecision.id).all()
+    assert [(d.id, d.run_id, d.evidence_work_ids) for d in decisions] == original_snapshots
+
+
 @pytest.mark.parametrize("legacy_first", [True, False])
 def test_admin_override_and_independent_legacy_membership(social_fixture, legacy_first):
     f = social_fixture

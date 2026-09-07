@@ -243,9 +243,11 @@ class SocialThemeProjectionService:
             if association.company_key != resolution.company_id:
                 association.company_key = resolution.company_id
                 association.version += 1
-            authors = {row[4] for row in qualifying if row[3] == resolution.company_id}
+            company_evidence = [row for row in qualifying if row[3] == resolution.company_id]
+            authors = {row[4] for row in company_evidence}
             if association.decision_owner == "system" and association.state == "proposed" and resolution.company_count_eligible and len(authors) >= 2:
-                self._decision(association, "accepted", "two_independent_authors_14d", "system", projection.prepared_at, projection.run_id)
+                self._decision(association, "accepted", "two_independent_authors_14d", "system", projection.prepared_at,
+                               projection.run_id, evidence_work_ids=sorted({row[1] for row in company_evidence}))
         companies = {item.company_key for item in self.effective_live_membership(theme_id) if item.company_count_eligible}
         dates = {row[0].date() for row in qualifying if row[3] in companies}
         theme = self.db.get(ThemeCluster, theme_id)
@@ -264,10 +266,10 @@ class SocialThemeProjectionService:
             else:
                 theme.lifecycle_state_metadata = metadata
 
-    def _decision(self, association, target, reason, actor, now, run_id=None):
+    def _decision(self, association, target, reason, actor, now, run_id=None, *, evidence_work_ids=None):
         self.db.add(SocialThemeDecision(association_id=association.id, run_id=run_id, actor=actor, reason=reason,
             before_state=association.state, after_state=target, policy_version=POLICY,
-            evidence_work_ids=list(association.evidence_work_ids), created_at=now))
+            evidence_work_ids=list(association.evidence_work_ids if evidence_work_ids is None else evidence_work_ids), created_at=now))
         association.state = target
         association.version += 1
         association.updated_at = now
