@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 
 SUPPORTED_PROVIDERS = frozenset({"official", "xui"})
@@ -314,13 +314,82 @@ class TickerResolution:
     security_id: str | None
     status: str
     reason_codes: tuple[str, ...] = ()
+    company_id: str | None = None
+    related_symbols: tuple[str, ...] = ()
+    security_kind: str = "stock"
+    ranking_eligible: bool = False
+    company_count_eligible: bool = False
+    explicit_listing: bool = False
 
     def __post_init__(self) -> None:
         _deeply_immutable(self.reason_codes, "reason_codes")
+        _deeply_immutable(self.related_symbols, "related_symbols")
+        _choice(self.security_kind, {"stock", "thematic_etf", "broad_etf", "macro"}, "security_kind")
         _required(self.raw_token, "raw_token")
         _choice(self.status, {"resolved", "unresolved"}, "resolution_status")
         if self.market is not None and self.market not in SUPPORTED_MARKETS:
             raise ValueError("unsupported_market")
+        if self.company_count_eligible and (not self.company_id or self.status != "resolved" or self.security_kind != "stock"):
+            raise ValueError("invalid_company_count_eligibility")
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionClaim:
+    post_id: str
+    theme_key: str
+    raw_theme: str
+    company_token: str
+    relationship: str
+    excerpt: str
+    support: Literal["supported", "uncertain", "unsupported"]
+    duplicate_of_post_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for field in ("post_id", "theme_key", "raw_theme", "company_token", "relationship", "excerpt"):
+            _required(getattr(self, field), field)
+        _choice(self.support, {"supported", "uncertain", "unsupported"}, "support")
+        _deeply_immutable(self.duplicate_of_post_ids, "duplicate_of_post_ids")
+        for post_id in self.duplicate_of_post_ids:
+            _required(post_id, "duplicate_post_id")
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionPostJudgment:
+    post_id: str
+    has_new_thesis: bool
+    canonical_claim_key: str | None
+
+    def __post_init__(self) -> None:
+        _required(self.post_id, "post_id")
+        if type(self.has_new_thesis) is not bool:
+            raise ValueError("invalid_has_new_thesis")
+        if self.canonical_claim_key is not None:
+            _required(self.canonical_claim_key, "canonical_claim_key")
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionResult:
+    input_hash: str
+    provider: str
+    model: str
+    prompt_version: str
+    schema_version: str
+    claims: tuple[ExtractionClaim, ...]
+    usage_input_tokens: int | None
+    usage_output_tokens: int | None
+    judgments: tuple[ExtractionPostJudgment, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field in ("input_hash", "provider", "model", "prompt_version", "schema_version"):
+            _required(getattr(self, field), field)
+        for field, record_type in (("claims", ExtractionClaim), ("judgments", ExtractionPostJudgment)):
+            _deeply_immutable(getattr(self, field), field)
+            if any(not isinstance(item, record_type) for item in getattr(self, field)):
+                raise TypeError(f"invalid_{field}")
+        for field in ("usage_input_tokens", "usage_output_tokens"):
+            value = getattr(self, field)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"invalid_{field}")
 
 
 @dataclass(frozen=True, slots=True)

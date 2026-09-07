@@ -43,6 +43,44 @@ from .theme_lifecycle_service import set_initial_lifecycle_defaults
 logger = logging.getLogger(__name__)
 
 
+def _find_active_canonical_theme(db, canonical_key: str, pipeline: str):
+    return db.query(ThemeCluster).filter(
+        ThemeCluster.canonical_key == canonical_key,
+        ThemeCluster.pipeline == pipeline,
+        ThemeCluster.is_active.is_(True),
+    ).first()
+
+
+def _theme_alias_quality_score(alias, source_trust):
+    source = (alias.source or "").strip().lower()
+    trust = float(source_trust.get(source, 0.5))
+    evidence = max(1, int(alias.evidence_count or 1))
+    quality = (0.5 * trust + 0.3 * max(0.0, min(1.0, float(alias.confidence or 0)))
+               + 0.2 * min(1.0, evidence / 4.0))
+    return max(0.0, min(1.0, quality))
+
+
+def find_read_only_theme_match(db, raw_theme: str, pipeline: str):
+    """Reuse exact/qualified-alias matching without any lifecycle or alias writes."""
+    key = canonical_theme_key(raw_theme)
+    with db.no_autoflush:
+        cluster = _find_active_canonical_theme(db, key, pipeline)
+        if cluster is not None or key == UNKNOWN_THEME_KEY:
+            return cluster
+        alias = SqlThemeAliasRepository(db).find_exact(pipeline=pipeline, alias_key=key)
+        if alias is None:
+            return None
+        # Share the pure policy; avoid constructing the legacy write service.
+        evidence = max(1, int(alias.evidence_count or 1))
+        quality = _theme_alias_quality_score(alias, ThemeExtractionService.ALIAS_SOURCE_TRUST)
+        if evidence < ThemeExtractionService.ALIAS_AUTO_ATTACH_MIN_EVIDENCE or quality < ThemeExtractionService.ALIAS_AUTO_ATTACH_MIN_SCORE:
+            return None
+        return db.query(ThemeCluster).filter(
+            ThemeCluster.id == alias.theme_cluster_id,
+            ThemeCluster.pipeline == pipeline, ThemeCluster.is_active.is_(True),
+        ).first()
+
+
 class ThemeExtractionParseError(Exception):
     """Raised when model output cannot be parsed into the extraction schema."""
 
@@ -770,13 +808,7 @@ Example themes for this pipeline: {examples_str}
 
     def _alias_quality_score(self, alias: ThemeAlias) -> float:
         """Blend source trust, confidence, and evidence for Stage B auto-attach."""
-        source = (alias.source or "").strip().lower()
-        trust_score = float(self.ALIAS_SOURCE_TRUST.get(source, 0.5))
-        confidence_score = max(0.0, min(1.0, float(alias.confidence or 0.0)))
-        evidence_count = max(1, int(alias.evidence_count or 1))
-        evidence_score = min(1.0, evidence_count / 4.0)
-        score = (0.5 * trust_score) + (0.3 * confidence_score) + (0.2 * evidence_score)
-        return max(0.0, min(1.0, score))
+        return _theme_alias_quality_score(alias, self.ALIAS_SOURCE_TRUST)
 
     def _can_auto_attach_alias(self, alias: ThemeAlias) -> bool:
         """Gate exact alias-key attachment to reduce low-trust alias poisoning."""
@@ -1295,11 +1327,7 @@ Example themes for this pipeline: {examples_str}
 
         # Stage A: pipeline+canonical_key exact matching (indexed, low-latency gate).
         if cluster is None:
-            cluster = self.db.query(ThemeCluster).filter(
-                ThemeCluster.canonical_key == canonical_key,
-                ThemeCluster.pipeline == self.pipeline,
-                ThemeCluster.is_active == True,
-            ).first()
+            cluster = _find_active_canonical_theme(self.db, canonical_key, self.pipeline)
             if cluster is not None:
                 method = "exact_canonical_key"
                 score = 1.0
