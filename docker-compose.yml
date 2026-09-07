@@ -22,6 +22,7 @@ x-app-env: &app-env
   SERVER_AUTH_SESSION_SECRET: ${SERVER_AUTH_SESSION_SECRET:-}
   SERVER_AUTH_SECURE_COOKIE: ${SERVER_AUTH_SECURE_COOKIE:-false}
   SERVER_EXPOSE_API_DOCS: ${SERVER_EXPOSE_API_DOCS:-false}
+  ADMIN_API_KEY: ${ADMIN_API_KEY:-}
   FEATURE_GROUPED_SCAN_FILTERS: ${FEATURE_GROUPED_SCAN_FILTERS:-false}
   OPTIONS_ANALYTICS_ENABLED: ${OPTIONS_ANALYTICS_ENABLED:-false}
   HERMES_API_BASE: ${HERMES_API_BASE:-http://hermes:8642/v1}
@@ -45,6 +46,20 @@ x-app-env: &app-env
   X_API_MAX_RESULTS_PER_PAGE: ${X_API_MAX_RESULTS_PER_PAGE:-50}
   XUI_LIMIT_PER_SOURCE: ${XUI_LIMIT_PER_SOURCE:-50}
   TWITTER_REQUEST_DELAY: ${TWITTER_REQUEST_DELAY:-5.0}
+  SOCIAL_SIGNALS_MODE: ${SOCIAL_SIGNALS_MODE:-off}
+  SOCIAL_INGEST_PROVIDER: ${SOCIAL_INGEST_PROVIDER:-disabled}
+  SOCIAL_REFRESH_HOURS: ${SOCIAL_REFRESH_HOURS:-6}
+  SOCIAL_MANUAL_REFRESH_COOLDOWN_SECONDS: ${SOCIAL_MANUAL_REFRESH_COOLDOWN_SECONDS:-3600}
+  SOCIAL_STALE_AFTER_HOURS: ${SOCIAL_STALE_AFTER_HOURS:-7}
+  SOCIAL_INITIAL_BACKFILL_DAYS: ${SOCIAL_INITIAL_BACKFILL_DAYS:-14}
+  SOCIAL_INITIAL_BACKFILL_LIMIT_PER_SOURCE: ${SOCIAL_INITIAL_BACKFILL_LIMIT_PER_SOURCE:-1000}
+  SOCIAL_INCREMENTAL_LIMIT_PER_SOURCE: ${SOCIAL_INCREMENTAL_LIMIT_PER_SOURCE:-200}
+  SOCIAL_XUI_CONFIG_PATH: /app/data/xui-reader/config.toml
+  SOCIAL_XUI_PROFILE: ${SOCIAL_XUI_PROFILE:-automation}
+  SOCIAL_OFFICIAL_DAILY_POST_LIMIT: ${SOCIAL_OFFICIAL_DAILY_POST_LIMIT:-2000}
+  SOCIAL_LLM_DAILY_BUDGET_USD: ${SOCIAL_LLM_DAILY_BUDGET_USD:-2.00}
+  SOCIAL_LLM_BUDGET_TIMEZONE: ${SOCIAL_LLM_BUDGET_TIMEZONE:-Asia/Singapore}
+  SOCIAL_MARKET_CLOSE_GRACE_MINUTES: ${SOCIAL_MARKET_CLOSE_GRACE_MINUTES:-120}
   LLM_DEFAULT_PROVIDER: ${LLM_DEFAULT_PROVIDER:-groq}
   LLM_CHATBOT_MODEL: ${LLM_CHATBOT_MODEL:-}
   LLM_RESEARCH_MODEL: ${LLM_RESEARCH_MODEL:-}
@@ -175,6 +190,16 @@ services:
       sh -c 'QUEUES="$$(python scripts/compose_enabled_markets.py queues --markets "$${ENABLED_MARKETS:-US}")" &&
       exec celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1
       --without-mingle --without-gossip -Q "$$QUEUES" -n datafetch-global@%h'
+
+  celery-social:
+    <<: *worker-common
+    image: ${SOCIAL_PUBLIC_WORKER_IMAGE:-stock-screener-social:local}
+    build:
+      <<: *backend-build
+      target: public
+    profiles: ["social"]
+    user: "1000:1000"
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q social_ingestion -n social@%h
 
   celery-marketjobs-us:
     <<: *worker-common

@@ -1,0 +1,20 @@
+services:
+  celery-social:
+    image: ${SOCIAL_WORKER_IMAGE:-stock-screener-social-xui:dev}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: social-xui
+      args:
+        INSTALL_THEME_ML: ${INSTALL_THEME_ML:-false}
+        XUI_READER_REF: ${XUI_READER_REF:-}
+      ssh:
+        - default
+      secrets:
+        - github_known_hosts
+    volumes:
+      - ${XUI_PROFILE_DIR:?Set XUI_PROFILE_DIR}:/app/data/xui-reader
+
+secrets:
+  github_known_hosts:
+    file: ${GITHUB_KNOWN_HOSTS_FILE:-./github_known_hosts}

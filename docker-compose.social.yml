@@ -1,0 +1,9 @@
+services:
+  celery-social:
+    image: ${SOCIAL_PUBLIC_WORKER_IMAGE:-stock-screener-social:local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: public
+      args:
+        INSTALL_THEME_ML: ${INSTALL_THEME_ML:-false}

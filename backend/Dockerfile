@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.11-slim AS builder
 
 ARG INSTALL_THEME_ML=false
@@ -20,7 +22,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 
 COPY backend/ /build/backend
 
-FROM python:3.11-slim
+FROM python:3.11-slim AS runtime-base
 
 WORKDIR /app
 
@@ -53,3 +55,30 @@ EXPOSE 8000
 ENV WEB_CONCURRENCY=4
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM builder AS social-xui-builder
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    openssh-client \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
+ARG XUI_READER_REF
+RUN test "${#XUI_READER_REF}" -eq 40 \
+    && case "$XUI_READER_REF" in *[!0-9a-fA-F]*) exit 1 ;; *) true ;; esac
+RUN --mount=type=ssh,required=true \
+    --mount=type=secret,id=github_known_hosts,target=/root/.ssh/known_hosts,required=true \
+    pip install --no-cache-dir \
+    "xui-reader[cli] @ git+ssh://git@github.com/xang1234/xui.git@${XUI_READER_REF}"
+
+FROM runtime-base AS social-xui
+USER root
+COPY --from=social-xui-builder /opt/venv /opt/venv
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/stockscanner/playwright
+RUN python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/stockscanner/playwright \
+    && rm -rf /var/lib/apt/lists/*
+USER stockscanner
+
+FROM runtime-base AS public
