@@ -143,15 +143,15 @@ def _prepare(evidence: SocialEvidenceInput, window_days: int, now: datetime) -> 
             exclusions.add((key, reason))
             continue
         recent.append(post.created_at)
+        if post.canonical_url:
+            urls.add(post.canonical_url)
+        if post.canonical_claim_key:
+            claims.add(post.canonical_claim_key)
         # Carry saved earlier author activity into the first scoring-day cap.
         if post.created_at < now - timedelta(days=14):
             exclusions.add((key, "outside_window"))
             continue
         accepted.append(post)
-        if post.canonical_url:
-            urls.add(post.canonical_url)
-        if post.canonical_claim_key:
-            claims.add(post.canonical_claim_key)
     current = tuple(p for p in accepted if p.created_at >= now - timedelta(days=window_days))
     recent_count = sum(p.created_at >= now - timedelta(days=1) for p in accepted)
     previous_count = len(accepted) - recent_count

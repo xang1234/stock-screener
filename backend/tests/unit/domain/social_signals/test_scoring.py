@@ -93,6 +93,23 @@ def test_author_cap_carries_in_saved_posts_before_fourteen_day_boundary():
     assert ("xui:4", "author_24h_cap") in row.exclusions
 
 
+@pytest.mark.parametrize(("dedup", "reason"), [
+    ({"canonical_url": "https://example.com/claim"}, "repeated_canonical_url"),
+    ({"canonical_claim_key": "saved-claim"}, "copied_claim"),
+])
+def test_carry_in_duplicates_do_not_consume_author_allowance(dedup, reason):
+    carry_in = tuple(post(str(i), age=339-i, **dedup) for i in range(3))
+    row = score(evidence(carry_in + (post("distinct", age=336),)))
+    assert row.mention_count == 1
+    assert row.social_score is not None
+    assert ("xui:0", "outside_window") in row.exclusions
+    assert ("xui:1", reason) in row.exclusions
+    assert ("xui:2", reason) in row.exclusions
+    assert ("xui:distinct", "author_24h_cap") not in row.exclusions
+    assert components(row)["authors"].observed_count == 1
+    assert components(row)["engagement"].input_count == 1
+
+
 def test_reposts_empty_quotes_copied_claims_and_canonical_urls_do_not_inflate():
     row = score(evidence((
         post("1", canonical_url="https://example.com/claim", canonical_claim_key="claim"),
