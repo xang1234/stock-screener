@@ -280,16 +280,24 @@ def score_confirmation(input: ConfirmationInput) -> ComponentScore:
     ))
 
 
-def rank_snapshots(rows: Iterable[SocialSnapshotRecord], mode: str) -> tuple[SocialSnapshotRecord, ...]:
+def snapshot_rank_order(mode: str) -> tuple[tuple[str, str, str], ...]:
+    """Shared field/direction/null policy for pure and persisted ranked rows."""
     if mode not in {"pure_social", "blended"}:
         raise ValueError("invalid_rank_mode")
-    def score_key(value):
-        return (value is None, -value if value is not None else Decimal(0))
+    social = (("social_score", "desc", "last"), ("latest_mention", "desc", "last"),
+              ("canonical_symbol", "asc", "last"), ("candidate_key", "asc", "last"))
+    return (("queue_score", "desc", "last"),) + social if mode == "blended" else social
+
+
+def rank_snapshots(rows: Iterable[SocialSnapshotRecord], mode: str) -> tuple[SocialSnapshotRecord, ...]:
+    ordering = snapshot_rank_order(mode)
     def key(row):
-        latest = row.latest_mention
-        if latest is not None:
-            validate_utc_timestamp(latest, "latest_mention")
-        social = (score_key(row.social_score), latest is None, -latest.timestamp() if latest else 0,
-                  row.canonical_symbol, row.candidate_key)
-        return (score_key(row.queue_score),) + social if mode == "blended" else social
+        values = []
+        for field, direction, _ in ordering:
+            value = getattr(row, field)
+            if field == "latest_mention" and value is not None:
+                validate_utc_timestamp(value, "latest_mention")
+                value = value.timestamp()
+            values.append((value is None, 0 if value is None else -value if direction == "desc" else value))
+        return tuple(values)
     return tuple(sorted((r for r in rows if r.candidate_state not in {"context", "unresolved"}), key=key))

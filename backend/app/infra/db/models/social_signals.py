@@ -1,7 +1,7 @@
 """Persisted social evidence and installation-wide source registry."""
 from sqlalchemy import (
     BigInteger, CheckConstraint, Column, Date, DateTime, ForeignKey, Index,
-    Integer, JSON, Numeric, Text, UniqueConstraint, event, inspect,
+    Integer, JSON, Numeric, Text, UniqueConstraint, event, inspect, select,
 )
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -203,6 +203,18 @@ class SocialSignalRunPointer(Base):
 
 @event.listens_for(Session, "before_flush")
 def _protect_social_history(session, flush_context, instances):
+    from app.infra.db.models.social_analysis import SocialRunWork
+    links = [row for row in session.new | session.dirty | session.deleted if isinstance(row, SocialRunWork)]
+    if links:
+        from app.services.social_theme_projection_service import _lock_registry
+        with session.no_autoflush:
+            _lock_registry(session)
+            run_ids = {row.run_id for row in links}
+            for row in links:
+                run_ids.update(inspect(row).attrs.run_id.history.deleted)
+            statuses = session.execute(select(SocialSignalRun.status).where(SocialSignalRun.id.in_(run_ids))).scalars()
+            if any(status != "running" for status in statuses):
+                raise ValueError("social_terminal_work_manifest_immutable")
     for row in session.new:
         if isinstance(row, SocialSignalSnapshot):
             run = session.get(SocialSignalRun, row.run_id)
@@ -232,6 +244,9 @@ def _protect_social_history(session, flush_context, instances):
 
 @event.listens_for(Session, "do_orm_execute")
 def _protect_social_bulk_history(state):
+    from app.infra.db.models.social_analysis import SocialRunWork
+    if (state.is_insert or state.is_update or state.is_delete) and state.bind_mapper is not None and state.bind_mapper.class_ is SocialRunWork:
+        raise ValueError("social_work_manifest_immutable_bulk")
     if state.is_insert and state.bind_mapper is not None and state.bind_mapper.class_ is SocialSignalSnapshot:
         raise ValueError("social_publication_immutable_bulk")
     if (state.is_update or state.is_delete) and state.bind_mapper is not None:

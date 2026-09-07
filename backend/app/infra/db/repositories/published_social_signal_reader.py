@@ -1,9 +1,10 @@
 """Read one immutable publication; never join current engagement or work."""
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 
 from app.domain.social_signals.records import QueuePage, SocialSnapshotRecord, SUPPORTED_MARKETS
+from app.domain.social_signals.scoring import snapshot_rank_order
 from app.infra.db.models.social_signals import SocialSignalRunPointer, SocialSignalSnapshot
 
 
@@ -20,8 +21,9 @@ class PublishedSocialSignalReader:
     def queue(self, market, window_days, view, rank_mode, page, page_size):
         if market not in SUPPORTED_MARKETS or window_days not in {1, 7, 14}:
             raise ValueError("invalid_market_or_window")
-        if view not in {"all", "actionable", "watch", "risk_off", "context", "unresolved"} or rank_mode not in {"blended", "social"}:
+        if view not in {"all", "actionable", "watch", "risk_off", "context", "unresolved"}:
             raise ValueError("invalid_queue_selection")
+        ordering = snapshot_rank_order(rank_mode)
         if page < 1 or not 1 <= page_size <= 200:
             raise ValueError("invalid_pagination")
         with self.session_factory() as db:
@@ -29,18 +31,28 @@ class PublishedSocialSignalReader:
             if pointer is None:
                 raise SocialPublicationUnavailable("no_published_run")
             run_id = pointer.run_id
-            rows = db.scalars(select(SocialSignalSnapshot).where(SocialSignalSnapshot.run_id == run_id,
+            predicates = [SocialSignalSnapshot.run_id == run_id,
                 SocialSignalSnapshot.window_days == window_days,
-                (SocialSignalSnapshot.market == market) | SocialSignalSnapshot.market.is_(None))).all()
+                (SocialSignalSnapshot.market == market) | SocialSignalSnapshot.market.is_(None)]
             if view != "all":
-                rows = [row for row in rows if row.state == view]
-            def ordering(row):
-                score = row.queue_score if rank_mode == "blended" else row.social_score
-                return (row.state in {"context", "unresolved"} or row.market is None,
-                    score is None, -(score or Decimal(0)), -(row.social_score or Decimal(0)), row.candidate_key)
-            rows.sort(key=ordering)
+                predicates.append(SocialSignalSnapshot.state == view)
+            ranked = SocialSignalSnapshot.state.not_in(("context", "unresolved")) & SocialSignalSnapshot.market.is_not(None)
+            # Unranked sections ignore scores and dates: context, then resolution,
+            # each alphabetically stable. They never join a candidate cohort.
+            order_by = [case((ranked, 0), (SocialSignalSnapshot.state == "context", 1), else_=2)]
+            for field, direction, null_policy in ordering:
+                column = getattr(SocialSignalSnapshot, field)
+                if field in {"canonical_symbol", "candidate_key"}:
+                    column = column.collate("C" if db.get_bind().dialect.name == "postgresql" else "BINARY")
+                else:
+                    column = case((ranked, column), else_=None)
+                ordered = column.desc() if direction == "desc" else column.asc()
+                order_by.append(ordered.nulls_last() if null_policy == "last" else ordered.nulls_first())
+            total = db.scalar(select(func.count()).select_from(SocialSignalSnapshot).where(*predicates))
+            rows = db.scalars(select(SocialSignalSnapshot).where(*predicates).order_by(*order_by)
+                .offset((page-1)*page_size).limit(page_size)).all()
             items = []
-            for row in rows[(page-1)*page_size:page*page_size]:
+            for row in rows:
                 data = dict(row.explanation_json["record"])
                 data["pinned_inputs"] = tuple(tuple(value) for value in data["pinned_inputs"])
                 data["coverage"] = tuple(data["coverage"])
@@ -48,4 +60,4 @@ class PublishedSocialSignalReader:
                 for field in ("social_score", "confirmation_score", "queue_score"):
                     data[field] = Decimal(data[field]) if data[field] is not None else None
                 items.append(SocialSnapshotRecord(**data))
-            return QueuePage(tuple(items), page, page_size, len(rows))
+            return QueuePage(tuple(items), page, page_size, total)

@@ -182,7 +182,13 @@ class SocialSignalWriter:
                 outcome["coverage_reason_codes"] = tuple(outcome["coverage_reason_codes"])
                 outcome["known_gap_intervals"] = tuple(tuple(datetime.fromisoformat(v) for v in gap) for gap in outcome["known_gap_intervals"])
                 batches.append(SocialSourceBatch(SocialReadRequest(**request), tuple(posts), SocialSourceOutcome(**outcome)))
-            work_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(SocialRunWork.run_id == run_id).order_by(SocialRunWork.work_id)))
+            if run.status == "running":
+                work_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(SocialRunWork.run_id == run_id).order_by(SocialRunWork.work_id)))
+            else:
+                manifest = run.application_progress_json.get("prepared", {}).get("work_ids")
+                if manifest is None:
+                    raise ValueError("terminal_run_manifest_missing")
+                work_ids = tuple(manifest)
             return SavedSocialRunInputs(run_id, utc(run.created_at), run.registry_version, tuple(batches), tuple(sorted(content_ids)), work_ids)
 
     def _validate_inputs(self, db, run):
@@ -244,12 +250,10 @@ class SocialSignalWriter:
                     raise ValueError("snapshot_identity_mismatch")
                 keys.add((record.window_days, record.candidate_key))
                 db.add(SocialSignalSnapshot(run_id=run_id, window_days=record.window_days,
-                    candidate_key=record.candidate_key, canonical_symbol=record.symbol, market=record.market,
+                    candidate_key=record.candidate_key, canonical_symbol=record.canonical_symbol, market=record.market,
                     state=record.candidate_state, social_score=record.social_score, confirmation_score=record.confirmation_score,
-                    queue_score=record.queue_score, explanation_json={"record": serialized(record),
-                        "run_inputs": frozen_input["observations"], "work_ids": list(work_ids),
-                        "theme_evidence": [serialized(e) for e in theme_evidence]},
-                    coverage_json={"sources": deepcopy(run.source_outcomes_json), "reasons": list(record.coverage)},
+                    queue_score=record.queue_score, explanation_json={"record": serialized(record), "evidence_run_id": run_id},
+                    coverage_json={"evidence_run_id": run_id, "reasons": list(record.coverage)},
                     resolution_policy_version="social-resolution-v1", formula_version=record.formula_version,
                     latest_mention=record.latest_mention, mention_count=record.mention_count,
                     observed_list_count=record.observed_list_count, enabled_list_count=len(frozen_input["sources"]),

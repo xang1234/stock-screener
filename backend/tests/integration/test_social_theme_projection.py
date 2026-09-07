@@ -69,12 +69,14 @@ class Fixture:
         if registry.mode != mode:
             registry.mode, registry.version = mode, registry.version + 1
         run = SocialSignalRun(id=f"run-{self.serial}-{mode}-{self.db.query(SocialSignalRun).count()}", registry_id=1,
-            registry_version=registry.version, mode=mode, provider="official", status="staged", source_outcomes_json={},
+            registry_version=registry.version, mode=mode, provider="official", status="running", source_outcomes_json={},
             application_progress_json={}, feature_run_ids_json={}, exposure_dates_json={}, coverage_json={})
         self.db.add(run)
         self.db.flush()
         for work_id in works:
             self.db.add(SocialRunWork(run_id=run.id, work_id=work_id, input_hash=self.db.get(SocialExtractionWork, work_id).input_hash, included_at=NOW))
+        self.db.flush()
+        run.status = "staged"
         self.db.commit()
         return self.service.prepare(run.id, NOW)
 

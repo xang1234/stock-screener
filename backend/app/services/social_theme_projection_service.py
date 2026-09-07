@@ -17,7 +17,7 @@ from app.domain.social_signals.records import (
 )
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialRunWork, SocialThemeAssociation, SocialThemeDecision
 from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
-from app.models.theme import ThemeCluster, ThemeConstituent, ThemeMention
+from app.models.theme import ThemeAlias, ThemeCluster, ThemeConstituent, ThemeMention
 from app.services.social_company_identity_service import SocialCompanyIdentityService
 from app.services.social_extraction_service import SocialExtractionParser, SocialExtractionService
 from app.services.social_ticker_resolver import SocialTickerResolver
@@ -123,6 +123,7 @@ class SocialThemeProjectionService:
         work_ids.update(self.db.scalars(select(ThemeMention.social_work_id).where(
             ThemeMention.theme_cluster_id.in_(ids), ThemeMention.social_work_id.is_not(None))))
         rows = [("catalog_identity", [tuple(row) for row in catalog])]
+        alias_keys = {canonical_theme_key(claim.raw_theme) for claim in projection.proposals}
         scopes = ((ThemeConstituent, ThemeConstituent.theme_cluster_id.in_(ids)),
             (SocialThemeAssociation, SocialThemeAssociation.theme_cluster_id.in_(ids)),
             (ThemeMention, ThemeMention.theme_cluster_id.in_(ids)),
@@ -131,6 +132,14 @@ class SocialThemeProjectionService:
         for model, condition in scopes:
             values = self.db.execute(select(*model.__table__.columns).where(condition).order_by(*model.__table__.primary_key.columns)).all()
             rows.append((model.__tablename__, [tuple(row) for row in values]))
+            if model is SocialExtractionWork:
+                for row in values:
+                    alias_keys.update(canonical_theme_key(claim["raw_theme"])
+                        for claim in (row.result_json or {}).get("claims", ()))
+        aliases = self.db.execute(select(ThemeAlias.id, ThemeAlias.alias_key, ThemeAlias.theme_cluster_id,
+            ThemeAlias.is_active, ThemeAlias.confidence, ThemeAlias.source, ThemeAlias.evidence_count).where(
+                ThemeAlias.pipeline == self.pipeline, ThemeAlias.alias_key.in_(alias_keys)).order_by(ThemeAlias.id)).all()
+        rows.append(("qualified_aliases", [tuple(row) for row in aliases]))
         # Security resolution can change without the Social registry. Pin the
         # small identity columns, not every stored stock/feature payload.
         values = self.db.execute(select(StockUniverse.id, StockUniverse.symbol, StockUniverse.market,

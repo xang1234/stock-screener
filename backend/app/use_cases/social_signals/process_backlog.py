@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.domain.social_signals.records import BacklogResult, SocialPostRecord
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt, SocialLLMBudgetDay, SocialRunWork
+from app.infra.db.models.social_signals import SocialSignalRun
 from app.services.llm.llm_service import LLMService
 from app.services.social_extraction_service import SocialExtractionError, SocialExtractionService, VERSION
 from app.services.social_llm_budget_service import SocialLLMBudgetService, social_analysis_transaction
@@ -121,6 +122,10 @@ class ProcessSocialBacklog:
         snapshot["created_at"] = post.created_at.isoformat()
         snapshot["observed_at"] = post.observed_at.isoformat()
         with social_analysis_transaction(self.session_factory) as db:
+            if run_id:
+                run = db.get(SocialSignalRun, run_id)
+                if run is None or run.status != "running":
+                    raise ValueError("terminal_or_missing_social_run")
             work = db.scalar(select(SocialExtractionWork).where(
                 SocialExtractionWork.content_item_id == content_item_id,
                 SocialExtractionWork.input_hash == input_hash,
