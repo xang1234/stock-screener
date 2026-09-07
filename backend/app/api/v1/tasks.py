@@ -15,7 +15,7 @@ from ...schemas.task import (
     TriggerTaskResponse,
     TaskStatusResponse,
 )
-from ...services.task_registry_service import SCHEDULED_TASKS
+from ...services.task_registry_service import SCHEDULED_TASKS, TaskCooldownError
 from ...wiring.bootstrap import get_task_registry_service
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,12 @@ async def trigger_task(
         service = get_task_registry_service()
         result = service.trigger_task(task_name, db)
         return TriggerTaskResponse(**result)
+    except TaskCooldownError as e:
+        raise HTTPException(
+            status_code=429,
+            detail="manual_refresh_cooldown",
+            headers={"Retry-After": str(e.retry_after)},
+        )
     except Exception as e:
         logger.error(f"Error triggering task {task_name}: {e}", exc_info=True)
         raise HTTPException(

@@ -288,6 +288,7 @@ class SocialSourceView:
     version: int
     created_at: datetime
     updated_at: datetime
+    test_progress: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("source_id", "name", "canonical_url", "list_id", "lifecycle", "provenance"):
@@ -297,6 +298,8 @@ class SocialSourceView:
         _utc(self.collected_at, "collected_at", nullable=True)
         _utc(self.created_at, "created_at")
         _utc(self.updated_at, "updated_at")
+        if self.test_progress is not None:
+            _choice(self.test_progress, {"queued", "running"}, "test_progress")
 
 
 @dataclass(frozen=True, slots=True)

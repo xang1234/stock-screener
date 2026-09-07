@@ -279,22 +279,7 @@ class SqlConfirmationReaderFacade:
             ).read_market(market, symbols, now, **kwargs)
 
 
-class ExternalFetchProviderReadLease:
-    """Temporary shared lease adapter; Task 10 owns its Social-specific runtime."""
-
-    def __init__(self, coordination):
-        self.coordination = coordination
-
-    def acquire(self, owner, ttl_seconds):
-        acquired, _ = self.coordination.acquire_external_fetch("social_signals", owner)
-        return acquired
-
-    def release(self, owner):
-        self.coordination.release_external_fetch(owner)
-
-
 __all__ = [
-    "ExternalFetchProviderReadLease",
     "SocialScoringEvidenceReader",
     "SqlConfirmationReaderFacade",
     "SqlSocialRefreshCatalog",

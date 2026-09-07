@@ -114,6 +114,9 @@ class Writer:
         self.created.append((run_id, as_of))
         return run_id
 
+    def resume_existing_run(self, run_id, expected_version):
+        return None
+
     def latest_committed_progress(self, source_id, provider):
         return {"2": "prior-cursor"}.get(source_id)
 
@@ -351,6 +354,25 @@ async def test_same_generation_retry_reuses_committed_source_without_refetching_
     result = await refresh.execute("scheduled", NOW)
     assert result.published is True
     assert [request.source_id for request in provider.requests] == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_delivery_returns_terminal_generation_without_replaying_io():
+    refresh, events, provider, writer, backlog, _ = use_case()
+
+    def already_exists(run_id, as_of):
+        raise ValueError("run_exists")
+
+    writer.create_run = already_exists
+    writer.resume_existing_run = lambda run_id, expected_version: SocialRunResult(
+        run_id, "live", "complete", True, (("1", "limited"), ("2", "limited")),
+    )
+
+    result = await refresh.execute("scheduled", NOW)
+
+    assert result.published is True
+    assert not provider.requests and not backlog.enqueued
+    assert events == []
 
 
 def test_production_factory_has_explicit_lazy_official_and_xui_adapters():

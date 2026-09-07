@@ -91,9 +91,9 @@ Ruling: Private image publication and real-X/paid-LLM validation are operator ga
 - [x] Task 8: Observation Writer and Atomic Publication Repository
 - [x] Task 9: Confirmation Reader and Refresh Orchestration
   - [x] Task 9A: Coherent batch confirmation/public liquidity adapter
-  - [ ] Task 9B: Current replay generation/immutable Market context
+  - [x] Task 9B: Current replay generation/immutable Market context
   - [x] Task 9C: Refresh orchestration/production factory
-- [ ] Task 10: Celery Scheduling, Lease, and Operations Visibility
+- [x] Task 10: Celery Scheduling, Lease, and Operations Visibility
 - [ ] Task 11: Authenticated Social API
 - [ ] Task 12: Social Queue and Evidence Drawer UI
 - [ ] Task 13: Daily Card, Theme Social Pulse, and Admin Health UI
@@ -103,6 +103,8 @@ Ruling: Private image publication and real-X/paid-LLM validation are operator ga
 - [ ] Task 17: Fixture-Only End-to-End Flow and Full Verification
 
 ## Task log
+
+Task 10: implemented inline without subagents per user request. Added dedicated refresh/resume/source-test Celery entries, DB-authoritative delivery gating, six-hour cadence-slot idempotency, ownership-token Redis provider lease, separate manual refresh cooldown, durable per-provider rate-limit/reauthentication cooldown, saved-analysis reset replay, redacted source diagnostics, task progress, and Operations health projection. Stable Beat delivery is intentionally always installed so later DB admin enablement does not require a Beat restart; off/disabled deliveries are no-I/O skips. Focused 23 passed; scheduling/source/cache/options regressions 73 passed; full affected Social suite 524 passed with 21 inherited dependency warnings. Report: task-10-report.md. Commit pending.
 
 Task 1: in_progress; BASE 7d53d2e9; implementer /root/task1_runtime (gpt-5.6-sol); brief task-1-brief.md, report task-1-report.md.
 Task 1: implementation 5b3903bb; backend 35 passed (19 inherited warnings), frontend 8 passed; awaiting task review.

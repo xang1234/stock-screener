@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import timedelta, timezone
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -216,6 +219,70 @@ def get_options_analytics_queries(session: Session):
     )
 
 
+def _social_provider_factories(sessions, *, official_client=None, cooldown_gate=None):
+    import httpx
+    from app.config import settings
+    from app.infra.providers.official_x_social_provider import OfficialXSocialProvider
+    from app.infra.providers.xui_cli_social_provider import XuiCliSocialProvider
+    from app.services.social_signal_runtime_gate import SharedCooldownSocialProvider
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    def reserve_official(day, requested, daily_limit):
+        with sessions() as db:
+            return SocialSourceAdminService(db).reserve_official_capacity(
+                day, requested, daily_limit
+            )
+
+    factories = {
+        "official": lambda: OfficialXSocialProvider(
+            bearer_token=settings.twitter_bearer_token,
+            reservation=reserve_official,
+            client=official_client or httpx.Client(timeout=30),
+            daily_post_limit=settings.social_official_daily_post_limit,
+            budget_timezone=settings.social_llm_budget_timezone,
+        ),
+        "xui": lambda: XuiCliSocialProvider(
+            config_path=settings.social_xui_config_path,
+            profile=settings.social_xui_profile,
+        ),
+    }
+    if cooldown_gate is None or not hasattr(cooldown_gate, "provider_cooldown"):
+        return factories
+    return {
+        name: (lambda name=name, factory=factory: SharedCooldownSocialProvider(
+            name, factory(), cooldown_gate
+        ))
+        for name, factory in factories.items()
+    }
+
+
+def _social_provider_lease():
+    from app.services.redis_pool import get_redis_client
+    from app.services.social_signal_runtime_gate import RedisSocialSignalGate
+    return RedisSocialSignalGate(get_redis_client())
+
+
+def _social_run_id(origin, now):
+    """Use the scheduled cadence slot as the idempotency identity."""
+    identity_time = now
+    if origin == "scheduled":
+        from app.config import settings
+        local = now.astimezone(ZoneInfo(settings.celery_timezone))
+        eligible = [hour for hour in (0, 6, 12, 18)
+                    if (hour, 17) <= (local.hour, local.minute)]
+        if eligible:
+            slot = local.replace(
+                hour=eligible[-1], minute=17, second=0, microsecond=0
+            )
+        else:
+            slot = (local - timedelta(days=1)).replace(
+                hour=18, minute=17, second=0, microsecond=0
+            )
+        identity_time = slot.astimezone(timezone.utc)
+    value = f"social:{origin}:{identity_time.isoformat()}".encode()
+    return f"social-{sha256(value).hexdigest()[:24]}"
+
+
 def get_refresh_social_signals_use_case(
     *, session_factory=None, provider_lease=None, official_client=None, llm=None
 ):
@@ -224,61 +291,29 @@ def get_refresh_social_signals_use_case(
     The database remains authoritative for mode and provider. Provider factories
     are lazy, so an off installation does not touch X credentials or start a CLI.
     """
-    from datetime import datetime
-    from hashlib import sha256
-    import httpx
-
     from app.config import settings
     from app.database import SessionLocal
     from app.infra.db.repositories.social_refresh_support import (
-        ExternalFetchProviderReadLease,
         SocialScoringEvidenceReader,
         SqlConfirmationReaderFacade,
         SqlSocialRefreshCatalog,
         SqlThemeProjectionFacade,
     )
     from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
-    from app.infra.providers.official_x_social_provider import OfficialXSocialProvider
-    from app.infra.providers.xui_cli_social_provider import XuiCliSocialProvider
     from app.services.social_extraction_service import SocialExtractionService
-    from app.services.social_source_admin_service import SocialSourceAdminService
     from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
     from app.use_cases.social_signals.refresh import RefreshSocialSignals
 
     sessions = session_factory or SessionLocal
 
-    def reserve_official(day, requested, daily_limit):
-        with sessions() as db:
-            return SocialSourceAdminService(db).reserve_official_capacity(
-                day, requested, daily_limit
-            )
-
-    def official():
-        return OfficialXSocialProvider(
-            bearer_token=settings.twitter_bearer_token,
-            reservation=reserve_official,
-            client=official_client or httpx.Client(timeout=30),
-            daily_post_limit=settings.social_official_daily_post_limit,
-            budget_timezone=settings.social_llm_budget_timezone,
-        )
-
-    def xui():
-        return XuiCliSocialProvider(
-            config_path=settings.social_xui_config_path,
-            profile=settings.social_xui_profile,
-        )
-
     if provider_lease is None:
-        from app.wiring.bootstrap import get_workload_coordination
-        provider_lease = ExternalFetchProviderReadLease(get_workload_coordination())
-
-    def run_id(origin, now: datetime):
-        value = f"social:{origin}:{now.isoformat()}".encode()
-        return f"social-{sha256(value).hexdigest()[:24]}"
+        provider_lease = _social_provider_lease()
 
     return RefreshSocialSignals(
         catalog=SqlSocialRefreshCatalog(sessions),
-        providers={"official": official, "xui": xui},
+        providers=_social_provider_factories(
+            sessions, official_client=official_client, cooldown_gate=provider_lease
+        ),
         writer=SocialSignalWriter(sessions),
         backlog=ProcessSocialBacklog(sessions, llm=llm),
         evidence_reader=SocialScoringEvidenceReader(sessions),
@@ -287,11 +322,33 @@ def get_refresh_social_signals_use_case(
             sessions, grace_minutes=settings.social_market_close_grace_minutes
         ),
         provider_lease=provider_lease,
-        run_id_factory=run_id,
+        run_id_factory=_social_run_id,
         input_hash=lambda post: SocialExtractionService.input_hash((post,)),
         initial_days=settings.social_initial_backfill_days,
         initial_limit=settings.social_initial_backfill_limit_per_source,
         incremental_limit=settings.social_incremental_limit_per_source,
+    )
+
+
+def get_validate_social_source_use_case(
+    *, session_factory=None, provider_lease=None, official_client=None
+):
+    from datetime import datetime, timezone
+    from app.database import SessionLocal
+    from app.use_cases.social_signals.validate_source import (
+        SqlSourceTestRegistry, ValidateSocialSource,
+    )
+    sessions = session_factory or SessionLocal
+    provider_lease = provider_lease or _social_provider_lease()
+    return ValidateSocialSource(
+        registry=SqlSourceTestRegistry(sessions),
+        providers=_social_provider_factories(
+            sessions,
+            official_client=official_client,
+            cooldown_gate=provider_lease,
+        ),
+        provider_lease=provider_lease,
+        clock=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -312,5 +369,6 @@ __all__ = [
     "get_options_analytics_queries",
     "get_refresh_options_analytics_use_case",
     "get_refresh_social_signals_use_case",
+    "get_validate_social_source_use_case",
     "get_run_bulk_scan_use_case",
 ]

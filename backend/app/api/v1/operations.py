@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 from ...database import get_db
 from ...schemas.operations import OperationsCancelJobResponse, OperationsJobsResponse
 from ...services.operations_job_service import OperationsJobService
+from ...services.social_signal_operations_service import SocialSignalOperationsService
 
 router = APIRouter(prefix="/operations", tags=["operations"])
 
 _service = OperationsJobService()
+_social_service = SocialSignalOperationsService()
 
 
 @router.get("/jobs", response_model=OperationsJobsResponse)
@@ -27,3 +29,9 @@ def cancel_operations_job(
 ) -> OperationsCancelJobResponse:
     """Safely cancel or revoke a job when the strategy supports it."""
     return OperationsCancelJobResponse(**_service.cancel_job(db, task_id))
+
+
+@router.get("/social-signals")
+def get_social_signal_operations(db: Session = Depends(get_db)) -> dict:
+    """Return redacted collection, processing, budget, and backlog health."""
+    return _social_service.snapshot(db)

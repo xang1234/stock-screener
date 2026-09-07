@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -103,3 +105,62 @@ async def test_operations_cancel_endpoint_returns_service_payload(client, monkey
         "cancel_strategy": "scan_cancel",
         "message": "Cancelled task-123",
     }
+
+
+@pytest.mark.asyncio
+async def test_social_signal_operations_endpoint_returns_redacted_health(client, monkeypatch):
+    from app.api.v1 import operations as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(module._social_service, "snapshot", lambda _db: {
+        "mode": "validation", "provider": "xui", "run_id": "run-1",
+        "collection_status": "complete", "processing_status": "pending",
+        "history_by_source": {"1": "warming_up", "2": "limited"},
+        "budget": {"spent_usd": "1.25", "reserved_usd": "0.25", "remaining_usd": "0.50"},
+        "backlog": {"waiting": 3, "failed": 0, "outside_window": 2},
+        "reason_codes": ["bounded_provider_read"],
+    })
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+    try:
+        response = await client.get("/api/v1/operations/social-signals")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "xui" and payload["budget"]["remaining_usd"] == "0.50"
+    assert "stderr" not in str(payload).lower() and "config_path" not in str(payload).lower()
+
+
+def test_social_signal_operations_snapshot_uses_db_runtime_and_shared_ttls(db_session):
+    from app.services.social_signal_operations_service import SocialSignalOperationsService
+    from app.services.social_signal_runtime_gate import (
+        MANUAL_COOLDOWN_KEY,
+        PROVIDER_COOLDOWN_KEY,
+        PROVIDER_LEASE_KEY,
+    )
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    admin = SocialSourceAdminService(db_session)
+    admin.ensure_seed_sources()
+    runtime = admin.read_runtime()
+    admin.apply_runtime("validation", "official", runtime.version, "admin")
+
+    class Redis:
+        def ttl(self, key):
+            return {
+                PROVIDER_LEASE_KEY: 30,
+                MANUAL_COOLDOWN_KEY: 60,
+                PROVIDER_COOLDOWN_KEY.format(provider="official"): 90,
+            }.get(key, -2)
+
+    payload = SocialSignalOperationsService(
+        redis_client=Redis(),
+        clock=lambda: datetime(2026, 9, 7, 12, tzinfo=timezone.utc),
+    ).snapshot(db_session)
+
+    assert (payload["mode"], payload["provider"]) == ("validation", "official")
+    assert (payload["source_count"], payload["enabled_source_count"]) == (2, 2)
+    assert payload["provider_lease_ttl_seconds"] == 30
+    assert payload["manual_cooldown_ttl_seconds"] == 60
+    assert payload["provider_cooldown_ttl_seconds"] == 90

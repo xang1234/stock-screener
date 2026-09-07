@@ -118,7 +118,8 @@ class SocialSourceAdminService:
         outcome = None
         if row.test_status not in {None, "queued", "running"}:
             outcome = SourceTestOutcome(row.tested_provider, row.test_status, row.test_sample_count, _utc(row.tested_at))
-        return SocialSourceView(str(source.id), source.name, source.url, row.x_list_id, row.lifecycle_state, row.provenance, outcome, _utc(row.last_successful_collection_at), row.version, _utc(row.created_at), _utc(row.updated_at))
+        progress = row.test_status if row.test_status in {"queued", "running"} else None
+        return SocialSourceView(str(source.id), source.name, source.url, row.x_list_id, row.lifecycle_state, row.provenance, outcome, _utc(row.last_successful_collection_at), row.version, _utc(row.created_at), _utc(row.updated_at), progress)
 
     def _metadata(self, row):
         view = self._view(row)
@@ -235,6 +236,8 @@ class SocialSourceAdminService:
             self._version(row, expected_version)
             if row.lifecycle_state == "archived":
                 raise SocialSourceStateError("source_archived")
+            if row.lifecycle_state not in {"pending", "disabled"}:
+                raise SocialSourceStateError("source_test_not_required")
             if registry.provider == "disabled":
                 raise SocialSourceStateError("provider_disabled")
             before = self._metadata(row)
@@ -246,6 +249,25 @@ class SocialSourceAdminService:
             row.tested_at = row.test_sample_count = None
             self._changed(row, "test_requested", actor, before)
             return SocialSourceTestRequest(row.test_request_id, str(row.content_source_id), row.x_list_id, registry.provider, row.version, registry.version + 1)
+
+    def claim_test(self, source_id, actor):
+        """Move one exact queued diagnostic to running without external I/O."""
+        if not isinstance(actor, str) or not actor.strip():
+            raise SocialSourceStateError("invalid_actor")
+        with self._transaction(lock=True) as registry:
+            row = self._source(source_id)
+            if (row.test_status != "queued" or not row.test_request_id
+                    or row.lifecycle_state not in {"pending", "disabled"}
+                    or row.test_request_version != row.version
+                    or row.test_registry_version != registry.version
+                    or row.tested_provider != registry.provider
+                    or registry.mode == "off" or registry.provider == "disabled"):
+                raise SocialSourceStateError("stale_test_request")
+            row.test_status = "running"
+            return SocialSourceTestRequest(
+                row.test_request_id, str(row.content_source_id), row.x_list_id,
+                registry.provider, row.version, registry.version,
+            )
 
     def record_test_result(self, source_id, provider, outcome, actor, *, request_id, expected_version):
         with self._transaction(lock=True) as registry:

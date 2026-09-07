@@ -19,6 +19,12 @@ from ..tasks.market_queues import (
     market_jobs_queue_for_market,
 )
 
+
+class TaskCooldownError(RuntimeError):
+    def __init__(self, retry_after: int):
+        super().__init__("manual_refresh_cooldown")
+        self.retry_after = retry_after
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +78,15 @@ def _daily_market_pipeline_task_definitions() -> Dict[str, Dict]:
 
 # Task definitions with metadata
 SCHEDULED_TASKS = {
+    'social-signal-refresh': {
+        'task_function': 'app.interfaces.tasks.social_signal_tasks.refresh_social_signals',
+        'display_name': 'Refresh Social Signals',
+        'description': 'Collects configured X lists and refreshes the Social Signal Queue',
+        'schedule_description': 'Every six hours at minute 17',
+        'manual_dispatch_kwargs': {'origin': 'manual'},
+        'manual_dispatch_options': {'queue': 'social_ingestion'},
+        'db_runtime_social': True,
+    },
     # ===== SUNDAY (Off-Market Maintenance) =====
     'weekly-orphaned-scan-cleanup': {
         'task_function': 'app.tasks.cache_tasks.cleanup_orphaned_scans',
@@ -130,9 +145,17 @@ class TaskRegistryService:
     - Task status polling via AsyncResult
     """
 
-    def __init__(self):
+    def __init__(self, *, social_gate=None):
         """Initialize the service with task imports."""
         self._task_imports = {}
+        self._social_gate = social_gate
+
+    def _gate(self):
+        if self._social_gate is None:
+            from app.services.redis_pool import get_redis_client
+            from app.services.social_signal_runtime_gate import RedisSocialSignalGate
+            self._social_gate = RedisSocialSignalGate(get_redis_client())
+        return self._social_gate
 
     def _get_task(self, task_name: str):
         """Lazy-load and cache task imports."""
@@ -168,18 +191,22 @@ class TaskRegistryService:
                 TaskExecutionHistory.task_name.in_(history_task_names)
             ).order_by(desc(TaskExecutionHistory.started_at)).first()
 
+            if task_info.get('db_runtime_social'):
+                from app.infra.db.models.social_signals import SocialSourceRegistry
+                runtime = db.get(SocialSourceRegistry, 1)
+                is_enabled = bool(runtime and runtime.mode in {'validation', 'live'}
+                                  and runtime.provider != 'disabled')
+            else:
+                is_enabled = bool(getattr(
+                    settings, task_info.get('enabled_setting', 'cache_warmup_enabled')
+                ))
             task_data = {
                 'name': task_name,
                 'display_name': task_info['display_name'],
                 'task_function': task_info['task_function'],
                 'description': task_info['description'],
                 'schedule_description': task_info['schedule_description'],
-                'is_enabled': bool(
-                    getattr(
-                        settings,
-                        task_info.get('enabled_setting', 'cache_warmup_enabled'),
-                    )
-                ),
+                'is_enabled': is_enabled,
                 'last_run': None,
             }
 
@@ -215,6 +242,14 @@ class TaskRegistryService:
 
         task_info = SCHEDULED_TASKS[task_name]
         logger.info(f"Manually triggering task: {task_name}")
+
+        if task_info.get('db_runtime_social'):
+            accepted, retry_after = self._gate().acquire_manual_cooldown(
+                f"manual:{datetime.now(timezone.utc).isoformat()}",
+                settings.social_manual_refresh_cooldown_seconds,
+            )
+            if not accepted:
+                raise TaskCooldownError(retry_after)
 
         # Get the task function and dispatch it
         task_func = self._get_task(task_name)

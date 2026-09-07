@@ -157,6 +157,28 @@ class SocialSignalWriter:
             run.source_outcomes_json = deepcopy(old.source_outcomes_json)
         return run_id
 
+    def resume_existing_run(self, run_id, expected_mode_version):
+        """Finish or collapse a duplicate delivery without repeating provider I/O."""
+        with self.session_factory() as db:
+            run = db.get(SocialSignalRun, run_id)
+            if run is None:
+                raise ValueError("run_not_found")
+            if run.status == "running":
+                return None
+            if run.status in {"staged", "published"}:
+                pass
+            elif run.status == "failed":
+                summary = tuple(
+                    (key, value.get("history_status", "limited"))
+                    for key, value in sorted(run.source_outcomes_json.items())
+                )
+                return SocialRunResult(
+                    run_id, run.mode, "failed", False, summary, ("run_failed",)
+                )
+            else:
+                raise ValueError("unsupported_existing_run_state")
+        return self.publish(run_id, expected_mode_version)
+
     @staticmethod
     def _post(value):
         value = dict(value)

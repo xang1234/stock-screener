@@ -122,6 +122,9 @@ class RefreshSocialSignals:
             except ValueError as exc:
                 if str(exc) != "run_exists":
                     raise
+                resumed = self.writer.resume_existing_run(run_id, runtime.version)
+                if resumed is not None:
+                    return resumed
                 existing = self.writer.read_run_inputs(run_id)
                 if existing.registry_version != runtime.version:
                     return self._result(
