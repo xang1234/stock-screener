@@ -157,6 +157,9 @@ jobs:
       - name: Install Playwright browser
         run: cd frontend && npx playwright install --with-deps chromium
 
+      - name: Social Signals fixture acceptance
+        run: cd frontend && npx playwright test --grep "Social Signals"
+
       - name: Smoke test
         run: cd frontend && npm run test:smoke
 

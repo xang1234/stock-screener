@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 from collections.abc import Iterable, Mapping
@@ -28,7 +27,6 @@ from app.domain.scanning.materialization import (
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
-from app.infra.serialization import json_safe
 from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
 from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.key_market_history import build_key_market_entries
@@ -82,6 +80,11 @@ from app.services.static_site_manifest import (
     static_market_metadata_path,
     write_static_market_metadata,
 )
+from app.services.static_social_isolation import (
+    StaticSocialIsolationError,
+    assert_live_only_static_isolation,
+    write_isolated_json,
+)
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
@@ -116,43 +119,6 @@ STATIC_MARKET_DISPLAY = {
     market: _MARKET_CATALOG.get(market).label for market in STATIC_SUPPORTED_MARKETS
 }
 STATIC_GROUP_HISTORY_RUNS = 40
-_LIVE_ONLY_STATIC_KEY_FRAGMENTS = (
-    "social",
-    "x_post",
-    "tweet",
-    "source_metrics",
-    "social_signal",
-)
-
-
-class StaticSocialIsolationError(ValueError):
-    """Raised when live-only Social data reaches a static publication."""
-
-
-def _find_live_only_static_key(value: Any, *, location: str) -> str | None:
-    if isinstance(value, Mapping):
-        for key, nested in value.items():
-            normalized_key = str(key).lower().replace("-", "_")
-            if any(
-                fragment in normalized_key
-                for fragment in _LIVE_ONLY_STATIC_KEY_FRAGMENTS
-            ):
-                return f"{key} at {location}"
-            violation = _find_live_only_static_key(
-                nested,
-                location=f"{location}.{key}",
-            )
-            if violation is not None:
-                return violation
-    elif isinstance(value, (list, tuple)):
-        for index, nested in enumerate(value):
-            violation = _find_live_only_static_key(
-                nested,
-                location=f"{location}[{index}]",
-            )
-            if violation is not None:
-                return violation
-    return None
 
 
 @dataclass(frozen=True)
@@ -1019,48 +985,8 @@ class StaticSiteExportService:
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
-        safe_payload = json_safe(payload)
-        violation = _find_live_only_static_key(safe_payload, location=path.name)
-        if violation is not None:
-            raise StaticSocialIsolationError(
-                f"Live-only static key {violation} is forbidden in {path.name}"
-            )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                safe_payload,
-                allow_nan=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        write_isolated_json(path, payload)
 
     @staticmethod
     def assert_live_only_isolation(output_dir: Path) -> None:
-        """Validate generated/copied artifacts before they can be published."""
-        root = Path(output_dir)
-        for path in root.rglob("*"):
-            relative_path = path.relative_to(root).as_posix()
-            normalized_path = relative_path.lower().replace("-", "_")
-            if any(
-                fragment in normalized_path
-                for fragment in _LIVE_ONLY_STATIC_KEY_FRAGMENTS
-            ):
-                raise StaticSocialIsolationError(
-                    f"Live-only static path {relative_path} is forbidden"
-                )
-            if not path.is_file() or path.suffix.lower() != ".json":
-                continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise StaticSocialIsolationError(
-                    f"Cannot validate static JSON isolation for {relative_path}: {exc}"
-                ) from exc
-            violation = _find_live_only_static_key(payload, location=relative_path)
-            if violation is not None:
-                raise StaticSocialIsolationError(
-                    f"Live-only static key {violation} is forbidden in {relative_path}"
-                )
+        assert_live_only_static_isolation(output_dir)

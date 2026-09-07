@@ -505,7 +505,7 @@ async def test_refresh_runs_through_real_writer_backlog_and_publication_with_fix
     from app.models.stock_universe import StockUniverse
     from app.services.social_extraction_service import SocialExtractionService
     from app.services.social_source_admin_service import SocialSourceAdminService
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     from app.use_cases.social_signals.refresh import RefreshSocialSignals
 
     engine = create_engine(f"sqlite:///{tmp_path / 'refresh-flow.sqlite'}")

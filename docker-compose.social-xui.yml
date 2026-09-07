@@ -12,6 +12,9 @@ services:
         - default
       secrets:
         - github_known_hosts
+    environment:
+      SOCIAL_XUI_CONFIG_PATH: /app/data/xui-reader/config.toml
+      SOCIAL_XUI_PROFILE: ${SOCIAL_XUI_PROFILE:-automation}
     volumes:
       - ${XUI_PROFILE_DIR:?Set XUI_PROFILE_DIR}:/app/data/xui-reader
 

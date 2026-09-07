@@ -8,22 +8,17 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from celery.result import AsyncResult
-from sqlalchemy import desc
+from sqlalchemy import desc, inspect
 from sqlalchemy.orm import Session
 
 from ..models.task_execution import TaskExecutionHistory
 from ..config import settings
+from .errors import TaskCooldownError
 from ..tasks.market_queues import (
     SHARED_DATA_FETCH_QUEUE,
     SUPPORTED_MARKETS,
     market_jobs_queue_for_market,
 )
-
-
-class TaskCooldownError(RuntimeError):
-    def __init__(self, retry_after: int):
-        super().__init__("manual_refresh_cooldown")
-        self.retry_after = retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -193,9 +188,18 @@ class TaskRegistryService:
 
             if task_info.get('db_runtime_social'):
                 from app.infra.db.models.social_signals import SocialSourceRegistry
-                runtime = db.get(SocialSourceRegistry, 1)
-                is_enabled = bool(runtime and runtime.mode in {'validation', 'live'}
-                                  and runtime.provider != 'disabled')
+                bind = db.get_bind()
+                if inspect(bind).has_table(SocialSourceRegistry.__tablename__):
+                    runtime = db.get(SocialSourceRegistry, 1)
+                    is_enabled = bool(
+                        runtime
+                        and runtime.mode in {'validation', 'live'}
+                        and runtime.provider != 'disabled'
+                    )
+                else:
+                    # Older/partial databases cannot run Social Signals, but
+                    # must still expose the rest of the task registry.
+                    is_enabled = False
             else:
                 is_enabled = bool(getattr(
                     settings, task_info.get('enabled_setting', 'cache_warmup_enabled')

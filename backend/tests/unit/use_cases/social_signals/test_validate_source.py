@@ -115,7 +115,8 @@ def test_real_registry_diagnostic_persists_only_redacted_test_state(tmp_path):
     )
     from app.models.theme import ContentItem
     from app.services.social_source_admin_service import SocialSourceAdminService
-    from app.use_cases.social_signals.validate_source import SqlSourceTestRegistry, ValidateSocialSource
+    from app.services.social_source_test_registry import SqlSourceTestRegistry
+    from app.use_cases.social_signals.validate_source import ValidateSocialSource
 
     engine = create_engine(f"sqlite:///{tmp_path / 'source-test.sqlite'}")
     Base.metadata.create_all(engine)

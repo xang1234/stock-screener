@@ -301,7 +301,7 @@ def get_refresh_social_signals_use_case(
     )
     from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
     from app.services.social_extraction_service import SocialExtractionService
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     from app.use_cases.social_signals.refresh import RefreshSocialSignals
 
     sessions = session_factory or SessionLocal
@@ -335,9 +335,8 @@ def get_validate_social_source_use_case(
 ):
     from datetime import datetime, timezone
     from app.database import SessionLocal
-    from app.use_cases.social_signals.validate_source import (
-        SqlSourceTestRegistry, ValidateSocialSource,
-    )
+    from app.services.social_source_test_registry import SqlSourceTestRegistry
+    from app.use_cases.social_signals.validate_source import ValidateSocialSource
     sessions = session_factory or SessionLocal
     provider_lease = provider_lease or _social_provider_lease()
     return ValidateSocialSource(

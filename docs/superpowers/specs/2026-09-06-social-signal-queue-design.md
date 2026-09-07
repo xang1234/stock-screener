@@ -1088,3 +1088,59 @@ changing existing Theme identities.
   or refresh it.
 - No credential, session state, raw provider debug payload, or social content
   enters image metadata, CI artifacts, logs, or static exports.
+
+## Implementation evidence (2026-09-07)
+
+The public acceptance flow is fixture-only. It exercises both provider shapes
+through the shared normalized contract, seeds all five supported Markets, and
+publishes only after all three enabled sources report complete. The published
+fixture run therefore records all-enabled-source coverage of `3/3`.
+
+- Backend acceptance: `python -m pytest -q
+  tests/integration/test_social_signal_end_to_end.py` — 3 passed.
+- Backend Social/worker/boundary/architecture/static regression set — 644
+  passed.
+- Frontend component suite — 735 passed; lint completed with no errors; the
+  production build completed successfully.
+- Browser acceptance: `npm --prefix frontend run test:smoke -- --grep
+  "Social Signals"` — 2 passed; the complete browser smoke suite — 3 passed.
+- Public-boundary verifier: `python3
+  scripts/verify_social_private_boundary.py` — clean.
+- Full backend suite — 7,246 passed, 7 skipped. One order-dependent Social
+  cooldown failure found by that run was corrected and its reproducing order
+  now passes. Four unrelated legacy Theme harness tests remain red: two expect
+  unauthenticated API access, while the reprocess/performance fixtures expect
+  obsolete processed-state behavior.
+
+Sanitized fixture SHA-256 values are
+`ba0b991bb99398e3845e865eb88beaadcc914c795c0ac290862e8e3be5b23d95`
+for the official provider shape,
+`abcc12e3bcccbc20f7a1c072a604c2c16b83f3f4f7c217ac5efe3f65cc43e4da`
+for the xui provider shape, and
+`1d0fa35a6dfd2e6327b47fc070eeab882d635b3d34ee3fcb0dde492776f5d189`
+for the browser fixture module.
+
+The source lifecycle audit is asserted as `created`, `test_requested`,
+`test_completed`, then `enabled`; creation itself performs no provider read.
+The run also retains one deliberately unresolved global symbol without
+fabricating a Market listing. Blended ranking orders the two resolved fixtures
+by queue scores 85 then 60, while Pure Social reverses them using Social scores
+96 then 75; the unresolved row remains unranked after both cohorts.
+
+A fresh Theme catalog is proven empty in validation mode with no mutation. In
+live mode the same fixture evidence creates one candidate Theme, accepts a
+three-company basket after independent corroboration, and then promotes the
+Theme without adding Social engagement to Market confirmation. Validation and
+live projection remain explicit, separate operator choices.
+
+The clean-room public backend image starts as the non-root `stockscanner` user
+with Social ingestion disabled. Its local image ID is
+`sha256:d82ed888500a7060102f518181e44c800eb64c7ca74717cb973cd8a0d38a2ffc`.
+Official Compose renders without private xui-reader config, host session paths,
+or SSH inputs; those settings exist only in the private overlay. The existing
+provider-neutral public ingestion limit remains available for either adapter.
+
+The final trusted-machine validation read was intentionally not executed in
+this public, credential-free verification. It remains an operator rollout gate:
+mount the dedicated automation profile, select `validation`, and inspect the
+bounded real-read/LLM result before any explicit transition to `live`.

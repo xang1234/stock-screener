@@ -57,7 +57,7 @@ class FakeLLM:
 
 
 def processor(factory, llm):
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     return ProcessSocialBacklog(factory, llm=llm)
 
 
@@ -86,7 +86,7 @@ def test_exhaust_two_dollars_restart_resume_without_collection(backlog):
 
 
 def test_boundary_retention_and_admin_old_analysis(backlog, monkeypatch):
-    from app.use_cases.social_signals import process_backlog
+    from app.services import social_signal_backlog_service as process_backlog
     # Hold the logical dispatch exactly on the boundary, rather than allowing
     # test execution time to move it a few milliseconds outside the window.
     monkeypatch.setattr(process_backlog, "monotonic", lambda: 0)
@@ -270,7 +270,7 @@ def test_pinned_work_identity_and_unsuccessful_aging_remain_auditable(backlog):
 
 
 def test_dispatches_crossing_midnight_use_distinct_dispatch_day_buckets(backlog, monkeypatch):
-    from app.use_cases.social_signals import process_backlog
+    from app.services import social_signal_backlog_service as process_backlog
     from app.infra.db.models.social_analysis import SocialLLMAttempt
     elapsed = [0]
     monkeypatch.setattr(process_backlog, "monotonic", lambda: elapsed[0], raising=False)
@@ -291,7 +291,7 @@ def test_dispatches_crossing_midnight_use_distinct_dispatch_day_buckets(backlog,
 
 
 def test_expired_queued_claim_does_not_dispatch_after_long_previous_call(backlog, monkeypatch):
-    from app.use_cases.social_signals import process_backlog
+    from app.services import social_signal_backlog_service as process_backlog
     with backlog.begin() as db:
         db.add(AppSetting(key="social_llm_daily_limit_usd", value="4"))
     elapsed = [0]
@@ -373,7 +373,7 @@ def test_cancelled_provider_attempt_is_uncertain_and_never_automatically_retried
 
 @pytest.mark.parametrize("admin_requested", [False, True])
 def test_queued_post_aging_out_before_dispatch_releases_only_unused_reservation(backlog, monkeypatch, admin_requested):
-    from app.use_cases.social_signals import process_backlog
+    from app.services import social_signal_backlog_service as process_backlog
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
     elapsed = [0]
     monkeypatch.setattr(process_backlog, "monotonic", lambda: elapsed[0])

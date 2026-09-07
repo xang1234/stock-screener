@@ -77,7 +77,7 @@ def test_publication_requires_every_pinned_read_and_exact_finished_inputs(store,
         w.persist_observations(batch(2), run_id="run")
         if problem == "unfinished":
             from app.models.theme import ContentItem
-            from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+            from app.services.social_signal_backlog_service import ProcessSocialBacklog
             with store() as db:
                 item = db.query(ContentItem).one().id
             ProcessSocialBacklog(store).enqueue(item, batch(2).posts[0], selected_model="synthetic/model", now=NOW, run_id="run")
@@ -178,7 +178,7 @@ def save_success(store, w, run):
     from app.domain.social_signals.records import ExtractionClaim, ExtractionPostJudgment, ExtractionResult
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.models.theme import ContentItem
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     b = batch()
     w.persist_observations(b, run_id=run)
     w.persist_observations(empty_batch(2), run_id=run)
@@ -293,7 +293,7 @@ def test_replay_keeps_historical_batches_but_pins_complete_current_sources(store
 def test_replay_aged_work_is_audit_or_saved_carry_in_never_fake_success(store, succeeded):
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.models.theme import ContentItem
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     w = writer(store)
     w.create_run("old", NOW)
     if succeeded:
@@ -466,7 +466,7 @@ def test_replay_deferred_current_analysis_blocks_until_real_saved_success(store)
     from app.domain.social_signals.records import ExtractionResult, ExtractionPostJudgment
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.models.theme import ContentItem
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     w = writer(store)
     w.create_run("old", NOW)
     w.persist_observations(batch(), run_id="old")
@@ -533,7 +533,7 @@ def test_replay_succeeded_carry_in_preserves_first_day_author_cap(store):
     from app.domain.social_signals.scoring import score_social_candidates
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.models.theme import ContentItem
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     w = writer(store)
     w.create_run("old", NOW)
     posts = tuple(replace(batch(post_id=str(100+i)).posts[0], created_at=NOW-timedelta(days=14)+timedelta(hours=hour),
@@ -633,7 +633,7 @@ def test_frozen_theme_context_uses_exact_market_pin_and_roundtrips(db_session, b
 def test_normal_bounded_read_selects_current_inputs_and_audits_linked_aged_work(store, mixed):
     from app.models.theme import ContentItem
     from app.infra.db.models.social_analysis import SocialExtractionWork
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     w = writer(store)
     w.create_run("run", NOW)
     old = replace(batch(post_id="old").posts[0], created_at=NOW-timedelta(days=16))
@@ -672,7 +672,7 @@ def test_later_observation_keeps_true_timing_and_publication_cutoff(store, publi
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
     from app.models.theme import ContentItem
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     observed = NOW + timedelta(minutes=1)
     w = SocialSignalWriter(store, clock=lambda: observed+timedelta(seconds=1))
     w.create_run("run", NOW)
@@ -945,7 +945,7 @@ def test_qualified_alias_change_fences_prepared_application(social_fixture, chan
 def test_terminal_work_links_cannot_change(store, operation, status):
     from sqlalchemy import insert
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialRunWork
-    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
     w = writer(store)
     w.create_run("run", NOW)
     work_id = save_success(store, w, "run")

@@ -38,6 +38,7 @@ def test_public_social_worker_is_opt_in_fail_closed_and_queue_is_isolated():
     environment = _environment_map(base_worker)
     assert environment["SOCIAL_SIGNALS_MODE"] == "${SOCIAL_SIGNALS_MODE:-off}"
     assert environment["SOCIAL_INGEST_PROVIDER"] == "${SOCIAL_INGEST_PROVIDER:-disabled}"
+    assert not any(key.startswith("SOCIAL_XUI_") for key in environment)
     assert "-Q social_ingestion" in worker["command"]
 
     services = base["services"]
@@ -64,6 +65,10 @@ def test_private_overlay_reuses_the_one_worker_and_alone_mounts_profile_writable
     assert not profile_mounts[0].endswith(":ro")
     assert worker["build"]["ssh"] == ["default"]
     assert "github_known_hosts" in worker["build"]["secrets"]
+    assert worker["environment"] == {
+        "SOCIAL_XUI_CONFIG_PATH": "/app/data/xui-reader/config.toml",
+        "SOCIAL_XUI_PROFILE": "${SOCIAL_XUI_PROFILE:-automation}",
+    }
 
 
 def test_dockerfile_keeps_private_install_out_of_default_public_target():

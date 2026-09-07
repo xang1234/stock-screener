@@ -12,24 +12,6 @@ class SocialSourceValidationDeferred(RuntimeError):
     pass
 
 
-class SqlSourceTestRegistry:
-    def __init__(self, session_factory):
-        self.session_factory = session_factory
-
-    def claim(self, source_id, actor):
-        from app.services.social_source_admin_service import SocialSourceAdminService
-        with self.session_factory() as db:
-            return SocialSourceAdminService(db).claim_test(source_id, actor)
-
-    def complete(self, request, outcome, actor):
-        from app.services.social_source_admin_service import SocialSourceAdminService
-        with self.session_factory() as db:
-            return SocialSourceAdminService(db).record_test_result(
-                request.source_id, request.provider, outcome, actor,
-                request_id=request.request_id, expected_version=request.version,
-            )
-
-
 class ValidateSocialSource:
     def __init__(self, *, registry, providers, provider_lease, clock,
                  lease_owner_factory=None, lease_ttl_seconds=300):
@@ -70,4 +52,4 @@ class ValidateSocialSource:
             self.provider_lease.release(owner)
 
 
-__all__ = ["SocialSourceValidationDeferred", "SqlSourceTestRegistry", "ValidateSocialSource"]
+__all__ = ["SocialSourceValidationDeferred", "ValidateSocialSource"]

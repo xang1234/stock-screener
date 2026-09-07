@@ -16,7 +16,7 @@ from app.schemas.social_signals import (
     SocialSourceRenameRequest, SocialSourceTransitionRequest,
     SocialSourceVersionRequest, SocialSummaryResponse, WindowCode,
 )
-from app.use_cases.social_signals.queries import SocialSignalQueries
+from app.services.social_signal_query_service import SocialSignalQueries
 from app.api.v1.config import require_admin
 
 
