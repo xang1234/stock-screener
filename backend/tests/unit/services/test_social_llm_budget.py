@@ -113,6 +113,43 @@ def test_money_rejects_float_and_nonfinite_values(ledger):
             service(ledger).reserve("bad", (1,), value, NOW)
 
 
+def test_out_of_order_old_price_block_cannot_reenable_current_or_previous_version(ledger):
+    import json
+    config = {"version": "v2", "models": {"synthetic/requested": {
+        "provider": "synthetic", "actual_models": ["actual"],
+        "input_usd_per_million": "1", "output_usd_per_million": "2"}}}
+    with ledger.begin() as db:
+        db.add(AppSetting(key="social_llm_pricing", value=json.dumps(config)))
+    budget = service(ledger)
+    assert budget.price("synthetic/requested") is not None
+    budget.block_price("synthetic/requested", "v2", "billing_model_mismatch")
+    budget.block_price("synthetic/requested", "v1", "billing_model_mismatch")
+    assert service(ledger).price("synthetic/requested") is None
+    with ledger.begin() as db:
+        config["version"] = "v1"
+        db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing")).value = json.dumps(config)
+    assert service(ledger).price("synthetic/requested") is None
+    with ledger.begin() as db:
+        config["version"] = "v3"
+        db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing")).value = json.dumps(config)
+    assert service(ledger).price("synthetic/requested") is not None
+
+
+def test_legacy_price_block_is_preserved_when_another_version_finishes(ledger):
+    import json
+    config = {"version": "v2", "models": {"synthetic/requested": {
+        "provider": "synthetic", "actual_models": ["actual"],
+        "input_usd_per_million": "1", "output_usd_per_million": "2"}}}
+    with ledger.begin() as db:
+        db.add(AppSetting(key="social_llm_pricing", value=json.dumps(config)))
+        db.add(AppSetting(key="social_llm_pricing_blocks", value=json.dumps({
+            "synthetic/requested": {"version": "v2", "reason": "billing_model_mismatch"}})))
+    budget = service(ledger)
+    assert budget.price("synthetic/requested") is None
+    budget.block_price("synthetic/requested", "v1", "billing_model_mismatch")
+    assert budget.price("synthetic/requested") is None
+
+
 def test_metered_transport_performs_one_http_attempt_and_redacts_errors(monkeypatch, caplog):
     import asyncio
     import httpx

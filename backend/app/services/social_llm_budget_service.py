@@ -110,8 +110,11 @@ class SocialLLMBudgetService:
         try:
             config = json.loads(setting.value)
             blocked = db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing_blocks"))
-            if blocked and json.loads(blocked.value).get(model, {}).get("version") == config["version"]:
-                return None
+            if blocked:
+                model_blocks = json.loads(blocked.value).get(model, {})
+                if (model_blocks.get("version") == config["version"]
+                        or config["version"] in model_blocks.get("versions", {})):
+                    return None
             rate = config["models"][model]
             if not config["version"] or not rate["provider"] or not rate["actual_models"]:
                 return None
@@ -129,7 +132,14 @@ class SocialLLMBudgetService:
         with social_analysis_transaction(self.session_factory) as db:
             value = self._setting(db, "social_llm_pricing_blocks", "{}")
             blocks = json.loads(value)
-            blocks[model] = {"version": version, "reason": reason}
+            model_blocks = blocks.get(model, {})
+            versions = dict(model_blocks.get("versions", {}))
+            # Retain the original single-version format during an in-place
+            # upgrade, and never let an old completion erase a newer block.
+            if "version" in model_blocks:
+                versions[model_blocks["version"]] = model_blocks["reason"]
+            versions[version] = reason
+            blocks[model] = {"versions": versions}
             db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing_blocks")).value = json.dumps(blocks)
 
     def reserve(self, attempt_key: str, work_ids: tuple[int, ...], maximum_usd: Decimal,

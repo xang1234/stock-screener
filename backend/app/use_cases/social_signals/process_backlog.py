@@ -23,6 +23,10 @@ class _Deferred(Exception):
     pass
 
 
+class _OutsideWindow(Exception):
+    pass
+
+
 class _MeteredCompletion:
     """Intercept usage BEFORE parsing, including malformed successful responses."""
     def __init__(self, owner, work_id, claim_token, now):
@@ -51,8 +55,12 @@ class _MeteredCompletion:
             dispatch_now = self.now()
             owned = work.claim_token == self.claim_token and work.state == "running"
             price_valid = budget.price_in_transaction(db, kwargs["model"]) == price
+            published = datetime.fromisoformat(work.input_snapshot_json["created_at"])
+            outside_window = (owned and not work.requested_by_admin
+                and published < dispatch_now - timedelta(days=14))
             valid = (owned and row.state == "reserved" and _utc(work.claim_expires_at) > dispatch_now
-                and _utc(day.period_start_utc) <= dispatch_now < _utc(day.period_end_utc) and price_valid)
+                and _utc(day.period_start_utc) <= dispatch_now < _utc(day.period_end_utc)
+                and price_valid and not outside_window)
             if valid:
                 row.state = "dispatched"
             else:
@@ -61,9 +69,14 @@ class _MeteredCompletion:
                     day.reserved_usd -= row.estimated_usd
                     day.version += 1
                 if owned:
-                    work.state = "pending" if price_valid else "waiting_budget"
-                    work.error_code = "claim_or_budget_period_expired" if price_valid else "pricing_changed"
+                    if outside_window:
+                        work.state, work.error_code = "outside_window", "outside_signal_window"
+                    else:
+                        work.state = "pending" if price_valid else "waiting_budget"
+                        work.error_code = "claim_or_budget_period_expired" if price_valid else "pricing_changed"
                     work.claim_token = work.claim_expires_at = None
+        if outside_window:
+            raise _OutsideWindow
         if not valid:
             raise _Deferred
         try:
@@ -199,6 +212,8 @@ class ProcessSocialBacklog:
                         schema_version=schema, llm=_MeteredCompletion(self, work_id, token, current_time))
                     result = await extraction.extract((SocialPostRecord(**snapshot),))
                 succeeded += self._finish(work_id, token, "succeeded", result=result)
+            except _OutsideWindow:
+                outside += 1
             except _Deferred:
                 deferred += 1
             except asyncio.CancelledError:

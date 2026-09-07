@@ -85,7 +85,11 @@ def test_exhaust_two_dollars_restart_resume_without_collection(backlog):
     assert asyncio.run(resumed.execute(NOW + timedelta(minutes=3), 10)).succeeded == 0
 
 
-def test_boundary_retention_and_admin_old_analysis(backlog):
+def test_boundary_retention_and_admin_old_analysis(backlog, monkeypatch):
+    from app.use_cases.social_signals import process_backlog
+    # Hold the logical dispatch exactly on the boundary, rather than allowing
+    # test execution time to move it a few milliseconds outside the window.
+    monkeypatch.setattr(process_backlog, "monotonic", lambda: 0)
     llm = FakeLLM()
     worker = processor(backlog, llm)
     old = enqueue(backlog, worker, post(1, 14 + 1/86400))
@@ -324,3 +328,32 @@ def test_cancelled_provider_attempt_is_uncertain_and_never_automatically_retried
     with backlog() as db:
         assert db.scalar(select(SocialLLMAttempt)).state == "uncertain"
     assert asyncio.run(processor(backlog, FakeLLM()).execute(NOW + timedelta(minutes=2), 10)).succeeded == 0
+
+
+@pytest.mark.parametrize("admin_requested", [False, True])
+def test_queued_post_aging_out_before_dispatch_releases_only_unused_reservation(backlog, monkeypatch, admin_requested):
+    from app.use_cases.social_signals import process_backlog
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+    elapsed = [0]
+    monkeypatch.setattr(process_backlog, "monotonic", lambda: elapsed[0])
+    llm = FakeLLM()
+    original = llm.completion
+    async def slow_first(**kwargs):
+        response = await original(**kwargs)
+        elapsed[0] = 120
+        return response
+    llm.completion = slow_first
+    worker = processor(backlog, llm)
+    enqueue(backlog, worker, post(1, 14 - 10/86400))
+    second_id = enqueue(backlog, worker, post(2, 14 - 60/86400))
+    result = asyncio.run(worker.execute(NOW, 10, admin_work_ids=(second_id,) if admin_requested else ()))
+    assert llm.seen == (["1", "2"] if admin_requested else ["1"])
+    assert result.outside_window == (0 if admin_requested else 1)
+    with backlog() as db:
+        second = db.get(SocialExtractionWork, second_id)
+        assert second.state == ("succeeded" if admin_requested else "outside_window")
+        assert (second.result_json is not None) == admin_requested
+        attempts = db.scalars(select(SocialLLMAttempt).order_by(SocialLLMAttempt.id)).all()
+        assert attempts[0].state == "reconciled" and attempts[0].actual_usd == 2
+        assert attempts[1].state == ("reconciled" if admin_requested else "released")
+        assert attempts[1].actual_usd == (2 if admin_requested else None)
