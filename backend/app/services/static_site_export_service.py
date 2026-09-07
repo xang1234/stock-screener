@@ -116,6 +116,43 @@ STATIC_MARKET_DISPLAY = {
     market: _MARKET_CATALOG.get(market).label for market in STATIC_SUPPORTED_MARKETS
 }
 STATIC_GROUP_HISTORY_RUNS = 40
+_LIVE_ONLY_STATIC_KEY_FRAGMENTS = (
+    "social",
+    "x_post",
+    "tweet",
+    "source_metrics",
+    "social_signal",
+)
+
+
+class StaticSocialIsolationError(ValueError):
+    """Raised when live-only Social data reaches a static publication."""
+
+
+def _find_live_only_static_key(value: Any, *, location: str) -> str | None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized_key = str(key).lower().replace("-", "_")
+            if any(
+                fragment in normalized_key
+                for fragment in _LIVE_ONLY_STATIC_KEY_FRAGMENTS
+            ):
+                return f"{key} at {location}"
+            violation = _find_live_only_static_key(
+                nested,
+                location=f"{location}.{key}",
+            )
+            if violation is not None:
+                return violation
+    elif isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            violation = _find_live_only_static_key(
+                nested,
+                location=f"{location}[{index}]",
+            )
+            if violation is not None:
+                return violation
+    return None
 
 
 @dataclass(frozen=True)
@@ -300,6 +337,7 @@ class StaticSiteExportService:
         )
         if write_manifest:
             self._write_json(output_dir / "manifest.json", manifest)
+        self.assert_live_only_isolation(output_dir)
 
         return StaticSiteExportResult(
             output_dir=output_dir,
@@ -361,6 +399,7 @@ class StaticSiteExportService:
             market_metadata_path=(Path(output_dir) / cls._market_metadata_path("US")),
         )
         warnings.extend(options_result.warnings)
+        cls.assert_live_only_isolation(Path(output_dir))
         return StaticSiteExportResult(
             output_dir=combined.output_dir,
             generated_at=combined.generated_at,
@@ -980,10 +1019,16 @@ class StaticSiteExportService:
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
+        safe_payload = json_safe(payload)
+        violation = _find_live_only_static_key(safe_payload, location=path.name)
+        if violation is not None:
+            raise StaticSocialIsolationError(
+                f"Live-only static key {violation} is forbidden in {path.name}"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(
-                json_safe(payload),
+                safe_payload,
                 allow_nan=False,
                 indent=2,
                 sort_keys=True,
@@ -991,3 +1036,31 @@ class StaticSiteExportService:
             + "\n",
             encoding="utf-8",
         )
+
+    @staticmethod
+    def assert_live_only_isolation(output_dir: Path) -> None:
+        """Validate generated/copied artifacts before they can be published."""
+        root = Path(output_dir)
+        for path in root.rglob("*"):
+            relative_path = path.relative_to(root).as_posix()
+            normalized_path = relative_path.lower().replace("-", "_")
+            if any(
+                fragment in normalized_path
+                for fragment in _LIVE_ONLY_STATIC_KEY_FRAGMENTS
+            ):
+                raise StaticSocialIsolationError(
+                    f"Live-only static path {relative_path} is forbidden"
+                )
+            if not path.is_file() or path.suffix.lower() != ".json":
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise StaticSocialIsolationError(
+                    f"Cannot validate static JSON isolation for {relative_path}: {exc}"
+                ) from exc
+            violation = _find_live_only_static_key(payload, location=relative_path)
+            if violation is not None:
+                raise StaticSocialIsolationError(
+                    f"Live-only static key {violation} is forbidden in {relative_path}"
+                )

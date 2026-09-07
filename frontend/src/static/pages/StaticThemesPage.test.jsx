@@ -104,5 +104,7 @@ describe('StaticThemesPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Flat Rankings')).toBeInTheDocument();
     expect(screen.getAllByText('AI Infrastructure').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/social pulse/i)).not.toBeInTheDocument();
+    expect(globalThis.fetch.mock.calls.every(([url]) => !String(url).includes('/social-signals'))).toBe(true);
   });
 });

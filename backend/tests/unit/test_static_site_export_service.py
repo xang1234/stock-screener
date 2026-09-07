@@ -69,6 +69,7 @@ from app.services.static_site_export_service import (
     STATIC_MARKET_METADATA_FILENAME,
     STATIC_SITE_SCHEMA_VERSION,
     NoPublishedStaticMarketArtifact,
+    StaticSocialIsolationError,
     StaticSiteExportService,
     StaticSiteSectionUnavailableError,
 )
@@ -126,6 +127,34 @@ def _insert_runs(
         if pointer_run_id is not None:
             db.add(FeatureRunPointer(key=pointer_key, run_id=pointer_run_id))
         db.commit()
+
+
+_FORBIDDEN_STATIC_SOCIAL_KEYS = (
+    "social",
+    "x_post",
+    "tweet",
+    "source_metrics",
+    "social_signal",
+)
+
+
+def _assert_export_has_no_social_keys(output_dir: Path) -> None:
+    def visit(value, location: str) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                normalized = str(key).lower()
+                assert not any(token in normalized for token in _FORBIDDEN_STATIC_SOCIAL_KEYS), (
+                    f"forbidden static key {key!r} at {location}"
+                )
+                visit(nested, f"{location}.{key}")
+        elif isinstance(value, list):
+            for index, nested in enumerate(value):
+                visit(nested, f"{location}[{index}]")
+
+    for path in output_dir.rglob("*.json"):
+        relative_path = path.relative_to(output_dir).as_posix().lower()
+        assert not any(token in relative_path for token in _FORBIDDEN_STATIC_SOCIAL_KEYS)
+        visit(json.loads(path.read_text(encoding="utf-8")), relative_path)
 
 
 def _insert_common_stock_universe(session_factory, *, market, symbols):
@@ -988,8 +1017,27 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert exported_signatures == {"2026-03-31": "signature"}
     assert groups["payload"]["rankings"]["rankings"][0]["industry_group"] == "Semiconductors"
     assert not (output_dir / "themes").exists()
+    _assert_export_has_no_social_keys(output_dir)
     assert result.manifest == manifest
     assert result.warnings == ()
+
+
+def test_static_json_writer_rejects_live_only_social_keys(tmp_path):
+    output_path = tmp_path / "static-data" / "manifest.json"
+
+    with pytest.raises(
+        StaticSocialIsolationError,
+        match=r"social_signal.*manifest\.json",
+    ):
+        StaticSiteExportService._write_json(
+            output_path,
+            {
+                "features": {"scan": True, "social_signal": True},
+                "pages": {},
+            },
+        )
+
+    assert not output_path.exists()
 
 
 def test_export_writes_india_market_bundle_and_root_manifest(
@@ -1757,6 +1805,44 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     assert "US local warning" in manifest["warnings"]
     assert any("JP" in warning for warning in manifest["warnings"])
     assert any("TW" in warning for warning in manifest["warnings"])
+    _assert_export_has_no_social_keys(output_dir)
+
+
+def test_combine_rejects_live_only_keys_copied_from_market_artifact(tmp_path):
+    artifacts_dir = tmp_path / "artifacts"
+    market_dir = artifacts_dir / "job-us" / "markets" / "us"
+    (market_dir / "scan").mkdir(parents=True)
+    (market_dir / "scan" / "manifest.json").write_text(
+        json.dumps({"rows_total": 0, "source_metrics": {"posts": 2}}),
+        encoding="utf-8",
+    )
+    entry = {
+        "market": "US",
+        "display_name": "United States",
+        "as_of_date": "2026-04-04",
+        "features": {"scan": True},
+        "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
+        "assets": {},
+        "freshness": {"scan_run_id": 11},
+    }
+    (market_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-04-04T22:00:00Z",
+                "market": "US",
+                "entry": entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StaticSocialIsolationError, match="source_metrics"):
+        StaticSiteExportService.combine_market_artifacts(
+            artifacts_dir,
+            tmp_path / "combined",
+        )
 
 
 def test_combiner_drops_invalid_optional_contributors_without_dropping_market(
