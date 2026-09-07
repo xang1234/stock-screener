@@ -203,15 +203,39 @@ class SocialSignalRunPointer(Base):
 
 @event.listens_for(Session, "before_flush")
 def _protect_social_history(session, flush_context, instances):
+    for row in session.new:
+        if isinstance(row, SocialSignalSnapshot):
+            run = session.get(SocialSignalRun, row.run_id)
+            if run is not None:
+                prior = inspect(run).attrs.status.history.deleted
+                status = prior[0] if prior else run.status
+                if status in {"staged", "completed", "failed", "published"}:
+                    raise ValueError("social_run_snapshots_immutable")
     for row in session.dirty | session.deleted:
         if isinstance(row, SocialSourceAuditEvent):
             raise ValueError("social_audit_append_only")
         if isinstance(row, SocialSourceConfiguration) and inspect(row).attrs.x_list_id.history.has_changes():
             raise ValueError("social_list_id_immutable")
+        if isinstance(row, SocialSignalSnapshot):
+            raise ValueError("social_snapshot_immutable")
+        if isinstance(row, SocialSignalRun):
+            state = inspect(row)
+            old_status = state.attrs.status.history.deleted
+            terminal = old_status[0] if old_status else row.status
+            if terminal in {"staged", "completed", "failed", "published"}:
+                changed = {attr.key for attr in state.attrs if attr.history.has_changes()}
+                publication_transition = (terminal == "staged" and row.status == "published"
+                    and changed <= {"status", "published_at"} and row not in session.deleted)
+                if not publication_transition and (changed or row in session.deleted):
+                    raise ValueError("social_run_immutable")
 
 
 @event.listens_for(Session, "do_orm_execute")
 def _protect_social_bulk_history(state):
+    if state.is_insert and state.bind_mapper is not None and state.bind_mapper.class_ is SocialSignalSnapshot:
+        raise ValueError("social_publication_immutable_bulk")
     if (state.is_update or state.is_delete) and state.bind_mapper is not None:
         if state.bind_mapper.class_ is SocialSourceAuditEvent:
             raise ValueError("social_audit_append_only")
+        if state.bind_mapper.class_ in {SocialSignalSnapshot, SocialSignalRun}:
+            raise ValueError("social_publication_immutable_bulk")

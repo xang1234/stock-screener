@@ -12,6 +12,7 @@ from app.domain.social_signals.records import (
     SocialReadRequest,
     SocialRunResult,
     SocialSourceBatch,
+    PreparedSocialPublication, SavedSocialRunInputs, SocialSnapshotRecord, ThemeMarketEvidence,
 )
 
 
@@ -20,7 +21,16 @@ class SocialProvider(Protocol):
 
 
 class SocialWriter(Protocol):
-    def persist_observations(self, batch: SocialSourceBatch) -> SocialSourceBatch: ...
+    def create_run(self, run_id: str, as_of: datetime) -> str: ...
+
+    def persist_observations(self, batch: SocialSourceBatch, *, run_id: str | None = None) -> SocialSourceBatch: ...
+
+    def latest_committed_progress(self, source_id: str, provider: str) -> str | None: ...
+
+    def read_run_inputs(self, run_id: str) -> SavedSocialRunInputs: ...
+
+    def prepare_run(self, run_id: str, rows: tuple[SocialSnapshotRecord, ...], as_of: datetime,
+                    *, theme_evidence: tuple[ThemeMarketEvidence, ...] = ()) -> PreparedSocialPublication: ...
 
     def publish(self, run_id: str, expected_mode_version: int) -> SocialRunResult: ...
 
@@ -53,4 +63,3 @@ class SocialDispatcher(Protocol):
     def refresh(self, origin: str) -> DispatchResult: ...
 
     def test_source(self, source_id: str, actor: str) -> DispatchResult: ...
-

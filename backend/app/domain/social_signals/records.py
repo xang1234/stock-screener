@@ -619,13 +619,51 @@ class SocialSnapshotRecord:
     latest_mention: datetime | None
     canonical_symbol: str
     candidate_key: str
+    window_days: int = 14
+    mention_count: int = 0
+    observed_list_count: int = 0
+    enabled_list_count: int = 0
+    normalization_scope: str = "global"
+    formula_version: str = "social-signal-v1"
 
     def __post_init__(self) -> None:
         _deeply_immutable(self.pinned_inputs, "pinned_inputs")
         _deeply_immutable(self.coverage, "coverage")
+        if self.window_days not in {1, 7, 14}:
+            raise ValueError("invalid_window")
         portions_available = self.social_score is not None and self.confirmation_score is not None
         if portions_available != (self.queue_score is not None):
             raise ValueError("inconsistent_snapshot_scores")
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedSocialPublication:
+    run_id: str
+    registry_version: int
+    as_of: datetime
+    work_ids: tuple[int, ...]
+    rows: tuple[SocialSnapshotRecord, ...]
+    theme_evidence: tuple[ThemeMarketEvidence, ...] = ()
+
+    def __post_init__(self):
+        _utc(self.as_of, "as_of")
+        for field in ("work_ids", "rows", "theme_evidence"):
+            _deeply_immutable(getattr(self, field), field)
+
+
+@dataclass(frozen=True, slots=True)
+class SavedSocialRunInputs:
+    run_id: str
+    as_of: datetime
+    registry_version: int
+    batches: tuple[SocialSourceBatch, ...]
+    content_ids: tuple[tuple[str, int], ...]
+    work_ids: tuple[int, ...]
+
+    def __post_init__(self):
+        _utc(self.as_of, "as_of")
+        for field in ("batches", "content_ids", "work_ids"):
+            _deeply_immutable(getattr(self, field), field)
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,6 +5,8 @@ use effective_live_membership to include accepted Social membership. No provider
 calls, commits, Social pointer changes, or legacy attention writes occur here.
 """
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from hashlib import sha256
 import json
 
 from sqlalchemy import select, update
@@ -24,6 +26,21 @@ from app.services.theme_identity_normalization import canonical_theme_key, displ
 from app.services.theme_lifecycle_service import apply_lifecycle_transition, set_initial_lifecycle_defaults
 
 POLICY = "social-theme-v1"
+
+
+@dataclass(frozen=True)
+class PreparedThemeApplication:
+    projection: ThemeProjection
+    baskets: tuple
+    decoded_work: tuple
+    fingerprint: str
+
+    def read(self, theme_key, market):
+        from app.services.social_theme_market_service import MeasurementUnavailable
+        for basket in self.baskets:
+            if basket.theme_key == theme_key and basket.market == market:
+                return basket
+        raise MeasurementUnavailable("theme_unavailable")
 
 
 def _lock_registry(db):
@@ -87,6 +104,94 @@ class SocialThemeProjectionService:
         if pipeline not in {"technical", "fundamental"}:
             raise ValueError("invalid_pipeline")
         self.db, self.pipeline, self.admin_authorized = db, pipeline, admin_authorized
+        self._prepared_decoded = {}
+
+    def _decode_work(self, work):
+        return self._prepared_decoded.get(work.id) or _decode(work)
+
+    def _fingerprint(self, projection, theme_keys):
+        """Fence catalog, manual/legacy basket edits and saved-work changes.
+
+        No semantic decoding, feature reads or price calculations under the lock.
+        Includes shared identity tables because legacy writers do not bump registry.
+        """
+        from app.models.stock_universe import StockUniverse
+        catalog = self.db.execute(select(ThemeCluster.id, ThemeCluster.canonical_key, ThemeCluster.aliases,
+            ThemeCluster.is_active, ThemeCluster.lifecycle_state).where(ThemeCluster.pipeline == self.pipeline).order_by(ThemeCluster.id)).all()
+        ids = [row.id for row in catalog if row.canonical_key in theme_keys]
+        work_ids = set(projection.work_ids)
+        work_ids.update(self.db.scalars(select(ThemeMention.social_work_id).where(
+            ThemeMention.theme_cluster_id.in_(ids), ThemeMention.social_work_id.is_not(None))))
+        rows = [("catalog_identity", [tuple(row) for row in catalog])]
+        scopes = ((ThemeConstituent, ThemeConstituent.theme_cluster_id.in_(ids)),
+            (SocialThemeAssociation, SocialThemeAssociation.theme_cluster_id.in_(ids)),
+            (ThemeMention, ThemeMention.theme_cluster_id.in_(ids)),
+            (SocialExtractionWork, SocialExtractionWork.id.in_(work_ids)),
+            (SocialRunWork, SocialRunWork.run_id == projection.run_id))
+        for model, condition in scopes:
+            values = self.db.execute(select(*model.__table__.columns).where(condition).order_by(*model.__table__.primary_key.columns)).all()
+            rows.append((model.__tablename__, [tuple(row) for row in values]))
+        # Security resolution can change without the Social registry. Pin the
+        # small identity columns, not every stored stock/feature payload.
+        values = self.db.execute(select(StockUniverse.id, StockUniverse.symbol, StockUniverse.market,
+            StockUniverse.is_active, StockUniverse.is_common_stock, StockUniverse.exchange).order_by(StockUniverse.id)).all()
+        rows.append(("security_identity", [tuple(row) for row in values]))
+        return sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
+
+    @staticmethod
+    def _automatic_accepts(state, owner, resolution, qualifying):
+        return (owner == "system" and state == "proposed" and resolution.company_count_eligible
+            and len({row[4] for row in qualifying if row[3] == resolution.company_id}) >= 2)
+
+    def prepare_application(self, projection, *, theme_keys=()):
+        """Read-only adjudicated effective baskets, including newly found Themes."""
+        from app.services.social_theme_market_service import AcceptedBasketSnapshot
+        with self.db.no_autoflush:
+            if self.prepare(projection.run_id, projection.prepared_at) != projection:
+                raise ValueError("social_projection_version_conflict")
+            identity = SocialCompanyIdentityService(self.db).read()
+            resolver = SocialTickerResolver(self.db, verified_company_ids=identity.verified_company_ids)
+            themes = {t.canonical_key: t for t in self.db.scalars(select(ThemeCluster).where(
+                ThemeCluster.pipeline == self.pipeline, ThemeCluster.canonical_key.in_(theme_keys),
+                ThemeCluster.is_active.is_(True), ThemeCluster.lifecycle_state != "retired"))}
+            proposed = {}
+            for claim in projection.proposals:
+                match = find_read_only_theme_match(self.db, claim.raw_theme, self.pipeline)
+                key = match.canonical_key if match else canonical_theme_key(claim.raw_theme)
+                if key == UNKNOWN_THEME_KEY or (match and match.lifecycle_state == "retired"):
+                    continue
+                themes.setdefault(key, match)
+                proposed.setdefault(key, []).append(resolver.resolve(claim.company_token))
+            ids = [theme.id for theme in themes.values() if theme is not None]
+            work_ids = set(projection.work_ids)
+            work_ids.update(self.db.scalars(select(ThemeMention.social_work_id).where(
+                ThemeMention.theme_cluster_id.in_(ids), ThemeMention.social_work_id.is_not(None))))
+            decoded = tuple((wid, *_decode(self.db.get(SocialExtractionWork, wid))) for wid in sorted(work_ids))
+            self._prepared_decoded = {wid: (post, result) for wid, post, result in decoded}
+            baskets = []
+            for key, theme in sorted(themes.items()):
+                members = {(m.market, m.canonical_symbol): m for m in self.effective_live_membership(theme.id)} if theme else {}
+                associations = self.db.scalars(select(SocialThemeAssociation).where(SocialThemeAssociation.theme_cluster_id == theme.id)).all() if theme else []
+                candidates = {(a.market, a.canonical_symbol): (resolver.resolve(a.canonical_symbol, a.market),
+                    "proposed" if a.origin == "legacy" else a.state, a.decision_owner) for a in associations}
+                for r in proposed.get(key, ()):
+                    if r.status == "resolved":
+                        candidates.setdefault((r.market, r.symbol), (r, "proposed", "system"))
+                ids = set(projection.work_ids)
+                if theme:
+                    ids.update(self.db.scalars(select(ThemeMention.social_work_id).where(
+                        ThemeMention.theme_cluster_id == theme.id, ThemeMention.social_work_id.is_not(None))))
+                qualifying = self._qualifying_inputs(ids, key, projection.prepared_at, resolver)
+                for pair, (r, state, owner) in candidates.items():
+                    if self._automatic_accepts(state, owner, r, qualifying):
+                        origins = set(members[pair].origins) if pair in members else set()
+                        origins.add("social")
+                        members[pair] = EffectiveThemeMembership(r.symbol, r.market, r.company_id, r.company_count_eligible, tuple(sorted(origins)))
+                for market in ("US", "HK", "CN", "JP", "TW"):
+                    selected = tuple(m for pair, m in sorted(members.items()) if m.market == market)
+                    stocks = tuple(m.canonical_symbol for m in selected if resolver.resolve(m.canonical_symbol, market).security_kind == "stock")
+                    baskets.append(AcceptedBasketSnapshot(key, market, selected, stocks, identity.version, identity.policy_version, identity.registry_version))
+            return PreparedThemeApplication(projection, tuple(baskets), decoded, self._fingerprint(projection, tuple(themes)))
 
     def prepare(self, run_id: str, now: datetime) -> ThemeProjection:
         validate_utc_timestamp(now, "now")
@@ -122,12 +227,19 @@ class SocialThemeProjectionService:
             raise ValueError("social_projection_version_conflict")
         return registry
 
-    def apply_live(self, projection: ThemeProjection, expected_mode_version: int) -> None:
+    def apply_live(self, projection: ThemeProjection, expected_mode_version: int, *, prepared=None) -> None:
         self._lock_live(expected_mode_version)
         run = self.db.get(SocialSignalRun, projection.run_id)
         if run.mode != "live" or run.registry_version != expected_mode_version:
             raise ValueError("social_live_run_required")
-        current = self.prepare(projection.run_id, projection.prepared_at)
+        if prepared is not None:
+            if prepared.projection != projection or prepared.fingerprint != self._fingerprint(projection, tuple(b.theme_key for b in prepared.baskets)):
+                raise ValueError("social_projection_version_conflict")
+            self._prepared_decoded = {wid: (post, result) for wid, post, result in prepared.decoded_work}
+            current = projection
+        else:
+            self._prepared_decoded = {}
+            current = self.prepare(projection.run_id, projection.prepared_at)
         if current != projection or projection.registry_version != expected_mode_version:
             raise ValueError("social_projection_version_conflict")
         identity = SocialCompanyIdentityService(self.db).read()
@@ -135,7 +247,7 @@ class SocialThemeProjectionService:
         touched = set()
         for work_id in projection.work_ids:
             work = self.db.get(SocialExtractionWork, work_id)
-            post, result = _decode(work)
+            post, result = self._decode_work(work)
             if not projection.prepared_at - timedelta(days=14) <= post.created_at <= projection.prepared_at:
                 continue
             by_theme = {}
@@ -207,17 +319,21 @@ class SocialThemeProjectionService:
     def _qualifying(self, theme_id, now, resolver):
         work_ids = self.db.scalars(select(ThemeMention.social_work_id).where(
             ThemeMention.theme_cluster_id == theme_id, ThemeMention.social_work_id.is_not(None))).all()
+        return self._qualifying_inputs(work_ids, self.db.get(ThemeCluster, theme_id).canonical_key, now, resolver)
+
+    def _qualifying_inputs(self, work_ids, theme_key, now, resolver):
         evidence = []
         for work_id in set(work_ids):
             work = self.db.get(SocialExtractionWork, work_id)
-            post, result = _decode(work)
+            post, result = self._decode_work(work)
             judgment = result.judgments[0]
             if (not now - timedelta(days=14) <= post.created_at <= now or post.is_repost
                     or not judgment.has_new_thesis or not judgment.canonical_claim_key):
                 continue
             for claim in result.claims:
                 match = find_read_only_theme_match(self.db, claim.raw_theme, self.pipeline)
-                if match is None or match.id != theme_id or claim.support != "supported" or claim.duplicate_of_post_ids:
+                key = match.canonical_key if match else canonical_theme_key(claim.raw_theme)
+                if key != theme_key or claim.support != "supported" or claim.duplicate_of_post_ids:
                     continue
                 resolution = resolver.resolve(claim.company_token)
                 if resolution.company_count_eligible:
@@ -245,7 +361,7 @@ class SocialThemeProjectionService:
                 association.version += 1
             company_evidence = [row for row in qualifying if row[3] == resolution.company_id]
             authors = {row[4] for row in company_evidence}
-            if association.decision_owner == "system" and association.state == "proposed" and resolution.company_count_eligible and len(authors) >= 2:
+            if self._automatic_accepts(association.state, association.decision_owner, resolution, qualifying):
                 self._decision(association, "accepted", "two_independent_authors_14d", "system", projection.prepared_at,
                                projection.run_id, evidence_work_ids=sorted({row[1] for row in company_evidence}))
         companies = {item.company_key for item in self.effective_live_membership(theme_id) if item.company_count_eligible}
@@ -281,7 +397,7 @@ class SocialThemeProjectionService:
             raise PermissionError("admin_required")
         if target not in {"accepted", "rejected"} or not isinstance(reason, str) or not reason.strip() or not isinstance(actor, str) or not actor.strip():
             raise ValueError("decision_reason_and_actor_required")
-        self._lock_live()
+        registry = self._lock_live()
         association = self.db.get(SocialThemeAssociation, association_id, populate_existing=True)
         if association is None or association.version != expected_version:
             raise ValueError("association_version_conflict")
@@ -289,6 +405,7 @@ class SocialThemeProjectionService:
         association.origin = "social"
         association.policy_version = POLICY
         association.decision_owner = "admin"
+        registry.version += 1
         self.db.flush()
 
     def effective_live_membership(self, theme_cluster_id):
