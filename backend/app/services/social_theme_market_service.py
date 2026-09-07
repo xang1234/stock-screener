@@ -122,7 +122,7 @@ class SocialThemeMarketService:
             symbol = member.canonical_symbol
             security = self.db.scalar(select(StockUniverse).where(StockUniverse.symbol == symbol, StockUniverse.market == market, StockUniverse.active_filter()))
             mic = security_master_resolver.resolve_identity(symbol=symbol, market=market, exchange=security.exchange).mic if security else None
-            facts = self.reader.read(symbol, market, as_of, mic=mic, pinned_run=pinned_run)
+            facts = self.reader.read_facts(symbol, market, as_of, mic=mic, pinned_run=pinned_run)
             dates.append((symbol, facts.feature_freshness.actual_session))
             runs.append((symbol, facts.feature_run_id))
             required = facts.feature_freshness.required_session

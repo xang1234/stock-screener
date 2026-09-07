@@ -158,13 +158,13 @@ def test_measurement_pins_feature_run_even_if_pointer_changes(db_session, basket
         db_session.add(StockFeatureDaily(run_id=run.id, symbol=symbol, as_of_date=DAY, details_json={"rs_rating": 20}))
     db_session.flush()
     service = SocialThemeMarketService(db_session, calendar=calendar)
-    real_read = service.reader.read
+    real_read = service.reader.read_facts
     def switch_pointer(*args, **kwargs):
         result = real_read(*args, **kwargs)
         pointer.run_id = run.id
         db_session.flush()
         return result
-    monkeypatch.setattr(service.reader, "read", switch_pointer)
+    monkeypatch.setattr(service.reader, "read_facts", switch_pointer)
     evidence = service.measure("chips", "US", NOW, symbols)
     assert dict(evidence.components)["avg_rs_rating"] == 80
     assert set(dict(evidence.feature_run_ids).values()) == {original_run_id}
@@ -267,7 +267,7 @@ def test_explicit_run_pin_is_shared_across_measurements(db_session, basket):
     db_session.delete(db_session.get(FeatureRunPointer, "latest_published_market:US"))
     db_session.flush()
     service = SocialThemeMarketService(db_session, calendar=calendar, pinned_feature_run=pin)
-    assert reader.read(symbols[0], "US", NOW, mic="XNYS", pinned_run=pin).rs_rating == 80
+    assert reader.read_facts(symbols[0], "US", NOW, mic="XNYS", pinned_run=pin).rs_rating == 80
     assert dict(service.measure("chips", "US", NOW, symbols).components)["avg_rs_rating"] == 80
 
 
