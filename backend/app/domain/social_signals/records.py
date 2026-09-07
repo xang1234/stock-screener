@@ -530,6 +530,14 @@ class DailyFreshness:
     fresh: bool
     reason: str | None = None
 
+    @property
+    def signal_state_value(self) -> bool | None:
+        """Unknown calendar/session is unavailable; known invalid/stale is false."""
+        if (self.required_session is None or self.actual_session is None
+                or self.reason in {"calendar_unavailable", "listing_mic_unknown"}):
+            return None
+        return self.fresh
+
 
 @dataclass(frozen=True, slots=True)
 class PinnedFeatureRun:
@@ -556,6 +564,13 @@ class ConfirmationFacts:
 
     def __post_init__(self):
         _deeply_immutable(self.reasons, "reasons")
+
+    def to_signal_state_input(self, *, resolved: bool, active: bool, market: str | None,
+                              security_kind: str = "stock") -> SignalStateInput:
+        """Combine caller-owned security identity with these exact frozen checks."""
+        return SignalStateInput(resolved, active, market, security_kind,
+            self.feature_freshness.signal_state_value, self.market_freshness.signal_state_value,
+            self.liquidity_eligible, self.setup_ready, self.setup_score, self.market_exposure)
 
 
 @dataclass(frozen=True, slots=True)

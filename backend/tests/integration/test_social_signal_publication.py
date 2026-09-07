@@ -33,7 +33,9 @@ def empty_batch(source):
 def collected(w, run="run", now=NOW):
     w.create_run(run, now)
     for source in (1, 2):
-        w.persist_observations(empty_batch(source), run_id=run)
+        b = empty_batch(source)
+        w.persist_observations(replace(b, request=replace(b.request, observed_at=now,
+            target_published_after=now-timedelta(days=14))), run_id=run)
     return run
 
 
@@ -224,6 +226,7 @@ def test_frozen_replay_inputs_keep_metrics_and_reuse_work_after_new_observation(
     w.create_run("run", NOW)
     work_id = save_success(store, w, "run")
     saved = w.read_run_inputs("run")
+    w.clock = lambda: NOW + timedelta(hours=1)
     w.persist_observations(batch(likes=900, age=1))
     assert saved.batches[0].posts[0].likes == 10
     assert saved.work_ids == (work_id,)
@@ -323,15 +326,26 @@ def publication_context(store, now=NOW):
     return records.SocialPublicationContext((market,))
 
 
-def candidate_context(candidate="AAA"):
+def candidate_context(context, candidate="AAA"):
     from app.domain.social_signals import records as r
+    from app.domain.social_signals.states import classify_signal_state
+    from app.domain.social_signals.scoring import score_confirmation
     assert hasattr(r, "CandidatePublicationContext"), "typed candidate context missing"
-    decision = r.SignalStateDecision("watch", ("missing_confirmation",))
+    market = context.market_batches[0]
+    fact = dict(market.facts)[candidate]
+    def fresh(value):
+        if value.required_session is None or value.actual_session is None or value.reason in {"calendar_unavailable", "listing_mic_unknown"}:
+            return None
+        return value.fresh
+    state = r.SignalStateInput(True, True, "US", feature_fresh=fresh(fact.feature_freshness),
+        market_fresh=fresh(fact.market_freshness), liquidity_eligible=fact.liquidity_eligible,
+        setup_ready=fact.setup_ready, setup_score=fact.setup_score, market_exposure=fact.market_exposure)
+    decision = classify_signal_state(state)
     social = r.SocialScoreResult(Decimal("80"), (), decision, candidate_key=candidate,
         canonical_symbol=candidate, market="US", acceleration=Decimal("1.5"),
         post_memberships=(("100", ("1", "2")),), exclusions=(("99", "outside_window"),))
-    return r.CandidatePublicationContext(candidate, 14, r.SignalStateInput(True, True, "US"),
-        decision, social, r.ComponentScore(None, Decimal(0), Decimal(40), ("missing",)))
+    return r.CandidatePublicationContext(candidate, 14, state,
+        decision, social, score_confirmation(next(v for v in market.inputs if v.candidate_key == f"US:{candidate}")))
 
 
 def test_market_publication_context_roundtrip_is_frozen_and_run_scoped(store):
@@ -341,7 +355,8 @@ def test_market_publication_context_roundtrip_is_frozen_and_run_scoped(store):
         seed_batch(db)
     w = writer(store)
     collected(w)
-    context = replace(publication_context(store), candidates=(candidate_context(),))
+    context = publication_context(store)
+    context = replace(context, candidates=(candidate_context(context),))
     w.prepare_run("run", (row("run"),), NOW, context=context)
     saved = w.read_publication_context("run")
     assert saved.market_batches == context.market_batches
@@ -364,7 +379,8 @@ def test_market_publication_context_roundtrip_is_frozen_and_run_scoped(store):
 def test_candidate_publication_context_rejects_snapshot_mismatch(store, change):
     w = writer(store)
     collected(w)
-    context = replace(publication_context(store), candidates=(candidate_context(),))
+    context = publication_context(store)
+    context = replace(context, candidates=(candidate_context(context),))
     record = row("run")
     if change == "candidate": record = replace(record, candidate_key="other")
     elif change == "state": record = replace(record, candidate_state="risk_off")
@@ -647,6 +663,123 @@ def test_normal_bounded_read_selects_current_inputs_and_audits_linked_aged_work(
         assert w.read_run_inputs("replay").replay_manifest.historical_work_ids == (aged_id,)
     with store() as db:
         assert db.get(SocialExtractionWork, aged_id).state == "outside_window"
+
+
+@pytest.mark.parametrize("published_after_cutoff", [False, True])
+def test_later_observation_keeps_true_timing_and_publication_cutoff(store, published_after_cutoff):
+    from dataclasses import asdict
+    from app.domain.social_signals.records import ExtractionResult, ExtractionPostJudgment
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    from app.models.theme import ContentItem
+    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    observed = NOW + timedelta(minutes=1)
+    w = SocialSignalWriter(store, clock=lambda: observed+timedelta(seconds=1))
+    w.create_run("run", NOW)
+    b = batch()
+    post = replace(b.posts[0], observed_at=observed,
+        created_at=NOW+timedelta(seconds=30) if published_after_cutoff else b.posts[0].created_at)
+    b = replace(b, request=replace(b.request, observed_at=observed), posts=(post,),
+        outcome=replace(b.outcome, observed_oldest_at=post.created_at, observed_newest_at=post.created_at))
+    w.persist_observations(b, run_id="run")
+    w.persist_observations(empty_batch(2), run_id="run")
+    with store() as db:
+        content_id = db.query(ContentItem).one().id
+    work_id = ProcessSocialBacklog(store).enqueue(content_id, post, selected_model="synthetic/model", now=observed, run_id="run")
+    with store.begin() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        result = ExtractionResult(work.input_hash, "synthetic", "model", work.prompt_version, work.schema_version,
+            (), 1, 1, (ExtractionPostJudgment("100", True, "claim-100"),))
+        work.state, work.actual_provider, work.actual_model, work.result_json = "succeeded", "synthetic", "model", asdict(result)
+    w.prepare_run("run", (), NOW)
+    saved = w.read_run_inputs("run")
+    assert saved.as_of == NOW
+    assert saved.batches[0].request.observed_at == observed
+    assert saved.batches[0].posts == (post,)
+    assert len(saved.current_manifest.required_inputs) == int(not published_after_cutoff)
+    assert saved.current_manifest.carry_in_work_ids == ()
+    assert saved.work_ids == (() if published_after_cutoff else (work_id,))
+    if published_after_cutoff:
+        assert saved.current_manifest.audit_work_ids == (work_id,)
+        assert "publication_after_evaluation" in saved.current_manifest.coverage_reasons
+
+
+@pytest.mark.parametrize("field", ["request", "post", "publication"])
+def test_ingress_rejects_observation_beyond_trusted_clock_tolerance(store, field):
+    from app.models.theme import ContentItem
+    w = writer(store)
+    w.create_run("run", NOW)
+    b = batch()
+    if field == "request": b = replace(b, request=replace(b.request, observed_at=NOW+timedelta(minutes=6)))
+    elif field == "post": b = replace(b, posts=(replace(b.posts[0], observed_at=NOW+timedelta(minutes=6)),))
+    else: b = replace(b, posts=(replace(b.posts[0], observed_at=NOW+timedelta(minutes=5), created_at=NOW+timedelta(minutes=6)),))
+    with pytest.raises(ValueError, match="future_timestamp"):
+        w.persist_observations(b, run_id="run")
+    with store() as db:
+        assert db.query(ContentItem).count() == 0
+
+
+@pytest.mark.parametrize("contradiction", ["missing_actionable", "decision", "social_state", "other_confirmation", "component_reasons", "coherent_actionable"])
+def test_candidate_evidence_must_agree_with_frozen_market_input(store, contradiction):
+    from app.domain.social_signals.records import SignalStateDecision, SocialPublicationContext
+    from app.domain.social_signals.states import classify_signal_state
+    from app.domain.social_signals.scoring import score_confirmation, queue_score
+    from app.services.social_confirmation_reader import SocialConfirmationReader
+    from tests.unit.services.test_social_confirmation_reader import seed_batch, utc
+    at = NOW
+    if contradiction in {"other_confirmation", "coherent_actionable"}:
+        at = utc("2026-07-02T23:00:00")
+        with store.begin() as db:
+            seed_batch(db)
+    w = writer(store)
+    w.clock = lambda: at
+    collected(w, now=at)
+    with store() as db:
+        market = SocialConfirmationReader(db).read_market("US", ("AAA", "BBB"), at, theme_keys=())
+    context = SocialPublicationContext((market,))
+    candidate = candidate_context(context)
+    if contradiction == "missing_actionable":
+        fake = replace(candidate.state_input, feature_fresh=True, market_fresh=True, liquidity_eligible=True,
+            setup_ready=True, setup_score=80, market_exposure=60)
+        decision = classify_signal_state(fake)
+        candidate = replace(candidate, state_input=fake, state_decision=decision,
+            social_result=replace(candidate.social_result, state=decision))
+    elif contradiction == "decision":
+        decision = SignalStateDecision("actionable")
+        candidate = replace(candidate, state_decision=decision, social_result=replace(candidate.social_result, state=decision))
+    elif contradiction == "social_state":
+        candidate = replace(candidate, social_result=replace(candidate.social_result, state=SignalStateDecision("actionable")))
+    elif contradiction == "other_confirmation":
+        other = next(v for v in market.inputs if v.candidate_key == "US:BBB")
+        candidate = replace(candidate, confirmation=score_confirmation(other))
+    elif contradiction == "component_reasons":
+        candidate = replace(candidate, confirmation=replace(candidate.confirmation, reasons=("invented",)))
+    context = replace(context, candidates=(candidate,))
+    record = replace(row("run"), candidate_state=candidate.state_decision.state,
+        confirmation_score=candidate.confirmation.value,
+        queue_score=queue_score(social=80, confirmation=candidate.confirmation.value))
+    if contradiction == "coherent_actionable":
+        assert candidate.state_decision.state == "actionable"
+        prepared = w.prepare_run("run", (record,), at, context=context)
+        assert w.publish("run", prepared.registry_version).published
+    else:
+        with pytest.raises(ValueError, match="candidate_context_mismatch"):
+            w.prepare_run("run", (record,), at, context=context)
+
+
+@pytest.mark.parametrize("required,actual,fresh,reason,want", [
+    (None, None, False, "calendar_unavailable", None),
+    (NOW.date(), None, False, "missing_session", None),
+    (NOW.date(), NOW.date(), False, "listing_mic_unknown", None),
+    (NOW.date(), NOW.date()-timedelta(days=1), False, "stale_session", False),
+    (NOW.date(), NOW.date()+timedelta(days=1), False, "future_session", False),
+    (NOW.date(), NOW.date(), True, None, True),
+])
+def test_frozen_freshness_maps_unknown_and_known_failure_to_classifier(required, actual, fresh, reason, want):
+    from app.domain.social_signals.records import DailyFreshness
+    value = DailyFreshness(required, actual, fresh, reason)
+    assert value.signal_state_value is want
+    assert value.reason == reason
 
 
 def test_stale_measured_basket_is_rejected_before_publication(social_fixture):

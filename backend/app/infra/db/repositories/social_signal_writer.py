@@ -127,7 +127,7 @@ class SocialSignalWriter:
                     missing.append((source_id, reason))
                 else:
                     observations[source_id] = deepcopy(old_payload["observations"][source_id])
-            current, older = self._partition_inputs(observations, as_of)
+            current, older, after = self._partition_inputs(observations, as_of)
             carry, linked = [], set()
             for work_id in historical_ids:
                 work = db.get(SocialExtractionWork, work_id)
@@ -145,6 +145,7 @@ class SocialSignalWriter:
                 tuple(missing), tuple(ReplayInput(*identity, "current") for identity in sorted(current)),
                 tuple(carry), ("saved_observations_replayed",) +
                 (("saved_read_does_not_cover_current_end",) if any(datetime.fromisoformat(v["observed_at"]) < as_of for v in observations.values()) else ()) +
+                (("publication_after_evaluation",) if after else ()) +
                 (("outside_window_judgments_missing",) if older - linked else ()))
             run.application_progress_json = {**run.application_progress_json,
                 "observations": deepcopy(old_payload["observations"]),
@@ -161,15 +162,16 @@ class SocialSignalWriter:
 
     @classmethod
     def _partition_inputs(cls, observations, as_of):
-        current, older = set(), set()
+        current, older, after = set(), set(), set()
         for observation in observations.values():
             for entry in observation["inputs"]:
                 post = cls._post(entry["post"])
                 identity = (entry["content_item_id"], SocialExtractionService.input_hash((post,)))
-                if post.created_at > as_of or post.observed_at > as_of:
-                    raise ValueError("saved_input_in_future")
-                (current if post.created_at >= as_of - timedelta(days=14) else older).add(identity)
-        return current, older
+                if post.created_at > as_of:
+                    after.add(identity)
+                else:
+                    (current if post.created_at >= as_of - timedelta(days=14) else older).add(identity)
+        return current, older, after
 
     def select_current_inputs(self, run_id):
         """Classify work on a running generation, preserving aged unfinished audit."""
@@ -183,7 +185,7 @@ class SocialSignalWriter:
             replay = payload.get("replay")
             if replay:
                 observations = {k: v for k, v in observations.items() if k in replay["participating_source_ids"]}
-            current, older = self._partition_inputs(observations, utc(run.created_at))
+            current, older, after = self._partition_inputs(observations, utc(run.created_at))
             audit = set(payload.get("current_manifest", {}).get("audit_work_ids", ()))
             if replay:
                 audit.update(replay["historical_work_ids"])
@@ -193,7 +195,7 @@ class SocialSignalWriter:
                 if work is None or work.input_hash != link.input_hash:
                     raise ValueError("pinned_input_mismatch")
                 identity = (work.content_item_id, work.input_hash)
-                if identity in older and work.state != "succeeded":
+                if identity in after or (identity in older and work.state != "succeeded"):
                     audit.add(work.id)
                     db.delete(link)
                     continue
@@ -202,7 +204,8 @@ class SocialSignalWriter:
                     _decode(work)
                     carry.append(work.id)
                     succeeded.add(identity)
-            reasons = ("outside_window_judgments_missing",) if older - succeeded else ()
+            reasons = (("outside_window_judgments_missing",) if older - succeeded else ()) + (
+                ("publication_after_evaluation",) if after else ())
             manifest = SocialCurrentInputManifest(tuple(ReplayInput(*v, "current") for v in sorted(current)),
                 tuple(carry), tuple(sorted(audit - kept)), reasons)
             payload["current_manifest"] = serialized(manifest)
@@ -214,6 +217,12 @@ class SocialSignalWriter:
             raise ValueError("diagnostic_observations_forbidden")
         if len(batch.posts) > batch.request.limit or batch.outcome.received_count != len(batch.posts):
             raise ValueError("invalid_bounded_batch")
+        ingress_at = self.clock()
+        validate_utc_timestamp(ingress_at, "ingress_at")
+        validate_utc_timestamp(batch.request.observed_at, "request_observed_at", reference_at=ingress_at)
+        for post in batch.posts:
+            validate_utc_timestamp(post.observed_at, "post_observed_at", reference_at=ingress_at)
+            validate_utc_timestamp(post.created_at, "post_created_at", reference_at=ingress_at)
         with self.session_factory.begin() as db:
             registry = _lock_registry(db)
             source = db.get(SocialSourceConfiguration, int(batch.request.source_id))
@@ -404,13 +413,33 @@ class SocialSignalWriter:
 
     @staticmethod
     def _validate_candidates(context, rows):
-        from app.domain.social_signals.scoring import queue_score
+        from app.domain.social_signals.scoring import queue_score, score_confirmation
+        from app.domain.social_signals.states import classify_signal_state
         candidates = {(v.candidate_key, v.window_days): v for v in context.candidates}
         if set(candidates) != {(v.candidate_key, v.window_days) for v in rows}:
             raise ValueError("candidate_context_mismatch:identity")
         markets = {batch.pinned_run.market: batch for batch in context.market_batches}
         for row in rows:
             candidate = candidates[(row.candidate_key, row.window_days)]
+            decision = classify_signal_state(candidate.state_input)
+            if (candidate.state_decision != decision
+                    or (candidate.social_result and candidate.social_result.state != decision)):
+                raise ValueError("candidate_context_mismatch:state_decision")
+            if row.market:
+                batch = markets.get(row.market)
+                fact = dict(batch.facts).get(row.canonical_symbol) if batch else None
+                confirmation_input = next((value for value in batch.inputs
+                    if value.candidate_key == f"{row.market}:{row.canonical_symbol}"), None) if batch else None
+                if fact is None or confirmation_input is None:
+                    raise ValueError("candidate_context_mismatch:market_inputs")
+                state = candidate.state_input
+                if state != fact.to_signal_state_input(resolved=state.resolved, active=state.active,
+                        market=row.market, security_kind=state.security_kind):
+                    raise ValueError("candidate_context_mismatch:frozen_checks")
+                if candidate.confirmation != score_confirmation(confirmation_input):
+                    raise ValueError("candidate_context_mismatch:confirmation_input")
+            elif candidate.confirmation is not None:
+                raise ValueError("candidate_context_mismatch:confirmation_without_market")
             social = candidate.social_result.social_score if candidate.social_result else None
             confirmation = candidate.confirmation.value if candidate.confirmation else None
             if (row.candidate_state != candidate.state_decision.state or row.market != candidate.state_input.market
@@ -419,8 +448,6 @@ class SocialSignalWriter:
                     or (candidate.social_result and (candidate.social_result.canonical_symbol != row.canonical_symbol
                         or candidate.social_result.formula_version != context.formula_version))):
                 raise ValueError("candidate_context_mismatch:state_or_score")
-            if row.market and (row.market not in markets or row.canonical_symbol not in dict(markets[row.market].facts)):
-                raise ValueError("candidate_context_mismatch:market_inputs")
 
     def _validate_context(self, db, context, as_of):
         if context is None:

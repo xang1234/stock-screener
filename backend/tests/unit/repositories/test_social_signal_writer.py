@@ -60,6 +60,7 @@ def test_cross_list_duplicate_retains_memberships_and_only_social_eligibility(st
 def test_newer_partial_metrics_preserve_missing_and_older_cannot_overwrite(store):
     w = writer(store)
     w.persist_observations(batch())
+    w.clock = lambda: NOW + timedelta(hours=1)
     w.persist_observations(batch(likes=20, replies=None, age=1))
     w.persist_observations(batch(likes=1, replies=1))
     with store() as db:
@@ -118,6 +119,7 @@ def test_changed_duplicate_delivery_cannot_replace_frozen_input(store):
 
 def test_progress_order_uses_observation_time_and_survives_budget_pause(store):
     w = writer(store)
+    w.clock = lambda: NOW + timedelta(hours=1)
     w.create_run("new", NOW)
     newer = replace(batch(age=1), outcome=replace(batch(age=1).outcome, proposed_progress="new-cursor"))
     w.persist_observations(newer, run_id="new")
