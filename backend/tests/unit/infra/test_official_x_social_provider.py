@@ -175,3 +175,16 @@ def test_diagnostic_is_capped_at_five_and_history_stops_before_boundary():
         "expansions":"author_id", "user.fields":"username", "max_results":"5"}]
     assert [post.provider_post_id for post in batch.posts] == ["new"]
     assert batch.outcome.proposed_progress is None
+
+
+def test_initial_read_crossing_requested_boundary_marks_history_observed():
+    response = {"data":[
+        {"id":"new","author_id":"u","text":"new","created_at":"2026-09-05T01:00:00Z","public_metrics":{}},
+        {"id":"old","author_id":"u","text":"old","created_at":"2026-08-20T01:00:00Z","public_metrics":{}},
+    ],"includes":{"users":[{"id":"u","username":"a"}]},"meta":{"next_token":"older"}}
+    batch = make_provider(lambda _: httpx.Response(200, json=response)).read_source(
+        read_request(intent="initial", limit=100)
+    )
+    assert [post.provider_post_id for post in batch.posts] == ["new"]
+    assert batch.outcome.history_status == "observed_window"
+    assert batch.outcome.coverage_reason_codes == ()

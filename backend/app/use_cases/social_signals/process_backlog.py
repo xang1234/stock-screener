@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.domain.social_signals.records import BacklogResult, SocialPostRecord
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt, SocialLLMBudgetDay, SocialRunWork
-from app.infra.db.models.social_signals import SocialSignalRun
+from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
 from app.services.llm.llm_service import LLMService
 from app.services.social_extraction_service import SocialExtractionError, SocialExtractionService, VERSION
 from app.services.social_llm_budget_service import SocialLLMBudgetService, social_analysis_transaction
@@ -53,15 +53,21 @@ class _MeteredCompletion:
             work = db.get(SocialExtractionWork, self.work_id)
             row = db.get(SocialLLMAttempt, attempt)
             day = db.get(SocialLLMBudgetDay, row.budget_day_id)
+            registry = db.get(SocialSourceRegistry, 1, populate_existing=True)
             dispatch_now = self.now()
             owned = work.claim_token == self.claim_token and work.state == "running"
             price_valid = budget.price_in_transaction(db, kwargs["model"]) == price
+            runtime_available = (
+                registry is not None
+                and registry.mode in {"validation", "live"}
+                and registry.provider != "disabled"
+            )
             published = datetime.fromisoformat(work.input_snapshot_json["created_at"])
             outside_window = (owned and not work.requested_by_admin
                 and published < dispatch_now - timedelta(days=14))
             valid = (owned and row.state == "reserved" and _utc(work.claim_expires_at) > dispatch_now
                 and _utc(day.period_start_utc) <= dispatch_now < _utc(day.period_end_utc)
-                and price_valid and not outside_window)
+                and price_valid and runtime_available and not outside_window)
             if valid:
                 row.state = "dispatched"
             else:
@@ -74,7 +80,11 @@ class _MeteredCompletion:
                         work.state, work.error_code = "outside_window", "outside_signal_window"
                     else:
                         work.state = "pending" if price_valid else "waiting_budget"
-                        work.error_code = "claim_or_budget_period_expired" if price_valid else "pricing_changed"
+                        work.error_code = (
+                            "social_runtime_unavailable" if not runtime_available
+                            else "claim_or_budget_period_expired" if price_valid
+                            else "pricing_changed"
+                        )
                     work.claim_token = work.claim_expires_at = None
         if outside_window:
             raise _OutsideWindow
@@ -143,10 +153,13 @@ class ProcessSocialBacklog:
                 db.add(SocialRunWork(run_id=run_id, work_id=work.id, input_hash=input_hash, included_at=now))
             return work.id
 
-    def _claim(self, now, limit, admin_work_ids):
+    def _claim(self, now, limit, admin_work_ids, eligible_work_ids=()):
         claimed, outside = [], 0
         with social_analysis_transaction(self.session_factory) as db:
-            rows = db.scalars(select(SocialExtractionWork).where(SocialExtractionWork.state != "succeeded")).all()
+            query = select(SocialExtractionWork).where(SocialExtractionWork.state != "succeeded")
+            if eligible_work_ids:
+                query = query.where(SocialExtractionWork.id.in_(eligible_work_ids))
+            rows = db.scalars(query).all()
             for row in rows:
                 if row.id in admin_work_ids:
                     row.requested_by_admin = True
@@ -201,12 +214,13 @@ class ProcessSocialBacklog:
                 row.actual_provider, row.actual_model = result.provider, result.model
             return True
 
-    async def execute(self, now: datetime, limit: int, admin_work_ids: tuple[int, ...] = ()) -> BacklogResult:
+    async def execute(self, now: datetime, limit: int, admin_work_ids: tuple[int, ...] = (),
+                      work_ids: tuple[int, ...] = ()) -> BacklogResult:
         if now.tzinfo is None or limit <= 0:
             raise ValueError("invalid_backlog_request")
         started = monotonic()
         current_time = lambda: now + timedelta(seconds=monotonic() - started)
-        claimed, outside = self._claim(now, limit, admin_work_ids)
+        claimed, outside = self._claim(now, limit, admin_work_ids, work_ids)
         succeeded = deferred = failed = 0
         for work_id, token, model, prompt, schema, snapshot in claimed:
             snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])

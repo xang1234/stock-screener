@@ -437,7 +437,7 @@ class EffectiveThemeMembership:
 class SocialEvidenceInput:
     candidate_key: str
     canonical_symbol: str
-    market: str
+    market: str | None
     posts: tuple[SocialPostRecord, ...]
     enabled_source_ids: tuple[str, ...] = ()
     history_complete: bool = False
@@ -452,8 +452,10 @@ class SocialEvidenceInput:
         _choice(self.security_kind, {"stock", "thematic_etf", "broad_etf", "macro"}, "security_kind")
         _required(self.candidate_key, "candidate_key")
         _required(self.canonical_symbol, "canonical_symbol")
-        if self.market not in SUPPORTED_MARKETS:
+        if self.market is not None and self.market not in SUPPORTED_MARKETS:
             raise ValueError("unsupported_market")
+        if self.resolved and self.market is None:
+            raise ValueError("resolved_market_required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -625,6 +627,7 @@ class SocialPublicationContext:
     extraction_versions: tuple[tuple[str, str, str], ...] = ()
     source_progress: tuple[tuple[str, str | None], ...] = ()
     candidates: tuple[CandidatePublicationContext, ...] = ()
+    scoring_input_version: str | None = None
 
     def __post_init__(self):
         for field in ("market_batches", "extraction_versions", "source_progress", "candidates"):
@@ -639,6 +642,8 @@ class SocialPublicationContext:
             raise TypeError("invalid_candidate_context")
         if len({(v.candidate_key, v.window_days) for v in self.candidates}) != len(self.candidates):
             raise ValueError("duplicate_candidate_context")
+        if self.scoring_input_version is not None:
+            _required(self.scoring_input_version, "scoring_input_version")
 
 
 @dataclass(frozen=True, slots=True)
@@ -817,9 +822,10 @@ class SocialCurrentInputManifest:
     carry_in_work_ids: tuple[int, ...]
     audit_work_ids: tuple[int, ...]
     coverage_reasons: tuple[str, ...] = ()
+    scoring_work_ids: tuple[int, ...] = ()
 
     def __post_init__(self):
-        for field in ("required_inputs", "carry_in_work_ids", "audit_work_ids", "coverage_reasons"):
+        for field in ("required_inputs", "carry_in_work_ids", "audit_work_ids", "coverage_reasons", "scoring_work_ids"):
             _deeply_immutable(getattr(self, field), field)
 
 

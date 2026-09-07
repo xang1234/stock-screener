@@ -18,7 +18,7 @@ from app.infra.db.models.social_signals import (
     ContentPipelineEligibility, SocialContentMetrics, SocialPostSource,
     SocialSignalRun, SocialSourceConfiguration, SocialSignalSnapshot, SocialSignalRunPointer, SocialPostTicker,
 )
-from app.models.theme import ContentItem
+from app.models.theme import ContentItem, ContentSource
 from app.services.social_theme_projection_service import _lock_registry
 from app.services.social_theme_projection_service import SocialThemeProjectionService, _decode
 from app.infra.db.models.social_analysis import SocialRunWork, SocialExtractionWork
@@ -88,7 +88,11 @@ class SocialSignalWriter:
         run = SocialSignalRun(id=run_id, registry_id=1, registry_version=registry.version,
                 mode=registry.mode, provider=registry.provider, status="running", created_at=as_of,
                 source_outcomes_json={}, application_progress_json={"sources": {
-                    str(s.content_source_id): {"list_id": s.x_list_id, "version": s.version} for s in sources}, "observations": {}},
+                    str(s.content_source_id): {
+                        "list_id": s.x_list_id,
+                        "name": db.get(ContentSource, s.content_source_id).name,
+                        "version": s.version,
+                    } for s in sources}, "observations": {}},
                 feature_run_ids_json={}, exposure_dates_json={}, coverage_json={})
         db.add(run)
         return run
@@ -187,6 +191,7 @@ class SocialSignalWriter:
                 observations = {k: v for k, v in observations.items() if k in replay["participating_source_ids"]}
             current, older, after = self._partition_inputs(observations, utc(run.created_at))
             audit = set(payload.get("current_manifest", {}).get("audit_work_ids", ()))
+            scoring = set(payload.get("current_manifest", {}).get("scoring_work_ids", ()))
             if replay:
                 audit.update(replay["historical_work_ids"])
             carry, kept, succeeded = [], set(), set()
@@ -195,6 +200,12 @@ class SocialSignalWriter:
                 if work is None or work.input_hash != link.input_hash:
                     raise ValueError("pinned_input_mismatch")
                 identity = (work.content_item_id, work.input_hash)
+                if identity not in current | older | after:
+                    published = datetime.fromisoformat(work.input_snapshot_json["created_at"])
+                    if utc(run.created_at) - timedelta(days=15) <= published <= utc(run.created_at):
+                        scoring.add(work.id)
+                        kept.add(work.id)
+                        continue
                 if identity in after or (identity in older and work.state != "succeeded"):
                     audit.add(work.id)
                     db.delete(link)
@@ -207,10 +218,32 @@ class SocialSignalWriter:
             reasons = (("outside_window_judgments_missing",) if older - succeeded else ()) + (
                 ("publication_after_evaluation",) if after else ())
             manifest = SocialCurrentInputManifest(tuple(ReplayInput(*v, "current") for v in sorted(current)),
-                tuple(carry), tuple(sorted(audit - kept)), reasons)
+                tuple(carry), tuple(sorted(audit - kept)), reasons, tuple(sorted(scoring & kept)))
             payload["current_manifest"] = serialized(manifest)
             run.application_progress_json = payload
         return self.read_run_inputs(run_id)
+
+    def current_inputs_ready(self, run_id):
+        """Return whether every pinned current input has a valid saved result."""
+        with self.session_factory() as db:
+            run = db.get(SocialSignalRun, run_id)
+            if run is None or run.status != "running":
+                return False
+            selection = run.application_progress_json.get("current_manifest")
+            if selection is None:
+                return False
+            expected = {(value["content_item_id"], value["input_hash"])
+                        for value in selection["required_inputs"]}
+            complete = set()
+            expected_work_ids = set(selection.get("scoring_work_ids", ()))
+            for link in db.scalars(select(SocialRunWork).where(SocialRunWork.run_id == run_id)):
+                work = db.get(SocialExtractionWork, link.work_id)
+                if (work is not None and work.state == "succeeded"
+                        and link.input_hash == work.input_hash):
+                    _decode(work)
+                    complete.add((work.content_item_id, work.input_hash))
+                    expected_work_ids.discard(work.id)
+            return expected <= complete and not expected_work_ids
 
     def persist_observations(self, batch, *, run_id=None):
         if batch.request.intent == "test":
@@ -239,7 +272,8 @@ class SocialSignalWriter:
                 if "replay" in run.application_progress_json:
                     raise ValueError("replay_collection_forbidden")
                 pin = run.application_progress_json["sources"].get(batch.request.source_id)
-                if (pin != {"list_id": source.x_list_id, "version": source.version}
+                source_name = db.get(ContentSource, source.content_source_id).name
+                if (pin != {"list_id": source.x_list_id, "name": source_name, "version": source.version}
                         or registry.version != run.registry_version or registry.provider != run.provider):
                     raise ValueError("source_configuration_changed")
                 existing = run.application_progress_json["observations"].get(batch.request.source_id)
@@ -390,12 +424,13 @@ class SocialSignalWriter:
         if selection:
             required = {(v["content_item_id"], v["input_hash"]) for v in selection["required_inputs"]}
         actual, ids = set(), []
+        scoring_ids = set(selection.get("scoring_work_ids", ())) if selection else set()
         for link in db.scalars(select(SocialRunWork).where(SocialRunWork.run_id == run.id).order_by(SocialRunWork.work_id)):
             work = db.get(SocialExtractionWork, link.work_id)
             if work is None or link.input_hash != work.input_hash:
                 raise ValueError("pinned_input_mismatch")
             _decode(work)
-            if not selection or work.id not in selection["carry_in_work_ids"]:
+            if not selection or work.id not in set(selection["carry_in_work_ids"]) | scoring_ids:
                 actual.add((work.content_item_id, work.input_hash))
             ids.append(work.id)
         if actual != required:
@@ -449,9 +484,35 @@ class SocialSignalWriter:
                         or candidate.social_result.formula_version != context.formula_version))):
                 raise ValueError("candidate_context_mismatch:state_or_score")
 
-    def _validate_context(self, db, context, as_of):
+    @staticmethod
+    def _validate_social_results(db, run_id, context, as_of):
+        if context is None or context.scoring_input_version is None:
+            return
+        if context.scoring_input_version != "rolling-observations-v1":
+            raise ValueError("candidate_context_mismatch:scoring_input_version")
+        from app.domain.social_signals.scoring import score_social_candidates
+        from app.infra.db.repositories.social_refresh_support import SocialScoringEvidenceReader
+        evidence = SocialScoringEvidenceReader.read_in_session(db, run_id, as_of)
+        expected = {(item.candidate_key, item.window_days): item
+                    for item in context.candidates}
+        actual = {}
+        for window_days in (1, 7, 14):
+            for result in score_social_candidates(evidence, window_days, as_of):
+                key = (result.candidate_key, window_days)
+                candidate = expected.get(key)
+                if candidate is not None:
+                    result = replace(result, state=candidate.state_decision)
+                actual[key] = result
+        supplied = {key: value.social_result for key, value in expected.items()
+                    if value.social_result is not None}
+        if actual != supplied:
+            raise ValueError("candidate_context_mismatch:social_inputs")
+
+    def _validate_context(self, db, context, as_of, *, run_id=None):
         if context is None:
             return
+        if run_id is not None:
+            self._validate_social_results(db, run_id, context, as_of)
         now = self.clock()
         validate_utc_timestamp(now, "publication_clock")
         if now < as_of:
@@ -517,7 +578,7 @@ class SocialSignalWriter:
                     raise ValueError("context_theme_evidence_mismatch")
                 theme_evidence = context_themes
                 # Also preloads local calendar providers before the final lock.
-                self._validate_context(db, context, as_of)
+                self._validate_context(db, context, as_of, run_id=run_id)
             service = SocialThemeProjectionService(db)
             projection = service.prepare(run_id, as_of)
             application = service.prepare_application(projection, theme_keys=tuple(e.theme_key for e in theme_evidence))
@@ -538,7 +599,7 @@ class SocialSignalWriter:
                 raise ValueError("publication_preparation_changed")
             if self._validate_inputs(db, run) != work_ids:
                 raise ValueError("publication_preparation_changed")
-            self._validate_context(db, context, as_of)
+            self._validate_context(db, context, as_of, run_id=run_id)
             keys = set()
             for record in rows:
                 if record.run_id != run_id or (record.window_days, record.candidate_key) in keys:
@@ -562,6 +623,10 @@ class SocialSignalWriter:
                 run.exposure_dates_json = {b.pinned_run.market: b.market_context.freshness.actual_session.isoformat()
                     if b.market_context.freshness.actual_session else None for b in context.market_batches}
             run.completed_at, run.status = as_of, "staged"
+            run.source_outcomes_json = {
+                source_id: {**value, "processing_status": "complete"}
+                for source_id, value in run.source_outcomes_json.items()
+            }
             run.coverage_json = {key: deepcopy(run.source_outcomes_json[key]) for key in frozen_input["sources"]}
         return result
 
@@ -583,7 +648,7 @@ class SocialSignalWriter:
                 raise ValueError("publication_version_changed")
             prepared_data = run.application_progress_json["prepared"]
             context = _restore_record(SocialPublicationContext, prepared_data.get("context"))
-            self._validate_context(db, context, utc(run.created_at))
+            self._validate_context(db, context, utc(run.created_at), run_id=run_id)
             application = service.prepare_application(projection, theme_keys=tuple(e["theme_key"] for e in prepared_data["theme_evidence"]))
             if (application.fingerprint != prepared_data["basket_fingerprint"]
                     or [serialized(b) for b in application.baskets] != prepared_data["baskets"]):
@@ -593,11 +658,15 @@ class SocialSignalWriter:
             run = db.get(SocialSignalRun, run_id)
             if registry.mode != "live" or registry.version != expected_mode_version or run.registry_version != expected_mode_version:
                 raise ValueError("publication_live_version_changed")
-            sources = {str(s.content_source_id): {"list_id": s.x_list_id, "version": s.version}
+            sources = {str(s.content_source_id): {
+                    "list_id": s.x_list_id,
+                    "name": db.get(ContentSource, s.content_source_id).name,
+                    "version": s.version,
+                }
                 for s in db.scalars(select(SocialSourceConfiguration).where(SocialSourceConfiguration.lifecycle_state == "enabled"))}
             if sources != run.application_progress_json["sources"] or registry.provider != run.provider:
                 raise ValueError("publication_source_version_changed")
-            self._validate_context(db, context, utc(run.created_at))
+            self._validate_context(db, context, utc(run.created_at), run_id=run_id)
             pointer = db.scalar(select(SocialSignalRunPointer).where(SocialSignalRunPointer.key == "latest_published").with_for_update())
             if pointer and pointer.run_id != run_id:
                 prior = db.get(SocialSignalRun, pointer.run_id)

@@ -216,6 +216,85 @@ def get_options_analytics_queries(session: Session):
     )
 
 
+def get_refresh_social_signals_use_case(
+    *, session_factory=None, provider_lease=None, official_client=None, llm=None
+):
+    """Build the private/local Social refresh path with explicit provider routing.
+
+    The database remains authoritative for mode and provider. Provider factories
+    are lazy, so an off installation does not touch X credentials or start a CLI.
+    """
+    from datetime import datetime
+    from hashlib import sha256
+    import httpx
+
+    from app.config import settings
+    from app.database import SessionLocal
+    from app.infra.db.repositories.social_refresh_support import (
+        ExternalFetchProviderReadLease,
+        SocialScoringEvidenceReader,
+        SqlConfirmationReaderFacade,
+        SqlSocialRefreshCatalog,
+        SqlThemeProjectionFacade,
+    )
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    from app.infra.providers.official_x_social_provider import OfficialXSocialProvider
+    from app.infra.providers.xui_cli_social_provider import XuiCliSocialProvider
+    from app.services.social_extraction_service import SocialExtractionService
+    from app.services.social_source_admin_service import SocialSourceAdminService
+    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    from app.use_cases.social_signals.refresh import RefreshSocialSignals
+
+    sessions = session_factory or SessionLocal
+
+    def reserve_official(day, requested, daily_limit):
+        with sessions() as db:
+            return SocialSourceAdminService(db).reserve_official_capacity(
+                day, requested, daily_limit
+            )
+
+    def official():
+        return OfficialXSocialProvider(
+            bearer_token=settings.twitter_bearer_token,
+            reservation=reserve_official,
+            client=official_client or httpx.Client(timeout=30),
+            daily_post_limit=settings.social_official_daily_post_limit,
+            budget_timezone=settings.social_llm_budget_timezone,
+        )
+
+    def xui():
+        return XuiCliSocialProvider(
+            config_path=settings.social_xui_config_path,
+            profile=settings.social_xui_profile,
+        )
+
+    if provider_lease is None:
+        from app.wiring.bootstrap import get_workload_coordination
+        provider_lease = ExternalFetchProviderReadLease(get_workload_coordination())
+
+    def run_id(origin, now: datetime):
+        value = f"social:{origin}:{now.isoformat()}".encode()
+        return f"social-{sha256(value).hexdigest()[:24]}"
+
+    return RefreshSocialSignals(
+        catalog=SqlSocialRefreshCatalog(sessions),
+        providers={"official": official, "xui": xui},
+        writer=SocialSignalWriter(sessions),
+        backlog=ProcessSocialBacklog(sessions, llm=llm),
+        evidence_reader=SocialScoringEvidenceReader(sessions),
+        theme_service=SqlThemeProjectionFacade(sessions),
+        confirmation_reader=SqlConfirmationReaderFacade(
+            sessions, grace_minutes=settings.social_market_close_grace_minutes
+        ),
+        provider_lease=provider_lease,
+        run_id_factory=run_id,
+        input_hash=lambda post: SocialExtractionService.input_hash((post,)),
+        initial_days=settings.social_initial_backfill_days,
+        initial_limit=settings.social_initial_backfill_limit_per_source,
+        incremental_limit=settings.social_incremental_limit_per_source,
+    )
+
+
 __all__ = [
     "get_build_daily_snapshot_use_case",
     "get_compare_feature_runs_use_case",
@@ -232,5 +311,6 @@ __all__ = [
     "get_list_feature_runs_use_case",
     "get_options_analytics_queries",
     "get_refresh_options_analytics_use_case",
+    "get_refresh_social_signals_use_case",
     "get_run_bulk_scan_use_case",
 ]

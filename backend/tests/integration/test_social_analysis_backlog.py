@@ -24,7 +24,7 @@ def backlog(tmp_path):
     Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory.begin() as db:
-        db.add(SocialSourceRegistry(id=1))
+        db.add(SocialSourceRegistry(id=1, mode="live", provider="official"))
         db.add(AppSetting(key="social_llm_pricing", value=json.dumps({
             "version": "fixture-v1", "models": {"synthetic/requested": {
                 "provider": "synthetic", "actual_models": ["actual-model"],
@@ -150,6 +150,18 @@ def test_engagement_only_updates_reuse_completed_work(backlog):
     assert worker.enqueue(item_id, replace(value, likes=1000, source_id="other"),
         selected_model="synthetic/requested", now=NOW) == work_id
     assert asyncio.run(worker.execute(NOW, 10)).succeeded == 0
+
+
+def test_generation_scoped_execution_does_not_claim_unrelated_pending_work(backlog):
+    llm = FakeLLM()
+    worker = processor(backlog, llm)
+    unrelated = enqueue(backlog, worker, post(1, 2))
+    selected = enqueue(backlog, worker, post(2, 1))
+    result = asyncio.run(worker.execute(NOW, 10, work_ids=(selected,)))
+    assert result.succeeded == 1 and llm.seen == ["2"]
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    with backlog() as db:
+        assert db.get(SocialExtractionWork, unrelated).state == "pending"
 
 
 @pytest.mark.parametrize("dispatched", [False, True])
@@ -296,6 +308,35 @@ def test_expired_queued_claim_does_not_dispatch_after_long_previous_call(backlog
     enqueue(backlog, worker, post(2))
     asyncio.run(worker.execute(NOW, 10))
     assert llm.seen == ["1"]
+
+
+def test_runtime_off_mid_batch_stops_new_model_dispatch_and_releases_reservation(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+    with backlog.begin() as db:
+        db.add(AppSetting(key="social_llm_daily_limit_usd", value="4"))
+    llm = FakeLLM()
+    original = llm.completion
+
+    async def disable_after_first(**kwargs):
+        response = await original(**kwargs)
+        with backlog.begin() as db:
+            registry = db.get(SocialSourceRegistry, 1)
+            registry.mode, registry.provider = "off", "disabled"
+        return response
+
+    llm.completion = disable_after_first
+    worker = processor(backlog, llm)
+    first = enqueue(backlog, worker, post(1, 2))
+    second = enqueue(backlog, worker, post(2, 1))
+    result = asyncio.run(worker.execute(NOW, 10))
+
+    assert result.succeeded == 1 and result.deferred == 1
+    assert llm.seen == ["1"]
+    with backlog() as db:
+        assert db.get(SocialExtractionWork, first).state == "succeeded"
+        assert db.get(SocialExtractionWork, second).state == "pending"
+        attempts = db.scalars(select(SocialLLMAttempt).order_by(SocialLLMAttempt.id)).all()
+        assert [attempt.state for attempt in attempts] == ["reconciled", "released"]
 
 
 def test_pricing_change_between_reservation_and_dispatch_releases_without_call(backlog):
