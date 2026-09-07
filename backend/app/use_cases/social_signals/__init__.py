@@ -1,0 +1,2 @@
+"""Social signal application boundary."""
+
