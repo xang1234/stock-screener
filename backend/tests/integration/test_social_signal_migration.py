@@ -41,7 +41,13 @@ def test_upgrade_backfills_provenance_and_downgrade_preserves_content(tmp_path):
         migration.upgrade()
         inspector = sa.inspect(connection)
         assert TABLES.issubset(inspector.get_table_names())
-        assert connection.exec_driver_sql("SELECT mode, provider, version FROM social_source_registry").one() == ("off", "disabled", 1)
+        assert connection.exec_driver_sql(
+            "SELECT mode, provider, version, official_budget_day, official_reserved_posts FROM social_source_registry"
+        ).one() == ("off", "disabled", 1, None, 0)
+        registry = migration.SocialSourceRegistry.__table__
+        with pytest.raises(sa.exc.IntegrityError, match="ck_social_registry_official_reserved_posts"):
+            with connection.begin_nested():
+                connection.execute(registry.update().values(official_reserved_posts=-1))
         assert set(connection.exec_driver_sql("SELECT content_item_id,pipeline,channel,originating_source_id FROM content_pipeline_eligibility")) == {(7, "technical", "legacy", 1), (7, "fundamental", "legacy", 1)}
         assert inspector.get_pk_constraint("social_signal_run_pointers")["constrained_columns"] == ["key"]
         for table in TABLES - {"social_source_registry"}:

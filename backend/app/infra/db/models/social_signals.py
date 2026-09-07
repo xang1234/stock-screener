@@ -15,12 +15,15 @@ class SocialSourceRegistry(Base):
     version = Column(Integer, nullable=False, server_default="1")
     mode = Column(Text, nullable=False, server_default="off")
     provider = Column(Text, nullable=False, server_default="disabled")
+    official_budget_day = Column(Date)
+    official_reserved_posts = Column(Integer, nullable=False, server_default="0")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_social_registry_singleton"),
         CheckConstraint("version >= 1", name="ck_social_registry_version"),
         CheckConstraint("mode IN ('off','validation','live')", name="ck_social_registry_mode"),
         CheckConstraint("provider IN ('disabled','official','xui')", name="ck_social_registry_provider"),
+        CheckConstraint("official_reserved_posts >= 0", name="ck_social_registry_official_reserved_posts"),
     )
 
 

@@ -1,8 +1,8 @@
 {
-  "provider": "official",
-  "source_id": "1986290701492232693",
-  "posts": [
-    {"id": "syn-101", "username": "alpha_research", "text": "$NVDA demand remains strong", "url": "https://x.example/alpha/status/syn-101", "created_at": "2026-09-05T01:00:00Z", "public_metrics": {"like_count": 0, "retweet_count": 0, "reply_count": 0}},
-    {"id": "syn-201", "username": "delta_capital", "text": "Quote: foundry capacity is the durable thesis", "url": "https://x.example/delta/status/syn-201", "created_at": "2026-09-05T04:00:00Z", "quoted_post": {"id": "syn-original-1", "text": "Foundry capacity supports the multi-year thesis"}, "public_metrics": {"like_count": 5, "retweet_count": 1, "reply_count": 1, "quote_count": 1}}
-  ]
+  "data": [
+    {"id":"syn-101","author_id":"user-1","text":"$NVDA demand remains strong","created_at":"2026-09-05T01:00:00Z","public_metrics":{"like_count":0,"retweet_count":0,"reply_count":0,"impression_count":12}},
+    {"id":"syn-201","author_id":"user-2","text":"Quote: foundry capacity is the durable thesis","created_at":"2026-09-05T04:00:00+00:00","referenced_tweets":[{"type":"quoted","id":"syn-original-1"}],"public_metrics":{"like_count":5,"retweet_count":1,"reply_count":1,"quote_count":1,"bookmark_count":2}}
+  ],
+  "includes":{"users":[{"id":"user-1","username":"alpha_research"},{"id":"user-2","username":"delta_capital"}]},
+  "meta":{"result_count":2,"next_token":"page-2"}
 }

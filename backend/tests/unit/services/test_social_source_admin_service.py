@@ -199,6 +199,53 @@ def test_caller_flushed_transaction_is_never_committed(db_session):
     assert db_session.query(ContentSource).count() == 0
 
 
+def test_official_capacity_is_durable_bounded_and_does_not_change_policy_version(registry_engine):
+    from datetime import date
+    from sqlalchemy.orm import sessionmaker
+    from app.services.social_source_admin_service import SocialSourceAdminService
+    factory = sessionmaker(bind=registry_engine)
+    with factory() as db:
+        service = SocialSourceAdminService(db)
+        service.ensure_seed_sources()
+        version = service.read_runtime().version
+        assert service.reserve_official_capacity(date(2026, 9, 7), 6, 10) == 6
+    with factory() as restarted:
+        service = SocialSourceAdminService(restarted)
+        assert service.reserve_official_capacity(date(2026, 9, 7), 6, 10) == 4
+        assert service.reserve_official_capacity(date(2026, 9, 7), 1, 10) == 0
+        assert service.read_runtime().version == version
+
+
+def test_prior_day_cannot_reset_newer_official_capacity_day(registry_engine):
+    from datetime import date
+    from sqlalchemy.orm import sessionmaker
+    from app.services.social_source_admin_service import SocialSourceAdminService
+    factory = sessionmaker(bind=registry_engine)
+    with factory() as db:
+        service = SocialSourceAdminService(db); service.ensure_seed_sources()
+        assert service.reserve_official_capacity(date(2026, 9, 8), 7, 10) == 7
+        assert service.reserve_official_capacity(date(2026, 9, 7), 3, 10) == 0
+        assert service.reserve_official_capacity(date(2026, 9, 8), 5, 10) == 3
+
+
+def test_concurrent_official_capacity_reservations_never_exceed_daily_limit(registry_engine):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import date
+    from threading import Barrier
+    from sqlalchemy.orm import sessionmaker
+    from app.services.social_source_admin_service import SocialSourceAdminService
+    factory = sessionmaker(bind=registry_engine)
+    with factory() as db: SocialSourceAdminService(db).ensure_seed_sources()
+    barrier = Barrier(2)
+    def reserve():
+        with factory() as db:
+            barrier.wait(timeout=5)
+            return SocialSourceAdminService(db).reserve_official_capacity(date(2026, 9, 7), 8, 10)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        grants = [future.result(timeout=15) for future in (workers.submit(reserve), workers.submit(reserve))]
+    assert sorted(grants) == [2, 8]
+
+
 def test_runtime_read_does_not_apply_environment(db_session, monkeypatch):
     from app.services.social_source_admin_service import SocialSourceAdminService
     monkeypatch.setenv("SOCIAL_SIGNALS_MODE", "live")

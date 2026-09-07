@@ -1,7 +1,7 @@
 """Short, serialized source-registry transactions. No provider I/O belongs here."""
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import re
 from uuid import uuid4
 
@@ -164,6 +164,24 @@ class SocialSourceAdminService:
 
     def apply_deployment_settings(self, settings, expected_version, actor):
         return self.apply_runtime(settings.social_signals_mode, settings.social_ingest_provider, expected_version, actor)
+
+    def reserve_official_capacity(self, day, requested_posts, daily_limit):
+        """Atomically reserve the conservative maximum size of one official read."""
+        if (not isinstance(day, date) or isinstance(day, datetime)
+                or not isinstance(requested_posts, int) or isinstance(requested_posts, bool)
+                or not isinstance(daily_limit, int) or isinstance(daily_limit, bool)
+                or requested_posts <= 0 or daily_limit <= 0):
+            raise SocialSourceStateError("invalid_official_capacity_request")
+        with self._transaction(lock=True) as registry:
+            if registry.official_budget_day is None or day > registry.official_budget_day:
+                registry.official_budget_day = day
+                registry.official_reserved_posts = 0
+            elif day < registry.official_budget_day:
+                return 0
+            remaining = max(0, daily_limit - registry.official_reserved_posts)
+            granted = min(requested_posts, remaining)
+            registry.official_reserved_posts += granted
+            return granted
 
     def _create(self, name, list_id, actor, *, seed=False):
         if self.db.query(SocialSourceConfiguration).filter_by(x_list_id=list_id).first():

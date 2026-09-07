@@ -191,6 +191,8 @@ class SocialSourceOutcome:
     received_count: int
     committed_progress: str | None
     error_code: str | None
+    proposed_progress: str | None = None
+    rate_limit_reset_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _deeply_immutable(self.coverage_reason_codes, "coverage_reason_codes")
@@ -202,6 +204,7 @@ class SocialSourceOutcome:
             raise ValueError("negative_received_count")
         _utc(self.observed_oldest_at, "observed_oldest_at", nullable=True)
         _utc(self.observed_newest_at, "observed_newest_at", nullable=True)
+        _utc(self.rate_limit_reset_at, "rate_limit_reset_at", nullable=True)
         if (self.observed_oldest_at is None) != (self.observed_newest_at is None):
             raise ValueError("inconsistent_source_outcome:unpaired_bounds")
         if (
@@ -218,6 +221,8 @@ class SocialSourceOutcome:
             if self.processing_status == "complete":
                 raise ValueError("inconsistent_source_outcome:failed_read_complete")
             if self.committed_progress is not None:
+                raise ValueError("inconsistent_source_outcome:failed_read_progress")
+            if self.proposed_progress is not None:
                 raise ValueError("inconsistent_source_outcome:failed_read_progress")
             if self.history_status == "observed_window":
                 raise ValueError("inconsistent_source_outcome:failed_read_coverage")
