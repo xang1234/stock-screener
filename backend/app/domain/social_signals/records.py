@@ -18,11 +18,38 @@ def _required(value: str, field: str) -> None:
         raise ValueError(f"blank_{field}")
 
 
+def validate_utc_timestamp(
+    value: datetime,
+    field: str,
+    *,
+    reference_at: datetime | None = None,
+) -> datetime:
+    """Validate ingress time against an explicit trusted reference, never wall time."""
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"naive_timestamp:{field}")
+    if value.utcoffset() != timedelta(0):
+        raise ValueError(f"non_utc_timestamp:{field}")
+    if reference_at is not None:
+        validate_utc_timestamp(reference_at, "reference_at")
+        if value > reference_at + _MAX_CLOCK_SKEW:
+            raise ValueError(f"future_timestamp:{field}")
+    return value
+
+
 def _utc(value: datetime | None, field: str, *, nullable: bool = False) -> None:
     if value is None and nullable:
         return
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"naive_timestamp:{field}")
+    validate_utc_timestamp(value, field)  # type: ignore[arg-type]
+
+
+def _deeply_immutable(value: object, field: str) -> None:
+    if not isinstance(value, tuple):
+        raise TypeError(f"immutable_tuple:{field}")
+    for item in value:
+        if isinstance(item, (list, dict, set)):
+            raise TypeError(f"immutable_tuple:{field}")
+        if isinstance(item, tuple):
+            _deeply_immutable(item, field)
 
 
 def _choice(value: str, allowed: set[str] | frozenset[str], field: str) -> None:
@@ -48,6 +75,11 @@ class SocialReadRequest:
         _choice(self.intent, {"initial", "incremental", "test"}, "read_intent")
         _utc(self.observed_at, "observed_at")
         _utc(self.target_published_after, "target_published_after")
+        validate_utc_timestamp(
+            self.target_published_after,
+            "target_published_after",
+            reference_at=self.observed_at,
+        )
         if self.limit <= 0:
             raise ValueError("invalid_limit")
 
@@ -79,8 +111,14 @@ class SocialPostRecord:
             _required(getattr(self, field), field)
         _utc(self.created_at, "created_at")
         _utc(self.observed_at, "observed_at")
-        if self.created_at > self.observed_at + _MAX_CLOCK_SKEW:
-            raise ValueError("future_timestamp")
+        try:
+            validate_utc_timestamp(
+                self.created_at, "created_at", reference_at=self.observed_at
+            )
+        except ValueError as exc:
+            if str(exc) == "future_timestamp:created_at":
+                raise ValueError("future_timestamp") from exc
+            raise
         for field in ("likes", "reposts", "replies", "quotes", "bookmarks", "views"):
             value = getattr(self, field)
             if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
@@ -150,6 +188,8 @@ class SocialSourceOutcome:
     error_code: str | None
 
     def __post_init__(self) -> None:
+        _deeply_immutable(self.coverage_reason_codes, "coverage_reason_codes")
+        _deeply_immutable(self.known_gap_intervals, "known_gap_intervals")
         _choice(self.read_status, {"success", "failed"}, "read_status")
         _choice(self.processing_status, {"pending", "complete", "failed"}, "processing_status")
         _choice(self.history_status, {"warming_up", "limited", "observed_window"}, "history_status")
@@ -157,6 +197,25 @@ class SocialSourceOutcome:
             raise ValueError("negative_received_count")
         _utc(self.observed_oldest_at, "observed_oldest_at", nullable=True)
         _utc(self.observed_newest_at, "observed_newest_at", nullable=True)
+        if (self.observed_oldest_at is None) != (self.observed_newest_at is None):
+            raise ValueError("inconsistent_source_outcome:unpaired_bounds")
+        if (
+            self.observed_oldest_at is not None
+            and self.observed_newest_at is not None
+            and self.observed_oldest_at > self.observed_newest_at
+        ):
+            raise ValueError("inconsistent_source_outcome:reversed_bounds")
+        if self.read_status == "success" and self.error_code is not None:
+            raise ValueError("inconsistent_source_outcome:success_with_error")
+        if self.read_status == "failed":
+            if self.error_code is None:
+                raise ValueError("inconsistent_source_outcome:failure_without_error")
+            if self.processing_status == "complete":
+                raise ValueError("inconsistent_source_outcome:failed_read_complete")
+            if self.committed_progress is not None:
+                raise ValueError("inconsistent_source_outcome:failed_read_progress")
+            if self.history_status == "observed_window":
+                raise ValueError("inconsistent_source_outcome:failed_read_coverage")
         for start, end in self.known_gap_intervals:
             _utc(start, "gap_start")
             _utc(end, "gap_end")
@@ -169,6 +228,9 @@ class SocialSourceBatch:
     request: SocialReadRequest
     posts: tuple[SocialPostRecord, ...]
     outcome: SocialSourceOutcome
+
+    def __post_init__(self) -> None:
+        _deeply_immutable(self.posts, "posts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +252,8 @@ class SourceTestOutcome:
         if not 0 <= self.sample_count <= 5:
             raise ValueError("invalid_sample_count")
         _utc(self.tested_at, "tested_at")
+        if self.reason_code is not None:
+            _required(self.reason_code, "reason_code")
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +289,8 @@ class SocialSourceAuditView:
     after_metadata: tuple[tuple[str, str | None], ...]
 
     def __post_init__(self) -> None:
+        _deeply_immutable(self.before_metadata, "before_metadata")
+        _deeply_immutable(self.after_metadata, "after_metadata")
         _required(self.action, "action")
         _required(self.actor, "actor")
         _utc(self.occurred_at, "occurred_at")
@@ -240,6 +306,7 @@ class TickerResolution:
     reason_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        _deeply_immutable(self.reason_codes, "reason_codes")
         _required(self.raw_token, "raw_token")
         _choice(self.status, {"resolved", "unresolved"}, "resolution_status")
         if self.market is not None and self.market not in SUPPORTED_MARKETS:
@@ -254,6 +321,7 @@ class SocialEvidenceInput:
     posts: tuple[SocialPostRecord, ...]
 
     def __post_init__(self) -> None:
+        _deeply_immutable(self.posts, "posts")
         _required(self.candidate_key, "candidate_key")
         _required(self.canonical_symbol, "canonical_symbol")
         if self.market not in SUPPORTED_MARKETS:
@@ -273,6 +341,7 @@ class ConfirmationInput:
     theme_confirmations: tuple[tuple[str, Decimal | None], ...] = ()
 
     def __post_init__(self) -> None:
+        _deeply_immutable(self.theme_confirmations, "theme_confirmations")
         _required(self.candidate_key, "candidate_key")
         if self.market not in SUPPORTED_MARKETS:
             raise ValueError("unsupported_market")
@@ -286,11 +355,17 @@ class ComponentScore:
     total_weight: Decimal
     reasons: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        _deeply_immutable(self.reasons, "reasons")
+
 
 @dataclass(frozen=True, slots=True)
 class SignalStateDecision:
     state: str
     reasons: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _deeply_immutable(self.reasons, "reasons")
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +373,9 @@ class SocialScoreResult:
     social_score: Decimal | None
     components: tuple[tuple[str, ComponentScore], ...]
     state: SignalStateDecision
+
+    def __post_init__(self) -> None:
+        _deeply_immutable(self.components, "components")
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +386,10 @@ class SocialRunResult:
     published: bool
     coverage_summary: tuple[tuple[str, str], ...]
     reason_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _deeply_immutable(self.coverage_summary, "coverage_summary")
+        _deeply_immutable(self.reason_codes, "reason_codes")
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +408,13 @@ class SocialSnapshotRecord:
     canonical_symbol: str
     candidate_key: str
 
+    def __post_init__(self) -> None:
+        _deeply_immutable(self.pinned_inputs, "pinned_inputs")
+        _deeply_immutable(self.coverage, "coverage")
+        portions_available = self.social_score is not None and self.confirmation_score is not None
+        if portions_available != (self.queue_score is not None):
+            raise ValueError("inconsistent_snapshot_scores")
+
 
 @dataclass(frozen=True, slots=True)
 class QueuePage:
@@ -333,6 +422,9 @@ class QueuePage:
     page: int
     page_size: int
     total: int
+
+    def __post_init__(self) -> None:
+        _deeply_immutable(self.items, "items")
 
 
 @dataclass(frozen=True, slots=True)
