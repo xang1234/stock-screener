@@ -74,7 +74,20 @@ The same Compose stack can build the private target itself when `XUI_READER_REF`
 
 ## Private GHCR image
 
-Publish only to a private GHCR package in an access-controlled repository or organization. Do not export private build caches or verbose install logs to public CI artifacts. Authenticate with a token that has only the package permissions needed by the host:
+Publish only to a private GHCR package in an access-controlled repository or organization. Do not export private build caches or verbose install logs to public CI artifacts. The private workflow deliberately refuses to push unless the package already exists and GitHub reports its visibility as `private`.
+
+One-time trusted setup:
+
+1. Protect `main` and the `v*` release-tag namespace with GitHub rulesets.
+2. Create the `private-social-worker-release` GitHub environment and require approval from trusted maintainers before its secrets can be used.
+3. Add `XUI_READER_DEPLOY_KEY` as an environment secret. It must be a read-only deploy key installed only on `xang1234/xui`.
+4. Add `GITHUB_KNOWN_HOSTS` as an environment secret using host keys independently verified against [GitHub's published SSH fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints).
+5. Add `XUI_READER_REF` as an environment variable containing the exact 40-character private-repository commit SHA.
+6. Bootstrap `ghcr.io/xang1234/stock-screener-social-xui` once from a trusted local build, then confirm **Package settings → Change visibility → Private** and disable repository-inherited access if it would expose the image through this public repository. GitHub documents that a newly published package starts private, but do not rely on that default without checking it. The workflow's preflight then prevents accidental publication to a missing or public package.
+
+The workflow never runs for pull requests. It smoke-tests amd64 and arm64 against local HTML before publishing immutable `sha-*` and optional release tags; it never publishes a sole `latest` tag. GitHub-hosted provenance and SBOM records remain attached to the private package and are not uploaded as public artifacts.
+
+For the bootstrap and later pulls, authenticate with a token that has only the package permissions needed by the host:
 
 ```bash
 docker login ghcr.io
