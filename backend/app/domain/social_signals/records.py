@@ -524,6 +524,109 @@ class ConfirmationInput:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyFreshness:
+    required_session: date | None
+    actual_session: date | None
+    fresh: bool
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedFeatureRun:
+    market: str
+    run_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmationFacts:
+    feature_run_id: int | None
+    market_exposure_id: int | None
+    feature_freshness: DailyFreshness
+    market_freshness: DailyFreshness
+    benchmark_symbol: str | None
+    rs_rating: Decimal | None
+    market_exposure: Decimal | None
+    reasons: tuple[str, ...]
+    setup_score: Decimal | None = None
+    setup_ready: bool | None = None
+    rs_rating_1m: Decimal | None = None
+    rs_rating_3m: Decimal | None = None
+    liquidity_eligible: bool | None = None
+    avg_dollar_volume: Decimal | None = None
+
+    def __post_init__(self):
+        _deeply_immutable(self.reasons, "reasons")
+
+
+@dataclass(frozen=True, slots=True)
+class MarketConfirmationContext:
+    market: str
+    observed_at: datetime
+    exposure_id: int | None
+    freshness: DailyFreshness
+    exposure_score: Decimal | None
+    benchmark_symbol: str | None
+    benchmark_candidates: tuple[str, ...]
+    benchmark_registry_version: str
+
+    def __post_init__(self):
+        _utc(self.observed_at, "observed_at")
+        _deeply_immutable(self.benchmark_candidates, "benchmark_candidates")
+
+
+@dataclass(frozen=True, slots=True)
+class GroupConfirmationContext:
+    session_date: date | None
+    formula_version: str | None
+    market_rs_run_id: int | None
+    cohort: tuple[tuple[str, int], ...]
+    row_ids: tuple[int, ...] = ()
+    reason: str | None = None
+
+    def __post_init__(self):
+        _deeply_immutable(self.cohort, "cohort")
+        _deeply_immutable(self.row_ids, "row_ids")
+
+
+@dataclass(frozen=True, slots=True)
+class MarketConfirmationBatch:
+    pinned_run: PinnedFeatureRun
+    market_context: MarketConfirmationContext
+    group_context: GroupConfirmationContext
+    inputs: tuple[ConfirmationInput, ...]
+    facts: tuple[tuple[str, ConfirmationFacts], ...]
+    theme_evidence: tuple[ThemeMarketEvidence, ...] = ()
+    theme_reasons: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self):
+        for field in ("inputs", "facts", "theme_evidence", "theme_reasons"):
+            _deeply_immutable(getattr(self, field), field)
+
+
+@dataclass(frozen=True, slots=True)
+class SocialPublicationContext:
+    market_batches: tuple[MarketConfirmationBatch, ...]
+    formula_version: str = "social-signal-v1"
+    extraction_versions: tuple[tuple[str, str, str], ...] = ()
+    source_progress: tuple[tuple[str, str | None], ...] = ()
+    candidates: tuple[CandidatePublicationContext, ...] = ()
+
+    def __post_init__(self):
+        for field in ("market_batches", "extraction_versions", "source_progress", "candidates"):
+            _deeply_immutable(getattr(self, field), field)
+        if any(not isinstance(batch, MarketConfirmationBatch) for batch in self.market_batches):
+            raise TypeError("invalid_market_batch")
+        markets = tuple(batch.pinned_run.market for batch in self.market_batches)
+        if len(set(markets)) != len(markets):
+            raise ValueError("duplicate_market_context")
+        _required(self.formula_version, "formula_version")
+        if any(not isinstance(v, CandidatePublicationContext) for v in self.candidates):
+            raise TypeError("invalid_candidate_context")
+        if len({(v.candidate_key, v.window_days) for v in self.candidates}) != len(self.candidates):
+            raise ValueError("duplicate_candidate_context")
+
+
+@dataclass(frozen=True, slots=True)
 class ComponentScore:
     value: Decimal | None
     available_weight: Decimal
@@ -591,6 +694,24 @@ class SocialScoreResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidatePublicationContext:
+    candidate_key: str
+    window_days: int
+    state_input: SignalStateInput
+    state_decision: SignalStateDecision
+    social_result: SocialScoreResult | None
+    confirmation: ComponentScore | None
+
+    def __post_init__(self):
+        _required(self.candidate_key, "candidate_key")
+        if self.window_days not in {1, 7, 14}:
+            raise ValueError("invalid_window")
+        if self.social_result is not None and (self.social_result.candidate_key != self.candidate_key
+                or self.social_result.market != self.state_input.market):
+            raise ValueError("candidate_context_identity_mismatch")
+
+
+@dataclass(frozen=True, slots=True)
 class SocialRunResult:
     run_id: str
     mode: str
@@ -644,10 +765,46 @@ class PreparedSocialPublication:
     work_ids: tuple[int, ...]
     rows: tuple[SocialSnapshotRecord, ...]
     theme_evidence: tuple[ThemeMarketEvidence, ...] = ()
+    context: SocialPublicationContext | None = None
 
     def __post_init__(self):
         _utc(self.as_of, "as_of")
         for field in ("work_ids", "rows", "theme_evidence"):
+            _deeply_immutable(getattr(self, field), field)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayInput:
+    content_item_id: int
+    input_hash: str
+    disposition: str
+
+
+@dataclass(frozen=True, slots=True)
+class SocialReplayManifest:
+    saved_run_id: str
+    historical_work_ids: tuple[int, ...]
+    participating_source_ids: tuple[str, ...]
+    missing_sources: tuple[tuple[str, str], ...]
+    required_inputs: tuple[ReplayInput, ...]
+    carry_in_work_ids: tuple[int, ...]
+    coverage_reasons: tuple[str, ...]
+
+    def __post_init__(self):
+        for field in ("historical_work_ids", "participating_source_ids", "missing_sources",
+                      "required_inputs", "carry_in_work_ids", "coverage_reasons"):
+            _deeply_immutable(getattr(self, field), field)
+
+
+@dataclass(frozen=True, slots=True)
+class SocialCurrentInputManifest:
+    required_inputs: tuple[ReplayInput, ...]
+    carry_in_work_ids: tuple[int, ...]
+    audit_work_ids: tuple[int, ...]
+    coverage_reasons: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        for field in ("required_inputs", "carry_in_work_ids", "audit_work_ids", "coverage_reasons"):
             _deeply_immutable(getattr(self, field), field)
 
 
@@ -659,6 +816,8 @@ class SavedSocialRunInputs:
     batches: tuple[SocialSourceBatch, ...]
     content_ids: tuple[tuple[str, int], ...]
     work_ids: tuple[int, ...]
+    replay_manifest: SocialReplayManifest | None = None
+    current_manifest: SocialCurrentInputManifest | None = None
 
     def __post_init__(self):
         _utc(self.as_of, "as_of")

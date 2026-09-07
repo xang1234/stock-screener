@@ -10,6 +10,13 @@ from tests.unit.repositories.test_social_signal_writer import store, batch, writ
 from app.domain.social_signals.records import SocialSnapshotRecord
 from app.infra.db.models.social_signals import SocialSignalRun, SocialSignalRunPointer, SocialSignalSnapshot
 from tests.integration.test_social_theme_projection import social_fixture
+from tests.unit.services.test_social_theme_market_service import basket
+
+
+@pytest.fixture(autouse=True)
+def local_calendar_cache(monkeypatch):
+    from app.services.market_calendar_adapters import RawMarketCalendarAdapter
+    monkeypatch.setattr(RawMarketCalendarAdapter, "_session_range_cache_client", lambda self: None)
 
 
 def row(run, candidate="AAA", score="80", market="US", state="watch"):
@@ -221,6 +228,425 @@ def test_frozen_replay_inputs_keep_metrics_and_reuse_work_after_new_observation(
     assert saved.batches[0].posts[0].likes == 10
     assert saved.work_ids == (work_id,)
     assert w.read_run_inputs("run") == saved
+
+
+def test_current_replay_preserves_terminal_history_and_collection_freshness(store, monkeypatch):
+    from app.infra.db.models.social_signals import SocialSourceConfiguration
+    w = writer(store)
+    w.create_run("old", NOW)
+    work_id = save_success(store, w, "old")
+    w.prepare_run("old", (), NOW)
+    old = w.read_run_inputs("old")
+    with store() as db:
+        timestamps = tuple(s.last_successful_collection_at for s in db.query(SocialSourceConfiguration).order_by(SocialSourceConfiguration.content_source_id))
+    def no_collection(*args, **kwargs):
+        raise AssertionError("replay must not collect observations")
+    monkeypatch.setattr(w, "persist_observations", no_collection)
+    current = NOW + timedelta(hours=8)
+    w.create_replay_run("current", "old", current)
+    saved = w.read_run_inputs("current")
+    assert saved.as_of == current
+    assert saved.batches == old.batches
+    assert saved.work_ids == (work_id,)
+    assert saved.replay_manifest.saved_run_id == "old"
+    assert saved.replay_manifest.required_inputs[0].disposition == "current"
+    assert w.read_run_inputs("old") == old
+    w.prepare_run("current", (), current)
+    with store() as db:
+        assert tuple(s.last_successful_collection_at for s in db.query(SocialSourceConfiguration).order_by(SocialSourceConfiguration.content_source_id)) == timestamps
+
+
+@pytest.mark.parametrize("change", ["provider", "source_version", "added", "disabled"])
+def test_replay_keeps_historical_batches_but_pins_complete_current_sources(store, change):
+    from app.infra.db.models.social_signals import SocialSourceRegistry, SocialSourceConfiguration
+    from app.models.theme import ContentSource
+    w = writer(store)
+    collected(w, "old")
+    old = w.read_run_inputs("old")
+    with store.begin() as db:
+        registry = db.get(SocialSourceRegistry, 1)
+        registry.version += 1
+        if change == "provider":
+            registry.provider = "xui"
+        elif change == "source_version":
+            db.get(SocialSourceConfiguration, 1).version += 1
+        else:
+            source = ContentSource(name="Extra", source_type="twitter", url="https://x.com/i/lists/3")
+            db.add(source)
+            db.flush()
+            db.add(SocialSourceConfiguration(content_source_id=source.id, x_list_id="3", lifecycle_state="enabled", provenance="admin", version=1))
+            if change == "disabled":
+                db.get(SocialSourceConfiguration, 1).lifecycle_state = "disabled"
+    w.create_replay_run("new", "old", NOW + timedelta(hours=1))
+    new = w.read_run_inputs("new")
+    assert new.batches == old.batches
+    assert new.replay_manifest.missing_sources
+    with pytest.raises(ValueError, match="participation_incomplete"):
+        w.prepare_run("new", (), new.as_of)
+    assert w.read_run_inputs("old") == old
+
+
+@pytest.mark.parametrize("succeeded", [False, True])
+def test_replay_aged_work_is_audit_or_saved_carry_in_never_fake_success(store, succeeded):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.models.theme import ContentItem
+    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    w = writer(store)
+    w.create_run("old", NOW)
+    if succeeded:
+        work_id = save_success(store, w, "old")
+    else:
+        w.persist_observations(batch(), run_id="old")
+        w.persist_observations(empty_batch(2), run_id="old")
+        with store() as db:
+            content_id = db.query(ContentItem).one().id
+        work_id = ProcessSocialBacklog(store).enqueue(content_id, batch().posts[0], selected_model="synthetic/model", now=NOW, run_id="old")
+    old = w.read_run_inputs("old")
+    w.create_replay_run("new", "old", NOW + timedelta(days=14))
+    new = w.read_run_inputs("new")
+    assert new.batches == old.batches
+    assert new.replay_manifest.required_inputs == ()
+    assert new.replay_manifest.historical_work_ids == (work_id,)
+    assert new.replay_manifest.carry_in_work_ids == ((work_id,) if succeeded else ())
+    w.prepare_run("new", (), new.as_of)
+    with store() as db:
+        assert db.get(SocialExtractionWork, work_id).state == ("succeeded" if succeeded else "pending")
+    assert w.read_run_inputs("old") == old
+
+
+def publication_context(store, now=NOW):
+    from app.services.social_confirmation_reader import SocialConfirmationReader
+    from app.domain.social_signals import records
+    assert hasattr(records, "SocialPublicationContext"), "typed publication context missing"
+    with store() as db:
+        market = SocialConfirmationReader(db).read_market("US", ("AAA",), now, theme_keys=())
+    return records.SocialPublicationContext((market,))
+
+
+def candidate_context(candidate="AAA"):
+    from app.domain.social_signals import records as r
+    assert hasattr(r, "CandidatePublicationContext"), "typed candidate context missing"
+    decision = r.SignalStateDecision("watch", ("missing_confirmation",))
+    social = r.SocialScoreResult(Decimal("80"), (), decision, candidate_key=candidate,
+        canonical_symbol=candidate, market="US", acceleration=Decimal("1.5"),
+        post_memberships=(("100", ("1", "2")),), exclusions=(("99", "outside_window"),))
+    return r.CandidatePublicationContext(candidate, 14, r.SignalStateInput(True, True, "US"),
+        decision, social, r.ComponentScore(None, Decimal(0), Decimal(40), ("missing",)))
+
+
+def test_market_publication_context_roundtrip_is_frozen_and_run_scoped(store):
+    from dataclasses import FrozenInstanceError
+    from tests.unit.services.test_social_confirmation_reader import seed_batch
+    with store.begin() as db:
+        seed_batch(db)
+    w = writer(store)
+    collected(w)
+    context = replace(publication_context(store), candidates=(candidate_context(),))
+    w.prepare_run("run", (row("run"),), NOW, context=context)
+    saved = w.read_publication_context("run")
+    assert saved.market_batches == context.market_batches
+    assert saved.candidates == context.candidates
+    assert saved.candidates[0].social_result.acceleration == Decimal("1.5")
+    assert saved.source_progress == (("1", "cursor"), ("2", "cursor"))
+    assert saved.market_batches[0].facts[0][1].avg_dollar_volume == Decimal("100000000")
+    with pytest.raises(FrozenInstanceError):
+        saved.market_batches[0].market_context.exposure_id = 99
+    with pytest.raises(TypeError, match="immutable"):
+        replace(saved, market_batches=list(saved.market_batches))
+    with store() as db:
+        run = db.get(SocialSignalRun, "run")
+        assert run.feature_run_ids_json == {"US": context.market_batches[0].pinned_run.run_id}
+        assert run.exposure_dates_json == {"US": "2026-07-02"}
+        assert "market_batches" not in db.query(SocialSignalSnapshot).one().explanation_json
+
+
+@pytest.mark.parametrize("change", ["candidate", "state", "social", "confirmation", "window", "missing"])
+def test_candidate_publication_context_rejects_snapshot_mismatch(store, change):
+    w = writer(store)
+    collected(w)
+    context = replace(publication_context(store), candidates=(candidate_context(),))
+    record = row("run")
+    if change == "candidate": record = replace(record, candidate_key="other")
+    elif change == "state": record = replace(record, candidate_state="risk_off")
+    elif change == "social": record = replace(record, social_score=Decimal("10"))
+    elif change == "confirmation": record = replace(record, confirmation_score=Decimal("50"), queue_score=Decimal("68"))
+    elif change == "window": record = replace(record, window_days=7)
+    else: context = replace(context, candidates=())
+    with pytest.raises(ValueError, match="candidate_context_mismatch"):
+        w.prepare_run("run", (record,), NOW, context=context)
+
+
+@pytest.mark.parametrize("change", ["pointer", "exposure_update", "exposure_insert", "feature", "group", "grace"])
+@pytest.mark.parametrize("stage", ["prepare", "publish"])
+def test_changed_market_context_requires_new_evaluation(store, change, stage):
+    from tests.unit.services.test_social_confirmation_reader import seed_batch, utc
+    from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer, StockFeatureDaily
+    from app.models.market_exposure import MarketExposure
+    from app.models.industry import IBDGroupRank
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    at = utc("2026-07-02T23:00:00")
+    clock = [at]
+    with store.begin() as db:
+        feature_run, _, exposure = seed_batch(db)
+        feature_id, exposure_id = feature_run.id, exposure.id
+        if change == "exposure_insert":
+            db.delete(exposure)
+    w = SocialSignalWriter(store, clock=lambda: clock[0])
+    w.create_run("run", at)
+    for source in (1, 2):
+        b = empty_batch(source)
+        w.persist_observations(replace(b, request=replace(b.request, observed_at=at,
+            target_published_after=at-timedelta(days=14))), run_id="run")
+    context = publication_context(store, at)
+    if stage == "publish":
+        w.prepare_run("run", (), at, context=context)
+    with store.begin() as db:
+        if change == "pointer":
+            other = FeatureRun(as_of_date=at.date(), run_type="daily_snapshot", status="published",
+                config_json={"universe": {"market": "US"}}, completed_at=at, published_at=at)
+            db.add(other)
+            db.flush()
+            db.get(FeatureRunPointer, "latest_published_market:US").run_id = other.id
+        elif change == "exposure_update":
+            db.get(MarketExposure, exposure_id).exposure_score = 20
+        elif change == "exposure_insert":
+            db.add(MarketExposure(market="US", date=at.date(), exposure_score=60, stance="uptrend", benchmark_symbol="SPY",
+                created_at=at+timedelta(minutes=1), updated_at=at+timedelta(minutes=1)))
+            clock[0] = at + timedelta(minutes=2)
+        elif change == "feature":
+            feature = db.get(StockFeatureDaily, (feature_id, "AAA"))
+            feature.details_json = {**feature.details_json, "setup_engine": {"setup_score": 10, "setup_ready": False}}
+        elif change == "group":
+            db.query(IBDGroupRank).filter_by(market="US", date=at.date(), industry_group="Chips").one().rank = 4
+        else:
+            clock[0] = utc("2026-07-06T22:00:00")
+    with pytest.raises(ValueError, match="market_context_changed"):
+        if stage == "prepare":
+            w.prepare_run("run", (), at, context=context)
+        else:
+            w.publish("run", 1)
+    with store() as db:
+        assert db.query(SocialSignalRunPointer).count() == 0
+    if stage == "publish":
+        assert w.read_publication_context("run").market_batches == context.market_batches
+
+
+def test_publication_validator_never_acquires_shared_calendar_cache(store, monkeypatch):
+    from app.services.market_calendar_adapters import RawMarketCalendarAdapter
+    w = writer(store)
+    collected(w)
+    context = publication_context(store)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("publication validation must use local calendar only")
+    monkeypatch.setattr(RawMarketCalendarAdapter, "_read_session_range_cache", forbidden)
+    monkeypatch.setattr(RawMarketCalendarAdapter, "_write_session_range_cache", forbidden)
+    monkeypatch.setattr(RawMarketCalendarAdapter, "_session_range_cache_client", forbidden)
+    prepared = w.prepare_run("run", (), NOW, context=context)
+    assert w.publish("run", prepared.registry_version).published
+
+
+def test_replay_deferred_current_analysis_blocks_until_real_saved_success(store):
+    from dataclasses import asdict
+    from app.domain.social_signals.records import ExtractionResult, ExtractionPostJudgment
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.models.theme import ContentItem
+    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    w = writer(store)
+    w.create_run("old", NOW)
+    w.persist_observations(batch(), run_id="old")
+    w.persist_observations(empty_batch(2), run_id="old")
+    with store() as db:
+        content_id = db.query(ContentItem).one().id
+    backlog = ProcessSocialBacklog(store)
+    work_id = backlog.enqueue(content_id, batch().posts[0], selected_model="synthetic/model", now=NOW, run_id="old")
+    with store.begin() as db:
+        db.get(SocialExtractionWork, work_id).state = "waiting_budget"
+    old = w.read_run_inputs("old")
+    w.create_replay_run("new", "old", NOW + timedelta(hours=1))
+    assert w.read_run_inputs("new").work_ids == ()
+    with pytest.raises(ValueError, match="incomplete"):
+        w.prepare_run("new", (), NOW+timedelta(hours=1))
+    assert backlog.enqueue(content_id, batch().posts[0], selected_model="synthetic/model", now=NOW+timedelta(hours=1), run_id="new") == work_id
+    with pytest.raises(ValueError, match="incomplete"):
+        w.prepare_run("new", (), NOW+timedelta(hours=1))
+    with store.begin() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        result = ExtractionResult(work.input_hash, "synthetic", "model", work.prompt_version, work.schema_version,
+            (), 1, 1, (ExtractionPostJudgment("100", True, "claim-100"),))
+        work.state, work.actual_provider, work.actual_model, work.result_json = "succeeded", "synthetic", "model", asdict(result)
+    w.prepare_run("new", (), NOW+timedelta(hours=1))
+    assert w.read_run_inputs("old") == old
+
+
+def test_validation_to_live_replay_uses_new_generation_and_same_raw_read(store):
+    from app.infra.db.models.social_signals import SocialSourceRegistry
+    w = writer(store)
+    with store.begin() as db:
+        db.get(SocialSourceRegistry, 1).mode = "validation"
+    collected(w, "validation")
+    prior = w.prepare_run("validation", (), NOW)
+    assert not w.publish("validation", prior.registry_version).published
+    with store.begin() as db:
+        registry = db.get(SocialSourceRegistry, 1)
+        registry.mode, registry.version = "live", registry.version + 1
+    w.create_replay_run("live", "validation", NOW + timedelta(hours=1))
+    live = w.prepare_run("live", (), NOW + timedelta(hours=1))
+    assert w.publish("live", live.registry_version).published
+    assert w.read_run_inputs("live").batches == w.read_run_inputs("validation").batches
+
+
+def test_replaying_incomplete_replay_retains_entire_original_audit(store):
+    from app.infra.db.models.social_signals import SocialSourceRegistry
+    w = writer(store)
+    w.create_run("old", NOW)
+    work_id = save_success(store, w, "old")
+    with store.begin() as db:
+        registry = db.get(SocialSourceRegistry, 1)
+        registry.provider, registry.version = "xui", registry.version + 1
+    w.create_replay_run("first", "old", NOW + timedelta(hours=1))
+    w.create_replay_run("second", "first", NOW + timedelta(hours=2))
+    second = w.read_run_inputs("second")
+    assert second.batches == w.read_run_inputs("old").batches
+    assert second.replay_manifest.historical_work_ids == (work_id,)
+    assert second.replay_manifest.missing_sources
+
+
+def test_replay_succeeded_carry_in_preserves_first_day_author_cap(store):
+    from dataclasses import asdict
+    from app.domain.social_signals.records import ExtractionResult, ExtractionPostJudgment, SocialEvidenceInput
+    from app.domain.social_signals.scoring import score_social_candidates
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.models.theme import ContentItem
+    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    w = writer(store)
+    w.create_run("old", NOW)
+    posts = tuple(replace(batch(post_id=str(100+i)).posts[0], created_at=NOW-timedelta(days=14)+timedelta(hours=hour),
+        has_new_thesis=True, canonical_claim_key=f"claim-{i}") for i, hour in enumerate((1, 2, 3, 5)))
+    b = batch()
+    w.persist_observations(replace(b, posts=posts, outcome=replace(b.outcome, received_count=4,
+        observed_oldest_at=posts[0].created_at, observed_newest_at=posts[-1].created_at)), run_id="old")
+    w.persist_observations(empty_batch(2), run_id="old")
+    with store() as db:
+        ids = {v.external_id: v.id for v in db.query(ContentItem)}
+    for post in posts:
+        work_id = ProcessSocialBacklog(store).enqueue(ids[post.provider_post_id], post,
+            selected_model="synthetic/model", now=NOW, run_id="old")
+        with store.begin() as db:
+            work = db.get(SocialExtractionWork, work_id)
+            result = ExtractionResult(work.input_hash, "synthetic", "model", work.prompt_version, work.schema_version,
+                (), 1, 1, (ExtractionPostJudgment(post.provider_post_id, True, post.canonical_claim_key),))
+            work.state, work.actual_provider, work.actual_model, work.result_json = "succeeded", "synthetic", "model", asdict(result)
+    current = NOW + timedelta(hours=4)
+    w.create_replay_run("new", "old", current)
+    saved = w.read_run_inputs("new")
+    assert len(saved.replay_manifest.required_inputs) == 1
+    assert len(saved.replay_manifest.carry_in_work_ids) == 3
+    evidence = SocialEvidenceInput("US:AAA", "AAA", "US", saved.batches[0].posts, ("1", "2"))
+    scored = score_social_candidates((evidence,), 14, current)[0]
+    assert scored.mention_count == 0
+    assert ("official:103", "author_24h_cap") in scored.exclusions
+    w.prepare_run("new", (), current)
+
+
+def test_grace_boundary_during_final_publication_lock_is_rejected(store):
+    from tests.unit.services.test_social_confirmation_reader import utc
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    at = utc("2026-09-08T21:59:59")
+    clock = [at]
+    w = SocialSignalWriter(store, clock=lambda: clock[0])
+    collected(w, "run", at)
+    context = publication_context(store, at)
+    prepared = w.prepare_run("run", (), at, context=context)
+    ticks = iter((at, at+timedelta(seconds=1)))
+    w.clock = lambda: next(ticks)
+    with pytest.raises(ValueError, match="market_context_changed"):
+        w.publish("run", prepared.registry_version)
+    with store() as db:
+        assert db.query(SocialSignalRunPointer).count() == 0
+
+
+def test_replay_stores_raw_corpus_once_per_generation(store):
+    import json
+    w = writer(store)
+    w.create_run("old", NOW)
+    save_success(store, w, "old")
+    w.create_replay_run("new", "old", NOW+timedelta(hours=1))
+    with store() as db:
+        encoded = json.dumps(db.get(SocialSignalRun, "new").application_progress_json)
+        assert encoded.count('"text": "$AAA supplies cooling"') == 1
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_frozen_theme_context_uses_exact_market_pin_and_roundtrips(db_session, basket, corrupt):
+    from sqlalchemy.orm import sessionmaker
+    from tests.unit.services.test_social_theme_market_service import NOW as at
+    from app.services.social_confirmation_reader import SocialConfirmationReader
+    from app.services.social_source_admin_service import SocialSourceAdminService
+    from app.infra.db.models.social_signals import SocialSourceRegistry
+    from app.models.market_exposure import MarketExposure
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    from app.domain.social_signals.records import SocialPublicationContext
+    _, symbols, calendar = basket(3, 3)
+    db_session.commit()
+    SocialSourceAdminService(db_session).ensure_seed_sources()
+    registry = db_session.get(SocialSourceRegistry, 1)
+    registry.mode, registry.provider = "live", "official"
+    db_session.add(MarketExposure(market="US", date=at.date(), exposure_score=60, stance="uptrend", benchmark_symbol="SPY",
+        created_at=at, updated_at=at))
+    db_session.commit()
+    factory = sessionmaker(db_session.bind)
+    w = SocialSignalWriter(factory, clock=lambda: at)
+    collected(w, "run", at)
+    with factory() as db:
+        market = SocialConfirmationReader(db, calendar=calendar).read_market("US", symbols, at)
+    assert len(market.theme_evidence) == 1
+    if corrupt:
+        bad = replace(market.theme_evidence[0], feature_run_ids=tuple((symbol, 999) for symbol in symbols))
+        market = replace(market, theme_evidence=(bad,), inputs=tuple(replace(v, theme_confirmations=(bad,)) for v in market.inputs))
+    context = SocialPublicationContext((market,))
+    if corrupt:
+        with pytest.raises(ValueError, match="market_context_changed:theme"):
+            w.prepare_run("run", (), at, context=context)
+    else:
+        prepared = w.prepare_run("run", (), at, context=context)
+        assert w.publish("run", prepared.registry_version).published
+        assert w.read_publication_context("run").market_batches == (market,)
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_normal_bounded_read_selects_current_inputs_and_audits_linked_aged_work(store, mixed):
+    from app.models.theme import ContentItem
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.use_cases.social_signals.process_backlog import ProcessSocialBacklog
+    w = writer(store)
+    w.create_run("run", NOW)
+    old = replace(batch(post_id="old").posts[0], created_at=NOW-timedelta(days=16))
+    posts = (old, batch().posts[0]) if mixed else (old,)
+    b = batch()
+    w.persist_observations(replace(b, posts=posts, outcome=replace(b.outcome, received_count=len(posts),
+        observed_oldest_at=old.created_at, observed_newest_at=posts[-1].created_at)), run_id="run")
+    w.persist_observations(empty_batch(2), run_id="run")
+    with store() as db:
+        ids = {v.external_id: v.id for v in db.query(ContentItem)}
+    aged_id = ProcessSocialBacklog(store).enqueue(ids["old"], old, selected_model="synthetic/model", now=NOW, run_id="run")
+    with store.begin() as db:
+        db.get(SocialExtractionWork, aged_id).state = "outside_window"
+    saved = w.read_run_inputs("run")
+    selected = w.select_current_inputs("run")
+    assert selected.batches == saved.batches
+    assert len(selected.current_manifest.required_inputs) == int(mixed)
+    assert selected.current_manifest.audit_work_ids == (aged_id,)
+    assert selected.work_ids == ()
+    assert w.select_current_inputs("run") == selected
+    if mixed:
+        with pytest.raises(ValueError, match="incomplete"):
+            w.prepare_run("run", (), NOW)
+    else:
+        w.prepare_run("run", (), NOW)
+        w.create_replay_run("replay", "run", NOW+timedelta(hours=1))
+        assert w.read_run_inputs("replay").replay_manifest.historical_work_ids == (aged_id,)
+    with store() as db:
+        assert db.get(SocialExtractionWork, aged_id).state == "outside_window"
 
 
 def test_stale_measured_basket_is_rejected_before_publication(social_fixture):

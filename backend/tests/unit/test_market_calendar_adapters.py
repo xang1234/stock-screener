@@ -76,6 +76,19 @@ def test_sessions_in_range_uses_redis_cache(monkeypatch):
     ]
 
 
+def test_public_local_calendar_opt_out_never_touches_redis(monkeypatch):
+    from app.services.market_calendar_service import MarketCalendarService
+    def forbidden(*args, **kwargs):
+        raise AssertionError("shared cache accessed")
+    monkeypatch.setattr(module, "get_redis_client", forbidden)
+    monkeypatch.setattr(RawMarketCalendarAdapter, "_read_session_range_cache", forbidden)
+    monkeypatch.setattr(RawMarketCalendarAdapter, "_write_session_range_cache", forbidden)
+    adapter = RawMarketCalendarAdapter(_ScheduleCalendar(), use_shared_cache=False)
+    assert adapter.sessions_in_range(date(2026, 1, 1), date(2026, 1, 7)) == (date(2026, 1, 2), date(2026, 1, 5))
+    calendar = MarketCalendarService(use_shared_cache=False)
+    assert calendar.trading_days("US", date(2026, 1, 2), date(2026, 1, 5)) == [date(2026, 1, 2), date(2026, 1, 5)]
+
+
 def test_last_session_date_falls_back_when_callable_returns_none():
     adapter = RawMarketCalendarAdapter(_CallableLastSessionCalendar())
 

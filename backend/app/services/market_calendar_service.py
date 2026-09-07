@@ -58,7 +58,9 @@ class MarketCalendarService:
         market_catalog: MarketCatalog | None = None,
         session_overrides: Iterable[CalendarSessionOverride] | None = None,
         calendar_coverage_registry: CalendarCoverageRegistry | None = None,
+        use_shared_cache: bool = True,
     ):
+        self._use_shared_cache = use_shared_cache
         self._market_catalog = market_catalog or get_market_catalog()
         self._calendar_coverage_registry = (
             calendar_coverage_registry
@@ -180,6 +182,7 @@ class MarketCalendarService:
         if cache_key not in self._calendar_cache:
             self._calendar_cache[cache_key] = RawMarketCalendarAdapter(
                 provider(provider_calendar_id),
+                use_shared_cache=self._use_shared_cache,
                 cache_namespace=(
                     f"{provider_engine.value}:{calendar_id}:{provider_calendar_id}"
                 ),

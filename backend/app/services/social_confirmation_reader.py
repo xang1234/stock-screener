@@ -1,5 +1,5 @@
 """Read-only daily snapshot facts; Task 9 owns Social run orchestration."""
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import math
@@ -7,7 +7,9 @@ import math
 from sqlalchemy import select
 
 from app.domain.feature_store.run_metadata import feature_run_market
-from app.domain.social_signals.records import ConfirmationInput, ThemeMarketEvidence, validate_utc_timestamp
+from app.domain.social_signals.records import (ConfirmationInput, ThemeMarketEvidence, validate_utc_timestamp,
+    DailyFreshness, PinnedFeatureRun, ConfirmationFacts, MarketConfirmationContext,
+    GroupConfirmationContext, MarketConfirmationBatch)
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer, StockFeatureDaily
 from app.models.market_exposure import MarketExposure
 from app.services.benchmark_registry_service import BenchmarkRegistryService
@@ -33,71 +35,6 @@ def _available_at(value, as_of):
     if value is None:
         return False
     return value.replace(tzinfo=timezone.utc) <= as_of if value.tzinfo is None else value <= as_of
-
-
-@dataclass(frozen=True, slots=True)
-class DailyFreshness:
-    required_session: date | None
-    actual_session: date | None
-    fresh: bool
-    reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PinnedFeatureRun:
-    market: str
-    run_id: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class ConfirmationFacts:
-    feature_run_id: int | None
-    market_exposure_id: int | None
-    feature_freshness: DailyFreshness
-    market_freshness: DailyFreshness
-    benchmark_symbol: str | None
-    rs_rating: Decimal | None
-    market_exposure: Decimal | None
-    reasons: tuple[str, ...]
-    setup_score: Decimal | None = None
-    setup_ready: bool | None = None
-    rs_rating_1m: Decimal | None = None
-    rs_rating_3m: Decimal | None = None
-    liquidity_eligible: bool | None = None
-    avg_dollar_volume: Decimal | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class MarketConfirmationContext:
-    market: str
-    observed_at: datetime
-    exposure_id: int | None
-    freshness: DailyFreshness
-    exposure_score: Decimal | None
-    benchmark_symbol: str | None
-    benchmark_candidates: tuple[str, ...]
-    benchmark_registry_version: str
-
-
-@dataclass(frozen=True, slots=True)
-class GroupConfirmationContext:
-    session_date: date | None
-    formula_version: str | None
-    market_rs_run_id: int | None
-    cohort: tuple[tuple[str, int], ...]
-    row_ids: tuple[int, ...] = ()
-    reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class MarketConfirmationBatch:
-    pinned_run: PinnedFeatureRun
-    market_context: MarketConfirmationContext
-    group_context: GroupConfirmationContext
-    inputs: tuple[ConfirmationInput, ...]
-    facts: tuple[tuple[str, ConfirmationFacts], ...]
-    theme_evidence: tuple[ThemeMarketEvidence, ...] = ()
-    theme_reasons: tuple[tuple[str, str], ...] = ()
 
 
 class SocialConfirmationReader:

@@ -1,14 +1,18 @@
 """Short, owned transactions for canonical observations and immutable publication."""
 from copy import deepcopy
-from dataclasses import asdict, replace
-from datetime import datetime, timezone
+from dataclasses import asdict, is_dataclass, replace
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from hashlib import sha256
 import json
 import re
+from types import UnionType
+from typing import get_args, get_origin, get_type_hints
 
 from sqlalchemy import select
 
 from app.domain.social_signals.records import (PreparedSocialPublication, SavedSocialRunInputs, SocialPostRecord,
+    SocialReplayManifest, ReplayInput, SocialPublicationContext, SocialCurrentInputManifest,
     SocialReadRequest, SocialSourceOutcome, SocialSourceBatch, SocialRunResult, validate_utc_timestamp)
 from app.infra.db.models.social_signals import (
     ContentPipelineEligibility, SocialContentMetrics, SocialPostSource,
@@ -31,28 +35,179 @@ def serialized(value):
     return json.loads(json.dumps(asdict(value), default=lambda v: v.isoformat() if isinstance(v, datetime) else str(v)))
 
 
+def _restore_record(kind, value):
+    """Decode the trusted, typed run-context schema, including nested tuple evidence."""
+    if value is None:
+        return None
+    if get_origin(kind) is UnionType:
+        return _restore_record(next(k for k in get_args(kind) if k is not type(None)), value)
+    if get_origin(kind) is tuple:
+        args = get_args(kind)
+        if len(args) == 2 and args[1] is Ellipsis:
+            return tuple(_restore_record(args[0], v) for v in value)
+        if len(args) != len(value):
+            raise ValueError("invalid_context_tuple")
+        return tuple(_restore_record(k, v) for k, v in zip(args, value))
+    if kind in (datetime, date):
+        return kind.fromisoformat(value)
+    if kind is Decimal:
+        return Decimal(value)
+    if is_dataclass(kind):
+        hints = get_type_hints(kind)
+        return kind(**{key: _restore_record(hints[key], val) for key, val in value.items()})
+    return value
+
+
 class SocialSignalWriter:
-    def __init__(self, session_factory, *, clock=None):
+    def __init__(self, session_factory, *, clock=None, confirmation_reader_factory=None):
         self.session_factory = session_factory
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        if confirmation_reader_factory is None:
+            from app.services.social_confirmation_reader import SocialConfirmationReader
+            from app.services.market_calendar_service import MarketCalendarService
+            calendar = MarketCalendarService(use_shared_cache=False)
+            confirmation_reader_factory = lambda db: SocialConfirmationReader(db, calendar=calendar)
+        self.confirmation_reader_factory = confirmation_reader_factory
 
     def create_run(self, run_id, as_of):
         validate_utc_timestamp(as_of, "as_of")
         with self.session_factory.begin() as db:
-            registry = _lock_registry(db)
-            if registry is None or registry.mode not in {"live", "validation"} or registry.provider == "disabled":
-                raise ValueError("social_runtime_unavailable")
-            sources = db.scalars(select(SocialSourceConfiguration).where(SocialSourceConfiguration.lifecycle_state == "enabled").order_by(SocialSourceConfiguration.content_source_id)).all()
-            if len(sources) < 2:
-                raise ValueError("minimum_two_enabled")
-            if db.get(SocialSignalRun, run_id) is not None:
-                raise ValueError("run_exists")
-            db.add(SocialSignalRun(id=run_id, registry_id=1, registry_version=registry.version,
+            self._create_run(db, run_id, as_of)
+        return run_id
+
+    @staticmethod
+    def _create_run(db, run_id, as_of):
+        registry = _lock_registry(db)
+        if registry is None or registry.mode not in {"live", "validation"} or registry.provider == "disabled":
+            raise ValueError("social_runtime_unavailable")
+        sources = db.scalars(select(SocialSourceConfiguration).where(SocialSourceConfiguration.lifecycle_state == "enabled").order_by(SocialSourceConfiguration.content_source_id)).all()
+        if len(sources) < 2:
+            raise ValueError("minimum_two_enabled")
+        if db.get(SocialSignalRun, run_id) is not None:
+            raise ValueError("run_exists")
+        run = SocialSignalRun(id=run_id, registry_id=1, registry_version=registry.version,
                 mode=registry.mode, provider=registry.provider, status="running", created_at=as_of,
                 source_outcomes_json={}, application_progress_json={"sources": {
                     str(s.content_source_id): {"list_id": s.x_list_id, "version": s.version} for s in sources}, "observations": {}},
-                feature_run_ids_json={}, exposure_dates_json={}, coverage_json={}))
+                feature_run_ids_json={}, exposure_dates_json={}, coverage_json={})
+        db.add(run)
+        return run
+
+    def create_replay_run(self, run_id, saved_run_id, as_of):
+        """Seed a current evaluation without asserting another collection occurred."""
+        validate_utc_timestamp(as_of, "as_of")
+        with self.session_factory.begin() as db:
+            run = self._create_run(db, run_id, as_of)
+            old = db.get(SocialSignalRun, saved_run_id)
+            if old is None or utc(old.created_at) > as_of:
+                raise ValueError("saved_generation_unavailable")
+            old_payload = old.application_progress_json
+            provenance = old_payload.get("historical", {"sources": old_payload["sources"],
+                "provider": old.provider, "registry_version": old.registry_version})
+            if old.status == "running":
+                historical_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(SocialRunWork.run_id == old.id).order_by(SocialRunWork.work_id)))
+            else:
+                historical_ids = old_payload.get("prepared", {}).get("work_ids")
+                if historical_ids is None:
+                    raise ValueError("terminal_run_manifest_missing")
+                historical_ids = tuple(historical_ids)
+            historical_ids = tuple(sorted(set(historical_ids)
+                | set(old_payload.get("replay", {}).get("historical_work_ids", ()))
+                | set(old_payload.get("current_manifest", {}).get("audit_work_ids", ()))))
+            observations, missing = {}, []
+            for source_id, pin in run.application_progress_json["sources"].items():
+                reason = None
+                if provenance["provider"] != run.provider:
+                    reason = "saved_provider_incompatible"
+                elif provenance["sources"].get(source_id) != pin:
+                    reason = "saved_source_incompatible"
+                elif source_id not in old_payload["observations"]:
+                    reason = "saved_source_missing"
+                if reason:
+                    missing.append((source_id, reason))
+                else:
+                    observations[source_id] = deepcopy(old_payload["observations"][source_id])
+            current, older = self._partition_inputs(observations, as_of)
+            carry, linked = [], set()
+            for work_id in historical_ids:
+                work = db.get(SocialExtractionWork, work_id)
+                if work is None or work.state != "succeeded":
+                    continue
+                identity = (work.content_item_id, work.input_hash)
+                if identity not in current | older or identity in linked:
+                    continue
+                _decode(work)
+                db.add(SocialRunWork(run_id=run_id, work_id=work.id, input_hash=work.input_hash, included_at=as_of))
+                linked.add(identity)
+                if identity in older:
+                    carry.append(work.id)
+            manifest = SocialReplayManifest(saved_run_id, historical_ids, tuple(sorted(observations)),
+                tuple(missing), tuple(ReplayInput(*identity, "current") for identity in sorted(current)),
+                tuple(carry), ("saved_observations_replayed",) +
+                (("saved_read_does_not_cover_current_end",) if any(datetime.fromisoformat(v["observed_at"]) < as_of for v in observations.values()) else ()) +
+                (("outside_window_judgments_missing",) if older - linked else ()))
+            run.application_progress_json = {**run.application_progress_json,
+                "observations": deepcopy(old_payload["observations"]),
+                "replay": serialized(manifest), "historical": deepcopy(provenance)}
+            run.source_outcomes_json = deepcopy(old.source_outcomes_json)
         return run_id
+
+    @staticmethod
+    def _post(value):
+        value = dict(value)
+        for field in ("created_at", "observed_at"):
+            value[field] = datetime.fromisoformat(value[field])
+        return SocialPostRecord(**value)
+
+    @classmethod
+    def _partition_inputs(cls, observations, as_of):
+        current, older = set(), set()
+        for observation in observations.values():
+            for entry in observation["inputs"]:
+                post = cls._post(entry["post"])
+                identity = (entry["content_item_id"], SocialExtractionService.input_hash((post,)))
+                if post.created_at > as_of or post.observed_at > as_of:
+                    raise ValueError("saved_input_in_future")
+                (current if post.created_at >= as_of - timedelta(days=14) else older).add(identity)
+        return current, older
+
+    def select_current_inputs(self, run_id):
+        """Classify work on a running generation, preserving aged unfinished audit."""
+        with self.session_factory.begin() as db:
+            _lock_registry(db)
+            run = db.get(SocialSignalRun, run_id)
+            if run is None or run.status != "running":
+                raise ValueError("run_not_collecting")
+            payload = deepcopy(run.application_progress_json)
+            observations = payload["observations"]
+            replay = payload.get("replay")
+            if replay:
+                observations = {k: v for k, v in observations.items() if k in replay["participating_source_ids"]}
+            current, older = self._partition_inputs(observations, utc(run.created_at))
+            audit = set(payload.get("current_manifest", {}).get("audit_work_ids", ()))
+            if replay:
+                audit.update(replay["historical_work_ids"])
+            carry, kept, succeeded = [], set(), set()
+            for link in db.scalars(select(SocialRunWork).where(SocialRunWork.run_id == run_id).order_by(SocialRunWork.work_id)):
+                work = db.get(SocialExtractionWork, link.work_id)
+                if work is None or work.input_hash != link.input_hash:
+                    raise ValueError("pinned_input_mismatch")
+                identity = (work.content_item_id, work.input_hash)
+                if identity in older and work.state != "succeeded":
+                    audit.add(work.id)
+                    db.delete(link)
+                    continue
+                kept.add(work.id)
+                if identity in older:
+                    _decode(work)
+                    carry.append(work.id)
+                    succeeded.add(identity)
+            reasons = ("outside_window_judgments_missing",) if older - succeeded else ()
+            manifest = SocialCurrentInputManifest(tuple(ReplayInput(*v, "current") for v in sorted(current)),
+                tuple(carry), tuple(sorted(audit - kept)), reasons)
+            payload["current_manifest"] = serialized(manifest)
+            run.application_progress_json = payload
+        return self.read_run_inputs(run_id)
 
     def persist_observations(self, batch, *, run_id=None):
         if batch.request.intent == "test":
@@ -72,6 +227,8 @@ class SocialSignalWriter:
             if run_id and (run is None or run.status != "running"):
                 raise ValueError("run_not_collecting")
             if run is not None:
+                if "replay" in run.application_progress_json:
+                    raise ValueError("replay_collection_forbidden")
                 pin = run.application_progress_json["sources"].get(batch.request.source_id)
                 if (pin != {"list_id": source.x_list_id, "version": source.version}
                         or registry.version != run.registry_version or registry.provider != run.provider):
@@ -152,6 +309,8 @@ class SocialSignalWriter:
         with self.session_factory() as db:
             observations = []
             for run in db.scalars(select(SocialSignalRun).where(SocialSignalRun.provider == provider)):
+                if "replay" in run.application_progress_json:
+                    continue
                 outcome = run.source_outcomes_json.get(str(source_id), {})
                 observation = run.application_progress_json.get("observations", {}).get(str(source_id))
                 if observation and outcome.get("read_status") == "success" and observation.get("intent") == "initial":
@@ -165,7 +324,9 @@ class SocialSignalWriter:
             if run is None:
                 raise ValueError("run_unavailable")
             batches, content_ids = [], set()
-            for source_id, observation in sorted(run.application_progress_json["observations"].items()):
+            observations = run.application_progress_json["observations"]
+            outcomes = run.source_outcomes_json
+            for source_id, observation in sorted(observations.items()):
                 request = dict(observation["request"])
                 for field in ("observed_at", "target_published_after"):
                     request[field] = datetime.fromisoformat(request[field])
@@ -176,7 +337,7 @@ class SocialSignalWriter:
                         post[field] = datetime.fromisoformat(post[field])
                     posts.append(SocialPostRecord(**post))
                     content_ids.add((post["provider_post_id"], entry["content_item_id"]))
-                outcome = dict(run.source_outcomes_json[source_id])
+                outcome = dict(outcomes[source_id])
                 for field in ("observed_oldest_at", "observed_newest_at", "rate_limit_reset_at"):
                     outcome[field] = datetime.fromisoformat(outcome[field]) if outcome[field] else None
                 outcome["coverage_reason_codes"] = tuple(outcome["coverage_reason_codes"])
@@ -189,14 +350,26 @@ class SocialSignalWriter:
                 if manifest is None:
                     raise ValueError("terminal_run_manifest_missing")
                 work_ids = tuple(manifest)
-            return SavedSocialRunInputs(run_id, utc(run.created_at), run.registry_version, tuple(batches), tuple(sorted(content_ids)), work_ids)
+            replay = run.application_progress_json.get("replay")
+            manifest = SocialReplayManifest(replay["saved_run_id"], tuple(replay["historical_work_ids"]),
+                tuple(replay["participating_source_ids"]), tuple(tuple(v) for v in replay["missing_sources"]),
+                tuple(ReplayInput(**v) for v in replay["required_inputs"]), tuple(replay["carry_in_work_ids"]),
+                tuple(replay["coverage_reasons"])) if replay else None
+            current_manifest = _restore_record(SocialCurrentInputManifest, run.application_progress_json.get("current_manifest"))
+            return SavedSocialRunInputs(run_id, utc(run.created_at), run.registry_version, tuple(batches), tuple(sorted(content_ids)), work_ids, manifest, current_manifest)
 
     def _validate_inputs(self, db, run):
         pins = run.application_progress_json["sources"]
         observations = run.application_progress_json["observations"]
-        if len(pins) < 2 or set(run.source_outcomes_json) != set(pins) or set(observations) != set(pins):
+        outcomes = run.source_outcomes_json
+        replay = run.application_progress_json.get("replay")
+        if replay:
+            participants = set(replay["participating_source_ids"])
+            observations = {k: v for k, v in observations.items() if k in participants}
+            outcomes = {k: v for k, v in outcomes.items() if k in participants}
+        if len(pins) < 2 or set(outcomes) != set(pins) or set(observations) != set(pins):
             raise ValueError("source_participation_incomplete")
-        if any(outcome["read_status"] != "success" for outcome in run.source_outcomes_json.values()):
+        if any(outcome["read_status"] != "success" for outcome in outcomes.values()):
             raise ValueError("source_participation_failed")
         required = set()
         for source in observations.values():
@@ -204,20 +377,91 @@ class SocialSignalWriter:
                 value = dict(observation["post"])
                 value.update(created_at=datetime.fromisoformat(value["created_at"]), observed_at=datetime.fromisoformat(value["observed_at"]))
                 required.add((observation["content_item_id"], SocialExtractionService.input_hash((SocialPostRecord(**value),))))
+        selection = run.application_progress_json.get("current_manifest") or replay
+        if selection:
+            required = {(v["content_item_id"], v["input_hash"]) for v in selection["required_inputs"]}
         actual, ids = set(), []
         for link in db.scalars(select(SocialRunWork).where(SocialRunWork.run_id == run.id).order_by(SocialRunWork.work_id)):
             work = db.get(SocialExtractionWork, link.work_id)
             if work is None or link.input_hash != work.input_hash:
                 raise ValueError("pinned_input_mismatch")
             _decode(work)
-            actual.add((work.content_item_id, work.input_hash))
+            if not selection or work.id not in selection["carry_in_work_ids"]:
+                actual.add((work.content_item_id, work.input_hash))
             ids.append(work.id)
         if actual != required:
             raise ValueError("pinned_inputs_incomplete")
         return tuple(ids)
 
-    def prepare_run(self, run_id, rows, as_of, *, theme_evidence=()):
+    def read_publication_context(self, run_id):
+        """Read only persisted evidence, never mutable latest Market fields."""
+        with self.session_factory() as db:
+            run = db.get(SocialSignalRun, run_id)
+            if run is None:
+                raise ValueError("run_unavailable")
+            value = run.application_progress_json.get("prepared", {}).get("context")
+            return _restore_record(SocialPublicationContext, value) if value else None
+
+    @staticmethod
+    def _validate_candidates(context, rows):
+        from app.domain.social_signals.scoring import queue_score
+        candidates = {(v.candidate_key, v.window_days): v for v in context.candidates}
+        if set(candidates) != {(v.candidate_key, v.window_days) for v in rows}:
+            raise ValueError("candidate_context_mismatch:identity")
+        markets = {batch.pinned_run.market: batch for batch in context.market_batches}
+        for row in rows:
+            candidate = candidates[(row.candidate_key, row.window_days)]
+            social = candidate.social_result.social_score if candidate.social_result else None
+            confirmation = candidate.confirmation.value if candidate.confirmation else None
+            if (row.candidate_state != candidate.state_decision.state or row.market != candidate.state_input.market
+                    or row.social_score != social or row.confirmation_score != confirmation
+                    or row.queue_score != queue_score(social=social, confirmation=confirmation)
+                    or (candidate.social_result and (candidate.social_result.canonical_symbol != row.canonical_symbol
+                        or candidate.social_result.formula_version != context.formula_version))):
+                raise ValueError("candidate_context_mismatch:state_or_score")
+            if row.market and (row.market not in markets or row.canonical_symbol not in dict(markets[row.market].facts)):
+                raise ValueError("candidate_context_mismatch:market_inputs")
+
+    def _validate_context(self, db, context, as_of):
+        if context is None:
+            return
+        now = self.clock()
+        validate_utc_timestamp(now, "publication_clock")
+        if now < as_of:
+            raise ValueError("market_context_changed:clock_before_generation")
+        reader = self.confirmation_reader_factory(db)
+        for batch in context.market_batches:
+            market = batch.pinned_run.market
+            if batch.market_context.market != market or batch.market_context.observed_at != as_of:
+                raise ValueError("market_context_changed:generation")
+            if reader.pin_feature_run(market) != batch.pinned_run:
+                raise ValueError("market_context_changed:feature_pointer")
+            for evidence in batch.theme_evidence:
+                if (evidence.market != market or evidence.benchmark_symbol != batch.market_context.benchmark_symbol
+                        or evidence.session_date != batch.market_context.freshness.required_session
+                        or evidence.benchmark_candidates != batch.market_context.benchmark_candidates
+                        or evidence.benchmark_registry_version != batch.market_context.benchmark_registry_version
+                        or any(run_id != batch.pinned_run.run_id for _, run_id in evidence.feature_run_ids)
+                        or set(dict(evidence.feature_run_ids)) != {m.canonical_symbol for m in evidence.membership}):
+                    raise ValueError("market_context_changed:theme_pin")
+            for value in batch.inputs:
+                linked = tuple(e for e in batch.theme_evidence if any(
+                    f"{m.market}:{m.canonical_symbol}" == value.candidate_key for m in e.membership))
+                if value.theme_confirmations != linked:
+                    raise ValueError("market_context_changed:theme_membership")
+            expected = replace(batch, inputs=tuple(replace(v, theme_confirmations=()) for v in batch.inputs),
+                theme_evidence=(), theme_reasons=())
+            for at in dict.fromkeys((as_of, now)):
+                actual = reader.read_market(market, tuple(symbol for symbol, _ in batch.facts), at,
+                    pinned_run=batch.pinned_run, theme_keys=())
+                actual = replace(actual, market_context=replace(actual.market_context, observed_at=as_of),
+                    inputs=tuple(replace(v, observed_at=as_of) for v in actual.inputs))
+                if actual != expected:
+                    raise ValueError("market_context_changed:confirmation_inputs")
+
+    def prepare_run(self, run_id, rows, as_of, *, theme_evidence=(), context=None):
         validate_utc_timestamp(as_of, "as_of")
+        self.select_current_inputs(run_id)
         # Read/validate expensive saved input and measurement work before locking.
         with self.session_factory() as db:
             run = db.get(SocialSignalRun, run_id)
@@ -226,6 +470,27 @@ class SocialSignalWriter:
             if utc(run.created_at) != as_of:
                 raise ValueError("generation_time_mismatch")
             work_ids = self._validate_inputs(db, run)
+            if context is not None:
+                if not isinstance(context, SocialPublicationContext):
+                    raise TypeError("invalid_publication_context")
+                self._validate_candidates(context, rows)
+                progress = tuple((key, run.source_outcomes_json[key]["committed_progress"])
+                    for key in sorted(run.application_progress_json["sources"]))
+                versions = tuple(sorted({(work.selected_model, work.prompt_version, work.schema_version)
+                    for work in (db.get(SocialExtractionWork, work_id) for work_id in work_ids)}))
+                if context.source_progress and context.source_progress != progress:
+                    raise ValueError("context_source_progress_mismatch")
+                if context.extraction_versions and context.extraction_versions != versions:
+                    raise ValueError("context_extraction_version_mismatch")
+                if any(row.formula_version != context.formula_version for row in rows):
+                    raise ValueError("context_formula_version_mismatch")
+                context = replace(context, source_progress=progress, extraction_versions=versions)
+                context_themes = tuple(e for batch in context.market_batches for e in batch.theme_evidence)
+                if theme_evidence and theme_evidence != context_themes:
+                    raise ValueError("context_theme_evidence_mismatch")
+                theme_evidence = context_themes
+                # Also preloads local calendar providers before the final lock.
+                self._validate_context(db, context, as_of)
             service = SocialThemeProjectionService(db)
             projection = service.prepare(run_id, as_of)
             application = service.prepare_application(projection, theme_keys=tuple(e.theme_key for e in theme_evidence))
@@ -237,13 +502,16 @@ class SocialSignalWriter:
                         or evidence.identity_version != basket.identity_version
                         or evidence.accepted_company_count != len({m.company_key for m in basket.membership if m.company_count_eligible})):
                     raise ValueError("measurement_basket_changed")
-            result = PreparedSocialPublication(run_id, run.registry_version, as_of, work_ids, rows, theme_evidence)
+            result = PreparedSocialPublication(run_id, run.registry_version, as_of, work_ids, rows, theme_evidence, context)
             frozen_input = deepcopy(run.application_progress_json)
         with self.session_factory.begin() as db:
             registry = _lock_registry(db)
             run = db.get(SocialSignalRun, run_id)
             if run.status != "running" or run.application_progress_json != frozen_input or registry.version != result.registry_version:
                 raise ValueError("publication_preparation_changed")
+            if self._validate_inputs(db, run) != work_ids:
+                raise ValueError("publication_preparation_changed")
+            self._validate_context(db, context, as_of)
             keys = set()
             for record in rows:
                 if record.run_id != run_id or (record.window_days, record.candidate_key) in keys:
@@ -260,9 +528,14 @@ class SocialSignalWriter:
                     normalization_scope=record.normalization_scope))
             run.application_progress_json = {**frozen_input, "prepared": {"work_ids": list(work_ids),
                 "projection": serialized(projection), "theme_evidence": [serialized(e) for e in theme_evidence],
-                "basket_fingerprint": application.fingerprint, "baskets": [serialized(b) for b in application.baskets]}}
+                "basket_fingerprint": application.fingerprint, "baskets": [serialized(b) for b in application.baskets],
+                "context": serialized(context) if context else None}}
+            if context is not None:
+                run.feature_run_ids_json = {b.pinned_run.market: b.pinned_run.run_id for b in context.market_batches}
+                run.exposure_dates_json = {b.pinned_run.market: b.market_context.freshness.actual_session.isoformat()
+                    if b.market_context.freshness.actual_session else None for b in context.market_batches}
             run.completed_at, run.status = as_of, "staged"
-            run.coverage_json = deepcopy(run.source_outcomes_json)
+            run.coverage_json = {key: deepcopy(run.source_outcomes_json[key]) for key in frozen_input["sources"]}
         return result
 
     def publish(self, run_id, expected_mode_version):
@@ -270,7 +543,8 @@ class SocialSignalWriter:
             run = db.get(SocialSignalRun, run_id)
             if run is None or run.status not in {"staged", "published"}:
                 raise ValueError("run_not_prepared")
-            summary = tuple((key, value["history_status"]) for key, value in sorted(run.source_outcomes_json.items()))
+            summary = tuple((key, run.source_outcomes_json[key]["history_status"])
+                for key in sorted(run.application_progress_json["sources"]))
             if run.mode == "validation":
                 return SocialRunResult(run_id, "validation", "complete", False, summary, ("validation_only",))
             if run.status == "published":
@@ -281,6 +555,8 @@ class SocialSignalWriter:
             if serialized(projection) != run.application_progress_json["prepared"]["projection"]:
                 raise ValueError("publication_version_changed")
             prepared_data = run.application_progress_json["prepared"]
+            context = _restore_record(SocialPublicationContext, prepared_data.get("context"))
+            self._validate_context(db, context, utc(run.created_at))
             application = service.prepare_application(projection, theme_keys=tuple(e["theme_key"] for e in prepared_data["theme_evidence"]))
             if (application.fingerprint != prepared_data["basket_fingerprint"]
                     or [serialized(b) for b in application.baskets] != prepared_data["baskets"]):
@@ -294,6 +570,7 @@ class SocialSignalWriter:
                 for s in db.scalars(select(SocialSourceConfiguration).where(SocialSourceConfiguration.lifecycle_state == "enabled"))}
             if sources != run.application_progress_json["sources"] or registry.provider != run.provider:
                 raise ValueError("publication_source_version_changed")
+            self._validate_context(db, context, utc(run.created_at))
             pointer = db.scalar(select(SocialSignalRunPointer).where(SocialSignalRunPointer.key == "latest_published").with_for_update())
             if pointer and pointer.run_id != run_id:
                 prior = db.get(SocialSignalRun, pointer.run_id)

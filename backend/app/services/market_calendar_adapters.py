@@ -57,6 +57,7 @@ class RawMarketCalendarAdapter:
 
     raw_calendar: object
     cache_namespace: str = "default"
+    use_shared_cache: bool = True
 
     def is_session(self, session: pd.Timestamp) -> bool:
         is_session = getattr(self.raw_calendar, "is_session", None)
@@ -70,6 +71,8 @@ class RawMarketCalendarAdapter:
     def sessions_in_range(self, start_day: date, end_day: date) -> tuple[date, ...]:
         if start_day > end_day:
             return ()
+        if not self.use_shared_cache:
+            return self._compute_sessions_in_range(start_day, end_day)
         cache_key = self._session_range_cache_key(start_day, end_day)
         cached_sessions = self._read_session_range_cache(cache_key)
         if cached_sessions is not None:
