@@ -196,6 +196,7 @@ class ThemeDiscoveryService:
             ThemeMention.mentioned_at <= as_of_date,
             legacy_eligibility_exists(ContentItem.id, self.pipeline, active_only=True),
             ThemeMention.pipeline == self.pipeline,
+            ThemeMention.social_work_id.is_(None),
         ).group_by(
             ThemeMention.theme_cluster_id, ThemeMention.content_item_id,
         ).subquery()
@@ -1153,6 +1154,7 @@ class ThemeDiscoveryService:
             ThemeMention.mentioned_at >= cutoff_30d,
             ThemeMention.mentioned_at <= now,
             legacy_eligibility_exists(ThemeMention.content_item_id, self.pipeline),
+            ThemeMention.social_work_id.is_(None),
         ).group_by(ThemeMention.content_item_id, ContentSource.source_type, ContentSource.name).all()
 
         mentions_7d = 0
@@ -1344,6 +1346,10 @@ class ThemeDiscoveryService:
         }
 
         def _apply_state_policy(cluster: ThemeCluster) -> None:
+            from .theme_lifecycle_service import has_current_social_lifecycle_evidence
+            if has_current_social_lifecycle_evidence(cluster, now):
+                result["unchanged"] += 1
+                return
             observation = self._lifecycle_snapshot(cluster.id, now=now)
             state = (cluster.lifecycle_state or "candidate").strip()
 

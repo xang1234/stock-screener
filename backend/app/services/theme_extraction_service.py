@@ -1817,7 +1817,8 @@ Example themes for this pipeline: {examples_str}
 
         # Subquery: content_item_ids that have at least one theme mention in this pipeline
         mentioned_ids = self.db.query(ThemeMention.content_item_id).filter(
-            ThemeMention.pipeline == self.pipeline
+            ThemeMention.pipeline == self.pipeline,
+            ThemeMention.social_work_id.is_(None),
         ).distinct().subquery()
 
         # Find items with pipeline state marked processed but with zero mentions in this pipeline
@@ -1903,6 +1904,8 @@ class ThemeNormalizationService:
 
     def merge_clusters(self, source_id: int, target_id: int):
         """Merge source cluster into target cluster"""
+        from .social_theme_projection_service import guard_social_theme_merge
+        guard_social_theme_merge(self.db, source_id, target_id)
         source = self.db.query(ThemeCluster).filter(ThemeCluster.id == source_id).first()
         target = self.db.query(ThemeCluster).filter(ThemeCluster.id == target_id).first()
 

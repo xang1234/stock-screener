@@ -2,7 +2,61 @@
 from sqlalchemy import (Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey,
                         Integer, JSON, Numeric, Text, UniqueConstraint)
 from sqlalchemy.sql import func
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 from app.database import Base
+
+
+class SocialThemeAssociation(Base):
+    __tablename__ = "social_theme_associations"
+    id = Column(Integer, primary_key=True)
+    theme_cluster_id = Column(Integer, ForeignKey("theme_clusters.id", ondelete="RESTRICT"), nullable=False)
+    company_key = Column(Text)
+    market = Column(Text, nullable=False)
+    canonical_symbol = Column(Text, nullable=False)
+    state = Column(Text, nullable=False, default="proposed")
+    origin = Column(Text, nullable=False, default="social")
+    decision_owner = Column(Text, nullable=False, default="system")
+    evidence_work_ids = Column(JSON, nullable=False, default=list)
+    policy_version = Column(Text, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False)
+    accepted_at = Column(DateTime(timezone=True))
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("theme_cluster_id", "market", "canonical_symbol", name="uq_social_theme_listing"),
+        CheckConstraint("state IN ('proposed','accepted','rejected')", name="ck_social_theme_state"),
+        CheckConstraint("origin IN ('social','legacy')", name="ck_social_theme_origin"),
+        CheckConstraint("decision_owner IN ('system','admin')", name="ck_social_theme_owner"),
+        CheckConstraint("market IN ('US','HK','CN','JP','TW')", name="ck_social_theme_market"),
+        CheckConstraint("version >= 1", name="ck_social_theme_version"),
+    )
+
+
+class SocialThemeDecision(Base):
+    __tablename__ = "social_theme_decisions"
+    id = Column(Integer, primary_key=True)
+    association_id = Column(Integer, ForeignKey("social_theme_associations.id", ondelete="RESTRICT"), nullable=False)
+    run_id = Column(Text, ForeignKey("social_signal_runs.id", ondelete="RESTRICT"))
+    actor = Column(Text, nullable=False)
+    reason = Column(Text, nullable=False)
+    before_state = Column(Text, nullable=False)
+    after_state = Column(Text, nullable=False)
+    policy_version = Column(Text, nullable=False)
+    evidence_work_ids = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+
+@event.listens_for(Session, "before_flush")
+def _protect_theme_decision_history(session, flush_context, instances):
+    if any(isinstance(row, SocialThemeDecision) for row in session.dirty | session.deleted):
+        raise ValueError("social_theme_decision_append_only")
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _protect_theme_decision_bulk_history(state):
+    if (state.is_update or state.is_delete) and state.bind_mapper is not None and state.bind_mapper.class_ is SocialThemeDecision:
+        raise ValueError("social_theme_decision_append_only")
 
 
 class SocialExtractionWork(Base):

@@ -402,6 +402,38 @@ class ExtractionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ThemeProjection:
+    run_id: str
+    policy_version: str
+    proposals: tuple[ExtractionClaim, ...]
+    registry_version: int
+    identity_version: int
+    identity_policy_version: str
+    prepared_at: datetime
+    work_ids: tuple[int, ...]
+    resolutions: tuple[TickerResolution, ...]
+    pipeline: str
+
+    def __post_init__(self):
+        _utc(self.prepared_at, "prepared_at")
+        _deeply_immutable(self.proposals, "proposals")
+        _deeply_immutable(self.work_ids, "work_ids")
+        _deeply_immutable(self.resolutions, "resolutions")
+        if len(self.resolutions) != len(self.proposals):
+            raise ValueError("projection_resolution_mismatch")
+        _choice(self.pipeline, {"technical", "fundamental"}, "pipeline")
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveThemeMembership:
+    canonical_symbol: str
+    market: str
+    company_key: str | None
+    company_count_eligible: bool
+    origins: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SocialEvidenceInput:
     candidate_key: str
     canonical_symbol: str
