@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
-import importlib
 import logging
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -184,33 +183,15 @@ class OfficialXTwitterFetcher:
 
 
 class PrivateXUIFetcher:
-    """Fetch Twitter/X source content through the private xui package."""
+    """Compatibility boundary for the retired private theme-source integration."""
 
     provider_name = "xui"
 
     def fetch(self, source: ContentSource, since: datetime | None = None) -> list[dict[str, Any]]:
-        bindings = _load_private_xui_bindings()
-        locator = _normalized_locator(source)
-        source_ref = _parse_source_locator(locator, source)
-        raw_items = bindings.read_source(
-            source=source_ref,
-            locator=locator,
-            source_name=source.name,
-            since=since,
-            limit=settings.xui_limit_per_source,
+        raise TwitterIngestionProviderError(
+            "The legacy private X theme-source integration is unsupported. "
+            "Configure the social-signal xui CLI provider for list reads."
         )
-        rows = [
-            _record_from_private_item(item, source, fallback_author=source_ref.value if source_ref.kind == "user" else None)
-            for item in raw_items or []
-        ]
-        logger.info(
-            "twitter_fetch provider=%s source_kind=%s source=%s items_fetched=%d",
-            self.provider_name,
-            source_ref.kind,
-            source.name,
-            len(rows),
-        )
-        return rows
 
 
 @dataclass(frozen=True)
@@ -218,11 +199,6 @@ class _SourceRef:
     kind: str
     value: str
     label: str
-
-
-@dataclass(frozen=True)
-class _PrivateXUIBindings:
-    read_source: Callable[..., Any]
 
 
 def _normalize_provider(raw: str | None) -> str:
@@ -346,30 +322,6 @@ def _record_from_api_tweet(
     }
 
 
-def _record_from_private_item(
-    item: Any,
-    source: ContentSource,
-    *,
-    fallback_author: str | None,
-) -> dict[str, Any]:
-    tweet_id = str(
-        _first_attr(item, "tweet_id", "id", "post_id", "rest_id")
-        or ""
-    ).strip()
-    if not tweet_id:
-        raise TwitterIngestionProviderError("Private xui returned tweet without id.")
-    author = _first_attr(item, "author_handle", "author", "username", "handle") or fallback_author or source.name
-    url = _first_attr(item, "url", "link")
-    return {
-        "external_id": hashlib.md5(f"twitter:{tweet_id}".encode("utf-8")).hexdigest(),
-        "title": "",
-        "content": str(_first_attr(item, "text", "content", "body") or ""),
-        "url": str(url or _tweet_url(tweet_id, str(author))),
-        "author": _format_author(str(author)),
-        "published_at": _normalize_datetime(_first_attr(item, "created_at", "published_at", "timestamp")),
-    }
-
-
 def _tweet_url(tweet_id: str, author: str | None) -> str:
     normalized = str(author or "").strip().lstrip("@")
     if normalized and _looks_like_handle(normalized):
@@ -412,15 +364,6 @@ def _normalize_datetime(value: Any) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _first_attr(item: Any, *names: str) -> Any:
-    for name in names:
-        if isinstance(item, dict) and name in item:
-            return item.get(name)
-        if hasattr(item, name):
-            return getattr(item, name)
-    return None
-
-
 def _log_rate_limit_headers(path: str, headers: Any) -> None:
     limit = headers.get("x-rate-limit-limit")
     remaining = headers.get("x-rate-limit-remaining")
@@ -448,24 +391,6 @@ def _response_error_detail(response: Any) -> str:
         if errors:
             return str(errors)
     return str(payload)
-
-
-def _load_private_xui_bindings() -> _PrivateXUIBindings:
-    try:
-        xui_mod = importlib.import_module("xui")
-    except ModuleNotFoundError as exc:
-        raise TwitterIngestionProviderError(
-            "Private xui package is not available. Install with "
-            "`pip install git+ssh://git@github.com/xang1234/xui.git`."
-        ) from exc
-
-    candidate = getattr(xui_mod, "read_source", None)
-    if callable(candidate):
-        return _PrivateXUIBindings(read_source=candidate)
-    raise TwitterIngestionProviderError(
-        "Private xui package is installed but no supported read function was found "
-        "(expected: read_source)."
-    )
 
 
 def official_since_id_key(source_id: int) -> str:

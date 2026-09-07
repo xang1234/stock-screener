@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -342,49 +341,8 @@ def test_official_fetcher_uses_persisted_since_id(monkeypatch: pytest.MonkeyPatc
         db.close()
 
 
-def test_private_xui_missing_package_error_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
-    def missing_bindings():
-        raise TwitterIngestionProviderError("Private xui package is not available. Install with `pip install git+ssh://git@github.com/xang1234/xui.git`.")
+def test_legacy_private_theme_fetcher_is_explicitly_unsupported() -> None:
+    source = ContentSource(name="Legacy List", source_type="twitter", url="https://x.com/i/lists/123")
 
-    monkeypatch.setattr(provider_mod, "_load_private_xui_bindings", missing_bindings)
-
-    source = ContentSource(name="@alice", source_type="twitter", url="@alice")
-    with pytest.raises(TwitterIngestionProviderError, match="github.com/xang1234/xui"):
+    with pytest.raises(TwitterIngestionProviderError, match="legacy.*unsupported"):
         PrivateXUIFetcher().fetch(source, since=None)
-
-
-def test_private_xui_normalizes_mocked_results(monkeypatch: pytest.MonkeyPatch) -> None:
-    created_at = datetime(2026, 3, 1, 2, 0, tzinfo=timezone.utc)
-    bindings = SimpleNamespace(
-        read_source=lambda **_kwargs: [
-            SimpleNamespace(
-                id="300",
-                text="private item",
-                author_handle="@carol",
-                created_at=created_at,
-                url=None,
-            )
-        ]
-    )
-    monkeypatch.setattr(provider_mod, "_load_private_xui_bindings", lambda: bindings)
-
-    source = ContentSource(name="@carol", source_type="twitter", url="@carol")
-    rows = PrivateXUIFetcher().fetch(source, since=None)
-
-    assert rows == [
-        {
-            "external_id": hashlib.md5("twitter:300".encode("utf-8")).hexdigest(),
-            "title": "",
-            "content": "private item",
-            "url": "https://x.com/carol/status/300",
-            "author": "@carol",
-            "published_at": created_at,
-        }
-    ]
-
-
-def test_private_xui_requires_stable_read_source_contract(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(provider_mod.importlib, "import_module", lambda _name: SimpleNamespace(fetch=lambda **_kwargs: []))
-
-    with pytest.raises(TwitterIngestionProviderError, match="read_source"):
-        provider_mod._load_private_xui_bindings()

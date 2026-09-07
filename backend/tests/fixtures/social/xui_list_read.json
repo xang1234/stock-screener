@@ -1,9 +1,12 @@
 {
-  "provider": "xui",
-  "source_id": "1522014550211457024",
-  "posts": [
-    {"tweet_id": "syn-101", "author_handle": "alpha_research", "text": "$NVDA demand remains strong", "url": "https://x.example/alpha/status/syn-101", "created_at": "2026-09-05T01:00:00Z", "likes": 0, "reposts": 0, "replies": 0, "quotes": null, "bookmarks": null, "views": null},
-    {"tweet_id": "syn-102", "author_handle": "beta_notes", "text": "Repost: $NVDA demand remains strong", "url": "https://x.example/beta/status/syn-102", "canonical_url": "https://x.example/alpha/status/syn-101", "created_at": "2026-09-05T02:00:00Z", "is_repost": true, "likes": 2, "reposts": 0, "replies": 0},
-    {"tweet_id": "syn-103", "author_handle": "gamma_asia", "text": "台積電先進封裝需求增長", "url": "https://x.example/gamma/status/syn-103", "created_at": "2026-09-05T03:00:00Z", "likes": 3, "reposts": 1, "replies": 0}
-  ]
+  "failed_sources": 0,
+  "items": [
+    {"tweet_id": "syn-101", "author_handle": "@alpha_research", "text": "$NVDA demand remains strong", "tweet_url": "https://x.com/alpha_research/status/syn-101", "created_at": "2026-09-05T01:00:00+00:00", "likes": 42, "retweets": 7, "replies": 3, "views": 1200, "bookmarks": null, "is_repost": false},
+    {"tweet_id": "syn-102", "author_handle": "@gamma_asia", "text": "台積電先進封裝需求增長", "tweet_url": "https://x.com/gamma_asia/status/syn-102", "created_at": "2026-09-05T03:00:00+00:00", "likes": 3, "retweets": 1, "replies": 0, "views": null, "bookmarks": null, "is_repost": false}
+  ],
+  "outcomes": [{"source_id": "list:1522014550211457024", "source_kind": "list", "ok": true, "item_count": 2, "page_loads": 1, "scroll_rounds": 1, "observed_ids": 2, "error": null, "html_artifact_path": null, "selector_report_path": null}],
+  "page_loads": 1,
+  "scroll_rounds": 1,
+  "seen_items": 2,
+  "succeeded_sources": 1
 }
