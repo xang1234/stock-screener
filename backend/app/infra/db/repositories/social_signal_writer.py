@@ -13,7 +13,8 @@ from sqlalchemy import select
 
 from app.domain.social_signals.records import (PreparedSocialPublication, SavedSocialRunInputs, SocialPostRecord,
     SocialReplayManifest, ReplayInput, SocialPublicationContext, SocialCurrentInputManifest,
-    SocialReadRequest, SocialSourceOutcome, SocialSourceBatch, SocialRunResult, validate_utc_timestamp)
+    SocialCollectionProgress, SocialReadRequest, SocialSourceOutcome, SocialSourceBatch,
+    SocialRunResult, validate_utc_timestamp)
 from app.infra.db.models.social_signals import (
     ContentPipelineEligibility, SocialContentMetrics, SocialPostSource,
     SocialSignalRun, SocialSourceConfiguration, SocialSignalSnapshot, SocialSignalRunPointer, SocialPostTicker,
@@ -23,6 +24,7 @@ from app.services.social_theme_projection_service import _lock_registry
 from app.services.social_theme_projection_service import SocialThemeProjectionService, _decode
 from app.infra.db.models.social_analysis import SocialRunWork, SocialExtractionWork
 from app.services.social_extraction_service import SocialExtractionService
+from app.services.twitter_content_identity import twitter_external_id
 
 METRICS = ("likes", "reposts", "replies", "quotes", "bookmarks", "views")
 
@@ -316,9 +318,21 @@ class SocialSignalWriter:
             for post in batch.posts:
                 if post.source_id != batch.request.source_id or post.provider != registry.provider or (run and post.provider != run.provider):
                     raise ValueError("post_source_identity_mismatch")
-                item = db.scalar(select(ContentItem).where(ContentItem.source_type == "twitter", ContentItem.external_id == post.provider_post_id))
+                external_id = twitter_external_id(post.provider_post_id)
+                item = db.scalar(select(ContentItem).where(
+                    ContentItem.source_type == "twitter",
+                    ContentItem.external_id == external_id,
+                ))
                 if item is None:
-                    item = ContentItem(source_id=source.content_source_id, source_type="twitter", external_id=post.provider_post_id,
+                    # Reuse observations written by early Social prereleases,
+                    # which stored the provider id before the legacy identity
+                    # convention was unified.
+                    item = db.scalar(select(ContentItem).where(
+                        ContentItem.source_type == "twitter",
+                        ContentItem.external_id == post.provider_post_id,
+                    ))
+                if item is None:
+                    item = ContentItem(source_id=source.content_source_id, source_type="twitter", external_id=external_id,
                         content=post.text, url=post.url, author=post.author_handle, published_at=post.created_at, fetched_at=post.observed_at)
                     db.add(item)
                     db.flush()
@@ -374,7 +388,7 @@ class SocialSignalWriter:
                     canonical_symbol=resolution.symbol, market=resolution.market, resolution_state=resolution.status,
                     resolution_policy_version="social-resolution-v1", explanation_json=serialized(resolution)))
 
-    def latest_committed_progress(self, source_id, provider):
+    def latest_collection_progress(self, source_id, provider):
         with self.session_factory() as db:
             observations = []
             for run in db.scalars(select(SocialSignalRun).where(SocialSignalRun.provider == provider)):
@@ -383,8 +397,25 @@ class SocialSignalWriter:
                 outcome = run.source_outcomes_json.get(str(source_id), {})
                 observation = run.application_progress_json.get("observations", {}).get(str(source_id))
                 if observation and outcome.get("read_status") == "success" and observation.get("intent") == "initial":
-                    observations.append((observation["observed_at"], utc(run.created_at), run.id, observation["committed_progress"]))
-            return max(observations)[-1] if observations else None
+                    observations.append((
+                        observation["observed_at"], utc(run.created_at), run.id,
+                        observation.get("committed_progress"),
+                        outcome.get("history_status"),
+                    ))
+            if not observations:
+                return None
+            _, _, _, cursor, history_status = max(
+                observations, key=lambda value: value[:3]
+            )
+            return SocialCollectionProgress(
+                initial_complete=(history_status == "observed_window" or cursor is None),
+                cursor=cursor,
+            )
+
+    def latest_committed_progress(self, source_id, provider):
+        """Compatibility reader for diagnostics that only display the cursor."""
+        progress = self.latest_collection_progress(source_id, provider)
+        return progress.cursor if progress is not None else None
 
     def read_run_inputs(self, run_id):
         """Frozen historical read evidence; not a claim of a new provider read."""

@@ -81,6 +81,7 @@ SCHEDULED_TASKS = {
         'manual_dispatch_kwargs': {'origin': 'manual'},
         'manual_dispatch_options': {'queue': 'social_ingestion'},
         'db_runtime_social': True,
+        'admin_only': True,
     },
     # ===== SUNDAY (Off-Market Maintenance) =====
     'weekly-orphaned-scan-cleanup': {
@@ -247,27 +248,34 @@ class TaskRegistryService:
         task_info = SCHEDULED_TASKS[task_name]
         logger.info(f"Manually triggering task: {task_name}")
 
+        cooldown_owner = None
         if task_info.get('db_runtime_social'):
+            cooldown_owner = f"manual:{datetime.now(timezone.utc).isoformat()}"
             accepted, retry_after = self._gate().acquire_manual_cooldown(
-                f"manual:{datetime.now(timezone.utc).isoformat()}",
+                cooldown_owner,
                 settings.social_manual_refresh_cooldown_seconds,
             )
             if not accepted:
                 raise TaskCooldownError(retry_after)
 
         # Get the task function and dispatch it
-        task_func = self._get_task(task_name)
-        manual_dispatch_kwargs = task_info.get('manual_dispatch_kwargs')
-        manual_dispatch_headers = task_info.get('manual_dispatch_headers')
-        manual_dispatch_options = task_info.get('manual_dispatch_options') or {}
-        if manual_dispatch_kwargs or manual_dispatch_headers or manual_dispatch_options:
-            celery_task = task_func.apply_async(
-                kwargs=manual_dispatch_kwargs or {},
-                headers=manual_dispatch_headers,
-                **manual_dispatch_options,
-            )
-        else:
-            celery_task = task_func.delay()
+        try:
+            task_func = self._get_task(task_name)
+            manual_dispatch_kwargs = task_info.get('manual_dispatch_kwargs')
+            manual_dispatch_headers = task_info.get('manual_dispatch_headers')
+            manual_dispatch_options = task_info.get('manual_dispatch_options') or {}
+            if manual_dispatch_kwargs or manual_dispatch_headers or manual_dispatch_options:
+                celery_task = task_func.apply_async(
+                    kwargs=manual_dispatch_kwargs or {},
+                    headers=manual_dispatch_headers,
+                    **manual_dispatch_options,
+                )
+            else:
+                celery_task = task_func.delay()
+        except Exception:
+            if cooldown_owner is not None:
+                self._gate().release_manual_cooldown(cooldown_owner)
+            raise
 
         # Record the execution in history
         execution = TaskExecutionHistory(

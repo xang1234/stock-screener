@@ -86,8 +86,8 @@ class RefreshSocialSignals:
         return selected() if callable(selected) and not hasattr(selected, "read_source") else selected
 
     def _request(self, run_id, source, provider, now):
-        progress = self.writer.latest_committed_progress(source.source_id, provider)
-        initial = progress is None
+        progress = self.writer.latest_collection_progress(source.source_id, provider)
+        initial = progress is None or not progress.initial_complete
         return SocialReadRequest(
             request_id=f"{run_id}:{source.source_id}",
             source_id=source.source_id,
@@ -96,7 +96,7 @@ class RefreshSocialSignals:
             observed_at=now,
             limit=self.initial_limit if initial else self.incremental_limit,
             target_published_after=now - timedelta(days=self.initial_days),
-            application_progress=progress,
+            application_progress=progress.cursor if initial and progress else None,
         )
 
     async def execute(self, origin: str, now: datetime, *, saved_run_id: str | None = None) -> SocialRunResult:
@@ -146,6 +146,16 @@ class RefreshSocialSignals:
                     ):
                         return self._result(
                             run_id, runtime.mode, "blocked", "social_runtime_changed", sources=enabled
+                        )
+                    if not self.provider_lease.renew(
+                        lease_owner, self.lease_ttl_seconds
+                    ):
+                        return self._result(
+                            run_id,
+                            runtime.mode,
+                            "deferred",
+                            "provider_lease_lost",
+                            sources=enabled,
                         )
                     batch = provider.read_source(self._request(run_id, source, runtime.provider, now))
                     saved = self.writer.persist_observations(batch, run_id=run_id)

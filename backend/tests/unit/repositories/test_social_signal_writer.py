@@ -1,6 +1,7 @@
 """Durable source observations; synthetic data and disposable repositories only."""
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import hashlib
 
 import pytest
 from sqlalchemy import create_engine
@@ -57,6 +58,24 @@ def test_cross_list_duplicate_retains_memberships_and_only_social_eligibility(st
         assert {r.channel for r in db.query(ContentPipelineEligibility)} == {"social"}
 
 
+def test_social_writer_reuses_legacy_twitter_content_identity(store):
+    legacy_external_id = hashlib.md5(b"twitter:100").hexdigest()
+    with store.begin() as db:
+        db.add(ContentItem(
+            source_type="twitter",
+            external_id=legacy_external_id,
+            content="legacy copy",
+            url="https://x.com/a/status/100",
+            published_at=NOW - timedelta(days=1),
+        ))
+
+    writer(store).persist_observations(batch())
+
+    with store() as db:
+        assert db.query(ContentItem).count() == 1
+        assert db.query(SocialPostSource).count() == 1
+
+
 def test_newer_partial_metrics_preserve_missing_and_older_cannot_overwrite(store):
     w = writer(store)
     w.persist_observations(batch())
@@ -86,6 +105,25 @@ def test_crash_rolls_back_observations_and_progress(store, monkeypatch):
     saved = w.persist_observations(batch(), run_id=run)
     assert saved.outcome.committed_progress == "cursor"
     assert w.latest_committed_progress("1", "official") == "cursor"
+    progress = w.latest_collection_progress("1", "official")
+    assert progress.initial_complete is False
+    assert progress.cursor == "cursor"
+
+
+def test_cursorless_success_is_a_durable_completed_initial_marker(store):
+    w = writer(store)
+    w.create_run("run", NOW)
+    value = batch()
+    value = replace(
+        value,
+        outcome=replace(value.outcome, proposed_progress=None),
+    )
+
+    w.persist_observations(value, run_id="run")
+
+    progress = w.latest_collection_progress("1", "official")
+    assert progress.initial_complete is True
+    assert progress.cursor is None
 
 
 def test_failed_and_diagnostic_reads_never_commit_progress(store):

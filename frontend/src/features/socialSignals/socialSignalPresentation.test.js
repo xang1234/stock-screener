@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatSocialScore, socialCoverage, socialFreshnessLabel, socialStateLabel,
+  visibleSocialRows,
 } from './socialSignalPresentation';
 
 describe('Social Signal presentation', () => {
@@ -19,5 +20,15 @@ describe('Social Signal presentation', () => {
       coverage: ['limited_history'] }, '14d')).toEqual({
       label: '1/3 lists · 14D', tone: 'warning', detail: 'Warming up · limited history',
     });
+  });
+
+  it('filters sources using the published source-name projection', () => {
+    const rows = [{
+      state: 'watch', canonical_symbol: 'AAA',
+      explanation: { source_names: ['Minervini Research List'] },
+    }];
+
+    expect(visibleSocialRows(rows, { source: 'minervini' })).toEqual(rows);
+    expect(visibleSocialRows(rows, { source: 'asia' })).toEqual([]);
   });
 });

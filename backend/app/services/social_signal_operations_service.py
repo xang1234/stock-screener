@@ -75,9 +75,12 @@ class SocialSignalOperationsService:
             SocialLLMBudgetDay.period_end_utc > now,
         ).order_by(SocialLLMBudgetDay.period_start_utc.desc()).limit(1))
         observations = (run.application_progress_json.get("observations", {}) if run else {})
-        collected = [datetime.fromisoformat(value["observed_at"])
-                     for value in observations.values() if value.get("observed_at")]
-        last_collection = max(collected, default=None)
+        successful_collections = [
+            _utc(source.last_successful_collection_at)
+            for source in sources
+            if source.last_successful_collection_at is not None
+        ]
+        last_collection = max(successful_collections, default=None)
         source_outcomes = run.source_outcomes_json if run else {}
         prepared = run.application_progress_json.get("prepared", {}) if run else {}
         context = prepared.get("context") or {}

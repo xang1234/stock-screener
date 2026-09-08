@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
 import logging
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -15,6 +14,7 @@ from sqlalchemy.orm import object_session
 from ..config import settings
 from ..models.app_settings import AppSetting
 from ..models.theme import ContentSource
+from .twitter_content_identity import twitter_external_id
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +312,7 @@ def _record_from_api_tweet(
         raise TwitterIngestionProviderError("Official X API returned tweet without id.")
     author = users_by_id.get(str(item.get("author_id"))) or fallback_author or source.name
     return {
-        "external_id": hashlib.md5(f"twitter:{tweet_id}".encode("utf-8")).hexdigest(),
+        "external_id": twitter_external_id(tweet_id),
         "title": "",
         "content": str(item.get("text") or ""),
         "url": _tweet_url(tweet_id, author),

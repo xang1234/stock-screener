@@ -791,6 +791,13 @@ class Settings(BaseSettings):
             )
         return normalized
 
+    @field_validator("social_refresh_hours")
+    @classmethod
+    def validate_social_refresh_hours(cls, v: int) -> int:
+        if not 1 <= v <= 24 or 24 % v:
+            raise ValueError("social_refresh_hours must be an even divisor of 24")
+        return v
+
     @field_validator("social_llm_budget_timezone")
     @classmethod
     def validate_social_llm_budget_timezone(cls, v: str) -> str:

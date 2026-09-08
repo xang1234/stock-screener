@@ -62,11 +62,19 @@ def queue(
     rank_mode: RankMode = Query("blended"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    source: str | None = Query(None, max_length=100),
+    theme: str | None = Query(None, max_length=100),
+    instrument: str | None = Query(None, max_length=100),
+    state: str | None = Query(None, max_length=100),
+    ticker: str | None = Query(None, max_length=100),
     db: Session = Depends(get_db),
 ):
     return SocialSignalQueries(db).queue(
         market=market, window=window, view=view, rank_mode=rank_mode,
-        page=page, page_size=page_size,
+        page=page, page_size=page_size, filters={
+            "source": source, "theme": theme, "instrument": instrument,
+            "state": state, "ticker": ticker,
+        },
     )
 
 
@@ -315,8 +323,18 @@ def admin_validation(run_id: str, db: Session = Depends(get_db)):
     rows = db.scalars(select(SocialSignalSnapshot).where(
         SocialSignalSnapshot.run_id == run_id
     ).order_by(SocialSignalSnapshot.window_days, SocialSignalSnapshot.candidate_key)).all()
+    projection = run.application_progress_json.get("prepared", {}).get(
+        "projection", {}
+    )
+    proposals = projection.get("proposals", ())
+    resolutions = projection.get("resolutions", ())
+    associations = [
+        {**proposal, "resolution": resolution}
+        for proposal, resolution in zip(proposals, resolutions)
+    ]
     return {"run_id": run.id, "status": run.status, "provider": run.provider,
             "created_at": run.created_at, "completed_at": run.completed_at,
+            "associations": associations,
             "candidates": [{"candidate_key": row.candidate_key, "symbol": row.canonical_symbol,
                             "market": row.market, "window_days": row.window_days,
                             "state": row.state, "social_score": row.social_score,
@@ -347,19 +365,38 @@ def admin_analysis(
 @router.post("/admin/analysis/{work_id}/retry", status_code=status.HTTP_202_ACCEPTED,
              dependencies=[Depends(require_admin)])
 def retry_admin_analysis(work_id: int, db: Session = Depends(get_db)):
-    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialRunWork
+    from app.infra.db.models.social_signals import SocialSignalRun
     from app.interfaces.tasks.social_signal_tasks import resume_social_analysis
     row = db.get(SocialExtractionWork, work_id)
     if row is None:
         raise HTTPException(status_code=404, detail={"code": "work_not_found"})
     if row.state not in {"waiting_budget", "failed_retryable", "failed_terminal", "outside_window"}:
         raise HTTPException(status_code=422, detail={"code": "work_not_retryable"})
+    run_id = db.scalar(
+        select(SocialRunWork.run_id)
+        .join(SocialSignalRun, SocialSignalRun.id == SocialRunWork.run_id)
+        .where(SocialRunWork.work_id == work_id)
+        .order_by(SocialSignalRun.created_at.desc(), SocialSignalRun.id.desc())
+        .limit(1)
+    )
+    if run_id is None:
+        raise HTTPException(
+            status_code=422, detail={"code": "work_generation_not_found"}
+        )
     row.requested_by_admin = True
     row.state = "pending"
     row.error_code = None
     db.commit()
-    task = resume_social_analysis.apply_async(queue="social_ingestion")
-    return {"task_id": task.id, "status": "queued", "work_id": work_id}
+    task = resume_social_analysis.apply_async(
+        args=[run_id], queue="social_ingestion"
+    )
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "work_id": work_id,
+        "run_id": run_id,
+    }
 
 
 @router.get("/admin/associations", dependencies=[Depends(require_admin)])

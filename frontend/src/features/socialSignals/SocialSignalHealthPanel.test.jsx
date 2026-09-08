@@ -109,4 +109,35 @@ describe('SocialSignalHealthPanel', () => {
       'secret', 12, { target: 'accepted', reason: 'Verified issuer relationship', expected_version: 2 },
     ));
   });
+
+  it('reloads the identity draft after an optimistic version conflict', async () => {
+    api.getSocialCompanyIdentities
+      .mockResolvedValueOnce({
+        registry_version: 7, version: 1,
+        entries: [{ symbol: 'OLD', company_id: 'old-company' }],
+      })
+      .mockResolvedValue({
+        registry_version: 8, version: 2,
+        entries: [{ symbol: 'NEW', company_id: 'server-company' }],
+      });
+    api.updateSocialCompanyIdentities
+      .mockRejectedValueOnce({ response: { data: { detail: { code: 'version_conflict' } } } })
+      .mockResolvedValueOnce({ registry_version: 9, entries: [] });
+    renderPanel();
+    await unlock();
+    const editor = await screen.findByLabelText('Identity entries JSON');
+    fireEvent.change(editor, { target: { value: '[{"symbol":"LOCAL"}]' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save verified identities' }));
+
+    await waitFor(() => expect(editor.value).toContain('server-company'));
+    expect(screen.getByText(/Reloaded the latest version/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save verified identities' }));
+    await waitFor(() => expect(api.updateSocialCompanyIdentities).toHaveBeenLastCalledWith(
+      'secret', {
+        expected_version: 8,
+        entries: [{ symbol: 'NEW', company_id: 'server-company' }],
+      },
+    ));
+  });
 });

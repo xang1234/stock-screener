@@ -16,7 +16,7 @@ NOW = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
 
 
 def test_all_social_tasks_route_only_to_dedicated_queue_and_schedule_is_six_hourly():
-    from app.celery_app import celery_app
+    from app.celery_app import _social_refresh_hour_expression, celery_app
     names = (
         "refresh_social_signals", "resume_social_analysis", "validate_social_source",
     )
@@ -27,6 +27,20 @@ def test_all_social_tasks_route_only_to_dedicated_queue_and_schedule_is_six_hour
     assert entry["task"].endswith("refresh_social_signals")
     assert entry["options"] == {"queue": "social_ingestion"}
     assert str(entry["schedule"]) == "<crontab: 17 0,6,12,18 * * * (m/h/dM/MY/d)>"
+    assert _social_refresh_hour_expression(3) == "0,3,6,9,12,15,18,21"
+
+
+def test_scheduled_run_identity_uses_configured_refresh_cadence(monkeypatch):
+    from app.config import settings
+    from app.wiring.use_case_factories import _social_run_id
+
+    monkeypatch.setattr(settings, "social_refresh_hours", 3)
+    midnight = datetime(2026, 9, 7, 0, 17, tzinfo=timezone.utc)
+    five_thirty = datetime(2026, 9, 7, 2, 30, tzinfo=timezone.utc)
+
+    assert _social_run_id("scheduled", midnight) != _social_run_id(
+        "scheduled", five_thirty
+    )
 
 
 def test_refresh_delivery_uses_runtime_use_case_and_schedules_only_analysis_pause(monkeypatch):
@@ -57,6 +71,48 @@ def test_off_delivery_is_a_noop_and_does_not_schedule_resume(monkeypatch):
     monkeypatch.setattr(use_case_factories, "get_refresh_social_signals_use_case", lambda: UseCase())
     monkeypatch.setattr(tasks, "_schedule_resume", lambda *_: (_ for _ in ()).throw(AssertionError("scheduled")))
     assert tasks.refresh_social_signals.run()["processing_status"] == "skipped"
+
+
+def test_budget_resume_ignores_runs_with_failed_source_collection(
+    db_session, monkeypatch
+):
+    from sqlalchemy.orm import sessionmaker
+
+    from app import database
+    from app.infra.db.models.social_signals import (
+        SocialSignalRun,
+        SocialSourceRegistry,
+    )
+    from app.interfaces.tasks import social_signal_tasks as tasks
+
+    registry = db_session.get(SocialSourceRegistry, 1)
+    if registry is None:
+        registry = SocialSourceRegistry(id=1, version=1)
+        db_session.add(registry)
+    elif registry.version is None:
+        registry.version = 1
+    registry.mode, registry.provider = "live", "official"
+    db_session.add(SocialSignalRun(
+        id="failed-collection", registry_id=1, registry_version=registry.version,
+        mode="live", provider="official", status="running",
+        source_outcomes_json={
+            "1": {"read_status": "success"},
+            "2": {"read_status": "failed"},
+        },
+        application_progress_json={
+            "sources": {"1": {}, "2": {}},
+            "observations": {"1": {}, "2": {}},
+        },
+        feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+    ))
+    db_session.commit()
+    monkeypatch.setattr(
+        database,
+        "SessionLocal",
+        sessionmaker(db_session.get_bind(), expire_on_commit=False),
+    )
+
+    assert tasks._latest_resumable_run() is None
 
 
 def test_source_task_returns_redacted_typed_outcome_without_outer_provider_retry(monkeypatch):
@@ -186,6 +242,24 @@ def test_task_registry_rejects_manual_refresh_inside_shared_cooldown():
     assert error.value.retry_after == 47
 
 
+def test_task_registry_releases_manual_cooldown_when_dispatch_fails():
+    from app.services.social_signal_runtime_gate import RedisSocialSignalGate
+    from app.services.task_registry_service import TaskRegistryService
+
+    class BrokenTask:
+        def apply_async(self, **_kwargs):
+            raise RuntimeError("broker unavailable")
+
+    gate = RedisSocialSignalGate(Redis())
+    service = TaskRegistryService(social_gate=gate)
+    service._task_imports["social-signal-refresh"] = BrokenTask()
+
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        service.trigger_task("social-signal-refresh", object())
+
+    assert gate.acquire_manual_cooldown("next-attempt", 3600) == (True, 3600)
+
+
 def test_scheduled_run_ids_collapse_duplicate_deliveries_within_one_cadence_slot():
     from app.wiring.use_case_factories import _social_run_id
 
@@ -228,7 +302,7 @@ def test_task_registry_projects_db_runtime_and_dispatches_manual_refresh_to_soci
 
 @pytest.mark.asyncio
 async def test_manual_refresh_endpoint_returns_retry_after_during_cooldown(monkeypatch):
-    from app.api.v1 import tasks as api
+    from app.api.v1 import config, tasks as api
     from app.database import get_db
     from app.main import app
     from app.services import server_auth
@@ -239,7 +313,46 @@ async def test_manual_refresh_endpoint_returns_retry_after_during_cooldown(monke
             raise TaskCooldownError(47)
 
     monkeypatch.setattr(api, "get_task_registry_service", lambda: Service())
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    app.dependency_overrides[get_db] = lambda: object()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/tasks/social-signal-refresh/run",
+                headers={"X-Admin-Key": "admin-secret"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "47"
+    assert response.json()["detail"] == "manual_refresh_cooldown"
+
+
+@pytest.mark.asyncio
+async def test_generic_social_refresh_endpoint_requires_admin_key(monkeypatch):
+    from app.api.v1 import config, tasks as api
+    from app.database import get_db
+    from app.main import app
+    from app.services import server_auth
+
+    class Service:
+        called = False
+
+        def trigger_task(self, task_name, db):
+            self.called = True
+            return {
+                "task_id": "unexpected", "task_name": task_name,
+                "status": "queued", "execution_id": 1, "message": "queued",
+            }
+
+    service = Service()
+    monkeypatch.setattr(api, "get_task_registry_service", lambda: service)
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
     app.dependency_overrides[get_db] = lambda: object()
     try:
         async with httpx.AsyncClient(
@@ -249,6 +362,5 @@ async def test_manual_refresh_endpoint_returns_retry_after_during_cooldown(monke
     finally:
         app.dependency_overrides.pop(get_db, None)
 
-    assert response.status_code == 429
-    assert response.headers["retry-after"] == "47"
-    assert response.json()["detail"] == "manual_refresh_cooldown"
+    assert response.status_code == 401
+    assert service.called is False

@@ -57,7 +57,7 @@ def test_limited_history_can_publish_and_reader_freezes_one_run(store):
     assert result.published and ("1", "limited") in result.coverage_summary
     page = PublishedSocialSignalReader(store).queue("US", 14, "all", "blended", 1, 20)
     assert {item.run_id for item in page.items} == {run}
-    assert page.total == 2
+    assert page.total == 1
     assert page.items[0].candidate_key == "AAA"
     assert w.publish(run, version).published
     with store() as db:
@@ -563,6 +563,7 @@ def test_replay_succeeded_carry_in_preserves_first_day_author_cap(store):
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.models.theme import ContentItem
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
+    from app.services.twitter_content_identity import twitter_external_id
     w = writer(store)
     w.create_run("old", NOW)
     posts = tuple(replace(batch(post_id=str(100+i)).posts[0], created_at=NOW-timedelta(days=14)+timedelta(hours=hour),
@@ -574,7 +575,7 @@ def test_replay_succeeded_carry_in_preserves_first_day_author_cap(store):
     with store() as db:
         ids = {v.external_id: v.id for v in db.query(ContentItem)}
     for post in posts:
-        work_id = ProcessSocialBacklog(store).enqueue(ids[post.provider_post_id], post,
+        work_id = ProcessSocialBacklog(store).enqueue(ids[twitter_external_id(post.provider_post_id)], post,
             selected_model="synthetic/model", now=NOW, run_id="old")
         with store.begin() as db:
             work = db.get(SocialExtractionWork, work_id)
@@ -663,6 +664,7 @@ def test_normal_bounded_read_selects_current_inputs_and_audits_linked_aged_work(
     from app.models.theme import ContentItem
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
+    from app.services.twitter_content_identity import twitter_external_id
     w = writer(store)
     w.create_run("run", NOW)
     old = replace(batch(post_id="old").posts[0], created_at=NOW-timedelta(days=16))
@@ -673,7 +675,7 @@ def test_normal_bounded_read_selects_current_inputs_and_audits_linked_aged_work(
     w.persist_observations(empty_batch(2), run_id="run")
     with store() as db:
         ids = {v.external_id: v.id for v in db.query(ContentItem)}
-    aged_id = ProcessSocialBacklog(store).enqueue(ids["old"], old, selected_model="synthetic/model", now=NOW, run_id="run")
+    aged_id = ProcessSocialBacklog(store).enqueue(ids[twitter_external_id("old")], old, selected_model="synthetic/model", now=NOW, run_id="run")
     with store.begin() as db:
         db.get(SocialExtractionWork, aged_id).state = "outside_window"
     saved = w.read_run_inputs("run")
@@ -924,11 +926,14 @@ def test_reader_hydrates_only_page_and_unranked_order_ignores_scores(store):
         hydrated.append(row.id)
     event.listen(SocialSignalSnapshot, "load", loaded)
     try:
-        page = PublishedSocialSignalReader(store).queue("US", 14, "all", "blended", 8, 5)
+        context = PublishedSocialSignalReader(store).queue("US", 14, "context", "blended", 1, 5)
+        unresolved = PublishedSocialSignalReader(store).queue("US", 14, "unresolved", "blended", 1, 5)
     finally:
         event.remove(SocialSignalSnapshot, "load", loaded)
-    assert [r.candidate_key for r in page.items] == ["context-a", "context-z", "unresolved-a"]
-    assert page.total == 38
+    assert [r.candidate_key for r in context.items] == ["context-a", "context-z"]
+    assert [r.candidate_key for r in unresolved.items] == ["unresolved-a"]
+    assert context.total == 2
+    assert unresolved.total == 1
     assert len(hydrated) == 3
 
 

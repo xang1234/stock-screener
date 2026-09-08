@@ -16,6 +16,7 @@ from app.domain.social_signals.records import (
     ReplayInput,
     SavedSocialRunInputs,
     SocialCurrentInputManifest,
+    SocialCollectionProgress,
     SocialEvidenceInput,
     SocialPostRecord,
     SocialReadRequest,
@@ -56,13 +57,18 @@ class Catalog:
 
 
 class Lease:
-    def __init__(self, acquired=True, events=None):
+    def __init__(self, acquired=True, events=None, renew_results=None):
         self.acquired = acquired
         self.events = events if events is not None else []
+        self.renew_results = list(renew_results or ())
 
     def acquire(self, owner, ttl_seconds):
         self.events.append("lease.acquire")
         return self.acquired
+
+    def renew(self, owner, ttl_seconds):
+        self.events.append("lease.renew")
+        return self.renew_results.pop(0) if self.renew_results else self.acquired
 
     def release(self, owner):
         self.events.append("lease.release")
@@ -103,6 +109,9 @@ class Writer:
         self.batches = []
         self.created = []
         self.prepared = None
+        self.collection_progress = {
+            "2": SocialCollectionProgress(initial_complete=True, cursor="prior-cursor")
+        }
 
     def create_run(self, run_id, as_of):
         self.events.append("writer.create")
@@ -117,8 +126,8 @@ class Writer:
     def resume_existing_run(self, run_id, expected_version):
         return None
 
-    def latest_committed_progress(self, source_id, provider):
-        return {"2": "prior-cursor"}.get(source_id)
+    def latest_collection_progress(self, source_id, provider):
+        return self.collection_progress.get(source_id)
 
     def persist_observations(self, batch, *, run_id=None):
         self.events.append(f"writer.persist.{batch.request.source_id}")
@@ -261,7 +270,7 @@ async def test_refresh_orders_collection_before_metered_work_and_publishes_all_w
 
     assert result.published is True
     assert [(r.intent, r.limit, r.application_progress) for r in provider.requests] == [
-        ("initial", 1000, None), ("incremental", 200, "prior-cursor")
+        ("initial", 1000, None), ("incremental", 200, None)
     ]
     assert events.index("lease.release") < events.index("backlog.execute")
     assert events.index("evidence.read") < events.index("confirmation.US") < events.index("writer.prepare")
@@ -282,6 +291,26 @@ async def test_failed_enabled_source_blocks_analysis_and_publication_but_keeps_a
     assert len(writer.batches) == 2
     assert not backlog.enqueued
     assert "writer.prepare" not in events and "writer.publish" not in events
+
+
+def test_read_intent_distinguishes_completed_cursorless_initial_from_paged_initial():
+    refresh, _, _, writer, _, _ = use_case()
+    writer.collection_progress["1"] = SocialCollectionProgress(True, None)
+    completed = refresh._request("run", SOURCES[0], "xui", NOW)
+    writer.collection_progress["1"] = SocialCollectionProgress(False, "page-2")
+    paged = refresh._request("run", SOURCES[0], "official", NOW)
+
+    assert (completed.intent, completed.application_progress) == ("incremental", None)
+    assert (paged.intent, paged.application_progress) == ("initial", "page-2")
+
+
+@pytest.mark.asyncio
+async def test_provider_lease_is_renewed_before_each_source_read():
+    refresh, events, provider, writer, backlog, catalog = use_case()
+
+    await refresh.execute("scheduled", NOW)
+
+    assert events.count("lease.renew") == len(SOURCES)
 
 
 @pytest.mark.asyncio
@@ -427,7 +456,7 @@ def test_scoring_evidence_retains_older_in_window_post_after_incremental_cap(tmp
     writer = SocialSignalWriter(sessions, clock=lambda: NOW)
     list_ids = ("1522014550211457024", "1986290701492232693")
 
-    def saved_batch(source_id, run_at, post_id, created_at, intent):
+    def saved_batch(source_id, run_at, post_id, created_at, intent, *, likes=10):
         request = SocialReadRequest(
             f"{run_at.isoformat()}:{source_id}", str(source_id), list_ids[source_id - 1],
             intent, run_at, 1000 if intent == "initial" else 200,
@@ -435,10 +464,13 @@ def test_scoring_evidence_retains_older_in_window_post_after_incremental_cap(tmp
         )
         value = SocialPostRecord(
             "official", post_id, str(source_id), "$AAA thesis", f"https://x.com/a/{post_id}",
-            f"a{source_id}", created_at, run_at, likes=10, reposts=1, replies=1,
+            f"a{source_id}", created_at, run_at, likes=likes, reposts=1, replies=1,
         )
+        history_status = "observed_window" if intent == "initial" else "limited"
+        reasons = () if intent == "initial" else ("bounded_provider_read",)
+        gaps = () if intent == "initial" else ((old_at, run_at),)
         outcome = SocialSourceOutcome(
-            "success", "pending", "limited", ("bounded_provider_read",), (),
+            "success", "pending", history_status, reasons, gaps,
             created_at, created_at, 1, None, None, proposed_progress="cursor",
         )
         return SocialSourceBatch(request, (value,), outcome)
@@ -451,13 +483,18 @@ def test_scoring_evidence_retains_older_in_window_post_after_incremental_cap(tmp
     writer.clock = lambda: NOW
     writer.create_run("incremental", NOW)
     writer.persist_observations(saved_batch(1, NOW, "new", NOW - timedelta(days=1), "incremental"), run_id="incremental")
-    writer.persist_observations(saved_batch(2, NOW, "peer-new", NOW - timedelta(hours=3), "incremental"), run_id="incremental")
+    writer.persist_observations(saved_batch(
+        2, NOW, "new", NOW - timedelta(hours=3), "incremental", likes=None,
+    ), run_id="incremental")
     writer.select_current_inputs("incremental")
 
     evidence = SocialScoringEvidenceReader(sessions).read("incremental", NOW)
     aaa = next(item for item in evidence if item.candidate_key == "US:AAA")
-    assert {post.provider_post_id for post in aaa.posts} == {"old", "peer-old", "new", "peer-new"}
+    assert {post.provider_post_id for post in aaa.posts} == {"old", "peer-old", "new"}
+    assert len(aaa.posts) == 4
+    assert {post.likes for post in aaa.posts if post.provider_post_id == "new"} == {10}
     assert aaa.enabled_source_ids == ("1", "2")
+    assert aaa.history_complete is False
     # A retained semantic judgment can be explicitly pinned to the new
     # generation without pretending the old post was recollected.
     from dataclasses import asdict

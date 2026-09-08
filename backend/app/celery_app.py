@@ -28,6 +28,10 @@ def _offset_schedule(hour: int, minute: int, offset_minutes: int) -> tuple[int, 
     total_minutes = minute + offset_minutes
     return (hour + total_minutes // 60) % 24, total_minutes % 60
 
+
+def _social_refresh_hour_expression(interval_hours: int) -> str:
+    return ",".join(str(hour) for hour in range(0, 24, interval_hours))
+
 # Import scanners to trigger registration
 # This ensures all screeners are registered with the registry before tasks run
 import app.scanners  # noqa: F401
@@ -434,7 +438,10 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
         # the clock entry stable lets an admin enable Social without restarting Beat.
         'social-signal-refresh-six-hourly': {
             'task': 'app.interfaces.tasks.social_signal_tasks.refresh_social_signals',
-            'schedule': crontab(hour='0,6,12,18', minute=17),
+            'schedule': crontab(
+                hour=_social_refresh_hour_expression(settings.social_refresh_hours),
+                minute=17,
+            ),
             'options': {'queue': 'social_ingestion'},
             'kwargs': {'origin': 'scheduled'},
         },

@@ -26,9 +26,14 @@ def _run_result(value):
 
 
 def _schedule_resume(run_id, now):
+    from app.config import settings
     from app.database import SessionLocal
     from app.services.social_llm_budget_service import SocialLLMBudgetService
-    reset = SocialLLMBudgetService(SessionLocal).status(now).next_reset_at
+    reset = SocialLLMBudgetService(
+        SessionLocal,
+        daily_limit_usd=settings.social_llm_daily_budget_usd,
+        budget_timezone=settings.social_llm_budget_timezone,
+    ).status(now).next_reset_at
     resume_social_analysis.apply_async(args=[run_id], eta=reset, queue="social_ingestion")
 
 
@@ -55,9 +60,15 @@ def _latest_resumable_run():
         runs = db.scalars(select(SocialSignalRun).where(
             SocialSignalRun.status == "running"
         ).order_by(SocialSignalRun.created_at.desc(), SocialSignalRun.id.desc())).all()
-        return next((run.id for run in runs
-                     if set(run.application_progress_json.get("observations", {}))
-                     == set(run.application_progress_json.get("sources", {}))), None)
+        return next((run.id for run in runs if (
+            set(run.application_progress_json.get("observations", {}))
+            == set(run.application_progress_json.get("sources", {}))
+            and all(
+                run.source_outcomes_json.get(source_id, {}).get("read_status")
+                == "success"
+                for source_id in run.application_progress_json.get("sources", {})
+            )
+        )), None)
 
 
 @celery_app.task(

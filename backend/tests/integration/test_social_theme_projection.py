@@ -103,6 +103,16 @@ def test_validation_does_not_mutate_live_catalog(social_fixture):
     assert f.db.query(ThemeCluster).count() == 0
 
 
+def test_unsupported_claim_does_not_create_live_theme_or_membership(social_fixture):
+    f = social_fixture
+
+    f.apply(f.prepare([f.save(("AAA",), support="unsupported")]))
+
+    assert f.db.query(ThemeCluster).count() == 0
+    assert f.db.query(ThemeMention).count() == 0
+    assert f.associations() == []
+
+
 def test_empty_catalog_proposes_accepts_promotes_and_is_idempotent(social_fixture):
     f = social_fixture
     first = f.save(("AAA", "BBB", "CCC"), age=3)

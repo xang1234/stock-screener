@@ -37,6 +37,29 @@ def test_singapore_budget_day_changes_at_1600_utc():
     assert social_budget_date(NOW + timedelta(minutes=1), "Asia/Singapore") == date(2026, 9, 8)
 
 
+def test_deployment_budget_policy_overrides_seeded_database_defaults(ledger):
+    from app.services.social_llm_budget_service import SocialLLMBudgetService
+
+    budget = SocialLLMBudgetService(
+        ledger,
+        daily_limit_usd=Decimal("0.75"),
+        budget_timezone="UTC",
+    )
+
+    assert budget.status(NOW).remaining_usd == Decimal("0.75")
+    with ledger() as db:
+        values = {
+            row.key: row.value
+            for row in db.scalars(select(AppSetting).where(AppSetting.key.in_({
+                "social_llm_daily_limit_usd", "social_llm_budget_timezone",
+            })))
+        }
+    assert values == {
+        "social_llm_daily_limit_usd": "0.750000000000",
+        "social_llm_budget_timezone": "UTC",
+    }
+
+
 def test_concurrent_reservations_share_last_quarter_dollar(ledger):
     budget = service(ledger)
     budget.reserve("spent", (1,), Decimal("1.75"), NOW)

@@ -11,7 +11,7 @@ from sqlalchemy import select
 from app.domain.social_signals.records import SocialEvidenceInput, SocialPostRecord, SocialSourceView
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialRunWork
 from app.infra.db.models.social_signals import (
-    SocialSignalRun,
+    SocialPostTicker, SocialSignalRun,
     SocialSourceConfiguration,
     SocialSourceRegistry,
 )
@@ -77,6 +77,22 @@ class SocialScoringEvidenceReader:
     def __init__(self, session_factory):
         self.session_factory = session_factory
 
+    @classmethod
+    def _merge_metrics_across_sources(cls, canonical):
+        merged = {}
+        for (_, _), post in sorted(
+            canonical.items(), key=lambda item: item[1].observed_at
+        ):
+            values = merged.setdefault(post.provider_post_id, {})
+            for field in cls._METRICS:
+                value = getattr(post, field)
+                if value is not None:
+                    values[field] = value
+        return {
+            key: replace(post, **merged.get(post.provider_post_id, {}))
+            for key, post in canonical.items()
+        }
+
     def retained_posts(self, run_id, as_of):
         """Return canonical retained post revisions to pin to this generation."""
         with self.session_factory() as db:
@@ -115,6 +131,7 @@ class SocialScoringEvidenceReader:
                                 })
                             canonical[key] = post
                             content_ids[post.provider_post_id] = entry["content_item_id"]
+            canonical = self._merge_metrics_across_sources(canonical)
             unique = {}
             for (post_id, _), post in canonical.items():
                 unique[(content_ids[post_id], self._content_revision(post))] = post
@@ -143,7 +160,7 @@ class SocialScoringEvidenceReader:
                 SocialSignalRun.provider == current.provider,
                 SocialSignalRun.created_at <= as_of,
             ).order_by(SocialSignalRun.created_at, SocialSignalRun.id)).all()
-            complete_sources = set()
+            latest_source_completeness = {}
             for generation in runs:
                 if ("replay" in generation.application_progress_json
                         or (generation.id != current.id and _utc(generation.created_at) >= as_of)):
@@ -152,9 +169,10 @@ class SocialScoringEvidenceReader:
                     if source_id not in source_ids or generation.source_outcomes_json.get(source_id, {}).get("read_status") != "success":
                         continue
                     outcome = generation.source_outcomes_json[source_id]
-                    if (outcome.get("history_status") == "observed_window"
-                            and not outcome.get("known_gap_intervals")):
-                        complete_sources.add(source_id)
+                    latest_source_completeness[source_id] = (
+                        outcome.get("history_status") == "observed_window"
+                        and not outcome.get("known_gap_intervals")
+                    )
                     for entry in observation.get("inputs", ()):
                         data = dict(entry["post"])
                         data["created_at"] = datetime.fromisoformat(data["created_at"])
@@ -174,10 +192,21 @@ class SocialScoringEvidenceReader:
                             canonical[key] = post
                             content_ids[post.provider_post_id] = entry["content_item_id"]
 
-            history_complete = set(source_ids) <= complete_sources
+            canonical = self._merge_metrics_across_sources(canonical)
+            history_complete = all(
+                latest_source_completeness.get(source_id, False)
+                for source_id in source_ids
+            )
 
             identity = SocialCompanyIdentityService(db).read()
             resolver = SocialTickerResolver(db, verified_company_ids=identity.verified_company_ids)
+            mappings_by_content = {}
+            if content_ids:
+                mappings = db.scalars(select(SocialPostTicker).where(
+                    SocialPostTicker.content_item_id.in_(set(content_ids.values()))
+                )).all()
+                for mapping in mappings:
+                    mappings_by_content.setdefault(mapping.content_item_id, []).append(mapping)
             candidates = {}
             judgments = {}
             claims = {}
@@ -209,15 +238,27 @@ class SocialScoringEvidenceReader:
                 resolutions = [resolver.resolve(token) for token in sorted(set(self._CASHTAG.findall(post.text)))]
                 resolutions.extend(resolver.resolve(value.get("company_token", ""))
                                     for value in claims.get(post_id, ()))
+                targets = {}
                 for resolution in resolutions:
                     resolved = resolution.status == "resolved"
                     key = (f"{resolution.market}:{resolution.symbol}" if resolved
                            else f"unresolved:{resolution.raw_token.casefold()}")
-                    candidates.setdefault(key, {
+                    targets[key] = {
                         "symbol": resolution.symbol or resolution.raw_token,
                         "market": resolution.market,
                         "kind": resolution.security_kind,
                         "resolved": resolved,
+                    }
+                for mapping in mappings_by_content.get(content_ids[post_id], ()):
+                    targets[mapping.candidate_key] = {
+                        "symbol": mapping.canonical_symbol or mapping.raw_token,
+                        "market": mapping.market,
+                        "kind": (mapping.explanation_json or {}).get("security_kind", "stock"),
+                        "resolved": mapping.resolution_state == "resolved",
+                    }
+                for key, target in targets.items():
+                    candidates.setdefault(key, {
+                        **target,
                         "posts": {},
                     })["posts"][(post_id, source_id)] = post
 

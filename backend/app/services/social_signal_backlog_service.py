@@ -181,7 +181,8 @@ class _MeteredCompletion:
 class ProcessSocialBacklog:
     def __init__(self, session_factory, *, llm=None, batch_size=1,
                  max_calls_per_run=20, max_calls_per_day=80, request_gate=None,
-                 min_interval_seconds=0, request_lease_seconds=600, sleep=asyncio.sleep):
+                 min_interval_seconds=0, request_lease_seconds=600, sleep=asyncio.sleep,
+                 daily_limit_usd=None, budget_timezone=None):
         if (not 1 <= batch_size <= 50 or max_calls_per_run <= 0 or max_calls_per_day <= 0
                 or min_interval_seconds < 0 or request_lease_seconds <= 0):
             raise ValueError("invalid_social_llm_request_policy")
@@ -193,7 +194,11 @@ class ProcessSocialBacklog:
         self.min_interval_seconds = min_interval_seconds
         self.request_lease_seconds = request_lease_seconds
         self.sleep = sleep
-        self.budget = SocialLLMBudgetService(session_factory)
+        self.budget = SocialLLMBudgetService(
+            session_factory,
+            daily_limit_usd=daily_limit_usd,
+            budget_timezone=budget_timezone,
+        )
 
     def enqueue(self, content_item_id, post: SocialPostRecord, *, selected_model,
                 now, prompt_version=VERSION, schema_version=VERSION, run_id=None):

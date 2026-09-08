@@ -75,6 +75,24 @@ export default function SocialSignalHealthPanel() {
         ? 'This record changed elsewhere. Reloaded the latest version.' : String(errorCode(error)) });
     },
   });
+  const identityMutation = useMutation({
+    mutationFn: (payload) => updateSocialCompanyIdentities(adminKey, payload),
+    onSuccess: () => {
+      setMessage({ severity: 'success', text: 'Social administration updated.' });
+      refresh();
+    },
+    onError: async (error) => {
+      if (errorCode(error) === 'version_conflict') {
+        const latest = await identities.refetch();
+        if (latest.data) {
+          setIdentityDraft(JSON.stringify(latest.data.entries || [], null, 2));
+        }
+        setMessage({ severity: 'error', text: 'This record changed elsewhere. Reloaded the latest version.' });
+        return;
+      }
+      setMessage({ severity: 'error', text: String(errorCode(error)) });
+    },
+  });
   const runtimeDraft = useMemo(() => runtime.data || { mode: 'off', provider: 'disabled' }, [runtime.data]);
   const [modeDraft, setModeDraft] = useState(null);
   const [providerDraft, setProviderDraft] = useState(null);
@@ -104,9 +122,9 @@ export default function SocialSignalHealthPanel() {
   const saveIdentities = () => {
     try {
       const entries = JSON.parse(identityDraft || '[]');
-      mutation.mutate(() => updateSocialCompanyIdentities(adminKey, {
+      identityMutation.mutate({
         expected_version: identities.data.registry_version, entries,
-      }));
+      });
     } catch {
       setMessage({ severity: 'error', text: 'Identity entries must be a valid JSON list.' });
     }
@@ -216,7 +234,9 @@ export default function SocialSignalHealthPanel() {
             Preview {run.run_id}
           </Button>
         ))}
-        {validation ? <Typography variant="body2">{validation.candidates?.length || 0} staged candidates · not published</Typography> : null}
+        {validation ? <Typography variant="body2">
+          {validation.candidates?.length || 0} staged candidates · {validation.associations?.length || 0} association proposals · not published
+        </Typography> : null}
       </Collapse>
     </Paper>
   );

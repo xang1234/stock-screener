@@ -31,6 +31,22 @@ def test_pending_test_enable_and_stale_version(db_session):
     assert [event.action for event in service.audit_events(source.source_id)] == ["created", "test_requested", "test_completed", "enabled"]
 
 
+def test_provider_diagnostic_can_run_while_social_publishing_is_off(db_session):
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    service = SocialSourceAdminService(db_session)
+    service.ensure_seed_sources()
+    runtime = service.read_runtime()
+    service.apply_runtime("off", "official", runtime.version, "admin")
+    source = service.create_source("Diagnostic list", "3002", "admin")
+
+    requested = service.request_test(source.source_id, source.version, "admin")
+    claimed = service.claim_test(source.source_id, "worker")
+
+    assert claimed.request_id == requested.request_id
+    assert claimed.provider == "official"
+
+
 def prepare_service(db):
     from app.services.social_source_admin_service import SocialSourceAdminService
     service = SocialSourceAdminService(db)

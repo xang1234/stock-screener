@@ -179,10 +179,10 @@ async def test_fixture_providers_source_lifecycle_atomic_publish_and_rank_modes(
         "/api/v1/social-signals/unresolved?scope=unknown&market=US&window=7d&page=1&page_size=50",
     )
     assert [row["canonical_symbol"] for row in blended.json()["items"]] == [
-        "AMD", "NVDA", "$MYSTERY",
+        "AMD", "NVDA",
     ]
     assert [row["canonical_symbol"] for row in pure.json()["items"]] == [
-        "NVDA", "AMD", "$MYSTERY",
+        "NVDA", "AMD",
     ]
     assert pure.json()["items"][0]["state"] == "actionable"
     assert pure.json()["items"][0]["explanation"]["state_reasons"] == ["fixture_verified"]

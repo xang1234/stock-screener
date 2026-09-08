@@ -63,21 +63,52 @@ class SocialModelPrice:
 
 
 class SocialLLMBudgetService:
-    def __init__(self, session_factory):
+    def __init__(
+        self,
+        session_factory,
+        *,
+        daily_limit_usd: Decimal | None = None,
+        budget_timezone: str | None = None,
+    ):
         self.session_factory = session_factory
+        self.daily_limit_usd = (
+            money(daily_limit_usd) if daily_limit_usd is not None else None
+        )
+        if budget_timezone is not None:
+            ZoneInfo(budget_timezone)
+        self.budget_timezone = budget_timezone
 
     @staticmethod
-    def _setting(db, key, default):
+    def _setting(db, key, default, *, override=None):
         setting = db.scalar(select(AppSetting).where(AppSetting.key == key))
         if setting is None:
-            setting = AppSetting(key=key, value=default, category="social")
+            setting = AppSetting(
+                key=key,
+                value=override if override is not None else default,
+                category="social",
+            )
             db.add(setting)
             db.flush()
+        elif override is not None and setting.value != override:
+            setting.value = override
         return setting.value
 
     def _day(self, db, now):
-        zone = self._setting(db, "social_llm_budget_timezone", "Asia/Singapore")
-        limit = money(Decimal(self._setting(db, "social_llm_daily_limit_usd", "2")))
+        zone = self._setting(
+            db,
+            "social_llm_budget_timezone",
+            "Asia/Singapore",
+            override=self.budget_timezone,
+        )
+        limit_override = (
+            str(self.daily_limit_usd) if self.daily_limit_usd is not None else None
+        )
+        limit = money(Decimal(self._setting(
+            db,
+            "social_llm_daily_limit_usd",
+            "2",
+            override=limit_override,
+        )))
         day = social_budget_date(now, zone)
         start = datetime.combine(day, time.min, ZoneInfo(zone)).astimezone(timezone.utc)
         end = datetime.combine(day + timedelta(days=1), time.min, ZoneInfo(zone)).astimezone(timezone.utc)

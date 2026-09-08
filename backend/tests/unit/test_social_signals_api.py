@@ -40,8 +40,8 @@ def _publish_rows(
         id="published-1", registry_id=1, registry_version=2,
         mode="live", provider="official", status="running",
         source_outcomes_json={
-            "1": {"history_status": "limited"},
-            "2": {"history_status": "limited"},
+            "1": {"read_status": "success", "history_status": "limited"},
+            "2": {"read_status": "success", "history_status": "limited"},
         },
         application_progress_json={
             "sources": {
@@ -301,10 +301,10 @@ async def test_published_queue_keeps_rank_modes_and_unranked_sections_separate(
     )
 
     assert [item["canonical_symbol"] for item in blended.json()["items"]] == [
-        "BBB", "AAA", "SPY", "$ZZZ",
+        "BBB", "AAA",
     ]
     assert [item["canonical_symbol"] for item in pure.json()["items"]] == [
-        "AAA", "BBB", "SPY", "$ZZZ",
+        "AAA", "BBB",
     ]
     assert [item["canonical_symbol"] for item in actionable.json()["items"]] == [
         "BBB", "AAA",
@@ -390,6 +390,60 @@ async def test_published_queue_exposes_frozen_candidate_context(
     assert explanation["theme"] == "ai_infrastructure"
     assert explanation["acceleration"] == "2.5"
     assert explanation["post_memberships"] == ["111"]
+    assert explanation["source_names"] == ["One"]
+
+
+@pytest.mark.asyncio
+async def test_queue_filters_before_server_pagination(
+    db_session, social_runtime, monkeypatch
+):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from app.domain.social_signals.records import SocialSnapshotRecord
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+
+    def record(symbol, score):
+        return SocialSnapshotRecord(
+            "published-1", f"US:{symbol}", symbol, "US", "actionable",
+            Decimal(str(score)), Decimal("50"), Decimal(str(score)), (), (),
+            now, symbol, f"US:{symbol}", 7, 1, 1, 2,
+        )
+
+    context = {
+        "formula_version": "social-signal-v1",
+        "candidates": [
+            {
+                "candidate_key": "US:AAA", "window_days": 7,
+                "state_input": {"security_kind": "stock"},
+                "social_result": {"post_memberships": [["post-a", ["2"]]]},
+                "confirmation": {"components": [["theme", {"selected_key": "cooling"}]]},
+            },
+            {
+                "candidate_key": "US:BBB", "window_days": 7,
+                "state_input": {"security_kind": "etf"},
+                "social_result": {"post_memberships": [["post-b", ["1"]]]},
+                "confirmation": {"components": [["theme", {"selected_key": "banks"}]]},
+            },
+        ],
+    }
+    _publish_rows(db_session, (record("BBB", 90), record("AAA", 80)), context=context)
+
+    response = await _request(
+        db_session,
+        "GET",
+        "/api/v1/social-signals/queue?market=US&window=7d&view=all"
+        "&page=1&page_size=1&source=Two&theme=cool&instrument=stock&ticker=AA",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert [item["canonical_symbol"] for item in response.json()["items"]] == ["AAA"]
 
 
 @pytest.mark.asyncio
@@ -458,7 +512,7 @@ async def test_evidence_is_run_scoped_canonical_and_limited_to_three_plain_excer
     from datetime import datetime, timedelta, timezone
     from decimal import Decimal
     from app.domain.social_signals.records import SocialSnapshotRecord
-    from app.infra.db.models.social_signals import SocialPostTicker
+    from app.infra.db.models.social_signals import SocialPostTicker, SocialSignalRun
     from app.models.stock_universe import StockUniverse
     from app.models.theme import ContentItem
     from app.services import server_auth
@@ -502,6 +556,26 @@ async def test_evidence_is_run_scoped_canonical_and_limited_to_three_plain_excer
                 "canonical_claim_key": None,
             },
         })
+    retained_input = inputs.pop(0)
+    db_session.add(SocialSignalRun(
+        id="older-evidence", registry_id=1, registry_version=2,
+        mode="live", provider="official", status="completed",
+        source_outcomes_json={
+            "1": {"read_status": "success", "history_status": "limited"},
+            "2": {"read_status": "success", "history_status": "limited"},
+        },
+        application_progress_json={
+            "sources": {
+                "1": {"list_id": "111", "name": "One", "version": 1},
+                "2": {"list_id": "222", "name": "Two", "version": 1},
+            },
+            "observations": {
+                "1": {"inputs": [retained_input]}, "2": {"inputs": []},
+            },
+        }, feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+        created_at=now - timedelta(days=1), completed_at=now - timedelta(days=1),
+    ))
+    db_session.commit()
     record = SocialSnapshotRecord(
         "published-1", "US:AAA", "AAA", "US", "watch",
         Decimal("80"), Decimal("50"), Decimal("68"),
@@ -522,6 +596,7 @@ async def test_evidence_is_run_scoped_canonical_and_limited_to_three_plain_excer
     assert response.status_code == 200
     payload = response.json()
     assert len(payload["posts"]) == 3
+    assert payload["posts"][0]["post_id"] == "p-0"
     assert all(len(post["excerpt"]) <= 280 for post in payload["posts"])
     assert payload["posts"][0]["url"] == "https://x.com/author0/status/p-0"
     assert payload["posts"][0]["source_names"] == ["One"]
@@ -658,6 +733,134 @@ async def test_admin_company_identity_configuration_is_optimistic(
     assert updated.status_code == 200, updated.text
     assert updated.json()["entries"][0]["company_id"] == "berkshire-hathaway"
     assert conflict.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_admin_analysis_retry_replays_the_work_linked_generation(
+    db_session, social_runtime, monkeypatch
+):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.api.v1 import config
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialRunWork
+    from app.infra.db.models.social_signals import SocialSignalRun
+    from app.interfaces.tasks.social_signal_tasks import resume_social_analysis
+    from app.models.theme import ContentItem
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    runtime = social_runtime.read_runtime()
+    runtime = social_runtime.apply_runtime(
+        "validation", "official", runtime.version, "admin"
+    )
+    now = datetime(2026, 9, 7, tzinfo=timezone.utc)
+    item = ContentItem(
+        source_type="twitter", external_id="retry-item", content="$AAA",
+        url="https://x.com/a/status/retry", published_at=now,
+    )
+    db_session.add(item)
+    db_session.flush()
+    work = SocialExtractionWork(
+        content_item_id=item.id,
+        input_hash="retry-hash",
+        prompt_version="v1",
+        schema_version="v1",
+        selected_model="model",
+        input_snapshot_json={},
+        state="failed_terminal",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(work)
+    db_session.flush()
+    run = SocialSignalRun(
+        id="retry-generation", registry_id=1, registry_version=runtime.version,
+        mode="validation", provider="official", status="running",
+        source_outcomes_json={}, application_progress_json={
+            "sources": {}, "observations": {},
+        }, feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+        created_at=now,
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(SocialRunWork(
+        run_id=run.id, work_id=work.id, input_hash=work.input_hash,
+        included_at=now,
+    ))
+    db_session.commit()
+    calls = []
+    monkeypatch.setattr(
+        resume_social_analysis,
+        "apply_async",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(id="retry-task"),
+    )
+
+    response = await _request(
+        db_session,
+        "POST",
+        f"/api/v1/social-signals/admin/analysis/{work.id}/retry",
+        headers={"X-Admin-Key": "admin-secret"},
+    )
+
+    assert response.status_code == 202
+    assert calls == [{"args": ["retry-generation"], "queue": "social_ingestion"}]
+
+
+@pytest.mark.asyncio
+async def test_validation_preview_includes_staged_association_proposals(
+    db_session, social_runtime, monkeypatch
+):
+    from datetime import datetime, timezone
+
+    from app.api.v1 import config
+    from app.infra.db.models.social_signals import SocialSignalRun
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    runtime = social_runtime.read_runtime()
+    runtime = social_runtime.apply_runtime(
+        "validation", "official", runtime.version, "admin"
+    )
+    now = datetime(2026, 9, 7, tzinfo=timezone.utc)
+    db_session.add(SocialSignalRun(
+        id="validation-associations", registry_id=1,
+        registry_version=runtime.version, mode="validation", provider="official",
+        status="staged", source_outcomes_json={}, application_progress_json={
+            "sources": {}, "observations": {}, "prepared": {"projection": {
+                "proposals": [{
+                    "post_id": "post-1", "theme_key": "cooling",
+                    "raw_theme": "Cooling", "company_token": "$AAA",
+                    "relationship": "supplies", "support": "supported",
+                }],
+                "resolutions": [{
+                    "raw_token": "$AAA", "status": "resolved", "symbol": "AAA",
+                    "market": "US", "reason_codes": [],
+                }],
+            }},
+        }, feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+        created_at=now, completed_at=now,
+    ))
+    db_session.commit()
+
+    response = await _request(
+        db_session,
+        "GET",
+        "/api/v1/social-signals/admin/validation/validation-associations",
+        headers={"X-Admin-Key": "admin-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["associations"] == [{
+        "post_id": "post-1", "theme_key": "cooling", "raw_theme": "Cooling",
+        "company_token": "$AAA", "relationship": "supplies",
+        "support": "supported", "resolution": {
+            "raw_token": "$AAA", "status": "resolved", "symbol": "AAA",
+            "market": "US", "reason_codes": [],
+        },
+    }]
 
 
 @pytest.mark.asyncio

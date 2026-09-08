@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -170,6 +170,49 @@ def test_social_signal_operations_snapshot_uses_db_runtime_and_shared_ttls(db_se
     assert payload["budget"]["limit_usd"] == "2"
     assert payload["budget"]["timezone"] == "Asia/Singapore"
     assert payload["budget"]["pricing_status"] == "absent"
+
+
+def test_social_freshness_ignores_failed_collection_observation(db_session):
+    from app.infra.db.models.social_signals import (
+        SocialSignalRun,
+        SocialSourceConfiguration,
+    )
+    from app.services.social_signal_operations_service import SocialSignalOperationsService
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    admin = SocialSourceAdminService(db_session)
+    admin.ensure_seed_sources()
+    runtime = admin.read_runtime()
+    runtime = admin.apply_runtime("validation", "official", runtime.version, "admin")
+    source = db_session.get(SocialSourceConfiguration, 1)
+    source.last_successful_collection_at = now - timedelta(hours=100)
+    db_session.add(SocialSignalRun(
+        id="failed-latest",
+        registry_id=1,
+        registry_version=runtime.version,
+        mode="validation",
+        provider="official",
+        status="running",
+        source_outcomes_json={"1": {"read_status": "failed"}},
+        application_progress_json={
+            "sources": {"1": {}},
+            "observations": {"1": {"observed_at": now.isoformat()}},
+        },
+        feature_run_ids_json={},
+        exposure_dates_json={},
+        coverage_json={},
+        created_at=now,
+    ))
+    db_session.commit()
+
+    payload = SocialSignalOperationsService(
+        redis_client=False,
+        clock=lambda: now,
+    ).snapshot(db_session)
+
+    assert payload["last_collection_at"] == (now - timedelta(hours=100)).isoformat()
+    assert payload["social_fresh"] is False
 
 
 def test_social_signal_health_reports_pricing_blocks_without_secret_configuration(db_session):

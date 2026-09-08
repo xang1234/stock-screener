@@ -102,7 +102,10 @@ export default function SocialSignalsTab() {
         <Stack direction="row" gap={1} sx={{ mt: 1.25 }} flexWrap="wrap">
           {FILTERS.map(([key, label]) => (
             <TextField key={key} size="small" label={label} value={filters[key] || ''}
-              onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))}
+              onChange={(event) => {
+                setFilters((current) => ({ ...current, [key]: event.target.value }));
+                setPage(1);
+              }}
               sx={{ width: 135 }} />
           ))}
         </Stack>

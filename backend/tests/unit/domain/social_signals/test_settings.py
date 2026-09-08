@@ -68,6 +68,13 @@ def test_social_budget_timezone_requires_an_iana_timezone():
         Settings(_env_file=None, social_llm_budget_timezone="Singapore-ish")
 
 
+def test_social_refresh_cadence_accepts_even_day_divisors_only():
+    assert Settings(_env_file=None, social_refresh_hours=3).social_refresh_hours == 3
+    for value in (0, 5, 25):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, social_refresh_hours=value)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

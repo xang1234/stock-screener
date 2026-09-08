@@ -261,7 +261,7 @@ class SocialSourceAdminService:
                     or row.test_request_version != row.version
                     or row.test_registry_version != registry.version
                     or row.tested_provider != registry.provider
-                    or registry.mode == "off" or registry.provider == "disabled"):
+                    or registry.provider == "disabled"):
                 raise SocialSourceStateError("stale_test_request")
             row.test_status = "running"
             return SocialSourceTestRequest(

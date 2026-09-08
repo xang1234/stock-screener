@@ -61,11 +61,14 @@ class OfficialXSocialProvider:
                 break
         ordered = tuple(posts)
         timestamps = [post.created_at for post in ordered]
+        observed_initial_window = (
+            request.intent == "initial" and (reached_boundary or not cursor)
+        )
         outcome = SocialSourceOutcome(
             read_status="success", processing_status="pending",
-            history_status=("observed_window" if request.intent == "initial" and reached_boundary
+            history_status=("observed_window" if observed_initial_window
                             else "warming_up" if request.intent == "initial" else "limited"),
-            coverage_reason_codes=(() if request.intent == "initial" and reached_boundary
+            coverage_reason_codes=(() if observed_initial_window
                                    else ("bounded_provider_read",)), known_gap_intervals=(),
             observed_oldest_at=min(timestamps) if timestamps else None,
             observed_newest_at=max(timestamps) if timestamps else None,

@@ -264,6 +264,8 @@ class SocialThemeProjectionService:
                 continue
             by_theme = {}
             for claim in result.claims:
+                if claim.support == "unsupported":
+                    continue
                 key = canonical_theme_key(claim.raw_theme)
                 if key == UNKNOWN_THEME_KEY:
                     continue

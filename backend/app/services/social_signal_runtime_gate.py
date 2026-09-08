@@ -25,11 +25,20 @@ end
 return 0
 """
 
+_RENEW = """
+local value = redis.call('get', KEYS[1])
+if value == ARGV[1] then
+  return redis.call('expire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+
 
 class RedisSocialSignalGate:
     def __init__(self, redis_client):
         self.redis = redis_client
         self._release = redis_client.register_script(_RELEASE)
+        self._renew = redis_client.register_script(_RENEW)
 
     def acquire(self, owner: str, ttl_seconds: int) -> bool:
         if not owner or ttl_seconds <= 0:
@@ -40,6 +49,16 @@ class RedisSocialSignalGate:
         if owner:
             self._release(keys=[PROVIDER_LEASE_KEY], args=[owner])
 
+    def renew(self, owner: str, ttl_seconds: int) -> bool:
+        if not owner or ttl_seconds <= 0:
+            raise ValueError("invalid_social_provider_lease")
+        return bool(
+            self._renew(
+                keys=[PROVIDER_LEASE_KEY],
+                args=[owner, ttl_seconds],
+            )
+        )
+
     def acquire_manual_cooldown(self, owner: str, ttl_seconds: int) -> tuple[bool, int]:
         if not owner or ttl_seconds <= 0:
             raise ValueError("invalid_social_manual_cooldown")
@@ -48,6 +67,10 @@ class RedisSocialSignalGate:
             return True, ttl_seconds
         remaining = self.redis.ttl(MANUAL_COOLDOWN_KEY)
         return False, max(1, int(remaining) if isinstance(remaining, int) and remaining > 0 else ttl_seconds)
+
+    def release_manual_cooldown(self, owner: str) -> None:
+        if owner:
+            self._release(keys=[MANUAL_COOLDOWN_KEY], args=[owner])
 
     def provider_cooldown(self, provider: str, now: datetime):
         key = PROVIDER_COOLDOWN_KEY.format(provider=provider)

@@ -277,7 +277,8 @@ def _social_run_id(origin, now):
     if origin == "scheduled":
         from app.config import settings
         local = now.astimezone(ZoneInfo(settings.celery_timezone))
-        eligible = [hour for hour in (0, 6, 12, 18)
+        cadence_hours = tuple(range(0, 24, settings.social_refresh_hours))
+        eligible = [hour for hour in cadence_hours
                     if (hour, 17) <= (local.hour, local.minute)]
         if eligible:
             slot = local.replace(
@@ -285,7 +286,7 @@ def _social_run_id(origin, now):
             )
         else:
             slot = (local - timedelta(days=1)).replace(
-                hour=18, minute=17, second=0, microsecond=0
+                hour=cadence_hours[-1], minute=17, second=0, microsecond=0
             )
         identity_time = slot.astimezone(timezone.utc)
     value = f"social:{origin}:{identity_time.isoformat()}".encode()
@@ -335,6 +336,8 @@ def get_refresh_social_signals_use_case(
             max_calls_per_day=settings.social_llm_max_calls_per_day,
             request_gate=llm_request_gate,
             min_interval_seconds=settings.social_llm_min_interval_seconds,
+            daily_limit_usd=settings.social_llm_daily_budget_usd,
+            budget_timezone=settings.social_llm_budget_timezone,
         ),
         evidence_reader=SocialScoringEvidenceReader(sessions),
         theme_service=SqlThemeProjectionFacade(sessions),

@@ -135,6 +135,24 @@ class SocialSignalQueries:
             if market_input:
                 break
         theme_component = confirmation_components.get("theme") or {}
+        memberships = social.get("post_memberships", [])
+        source_ids = set()
+        for membership in memberships:
+            if isinstance(membership, str):
+                source_ids.add(membership)
+            elif isinstance(membership, (list, tuple)) and len(membership) == 2:
+                values = membership[1]
+                if isinstance(values, str):
+                    source_ids.add(values)
+                elif isinstance(values, (list, tuple)):
+                    source_ids.update(str(value) for value in values)
+        pins = run.application_progress_json.get("sources", {})
+        source_names = sorted({
+            str(pin.get("name") or source_id)
+            for source_id, pin in pins.items()
+            if str(source_id) in source_ids
+            or str(pin.get("list_id")) in source_ids
+        })
         return {
             "state_reasons": list((candidate.get("state_decision") or {}).get("reasons", ())),
             "security_kind": state_input.get("security_kind"),
@@ -150,6 +168,7 @@ class SocialSignalQueries:
             "social_components": social_components,
             "acceleration": social.get("acceleration"),
             "post_memberships": social.get("post_memberships", []),
+            "source_names": source_names,
         }
 
     @classmethod
@@ -179,7 +198,9 @@ class SocialSignalQueries:
             "explanation": pinned,
         }
 
-    def queue(self, *, market, window, view, rank_mode, page, page_size):
+    def queue(
+        self, *, market, window, view, rank_mode, page, page_size, filters=None
+    ):
         base = {
             "supported": self._supported(), "available": False,
             "reason_code": "social_signals_disabled", "market": market,
@@ -188,16 +209,35 @@ class SocialSignalQueries:
         }
         if not base["supported"]:
             return base
+        filters = {
+            key: str(value).strip().casefold()
+            for key, value in (filters or {}).items()
+            if value is not None and str(value).strip()
+        }
+        run = self._publication()
+
+        def matches(record):
+            item = self._item(record, run)
+            explanation = item["explanation"]
+            haystacks = {
+                "source": " ".join(explanation.get("source_names") or ()).casefold(),
+                "theme": str(explanation.get("theme") or "").casefold(),
+                "instrument": str(explanation.get("security_kind") or "stock").casefold(),
+                "state": str(item.get("state") or "").casefold(),
+                "ticker": str(item.get("canonical_symbol") or "").casefold(),
+            }
+            return all(value in haystacks.get(key, "") for key, value in filters.items())
+
         try:
             result = self.reader.queue(
-                market, WINDOW_DAYS[window], view, rank_mode, page, page_size
+                market, WINDOW_DAYS[window], view, rank_mode, page, page_size,
+                item_filter=matches if filters else None,
             )
         except SocialPublicationUnavailable as exc:
             return {
                 **base, "reason_code": exc.reason,
                 "latest_attempt": self._latest_attempt(),
             }
-        run = self._publication()
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)
         return {
@@ -272,23 +312,37 @@ class SocialSignalQueries:
         for field in ("social_score", "confirmation_score", "queue_score"):
             data[field] = Decimal(data[field]) if data[field] is not None else None
         item = self._item(SocialSnapshotRecord(**data), run)
-        content_ids = set(self.db.scalars(select(SocialPostTicker.content_item_id).where(
-            SocialPostTicker.candidate_key == candidate_key
-        )))
         pins = run.application_progress_json.get("sources", {})
         collected = {}
         cutoff = _utc(run.created_at) - timedelta(days=WINDOW_DAYS[window])
-        for source_id, observation in run.application_progress_json.get("observations", {}).items():
-            for entry in observation.get("inputs", ()):
-                if entry.get("content_item_id") not in content_ids:
-                    continue
-                post = entry.get("post") or {}
-                created_at = datetime.fromisoformat(post["created_at"])
-                if created_at < cutoff or created_at > _utc(run.created_at):
-                    continue
-                key = (post.get("provider"), str(post.get("provider_post_id")))
-                value = collected.setdefault(key, {"post": post, "sources": set()})
-                value["sources"].add(pins.get(source_id, {}).get("name", source_id))
+        from app.infra.db.repositories.social_refresh_support import (
+            SocialScoringEvidenceReader,
+        )
+        rolling = SocialScoringEvidenceReader.read_in_session(
+            self.db, run.id, _utc(run.created_at)
+        )
+        candidate = next(
+            (value for value in rolling if value.candidate_key == candidate_key),
+            None,
+        )
+        for record in candidate.posts if candidate else ():
+            if record.created_at < cutoff or record.created_at > _utc(run.created_at):
+                continue
+            post = {
+                "provider": record.provider,
+                "provider_post_id": record.provider_post_id,
+                "author_handle": record.author_handle,
+                "created_at": record.created_at.isoformat(),
+                "text": record.text,
+                **{field: getattr(record, field) for field in (
+                    "likes", "reposts", "replies", "quotes", "bookmarks", "views"
+                )},
+            }
+            key = (record.provider, record.provider_post_id)
+            value = collected.setdefault(key, {"post": post, "sources": set()})
+            value["sources"].add(
+                pins.get(record.source_id, {}).get("name", record.source_id)
+            )
         posts = []
         for value in collected.values():
             post = value["post"]

@@ -9,6 +9,7 @@ from app.domain.social_signals.records import (
     ConfirmationInput,
     DispatchResult,
     QueuePage,
+    SocialCollectionProgress,
     SocialReadRequest,
     SocialRunResult,
     SocialSourceBatch,
@@ -27,7 +28,9 @@ class SocialWriter(Protocol):
 
     def persist_observations(self, batch: SocialSourceBatch, *, run_id: str | None = None) -> SocialSourceBatch: ...
 
-    def latest_committed_progress(self, source_id: str, provider: str) -> str | None: ...
+    def latest_collection_progress(
+        self, source_id: str, provider: str
+    ) -> SocialCollectionProgress | None: ...
 
     def read_run_inputs(self, run_id: str) -> SavedSocialRunInputs: ...
 

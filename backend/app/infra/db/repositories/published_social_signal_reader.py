@@ -18,7 +18,20 @@ class PublishedSocialSignalReader:
     def __init__(self, session_factory):
         self.session_factory = session_factory
 
-    def queue(self, market, window_days, view, rank_mode, page, page_size):
+    @staticmethod
+    def _record(row):
+        data = dict(row.explanation_json["record"])
+        data["pinned_inputs"] = tuple(tuple(value) for value in data["pinned_inputs"])
+        data["coverage"] = tuple(data["coverage"])
+        data["latest_mention"] = datetime.fromisoformat(data["latest_mention"]) if data["latest_mention"] else None
+        for field in ("social_score", "confirmation_score", "queue_score"):
+            data[field] = Decimal(data[field]) if data[field] is not None else None
+        return SocialSnapshotRecord(**data)
+
+    def queue(
+        self, market, window_days, view, rank_mode, page, page_size,
+        *, item_filter=None,
+    ):
         if market not in SUPPORTED_MARKETS or window_days not in {1, 7, 14}:
             raise ValueError("invalid_market_or_window")
         if view not in {"all", "actionable", "watch", "risk_off", "context", "unresolved"}:
@@ -34,9 +47,11 @@ class PublishedSocialSignalReader:
             predicates = [SocialSignalSnapshot.run_id == run_id,
                 SocialSignalSnapshot.window_days == window_days,
                 (SocialSignalSnapshot.market == market) | SocialSignalSnapshot.market.is_(None)]
-            if view != "all":
-                predicates.append(SocialSignalSnapshot.state == view)
             ranked = SocialSignalSnapshot.state.not_in(("context", "unresolved")) & SocialSignalSnapshot.market.is_not(None)
+            if view == "all":
+                predicates.append(ranked)
+            else:
+                predicates.append(SocialSignalSnapshot.state == view)
             # Unranked sections ignore scores and dates: context, then resolution,
             # each alphabetically stable. They never join a candidate cohort.
             order_by = [case((ranked, 0), (SocialSignalSnapshot.state == "context", 1), else_=2)]
@@ -48,16 +63,15 @@ class PublishedSocialSignalReader:
                     column = case((ranked, column), else_=None)
                 ordered = column.desc() if direction == "desc" else column.asc()
                 order_by.append(ordered.nulls_last() if null_policy == "last" else ordered.nulls_first())
-            total = db.scalar(select(func.count()).select_from(SocialSignalSnapshot).where(*predicates))
-            rows = db.scalars(select(SocialSignalSnapshot).where(*predicates).order_by(*order_by)
-                .offset((page-1)*page_size).limit(page_size)).all()
-            items = []
-            for row in rows:
-                data = dict(row.explanation_json["record"])
-                data["pinned_inputs"] = tuple(tuple(value) for value in data["pinned_inputs"])
-                data["coverage"] = tuple(data["coverage"])
-                data["latest_mention"] = datetime.fromisoformat(data["latest_mention"]) if data["latest_mention"] else None
-                for field in ("social_score", "confirmation_score", "queue_score"):
-                    data[field] = Decimal(data[field]) if data[field] is not None else None
-                items.append(SocialSnapshotRecord(**data))
-            return QueuePage(tuple(items), page, page_size, total)
+            query = select(SocialSignalSnapshot).where(*predicates).order_by(*order_by)
+            if item_filter is None:
+                total = db.scalar(select(func.count()).select_from(SocialSignalSnapshot).where(*predicates))
+                rows = db.scalars(query.offset((page-1)*page_size).limit(page_size)).all()
+                items = tuple(self._record(row) for row in rows)
+            else:
+                records = tuple(self._record(row) for row in db.scalars(query).all())
+                filtered = tuple(record for record in records if item_filter(record))
+                total = len(filtered)
+                start = (page - 1) * page_size
+                items = filtered[start:start + page_size]
+            return QueuePage(items, page, page_size, total)

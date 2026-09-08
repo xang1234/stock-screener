@@ -94,6 +94,14 @@ class SocialReadRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SocialCollectionProgress:
+    """Durable source bootstrap state, independent of cursor availability."""
+
+    initial_complete: bool
+    cursor: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SocialPostRecord:
     provider: str
     provider_post_id: str
