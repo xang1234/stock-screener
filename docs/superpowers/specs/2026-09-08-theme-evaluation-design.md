@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: proposed design for user review
+Status: evidence collection implemented; user review required before extraction
 
 Worktree branch: `feat/theme-detection-evaluation`
 
@@ -26,6 +26,8 @@ The current application database is new and empty, as confirmed by the user. Exi
 8. Deliver Markdown reports with examples/evidence and CSV details.
 9. With an empty database, start with a curated real-content pilot and establish capture of new history alongside it. Historical material collected now supports a retrospective simulation, not proof of actual historical system latency.
 10. Both user-specified X lists are required sources: `1986290701492232693` and `1522014550211457024`. Use the local xui-reader skill to access them. When a post references an investment-related article, look up the article as well and preserve the evidence relationship.
+
+11. Review the collected evidence with the user before generating any extractions. Approval applies to the identified evidence bundle; collecting or correcting more evidence creates a new review version.
 
 ## Approaches and choice
 

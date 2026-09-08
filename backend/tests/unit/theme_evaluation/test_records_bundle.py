@@ -59,3 +59,12 @@ def test_failed_write_does_not_publish_partial_bundle(tmp_path, bundle, monkeypa
     with pytest.raises(OSError):
         seal_bundle(tmp_path, Bundle.model_validate(bundle()))
     assert list((tmp_path / 'bundles').iterdir()) == []
+
+
+def test_successful_source_requires_raw_provenance(xui_payloads):
+    from datetime import datetime, timezone
+    from app.services.theme_evaluation.xui_intake import import_xui
+    value = import_xui(xui_payloads, captured_at=datetime.now(timezone.utc), max_posts_per_source=5)
+    value.source_outcomes[0].raw_sha256 = None
+    with pytest.raises(ValueError, match='source_raw_hash_required'):
+        validate_bundle(value)

@@ -228,8 +228,8 @@ def load_bundle(path: Path) -> Bundle: ...
 def verify_bundle(path: Path) -> dict: ...
 ```
 
-- [ ] Write complete builders `document(**overrides)` and `bundle(**overrides)` in the test conftest. Default document: `post:1`, post kind, title `Example`, text `A supplier reports new orders.`, URL `https://example.com/post/1`, author `analyst`, publication `2026-09-01T09:00:00Z`, retrieval `2026-09-01T10:00:00Z`, language `en`, empty memberships, full text, correctly computed SHA-256, `reference_only=False`. Default bundle has this document, no other records, controlled mode, empty selection/limitations. The executable builders below supply every required field. Add new default fields here when extending records; do not rely on undeclared fixtures.
-- [ ] Add failing tests including the following; builders return dictionaries accepted by model validation.
+- [x] Write complete builders `document(**overrides)` and `bundle(**overrides)` in the test conftest. Default document: `post:1`, post kind, title `Example`, text `A supplier reports new orders.`, URL `https://example.com/post/1`, author `analyst`, publication `2026-09-01T09:00:00Z`, retrieval `2026-09-01T10:00:00Z`, language `en`, empty memberships, full text, correctly computed SHA-256, `reference_only=False`. Default bundle has this document, no other records, controlled mode, empty selection/limitations. The executable builders below supply every required field. Add new default fields here when extending records; do not rely on undeclared fixtures.
+- [x] Add failing tests including the following; builders return dictionaries accepted by model validation.
 
 ```python
 def test_sealed_content_cannot_be_modified(tmp_path, bundle):
@@ -243,8 +243,8 @@ def test_same_content_has_same_bundle_id(tmp_path, bundle):
     assert seal_bundle(tmp_path, value) == seal_bundle(tmp_path, value)
 ```
 
-- [ ] Run `python -m pytest tests/unit/theme_evaluation/test_records_bundle.py -q`; confirm failure due to absent implementation.
-- [ ] Implement canonical JSON using sorted keys, UTF-8, compact separators, `allow_nan=False`; compute SHA-256 on those bytes. Serialize Pydantic models in JSON mode. Store versions under `root/bundles/<digest>/bundle.json` plus a manifest containing the digest and file size. Create a temporary sibling directory, write/flush files, and atomically rename; if the digest directory exists, verify identical content and return it without rewriting. Clean only the temporary directory created by this operation on failure.
+- [x] Run `python -m pytest tests/unit/theme_evaluation/test_records_bundle.py -q`; confirm failure due to absent implementation.
+- [x] Implement canonical JSON using sorted keys, UTF-8, compact separators, `allow_nan=False`; compute SHA-256 on those bytes. Serialize Pydantic models in JSON mode. Store versions under `root/bundles/<digest>/bundle.json` plus a manifest containing the digest and file size. Create a temporary sibling directory, write/flush files, and atomically rename; if the digest directory exists, verify identical content and return it without rewriting. Clean only the temporary directory created by this operation on failure.
 
 ```python
 def canonical_bytes(value: dict) -> bytes:
@@ -252,8 +252,8 @@ def canonical_bytes(value: dict) -> bytes:
                       separators=(',', ':'), allow_nan=False).encode('utf-8')
 ```
 
-- [ ] Enforce aware timestamps, referenced-document existence, correct text hashes, approved-label reviewer/time fields, article-only targets for resolved follow-ups, and success/empty/failure distinctions. Test dangling references, naive dates, NaN confidence, modified bytes, duplicate IDs, and failed atomic writes.
-- [ ] Re-run the task tests and commit only its files with `feat(themes): add immutable evaluation corpus records`.
+- [x] Enforce aware timestamps, referenced-document existence, correct text hashes, article-only targets for resolved follow-ups, and explicit source failures. Test naive dates, modified bytes, duplicate IDs, missing raw provenance, and failed atomic writes. At the user-required evidence checkpoint, reject all nonempty extraction/label inputs; implement confidence and approved-label validation with their later tasks.
+- [x] Re-run the task tests and commit only its files with `feat(themes): add immutable evaluation corpus records`.
 
 ## Task 2: Required-list acquisition and deterministic selection
 
@@ -270,7 +270,7 @@ def import_xui(payloads: dict[str, dict], *, captured_at: datetime,
                max_posts_per_source: int, mode: str = "observed_capture") -> Bundle: ...
 ```
 
-- [ ] Write tests with complete minimal xui payloads (`items`, `outcomes`, `failed_sources`, `succeeded_sources`). Include an outcome that reports five observed IDs but exports eight records, an overlapping tweet across both lists, and a failed second list.
+- [x] Write tests with complete minimal xui payloads (`items`, `outcomes`, `failed_sources`, `succeeded_sources`). Include an outcome that reports five observed IDs but exports eight records, an overlapping tweet across both lists, and a failed second list.
 
 ```python
 def test_shared_post_keeps_both_memberships(xui_payloads):
@@ -282,12 +282,12 @@ def test_shared_post_keeps_both_memberships(xui_payloads):
     assert len([d for d in result.documents if d.document_id == shared.document_id]) == 1
 ```
 
-- [ ] Run `python -m pytest tests/unit/theme_evaluation/test_xui_intake.py -q`; confirm the new behavior fails before implementation.
-- [ ] Invoke the supplied wrapper with argument arrays (`subprocess.run`, never a shell), profile `default`, policy `prompt`, `--config-path` for the wrapper config, and explicit list IDs. Put `xui_bin.parent` at the front of the child process PATH. The wrapper performs authentication checking. On `reauth_required`, preserve its safe reauthentication command and stop further live reads; do not launch interactive login. Use bounded process timeouts and preserve stable errors without secrets or browser logs in exported reports.
-- [ ] Capture each invocation's start/end time and raw response hash. Import all post fields needed by the record contract; keep `observed_at` when supplied and mark a capture-time fallback if absent. Normalize the observed reader ID `list:<id>` to the corpus ID `x-list:<id>`; validate each item against its payload source. Do not infer source membership solely from returned row order. Unexpected source IDs fail validation.
-- [ ] Sort unique posts within each source by descending publication time with tweet ID as a stable tie-breaker; explicitly place missing publication times last. Select up to `max_posts_per_source`, then union sources by tweet ID. Save raw and selected counts and selected IDs. Record this as a recent sample, not a complete chronological archive. Preserve original text/language; a missing language is unknown. If the same ID has different bodies, record a content-version conflict with raw hashes and excluded IDs in `selection`, retain the raw captures, and exclude that ID from the selected documents until reviewed instead of overwriting it.
-- [ ] Add `collect-x` and `import-x` CLI commands; the latter can consume the existing access-check capture without new X requests. Failed required sources remain in the manifest and prevent a complete required-source status. Zero returned posts is distinct from authentication success with useful coverage.
-- [ ] Verify argument arrays contain only read operations and both required IDs; verify no session-storage reads and no import of application DB initialization. Re-run the task tests; commit with `feat(themes): ingest required X list evidence for evaluation`.
+- [x] Run `python -m pytest tests/unit/theme_evaluation/test_xui_intake.py -q`; confirm the new behavior fails before implementation.
+- [x] Invoke the supplied wrapper with argument arrays (`subprocess.run`, never a shell), profile `default`, policy `prompt`, `--config-path` for the wrapper config, and explicit list IDs. Put `xui_bin.parent` at the front of the child process PATH. The wrapper performs authentication checking. On `reauth_required`, preserve its safe reauthentication command and stop further live reads; do not launch interactive login. Use bounded process timeouts and preserve stable errors without secrets or browser logs in exported reports.
+- [x] Capture each invocation's start/end time and raw response hash. Import all post fields needed by the record contract; keep `observed_at` when supplied and mark a capture-time fallback if absent. Normalize the observed reader ID `list:<id>` to the corpus ID `x-list:<id>`; validate each item against its payload source. Do not infer source membership solely from returned row order. Unexpected source IDs fail validation.
+- [x] Sort unique posts within each source by descending publication time with tweet ID as a stable tie-breaker; explicitly place missing publication times last. Select up to `max_posts_per_source`, then union sources by tweet ID. Save raw and selected counts and selected IDs. Record this as a recent sample, not a complete chronological archive. Preserve original text/language; a missing language is unknown. If the same ID has different bodies, record a content-version conflict with raw hashes and excluded IDs in `selection`, retain the raw captures, and exclude that ID from the selected documents until reviewed instead of overwriting it.
+- [x] Add `collect-x` and `import-x` CLI commands; the latter can consume the existing access-check capture without new X requests. Failed required sources remain in the manifest and prevent a complete required-source status. Zero returned posts is distinct from authentication success with useful coverage.
+- [x] Verify argument arrays contain only read operations and both required IDs; verify no session-storage reads and no import of application DB initialization. Re-run the task tests; commit with `feat(themes): ingest required X list evidence for evaluation`.
 
 ## Task 3: Article follow-up queue and evidence imports
 
@@ -302,7 +302,7 @@ def apply_followups(bundle: Bundle, updates: list[Followup],
 def import_derivatives(bundle: Bundle, values: list[Derivative]) -> Bundle: ...
 ```
 
-- [ ] Add tests for two posts linking one article, a picture short link, a title-only reference, paywall failure, untranslated content, and a referenced article collected after its post.
+- [x] Add tests for two posts linking one article, a picture short link, a title-only reference, paywall failure, untranslated content, and a referenced article collected after its post.
 
 ```python
 def test_article_does_not_inherit_post_retrieval_time(article_bundle):
@@ -313,12 +313,12 @@ def test_article_does_not_inherit_post_retrieval_time(article_bundle):
     assert len([r for r in updated.followups if r.article_id == article.document_id]) == 2
 ```
 
-- [ ] Run `python -m pytest tests/unit/theme_evaluation/test_article_intake.py -q` and confirm failure.
-- [ ] Extract URL candidates from text with a simple bounded URL regex; create `pending`, investment-relevance `uncertain` records. Add a title-reference entry when the reading agent supplies a title/author reference. Do not automatically label all links as articles or classify relevance by presence of a ticker.
-- [ ] The agent reviews the queue and records investment relevance with a reason/version, follows usable links with existing web tools, or searches title/author/publisher when needed. Imports must name the exact matched piece and supporting lookup URLs. Same-topic search results are insufficient. Import unresolved/paywalled/partial outcomes explicitly. Do not build another browser or recursive crawler in this package.
-- [ ] Native X Articles use the skill's `article-pdf` wrapper. Record the PDF hash, title, warnings, export time, and source post; import text only from a supported PDF reader, retaining `partial` when extraction is incomplete. Normal post text never stands in for the full Article body.
-- [ ] Canonicalize article identity conservatively: strip URL fragments, normalize scheme/host casing, retain query parameters unless a verified canonical URL is supplied. Deduplicate identical canonical URL plus text hash, preserve all referring posts, and treat changed text as a new version. Store lookup/translation provenance separately from immutable original text.
-- [ ] Add `references`, `import-articles`, and `import-translations` commands. An unresolved required article lookup is a coverage gap, not silent success. Every change seals a new bundle version. Re-run tests; commit with `feat(themes): preserve article follow-up evidence for evaluation`.
+- [x] Run `python -m pytest tests/unit/theme_evaluation/test_article_intake.py -q` and confirm failure.
+- [x] Extract URL candidates from text with a simple bounded URL regex; create `pending`, investment-relevance `uncertain` records. Add a title-reference entry when the reading agent supplies a title/author reference. Do not automatically label all links as articles or classify relevance by presence of a ticker.
+- [x] The agent reviews the queue and records investment relevance with a reason/version, follows usable links with existing web tools, or searches title/author/publisher when needed. Imports must name the exact matched piece and supporting lookup URLs. Same-topic search results are insufficient. Import unresolved/paywalled/partial outcomes explicitly. Do not build another browser or recursive crawler in this package.
+- [x] Native X Articles use the skill's `article-pdf` wrapper. Record the PDF hash, title, warnings, export time, and source post; import text only from a supported PDF reader, retaining `partial` when extraction is incomplete. Normal post text never stands in for the full Article body.
+- [x] Canonicalize article identity conservatively: strip URL fragments, normalize scheme/host casing, retain query parameters unless a verified canonical URL is supplied. Deduplicate identical canonical URL plus text hash, preserve all referring posts, and treat changed text as a new version. Store lookup/translation provenance separately from immutable original text.
+- [x] Add `references`, `import-articles`, and `import-translations` commands. An unresolved required article lookup is a coverage gap, not silent success. Every change seals a new bundle version. Re-run tests; commit with `feat(themes): preserve article follow-up evidence for evaluation`.
 
 ## Task 4: Freeze extraction output with actual provenance
 
@@ -458,3 +458,11 @@ These checked items describe document review, not completed implementation.
 ## Execution handoff
 
 The default execution path is inline using `superpowers:executing-plans`, with a checkpoint after Task 3 so the source corpus and article handling can be reviewed before optional provider generation. If the user explicitly requests parallel agent work, use `superpowers:subagent-driven-development` with task-local ownership and reviews. Do not spawn agents solely because this plan mentions that option.
+
+## Evidence checkpoint delivered, 2026-09-08
+
+Tasks 1–3 are implemented, including local collection/import commands, atomic evidence bundles, article follow-up decisions and translation imports. The source-only renderer and CLI review path were brought forward from Tasks 5–6 to honor the user's checkpoint. Extraction and episode-label record implementations remain deferred with Tasks 4–5; the current schema rejects nonempty extraction/label lists.
+
+The local pilot selects 50 posts per required list from the frozen access audit: 96 unique posts, four cross-list overlaps. Two matched articles have partial excerpts only; 14 reference outcomes remain partial/unavailable/unresolved. Twenty-eight posts are conservatively marked potentially truncated, and all 96 posts lack reader-supplied language metadata. No translations, extraction calls, or theme-label proposals were generated.
+
+Review artifacts are below `data/xui-reader/theme-evaluation/pilot-20260908/`; source bodies stay ignored. The exact reviewed bundle is identified in `review-location.json`. Capture history integration, full extraction provenance, reviewed theme labels, and ranking replay remain outstanding. The current sample is not a days-to-weeks performance benchmark.

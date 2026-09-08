@@ -50,6 +50,8 @@ def validate_bundle(bundle: Bundle) -> None:
         if any(m.source_id not in sources for m in doc.memberships):
             raise ValueError('unknown_membership_source')
     for source in bundle.source_outcomes:
+        if source.status == 'success' and source.raw_sha256 is None:
+            raise ValueError('source_raw_hash_required')
         selected = sum(any(m.source_id == source.source_id for m in d.memberships)
                        for d in bundle.documents)
         if selected != source.selected_count or selected > source.returned_count:
@@ -73,6 +75,9 @@ def validate_bundle(bundle: Bundle) -> None:
             raise ValueError('followup_requires_decision_provenance')
         if ref.status == 'skipped_noninvestment' and ref.investment_related != 'no':
             raise ValueError('uncertain_reference_cannot_be_skipped')
+    linked_articles = {r.article_id for r in bundle.followups if r.article_id}
+    if any(d.kind == 'article' and d.document_id not in linked_articles for d in bundle.documents):
+        raise ValueError('unreferenced_article')
     _unique(((d.document_id, d.target_language, d.policy_version) for d in bundle.derivatives),
             'duplicate_derivative')
     for derivative in bundle.derivatives:
