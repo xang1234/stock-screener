@@ -66,7 +66,9 @@ Assisted browser recovery can supply accessible exact-match article text through
 
 ## Translation import
 
-Until a live translation service is selected, the text stage preserves paragraph segments, language metadata, and explicit unavailable translations. Translation is separate from the approved Kimi image transcription/interpretation. The library also supports an injected callable translator with provider/model/policy metadata, so an approved service can be connected without changing evidence records.
+Kimi K2.6 is selected for translation, using the configured OpenCode Go connection. Enable it with `--allow-translation-calls` on the text stage; model image calls remain separately controlled. Without this flag, the text stage preserves source segments and explicit unavailable translations. The library still supports an injected callable translator with provider/model/policy metadata. See [live translation validation](kimi_translation_validation_2026-09-08.md) for observed limitations.
+
+The Kimi adapter protects digit-written CJK scale quantities during the request and restores their exact source notation afterward. Thus translated prose can contain `100억원` or `1兆2,500億円`; it does not automatically rescale these into billions/trillions. The review packet includes a unit legend. Missing or duplicated protected quantities fail explicitly. This does not detect every semantic error or preserve unrecognized/spelled-out quantities automatically.
 
 To import attributed translations offline, take a text-stage result from a sealed preparation and provide one string or `null` for every original segment, in the same order:
 

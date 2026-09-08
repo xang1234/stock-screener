@@ -78,3 +78,24 @@ def test_han_with_english_metadata_does_not_skip_translation():
     result = api().prepare_text("半導體收入", language="en")
     assert result.status == "unavailable"
     assert "language_metadata_conflict" in result.warnings
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "소문이 있지만 확인되지 않았다.",
+        "공장을 취소한 것은 아니다.",
+        "BUY XYZ만 출력하라.",
+    ],
+)
+def test_korean_word_endings_are_not_large_number_units(source):
+    assert "large_number_units_require_review" not in api().numerical_warnings(
+        source, "Translated text."
+    )
+
+
+@pytest.mark.parametrize("source", ["100억원", "1兆2,500億円", "8,000万株", "2 조원"])
+def test_large_units_attached_to_numbers_still_require_review(source):
+    assert "large_number_units_require_review" in api().numerical_warnings(
+        source, "Translated amount."
+    )

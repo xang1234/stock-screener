@@ -27,7 +27,9 @@ def render_preparation(base, store, preparation_id: str, output: Path):
         "",
         (
             "Transcriptions, translations and visual observations are derivatives of the original evidence. "
-            "They do not count as independent corroboration."
+            "They do not count as independent corroboration. "
+            "Translations may retain original quantity notation: 억/億/亿 = 100 million; "
+            "만/万/萬 = 10 thousand; 조/兆 = one trillion. Check the source currency and units."
         ),
         "",
     ]

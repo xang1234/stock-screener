@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .bundle import IntegrityError
 from .image_preparation import OpenCodeGoVision
+from .kimi_translation import OpenCodeGoTranslator
 from .preparation_pipeline import import_articles, prepare
 from .preparation_records import Handoff
 from .preparation_review import render_preparation
@@ -52,6 +53,11 @@ def _parser():
                 action="store_true",
                 help="Enable approved Kimi K2.6 image calls.",
             )
+            command.add_argument(
+                "--allow-translation-calls",
+                action="store_true",
+                help="Enable approved Kimi K2.6 translation through OpenCode Go.",
+            )
             command.add_argument("--max-images", type=int, default=100)
             command.add_argument("--max-documents", type=int, default=500)
         elif name in ("import-articles", "import-translations"):
@@ -93,6 +99,11 @@ def _run(args):
     validate_handoff(args.bundle, handoff)
     if args.command == "prepare":
         vision = None
+        translator = None
+        if args.allow_translation_calls:
+            if "text" not in args.stages:
+                raise ValueError("text_stage_required")
+            translator = OpenCodeGoTranslator(os.environ.get("OPENCODE_GO_API_KEY", ""))
         if args.allow_model_calls:
             if "image" not in args.stages:
                 raise ValueError("image_stage_required")
@@ -103,6 +114,7 @@ def _run(args):
             handoff,
             stages=args.stages,
             vision=vision,
+            translator=translator,
             allow_network=args.allow_network,
             prior_id=args.prior_preparation,
             max_images=args.max_images,

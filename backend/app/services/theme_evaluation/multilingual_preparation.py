@@ -160,9 +160,7 @@ def numerical_warnings(original: str, translated: str) -> list[str]:
 
     if numbers(original) != numbers(translated):
         warnings.append("numerical_tokens_changed")
-    if any(
-        unit in original for unit in ("億", "亿", "万", "萬", "兆", "억", "조", "만")
-    ):
+    if re.search(r"\d[\d,.]*\s*(?:億|亿|万|萬|兆|억|조|만)", original):
         warnings.append("large_number_units_require_review")
     if Counter(re.findall(r"[$€£¥₩]", original)) != Counter(
         re.findall(r"[$€£¥₩]", translated)

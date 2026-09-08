@@ -71,7 +71,7 @@ Exit codes: `0` completed operation (inspect coverage separately), `2` invalid d
 
 Implementation lives in the evaluation worktree. The original pilot is frozen. Rebuild acquisition only after both repositories are updated; keep evidence review before theme extraction.
 
-The preparation commands use existing HTTPX, BeautifulSoup and Pillow. Kimi K2.6 via OpenCode Go is approved for original-language image transcription and chart interpretation. PaddleOCR is deferred. The proposed live translation service and article tool choices still need their recorded approval before actual use; neither was called during implementation.
+The preparation commands use existing HTTPX, BeautifulSoup and Pillow. Kimi K2.6 via OpenCode Go is approved for original-language image transcription and chart interpretation. PaddleOCR is deferred. HTTPX and BeautifulSoup are approved for article recovery. Kimi K2.6 is now selected for translation through the configured Go connection. The rendered-browser fallback still needs its recorded approval before use.
 
 From `backend`, using the configured project Python environment:
 
@@ -128,3 +128,11 @@ To prepare recovered article text or image transcription for translation, run th
 Preparation manifests now use schema version 2 with `bindings` for unique attempt history and `current` mapping slot hashes to selected binding hashes. A slot identifies source kind/ID, stage, parent result and input locator. Article, text and image results have typed requests and payloads. Status and warnings derive from validated content rather than duplicated stored status fields. This changes only preparation artifacts; acquisition Bundle v1 and its frozen content IDs remain unchanged.
 
 The earlier development-only preparation format is intentionally rejected rather than silently migrated. It was used in temporary tests, not on the frozen pilot. If an external scratch preparation used that format, rebuild it in a new output directory. Keep old evidence for inspection.
+
+### Kimi translation
+
+Enable translation explicitly with `--stages text --allow-translation-calls`, using `OPENCODE_GO_API_KEY`. It can be combined with article/image stages; `--allow-network` controls article/image downloads and `--allow-model-calls` controls image interpretation separately. The translation flag sends source text to Go even if public downloads are disabled. Without it, text preparation remains offline.
+
+The [live validation report](kimi_translation_validation_2026-09-08.md) records 20 final-round translations, 10/10 preserved large quantities and two contextual issues. Policy `translation-v3` retains written CJK large quantities in source notation; it does not ask Kimi to convert them into billions. Each protected token must return exactly once before original quantities are restored. Invalid/truncated output remains unavailable. Name, supplier/customer direction and speaker attribution still need evidence review.
+
+The adapter bounds each segment to 4,000 characters and each output to 4,096 tokens, with a 45-second read timeout. This is a short-passage validation, not a measured long-article throughput or accuracy guarantee. The configured route remains Go; a direct API route has not been provisioned.
