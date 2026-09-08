@@ -73,6 +73,17 @@ def test_executes_exact_noninteractive_commands_and_normalizes_fixture():
     assert batch.outcome.proposed_progress is None
 
 
+def test_normalizes_nullable_repost_flag_from_xui_as_false():
+    payload = json.loads(FIXTURE.read_text())
+    payload["items"][0]["is_repost"] = None
+
+    batch = provider(SyntheticRunner(auth(), completed(payload))).read_source(request())
+
+    assert batch.outcome.read_status == "success"
+    assert batch.outcome.error_code is None
+    assert batch.posts[0].is_repost is False
+
+
 def test_test_intent_caps_cli_limit_at_five_and_never_uses_application_progress():
     payload = json.loads(FIXTURE.read_text())
     runner = SyntheticRunner(auth(), completed(payload))

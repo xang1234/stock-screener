@@ -169,7 +169,11 @@ class XuiCliSocialProvider:
         for raw in items[:limit]:
             if not isinstance(raw, dict) or raw.get("source_id", expected_source) != expected_source:
                 raise ValueError("item")
-            if "is_repost" in raw and not isinstance(raw["is_repost"], bool):
+            if (
+                "is_repost" in raw
+                and raw["is_repost"] is not None
+                and not isinstance(raw["is_repost"], bool)
+            ):
                 raise ValueError("is_repost")
             url = raw.get("tweet_url")
             normalized = {
