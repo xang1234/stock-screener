@@ -25,6 +25,8 @@
 
 ## Milestone boundary
 
+**User checkpoint, 2026-09-08:** Review the collected evidence before generating any extractions. Execute Tasks 1–3 and bring forward the source-only Markdown/CSV report from Tasks 5–6. Stop with an immutable evidence bundle for user review. Extraction generation, extraction imports, and theme-label proposals remain unavailable at this checkpoint. Add their record implementations with their later tasks rather than accepting unvalidated future records now. A review of one bundle does not approve later changes to its contents.
+
 This plan implements acquisition, fixed extractions, label contracts, and review packets. It is a complete first deliverable, not the entire theme benchmark. Fresh-history capture integration and controlled-clock ranking replay require separate implementation plans grounded in the same design. This milestone must explicitly report `ranking_evaluation: unavailable` rather than invent a quality comparison.
 
 Coverage map:
