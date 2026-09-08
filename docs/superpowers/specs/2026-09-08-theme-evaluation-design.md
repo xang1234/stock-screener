@@ -39,7 +39,7 @@ Use the third approach. Implement acquisition and frozen files before a general 
 
 ## Initial scope and defaults
 
-- Start with English-language content and US theme analytics, matching the reviewed ranking implementation's market scope.
+- Preserve original languages from both required X lists; do not silently drop non-English posts. Use versioned English translations when needed for extraction/review and retain originals alongside derivatives. Report language coverage and unsupported translations explicitly. Initial price/ranking analytics remain US-scoped; overseas evidence can inform relevant themes without inventing US ticker mappings.
 - Run the existing technical and fundamental pipelines separately and report separate results. Do not combine their rankings or migrate their identities.
 - Use the current ungrouped L2 theme ranking as the first evaluation surface. Grouped L1 presentation and the separate social-signal ranking engine are outside the first comparison surface.
 - Review the top 10 results at predetermined daily checkpoints. Report delay at checkpoint resolution, not as minute-level latency.
@@ -63,6 +63,8 @@ Required sources:
 Follow the user-specified skill at `/Users/admin/Documents/Work/xui-reader/skills/xui-reader/SKILL.md`, preferably through its `scripts/xui_read.py` wrapper. Check authentication before reads. Use the `default` profile and `prompt` login policy for interactive chat collection. Never inspect session storage, expose cookies, or mutate X state. Unattended collection, if separately configured later, must fail closed on authentication/challenge errors.
 
 Collect bounded chronological samples from both lists and record requested limits, returned counts, observation times, oldest/newest post times, source errors, and coverage limitations. A list read is not proof of a complete historical window. Both sources must have an explicit collection outcome; a failure makes required-source coverage incomplete and cannot be silently replaced by news feeds. Successful reads of the other source and document preparation may continue independently.
+
+The CLI's requested limit must not be assumed to cap the number of exported records. Preserve its outcome counters and per-post `observed_at` separately from `created_at`; validate returned cardinality and apply an explicit deterministic corpus-sampling rule before extraction. Older publication dates are not evidence that this installation observed the posts historically.
 
 Deduplicate post bodies by tweet ID while preserving membership in both lists and the observation time for each membership. Record authors as distinct from list IDs: two lists carrying the same post are not two independent observations. Preserve sampled non-investment posts as background/negative examples rather than filtering them out of the dataset entirely.
 
@@ -88,7 +90,17 @@ Follow direct article references; do not recursively crawl every link within an 
 
 For native long-form X Articles, use the skill's supported `article-pdf` export with a deterministic local output path. Preserve the returned status, title, warnings, and PDF hash. A normal post read exposes only the post/Article flag, not necessarily the full Article body. Apply the skill's error contract instead of guessing missing content.
 
+A short link can refer to an image, quoted post, subscription page, or article. Do not classify every `t.co` URL as an article. Follow context to locate the original article, preserve quote/reply relationships where available, and retain unresolved targets as explicit coverage gaps.
+
 Freeze post and article extractions independently after collection. Admission during observed replay uses actual availability and eligibility; an article fetched after its referring post cannot affect an earlier checkpoint just because its publication date is older. Retrospective simulations retain actual retrieval dates and declare their separate simulated-availability rule, including article-follow-up assumptions.
+
+### Initial access check, 2026-09-08
+
+Authenticated access succeeded for both required lists. Reads requested a limit of five each; the reader reported five observed IDs per source but exported 125 and 143 records respectively. There were 262 unique tweet IDs and six shared between the lists. Per-post observation timestamps in these responses were on September 8, including records with older publication dates. These counters establish access and response shape, not historical completeness.
+
+Raw captures and a manifest are saved locally under `data/xui-reader/theme-evaluation-source-audit-20260908/`, which is already ignored by Git. No extraction or reviewed labels have been produced for this access-check capture.
+
+Selected follow-up lookups covered a referenced FT semiconductor article, an Agility/SoftBank article, and a market-commentary blog entry. The exact originals were not verified: the tested short URLs could not be opened by the web tool, and targeted searches did not establish matching originals. These examples remain unresolved in the audit manifest. This is a partial access survey, not completed article follow-up for the corpus.
 
 ### Immutable input records
 
