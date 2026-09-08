@@ -14,6 +14,7 @@ from app.domain.social_signals.records import (
 )
 
 Reservation = Callable[[object, int, int], int]
+X_API_MIN_RESULTS = 5
 
 
 class OfficialXSocialProvider:
@@ -24,7 +25,7 @@ class OfficialXSocialProvider:
                  sleep: Callable[[float], None] = time.sleep):
         if reservation is None:
             raise ValueError("official_reservation_required")
-        if not 1 <= max_results_per_page <= 100:
+        if not X_API_MIN_RESULTS <= max_results_per_page <= 100:
             raise ValueError("invalid_max_results_per_page")
         self._token = bearer_token
         self._reserve = reservation
@@ -78,18 +79,20 @@ class OfficialXSocialProvider:
 
     def _request_page(self, request, cursor, capacity):
         day = request.observed_at.astimezone(self._timezone).date()
+        provider_capacity = max(X_API_MIN_RESULTS, capacity)
         params = {
             "tweet.fields": "created_at,public_metrics,author_id,referenced_tweets,entities",
             "expansions": "author_id", "user.fields": "username",
-            "max_results": str(capacity),
+            "max_results": str(provider_capacity),
         }
         if cursor:
             params["pagination_token"] = cursor
         for attempt in range(2):
-            granted = self._reserve(day, capacity, self._daily_limit)
-            if not isinstance(granted, int) or isinstance(granted, bool) or not 0 <= granted <= capacity:
+            granted = self._reserve(day, provider_capacity, self._daily_limit)
+            if (not isinstance(granted, int) or isinstance(granted, bool)
+                    or not 0 <= granted <= provider_capacity):
                 return self._failed(request, "invalid_reservation_grant")
-            if granted == 0:
+            if granted < X_API_MIN_RESULTS:
                 return self._failed(request, "daily_limit_exhausted")
             params["max_results"] = str(granted)
             try:

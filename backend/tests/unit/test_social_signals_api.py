@@ -516,13 +516,25 @@ async def test_evidence_is_run_scoped_canonical_and_limited_to_three_plain_excer
     from app.models.stock_universe import StockUniverse
     from app.models.theme import ContentItem
     from app.services import server_auth
+    from app.services.social_company_identity_service import SocialCompanyIdentityService
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
     runtime = social_runtime.read_runtime()
-    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    runtime = social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    SocialCompanyIdentityService(db_session, admin_authorized=True).replace([
+        {"symbol": "AAA", "company_id": "issuer-aaa",
+         "verification_reference": "issuer register 2026-09-01",
+         "verified_at": "2026-09-01T00:00:00+00:00"},
+        {"symbol": "BBB", "company_id": "issuer-aaa",
+         "verification_reference": "issuer register 2026-09-01",
+         "verified_at": "2026-09-01T00:00:00+00:00"},
+    ], expected_version=runtime.version, actor="test")
     now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
     security = StockUniverse(symbol="AAA", market="US", exchange="NASDAQ", is_active=True)
-    db_session.add(security)
+    related_security = StockUniverse(
+        symbol="BBB", market="HK", exchange="HKEX", is_active=True,
+    )
+    db_session.add_all([security, related_security])
     db_session.flush()
     inputs = []
     for number in range(4):
@@ -600,6 +612,9 @@ async def test_evidence_is_run_scoped_canonical_and_limited_to_three_plain_excer
     assert all(len(post["excerpt"]) <= 280 for post in payload["posts"])
     assert payload["posts"][0]["url"] == "https://x.com/author0/status/p-0"
     assert payload["posts"][0]["source_names"] == ["One"]
+    assert payload["related_listings"] == [
+        {"market": "HK", "canonical_symbol": "BBB"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -770,6 +785,8 @@ async def test_admin_analysis_retry_replays_the_work_linked_generation(
         selected_model="model",
         input_snapshot_json={},
         state="failed_terminal",
+        error_code="original_error",
+        requested_by_admin=False,
         created_at=now,
         updated_at=now,
     )
@@ -791,10 +808,23 @@ async def test_admin_analysis_retry_replays_the_work_linked_generation(
     ))
     db_session.commit()
     calls = []
-    monkeypatch.setattr(
-        resume_social_analysis,
-        "apply_async",
-        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(id="retry-task"),
+    def dispatch(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("synthetic dispatch failure")
+        return SimpleNamespace(id="retry-task")
+    monkeypatch.setattr(resume_social_analysis, "apply_async", dispatch)
+
+    with pytest.raises(RuntimeError, match="synthetic dispatch failure"):
+        await _request(
+            db_session,
+            "POST",
+            f"/api/v1/social-signals/admin/analysis/{work.id}/retry",
+            headers={"X-Admin-Key": "admin-secret"},
+        )
+    db_session.refresh(work)
+    assert (work.state, work.error_code, work.requested_by_admin) == (
+        "failed_terminal", "original_error", False,
     )
 
     response = await _request(
@@ -805,7 +835,10 @@ async def test_admin_analysis_retry_replays_the_work_linked_generation(
     )
 
     assert response.status_code == 202
-    assert calls == [{"args": ["retry-generation"], "queue": "social_ingestion"}]
+    assert calls == [
+        {"args": ["retry-generation"], "queue": "social_ingestion"},
+        {"args": ["retry-generation"], "queue": "social_ingestion"},
+    ]
 
 
 @pytest.mark.asyncio

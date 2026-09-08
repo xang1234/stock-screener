@@ -180,6 +180,8 @@ class SocialSourceAdminService:
             elif day < registry.official_budget_day:
                 return 0
             remaining = max(0, daily_limit - registry.official_reserved_posts)
+            if requested_posts < 5 or remaining < 5:
+                return 0
             granted = min(requested_posts, remaining)
             registry.official_reserved_posts += granted
             return granted

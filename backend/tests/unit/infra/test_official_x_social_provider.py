@@ -42,9 +42,9 @@ def test_reads_approved_dialect_and_normalizes_posts_with_proposed_progress():
     assert seen[0].url.path == "/2/lists/1986290701492232693/tweets"
     assert dict(seen[0].url.params) == {
         "tweet.fields":"created_at,public_metrics,author_id,referenced_tweets,entities",
-        "expansions":"author_id", "user.fields":"username", "max_results":"2"}
+        "expansions":"author_id", "user.fields":"username", "max_results":"5"}
     assert seen[0].headers["authorization"] == "Bearer secret"
-    assert reservations == [(date(2026, 9, 7), 2, 2000)]
+    assert reservations == [(date(2026, 9, 7), 5, 2000)]
     assert batch.outcome.proposed_progress == "page-2"
     assert batch.outcome.committed_progress is None
     assert batch.posts[0].author_handle == "alpha_research"
@@ -55,17 +55,35 @@ def test_reads_approved_dialect_and_normalizes_posts_with_proposed_progress():
 
 
 def test_caps_pages_to_run_limit_and_resumes_from_application_progress():
-    calls = []
+    calls, reservations = [], []
     payloads = [
         {"data":[{"id":"1","author_id":"u","text":"one","created_at":"2026-09-05T01:00:00Z","public_metrics":{}}],"includes":{"users":[{"id":"u","username":"a"}]},"meta":{"next_token":"next"}},
         {"data":[{"id":"2","author_id":"u","text":"two","created_at":"2026-09-05T00:00:00Z","public_metrics":{}}],"includes":{"users":[{"id":"u","username":"a"}]},"meta":{"next_token":"unused"}},]
     def handler(req):
         calls.append(dict(req.url.params)); return httpx.Response(200, json=payloads[len(calls)-1])
-    batch = make_provider(handler, max_results_per_page=1).read_source(read_request(intent="initial", limit=2, application_progress="resume"))
+    batch = make_provider(handler, reservations=reservations, max_results_per_page=5).read_source(
+        read_request(intent="initial", limit=2, application_progress="resume")
+    )
     assert [c.get("pagination_token") for c in calls] == ["resume", "next"]
-    assert [c["max_results"] for c in calls] == ["1", "1"]
+    assert [c["max_results"] for c in calls] == ["5", "5"]
+    assert reservations == [(date(2026, 9, 7), 5, 2000)] * 2
     assert [p.provider_post_id for p in batch.posts] == ["1", "2"]
     assert batch.outcome.proposed_progress == "unused"
+
+
+def test_sub_five_reservation_is_exhausted_without_sending_invalid_request():
+    requested = []
+    provider = OfficialXSocialProvider(
+        bearer_token="secret", reservation=lambda *_: 4,
+        client=httpx.Client(transport=httpx.MockTransport(
+            lambda request: requested.append(request) or httpx.Response(200, json={"data": []})
+        )), daily_post_limit=10, budget_timezone="Asia/Singapore",
+    )
+
+    batch = provider.read_source(read_request(limit=2))
+
+    assert requested == []
+    assert batch.outcome.error_code == "daily_limit_exhausted"
 
 
 def test_incremental_starts_at_head_and_test_read_never_proposes_progress():
@@ -92,7 +110,7 @@ def test_blank_token_and_exhausted_allowance_make_no_request():
     assert exhausted.outcome.error_code == "daily_limit_exhausted"
 
 
-@pytest.mark.parametrize("grant", ["2", 3, -1])
+@pytest.mark.parametrize("grant", ["5", 6, -1])
 def test_invalid_reservation_grant_fails_closed_without_request(grant):
     requested = []
     def handler(req): requested.append(req); return httpx.Response(200, json={"data":[],"meta":{}})
@@ -127,7 +145,7 @@ def test_one_network_failure_is_delayed_retried_and_reserved_again():
     batch = make_provider(handler, sleeps=sleeps, reservations=reservations).read_source(read_request())
     assert batch.outcome.read_status == "success"
     assert attempts == 2 and sleeps == [0.25]
-    assert reservations == [(date(2026, 9, 7), 2, 2000)] * 2
+    assert reservations == [(date(2026, 9, 7), 5, 2000)] * 2
 
 
 def test_invalid_json_and_invalid_schema_fail_closed():

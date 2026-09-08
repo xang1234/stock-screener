@@ -140,4 +140,31 @@ describe('SocialSignalHealthPanel', () => {
       },
     ));
   });
+
+  it('replaces a stale source rename draft after an optimistic version conflict', async () => {
+    const latestSources = [{ ...sources[0], name: 'Server Name', version: 4 }];
+    api.getSocialAdminSources
+      .mockResolvedValueOnce(sources)
+      .mockResolvedValue(latestSources);
+    api.renameSocialSource
+      .mockRejectedValueOnce({ response: { data: { detail: { code: 'version_conflict' } } } })
+      .mockResolvedValueOnce(latestSources[0]);
+    renderPanel();
+    await unlock();
+    const editor = screen.getByLabelText('Rename Asia Growth').querySelector('input');
+    fireEvent.change(editor, { target: { value: 'Local Name' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => expect(
+      screen.getByLabelText('Rename Server Name').querySelector('input'),
+    ).toHaveValue('Server Name'));
+    expect(screen.getByText(/Reloaded the latest version/)).toBeInTheDocument();
+    const refreshedEditor = screen.getByLabelText('Rename Server Name').querySelector('input');
+    fireEvent.change(refreshedEditor, { target: { value: 'Final Name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(api.renameSocialSource).toHaveBeenLastCalledWith(
+      'secret', '9', 'Final Name', 4,
+    ));
+  });
 });

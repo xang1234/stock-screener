@@ -384,13 +384,21 @@ def retry_admin_analysis(work_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=422, detail={"code": "work_generation_not_found"}
         )
+    prior = (row.state, row.error_code, row.requested_by_admin)
     row.requested_by_admin = True
     row.state = "pending"
     row.error_code = None
     db.commit()
-    task = resume_social_analysis.apply_async(
-        args=[run_id], queue="social_ingestion"
-    )
+    try:
+        task = resume_social_analysis.apply_async(
+            args=[run_id], queue="social_ingestion"
+        )
+    except Exception:
+        db.rollback()
+        row = db.get(SocialExtractionWork, work_id)
+        row.state, row.error_code, row.requested_by_admin = prior
+        db.commit()
+        raise
     return {
         "task_id": task.id,
         "status": "queued",

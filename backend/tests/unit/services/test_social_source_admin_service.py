@@ -238,7 +238,7 @@ def test_official_capacity_is_durable_bounded_and_does_not_change_policy_version
         assert service.reserve_official_capacity(date(2026, 9, 7), 6, 10) == 6
     with factory() as restarted:
         service = SocialSourceAdminService(restarted)
-        assert service.reserve_official_capacity(date(2026, 9, 7), 6, 10) == 4
+        assert service.reserve_official_capacity(date(2026, 9, 7), 6, 10) == 0
         assert service.reserve_official_capacity(date(2026, 9, 7), 1, 10) == 0
         assert service.read_runtime().version == version
 
@@ -252,7 +252,7 @@ def test_prior_day_cannot_reset_newer_official_capacity_day(registry_engine):
         service = SocialSourceAdminService(db); service.ensure_seed_sources()
         assert service.reserve_official_capacity(date(2026, 9, 8), 7, 10) == 7
         assert service.reserve_official_capacity(date(2026, 9, 7), 3, 10) == 0
-        assert service.reserve_official_capacity(date(2026, 9, 8), 5, 10) == 3
+        assert service.reserve_official_capacity(date(2026, 9, 8), 5, 10) == 0
 
 
 def test_concurrent_official_capacity_reservations_never_exceed_daily_limit(registry_engine):
@@ -270,7 +270,7 @@ def test_concurrent_official_capacity_reservations_never_exceed_daily_limit(regi
             return SocialSourceAdminService(db).reserve_official_capacity(date(2026, 9, 7), 8, 10)
     with ThreadPoolExecutor(max_workers=2) as workers:
         grants = [future.result(timeout=15) for future in (workers.submit(reserve), workers.submit(reserve))]
-    assert sorted(grants) == [2, 8]
+    assert sorted(grants) == [0, 8]
 
 
 def test_runtime_read_does_not_apply_environment(db_session, monkeypatch):

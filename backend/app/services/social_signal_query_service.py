@@ -359,12 +359,25 @@ class SocialSignalQueries:
                 )},
             })
         posts.sort(key=lambda value: (value["created_at"], value["post_id"]), reverse=True)
-        related = sorted({
-            (row.market, row.canonical_symbol)
-            for row in self.db.scalars(select(SocialPostTicker).where(
-                SocialPostTicker.candidate_key == candidate_key
-            )) if row.market and row.canonical_symbol
-        })
+        from app.models.stock_universe import StockUniverse
+        from app.services.social_company_identity_service import (
+            SocialCompanyIdentityService,
+        )
+        from app.services.social_ticker_resolver import SocialTickerResolver
+        related = []
+        if item["canonical_symbol"] and item["market"]:
+            identities = SocialCompanyIdentityService(self.db).read()
+            resolution = SocialTickerResolver(
+                self.db, verified_company_ids=identities.verified_company_ids,
+            ).resolve(item["canonical_symbol"], item["market"])
+            if resolution.related_symbols:
+                related = [
+                    (row.market, row.symbol)
+                    for row in self.db.scalars(select(StockUniverse).where(
+                        StockUniverse.symbol.in_(resolution.related_symbols),
+                        StockUniverse.active_filter(),
+                    ).order_by(StockUniverse.market, StockUniverse.symbol))
+                ]
         return {
             **base, "available": True, "reason_code": None, "item": item,
             "posts": posts[:3],

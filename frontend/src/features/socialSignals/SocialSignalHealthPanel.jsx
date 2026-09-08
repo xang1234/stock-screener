@@ -32,6 +32,8 @@ export default function SocialSignalHealthPanel() {
   const [message, setMessage] = useState(null);
   const [identityDraft, setIdentityDraft] = useState('');
   const [validation, setValidation] = useState(null);
+  const [modeDraft, setModeDraft] = useState(null);
+  const [providerDraft, setProviderDraft] = useState(null);
   const enabled = Boolean(adminKey);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['socialAdmin'] });
 
@@ -69,10 +71,17 @@ export default function SocialSignalHealthPanel() {
   const mutation = useMutation({
     mutationFn: async (work) => work(),
     onSuccess: () => { setMessage({ severity: 'success', text: 'Social administration updated.' }); refresh(); },
-    onError: (error) => {
+    onError: async (error) => {
+      if (errorCode(error) === 'version_conflict') {
+        setModeDraft(null);
+        setProviderDraft(null);
+        setRenameDrafts({});
+        await Promise.all([runtime.refetch(), sources.refetch()]);
+        setMessage({ severity: 'error', text: 'This record changed elsewhere. Reloaded the latest version.' });
+        return;
+      }
       refresh();
-      setMessage({ severity: 'error', text: errorCode(error) === 'version_conflict'
-        ? 'This record changed elsewhere. Reloaded the latest version.' : String(errorCode(error)) });
+      setMessage({ severity: 'error', text: String(errorCode(error)) });
     },
   });
   const identityMutation = useMutation({
@@ -94,8 +103,6 @@ export default function SocialSignalHealthPanel() {
     },
   });
   const runtimeDraft = useMemo(() => runtime.data || { mode: 'off', provider: 'disabled' }, [runtime.data]);
-  const [modeDraft, setModeDraft] = useState(null);
-  const [providerDraft, setProviderDraft] = useState(null);
   useEffect(() => {
     if (identities.data) {
       setIdentityDraft((current) => current || JSON.stringify(identities.data.entries || [], null, 2));
