@@ -81,6 +81,25 @@ def test_local_up_builds_then_starts_normal_stack_then_private_worker(tmp_path):
     assert commands[2].endswith("--profile social up -d --no-build celery-social")
 
 
+def test_local_up_build_flag_forces_normal_stack_rebuild(tmp_path):
+    env, command_log = _environment(tmp_path)
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "local", "up", "--build"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = command_log.read_text(encoding="utf-8").splitlines()
+    assert commands[0].startswith("build --ssh default")
+    assert commands[1].endswith("up -d --build")
+    assert commands[2].endswith("--profile social up -d --no-build celery-social")
+
+
 def test_ghcr_up_pulls_immutable_image_before_starting_stack(tmp_path):
     image = "ghcr.io/xang1234/stock-screener-social-xui:sha-" + "b" * 40
     env, command_log = _environment(tmp_path, worker_image=image)

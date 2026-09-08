@@ -70,6 +70,7 @@ validate_profile() {
 }
 
 local_up() {
+  local force_rebuild="${1:-0}"
   local ref known_hosts image
   ref="$(setting XUI_READER_REF)"
   known_hosts="$(setting GITHUB_KNOWN_HOSTS_FILE)"
@@ -93,7 +94,11 @@ local_up() {
     -f "$ROOT_DIR/backend/Dockerfile" \
     "$ROOT_DIR"
 
-  "$STACK_WRAPPER" --env-file "$ENV_FILE" up -d
+  if [[ "$force_rebuild" == "1" ]]; then
+    "$STACK_WRAPPER" --env-file "$ENV_FILE" up -d --build
+  else
+    "$STACK_WRAPPER" --env-file "$ENV_FILE" up -d
+  fi
   compose_social up -d --no-build celery-social
   printf 'Social Signal stack is running with local image %s.\n' "$image"
   printf 'Open http://localhost and activate validation from Operations.\n'
@@ -120,7 +125,8 @@ ghcr_up() {
 
 usage() {
   printf 'Usage:\n' >&2
-  printf '  %s {local|ghcr} up\n' "${0##*/}" >&2
+  printf '  %s local up [--build]\n' "${0##*/}" >&2
+  printf '  %s ghcr up\n' "${0##*/}" >&2
   printf '  %s {status|logs|stop}\n' "${0##*/}" >&2
   exit 2
 }
@@ -131,6 +137,9 @@ cd "$ROOT_DIR"
 
 if [[ "${1:-}" == "local" && "${2:-}" == "up" && $# -eq 2 ]]; then
   local_up
+elif [[ "${1:-}" == "local" && "${2:-}" == "up" \
+  && "${3:-}" == "--build" && $# -eq 3 ]]; then
+  local_up 1
 elif [[ "${1:-}" == "ghcr" && "${2:-}" == "up" && $# -eq 2 ]]; then
   ghcr_up
 elif [[ "${1:-}" == "status" && $# -eq 1 ]]; then

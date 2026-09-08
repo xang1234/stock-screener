@@ -56,6 +56,15 @@ Build the private xui image locally and start the complete stack:
 scripts/social-signal-stack.sh local up
 ```
 
+Force-rebuild the normal backend, frontend, and worker images as well:
+
+```bash
+scripts/social-signal-stack.sh local up --build
+```
+
+The private xui image is rebuilt in both local forms. `--build` controls the
+additional Compose rebuild of the normal application stack.
+
 Or pull an already-published private GHCR image and start the complete stack:
 
 ```bash
