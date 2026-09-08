@@ -1,0 +1,45 @@
+# Evidence Preparation Implementation Plan
+
+> Execute inline with test-first checks. Reader work is excluded. Preserve the user's evidence-review gate.
+
+**Goal:** Recover article bodies, prepare multilingual text and interpret attached images in versioned artifacts without changing the frozen sample.
+
+**Architecture:** Standalone preparation modules alongside the existing evidence package. A content-addressed result store binds each result to a bundle and source record. Public HTTP, HTML parsing and model completion are narrow injected boundaries. Reuse installed httpx/BeautifulSoup/Pillow and existing provider clients where suitable.
+
+**Spec:** [Evidence preparation design](../specs/2026-09-08-evidence-preparation-design.md).
+
+**Tool approval status:** The user approved OpenCode Go model `kimi-k2.6` for image transcription and chart interpretation on 2026-09-08. Implement this adapter with separate transcription and observation fields; defer PaddleOCR and its model downloads. Article tools and the MiniMax translation proposal remain pending approval; their live use requires that approval. Kimi does not require another model-selection approval. Preserve the existing sequence: mocked/offline checks during implementation, then live image validation and sample rebuilding after both repositories are updated. Model approval does not waive evidence review before theme extraction. Implementation now includes offline-tested article recovery, language preparation and attributed translation imports, the approved Go image adapter, immutable storage, CLI and review reports. Live corpus processing remains deferred.
+
+## Files and steps
+
+1. `preparation_records.py`, `preparation_store.py`, `test_preparation_store.py`: strict input/result contracts, raw asset hashes and immutable result files. Prove tampering and stale source bindings fail; cache success only. Implement canonical JSON and atomic write/rename using the existing hashing conventions. Keep original Bundle unchanged.
+2. `article_recovery.py`, `public_fetch.py`, `test_article_recovery.py`: fetch public URLs with per-redirect checks and byte/time limits; parse articleBody/semantic body, reject access interstitials, return partial when completeness is unknown. Support exact-reference fallback imports. Test real HTML fixtures and injected transport responses, never live sites.
+3. `multilingual_preparation.py`, `test_multilingual_preparation.py`: paragraph-preserving segmentation; Hangul/kana/Han and unknown/mixed language detection; explicit translation adapter; validate aligned output and warn on numerical changes. Prove every input character is preserved and a failed chunk cannot become a full translation.
+4. `image_preparation.py`, `preparation_models.py`, `test_image_preparation.py`: validate images, preserve content hashes, request separate transcription/observation fields, validate model output, and cache using image hash/model/policy. Test corrupt images, capability rejection, repeated images and malformed provider results.
+5. `preparation_cli.py`, `preparation_review.py`, `backend/scripts/prepare_theme_evidence.py`, `test_preparation_cli.py`: validate reader-handoff mappings against a base bundle; explicit article/text/image stages, limits, fallback import and offline review. Report separate states and lineage; do not expose a theme-extraction command.
+6. Update `docs/theme_evaluation/pilot_runbook.md` and add `docs/theme_evaluation/reader_handoff.md`. Run new tests and existing evidence/theme regressions; request a bounded code review and fix material findings. Do not run preparation against the real pilot or modify reader code.
+
+## Contracts
+
+Input mapping JSON: `bundle_id`, `documents` (document ID -> original text SHA, optional language, image URLs), `references` (reference ID -> destination URL). Unknown IDs/hash mismatches fail before any network/model call. Empty mappings use known bundle metadata; short image links remain unresolved.
+
+Stage result: strict `stage`, source identity/hash, input signature, status (`success`, `partial`, `unavailable`, `needs_review`), payload, warnings, source URL, retrieved/generated times and model/policy provenance. Payloads are validated by the responsible stage. A successful image result requires valid transcription/observation fields; a successful translation requires all source segments. A parsed article with uncertain completeness stays partial.
+
+Stored preparation manifest: base bundle ID, source mapping hash, ordered stage result IDs and policy version. Review verifies result IDs and input bindings before displaying evidence. Repeated stage results can share processing across parents; parent links live in the manifest.
+
+## Verification
+
+Use the main checkout's backend virtual environment with `DATABASE_URL=sqlite://`, `STOCKSCANNER_TEST_ALLOW_SQLITE=1`, `STOCKSCANNER_TEST_ALLOW_POSTGRES=0`, `STOCKSCANNER_TEST_USE_DATABASE_URL=0` and `PYTHONPATH=.`. Write tests before stage implementations, confirm expected failure, then run the affected tests. At completion run the full evidence suite and the existing identity/source-quality/lifecycle tests. Verify the original pilot's manifest hash without writing it.
+
+## Implementation decisions and verification ledger
+
+- Existing worktree verified: `feat/theme-detection-evaluation`. Main checkout and reader repository untouched.
+- Kept Bundle v1 unchanged. Added separate source-bound preparation artifacts and asset storage.
+- Article/model calls remain explicit. Translation uses an injected provider boundary or offline attributed imports while its live service selection is pending. This avoids silently selecting an unapproved translator.
+- Script checks preserve supplied languages; Han-only/unknown Latin scripts stay ambiguous. Identity translation requires compatible metadata.
+- Browser recovery requires an explicit capture time and exact destination/reference match; automatic HTML text stays partial until reviewed.
+- Image implementation delegated as one bounded task; separate review covered storage, fetches, language and report integration.
+- Review fixes: cookie isolation on IP-pinned redirects; reject encoded responses before decompression; flag unchanged foreign translations and conflicting Han/English metadata; exclude superseded failures from current queues; require imported capture times; idempotent translation imports; reject provider-reported truncated image responses. Each fix has a regression test.
+- No installs, paid calls, real-pilot preparation or reader changes during implementation.
+
+Final offline validation: 119 tests passed (evidence suite plus theme identity, source-quality and lifecycle regressions), with two pre-existing dependency deprecation warnings. Ruff passed for all added Python files. The frozen 98-document pilot bundle verified against its original content ID. Review findings were closed, including a regression for returning to a previously cached image after an intervening image version. No live provider transport/accuracy claim is made.
