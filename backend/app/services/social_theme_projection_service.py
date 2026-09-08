@@ -222,8 +222,12 @@ class SocialThemeProjectionService:
                 post, result = _decode(work)
                 work_ids.append(work.id)
                 if now - timedelta(days=14) <= post.created_at <= now:
-                    proposals.extend(result.claims)
-                    for claim in result.claims:
+                    supported_claims = tuple(
+                        claim for claim in result.claims
+                        if claim.support != "unsupported"
+                    )
+                    proposals.extend(supported_claims)
+                    for claim in supported_claims:
                         find_read_only_theme_match(self.db, claim.raw_theme, self.pipeline)
             return ThemeProjection(run_id, POLICY, tuple(proposals), identity.registry_version,
                                    identity.version, identity.policy_version, now, tuple(work_ids),

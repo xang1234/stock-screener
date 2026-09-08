@@ -203,13 +203,15 @@ def test_failed_mutation_rolls_back_and_seed_is_idempotent(db_session):
     assert len(service.audit_events(first.source_id)) == 2
 
 
-def test_explicit_test_is_limited_to_pending_or_disabled_sources(db_session):
-    from app.services.social_source_admin_service import SocialSourceStateError
+def test_explicit_test_can_run_for_enabled_sources(db_session):
     service = prepare_service(db_session)
     enabled = service.list_sources()[0]
 
-    with pytest.raises(SocialSourceStateError, match="source_test_not_required"):
-        service.request_test(enabled.source_id, enabled.version, "admin")
+    requested = service.request_test(enabled.source_id, enabled.version, "admin")
+    claimed = service.claim_test(enabled.source_id, "worker")
+
+    assert claimed.request_id == requested.request_id
+    assert service.list_sources()[0].lifecycle == "enabled"
 
 
 def test_caller_flushed_transaction_is_never_committed(db_session):

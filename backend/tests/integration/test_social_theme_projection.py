@@ -105,8 +105,11 @@ def test_validation_does_not_mutate_live_catalog(social_fixture):
 
 def test_unsupported_claim_does_not_create_live_theme_or_membership(social_fixture):
     f = social_fixture
+    projection = f.prepare([f.save(("AAA",), support="unsupported")])
 
-    f.apply(f.prepare([f.save(("AAA",), support="unsupported")]))
+    assert projection.proposals == ()
+    assert projection.resolutions == ()
+    f.apply(projection)
 
     assert f.db.query(ThemeCluster).count() == 0
     assert f.db.query(ThemeMention).count() == 0

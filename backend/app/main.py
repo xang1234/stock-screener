@@ -90,6 +90,11 @@ def initialize_runtime() -> None:
     )
     action = migrate_database_to_head(engine)
     logger.info("Database schema ready", extra={"migration_action": action})
+    from .services.social_source_admin_service import SocialSourceAdminService
+
+    with SessionLocal() as db:
+        sources = SocialSourceAdminService(db).ensure_seed_sources()
+    logger.info("Social source inventory ready", extra={"source_count": len(sources)})
 
 
 async def trigger_ui_snapshot_rebuild_on_startup() -> None:

@@ -236,8 +236,6 @@ class SocialSourceAdminService:
             self._version(row, expected_version)
             if row.lifecycle_state == "archived":
                 raise SocialSourceStateError("source_archived")
-            if row.lifecycle_state not in {"pending", "disabled"}:
-                raise SocialSourceStateError("source_test_not_required")
             if registry.provider == "disabled":
                 raise SocialSourceStateError("provider_disabled")
             before = self._metadata(row)
@@ -257,7 +255,7 @@ class SocialSourceAdminService:
         with self._transaction(lock=True) as registry:
             row = self._source(source_id)
             if (row.test_status != "queued" or not row.test_request_id
-                    or row.lifecycle_state not in {"pending", "disabled"}
+                    or row.lifecycle_state == "archived"
                     or row.test_request_version != row.version
                     or row.test_registry_version != registry.version
                     or row.tested_provider != registry.provider
