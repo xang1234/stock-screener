@@ -43,6 +43,42 @@ If the container cannot update the session, change ownership of this dedicated d
 
 The profile is mounted read/write only at `/app/data/xui-reader` in `celery-social`. It is not mounted into the backend, scheduler, or general/data workers.
 
+## Convenience wrapper
+
+The wrapper combines prerequisite checks, the normal enabled-market stack, and
+the isolated Social worker. It reads `.env`, then `.env.docker` when `.env` is
+absent. To select another file, set `SOCIAL_STACK_ENV_FILE`; relative paths are
+resolved from the repository root.
+
+Build the private xui image locally and start the complete stack:
+
+```bash
+scripts/social-signal-stack.sh local up
+```
+
+Or pull an already-published private GHCR image and start the complete stack:
+
+```bash
+scripts/social-signal-stack.sh ghcr up
+```
+
+GHCR mode requires `SOCIAL_WORKER_IMAGE` to use an immutable digest, a full
+40-character `sha-*` tag, or a `v*` release tag. The wrapper rejects `latest`
+and never performs `docker login`; authenticate separately before running it.
+
+Operational commands target only the Social worker:
+
+```bash
+scripts/social-signal-stack.sh status
+scripts/social-signal-stack.sh logs
+scripts/social-signal-stack.sh stop
+```
+
+The wrapper never changes the database runtime to `validation` or `live`.
+Activation remains an explicit administrator action in Operations. The manual
+commands below remain useful for troubleshooting individual build and Compose
+steps.
+
 ## GHCR-free local private build
 
 Set `XUI_READER_REF` to the exact 40-character commit SHA you reviewed in the private repository. Create a `known_hosts` file using keys whose fingerprints you independently verified against [GitHub's published SSH host keys](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints). Do not populate this file from an unverified `ssh-keyscan` result.
