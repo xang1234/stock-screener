@@ -3,9 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from app.services.theme_evaluation.xui_intake import import_xui, read_required_lists
-
 
 NOW = datetime(2026, 9, 1, 10, tzinfo=timezone.utc)
 
@@ -100,6 +98,47 @@ def test_reader_quality_full_does_not_prove_complete_long_post(xui_payloads):
     for payload in xui_payloads.values():
         payload['items'][0]['text'] = 'A long post that stops mid sentence ' * 8
     assert ingest(xui_payloads).documents[0].capture_status == 'partial'
+
+
+@pytest.mark.parametrize('complete,reasons,is_article,expected', [
+    (True, [], False, 'full'),
+    (False, ['truncated'], False, 'partial'),
+    (None, [], False, 'partial'),
+    (True, ['conflicting_body'], False, 'partial'),
+    (True, [], True, 'partial'),
+])
+def test_explicit_reader_completeness_controls_capture(xui_payloads, complete, reasons,
+                                                       is_article, expected):
+    for payload in xui_payloads.values():
+        payload['items'][0].update(text='A complete long note. ' * 30,
+            text_complete=complete, incomplete_text_reasons=reasons,
+            text_source='note_tweet', is_article=is_article)
+    assert ingest(xui_payloads).documents[0].capture_status == expected
+
+
+def test_incomplete_short_post_is_never_marked_full(xui_payloads):
+    for payload in xui_payloads.values():
+        payload['items'][0].update(text_complete=False, incomplete_text_reasons=['truncated'])
+    assert ingest(xui_payloads).documents[0].capture_status == 'partial'
+
+
+def test_updated_reader_metadata_survives_sealing_and_drives_article_queue(xui_payloads, tmp_path):
+    from app.services.theme_evaluation.article_intake import propose_references
+    from app.services.theme_evaluation.bundle import load_bundle, seal_bundle
+
+    for payload in xui_payloads.values():
+        payload['items'][0].update(text='Read the earnings report.', text_source='legacy',
+            text_complete=True, incomplete_text_reasons=[],
+            article_urls=['https://example.com/earnings'],
+            image_urls=['https://example.com/chart.png'], image_captions=['売上高'],
+            reply_tweet_id='123')
+    bundle = load_bundle(seal_bundle(tmp_path, ingest(xui_payloads)))
+    assert [r.candidate_url for r in propose_references(bundle)] == ['https://example.com/earnings']
+    metadata = bundle.documents[0].source_metadata
+    assert metadata.text_source == 'legacy'
+    assert metadata.text_complete is True
+    assert metadata.image_captions == ['売上高']
+    assert metadata.reply_tweet_id == '123'
 
 
 def test_auth_error_inside_outcome_also_stops_live_reads():

@@ -18,6 +18,7 @@ def propose_references(bundle: Bundle) -> list[Followup]:
         if doc.kind != 'post':
             continue
         urls = set(re.findall(r'https?://[^\s<>"\u2026]+', doc.text))
+        urls.update(doc.source_metadata.article_urls)
         if doc.source_metadata.is_article:
             urls.add(doc.url)
         for url in sorted(urls):

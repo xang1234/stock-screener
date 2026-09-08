@@ -52,6 +52,7 @@ class OpenCodeGoVision(OpenCodeGoKimi):
                 }
             ],
             max_tokens=2_048,
+            read_timeout=45.0,
         )
 
 

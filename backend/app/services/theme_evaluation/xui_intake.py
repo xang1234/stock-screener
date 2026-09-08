@@ -9,8 +9,14 @@ from pathlib import Path
 from pydantic import AwareDatetime, TypeAdapter
 
 from .bundle import canonical_bytes, sha256, validate_bundle
-from .records import Bundle, Document, Membership, REQUIRED_LIST_IDS, SourceMetadata, SourceOutcome
-
+from .records import (
+    REQUIRED_LIST_IDS,
+    Bundle,
+    Document,
+    Membership,
+    SourceMetadata,
+    SourceOutcome,
+)
 
 _DATE = TypeAdapter(AwareDatetime)
 
@@ -34,7 +40,7 @@ def read_required_lists(*, wrapper: Path, python: Path, xui_bin: Path,
             response = run_command(args, env=env, capture_output=True, text=True, timeout=180)
             payload = json.loads(response.stdout)
             if not isinstance(payload, dict):
-                raise ValueError('reader_object_required')
+                raise ValueError('reader_object_required')  # noqa: TRY004 - handled as invalid reader data
             for outcome in payload.get('outcomes', []):
                 error = outcome.get('error')
                 if error == 'reauth_required' or (isinstance(error, dict)
@@ -47,10 +53,12 @@ def read_required_lists(*, wrapper: Path, python: Path, xui_bin: Path,
             payload, raw_hash = {'error_code': 'reader_timeout'}, None
         except (OSError, ValueError):
             payload, raw_hash = {'error_code': 'reader_response_unavailable'}, None
-        payload['_capture'] = dict(started_at=started.isoformat(),
-                                   finished_at=datetime.now(timezone.utc).isoformat(),
-                                   raw_sha256=raw_hash,
-                                   raw_json=response.stdout if raw_hash is not None else None)
+        payload['_capture'] = {
+            'started_at': started.isoformat(),
+            'finished_at': datetime.now(timezone.utc).isoformat(),
+            'raw_sha256': raw_hash,
+            'raw_json': response.stdout if raw_hash is not None else None,
+        }
         results[list_id] = payload
         if payload.get('error_code') == 'reauth_required':
             break
@@ -60,6 +68,17 @@ def read_required_lists(*, wrapper: Path, python: Path, xui_bin: Path,
 def _sort_row(row):
     published = _date(row.get('created_at'))
     return (-(published.timestamp()) if published else float('inf'), str(row['tweet_id']))
+
+
+def _capture_status(row):
+    # A complete post preview is not the full body of a native X Article.
+    if row.get('is_article') or row.get('incomplete_text_reasons'):
+        return 'partial'
+    if 'text_complete' in row:
+        return 'full' if row['text_complete'] is True else 'partial'
+    # Legacy exports have no explicit completeness signal.
+    return ('full' if row.get('quality_tier') == 'full' and len(row['text']) < 270
+            and not row['text'].rstrip().endswith(('…', '...')) else 'partial')
 
 
 def import_xui(payloads: dict[str, dict], *, captured_at: datetime,
@@ -123,7 +142,9 @@ def import_xui(payloads: dict[str, dict], *, captured_at: datetime,
                 documents[key].retrieved_at = min(documents[key].retrieved_at, observed)
                 continue
             meta_fields = ('extraction_method', 'extraction_version', 'quality_tier',
-                           'quality_score', 'quote_tweet_id', 'is_reply', 'is_article', 'image_urls')
+                           'quality_score', 'quote_tweet_id', 'is_reply', 'is_article', 'image_urls',
+                           'image_captions', 'article_urls', 'reply_tweet_id', 'text_source',
+                           'text_complete', 'incomplete_text_reasons')
             metadata = {k: row[k] for k in meta_fields if row.get(k) is not None}
             metadata['observed_at_fallback'] = not bool(row.get('observed_at'))
             author = row.get('author_handle') or row.get('author')
@@ -132,10 +153,7 @@ def import_xui(payloads: dict[str, dict], *, captured_at: datetime,
                 text=row['text'], url=row['tweet_url'], author=author, publisher='X',
                 published_at=_date(row.get('created_at')), updated_at=None,
                 retrieved_at=observed, original_language=row.get('lang') or row.get('language'),
-                memberships=[member], capture_status=(
-                    'full' if row.get('quality_tier') == 'full' and len(row['text']) < 270
-                    and not row['text'].rstrip().endswith(('…', '...'))
-                    and not row.get('is_article') else 'partial'),
+                memberships=[member], capture_status=_capture_status(row),
                 text_sha256=sha256(row['text'].encode()), reference_only=False,
                 source_metadata=SourceMetadata.model_validate(metadata),
             )
@@ -143,14 +161,16 @@ def import_xui(payloads: dict[str, dict], *, captured_at: datetime,
         schema_version=1, mode=mode, availability_rule=None, source_outcomes=outcomes,
         documents=sorted(documents.values(), key=lambda d: (d.retrieved_at, d.document_id)),
         derivatives=[], followups=[], extractions=[], labels=[],
-        selection=dict(rule='recent-per-source-v1: publication descending, tweet ID ascending; unknown last',
-                       max_posts_per_source=max_posts_per_source, selected_ids=selected,
-                       conflicting_post_ids=conflicts, original_unique_post_count=len(all_rows)),
+        selection={
+            'rule': 'recent-per-source-v1: publication descending, tweet ID ascending; unknown last',
+            'max_posts_per_source': max_posts_per_source, 'selected_ids': selected,
+            'conflicting_post_ids': conflicts, 'original_unique_post_count': len(all_rows),
+        },
         limitations=['Recent captured sample, not a complete historical archive.',
                      'Older publication dates do not establish historical observation.',
                      'Language metadata is unknown where the reader does not supply it.',
-                     'Reader quality does not guarantee complete long posts. Text of 270+ characters, '
-                     'ellipsis endings, and native Article posts are conservatively marked partial.',
+                     ('Explicit reader completeness is preserved; unknown or incomplete text and native '
+                      'Article previews are partial. Legacy exports use conservative length/ellipsis checks.'),
                      'Evidence requires user review before extraction.'],
     )
     validate_bundle(result)

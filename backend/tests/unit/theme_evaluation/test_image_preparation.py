@@ -168,6 +168,8 @@ def test_opencode_go_sends_bounded_kimi_vision_request_and_parses_json():
         assert str(request.url) == "https://opencode.ai/zen/go/v1/chat/completions"
         assert request.headers["authorization"] == "Bearer test-api-key"
         assert all(0 < value < 60 for value in request.extensions["timeout"].values())
+        # A real chart took 21 seconds: do not reintroduce the synthetic-only 20s limit.
+        assert request.extensions["timeout"]["read"] >= 30
         payload = json.loads(request.content)
         assert payload["model"] == "kimi-k2.6"
         assert 0 < payload["max_tokens"] <= 2_048

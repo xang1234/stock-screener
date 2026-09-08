@@ -9,6 +9,18 @@ Both required lists remain part of acquisition:
 
 After both repositories are updated, create a new evidence bundle, then build this explicit mapping against its ID. Do not edit the existing frozen bundle to add corrected reader text. Source text changes require a new bundle and new mapping.
 
+The importer now preserves the reader's `text_source`, `text_complete`,
+`incomplete_text_reasons`, expanded `article_urls`, aligned `image_captions`, and
+`reply_tweet_id` alongside language and image URLs. Explicit completeness takes
+precedence over length: a complete long note can be full, while unknown or
+incomplete text remains partial. A native Article preview still requires its body.
+Expanded links join the reference queue even when absent from the visible text.
+Legacy bundles retain their original content addresses and review identities.
+
+The September 8 interim rebuild uses the currently installed reader while its
+translation update is being developed separately. It uses Kimi translation; it
+does not imply that X-provided translation ingestion has been implemented.
+
 ## Mapping file
 
 ```json
@@ -33,6 +45,12 @@ All IDs must already exist in the named bundle. Every document override requires
 `image_urls` contains actual public image destinations, never t.co landing pages or `/photo/1` web pages. For explicitly provided local images, use absolute paths in `local_images`. Image results preserve the bytes by content hash and keep every referring document/locator. Supported initial image formats are static JPEG, PNG, and WebP, up to 10 MiB and 20 million pixels. Animated, oversized, corrupt and unsupported images remain processing gaps.
 
 Document URLs already in the bundle and mapped image URLs are combined, with identical locators deduplicated. The mapping supplies extra evidence metadata; it does not silently remove earlier recorded attachments. Review incorrect earlier metadata as a reader issue when building the new base bundle.
+
+Kimi image requests allow 45 seconds for a response, with a 5-second connection
+timeout and the existing 2,048-token output limit. A real chart timed out at the
+earlier 20-second limit and completed in 21.07 seconds during diagnosis. Complete
+responses still require visual review; unreadable values and unfinished model
+responses are not accepted as facts.
 
 ## Article browser recovery import
 

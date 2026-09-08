@@ -1,6 +1,9 @@
 import pytest
-
-from app.services.theme_evaluation.bundle import load_bundle, seal_bundle, validate_bundle
+from app.services.theme_evaluation.bundle import (
+    load_bundle,
+    seal_bundle,
+    validate_bundle,
+)
 from app.services.theme_evaluation.records import Bundle
 
 
@@ -18,6 +21,20 @@ def test_repeat_sealing_preserves_original_files(tmp_path, bundle):
     assert seal_bundle(tmp_path, value) == path
     assert (path / 'bundle.json').stat().st_mtime_ns == mtime
     assert load_bundle(path) == value
+
+
+def test_legacy_metadata_round_trip_keeps_bundle_content_address(bundle, document):
+    from app.services.theme_evaluation.bundle import canonical_bytes, sha256
+    from app.services.theme_evaluation.review import coverage_summary
+
+    value = Bundle.model_validate(bundle(documents=[document()])).model_dump(mode='json')
+    metadata = value['documents'][0]['source_metadata']
+    for field in ('image_captions', 'article_urls', 'reply_tweet_id', 'text_source',
+                  'text_complete', 'incomplete_text_reasons'):
+        metadata.pop(field, None)
+    original_id = sha256(canonical_bytes(value))
+    restored = Bundle.model_validate(value)
+    assert coverage_summary(restored)['bundle_id'] == original_id
 
 
 @pytest.mark.parametrize('change,error', [
@@ -63,6 +80,7 @@ def test_failed_write_does_not_publish_partial_bundle(tmp_path, bundle, monkeypa
 
 def test_successful_source_requires_raw_provenance(xui_payloads):
     from datetime import datetime, timezone
+
     from app.services.theme_evaluation.xui_intake import import_xui
     value = import_xui(xui_payloads, captured_at=datetime.now(timezone.utc), max_posts_per_source=5)
     value.source_outcomes[0].raw_sha256 = None

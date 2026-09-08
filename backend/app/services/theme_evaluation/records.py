@@ -3,8 +3,14 @@
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
-
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_serializer,
+)
 
 REQUIRED_LIST_IDS = ('1986290701492232693', '1522014550211457024')
 REQUIRED_SOURCE_IDS = tuple('x-list:' + value for value in REQUIRED_LIST_IDS)
@@ -55,11 +61,27 @@ class SourceMetadata(Record):
     is_reply: bool | None = None
     is_article: bool | None = None
     image_urls: list[URL] = Field(default_factory=list)
+    image_captions: list[str | None] = Field(default_factory=list)
+    article_urls: list[URL] = Field(default_factory=list)
+    reply_tweet_id: str | None = None
+    text_source: str | None = None
+    text_complete: bool | None = None
+    incomplete_text_reasons: list[str] = Field(default_factory=list)
     observed_at_fallback: bool = False
     pdf_sha256: SHA | None = None
     pdf_title: str | None = None
     pdf_warnings: list[str] = Field(default_factory=list)
     pdf_exported_at: AwareDatetime | None = None
+
+    @model_serializer(mode='wrap')
+    def preserve_legacy_metadata(self, handler):
+        result = handler(self)
+        # Additive reader fields must not change IDs of previously sealed v1 bundles.
+        for name in ('image_captions', 'article_urls', 'reply_tweet_id', 'text_source',
+                     'text_complete', 'incomplete_text_reasons'):
+            if name not in self.model_fields_set:
+                result.pop(name, None)
+        return result
 
 
 class Document(Record):
