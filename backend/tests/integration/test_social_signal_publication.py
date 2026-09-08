@@ -4,7 +4,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import update, delete
+from sqlalchemy import event, update, delete
 
 from tests.unit.repositories.test_social_signal_writer import store, batch, writer, NOW
 from app.domain.social_signals.records import SocialSnapshotRecord
@@ -257,6 +257,35 @@ def test_current_replay_preserves_terminal_history_and_collection_freshness(stor
     w.prepare_run("current", (), current)
     with store() as db:
         assert tuple(s.last_successful_collection_at for s in db.query(SocialSourceConfiguration).order_by(SocialSourceConfiguration.content_source_id)) == timestamps
+
+
+def test_replay_flushes_run_before_linking_successful_work(store):
+    """Postgres must see the parent run before replay work links are inserted."""
+    from app.infra.db.models.social_analysis import SocialRunWork
+    from sqlalchemy.orm import sessionmaker
+
+    strict_store = sessionmaker(
+        bind=store.kw["bind"], expire_on_commit=False, autoflush=False
+    )
+    w = writer(strict_store)
+    w.create_run("old", NOW)
+    save_success(strict_store, w, "old")
+
+    def reject_unflushed_parent(session, *_):
+        pending_runs = {
+            row.id for row in session.new if isinstance(row, SocialSignalRun)
+        }
+        if any(
+            isinstance(row, SocialRunWork) and row.run_id in pending_runs
+            for row in session.new
+        ):
+            raise AssertionError("replay_parent_run_not_flushed")
+
+    event.listen(strict_store.class_, "before_flush", reject_unflushed_parent)
+    try:
+        w.create_replay_run("current", "old", NOW + timedelta(hours=1))
+    finally:
+        event.remove(strict_store.class_, "before_flush", reject_unflushed_parent)
 
 
 @pytest.mark.parametrize("change", ["provider", "source_version", "added", "disabled"])

@@ -112,6 +112,22 @@ def test_redis_lease_owner_cannot_be_released_by_another_worker():
     assert gate.acquire("owner-b", 30)
 
 
+def test_llm_request_gate_serializes_callers_and_retains_start_spacing():
+    from app.services.social_signal_runtime_gate import RedisSocialLLMRequestGate
+
+    redis = Redis()
+    first = RedisSocialLLMRequestGate(redis)
+    second = RedisSocialLLMRequestGate(redis)
+
+    assert first.acquire("owner-a", 600)
+    assert not second.acquire("owner-b", 600)
+    first.mark_started(5)
+    first.release("owner-a")
+
+    assert second.acquire("owner-b", 600)
+    assert second.wait_seconds() == 5
+
+
 def test_manual_cooldown_is_shared_but_separate_from_provider_lease():
     from app.services.social_signal_runtime_gate import RedisSocialSignalGate
     gate = RedisSocialSignalGate(Redis())

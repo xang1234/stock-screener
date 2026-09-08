@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from datetime import timedelta
 from typing import Callable
 
@@ -26,6 +27,11 @@ _OUTCOME_KEYS = frozenset({
     "selector_report_path",
 })
 _AUTH_REASONS = ("challenge", "login wall", "login_wall", "reauth", "auth", "session")
+_NETWORK_REASONS = (
+    "network", "connection reset", "connection refused", "temporary failure",
+    "timed out", "timeout", "dns",
+)
+_RETRY_DELAY_SECONDS = 30
 
 
 class XuiCliSocialProvider:
@@ -72,24 +78,36 @@ class XuiCliSocialProvider:
 
         intent_cap = {"initial": 1000, "incremental": 200, "test": 5}[request.intent]
         effective_limit = min(request.limit, intent_cap)
-        read_result = self._execute([
+        read_command = [
             "xui", "read", "--path", self._config_path, "--profile", self._profile,
             "--limit", str(effective_limit), "--json", "--sources", f"list:{request.list_id}",
-        ])
-        if isinstance(read_result, str):
-            return self._failed(request, read_result)
-        try:
-            payload = json.loads(read_result.stdout)
-        except (TypeError, json.JSONDecodeError):
-            return self._failed(request, "invalid_provider_json")
-        try:
-            posts = self._normalize(payload, request, effective_limit)
-        except (TypeError, ValueError, KeyError):
-            return self._failed(request, "invalid_provider_schema")
+        ]
+        for attempt in range(2):
+            read_result = self._execute(read_command)
+            if isinstance(read_result, str):
+                if read_result == "provider_timeout" and attempt == 0:
+                    time.sleep(_RETRY_DELAY_SECONDS)
+                    continue
+                return self._failed(request, read_result)
+            try:
+                payload = json.loads(read_result.stdout)
+            except (TypeError, json.JSONDecodeError):
+                return self._failed(request, "invalid_provider_json")
+            try:
+                posts = self._normalize(payload, request, effective_limit)
+            except (TypeError, ValueError, KeyError):
+                return self._failed(request, "invalid_provider_schema")
 
-        if read_result.returncode != 0 or payload["failed_sources"] != 0:
-            code = self._failure_code(payload)
-            return self._failed(request, code, cooldown=True)
+            if read_result.returncode != 0 or payload["failed_sources"] != 0:
+                code = self._failure_code(payload)
+                if code == "provider_network_error" and attempt == 0:
+                    time.sleep(_RETRY_DELAY_SECONDS)
+                    continue
+                return self._failed(
+                    request, code,
+                    cooldown=code not in {"provider_network_error", "provider_timeout"},
+                )
+            break
 
         timestamps = [post.created_at for post in posts]
         return SocialSourceBatch(request, tuple(posts), SocialSourceOutcome(
@@ -107,7 +125,9 @@ class XuiCliSocialProvider:
             return self._runner(
                 command, capture_output=True, text=True, timeout=self._timeout, shell=False,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired:
+            return "provider_timeout"
+        except (FileNotFoundError, OSError):
             return "provider_unavailable"
 
     @staticmethod
@@ -197,7 +217,11 @@ class XuiCliSocialProvider:
         outcomes = payload.get("outcomes") if isinstance(payload, dict) else None
         error = outcomes[0].get("error") if isinstance(outcomes, list) and outcomes and isinstance(outcomes[0], dict) else ""
         lowered = str(error or "").lower()
-        return "reauthentication_required" if any(term in lowered for term in _AUTH_REASONS) else "provider_error"
+        if any(term in lowered for term in _AUTH_REASONS):
+            return "reauthentication_required"
+        if any(term in lowered for term in _NETWORK_REASONS):
+            return "provider_network_error"
+        return "provider_error"
 
     def _failed(self, request, code, *, cooldown=False, reset_at=None):
         if cooldown:

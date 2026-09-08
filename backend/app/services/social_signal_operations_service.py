@@ -33,6 +33,7 @@ _PUBLIC_REASON_CODES = {
     "provider_error",
     "provider_lease_unavailable",
     "provider_network_error",
+    "provider_timeout",
     "provider_unavailable",
     "rate_limited",
     "reauthentication_required",

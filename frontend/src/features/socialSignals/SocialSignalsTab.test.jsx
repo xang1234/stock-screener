@@ -138,4 +138,32 @@ describe('SocialSignalsTab', () => {
     renderTab();
     expect(await screen.findByText('No signals match these controls.')).toBeInTheDocument();
   });
+
+  it('explains mixed source outcomes when the first publication is blocked', async () => {
+    socialApi.getSocialQueue.mockResolvedValueOnce(queue({
+      available: false, reason_code: 'no_published_run', total: 0, items: [],
+      latest_attempt: {
+        run_id: 'failed-collection-1', status: 'collection_failed',
+        started_at: '2026-09-08T05:49:14Z', completed_at: null,
+        sources: [
+          { name: 'Minervini', read_status: 'failed', received_count: 0,
+            history_status: 'limited', reason_codes: ['provider_unavailable'] },
+          { name: 'AI Investing', read_status: 'success', received_count: 50,
+            history_status: 'warming_up', reason_codes: ['bounded_provider_read'] },
+        ],
+      },
+    }));
+
+    renderTab();
+
+    expect(await screen.findByText('Latest collection did not publish')).toBeInTheDocument();
+    expect(screen.getByText('Minervini')).toBeInTheDocument();
+    expect(screen.getByText('Failed · 0 posts')).toBeInTheDocument();
+    expect(screen.getByText('Provider unavailable')).toBeInTheDocument();
+    expect(screen.getByText('AI Investing')).toBeInTheDocument();
+    expect(screen.getByText('Collected · 50 posts')).toBeInTheDocument();
+    expect(screen.getByText('Limited history')).toBeInTheDocument();
+    expect(screen.getByText(/Analysis did not start because every enabled list/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Operations' })).toBeInTheDocument();
+  });
 });

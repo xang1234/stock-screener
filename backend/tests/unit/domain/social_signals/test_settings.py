@@ -22,6 +22,10 @@ def test_social_ingest_defaults_fail_closed():
     assert settings.social_official_daily_post_limit == 2000
     assert settings.social_llm_daily_budget_usd == Decimal("2.00")
     assert settings.social_llm_budget_timezone == "Asia/Singapore"
+    assert settings.social_llm_batch_size == 20
+    assert settings.social_llm_min_interval_seconds == 5
+    assert settings.social_llm_max_calls_per_run == 20
+    assert settings.social_llm_max_calls_per_day == 80
     assert settings.social_market_close_grace_minutes == 120
     assert settings.capability_flags()["social_signals"] is False
 
@@ -62,3 +66,18 @@ def test_social_capability_requires_live_mode_and_configured_provider(mode, prov
 def test_social_budget_timezone_requires_an_iana_timezone():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, social_llm_budget_timezone="Singapore-ish")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("social_llm_batch_size", 0),
+        ("social_llm_batch_size", 51),
+        ("social_llm_min_interval_seconds", -1),
+        ("social_llm_max_calls_per_run", 0),
+        ("social_llm_max_calls_per_day", 0),
+    ],
+)
+def test_social_llm_request_guards_reject_unsafe_values(field, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: value})

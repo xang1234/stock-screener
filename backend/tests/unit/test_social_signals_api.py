@@ -164,6 +164,79 @@ async def test_live_without_publication_is_typed_unavailable(
 
 
 @pytest.mark.asyncio
+async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
+    db_session, social_runtime, monkeypatch
+):
+    from datetime import datetime, timezone
+
+    from app.infra.db.models.social_signals import SocialSignalRun
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    current = social_runtime.apply_runtime(
+        "live", "xui", runtime.version, "admin"
+    )
+    started = datetime(2026, 9, 8, 5, 49, 14, tzinfo=timezone.utc)
+    db_session.add(SocialSignalRun(
+        id="failed-collection-1", registry_id=1,
+        registry_version=current.version, mode="live", provider="xui",
+        status="running",
+        source_outcomes_json={
+            "1": {
+                "read_status": "failed", "processing_status": "failed",
+                "history_status": "limited", "received_count": 0,
+                "coverage_reason_codes": ["provider_unavailable"],
+            },
+            "2": {
+                "read_status": "success", "processing_status": "pending",
+                "history_status": "warming_up", "received_count": 50,
+                "coverage_reason_codes": ["bounded_provider_read"],
+            },
+        },
+        application_progress_json={
+            "sources": {
+                "1": {"name": "Minervini", "list_id": "private-list-1"},
+                "2": {"name": "AI Investing", "list_id": "private-list-2"},
+            },
+            "observations": {"2": {"observed_at": started.isoformat()}},
+        },
+        feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+        created_at=started,
+    ))
+    db_session.commit()
+
+    response = await _request(
+        db_session, "GET",
+        "/api/v1/social-signals/queue?market=US&window=7d",
+    )
+
+    assert response.status_code == 200
+    attempt = response.json().get("latest_attempt")
+    assert attempt == {
+        "run_id": "failed-collection-1",
+        "status": "collection_failed",
+        "started_at": "2026-09-08T05:49:14Z",
+        "completed_at": None,
+        "sources": [
+            {
+                "name": "Minervini", "read_status": "failed",
+                "received_count": 0, "history_status": "limited",
+                "reason_codes": ["provider_unavailable"],
+            },
+            {
+                "name": "AI Investing", "read_status": "success",
+                "received_count": 50, "history_status": "warming_up",
+                "reason_codes": ["bounded_provider_read"],
+            },
+        ],
+    }
+    encoded = response.text.lower()
+    assert "private-list-1" not in encoded
+    assert "private-list-2" not in encoded
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query",
     [

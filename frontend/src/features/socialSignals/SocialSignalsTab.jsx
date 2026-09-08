@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
-  Alert, Box, Button, CircularProgress, Paper, Stack, TextField,
+  Alert, AlertTitle, Box, Button, CircularProgress, Paper, Stack, TextField,
   Typography,
 } from '@mui/material';
 
@@ -112,9 +112,14 @@ export default function SocialSignalsTab() {
       {queueQuery.isError ? <Alert severity="error">
         {queueQuery.error?.response?.status === 401 ? 'Your session expired. Sign in again.' : 'Social Signals could not be loaded.'}
       </Alert> : null}
-      {queueQuery.data?.available === false ? <Alert severity="info">
-        {unavailableCopy[queueQuery.data.reason_code] || 'Social Signals are temporarily unavailable.'}
-      </Alert> : null}
+      {queueQuery.data?.available === false ? (
+        queueQuery.data.latest_attempt
+          ? <LatestAttemptPanel attempt={queueQuery.data.latest_attempt}
+              onOpenOperations={() => navigate('/operations')} />
+          : <Alert severity="info">
+              {unavailableCopy[queueQuery.data.reason_code] || 'Social Signals are temporarily unavailable.'}
+            </Alert>
+      ) : null}
       {queueQuery.data?.available ? (
         <>
           <Stack direction="row" gap={1} alignItems="center" sx={{ mb: 1 }}>
@@ -154,6 +159,57 @@ export default function SocialSignalsTab() {
         navigationSymbolsOverride={visibleSymbols}
         currentPageResults={rows.map((row) => ({ ...row, symbol: row.canonical_symbol }))} />
     </Box>
+  );
+}
+
+const attemptReasonCopy = {
+  provider_error: 'Provider error',
+  provider_network_error: 'Network error after one retry',
+  provider_timeout: 'Provider timed out after one retry',
+  provider_unavailable: 'Provider unavailable',
+  rate_limited: 'Rate limited',
+  reauthentication_required: 'X authentication needs attention',
+};
+
+function LatestAttemptPanel({ attempt, onOpenOperations }) {
+  const collectionFailed = attempt.status === 'collection_failed';
+  const title = collectionFailed
+    ? 'Latest collection did not publish'
+    : attempt.status === 'processing'
+      ? 'Posts collected; analysis is in progress'
+      : 'First collection is in progress';
+  return (
+    <Alert severity={collectionFailed ? 'error' : 'info'} sx={{ mb: 1.5 }}>
+      <AlertTitle>{title}</AlertTitle>
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        Started {new Date(attempt.started_at).toLocaleString()}
+      </Typography>
+      <Stack gap={0.75}>
+        {(attempt.sources || []).map((source) => {
+          const collected = source.read_status === 'success';
+          const status = collected ? 'Collected' : source.read_status === 'failed' ? 'Failed' : 'Waiting';
+          const count = source.received_count == null ? '—' : source.received_count;
+          const limited = source.history_status === 'warming_up'
+            || (source.reason_codes || []).includes('bounded_provider_read');
+          const reasons = (source.reason_codes || [])
+            .filter((reason) => reason !== 'bounded_provider_read')
+            .map((reason) => attemptReasonCopy[reason] || reason.replaceAll('_', ' '));
+          return (
+            <Box key={source.name} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
+              <Typography variant="subtitle2">{source.name}</Typography>
+              <Typography variant="body2">{status} · {count} posts</Typography>
+              {limited ? <Typography variant="caption" color="warning.main">Limited history</Typography> : null}
+              {reasons.map((reason) => <Typography key={reason} variant="caption" display="block"
+                color={source.read_status === 'failed' ? 'error.main' : 'text.secondary'}>{reason}</Typography>)}
+            </Box>
+          );
+        })}
+      </Stack>
+      {collectionFailed ? <Typography variant="body2" sx={{ mt: 1 }}>
+        Analysis did not start because every enabled list must collect successfully.
+      </Typography> : null}
+      <Button size="small" sx={{ mt: 1 }} onClick={onOpenOperations}>Open Operations</Button>
+    </Alert>
   );
 }
 

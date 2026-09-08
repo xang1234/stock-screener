@@ -71,6 +71,12 @@ def test_private_overlay_reuses_the_one_worker_and_alone_mounts_profile_writable
     }
 
 
+def test_private_worker_reserves_shared_memory_for_playwright_chromium():
+    worker = _yaml(XUI_COMPOSE)["services"]["celery-social"]
+
+    assert worker["shm_size"] == "1gb"
+
+
 def test_dockerfile_keeps_private_install_out_of_default_public_target():
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 

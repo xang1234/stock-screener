@@ -381,9 +381,11 @@ def test_production_factory_has_explicit_lazy_official_and_xui_adapters():
     from app.wiring.use_case_factories import get_refresh_social_signals_use_case
 
     lease = Lease()
+    request_gate = object()
     refresh = get_refresh_social_signals_use_case(
         session_factory=lambda: None,
         provider_lease=lease,
+        llm_request_gate=request_gate,
         official_client=object(),
     )
     assert isinstance(refresh._provider("official"), OfficialXSocialProvider)
@@ -392,6 +394,11 @@ def test_production_factory_has_explicit_lazy_official_and_xui_adapters():
     assert refresh.evidence_reader.__class__.__name__ == "SocialScoringEvidenceReader"
     assert refresh.theme_service.__class__.__name__ == "SqlThemeProjectionFacade"
     assert refresh.confirmation_reader.__class__.__name__ == "SqlConfirmationReaderFacade"
+    assert refresh.backlog.request_gate is request_gate
+    assert refresh.backlog.batch_size == 20
+    assert refresh.backlog.min_interval_seconds == 5
+    assert refresh.backlog.max_calls_per_run == 20
+    assert refresh.backlog.max_calls_per_day == 80
     with pytest.raises(ValueError, match="not_wired"):
         refresh._provider("disabled")
 
@@ -517,7 +524,7 @@ async def test_refresh_runs_through_real_writer_backlog_and_publication_with_fix
         registry = db.get(SocialSourceRegistry, 1)
         registry.mode, registry.provider = "live", "official"
         db.add(StockUniverse(symbol="AAA", market="US", exchange="NASDAQ", is_active=True))
-        db.add(AppSetting(key="llm_extraction_model", value="synthetic/requested"))
+        db.add(AppSetting(key="social_llm_extraction_model", value="synthetic/requested"))
         db.add(AppSetting(key="social_llm_daily_limit_usd", value="2"))
         db.add(AppSetting(key="social_llm_pricing", value=json.dumps({
             "version": "fixture-v1", "models": {"synthetic/requested": {

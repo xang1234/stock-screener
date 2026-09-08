@@ -262,6 +262,15 @@ def _social_provider_lease():
     return RedisSocialSignalGate(get_redis_client())
 
 
+def _social_llm_request_gate():
+    from app.services.redis_pool import get_redis_client
+    from app.services.social_signal_runtime_gate import RedisSocialLLMRequestGate
+    client = get_redis_client()
+    if client is None:
+        raise RuntimeError("social_llm_request_gate_unavailable")
+    return RedisSocialLLMRequestGate(client)
+
+
 def _social_run_id(origin, now):
     """Use the scheduled cadence slot as the idempotency identity."""
     identity_time = now
@@ -284,7 +293,8 @@ def _social_run_id(origin, now):
 
 
 def get_refresh_social_signals_use_case(
-    *, session_factory=None, provider_lease=None, official_client=None, llm=None
+    *, session_factory=None, provider_lease=None, llm_request_gate=None,
+    official_client=None, llm=None
 ):
     """Build the private/local Social refresh path with explicit provider routing.
 
@@ -308,6 +318,8 @@ def get_refresh_social_signals_use_case(
 
     if provider_lease is None:
         provider_lease = _social_provider_lease()
+    if llm_request_gate is None:
+        llm_request_gate = _social_llm_request_gate()
 
     return RefreshSocialSignals(
         catalog=SqlSocialRefreshCatalog(sessions),
@@ -315,7 +327,15 @@ def get_refresh_social_signals_use_case(
             sessions, official_client=official_client, cooldown_gate=provider_lease
         ),
         writer=SocialSignalWriter(sessions),
-        backlog=ProcessSocialBacklog(sessions, llm=llm),
+        backlog=ProcessSocialBacklog(
+            sessions,
+            llm=llm,
+            batch_size=settings.social_llm_batch_size,
+            max_calls_per_run=settings.social_llm_max_calls_per_run,
+            max_calls_per_day=settings.social_llm_max_calls_per_day,
+            request_gate=llm_request_gate,
+            min_interval_seconds=settings.social_llm_min_interval_seconds,
+        ),
         evidence_reader=SocialScoringEvidenceReader(sessions),
         theme_service=SqlThemeProjectionFacade(sessions),
         confirmation_reader=SqlConfirmationReaderFacade(

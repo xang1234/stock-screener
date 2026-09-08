@@ -49,7 +49,9 @@ class SqlSocialRefreshCatalog:
                     _utc(row.last_successful_collection_at), row.version,
                     _utc(row.created_at), _utc(row.updated_at),
                 ))
-            setting = db.scalar(select(AppSetting).where(AppSetting.key == "llm_extraction_model"))
+            setting = db.scalar(select(AppSetting).where(
+                AppSetting.key == "social_llm_extraction_model"
+            ))
             model = setting.value if setting and setting.value else None
             return SocialRuntimeState(registry.mode, registry.provider, registry.version), tuple(sources), model
 

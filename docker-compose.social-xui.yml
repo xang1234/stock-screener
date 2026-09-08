@@ -1,6 +1,7 @@
 services:
   celery-social:
     image: ${SOCIAL_WORKER_IMAGE:-stock-screener-social-xui:dev}
+    shm_size: "1gb"
     build:
       context: .
       dockerfile: backend/Dockerfile

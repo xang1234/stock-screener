@@ -21,6 +21,11 @@ from app.infra.db.repositories.published_social_signal_reader import (
 
 
 WINDOW_DAYS = {"1d": 1, "7d": 7, "14d": 14}
+_PUBLIC_ATTEMPT_REASONS = {
+    "bounded_provider_read", "provider_error", "provider_network_error",
+    "provider_timeout", "provider_unavailable", "rate_limited",
+    "reauthentication_required",
+}
 
 
 def _utc(value):
@@ -55,6 +60,59 @@ class SocialSignalQueries:
     def _publication(self):
         pointer = self.db.get(SocialSignalRunPointer, "latest_published")
         return self.db.get(SocialSignalRun, pointer.run_id) if pointer else None
+
+    def _latest_attempt(self):
+        run = self.db.scalar(select(SocialSignalRun).where(
+            SocialSignalRun.mode == "live"
+        ).order_by(
+            SocialSignalRun.created_at.desc(), SocialSignalRun.id.desc()
+        ).limit(1))
+        if run is None:
+            return None
+        configured = run.application_progress_json.get("sources", {})
+        outcomes = run.source_outcomes_json or {}
+        sources = []
+        for source_id, source in sorted(
+            configured.items(),
+            key=lambda item: (
+                0, int(item[0])
+            ) if str(item[0]).isdigit() else (1, str(item[0])),
+        ):
+            outcome = outcomes.get(source_id) or {}
+            read_status = outcome.get("read_status")
+            if read_status not in {"success", "failed"}:
+                read_status = "pending"
+            received_count = outcome.get("received_count")
+            if not isinstance(received_count, int) or isinstance(received_count, bool):
+                received_count = None
+            sources.append({
+                "name": str(source.get("name") or f"Source {source_id}"),
+                "read_status": read_status,
+                "received_count": received_count,
+                "history_status": outcome.get("history_status"),
+                "reason_codes": sorted({
+                    reason for reason in outcome.get("coverage_reason_codes", [])
+                    if reason in _PUBLIC_ATTEMPT_REASONS
+                }),
+            })
+        statuses = {source["read_status"] for source in sources}
+        if "failed" in statuses:
+            status = "collection_failed"
+        elif "pending" in statuses or not sources:
+            status = "collecting"
+        elif run.status == "running":
+            status = "processing"
+        elif run.status == "published":
+            status = "published"
+        else:
+            status = "failed"
+        return {
+            "run_id": run.id,
+            "status": status,
+            "started_at": _utc(run.created_at),
+            "completed_at": _utc(run.completed_at),
+            "sources": sources,
+        }
 
     @staticmethod
     def _candidate_explanation(run, candidate_key, window_days):
@@ -135,7 +193,10 @@ class SocialSignalQueries:
                 market, WINDOW_DAYS[window], view, rank_mode, page, page_size
             )
         except SocialPublicationUnavailable as exc:
-            return {**base, "reason_code": exc.reason}
+            return {
+                **base, "reason_code": exc.reason,
+                "latest_attempt": self._latest_attempt(),
+            }
         run = self._publication()
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)

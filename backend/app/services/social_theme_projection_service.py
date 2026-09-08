@@ -92,7 +92,10 @@ def _decode(work):
                 raise ValueError("social_work_attribution_mismatch")
             claim_values.append({key: value for key, value in claim.items() if key != "post_id"})
         claims, parsed_judgments = SocialExtractionParser().parse_batch(
-            SocialExtractionService.source_inputs((post,)), json.dumps({"posts": [{**judgments[0], "claims": claim_values}]}))
+            SocialExtractionService.source_inputs((post,)),
+            json.dumps({"posts": [{**judgments[0], "claims": claim_values}]}),
+            strict_claims=True,
+        )
         result = ExtractionResult(**{**data, "claims": claims, "judgments": parsed_judgments})
         return post, result
     except (KeyError, TypeError, AttributeError) as exc:

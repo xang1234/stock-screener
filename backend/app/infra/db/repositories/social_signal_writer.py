@@ -102,6 +102,10 @@ class SocialSignalWriter:
         validate_utc_timestamp(as_of, "as_of")
         with self.session_factory.begin() as db:
             run = self._create_run(db, run_id, as_of)
+            # Production sessions disable autoflush. Persist the parent before
+            # adding SocialRunWork rows so PostgreSQL can enforce the FK in the
+            # intended order once prior extraction successes exist.
+            db.flush()
             old = db.get(SocialSignalRun, saved_run_id)
             if old is None or utc(old.created_at) > as_of:
                 raise ValueError("saved_generation_unavailable")

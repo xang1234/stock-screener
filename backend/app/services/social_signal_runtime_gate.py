@@ -11,6 +11,8 @@ from app.domain.social_signals.records import SocialSourceBatch, SocialSourceOut
 PROVIDER_LEASE_KEY = "social-signals:provider-read:lease"
 MANUAL_COOLDOWN_KEY = "social-signals:manual-refresh:cooldown"
 PROVIDER_COOLDOWN_KEY = "social-signals:provider:{provider}:cooldown"
+LLM_REQUEST_LEASE_KEY = "social-signals:llm-request:lease"
+LLM_REQUEST_SPACING_KEY = "social-signals:llm-request:spacing"
 _PROVIDER_COOLDOWN_CODES = {
     "rate_limited", "reauthentication_required", "provider_error",
 }
@@ -66,6 +68,33 @@ class RedisSocialSignalGate:
         self.redis.set(PROVIDER_COOLDOWN_KEY.format(provider=provider), code, ex=seconds)
 
 
+class RedisSocialLLMRequestGate:
+    """One global model request lease plus a shared start-to-start interval."""
+
+    def __init__(self, redis_client):
+        self.redis = redis_client
+        self._release = redis_client.register_script(_RELEASE)
+
+    def acquire(self, owner: str, ttl_seconds: int) -> bool:
+        if not owner or ttl_seconds <= 0:
+            raise ValueError("invalid_social_llm_request_lease")
+        return bool(self.redis.set(LLM_REQUEST_LEASE_KEY, owner, nx=True, ex=ttl_seconds))
+
+    def wait_seconds(self) -> int:
+        remaining = self.redis.ttl(LLM_REQUEST_SPACING_KEY)
+        return max(0, remaining if isinstance(remaining, int) else 0)
+
+    def mark_started(self, interval_seconds: float) -> None:
+        if interval_seconds > 0:
+            self.redis.set(
+                LLM_REQUEST_SPACING_KEY, "1", ex=max(1, ceil(interval_seconds))
+            )
+
+    def release(self, owner: str) -> None:
+        if owner:
+            self._release(keys=[LLM_REQUEST_LEASE_KEY], args=[owner])
+
+
 class SharedCooldownSocialProvider:
     """Persist adapter cooldowns so reconstructed workers remain fail-closed."""
 
@@ -100,6 +129,9 @@ __all__ = [
     "MANUAL_COOLDOWN_KEY",
     "PROVIDER_COOLDOWN_KEY",
     "PROVIDER_LEASE_KEY",
+    "LLM_REQUEST_LEASE_KEY",
+    "LLM_REQUEST_SPACING_KEY",
+    "RedisSocialLLMRequestGate",
     "RedisSocialSignalGate",
     "SharedCooldownSocialProvider",
 ]

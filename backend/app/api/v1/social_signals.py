@@ -25,7 +25,8 @@ ADMIN_ACTOR = "server-admin"
 _SAFE_REASON_CODES = {
     "analysis_incomplete", "bounded_provider_read", "daily_budget_exhausted",
     "invalid_provider_json", "invalid_provider_schema", "provider_error",
-    "provider_lease_unavailable", "provider_network_error", "provider_unavailable",
+    "provider_lease_unavailable", "provider_network_error", "provider_timeout",
+    "provider_unavailable",
     "rate_limited", "reauthentication_required", "social_runtime_changed",
     "source_participation_failed",
 }

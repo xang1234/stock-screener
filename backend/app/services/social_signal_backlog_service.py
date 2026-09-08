@@ -2,13 +2,15 @@
 import asyncio
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import logging
 from time import monotonic
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.domain.social_signals.records import BacklogResult, SocialPostRecord
+from app.domain.social_signals.records import BacklogResult, ExtractionResult, SocialPostRecord
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt, SocialLLMBudgetDay, SocialRunWork
 from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
 from app.services.llm.llm_service import LLMService
@@ -16,110 +18,181 @@ from app.services.social_extraction_service import SocialExtractionError, Social
 from app.services.social_llm_budget_service import SocialLLMBudgetService, social_analysis_transaction
 
 
+logger = logging.getLogger(__name__)
+
+
 def _utc(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
 class _Deferred(Exception):
-    pass
+    def __init__(self, count=1, outside=0):
+        self.count = count
+        self.outside = outside
 
 
-class _OutsideWindow(Exception):
-    pass
+class _NoopRequestGate:
+    def acquire(self, owner, ttl):
+        return True
+
+    def wait_seconds(self):
+        return 0
+
+    def mark_started(self, interval):
+        pass
+
+    def release(self, owner):
+        pass
 
 
 class _MeteredCompletion:
     """Intercept usage BEFORE parsing, including malformed successful responses."""
-    def __init__(self, owner, work_id, claim_token, now):
-        self.owner, self.work_id, self.claim_token, self.now = owner, work_id, claim_token, now
+    def __init__(self, owner, claims, now):
+        self.owner, self.claims, self.now = owner, claims, now
 
     async def completion(self, **kwargs):
         budget = self.owner.budget
         price = budget.price(kwargs["model"])
         if price is None:
-            self.owner._finish(self.work_id, self.claim_token, "waiting_budget", "pricing_not_configured")
-            raise _Deferred
+            self.owner._finish_many(self.claims, "waiting_budget", "pricing_not_configured")
+            raise _Deferred(len(self.claims))
         # UTF-8 bytes upper-bound text tokens; fixed margin covers chat envelope.
         inputs = len(json.dumps(kwargs["messages"], ensure_ascii=False).encode("utf-8")) + 1024
         outputs = kwargs["max_tokens"]
-        attempt = budget.reserve(f"social:{self.work_id}:{self.claim_token}", (self.work_id,),
+        work_ids = tuple(work_id for work_id, _ in self.claims)
+        identity = ":".join(f"{work_id}:{token}" for work_id, token in self.claims)
+        attempt = budget.reserve(f"social-batch:{hashlib.sha256(identity.encode()).hexdigest()}", work_ids,
             price.cost(inputs, outputs), self.now(), pricing_version=price.version,
             input_token_limit=inputs, output_token_limit=outputs)
         if attempt is None:
-            self.owner._finish(self.work_id, self.claim_token, "waiting_budget", "daily_budget_exhausted")
-            raise _Deferred
-        # Fence stale owners and reserved cancellation in the same short transaction.
-        with social_analysis_transaction(self.owner.session_factory) as db:
-            work = db.get(SocialExtractionWork, self.work_id)
-            row = db.get(SocialLLMAttempt, attempt)
-            day = db.get(SocialLLMBudgetDay, row.budget_day_id)
-            registry = db.get(SocialSourceRegistry, 1, populate_existing=True)
-            dispatch_now = self.now()
-            owned = work.claim_token == self.claim_token and work.state == "running"
-            price_valid = budget.price_in_transaction(db, kwargs["model"]) == price
-            runtime_available = (
-                registry is not None
-                and registry.mode in {"validation", "live"}
-                and registry.provider != "disabled"
-            )
-            published = datetime.fromisoformat(work.input_snapshot_json["created_at"])
-            outside_window = (owned and not work.requested_by_admin
-                and published < dispatch_now - timedelta(days=14))
-            valid = (owned and row.state == "reserved" and _utc(work.claim_expires_at) > dispatch_now
-                and _utc(day.period_start_utc) <= dispatch_now < _utc(day.period_end_utc)
-                and price_valid and runtime_available and not outside_window)
-            if valid:
-                row.state = "dispatched"
-            else:
-                if row.state == "reserved":
-                    row.state, row.completed_at = "released", dispatch_now
-                    day.reserved_usd -= row.estimated_usd
-                    day.version += 1
-                if owned:
-                    if outside_window:
-                        work.state, work.error_code = "outside_window", "outside_signal_window"
-                    else:
-                        work.state = "pending" if price_valid else "waiting_budget"
-                        work.error_code = (
-                            "social_runtime_unavailable" if not runtime_available
-                            else "claim_or_budget_period_expired" if price_valid
-                            else "pricing_changed"
-                        )
-                    work.claim_token = work.claim_expires_at = None
-        if outside_window:
-            raise _OutsideWindow
-        if not valid:
-            raise _Deferred
+            self.owner._finish_many(self.claims, "waiting_budget", "daily_budget_exhausted")
+            raise _Deferred(len(self.claims))
+        lease_owner = f"social-llm:{attempt}:{uuid4().hex}"
         try:
-            llm = self.owner.llm if self.owner.llm is not None else LLMService(use_case="extraction")
-            response = await llm.completion(**kwargs, metered=True)
-        except BaseException:
-            budget.reconcile(attempt, None, None)
-            raise
-        usage = getattr(response, "usage", None)
-        actual_inputs = getattr(usage, "prompt_tokens", None)
-        actual_outputs = getattr(usage, "completion_tokens", None)
-        actual_model = getattr(response, "model", None)
-        provider = (getattr(response, "_hidden_params", None) or {}).get("custom_llm_provider")
-        known = (provider == price.provider and actual_model in price.actual_models
-            and type(actual_inputs) is int and actual_inputs >= 0
-            and type(actual_outputs) is int and actual_outputs >= 0)
-        if provider != price.provider or actual_model not in price.actual_models:
-            budget.block_price(kwargs["model"], price.version, "billing_model_mismatch")
-        elif known and (actual_inputs > inputs or actual_outputs > outputs):
-            budget.block_price(kwargs["model"], price.version, "billing_token_limit_exceeded")
-        budget.reconcile(attempt, price.cost(actual_inputs, actual_outputs) if known else None,
-            getattr(response, "id", None), actual_input_tokens=actual_inputs, actual_output_tokens=actual_outputs)
-        with social_analysis_transaction(self.owner.session_factory) as db:
-            work = db.get(SocialExtractionWork, self.work_id)
-            if work.claim_token == self.claim_token:
-                work.actual_provider, work.actual_model = provider, actual_model
-        return response
+            acquired = self.owner.request_gate.acquire(
+                lease_owner, self.owner.request_lease_seconds
+            )
+        except Exception:
+            budget.release(attempt)
+            self.owner._finish_many(
+                self.claims, "pending", "llm_request_gate_unavailable"
+            )
+            raise _Deferred(len(self.claims)) from None
+        if not acquired:
+            budget.release(attempt)
+            self.owner._finish_many(self.claims, "pending", "llm_request_in_flight")
+            raise _Deferred(len(self.claims))
+        try:
+            try:
+                wait = self.owner.request_gate.wait_seconds()
+                if wait > 0:
+                    await self.owner.sleep(wait)
+                self.owner.request_gate.mark_started(self.owner.min_interval_seconds)
+            except Exception:
+                budget.release(attempt)
+                self.owner._finish_many(
+                    self.claims, "pending", "llm_request_gate_unavailable"
+                )
+                raise _Deferred(len(self.claims)) from None
+            # Fence stale owners, daily calls, and reserved cancellation in one transaction.
+            with social_analysis_transaction(self.owner.session_factory) as db:
+                works = [db.get(SocialExtractionWork, work_id) for work_id in work_ids]
+                row = db.get(SocialLLMAttempt, attempt)
+                day = db.get(SocialLLMBudgetDay, row.budget_day_id)
+                registry = db.get(SocialSourceRegistry, 1, populate_existing=True)
+                dispatch_now = self.now()
+                owned = all(work is not None and work.claim_token == token and work.state == "running"
+                            for work, (_, token) in zip(works, self.claims))
+                price_valid = budget.price_in_transaction(db, kwargs["model"]) == price
+                runtime_available = (
+                    registry is not None
+                    and registry.mode in {"validation", "live"}
+                    and registry.provider != "disabled"
+                )
+                outside_ids = {
+                    work.id for work in works if work is not None and not work.requested_by_admin
+                    and datetime.fromisoformat(work.input_snapshot_json["created_at"])
+                    < dispatch_now - timedelta(days=14)
+                }
+                calls_today = db.scalar(select(func.count(SocialLLMAttempt.id)).where(
+                    SocialLLMAttempt.budget_day_id == day.id,
+                    SocialLLMAttempt.state.in_({"dispatched", "reconciled", "uncertain"}),
+                )) or 0
+                call_available = calls_today < self.owner.max_calls_per_day
+                valid = (owned and row.state == "reserved"
+                    and all(_utc(work.claim_expires_at) > dispatch_now for work in works)
+                    and _utc(day.period_start_utc) <= dispatch_now < _utc(day.period_end_utc)
+                    and price_valid and runtime_available and not outside_ids and call_available)
+                if valid:
+                    row.state = "dispatched"
+                else:
+                    if row.state == "reserved":
+                        row.state, row.completed_at = "released", dispatch_now
+                        day.reserved_usd -= row.estimated_usd
+                        day.version += 1
+                    if owned:
+                        for work in works:
+                            if work.id in outside_ids:
+                                work.state, work.error_code = "outside_window", "outside_signal_window"
+                            else:
+                                work.state = "pending" if price_valid and call_available else "waiting_budget"
+                                work.error_code = (
+                                    "social_runtime_unavailable" if not runtime_available
+                                    else "daily_call_limit_exhausted" if not call_available
+                                    else "claim_or_budget_period_expired" if price_valid
+                                    else "pricing_changed"
+                                )
+                            work.claim_token = work.claim_expires_at = None
+            if not valid:
+                raise _Deferred(len(self.claims) - len(outside_ids), len(outside_ids))
+            try:
+                llm = self.owner.llm if self.owner.llm is not None else LLMService(use_case="extraction")
+                response = await llm.completion(**kwargs, metered=True)
+            except BaseException:
+                budget.reconcile(attempt, None, None)
+                raise
+            usage = getattr(response, "usage", None)
+            actual_inputs = getattr(usage, "prompt_tokens", None)
+            actual_outputs = getattr(usage, "completion_tokens", None)
+            actual_model = getattr(response, "model", None)
+            provider = (getattr(response, "_hidden_params", None) or {}).get("custom_llm_provider")
+            known = (provider == price.provider and actual_model in price.actual_models
+                and type(actual_inputs) is int and actual_inputs >= 0
+                and type(actual_outputs) is int and actual_outputs >= 0)
+            if provider != price.provider or actual_model not in price.actual_models:
+                budget.block_price(kwargs["model"], price.version, "billing_model_mismatch")
+            elif known and (actual_inputs > inputs or actual_outputs > outputs):
+                budget.block_price(kwargs["model"], price.version, "billing_token_limit_exceeded")
+            budget.reconcile(attempt, price.cost(actual_inputs, actual_outputs) if known else None,
+                getattr(response, "id", None), actual_input_tokens=actual_inputs, actual_output_tokens=actual_outputs)
+            with social_analysis_transaction(self.owner.session_factory) as db:
+                for work_id, token in self.claims:
+                    work = db.get(SocialExtractionWork, work_id)
+                    if work.claim_token == token:
+                        work.actual_provider, work.actual_model = provider, actual_model
+            return response
+        finally:
+            try:
+                self.owner.request_gate.release(lease_owner)
+            except Exception:
+                logger.warning("Social LLM request lease release failed", exc_info=True)
 
 
 class ProcessSocialBacklog:
-    def __init__(self, session_factory, *, llm=None):
+    def __init__(self, session_factory, *, llm=None, batch_size=1,
+                 max_calls_per_run=20, max_calls_per_day=80, request_gate=None,
+                 min_interval_seconds=0, request_lease_seconds=600, sleep=asyncio.sleep):
+        if (not 1 <= batch_size <= 50 or max_calls_per_run <= 0 or max_calls_per_day <= 0
+                or min_interval_seconds < 0 or request_lease_seconds <= 0):
+            raise ValueError("invalid_social_llm_request_policy")
         self.session_factory, self.llm = session_factory, llm
+        self.batch_size = batch_size
+        self.max_calls_per_run = max_calls_per_run
+        self.max_calls_per_day = max_calls_per_day
+        self.request_gate = request_gate or _NoopRequestGate()
+        self.min_interval_seconds = min_interval_seconds
+        self.request_lease_seconds = request_lease_seconds
+        self.sleep = sleep
         self.budget = SocialLLMBudgetService(session_factory)
 
     def enqueue(self, content_item_id, post: SocialPostRecord, *, selected_model,
@@ -214,32 +287,68 @@ class ProcessSocialBacklog:
                 row.actual_provider, row.actual_model = result.provider, result.model
             return True
 
+    def _finish_many(self, claims, state, error=None):
+        return sum(self._finish(work_id, token, state, error) for work_id, token in claims)
+
+    @staticmethod
+    def _groups(claimed, batch_size):
+        current = []
+        current_config = None
+        for item in claimed:
+            config = item[2:5]
+            if current and (config != current_config or len(current) >= batch_size):
+                yield current
+                current = []
+            current.append(item)
+            current_config = config
+        if current:
+            yield current
+
+    @staticmethod
+    def _single_result(post, result):
+        post_id = post.provider_post_id
+        return ExtractionResult(
+            SocialExtractionService.input_hash((post,)), result.provider, result.model,
+            result.prompt_version, result.schema_version,
+            tuple(claim for claim in result.claims if claim.post_id == post_id),
+            None, None,
+            tuple(value for value in result.judgments if value.post_id == post_id),
+        )
+
     async def execute(self, now: datetime, limit: int, admin_work_ids: tuple[int, ...] = (),
                       work_ids: tuple[int, ...] = ()) -> BacklogResult:
         if now.tzinfo is None or limit <= 0:
             raise ValueError("invalid_backlog_request")
         started = monotonic()
         current_time = lambda: now + timedelta(seconds=monotonic() - started)
-        claimed, outside = self._claim(now, limit, admin_work_ids, work_ids)
+        claim_limit = min(limit, self.batch_size * self.max_calls_per_run)
+        claimed, outside = self._claim(now, claim_limit, admin_work_ids, work_ids)
         succeeded = deferred = failed = 0
-        for work_id, token, model, prompt, schema, snapshot in claimed:
-            snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
-            snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
+        for batch in self._groups(claimed, self.batch_size):
+            model, prompt, schema = batch[0][2:5]
+            claims = tuple((item[0], item[1]) for item in batch)
+            posts = []
+            for _, _, _, _, _, snapshot in batch:
+                snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
+                snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
+                posts.append(SocialPostRecord(**snapshot))
             try:
                 with self.session_factory() as db:
                     extraction = SocialExtractionService(db, model=model, prompt_version=prompt,
-                        schema_version=schema, llm=_MeteredCompletion(self, work_id, token, current_time))
-                    result = await extraction.extract((SocialPostRecord(**snapshot),))
-                succeeded += self._finish(work_id, token, "succeeded", result=result)
-            except _OutsideWindow:
-                outside += 1
-            except _Deferred:
-                deferred += 1
+                        schema_version=schema, llm=_MeteredCompletion(self, claims, current_time))
+                    result = await extraction.extract(tuple(posts))
+                for (work_id, token), post in zip(claims, posts):
+                    succeeded += self._finish(
+                        work_id, token, "succeeded", result=self._single_result(post, result)
+                    )
+            except _Deferred as exc:
+                deferred += exc.count
+                outside += exc.outside
             except asyncio.CancelledError:
-                self._finish(work_id, token, "failed_terminal", "completion_unknown")
+                self._finish_many(claims, "failed_terminal", "completion_unknown")
                 raise
             except SocialExtractionError as exc:
-                failed += self._finish(work_id, token, "failed_terminal", str(exc))
+                failed += self._finish_many(claims, "failed_terminal", str(exc))
             except Exception:
-                failed += self._finish(work_id, token, "failed_terminal", "completion_unknown")
+                failed += self._finish_many(claims, "failed_terminal", "completion_unknown")
         return BacklogResult(succeeded, deferred, failed, outside, self.budget.status(current_time()).next_reset_at)

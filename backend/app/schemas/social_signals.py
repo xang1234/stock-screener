@@ -14,11 +14,30 @@ QueueView = Literal["actionable", "all", "watch", "risk_off"]
 RankMode = Literal["blended", "pure_social"]
 
 
+class SocialSourceAttempt(BaseModel):
+    name: str
+    read_status: Literal["pending", "success", "failed"]
+    received_count: int | None = None
+    history_status: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class SocialLatestAttempt(BaseModel):
+    run_id: str
+    status: Literal[
+        "collecting", "collection_failed", "processing", "failed", "published"
+    ]
+    started_at: datetime
+    completed_at: datetime | None = None
+    sources: list[SocialSourceAttempt] = Field(default_factory=list)
+
+
 class SocialAvailabilityResponse(BaseModel):
     supported: bool
     available: bool
     reason_code: str | None = None
     market: MarketCode
+    latest_attempt: SocialLatestAttempt | None = None
 
 
 class SocialSummaryResponse(SocialAvailabilityResponse):

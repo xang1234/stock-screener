@@ -13,6 +13,7 @@ At least one LLM provider key is required for assistant and theme extraction wor
 | Groq | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) | Fast inference, free tier (recommended to start) |
 | Z.AI | `ZAI_API_KEY` | [platform.z.ai](https://platform.z.ai) | GLM models |
 | Minimax | `MINIMAX_API_KEY` | [platform.minimax.io](https://platform.minimax.io) | Default for theme extraction |
+| OpenCode Go | `OPENCODE_GO_API_KEY` | [opencode.ai](https://opencode.ai/docs/go/) | Default `deepseek-v4-flash` provider for Social Signal extraction |
 
 Multiple keys for load balancing: `GROQ_API_KEYS=key1,key2,key3` (comma-separated).
 

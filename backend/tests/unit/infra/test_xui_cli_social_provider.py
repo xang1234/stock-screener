@@ -178,10 +178,69 @@ def test_stderr_is_never_parsed_as_success_or_exposed(caplog):
     assert secret not in caplog.text and "/private/config.toml" not in caplog.text
 
 
-@pytest.mark.parametrize("error", [FileNotFoundError("xui"), subprocess.TimeoutExpired(["xui"], 45)])
-def test_missing_or_stalled_executable_is_unavailable(error):
-    batch = provider(SyntheticRunner(error)).read_source(request())
+def test_missing_executable_is_unavailable_without_retry():
+    runner = SyntheticRunner(FileNotFoundError("xui"))
+    batch = provider(runner).read_source(request())
     assert batch.outcome.error_code == "provider_unavailable"
+    assert len(runner.calls) == 1
+
+
+def test_timed_out_list_read_retries_once_after_a_delay(monkeypatch):
+    delays = []
+    monkeypatch.setattr("time.sleep", lambda seconds: delays.append(seconds))
+    runner = SyntheticRunner(
+        auth(),
+        subprocess.TimeoutExpired(["xui", "read"], 45),
+        completed(json.loads(FIXTURE.read_text())),
+    )
+
+    batch = provider(runner).read_source(request())
+
+    assert batch.outcome.read_status == "success"
+    assert [call[0][1] for call in runner.calls] == ["auth", "read", "read"]
+    assert delays == [30]
+
+
+def test_timed_out_list_read_stops_after_the_single_retry(monkeypatch):
+    delays = []
+    monkeypatch.setattr("time.sleep", lambda seconds: delays.append(seconds))
+    runner = SyntheticRunner(
+        auth(),
+        subprocess.TimeoutExpired(["xui", "read"], 45),
+        subprocess.TimeoutExpired(["xui", "read"], 45),
+    )
+
+    batch = provider(runner).read_source(request())
+
+    assert batch.outcome.error_code == "provider_timeout"
+    assert [call[0][1] for call in runner.calls] == ["auth", "read", "read"]
+    assert delays == [30]
+
+
+def test_explicit_network_failure_retries_once_without_reauthenticating(monkeypatch):
+    delays = []
+    monkeypatch.setattr("time.sleep", lambda seconds: delays.append(seconds))
+    failed = {
+        "succeeded_sources": 0, "failed_sources": 1,
+        "page_loads": 1, "scroll_rounds": 0, "seen_items": 0, "items": [],
+        "outcomes": [{
+            "source_id": "list:1522014550211457024", "source_kind": "list",
+            "ok": False, "item_count": 0, "page_loads": 1,
+            "scroll_rounds": 0, "observed_ids": 0,
+            "error": "temporary network connection failure",
+            "html_artifact_path": None, "selector_report_path": None,
+        }],
+    }
+    runner = SyntheticRunner(
+        auth(), completed(failed, returncode=2),
+        completed(json.loads(FIXTURE.read_text())),
+    )
+
+    batch = provider(runner).read_source(request())
+
+    assert batch.outcome.read_status == "success"
+    assert [call[0][1] for call in runner.calls] == ["auth", "read", "read"]
+    assert delays == [30]
 
 
 def test_failed_auth_prevents_read_and_starts_reauthentication_cooldown():

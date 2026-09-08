@@ -11,7 +11,7 @@ GHCR is optional for a local Mac deployment. Build the xui image locally and poi
 
 ## Common setup
 
-Copy `.env.docker.example` to the environment file used by Compose. Set a strong `SERVER_AUTH_PASSWORD` and `ADMIN_API_KEY`. Leave these values in their environment file; do not put credentials or X session data in an image, Compose file, build argument, CI artifact, or Git commit.
+Copy `.env.docker.example` to the environment file used by Compose. Set a strong `SERVER_AUTH_PASSWORD`, `ADMIN_API_KEY`, and `OPENCODE_GO_API_KEY`. Leave these values in their environment file; do not put credentials or X session data in an image, Compose file, build argument, CI artifact, or Git commit. Social extraction uses `opencode-go/deepseek-v4-flash` through `https://opencode.ai/zen/go/v1`; the key is available only to backend services and is never sent to the browser.
 
 Start the official/public worker with:
 
@@ -166,7 +166,9 @@ Keep the runtime in `off` until the worker reports healthy. In Operations:
 4. Change runtime to `validation`; review source coverage, unresolved companies, candidate associations, and estimated LLM spend.
 5. Change runtime to `live` only after the preview is acceptable.
 
-The shared LLM allowance defaults to **$2 per Asia/Singapore day**. Work that cannot reserve budget waits for the next reset and is processed later; it is not discarded. Unknown or blocked model pricing also pauses dispatch rather than spending without a price contract.
+The shared LLM allowance defaults to **$2 per Asia/Singapore day**. OpenCode Go input/output is budgeted at the documented peak DeepSeek V4 Flash rates. Work that cannot reserve budget waits for the next reset and is processed later; it is not discarded. Unknown or blocked model pricing also pauses dispatch rather than spending without a price contract.
+
+Requests are additionally constrained to batches of at most 20 posts, one provider request at a time across the deployment, at least five seconds between request starts, 20 calls per refresh, and 80 calls per day. Provider failures are not automatically retried because a timed-out request may already have been billed. Remaining posts stay in the durable backlog for a later six-hour run. The four limits can be made stricter with `SOCIAL_LLM_BATCH_SIZE`, `SOCIAL_LLM_MIN_INTERVAL_SECONDS`, `SOCIAL_LLM_MAX_CALLS_PER_RUN`, and `SOCIAL_LLM_MAX_CALLS_PER_DAY`.
 
 To stop collection immediately, set the provider to `disabled` in Operations. For a container-level rollback:
 

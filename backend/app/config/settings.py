@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     zai_api_base: str = "https://api.z.ai/api/paas/v4"  # Z.AI OpenAI-compatible base URL
     minimax_api_key: str = ""  # Minimax international API
     minimax_api_base: str = "https://api.minimax.io/v1"  # Minimax OpenAI-compatible base URL
+    opencode_go_api_key: str = ""  # OpenCode Go OpenAI-compatible endpoint
+    opencode_go_api_base: str = "https://opencode.ai/zen/go/v1"
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
     twitter_bearer_token: str = ""  # Official X API bearer token for Twitter/X ingestion
@@ -115,6 +117,10 @@ class Settings(BaseSettings):
     social_official_daily_post_limit: int = 2000
     social_llm_daily_budget_usd: Decimal = Decimal("2.00")
     social_llm_budget_timezone: str = "Asia/Singapore"
+    social_llm_batch_size: int = 20
+    social_llm_min_interval_seconds: float = 5.0
+    social_llm_max_calls_per_run: int = 20
+    social_llm_max_calls_per_day: int = 80
     social_market_close_grace_minutes: int = 120
     benzinga_api_key: str = ""  # For Benzinga news API (optional)
     tavily_api_key: str = ""  # For web search (primary)
@@ -794,6 +800,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"Invalid social_llm_budget_timezone: {v!r}. Use an IANA timezone"
             ) from exc
+        return v
+
+    @field_validator("social_llm_batch_size")
+    @classmethod
+    def validate_social_llm_batch_size(cls, v: int) -> int:
+        if not 1 <= v <= 50:
+            raise ValueError("social_llm_batch_size must be between 1 and 50")
+        return v
+
+    @field_validator("social_llm_min_interval_seconds")
+    @classmethod
+    def validate_social_llm_min_interval_seconds(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("social_llm_min_interval_seconds must be >= 0")
+        return v
+
+    @field_validator("social_llm_max_calls_per_run", "social_llm_max_calls_per_day")
+    @classmethod
+    def validate_social_llm_call_limits(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("social LLM call limits must be > 0")
         return v
 
     @field_validator("x_api_max_pages_per_source", "x_api_max_results_per_page")

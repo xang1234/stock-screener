@@ -42,9 +42,11 @@ def post(number, age=1):
 class FakeLLM:
     def __init__(self, *, malformed=False, usage=True, model="actual-model"):
         self.seen = []
+        self.calls = 0
         self.malformed, self.usage, self.model = malformed, usage, model
 
     async def completion(self, **kwargs):
+        self.calls += 1
         sources = json.loads(kwargs["messages"][1]["content"])["posts"]
         self.seen.extend(p["post_id"] for p in sources)
         assert kwargs["max_tokens"] == 8192
@@ -61,6 +63,23 @@ def processor(factory, llm):
     return ProcessSocialBacklog(factory, llm=llm)
 
 
+def configure_budget(backlog, *, dollars="20", output_rate="0"):
+    with backlog.begin() as db:
+        daily = db.scalar(select(AppSetting).where(
+            AppSetting.key == "social_llm_daily_limit_usd"
+        ))
+        if daily is None:
+            db.add(AppSetting(
+                key="social_llm_daily_limit_usd", value=dollars, category="social",
+            ))
+        else:
+            daily.value = dollars
+        row = db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing"))
+        value = json.loads(row.value)
+        value["models"]["synthetic/requested"]["output_usd_per_million"] = output_rate
+        row.value = json.dumps(value)
+
+
 def enqueue(factory, worker, value):
     with factory.begin() as db:
         item = ContentItem(source_type="twitter", external_id=value.provider_post_id,
@@ -69,6 +88,166 @@ def enqueue(factory, worker, value):
         db.flush()
         item_id = item.id
     return worker.enqueue(item_id, value, selected_model="synthetic/requested", now=NOW)
+
+
+def test_batches_twenty_posts_into_one_metered_provider_call(backlog):
+    from app.infra.db.models.social_analysis import SocialLLMAttempt
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = FakeLLM()
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=20)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 21)]
+
+    result = asyncio.run(worker.execute(NOW, 20))
+
+    assert result.succeeded == 20
+    assert llm.calls == 1
+    with backlog() as db:
+        assert db.scalar(select(SocialLLMAttempt)).work_ids == work_ids
+
+
+def test_per_run_call_cap_leaves_remaining_work_pending(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = FakeLLM()
+    worker = ProcessSocialBacklog(
+        backlog, llm=llm, batch_size=2, max_calls_per_run=2,
+    )
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 6)]
+
+    result = asyncio.run(worker.execute(NOW, 5))
+
+    assert result.succeeded == 4
+    assert llm.calls == 2
+    with backlog() as db:
+        assert db.get(SocialExtractionWork, work_ids[-1]).state == "pending"
+
+
+def test_daily_call_cap_defers_without_a_third_provider_call(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = FakeLLM()
+    worker = ProcessSocialBacklog(
+        backlog, llm=llm, batch_size=1, max_calls_per_day=2,
+    )
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 4)]
+
+    result = asyncio.run(worker.execute(NOW, 3))
+
+    assert (result.succeeded, result.deferred) == (2, 1)
+    assert llm.calls == 2
+    with backlog() as db:
+        deferred = db.get(SocialExtractionWork, work_ids[-1])
+        assert (deferred.state, deferred.error_code) == (
+            "waiting_budget", "daily_call_limit_exhausted",
+        )
+
+
+def test_waits_between_sequential_provider_calls(backlog):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    class Gate:
+        def __init__(self):
+            self.waits = iter((0, 5))
+
+        def acquire(self, owner, ttl):
+            return True
+
+        def wait_seconds(self):
+            return next(self.waits)
+
+        def mark_started(self, seconds):
+            assert seconds == 5
+
+        def release(self, owner):
+            pass
+
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    configure_budget(backlog)
+    llm = FakeLLM()
+    worker = ProcessSocialBacklog(
+        backlog, llm=llm, batch_size=1, request_gate=Gate(),
+        min_interval_seconds=5, sleep=sleep,
+    )
+    enqueue(backlog, worker, post(1))
+    enqueue(backlog, worker, post(2))
+
+    assert asyncio.run(worker.execute(NOW, 2)).succeeded == 2
+    assert llm.calls == 2
+    assert slept == [5]
+
+
+def test_shared_in_flight_lease_defers_without_provider_call(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    class BusyGate:
+        def acquire(self, owner, ttl):
+            return False
+
+        def release(self, owner):
+            raise AssertionError("unowned lease must not be released")
+
+    configure_budget(backlog)
+    llm = FakeLLM()
+    worker = ProcessSocialBacklog(backlog, llm=llm, request_gate=BusyGate())
+    work_id = enqueue(backlog, worker, post(1))
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    assert result.deferred == 1 and llm.calls == 0
+    with backlog() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        assert (work.state, work.error_code) == ("pending", "llm_request_in_flight")
+        assert db.scalar(select(SocialLLMAttempt)).state == "released"
+
+
+@pytest.mark.parametrize("failure_method", ["acquire", "wait", "mark"])
+def test_request_gate_outage_fails_closed_and_preserves_work(backlog, failure_method):
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    class BrokenGate:
+        def acquire(self, owner, ttl):
+            if failure_method == "acquire":
+                raise ConnectionError("redis unavailable")
+            return True
+
+        def wait_seconds(self):
+            if failure_method == "wait":
+                raise ConnectionError("redis unavailable")
+            return 0
+
+        def mark_started(self, seconds):
+            if failure_method == "mark":
+                raise ConnectionError("redis unavailable")
+
+        def release(self, owner):
+            pass
+
+    configure_budget(backlog)
+    llm = FakeLLM()
+    worker = ProcessSocialBacklog(backlog, llm=llm, request_gate=BrokenGate())
+    work_id = enqueue(backlog, worker, post(1))
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    assert result.deferred == 1 and llm.calls == 0
+    with backlog() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        assert (work.state, work.error_code) == (
+            "pending", "llm_request_gate_unavailable",
+        )
+        assert db.scalar(select(SocialLLMAttempt)).state == "released"
 
 
 def test_exhaust_two_dollars_restart_resume_without_collection(backlog):
