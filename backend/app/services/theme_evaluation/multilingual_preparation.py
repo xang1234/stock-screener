@@ -4,7 +4,7 @@ import re
 from collections import Counter
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .records import Record
 
@@ -13,6 +13,22 @@ class TranslationSegment(Record):
     original: str
     translated: str | None
     status: Literal["translated", "identity", "unavailable"]
+    failure_reason: str | None = None
+
+    @model_validator(mode="after")
+    def consistent_segment(self):
+        if self.status == "unavailable":
+            if self.translated is not None or not self.failure_reason:
+                raise ValueError("unavailable_translation_requires_reason_and_no_text")
+        elif self.translated is None or (
+            self.original.strip() and not self.translated.strip()
+        ):
+            raise ValueError("translation_segment_missing")
+        elif self.failure_reason:
+            raise ValueError("available_translation_has_failure")
+        if self.status == "identity" and self.translated != self.original:
+            raise ValueError("identity_translation_changed")
+        return self
 
 
 class TextPreparation(Record):
@@ -20,8 +36,78 @@ class TextPreparation(Record):
     supplied_language: str | None
     target_language: str
     segments: list[TranslationSegment]
-    status: Literal["success", "partial", "unavailable", "needs_review"]
-    warnings: list[str] = Field(default_factory=list)
+    language_warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def valid_identity(self):
+        for segment in self.segments:
+            if (
+                segment.status == "identity"
+                and segment.original.strip()
+                and (
+                    self.source_language != self.target_language
+                    or "language_metadata_conflict" in self.language_warnings
+                )
+            ):
+                raise ValueError("identity_requires_matching_language")
+        return self
+
+    @property
+    def warnings(self) -> list[str]:
+        warnings = list(self.language_warnings)
+        for segment in self.segments:
+            if segment.failure_reason:
+                warnings.append(segment.failure_reason)
+            elif segment.status == "translated":
+                if (
+                    segment.translated.strip() == segment.original.strip()
+                    and self.source_language != self.target_language
+                ):
+                    warnings.append("translation_unchanged")
+                warnings.extend(
+                    numerical_warnings(segment.original, segment.translated)
+                )
+        return list(dict.fromkeys(warnings))
+
+    @property
+    def status(self):
+        missing = sum(s.status == "unavailable" for s in self.segments)
+        if missing:
+            return "unavailable" if missing == len(self.segments) else "partial"
+        return "needs_review" if self.warnings else "success"
+
+
+def finalize_translation(
+    previous: TextPreparation,
+    translations: list[str | None],
+    *,
+    missing_reason="translation_segment_failed",
+) -> TextPreparation:
+    """Attach outputs to exact stored segments; never detect or segment again."""
+    if len(translations) != len(previous.segments):
+        raise ValueError("translation_import_segment_count")
+    segments = []
+    for segment, translated in zip(previous.segments, translations):
+        if segment.status == "identity":
+            if translated != segment.original:
+                raise ValueError("identity_translation_changed")
+            segments.append(segment)
+        else:
+            segments.append(
+                TranslationSegment(
+                    original=segment.original,
+                    translated=translated,
+                    status="translated" if translated is not None else "unavailable",
+                    failure_reason=missing_reason if translated is None else None,
+                )
+            )
+    return TextPreparation(
+        source_language=previous.source_language,
+        supplied_language=previous.supplied_language,
+        target_language=previous.target_language,
+        language_warnings=previous.language_warnings,
+        segments=segments,
+    )
 
 
 def detect_language(text: str, supplied: str | None = None):
@@ -95,48 +181,39 @@ def prepare_text(
 ) -> TextPreparation:
     source, warnings = detect_language(text, language)
     segments = []
+    translations = []
     for original in segment_text(text, max_chars):
-        if not original.strip() or (
+        identity = not original.strip() or (
             source == target_language and "language_metadata_conflict" not in warnings
-        ):
-            segments.append(
-                TranslationSegment(
-                    original=original, translated=original, status="identity"
-                )
-            )
-            continue
-        translated = None
-        if translator is not None:
-            try:
-                translated = translator(original, source, target_language)
-                if not isinstance(translated, str) or not translated.strip():
-                    raise ValueError("empty_translation")
-                if translated.strip() == original.strip() and source != target_language:
-                    warnings.append("translation_unchanged")
-                warnings.extend(numerical_warnings(original, translated))
-            except Exception:  # noqa: BLE001 - injected provider failures become explicit evidence gaps
-                # Provider messages may contain source text or credentials.
-                translated = None
-                warnings.append("translation_segment_failed")
-        else:
-            warnings.append("translator_unavailable")
+        )
         segments.append(
             TranslationSegment(
                 original=original,
-                translated=translated,
-                status="translated" if translated is not None else "unavailable",
+                translated=original if identity else None,
+                status="identity" if identity else "unavailable",
+                failure_reason=None if identity else "translator_unavailable",
             )
         )
-    missing = sum(segment.translated is None for segment in segments)
-    if missing:
-        status = "unavailable" if missing == len(segments) else "partial"
-    else:
-        status = "needs_review" if warnings else "success"
-    return TextPreparation(
+        translated = original if identity else None
+        if not identity and translator is not None:
+            try:
+                translated = translator(original, source, target_language)
+                if not isinstance(translated, str) or not translated.strip():
+                    translated = None
+            except Exception:  # noqa: BLE001 - provider failures become sanitized evidence gaps
+                translated = None
+        translations.append(translated)
+    previous = TextPreparation(
         source_language=source,
         supplied_language=language,
         target_language=target_language,
         segments=segments,
-        status=status,
-        warnings=list(dict.fromkeys(warnings)),
+        language_warnings=warnings,
+    )
+    return finalize_translation(
+        previous,
+        translations,
+        missing_reason="translator_unavailable"
+        if translator is None
+        else "translation_segment_failed",
     )

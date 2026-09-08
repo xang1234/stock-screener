@@ -215,7 +215,7 @@ def test_browser_import_requires_actual_capture_time():
 def test_returning_to_cached_image_makes_that_version_current(
     bundle, document, tmp_path
 ):
-    pipeline, review = api()
+    pipeline, _ = api()
     base = seal_bundle(tmp_path, Bundle.model_validate(bundle()))
     image_path = tmp_path / "image.png"
     handoff = Handoff(
@@ -238,10 +238,130 @@ def test_returning_to_cached_image_makes_that_version_current(
             base, store, handoff, stages=["image"], vision=vision, prior_id=prior
         )
     manifest = store.load(base, prior)
-    active = review.active_binding_indices(manifest, store)
+    active = manifest.current_bindings
     from app.services.theme_evaluation.bundle import sha256
 
     assert len(active) == 1
-    current = store.load_result(manifest.bindings[active.pop()].result_id)
+    current = store.load_result(active[0].result_id)
     assert current.request.input_sha256 == sha256(image_path.read_bytes())
     assert vision.calls == 2
+
+
+def test_changed_image_invalidates_translation_and_does_not_process_history(
+    bundle, document, tmp_path
+):
+    pipeline, review = api()
+    base = seal_bundle(tmp_path, Bundle.model_validate(bundle()))
+    img = tmp_path / "image.png"
+    img.write_bytes(png())
+    handoff = Handoff(
+        bundle_id=base.name,
+        documents={
+            "post:1": {
+                "source_text_sha256": document()["text_sha256"],
+                "local_images": [str(img)],
+            }
+        },
+    )
+
+    class ChangingVision(Vision):
+        def describe_image(self, data, mime_type):
+            result = super().describe_image(data, mime_type)
+            result["transcription"] = "매출 증가" if self.calls == 1 else "수출 증가"
+            return result
+
+    class Translator:
+        provider = "test"
+        model = "test"
+        policy_version = "text-v1"
+
+        def __init__(self):
+            self.inputs = []
+
+        def __call__(self, text, source, target):
+            self.inputs.append(text)
+            return "Revenue growth"
+
+    store = PreparationStore(tmp_path / "out")
+    vision = ChangingVision()
+    first = pipeline.prepare(
+        base, store, handoff, stages=["image", "text"], vision=vision
+    )
+    old = store.load(base, first)
+    old_image = next(b.result_id for b in old.current_bindings if b.stage == "image")
+    Image.new("RGB", (8, 8), "black").save(img, format="PNG")
+    changed = pipeline.prepare(
+        base, store, handoff, stages=["image"], vision=vision, prior_id=first
+    )
+    assert not any(
+        b.parent_result_id == old_image
+        for b in store.load(base, changed).current_bindings
+    )
+    translator = Translator()
+    translated = pipeline.prepare(
+        base, store, handoff, stages=["text"], translator=translator, prior_id=changed
+    )
+    assert translator.inputs == ["수출 증가"]
+    manifest = store.load(base, translated)
+    assert any(b.parent_result_id == old_image for b in manifest.bindings)
+    assert not any(b.parent_result_id == old_image for b in manifest.current_bindings)
+    summary = review.render_preparation(base, store, translated, tmp_path / "review")
+    assert summary["gaps"] == 0
+
+
+def test_changed_image_with_missing_provider_does_not_retain_old_pixels(
+    bundle, document, tmp_path
+):
+    pipeline, _ = api()
+    base = seal_bundle(tmp_path, Bundle.model_validate(bundle()))
+    img = tmp_path / "image.png"
+    img.write_bytes(png())
+    handoff = Handoff(
+        bundle_id=base.name,
+        documents={
+            "post:1": {
+                "source_text_sha256": document()["text_sha256"],
+                "local_images": [str(img)],
+            }
+        },
+    )
+    store = PreparationStore(tmp_path / "out")
+    first = pipeline.prepare(base, store, handoff, stages=["image"], vision=Vision())
+    Image.new("RGB", (8, 8), "black").save(img, format="PNG")
+    second = pipeline.prepare(base, store, handoff, stages=["image"], prior_id=first)
+    current = store.load_result(store.load(base, second).current_bindings[0].result_id)
+    from app.services.theme_evaluation.bundle import sha256
+
+    assert current.request.input_sha256 == sha256(img.read_bytes())
+    assert current.status == "unavailable"
+
+
+def test_shared_image_result_does_not_keep_translation_for_changed_attachment(
+    bundle, document, tmp_path
+):
+    pipeline, _ = api()
+    base = seal_bundle(tmp_path, Bundle.model_validate(bundle()))
+    images = [tmp_path / "first.png", tmp_path / "second.png"]
+    for path in images:
+        path.write_bytes(png())
+    handoff = Handoff(
+        bundle_id=base.name,
+        documents={
+            "post:1": {
+                "source_text_sha256": document()["text_sha256"],
+                "local_images": [str(p) for p in images],
+            }
+        },
+    )
+    store = PreparationStore(tmp_path / "out")
+    first = pipeline.prepare(
+        base, store, handoff, stages=["image", "text"], vision=Vision()
+    )
+    Image.new("RGB", (8, 8), "black").save(images[0], format="PNG")
+    second = pipeline.prepare(
+        base, store, handoff, stages=["image"], vision=Vision(), prior_id=first
+    )
+    children = [
+        b for b in store.load(base, second).current_bindings if b.parent_result_id
+    ]
+    assert [b.input_locator for b in children] == [str(images[1])]

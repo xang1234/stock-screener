@@ -5,34 +5,45 @@ from pathlib import Path
 from pydantic import field_validator
 
 from .article_recovery import ArticleRecovery, parse_article
-from .bundle import sha256
+from .bundle import IntegrityError, sha256
 from .image_preparation import prepare_image, validate_image
 from .multilingual_preparation import prepare_text
 from .preparation_records import (
     Handoff,
     PreparationBinding,
-    PreparationManifest,
-    PreparationRequest,
-    PreparationResult,
 )
-from .preparation_store import PreparationStore, deduplicate_bindings, validate_handoff
+from .preparation_results import (
+    ArticleRequest,
+    ArticleResult,
+    ImageRequest,
+    ImageResult,
+    TextRequest,
+    TextResult,
+)
+from .preparation_state import PreparationState
+from .preparation_store import PreparationStore, validate_handoff
 from .public_fetch import fetch_public
 from .records import URL, Record
 
 
 def _request(stage, digest, client=None, **options):
-    return PreparationRequest(
-        stage=stage,
+    request_type = {
+        "article": ArticleRequest,
+        "text": TextRequest,
+        "image": ImageRequest,
+    }[stage]
+    return request_type(
         input_sha256=digest,
         provider=client.provider if client else "local",
         model=client.model if client else None,
         policy_version=client.policy_version if client else stage + "-v1",
-        options=options,
+        **options,
     )
 
 
-def _binding(kind, doc, result_id, source_id=None, parent=None, locator=None):
+def _binding(stage, kind, doc, result_id, source_id=None, parent=None, locator=None):
     return PreparationBinding(
+        stage=stage,
         source_kind=kind,
         source_id=source_id or doc.document_id,
         source_text_sha256=doc.text_sha256,
@@ -55,14 +66,7 @@ def _text_result(store, text, language, translator):
     if cached:
         return cached[0]
     prepared = prepare_text(text, language=language, translator=translator)
-    return store.save_result(
-        PreparationResult(
-            request=request,
-            status=prepared.status,
-            payload=prepared.model_dump(mode="json"),
-            warnings=prepared.warnings,
-        )
-    )
+    return store.save_result(TextResult(request=request, payload=prepared))
 
 
 def _image_result(store, location, is_local, vision, fetcher, allow_network):
@@ -76,10 +80,9 @@ def _image_result(store, location, is_local, vision, fetcher, allow_network):
             data = fetcher(location, max_bytes=10 * 1024 * 1024).body
         else:
             return store.save_result(
-                PreparationResult(
+                ImageResult(
                     request=request,
-                    status="unavailable",
-                    warnings=["network_disabled"],
+                    failure_reasons=["network_disabled"],
                     source_url=location,
                 )
             )
@@ -91,29 +94,27 @@ def _image_result(store, location, is_local, vision, fetcher, allow_network):
             return cached[0]
         if vision is None:
             return store.save_result(
-                PreparationResult(
+                ImageResult(
                     request=request,
-                    status="unavailable",
                     assets=assets,
-                    warnings=["vision_provider_unavailable"],
+                    failure_reasons=["vision_provider_unavailable"],
                     source_url=None if is_local else location,
                 )
             )
         prepared = prepare_image(data, model_client=vision)
-        result = PreparationResult(
+        result = ImageResult(
             request=request,
-            status="needs_review" if prepared.uncertainties else "success",
-            payload=prepared.model_dump(mode="json"),
-            warnings=prepared.uncertainties,
+            payload=prepared,
             assets=assets,
             source_url=None if is_local else location,
         )
+    except IntegrityError:
+        raise
     except (ValueError, OSError, RuntimeError):
-        result = PreparationResult(
+        result = ImageResult(
             request=request,
-            status="unavailable",
             assets=assets,
-            warnings=["image_validation_or_processing_failed"],
+            failure_reasons=["image_validation_or_processing_failed"],
             source_url=None if is_local else location,
         )
     return store.save_result(result)
@@ -123,10 +124,9 @@ def _article_result(store, url, fetcher, allow_network):
     request = _request("article", sha256(url.encode()), destination_url=url)
     if not allow_network:
         return store.save_result(
-            PreparationResult(
+            ArticleResult(
                 request=request,
-                status="unavailable",
-                warnings=["network_disabled", "browser_followup_required"],
+                failure_reasons=["network_disabled", "browser_followup_required"],
                 source_url=url,
             )
         )
@@ -140,21 +140,23 @@ def _article_result(store, url, fetcher, allow_network):
         article = parse_article(response.body, response.final_url)
         request = _request("article", raw_id, destination_url=url)
         return store.save_result(
-            PreparationResult(
+            ArticleResult(
                 request=request,
-                status="partial" if article.text else "unavailable",
-                payload=article.model_dump(mode="json"),
+                payload=article,
                 assets=[raw_id],
-                warnings=article.warnings + ["browser_followup_required"],
                 source_url=response.final_url,
             )
         )
+    except IntegrityError:
+        raise
     except (ValueError, OSError):
         return store.save_result(
-            PreparationResult(
+            ArticleResult(
                 request=request,
-                status="unavailable",
-                warnings=["article_fetch_or_parse_failed", "browser_followup_required"],
+                failure_reasons=[
+                    "article_fetch_or_parse_failed",
+                    "browser_followup_required",
+                ],
                 source_url=url,
             )
         )
@@ -179,12 +181,7 @@ def prepare(
         raise ValueError("invalid_preparation_stages")
     if len(bundle.documents) > max_documents or max_images < 0 or max_documents < 1:
         raise ValueError("preparation_limit_exceeded")
-    bindings = []
-    if prior_id:
-        prior = store.load(base, prior_id)
-        if prior.handoff != handoff:
-            raise ValueError("prior_handoff_mismatch")
-        bindings.extend(prior.bindings)
+    state = PreparationState(base, store, handoff, prior_id)
     documents = {d.document_id: d for d in bundle.documents}
     images = []
     for doc in bundle.documents:
@@ -212,26 +209,31 @@ def prepare(
                 rid = _article_result(store, url, fetcher, allow_network)
             else:
                 rid = store.save_result(
-                    PreparationResult(
+                    ArticleResult(
                         request=_request(
                             "article", sha256(ref.reference_text.encode())
                         ),
-                        status="unavailable",
-                        warnings=[
+                        failure_reasons=[
                             "article_destination_unknown",
                             "browser_followup_required",
                         ],
                     )
                 )
-            bindings.append(
-                _binding("reference", documents[ref.post_id], rid, ref.reference_id)
+            state.record(
+                _binding(
+                    "article",
+                    "reference",
+                    documents[ref.post_id],
+                    rid,
+                    ref.reference_id,
+                )
             )
     if "image" in stages:
         for doc, location, is_local in images:
             rid = _image_result(
                 store, location, is_local, vision, fetcher, allow_network
             )
-            bindings.append(_binding("document", doc, rid, locator=location))
+            state.record(_binding("image", "document", doc, rid, locator=location))
     if "text" in stages:
         for doc in bundle.documents:
             override = handoff.documents.get(doc.document_id)
@@ -241,36 +243,34 @@ def prepare(
                 else doc.original_language
             )
             rid = _text_result(store, doc.text, language, translator)
-            bindings.append(_binding("document", doc, rid))
+            state.record(_binding("text", "document", doc, rid))
         references = {r.reference_id: r for r in bundle.followups}
-        for binding in list(bindings):
+        for binding in state.manifest.current_bindings:
             result = store.load_result(binding.result_id)
-            text = (
-                result.payload.get("text")
-                if result.request.stage == "article"
-                else result.payload.get("transcription")
-            )
-            if not isinstance(text, str) or not text.strip():
+            if (
+                result.stage not in {"article", "image"}
+                or not result.source_text.strip()
+            ):
                 continue
+            text = result.source_text
             doc = (
                 documents[binding.source_id]
                 if binding.source_kind == "document"
                 else documents[references[binding.source_id].post_id]
             )
             rid = _text_result(store, text, None, translator)
-            bindings.append(
+            state.record(
                 _binding(
-                    binding.source_kind, doc, rid, binding.source_id, binding.result_id
+                    "text",
+                    binding.source_kind,
+                    doc,
+                    rid,
+                    binding.source_id,
+                    binding.result_id,
+                    locator=binding.input_locator,
                 )
             )
-    return store.seal(
-        base,
-        PreparationManifest(
-            bundle_id=base.name,
-            handoff=handoff,
-            bindings=deduplicate_bindings(bindings),
-        ),
-    )
+    return store.seal(base, state.manifest)
 
 
 class ArticleImport(Record):
@@ -306,36 +306,26 @@ def import_articles(base, store, handoff, records, *, prior_id=None):
             raise ValueError("article_import_provenance_required")
         if sha256(row.article.text.encode()) != row.article.response_sha256:
             raise ValueError("article_import_text_hash_mismatch")
-    bindings = []
-    if prior_id:
-        prior = store.load(base, prior_id)
-        if prior.handoff != handoff:
-            raise ValueError("prior_handoff_mismatch")
-        bindings.extend(prior.bindings)
+    state = PreparationState(base, store, handoff, prior_id)
     for row in imports:
         asset = store.save_asset(row.article.text.encode())
         request = _request("article", asset, destination_url=row.destination_url)
         rid = store.save_result(
-            PreparationResult(
+            ArticleResult(
                 request=request,
-                status="success" if row.article.capture_status == "full" else "partial",
-                payload=row.article.model_dump(mode="json"),
-                warnings=row.article.warnings,
+                payload=row.article,
                 assets=[asset],
                 source_url=row.article.final_url,
                 created_at=row.article.retrieved_at,
             )
         )
-        bindings.append(
+        state.record(
             _binding(
-                "reference", docs[refs[row.reference_id].post_id], rid, row.reference_id
+                "article",
+                "reference",
+                docs[refs[row.reference_id].post_id],
+                rid,
+                row.reference_id,
             )
         )
-    return store.seal(
-        base,
-        PreparationManifest(
-            bundle_id=base.name,
-            handoff=handoff,
-            bindings=deduplicate_bindings(bindings),
-        ),
-    )
+    return store.seal(base, state.manifest)

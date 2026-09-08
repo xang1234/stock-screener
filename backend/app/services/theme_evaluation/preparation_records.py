@@ -1,10 +1,10 @@
-"""Preparation artifacts are separate from frozen version-1 evidence bundles."""
+"""Preparation state is separate from frozen version-1 evidence bundles."""
 
-from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import Field, model_validator
 
+from .bundle import canonical_bytes, sha256
 from .records import SHA, URL, Record
 
 
@@ -21,36 +21,8 @@ class Handoff(Record):
     references: dict[str, URL] = Field(default_factory=dict)
 
 
-class PreparationRequest(Record):
-    stage: Literal["article", "text", "image"]
-    input_sha256: SHA
-    provider: str
-    model: str | None
-    policy_version: str
-    options: dict = Field(default_factory=dict)
-
-
-class PreparationResult(Record):
-    request: PreparationRequest
-    status: Literal["success", "partial", "unavailable", "needs_review"]
-    payload: dict = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
-    assets: list[SHA] = Field(default_factory=list)
-    source_url: URL | None = None
-    created_at: AwareDatetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
-
-    @model_validator(mode="after")
-    def outcome_consistent(self):
-        if self.status == "success" and not self.payload:
-            raise ValueError("success_requires_payload")
-        if self.status == "unavailable" and not self.warnings:
-            raise ValueError("unavailable_requires_reason")
-        return self
-
-
 class PreparationBinding(Record):
+    stage: Literal["article", "text", "image"]
     source_kind: Literal["document", "reference"]
     source_id: str
     source_text_sha256: SHA
@@ -58,11 +30,62 @@ class PreparationBinding(Record):
     parent_result_id: SHA | None = None
     input_locator: str | None = None
 
+    @property
+    def binding_id(self):
+        return sha256(canonical_bytes(self.model_dump(mode="json")))
+
+    @property
+    def slot_id(self):
+        return sha256(
+            canonical_bytes(
+                self.model_dump(
+                    mode="json",
+                    exclude={"source_text_sha256", "result_id"},
+                )
+            )
+        )
+
 
 class PreparationManifest(Record):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     bundle_id: SHA
     handoff: Handoff
-    bindings: list[PreparationBinding]
+    bindings: list[PreparationBinding] = Field(default_factory=list)
+    current: dict[SHA, SHA] = Field(default_factory=dict)
     evidence_review: Literal["pending"] = "pending"
     extraction: Literal["awaiting_evidence_approval"] = "awaiting_evidence_approval"
+
+    @property
+    def current_bindings(self):
+        selected = set(self.current.values())
+        return [b for b in self.bindings if b.binding_id in selected]
+
+    @model_validator(mode="after")
+    def valid_selection(self):
+        history = {b.binding_id: b for b in self.bindings}
+        if len(history) != len(self.bindings):
+            raise ValueError("duplicate_preparation_binding")
+        for slot, selected in self.current.items():
+            if selected not in history or history[selected].slot_id != slot:
+                raise ValueError("invalid_current_preparation")
+        roots = {
+            (b.source_kind, b.source_id, b.result_id, b.input_locator)
+            for b in self.current_bindings
+            if b.parent_result_id is None
+        }
+        for binding in self.bindings:
+            if binding.parent_result_id is None and binding.slot_id not in self.current:
+                raise ValueError("missing_current_preparation")
+        for binding in self.current_bindings:
+            if (
+                binding.parent_result_id
+                and (
+                    binding.source_kind,
+                    binding.source_id,
+                    binding.parent_result_id,
+                    binding.input_locator,
+                )
+                not in roots
+            ):
+                raise ValueError("current_preparation_parent_superseded")
+        return self

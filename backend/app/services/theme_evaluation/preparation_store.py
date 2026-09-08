@@ -9,10 +9,8 @@ from .bundle import IntegrityError, canonical_bytes, load_bundle, sha256
 from .preparation_records import (
     Handoff,
     PreparationManifest,
-    PreparationRequest,
-    PreparationResult,
 )
-from .preparation_validation import validate_result
+from .preparation_results import RESULT_ADAPTER, PreparationRequest, PreparationResult
 
 
 def validate_handoff(base: Path, handoff: Handoff):
@@ -53,16 +51,6 @@ def _atomic(path: Path, data: bytes):
         os.unlink(temporary)
 
 
-def deduplicate_bindings(bindings):
-    # Last occurrence is the latest selection, including a return to a cached result.
-    unique = {}
-    for binding in bindings:
-        key = canonical_bytes(binding.model_dump(mode="json"))
-        unique.pop(key, None)
-        unique[key] = binding
-    return list(unique.values())
-
-
 class PreparationStore:
     def __init__(self, root: Path):
         self.root = root
@@ -90,40 +78,76 @@ class PreparationStore:
         return self._read("assets", digest)
 
     def save_result(self, result: PreparationResult) -> str:
-        result = PreparationResult.model_validate(result.model_dump())
-        validate_result(result)
+        result = RESULT_ADAPTER.validate_python(result.model_dump())
         for asset in result.assets:
             self.load_asset(asset)
         raw = canonical_bytes(result.model_dump(mode="json"))
         digest = sha256(raw)
         _atomic(self._path("results", digest, ".json"), raw)
+        if result.status == "success":
+            self._index_result(digest, result)
         return digest
 
     def load_result(self, digest: str) -> PreparationResult:
-        result = PreparationResult.model_validate_json(
-            self._read("results", digest, ".json")
-        )
-        validate_result(result)
+        result = RESULT_ADAPTER.validate_json(self._read("results", digest, ".json"))
         for asset in result.assets:
             self.load_asset(asset)
         return result
 
+    def _index_result(self, digest, result):
+        # Immutable entries avoid a mutable pointer and concurrent-writer races.
+        _atomic(self._path("cache", _digest(result.request)) / digest, b"")
+
     def cached(self, request: PreparationRequest):
-        # Small offline pilots need no database or mutable cache index.
         signature = _digest(request)
-        for path in sorted((self.root / "results").glob("*.json")):
-            result = self.load_result(path.stem)
-            if result.status == "success" and _digest(result.request) == signature:
-                return path.stem, result
+        for path in sorted(self._path("cache", signature).glob("*")):
+            if path.name.startswith(".pending-"):
+                continue
+            result = self.load_result(path.name)
+            if (
+                path.read_bytes()
+                or result.status != "success"
+                or _digest(result.request) != signature
+            ):
+                raise IntegrityError("preparation_cache_mismatch")
+            return path.name, result
         return None
 
+    def verify_all(self):
+        """Audit every asset/result, including unbound history, and repair missing indexes.
+
+        A crash after a result write but before indexing is a harmless cache miss.
+        Reindex only after all content and existing entries pass verification.
+        """
+        for path in sorted((self.root / "assets").glob("*")):
+            if not path.name.startswith(".pending-"):
+                self.load_asset(path.name)
+        successful = []
+        for path in sorted((self.root / "results").glob("*.json")):
+            result = self.load_result(path.stem)
+            if result.status == "success":
+                successful.append((path.stem, result))
+        for directory in sorted((self.root / "cache").glob("*")):
+            for entry in sorted(directory.glob("*")):
+                if entry.name.startswith(".pending-"):
+                    continue
+                result = self.load_result(entry.name)
+                if (
+                    entry.read_bytes()
+                    or result.status != "success"
+                    or _digest(result.request) != directory.name
+                ):
+                    raise IntegrityError("preparation_cache_mismatch")
+        for digest, result in successful:
+            self._index_result(digest, result)
+
     def validate(self, base: Path, manifest: PreparationManifest):
+        manifest = PreparationManifest.model_validate(manifest.model_dump())
         bundle = validate_handoff(base, manifest.handoff)
         if manifest.bundle_id != base.name:
             raise ValueError("preparation_base_mismatch")
         documents = {d.document_id: d for d in bundle.documents}
         references = {r.reference_id: r for r in bundle.followups}
-        keys = set()
         for binding in manifest.bindings:
             if binding.source_kind == "reference":
                 ref = references.get(binding.source_id)
@@ -132,17 +156,9 @@ class PreparationStore:
                 doc = documents.get(binding.source_id)
             if doc is None or doc.text_sha256 != binding.source_text_sha256:
                 raise ValueError("preparation_source_mismatch")
-            key = (
-                binding.source_kind,
-                binding.source_id,
-                binding.result_id,
-                binding.parent_result_id,
-                binding.input_locator,
-            )
-            if key in keys:
-                raise ValueError("duplicate_preparation_binding")
-            keys.add(key)
             result = self.load_result(binding.result_id)
+            if result.stage != binding.stage:
+                raise ValueError("preparation_stage_mismatch")
             if result.request.stage == "image":
                 override = manifest.handoff.documents.get(doc.document_id)
                 locators = doc.source_metadata.image_urls + (
@@ -159,7 +175,7 @@ class PreparationStore:
                 destination = manifest.handoff.references.get(
                     binding.source_id, references[binding.source_id].candidate_url
                 )
-                if result.request.options.get("destination_url") != destination:
+                if result.request.destination_url != destination:
                     raise ValueError("article_destination_mismatch")
             if binding.parent_result_id:
                 parents = [
@@ -169,16 +185,15 @@ class PreparationStore:
                     and b.source_id == binding.source_id
                     and b.source_kind == binding.source_kind
                     and b.parent_result_id is None
+                    and b.input_locator == binding.input_locator
                 ]
                 if not parents:
                     raise ValueError("missing_preparation_parent")
                 parent = self.load_result(binding.parent_result_id)
-                parent_text = parent.payload.get(
-                    "text", parent.payload.get("transcription")
-                )
+                parent_text = parent.source_text
                 if (
                     result.request.stage != "text"
-                    or not isinstance(parent_text, str)
+                    or parent.stage not in {"article", "image"}
                     or sha256(parent_text.encode()) != result.request.input_sha256
                 ):
                     raise ValueError("preparation_parent_input_mismatch")

@@ -25,7 +25,7 @@ Input mapping JSON: `bundle_id`, `documents` (document ID -> original text SHA, 
 
 Stage result: strict `stage`, source identity/hash, input signature, status (`success`, `partial`, `unavailable`, `needs_review`), payload, warnings, source URL, retrieved/generated times and model/policy provenance. Payloads are validated by the responsible stage. A successful image result requires valid transcription/observation fields; a successful translation requires all source segments. A parsed article with uncertain completeness stays partial.
 
-Stored preparation manifest: base bundle ID, source mapping hash, ordered stage result IDs and policy version. Review verifies result IDs and input bindings before displaying evidence. Repeated stage results can share processing across parents; parent links live in the manifest.
+Stored preparation manifest (v2): base bundle ID, handoff mapping, immutable attempt bindings, and explicit current slot-to-binding IDs. See the follow-up ledger below for the reviewed contract changes. Review verifies result IDs and input bindings before displaying evidence. Repeated stage results can share processing across parents; parent links live in the manifest.
 
 ## Verification
 
@@ -42,4 +42,17 @@ Use the main checkout's backend virtual environment with `DATABASE_URL=sqlite://
 - Review fixes: cookie isolation on IP-pinned redirects; reject encoded responses before decompression; flag unchanged foreign translations and conflicting Han/English metadata; exclude superseded failures from current queues; require imported capture times; idempotent translation imports; reject provider-reported truncated image responses. Each fix has a regression test.
 - No installs, paid calls, real-pilot preparation or reader changes during implementation.
 
-Final offline validation: 119 tests passed (evidence suite plus theme identity, source-quality and lifecycle regressions), with two pre-existing dependency deprecation warnings. Ruff passed for all added Python files. The frozen 98-document pilot bundle verified against its original content ID. Review findings were closed, including a regression for returning to a previously cached image after an intervening image version. No live provider transport/accuracy claim is made.
+Initial implementation validation before the strict maintainability review: 119 tests passed (evidence suite plus theme identity, source-quality and lifecycle regressions), with two pre-existing dependency deprecation warnings. Ruff passed for all added Python files. The frozen 98-document pilot bundle verified against its original content ID. Initial functional-review findings were closed, including a regression for returning to a previously cached image after an intervening image version. No live provider transport/accuracy claim is made.
+
+## Strict maintainability review follow-up
+
+The user requested fixes for all four structural findings. Four regression tests first reproduced the failures: an offline retry superseded an imported translation; foreign-language identity text could claim success; imports reran segmentation; unrelated corrupted assets broke cache misses.
+
+1. **Explicit current evidence:** preparation manifest v2 stores a current-selection map alongside unique attempt history. `PreparationState` owns transitions; execution and reports consume the same selection. Unavailable retries preserve useful evidence for unchanged/uncaptured input. Captured input changes supersede children at that source locator. Tests cover history reordering, cached A→B→A, changed images, shared image results across locators and exclusion of old versions from translation work.
+2. **Typed results:** `preparation_results.py` defines discriminated article/text/image outcomes and stage-specific requests. Content models own consistency rules. Status/warnings derive from content; foreign-language identity is invalid at construction. Removed the payload-reparsing validation module and dictionary payload access from consumers.
+3. **Direct imports:** one finalizer binds live/imported translations to the exact original segments. Imports retain language metadata, missing slots and generation provenance without redetection, resegmentation or a fake translator. Tests replace both language detection and segmentation with failing functions during a multi-segment import.
+4. **Indexed cache:** immutable request-keyed index entries select successful results without scanning unrelated assets. Selected artifacts still fail on corruption. Explicit verification audits all assets/results/cache entries and repairs missing indexes after validation, covering interruption between result write and indexing.
+
+Only preparation format v1 is retired; the frozen acquisition Bundle v1 remains unchanged. No real preparation artifacts had been generated, so no migration or sample rebuild is required. No new dependencies, live service calls or reader changes are part of this fix.
+
+Follow-up validation: **130 tests passed**, covering the full evidence suite and existing theme identity, source-quality and lifecycle regressions. The two dependency warnings are pre-existing. Ruff passed on every changed Python file; the broader package check also reported existing lint issues in unchanged acquisition files, which were left outside this refactor. `git diff --check` passed. The original 98-document pilot again verified against content ID `96d66ae1038bea1107ac17aeab3fabbbabd383fa830014b040ed892031789844`.

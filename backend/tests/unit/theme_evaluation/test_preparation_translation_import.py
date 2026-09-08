@@ -43,8 +43,8 @@ def test_import_preserves_source_and_timestamp_but_flags_unit_change(
     manifest = store.load(base, new_pid)
     result = store.load_result(manifest.bindings[-1].result_id)
     assert result.status == "needs_review"
-    assert result.payload["segments"][0]["original"] == "매출 100억원"
-    assert result.payload["segments"][0]["translated"] == "Revenue 10 billion won"
+    assert result.payload.segments[0].original == "매출 100억원"
+    assert result.payload.segments[0].translated == "Revenue 10 billion won"
     assert result.created_at.isoformat() == row["generated_at"]
     assert len(store.load(base, pid).bindings) == 1
 

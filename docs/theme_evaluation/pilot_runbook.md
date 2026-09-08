@@ -107,9 +107,9 @@ Review outputs:
 - `coverage.json`: current gaps, missing image metadata, and pending evidence approval.
 - `original/`: the unchanged base-bundle review packet.
 
-Keep the review directory together when sharing it: image links are relative. No images load from remote hosts during offline review. The content-addressed store contains `assets`, `results`, and `preparations`; integrity checks cover all referenced assets/results and source bindings. Place it under ignored local `data/`, never source control. Successful identical image inputs reuse processing across posts; original processing times remain intact. Failed/partial/uncertain results stay retryable.
+Keep the review directory together when sharing it: image links are relative. No images load from remote hosts during offline review. The content-addressed store contains `assets`, `results`, and `preparations`, plus a request-keyed `cache` index. Ordinary lookup verifies only the selected result and its assets. The explicit `verify` command checks all stored assets/results and cache entries, including unbound attempts, then verifies the requested preparation and its source bindings. It rebuilds missing index entries only after the asset/result audit passes; interrupted indexing otherwise causes a harmless cache miss. Place it under ignored local `data/`, never source control. Successful identical image inputs reuse processing across posts; original processing times remain intact. Failed/partial/uncertain results stay retryable.
 
-Use `--prior-preparation <id>` on prepare/import-articles to retain prior results in a new preparation. It requires the same base and handoff. Latest attempts are current; earlier versions remain visible as superseded history. If source text or handoff metadata changes, start a new appropriately bound preparation. Re-running HTTP recovery fetches the URL again because web content can change.
+Use `--prior-preparation <id>` on prepare/import-articles to retain prior results in a new preparation. It requires the same base and handoff. The manifest explicitly records current evidence separately from attempt history; list order never selects the current version. An unavailable retry retains a usable prior result when its input is unchanged or could not be recaptured. Changed captured inputs select a new version even if processing fails, and supersede translations of the old article/image at that source locator. The text stage processes only current article/image versions. Other completed results become current, including results carrying review warnings. All attempts remain visible in the report. If source text or handoff metadata changes, start a new appropriately bound preparation. Re-running HTTP recovery fetches the URL again because web content can change.
 
 ```bash
 python scripts/prepare_theme_evidence.py import-articles \
@@ -122,3 +122,9 @@ python scripts/prepare_theme_evidence.py import-translations \
 ```
 
 To prepare recovered article text or image transcription for translation, run the text stage with the resulting prior preparation. Translation imports create another immutable preparation; repeated identical imports are idempotent. All evidence versions still require user review before extraction.
+
+### Preparation format version 2
+
+Preparation manifests now use schema version 2 with `bindings` for unique attempt history and `current` mapping slot hashes to selected binding hashes. A slot identifies source kind/ID, stage, parent result and input locator. Article, text and image results have typed requests and payloads. Status and warnings derive from validated content rather than duplicated stored status fields. This changes only preparation artifacts; acquisition Bundle v1 and its frozen content IDs remain unchanged.
+
+The earlier development-only preparation format is intentionally rejected rather than silently migrated. It was used in temporary tests, not on the frozen pilot. If an external scratch preparation used that format, rebuild it in a new output directory. Keep old evidence for inspection.

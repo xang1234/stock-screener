@@ -66,6 +66,7 @@ def _run(args):
     if args.command == "review":
         return render_preparation(args.bundle, store, args.preparation, args.output)
     if args.command == "verify":
+        store.verify_all()
         manifest = store.load(args.bundle, args.preparation)
         return {
             "preparation_id": args.preparation,

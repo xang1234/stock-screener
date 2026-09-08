@@ -2,9 +2,9 @@
 
 from pydantic import AwareDatetime, Field
 
-from .multilingual_preparation import TextPreparation, prepare_text
-from .preparation_records import PreparationManifest, PreparationResult
-from .preparation_store import deduplicate_bindings
+from .multilingual_preparation import finalize_translation
+from .preparation_results import TextResult
+from .preparation_state import PreparationState
 from .records import SHA, Record
 
 
@@ -30,63 +30,29 @@ def import_translations(base, store, preparation_id, records):
             raise ValueError("unknown_translation_source")
         original = store.load_result(row.result_id)
         if (
-            original.request.stage != "text"
+            not isinstance(original, TextResult)
             or row.source_text_sha256 != original.request.input_sha256
         ):
             raise ValueError("translation_import_source_mismatch")
-        previous = TextPreparation.model_validate(original.payload)
-        if len(row.translations) != len(previous.segments):
-            raise ValueError("translation_import_segment_count")
-        # Preserve source segmentation including identity/blank segments. prepare_text
-        # intentionally skips those, so validate them and omit them from the iterator.
-        translating = []
-        for segment, translated in zip(previous.segments, row.translations):
-            if segment.status == "identity":
-                if translated != segment.original:
-                    raise ValueError("identity_translation_changed")
-            else:
-                translating.append(translated)
-
-        translation_values = iter(translating)
-
-        def translate(text, source, target, values=translation_values):
-            return next(values)
-
-        text = "".join(segment.original for segment in previous.segments)
-        prepared = prepare_text(
-            text,
-            language=previous.supplied_language,
-            target_language=previous.target_language,
-            translator=translate,
-            max_chars=original.request.options.get("max_chars", 4000),
-        )
+        prepared = finalize_translation(original.payload, row.translations)
         request = original.request.model_copy(
             update={
                 "provider": row.provider,
                 "model": row.model,
                 "policy_version": row.policy_version,
-                "options": {**original.request.options, "method": "translation_import"},
+                "method": "translation_import",
             }
         )
-        result = PreparationResult(
+        result = TextResult(
             request=request,
-            status=prepared.status,
-            payload=prepared.model_dump(mode="json"),
-            warnings=prepared.warnings,
+            payload=prepared,
             created_at=row.generated_at,
         )
         pending.append((row.result_id, result))
-    bindings = list(manifest.bindings)
+    state = PreparationState(base, store, manifest.handoff, preparation_id)
     for old_id, result in pending:
         rid = store.save_result(result)
         for binding in manifest.bindings:
             if binding.result_id == old_id:
-                bindings.append(binding.model_copy(update={"result_id": rid}))
-    return store.seal(
-        base,
-        PreparationManifest(
-            bundle_id=manifest.bundle_id,
-            handoff=manifest.handoff,
-            bindings=deduplicate_bindings(bindings),
-        ),
-    )
+                state.record(binding.model_copy(update={"result_id": rid}))
+    return store.seal(base, state.manifest)

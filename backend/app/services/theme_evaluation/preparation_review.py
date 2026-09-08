@@ -4,41 +4,8 @@ import json
 from pathlib import Path
 
 from .image_preparation import validate_image
+from .preparation_results import ArticleResult, ImageResult, TextResult
 from .review import _text, _write_csv, render_review
-
-
-def active_binding_indices(manifest, store):
-    latest = {}
-    for index, binding in enumerate(manifest.bindings):
-        result = store.load_result(binding.result_id)
-        key = (
-            binding.source_kind,
-            binding.source_id,
-            result.request.stage,
-            binding.parent_result_id,
-            binding.input_locator,
-        )
-        latest[key] = index
-    roots = {
-        (
-            manifest.bindings[i].source_kind,
-            manifest.bindings[i].source_id,
-            manifest.bindings[i].result_id,
-        )
-        for i in latest.values()
-        if manifest.bindings[i].parent_result_id is None
-    }
-    return {
-        i
-        for i in latest.values()
-        if not manifest.bindings[i].parent_result_id
-        or (
-            manifest.bindings[i].source_kind,
-            manifest.bindings[i].source_id,
-            manifest.bindings[i].parent_result_id,
-        )
-        in roots
-    }
 
 
 def render_preparation(base, store, preparation_id: str, output: Path):
@@ -47,7 +14,7 @@ def render_preparation(base, store, preparation_id: str, output: Path):
     output.mkdir(parents=True, exist_ok=False)
     render_review(bundle, output / "original")
     rows, followups = [], []
-    active = active_binding_indices(manifest, store)
+    active = set(manifest.current.values())
     lines = [
         "# Prepared evidence — review before extraction",
         "",
@@ -68,7 +35,7 @@ def render_preparation(base, store, preparation_id: str, output: Path):
     for number, binding in enumerate(manifest.bindings, 1):
         result = store.load_result(binding.result_id)
         row = {
-            "version": "current" if number - 1 in active else "superseded",
+            "version": "current" if binding.binding_id in active else "superseded",
             "input_locator": binding.input_locator or "",
             "source_kind": binding.source_kind,
             "source_id": binding.source_id,
@@ -82,7 +49,10 @@ def render_preparation(base, store, preparation_id: str, output: Path):
             "policy_version": result.request.policy_version,
             "source_url": result.source_url or "",
             "warnings": json.dumps(result.warnings, ensure_ascii=False),
-            "payload": json.dumps(result.payload, ensure_ascii=False),
+            "payload": json.dumps(
+                result.payload.model_dump(mode="json") if result.payload else None,
+                ensure_ascii=False,
+            ),
         }
         rows.append(row)
         lines.extend(
@@ -97,7 +67,7 @@ def render_preparation(base, store, preparation_id: str, output: Path):
         )
         if result.source_url:
             lines.extend(["Source URL: " + _text(result.source_url), ""])
-        if result.request.stage == "image":
+        if isinstance(result, ImageResult):
             for asset in result.assets:
                 raw = store.load_asset(asset)
                 metadata = validate_image(raw)
@@ -112,35 +82,39 @@ def render_preparation(base, store, preparation_id: str, output: Path):
                     target.write_bytes(raw)
                 lines.extend([f"![Original image](images/{target.name})", ""])
             for label, value in (
-                ("Transcription", result.payload.get("transcription", "")),
-                ("Observations", "\n".join(result.payload.get("observations", []))),
-                ("Uncertainty", "\n".join(result.payload.get("uncertainties", []))),
+                (
+                    "Transcription",
+                    result.payload.transcription if result.payload else "",
+                ),
+                (
+                    "Observations",
+                    "\n".join(result.payload.observations) if result.payload else "",
+                ),
+                (
+                    "Uncertainty",
+                    "\n".join(result.payload.uncertainties) if result.payload else "",
+                ),
             ):
                 lines.extend([f"**{label}**", ""])
                 lines.extend("> " + _text(line) for line in value.splitlines())
                 lines.append("")
-        elif result.request.stage == "text":
-            lines.extend(
-                ["Language: " + _text(result.payload.get("source_language", "und")), ""]
-            )
-            for segment in result.payload.get("segments", []):
+        elif isinstance(result, TextResult):
+            lines.extend(["Language: " + _text(result.payload.source_language), ""])
+            for segment in result.payload.segments:
                 lines.extend(["**Original segment**", ""])
                 lines.extend(
-                    "> " + _text(line) for line in segment["original"].splitlines()
+                    "> " + _text(line) for line in segment.original.splitlines()
                 )
-                lines.extend(["", "**Translation: " + segment["status"] + "**", ""])
+                lines.extend(["", "**Translation: " + segment.status + "**", ""])
                 lines.extend(
                     "> " + _text(line)
-                    for line in (segment["translated"] or "[unavailable]").splitlines()
+                    for line in (segment.translated or "[unavailable]").splitlines()
                 )
                 lines.append("")
-        else:
-            lines.extend(
-                "> " + _text(line)
-                for line in result.payload.get("text", "").splitlines()
-            )
+        elif isinstance(result, ArticleResult):
+            lines.extend("> " + _text(line) for line in result.source_text.splitlines())
             lines.append("")
-            if result.status != "success" and number - 1 in active:
+            if result.status != "success" and binding.binding_id in active:
                 followups.append(row)
     (output / "evidence.md").write_text("\n".join(lines), encoding="utf-8")
     fields = [
