@@ -7,6 +7,7 @@ import io
 import json
 from base64 import b64encode
 from typing import Any, Protocol
+from uuid import uuid4
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -46,6 +47,7 @@ class OpenCodeGoVision:
             raise ValueError("opencode_go_api_key_required")
         self._api_key = api_key.strip()
         self._transport = transport
+        self._session_id = str(uuid4())
 
     def describe_image(self, data: bytes, mime_type: str) -> dict[str, Any]:
         encoded = b64encode(data).decode("ascii")
@@ -81,7 +83,11 @@ class OpenCodeGoVision:
                 client.stream(
                     "POST",
                     _OPENCODE_GO_ENDPOINT,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "User-Agent": "stockscreen-evidence-preparation/1.0",
+                        "x-opencode-session": self._session_id,
+                    },
                     json=payload,
                 ) as response,
             ):

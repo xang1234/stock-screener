@@ -85,7 +85,7 @@ This defaults to offline operation. Missing downloads/models/translations produc
 
 After the reader update and applicable tool approval, `--allow-network` enables public article/image downloads. `--allow-model-calls` separately enables the approved Go image request, using `OPENCODE_GO_API_KEY` from the environment. Do not put keys in command arguments or handoff files. The model is fixed to `kimi-k2.6`; there is no silent provider fallback. No new local OCR package is required.
 
-Before processing a real corpus, run a small controlled image fixture through Go to verify image transport, non-thinking parameters, Korean/Japanese text, numbers/units and chart labels. Provider parameters and actual evidence accuracy have not been validated live. The current output cap is 2,048 tokens; provider-reported truncation fails visibly instead of becoming a successful transcription. Dense images may need a later approved higher cap or crop strategy based on fixture results.
+The [2026-09-08 live Kimi validation](kimi_validation_2026-09-08.md) passed image transport, configured parameters, Korean/Japanese financial transcription and tested chart associations across four controlled fixtures. The adapter now supplies Go’s required session header and an explicit client name. Two minor commentary counting errors were observed. Real-corpus accuracy remains unmeasured; retain original images for evidence review. The current output cap is 2,048 tokens; provider-reported truncation fails visibly instead of becoming a successful transcription. Dense images may need a later approved higher cap or crop strategy based on fixture results.
 
 Every preparation command prints a preparation ID. Review and verify it with:
 

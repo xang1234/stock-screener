@@ -327,3 +327,36 @@ def test_opencode_go_rejects_incomplete_model_output_safely(finish_reason):
         client.describe_image(image_bytes(), "image/png")
 
     assert "private truncated content" not in str(raised.value)
+
+
+def test_go_identifies_client_and_reuses_session_for_one_preparation_run():
+    headers = []
+    output = {
+        "transcription": "100",
+        "observations": [],
+        "image_type": "table",
+        "uncertainties": [],
+    }
+
+    def handler(request):
+        headers.append(request.headers)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps(output)},
+                    }
+                ]
+            },
+        )
+
+    client = OpenCodeGoVision("test-api-key", transport=httpx.MockTransport(handler))
+    client.describe_image(image_bytes(), "image/png")
+    client.describe_image(image_bytes(), "image/png")
+    from uuid import UUID
+
+    assert UUID(headers[0]["x-opencode-session"])
+    assert headers[0]["x-opencode-session"] == headers[1]["x-opencode-session"]
+    assert headers[0]["user-agent"] == "stockscreen-evidence-preparation/1.0"
