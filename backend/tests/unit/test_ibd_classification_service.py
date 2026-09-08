@@ -490,6 +490,88 @@ def test_llm_tier_raising_tiebreaker_is_charged_and_cached():
     assert calls["n"] == 1                    # tiebreaker invoked exactly once total
 
 
+def test_llm_tier_opens_circuit_after_one_terminal_provider_failure():
+    calls = {"n": 0}
+
+    class ForbiddenError(RuntimeError):
+        status_code = 403
+
+    def tb(text, shortlist):
+        calls["n"] += 1
+        raise ForbiddenError("region access denied")
+
+    tier = _LLMTier(tb, model_id="m", max_calls=600, deadline_seconds=None, clock=lambda: 0.0)
+    contexts = [StockContext(str(i), "HK", sector=f"S{i}") for i in range(5)]
+
+    assert [tier.choose(ctx, ["G1"]) for ctx in contexts] == [None] * 5
+    assert calls["n"] == 1
+    assert tier.calls == 1
+    assert tier.failures == 1
+    assert tier.successes == 0
+    assert tier.circuit_open is True
+    assert tier.circuit_reason == "provider_http_403"
+
+
+def test_llm_tier_opens_circuit_after_three_consecutive_transient_failures():
+    calls = {"n": 0}
+
+    def tb(text, shortlist):
+        calls["n"] += 1
+        raise ConnectionError("provider unavailable")
+
+    tier = _LLMTier(tb, model_id="m", max_calls=600, deadline_seconds=None, clock=lambda: 0.0)
+    contexts = [StockContext(str(i), "HK", sector=f"S{i}") for i in range(5)]
+
+    assert [tier.choose(ctx, ["G1"]) for ctx in contexts] == [None] * 5
+    assert calls["n"] == 3
+    assert tier.failures == 3
+    assert tier.circuit_open is True
+    assert tier.circuit_reason == "provider_network_error"
+
+
+def test_llm_tier_counts_unparseable_responses_and_stops_after_three():
+    calls = {"n": 0}
+
+    def tb(text, shortlist):
+        calls["n"] += 1
+        return None
+
+    tier = _LLMTier(tb, model_id="m", max_calls=600, deadline_seconds=None, clock=lambda: 0.0)
+    contexts = [StockContext(str(i), "HK", sector=f"S{i}") for i in range(5)]
+
+    assert [tier.choose(ctx, ["G1"]) for ctx in contexts] == [None] * 5
+    assert calls["n"] == 3
+    assert tier.parse_failures == 3
+    assert tier.failures == 0
+    assert tier.circuit_open is True
+    assert tier.circuit_reason == "invalid_response"
+
+
+def test_classification_summary_distinguishes_llm_success_from_fallback():
+    session = _make_session()
+    _seed_taxonomy(session)
+    _add_universe(session, "AAA.SG", "SG", name="Alpha Holdings", sector="SectorA")
+    _add_universe(session, "BBB.SG", "SG", name="Beta Holdings", sector="SectorB")
+    answers = iter(["Computers-Software", None])
+    service = IBDClassificationService(
+        crosswalk=None,
+        embedding_engine=FakeEngine(),
+        llm_tiebreaker=lambda _text, _shortlist: next(answers),
+        llm_model_id="test/model",
+        attach_threshold=0.9,
+    )
+
+    result = service.classify_market(session, "SG", soft_attach=True)
+    summary = result.summary()
+
+    assert summary["llm_attempts"] == 2
+    assert summary["llm_successes"] == 1
+    assert summary["llm_failures"] == 0
+    assert summary["llm_parse_failures"] == 1
+    assert summary["llm_fallbacks"] == 1
+    assert summary["llm_circuit_open"] is False
+
+
 def test_llm_tier_without_tiebreaker_declines():
     tier = _LLMTier(None, model_id=None, max_calls=None, deadline_seconds=None, clock=lambda: 0.0)
     a = StockContext("A", "SG", sector="Fin", industry="Banks")

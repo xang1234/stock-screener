@@ -226,3 +226,44 @@ def test_gate_none_coverage_is_breach_not_crash():
     )
     assert not res.passed
     assert any("coverage" in b for b in res.breaches)
+
+
+def test_gate_enforce_fails_when_configured_llm_has_zero_successes():
+    report = {
+        "model_id": "deepseek-v4-flash",
+        "summary": {
+            "coverage_pct": 100.0,
+            "llm_attempts": 1,
+            "llm_successes": 0,
+            "llm_failures": 1,
+            "llm_parse_failures": 0,
+        },
+        "diff": None,
+    }
+
+    result = evaluate_gate(
+        report, max_churn_pct=25, min_coverage_pct=50, mode="enforce",
+    )
+
+    assert not result.passed
+    assert any("zero successful LLM classifications" in breach for breach in result.breaches)
+
+
+def test_gate_does_not_breach_when_configured_llm_was_not_needed():
+    report = {
+        "model_id": "deepseek-v4-flash",
+        "summary": {
+            "coverage_pct": 100.0,
+            "llm_attempts": 0,
+            "llm_successes": 0,
+            "llm_failures": 0,
+            "llm_parse_failures": 0,
+        },
+        "diff": None,
+    }
+
+    result = evaluate_gate(
+        report, max_churn_pct=25, min_coverage_pct=50, mode="enforce",
+    )
+
+    assert result.passed

@@ -23,7 +23,10 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Callable, Optional
+from urllib.parse import urlparse
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,16 @@ def _resolve_litellm_model(model: str, *, has_api_base: bool) -> str:
     return model if "/" in model else f"openai/{model}"
 
 
+def _is_opencode_go_api_base(api_base: Optional[str]) -> bool:
+    if not api_base:
+        return False
+    parsed = urlparse(api_base)
+    return (
+        parsed.hostname == "opencode.ai"
+        and parsed.path.rstrip("/").endswith("/zen/go/v1")
+    )
+
+
 def match_choice(response_text: str, shortlist: list[str]) -> Optional[str]:
     """Map a model response to one of the shortlisted group names.
 
@@ -104,6 +117,9 @@ class OpenAICompatibleTiebreaker:
         temperature: float = 0.1,
         max_tokens: int = 200,
         timeout: float = 30.0,
+        min_interval_seconds: float = 0.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
         complete_fn: Optional[Callable[..., str]] = None,
     ):
         self.model = model
@@ -113,6 +129,11 @@ class OpenAICompatibleTiebreaker:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.min_interval_seconds = max(0.0, min_interval_seconds)
+        self._clock = clock
+        self._sleep = sleep
+        self._last_dispatch_at: Optional[float] = None
+        self._opencode_session_id = f"ibd-{uuid4().hex}"
         self._complete_fn = complete_fn  # injectable for tests
 
     @property
@@ -132,12 +153,29 @@ class OpenAICompatibleTiebreaker:
             # between symbols, so without this a single hung request could run past
             # the job cap. Worst-case overrun is one timeout, not unbounded.
             "timeout": self.timeout,
+            # One classifier decision is one provider dispatch. Disable both
+            # LiteLLM and provider-SDK retries so the call budget is truthful.
+            "num_retries": 0,
+            "max_retries": 0,
         }
         if self.api_base:
             params["api_base"] = self.api_base
         if self.api_key:
             params["api_key"] = self.api_key
+        if _is_opencode_go_api_base(self.api_base):
+            params["extra_headers"] = {
+                "User-Agent": "StockScreen/1.0",
+                "x-opencode-session": self._opencode_session_id,
+            }
         return params
+
+    def _pace_dispatch(self) -> None:
+        now = self._clock()
+        if self._last_dispatch_at is not None:
+            remaining = self.min_interval_seconds - (now - self._last_dispatch_at)
+            if remaining > 0:
+                self._sleep(remaining)
+        self._last_dispatch_at = self._clock()
 
     def _complete(self, user_prompt: str) -> str:
         if self._complete_fn is not None:
@@ -150,11 +188,10 @@ class OpenAICompatibleTiebreaker:
     def __call__(self, text: str, shortlist: list[str]) -> Optional[str]:
         if not shortlist:
             return None
-        try:
-            raw = self._complete(_render_prompt(text, shortlist))
-        except Exception as exc:  # noqa: BLE001 — never let a bad call break the batch
-            logger.warning("IBD LLM tiebreaker call failed: %s", exc)
-            return None
+        self._pace_dispatch()
+        # The batch-level LLM tier catches provider failures so it can count them
+        # and open its circuit. Swallowing here previously hid 600 identical 403s.
+        raw = self._complete(_render_prompt(text, shortlist))
         return match_choice(raw, shortlist)
 
 
@@ -172,6 +209,7 @@ def build_ibd_tiebreaker() -> tuple[Optional[Callable[[str, list[str]], Optional
         temperature = float(_env("IBD_LLM_TEMPERATURE") or 0.1)
         max_tokens = int(_env("IBD_LLM_MAX_TOKENS") or 200)
         timeout = float(_env("IBD_LLM_TIMEOUT") or 30.0)
+        min_interval_seconds = float(_env("IBD_LLM_MIN_INTERVAL_SECONDS") or 5.0)
         tb = OpenAICompatibleTiebreaker(
             model=model,
             api_base=_env("IBD_LLM_API_BASE"),
@@ -179,6 +217,7 @@ def build_ibd_tiebreaker() -> tuple[Optional[Callable[[str, list[str]], Optional
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
+            min_interval_seconds=min_interval_seconds,
         )
         logger.info("IBD tiebreaker: env-driven OpenAI-compatible model %s", model)
         return tb, tb.model_id
