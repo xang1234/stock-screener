@@ -373,3 +373,86 @@ def test_incomplete_derived_translation_is_not_eligible():
         ),
     )
     assert not any(eligible for _, _, eligible, _, _ in findings(result, None, False))
+
+
+@pytest.mark.parametrize(
+    "complete,expected_code,incomplete,unknown",
+    [
+        (None, "original_completeness_unknown", 0, 1),
+        (False, "original_incomplete", 1, 0),
+        (True, None, 0, 0),
+    ],
+)
+def test_imported_post_completeness_is_not_inferred_from_legacy_status(
+    tmp_path, xui_payloads, complete, expected_code, incomplete, unknown
+):
+    from app.services.theme_evaluation.evidence_assessment import build_assessment
+    from app.services.theme_evaluation.xui_intake import import_xui
+
+    for payload in xui_payloads.values():
+        payload["items"][0].update(
+            text="An investment note with captured text. " * 20,
+            text_complete=complete,
+            text_source="note_tweet",
+            incomplete_text_reasons=[],
+        )
+    captured = import_xui(
+        xui_payloads,
+        captured_at=datetime(2026, 9, 1, 10, tzinfo=timezone.utc),
+        max_posts_per_source=50,
+        requested_limit=50,
+        mode="controlled",
+    )
+    base = seal_bundle(tmp_path, captured)
+    original = (base / "bundle.json").read_bytes()
+    store = PreparationStore(tmp_path / "store")
+    pid = prepare(base, store, Handoff(bundle_id=base.name), stages=["image"])
+    assessment = build_assessment(base, store, pid)
+    originals = [e for e in assessment["entries"].values() if e["stage"] == "original"]
+    assert [e["issue_code"] for e in originals] == (
+        [expected_code] if expected_code else []
+    )
+    assert assessment["coverage"]["original_incomplete"] == incomplete
+    assert assessment["coverage"]["original_completeness_unknown"] == unknown
+    if complete is None:
+        assert captured.documents[0].capture_status == "partial"
+        assert originals[0]["legacy_status"] == "partial"
+        assert "unknown" in originals[0]["explanation"]
+    assert (base / "bundle.json").read_bytes() == original
+    assert store.load(base, pid).extraction == "awaiting_evidence_approval"
+
+
+def test_corrected_completeness_policy_preserves_archived_assessment_validation(
+    tmp_path, bundle, document
+):
+    from app.services.theme_evaluation.evidence_assessment import (
+        build_assessment,
+        load_assessment,
+        save_assessment,
+    )
+
+    base = seal_bundle(
+        tmp_path,
+        Bundle.model_validate(
+            bundle(
+                documents=[
+                    document(
+                        capture_status="partial",
+                        source_metadata={"text_complete": None},
+                    )
+                ]
+            )
+        ),
+    )
+    store = PreparationStore(tmp_path / "store")
+    pid = prepare(base, store, Handoff(bundle_id=base.name), stages=["image"])
+    legacy = build_assessment(base, store, pid, policy_version="evidence-assessment-v1")
+    legacy_id = save_assessment(base, store, legacy)
+    legacy_bytes = store._read("assessments", legacy_id, ".json")
+    corrected = build_assessment(base, store, pid)
+    assert corrected["policy_version"] == "evidence-assessment-v2"
+    assert legacy["coverage"]["original_incomplete"] == 1
+    assert corrected["coverage"]["original_incomplete"] == 0
+    assert corrected["coverage"]["original_completeness_unknown"] == 1
+    assert load_assessment(base, store, pid, legacy_id) == legacy
+    assert store._read("assessments", legacy_id, ".json") == legacy_bytes

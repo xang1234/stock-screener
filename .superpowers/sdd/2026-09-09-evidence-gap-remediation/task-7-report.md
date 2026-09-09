@@ -50,3 +50,13 @@ The annotation file is a JSON array of exact entry-bound annotations. Existing n
 No live calls, browser rendering, production database access, frozen bundle edits, or live artifact mutations were performed. Linked-post manifests expose bounded acquisition work; queued posts are explicitly unprocessed and outside the list quota until an independently captured/imported supplement is reviewed. Legacy statuses and extraction locks are unchanged. Per-run operational reports describe only that run, not accumulated historical costs. Manual notes do not provide an extraction-approval path.
 
 FINAL: completion — implementation ready for independent integration review.
+
+## Completeness review correction
+
+The live packet exposed that the importer intentionally uses legacy `capture_status="partial"` for posts whose `text_complete` is unknown. Assessment policy `evidence-assessment-v2` now classifies post completeness from the authoritative `text_complete` tri-state: `False` is incomplete, `None` is unknown, and `True` is complete. Partial non-post/article captures remain incomplete/unverified. Both the issue code/explanation and coverage counters use this classification; original bytes and legacy status are preserved.
+
+The corrected default has a new policy version. Archived `evidence-assessment-v1` sidecars still regenerate and validate under their original policy, without rewriting their bytes. New review packets use v2. A realistic xui import/seal/prepare/assessment regression first reproduced the unknown-as-incomplete failure, then passed for all three metadata states. An additional regression verifies archived v1 validation and byte preservation.
+
+Verification after correction: **48 passed** across assessment, stage integration, pipeline, CLI and xui importer suites; scoped Ruff and diff checks pass. No saved live packets or source artifacts were changed. The controller will create new packet directories.
+
+FINAL: completion — corrected completeness assessment ready for packet regeneration and review.

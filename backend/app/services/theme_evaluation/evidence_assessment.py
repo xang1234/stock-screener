@@ -7,11 +7,38 @@ from .preparation_store import _atomic
 from .reference_routing import destination_identity
 from .translation_selection_store import selection_for_preparation
 
-POLICY = "evidence-assessment-v1"
+POLICY = "evidence-assessment-v2"
 PRIORITY = {"hold": 0, "review": 1, "info": 2}
 
 
-def build_assessment(base, store, preparation_id, *, annotations=()):
+def _original_completeness(doc, policy_version):
+    complete = doc.source_metadata.text_complete
+    if policy_version == "evidence-assessment-v1":
+        if doc.capture_status == "partial" or (
+            doc.kind == "post" and complete is not True
+        ):
+            return (
+                "incomplete"
+                if complete is False or doc.capture_status == "partial"
+                else "unknown"
+            )
+        return None
+    if doc.kind == "post":
+        return (
+            "unknown"
+            if complete is None
+            else "incomplete"
+            if complete is False
+            else None
+        )
+    return "incomplete" if doc.capture_status == "partial" else None
+
+
+def build_assessment(
+    base, store, preparation_id, *, annotations=(), policy_version=POLICY
+):
+    if policy_version not in {"evidence-assessment-v1", POLICY}:
+        raise ValueError("unsupported_assessment_policy")
     manifest = store.load(base, preparation_id)
     bundle = store.validate(base, manifest)
     try:
@@ -59,7 +86,7 @@ def build_assessment(base, store, preparation_id, *, annotations=()):
                     {
                         "binding_id": binding.binding_id,
                         "issue_index": index,
-                        "policy_version": POLICY,
+                        "policy_version": policy_version,
                     }
                 )
             )
@@ -98,13 +125,11 @@ def build_assessment(base, store, preparation_id, *, annotations=()):
                 destination_identity(article.url if article else ref.candidate_url)
             )
     for doc in bundle.documents:
-        completeness = doc.source_metadata.text_complete
-        if doc.capture_status == "partial" or (
-            doc.kind == "post" and completeness is not True
-        ):
+        completeness = _original_completeness(doc, policy_version)
+        if completeness:
             code = (
                 "original_incomplete"
-                if completeness is False or doc.capture_status == "partial"
+                if completeness == "incomplete"
                 else "original_completeness_unknown"
             )
             entry_id = sha256(
@@ -113,7 +138,7 @@ def build_assessment(base, store, preparation_id, *, annotations=()):
                         "document_id": doc.document_id,
                         "source_hash": doc.text_sha256,
                         "code": code,
-                        "policy_version": POLICY,
+                        "policy_version": policy_version,
                     }
                 )
             )
@@ -131,11 +156,7 @@ def build_assessment(base, store, preparation_id, *, annotations=()):
                 "issue_code": code,
                 "severity": "review",
                 "explanation": "Original capture completeness is "
-                + (
-                    "unknown."
-                    if completeness is None and doc.capture_status != "partial"
-                    else "partial."
-                ),
+                + ("unknown." if completeness == "unknown" else "partial."),
                 "next_action": "Inspect original capture; unknown does not establish truncation.",
                 "claim": "",
                 "legacy_status": doc.capture_status,
@@ -148,7 +169,7 @@ def build_assessment(base, store, preparation_id, *, annotations=()):
     entries.update(unprepared_reference_entries(bundle, manifest))
     assessment = {
         "schema_version": 1,
-        "policy_version": POLICY,
+        "policy_version": policy_version,
         "bundle_id": base.name,
         "preparation_id": preparation_id,
         "selection_id": selection_id,
@@ -170,14 +191,16 @@ def build_assessment(base, store, preparation_id, *, annotations=()):
             "image_inputs": len(image_inputs),
             "image_outputs": len(image_outputs),
             "original_incomplete": sum(
-                d.capture_status == "partial"
-                or d.source_metadata.text_complete is False
+                (
+                    d.capture_status == "partial"
+                    or d.source_metadata.text_complete is False
+                )
+                if policy_version == "evidence-assessment-v1"
+                else _original_completeness(d, policy_version) == "incomplete"
                 for d in bundle.documents
             ),
             "original_completeness_unknown": sum(
-                d.kind == "post"
-                and d.capture_status != "partial"
-                and d.source_metadata.text_complete is None
+                _original_completeness(d, policy_version) == "unknown"
                 for d in bundle.documents
             ),
         },
@@ -202,7 +225,11 @@ def save_assessment(base, store, assessment):
         if entry["manual_decision"]
     ]
     expected = build_assessment(
-        base, store, assessment["preparation_id"], annotations=annotations
+        base,
+        store,
+        assessment["preparation_id"],
+        annotations=annotations,
+        policy_version=assessment["policy_version"],
     )
     if assessment != expected:
         raise ValueError("assessment_evidence_mismatch")
@@ -224,7 +251,11 @@ def load_assessment(base, store, preparation_id, assessment_id):
         if e["manual_decision"]
     ]
     if assessment != build_assessment(
-        base, store, preparation_id, annotations=annotations
+        base,
+        store,
+        preparation_id,
+        annotations=annotations,
+        policy_version=assessment["policy_version"],
     ):
         raise ValueError("assessment_evidence_mismatch")
     return assessment
