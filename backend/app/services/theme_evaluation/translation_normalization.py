@@ -6,6 +6,9 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TypeVar
+
+_Label = TypeVar("_Label")
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,7 @@ class Quantity:
 class NormalizedText:
     text: str
     temporal: Counter[tuple[str, int]]
+    dates: Counter[tuple[int | None, int | None, int | None]]
     identifiers: Counter[str]
     quantities: tuple[Quantity, ...]
     metrics: frozenset[str]
@@ -100,12 +104,13 @@ _CJK_QUANTITY = re.compile(
     r"\s*(?:원|円|元|株|주|개)?"
 )
 _PLAIN_QUANTITY = re.compile(
-    r"(?<![\w.])(?P<prefix>[$€£¥₩])?\s*"
-    r"(?P<number>[+−-]?\d[\d,]*(?:\.\d+)?)\s*"
+    r"(?<![\w.$€£¥₩+−-])"
+    r"(?P<head>(?:[+−-]\s*[$€£¥₩]?|[$€£¥₩]\s*[+−-]?))?\s*"
+    r"(?P<number>\d[\d,]*(?:\.\d+)?)\s*"
     r"(?P<scale>thousand|million|billion|trillion)?\s*"
     r"(?P<unit>percent|%|won|krw|yen|jpy|yuan|rmb|cny|dollars?|usd|"
     r"euros?|eur|pounds?|gbp|shares?|stocks?|units?|원|円|元|株|주|개)?"
-    r"(?![\w.])",
+    r"(?![A-Za-z0-9_.])",
     re.IGNORECASE,
 )
 _IDENTIFIER = re.compile(
@@ -165,6 +170,9 @@ _NEGATION = re.compile(
     r"ではない|ない|不是|没有|沒有|\b(?:not|no|never|without|isn't|wasn't|doesn't|didn't)\b",
     re.IGNORECASE,
 )
+_QUARTER = re.compile(
+    r"\bQ([1-4])\b|(?:第\s*)?([1-4])\s*(?:분기|四半期|季度)", re.IGNORECASE
+)
 
 
 def _clean(text: str) -> str:
@@ -181,8 +189,25 @@ def _decimal(text: str) -> Decimal:
     return Decimal(text.replace(",", "").replace("−", "-"))
 
 
-def _temporal_tokens(text: str) -> tuple[Counter, list[tuple[int, int]]]:
+def _year_has_quantity_unit(text: str, start: int, end: int) -> bool:
+    before = text[:start]
+    after = text[end:]
+    return bool(
+        re.search(r"[$€£¥₩]\s*$", before)
+        or re.match(
+            r"\s*(?:%|won|krw|yen|jpy|yuan|rmb|cny|dollars?|usd|euros?|eur|"
+            r"pounds?|gbp|shares?|stocks?|units?|원|円|元|株|주|개)",
+            after,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _temporal_tokens(
+    text: str,
+) -> tuple[Counter, Counter, list[tuple[int, int]]]:
     tokens: Counter[tuple[str, int]] = Counter()
+    date_parts: list[tuple[int | None, int | None, int | None]] = []
     spans: list[tuple[int, int]] = []
 
     for match in re.finditer(
@@ -192,6 +217,9 @@ def _temporal_tokens(text: str) -> tuple[Counter, list[tuple[int, int]]]:
         tokens[("year", int(match.group(1)))] += 1
         tokens[("month", int(match.group(3)))] += 1
         tokens[("day", int(match.group(4)))] += 1
+        date_parts.append(
+            (int(match.group(1)), int(match.group(3)), int(match.group(4)))
+        )
         spans.append(match.span())
     for match in re.finditer(r"(?<!\d)(\d{4})\s*[年년]", text):
         tokens[("year", int(match.group(1)))] += 1
@@ -202,41 +230,87 @@ def _temporal_tokens(text: str) -> tuple[Counter, list[tuple[int, int]]]:
     for match in re.finditer(r"(?<!\d)(3[01]|[12]\d|0?[1-9])\s*[日일]", text):
         tokens[("day", int(match.group(1)))] += 1
         spans.append(match.span())
-    for match in re.finditer(
-        r"\bQ([1-4])\b|(?:第\s*)?([1-4])\s*(?:분기|四半期|季度)",
-        text,
-        re.IGNORECASE,
-    ):
+    for match in _QUARTER.finditer(text):
         tokens[("quarter", int(match.group(1) or match.group(2)))] += 1
         spans.append(match.span())
 
     for match in _MONTH_NAME.finditer(text):
-        tokens[("month", _MONTHS[match.group(1).lower()])] += 1
-        spans.append(match.span())
         after = re.match(
             r"\s*(3[01]|[12]\d|[1-9])(?:st|nd|rd|th)?\b",
             text[match.end() :],
             re.IGNORECASE,
         )
+        if match.group(1).lower() == "may" and match.group(1) != "May" and not after:
+            continue
+        month = _MONTHS[match.group(1).lower()]
+        tokens[("month", month)] += 1
+        spans.append(match.span())
+        day = None
         if after:
             start = match.end() + after.start()
             end = match.end() + after.end()
-            tokens[("day", int(after.group(1)))] += 1
+            day = int(after.group(1))
+            tokens[("day", day)] += 1
             spans.append((start, end))
         before = re.search(
             r"\b(3[01]|[12]\d|[1-9])(?:st|nd|rd|th)?\s*$",
             text[: match.start()],
             re.IGNORECASE,
         )
-        if before:
-            tokens[("day", int(before.group(1)))] += 1
+        if before and day is None:
+            day = int(before.group(1))
+            tokens[("day", day)] += 1
             spans.append(before.span())
+        tail_start = after.end() if after else 0
+        year_after = re.match(
+            r"\s*,?\s*((?:19|20)\d{2})\b",
+            text[match.end() + tail_start :],
+        )
+        year_before = re.search(r"\b((?:19|20)\d{2})\s*$", text[: match.start()])
+        year = int(year_after.group(1)) if year_after else None
+        if year is None and year_before:
+            year = int(year_before.group(1))
+        date_parts.append((year, month, day))
+
+    for match in re.finditer(
+        r"(?:(?<!\d)((?:19|20)\d{2})\s*[年년]\s*)?"
+        r"(1[0-2]|0?[1-9])\s*[月월]"
+        r"(?:\s*(3[01]|[12]\d|0?[1-9])\s*[日일])?",
+        text,
+    ):
+        date_parts.append(
+            (
+                int(match.group(1)) if match.group(1) else None,
+                int(match.group(2)),
+                int(match.group(3)) if match.group(3) else None,
+            )
+        )
 
     for match in re.finditer(r"(?<![\d.])(?:19|20)\d{2}(?![\d.])", text):
-        if not _overlaps(*match.span(), spans):
+        if not _overlaps(*match.span(), spans) and not _year_has_quantity_unit(
+            text, *match.span()
+        ):
             tokens[("year", int(match.group()))] += 1
             spans.append(match.span())
-    return tokens, spans
+
+    years = {
+        value for (kind, value), count in tokens.items() if kind == "year" and count
+    }
+    if len(years) == 1:
+        shared_year = next(iter(years))
+        date_parts = [
+            (year if year is not None else shared_year, month, day)
+            for year, month, day in date_parts
+        ]
+    dates = Counter(date_parts)
+    if not dates:
+        dates.update(
+            (year, None, None)
+            for (kind, year), count in tokens.items()
+            if kind == "year"
+            for _ in range(count)
+        )
+    return tokens, dates, spans
 
 
 def _identifiers(
@@ -257,11 +331,19 @@ def _identifiers(
 def _cjk_quantity(match: re.Match[str]) -> Quantity:
     raw = match.group()
     sign = Decimal(-1) if raw.startswith(("-", "−")) else Decimal(1)
-    pairs = re.findall(r"(\d[\d,.]*)\s*(兆|億|亿|万|萬|억|조|만)", raw)
+    pairs = list(re.finditer(r"(\d[\d,.]*)\s*(兆|億|亿|万|萬|억|조|만)", raw))
     value = sum(
-        (_decimal(number) * _CJK_SCALES[scale] for number, scale in pairs), Decimal(0)
+        (
+            _decimal(component.group(1)) * _CJK_SCALES[component.group(2)]
+            for component in pairs
+        ),
+        Decimal(0),
     )
     unit_match = re.search(r"(원|円|元|株|주|개)\s*$", raw)
+    tail_end = unit_match.start() if unit_match else len(raw)
+    tail = raw[pairs[-1].end() : tail_end].strip()
+    if re.search(r"\d", tail):
+        value += _decimal(tail)
     unit = _UNIT_ALIASES[unit_match.group(1)] if unit_match else "ambiguous"
     return Quantity(sign * value, unit, match.start(), match.end())
 
@@ -276,13 +358,16 @@ def _quantities(text: str, occupied: list[tuple[int, int]]) -> tuple[Quantity, .
     for match in _PLAIN_QUANTITY.finditer(text):
         if _overlaps(*match.span(), spans):
             continue
-        prefix = match.group("prefix")
+        head = match.group("head") or ""
+        prefix_match = re.search(r"[$€£¥₩]", head)
+        prefix = prefix_match.group() if prefix_match else None
         unit_text = (match.group("unit") or prefix or "number").lower()
         unit = _UNIT_ALIASES.get(unit_text, "number")
         scale = _ENGLISH_SCALES[(match.group("scale") or "").lower() or None]
+        sign = Decimal(-1) if "-" in head or "−" in head else Decimal(1)
         quantities.append(
             Quantity(
-                _decimal(match.group("number")) * scale,
+                sign * _decimal(match.group("number")) * scale,
                 unit,
                 match.start(),
                 match.end(),
@@ -294,12 +379,13 @@ def _quantities(text: str, occupied: list[tuple[int, int]]) -> tuple[Quantity, .
 
 def normalize_text(text: str) -> NormalizedText:
     cleaned = _clean(text)
-    temporal, temporal_spans = _temporal_tokens(cleaned)
+    temporal, dates, temporal_spans = _temporal_tokens(cleaned)
     identifiers, identifier_spans = _identifiers(cleaned, temporal_spans)
     quantities = _quantities(cleaned, [*temporal_spans, *identifier_spans])
     return NormalizedText(
         text=cleaned,
         temporal=temporal,
+        dates=dates,
         identifiers=identifiers,
         quantities=quantities,
         metrics=frozenset(
@@ -330,24 +416,59 @@ def ambiguous_values(quantities: tuple[Quantity, ...]) -> Counter:
     )
 
 
+def _markers(patterns: dict[str, re.Pattern], text: str) -> list[tuple[int, int, str]]:
+    return sorted(
+        (match.start(), match.end(), name)
+        for name, pattern in patterns.items()
+        for match in pattern.finditer(text)
+    )
+
+
+def _nearest_label(
+    markers: list[tuple[int, int, _Label]], position: int
+) -> tuple[int, int, _Label] | None:
+    preceding = [marker for marker in markers if marker[0] <= position]
+    if preceding:
+        return preceding[-1]
+    return markers[0] if markers else None
+
+
 def quantity_associations(text: str) -> Counter:
-    associations: Counter[tuple[str | None, int | None, Decimal, str]] = Counter()
-    for clause in re.split(r"[,;；，\n]+", text):
-        normalized = normalize_text(clause)
-        metric = (
-            next(iter(normalized.metrics)) if len(normalized.metrics) == 1 else None
+    associations: Counter[
+        tuple[str | None, int | None, Decimal, str, str | None, bool]
+    ] = Counter()
+    normalized = normalize_text(text)
+    metrics = _markers(_METRICS, normalized.text)
+    directions = _markers(_DIRECTIONS, normalized.text)
+    quarters = [
+        (match.start(), match.end(), int(match.group(1) or match.group(2)))
+        for match in _QUARTER.finditer(normalized.text)
+    ]
+
+    for quantity in normalized.quantities:
+        metric_marker = _nearest_label(metrics, quantity.start)
+        metric = metric_marker[2] if metric_marker else None
+        region_start = metric_marker[0] if metric_marker else 0
+        region_end = next(
+            (
+                marker[0]
+                for marker in metrics
+                if metric_marker and marker[0] > metric_marker[0]
+            ),
+            len(normalized.text),
         )
-        quarters = [
-            value
-            for (kind, value), count in normalized.temporal.items()
-            if kind == "quarter"
-            for _ in range(count)
-        ]
-        quarter = quarters[0] if len(quarters) == 1 else None
+        local_directions = {
+            direction
+            for start, _end, direction in directions
+            if region_start <= start < region_end
+        }
+        direction = next(iter(local_directions)) if len(local_directions) == 1 else None
+        quarter_marker = _nearest_label(quarters, quantity.start)
+        quarter = quarter_marker[2] if quarter_marker else None
+        negated = bool(_NEGATION.search(normalized.text[region_start:region_end]))
         if metric is None and quarter is None:
             continue
-        for quantity in normalized.quantities:
-            associations[(metric, quarter, *quantity.key)] += 1
+        associations[(metric, quarter, *quantity.key, direction, negated)] += 1
     return associations
 
 

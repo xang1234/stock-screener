@@ -99,6 +99,10 @@ def _token_issues(
     issues: list[QualityIssue] = []
     if source.temporal != target.temporal:
         issues.append(_issue("temporal_value_changed", "blocker", original, translated))
+    elif source.dates != target.dates and (source.dates or target.dates):
+        issues.append(
+            _issue("date_association_changed", "review", original, translated)
+        )
     if source.identifiers != target.identifiers:
         issues.append(_issue("identifier_changed", "blocker", original, translated))
     quantity_issue = _compare_quantities(source, target, original, translated)
@@ -130,6 +134,10 @@ def _fragment_issue(
     return None
 
 
+def _association_context(associations: Counter) -> Counter:
+    return Counter(association[:4] for association in associations.elements())
+
+
 def assess_translation(
     original: str, translated: str, *, language: str | None
 ) -> TranslationAssessment:
@@ -149,8 +157,18 @@ def assess_translation(
             and target_associations
             and source_associations != target_associations
         ):
+            same_value_context = _association_context(
+                source_associations
+            ) == _association_context(target_associations)
             issues.append(
-                _issue("quantity_association_changed", "review", original, translated)
+                _issue(
+                    "polarity_association_changed"
+                    if same_value_context
+                    else "quantity_association_changed",
+                    "blocker" if same_value_context else "review",
+                    original,
+                    translated,
+                )
             )
 
     fragment = _fragment_issue(source, target, original, translated)
@@ -159,7 +177,9 @@ def assess_translation(
 
     if not issues:
         base_language = (language or "").lower().split("-", 1)[0]
-        if original == translated and base_language not in {"en", "zxx", "art"}:
+        source_prose = re.sub(r"\s+", " ", source.text).strip()
+        target_prose = re.sub(r"\s+", " ", target.text).strip()
+        if source_prose == target_prose and base_language not in {"en", "zxx", "art"}:
             issues.append(
                 _issue("translation_unchanged", "review", original, translated)
             )

@@ -71,6 +71,24 @@ def test_compound_cjk_quantities_match_decimal_english_values(source, target):
     assert assess(source, target, "ja").disposition == "use"
 
 
+def test_compound_cjk_quantity_includes_unscaled_final_component():
+    assert assess("1만5000주", "15 thousand shares").disposition == "use"
+    assert assess("1만5000주", "10 thousand shares").disposition == "fallback"
+
+
+def test_sign_is_preserved_before_or_after_currency_symbol():
+    assert assess("매출 -$10", "Revenue was -10 dollars").disposition == "use"
+    assert assess("매출 $-10", "Revenue was -10 dollars").disposition == "use"
+    assert assess("매출 -$10", "Revenue was $10").disposition == "fallback"
+
+
+def test_korean_particles_do_not_break_explicit_quantity_units():
+    assert (
+        assess("매출 10%와 이익 5%", "Revenue 10% and profit 5%").disposition == "use"
+    )
+    assert assess("매출 100원에 도달", "Revenue reached 100 won").disposition == "use"
+
+
 @pytest.mark.parametrize(
     "source,target",
     [
@@ -133,6 +151,68 @@ def test_complete_calendar_date_and_matching_direction_are_supported():
         assess("2026.04.05 매출 증가", "Revenue increased on April 5, 2026").disposition
         == "use"
     )
+
+
+def test_temporal_rules_do_not_invent_a_month_or_hide_explicit_units():
+    assert assess("매출이 증가할 수 있다", "Revenue may increase").disposition == "use"
+    assert assess("2026주", "2026 shares").disposition == "use"
+    assert assess("2026주", "2026 won").disposition == "fallback"
+
+
+def test_metric_bound_direction_reversal_requires_fallback():
+    result = assess(
+        "매출 10% 증가, 이익 20% 감소",
+        "Revenue decreased 10%; profit increased 20%",
+    )
+
+    assert result.disposition == "fallback"
+    assert any(issue.code == "polarity_association_changed" for issue in result.issues)
+
+
+@pytest.mark.parametrize(
+    "source,target",
+    [
+        (
+            "매출 10억원 이익 20억원",
+            "Revenue 2 billion won and profit 1 billion won",
+        ),
+        (
+            "Q1 매출 10억원 Q2 매출 20억원",
+            "Q1 revenue 2 billion won and Q2 revenue 1 billion won",
+        ),
+    ],
+)
+def test_nearby_associations_do_not_depend_on_punctuation(source, target):
+    result = assess(source, target)
+
+    assert result.disposition == "review"
+    assert any(issue.code == "quantity_association_changed" for issue in result.issues)
+
+
+def test_normalized_unchanged_foreign_prose_requires_review():
+    assert assess("매출이 증가했다", " 매출이 증가했다 ").disposition == "review"
+    assert assess("매출 증가 https://t.co/a123", "매출 증가").disposition == "review"
+
+
+def test_date_relationships_are_not_flattened_into_component_bags():
+    result = assess(
+        "2026년 4월 5일과 5월 6일",
+        "May 5, 2026 and April 6",
+    )
+
+    assert result.disposition == "review"
+    assert any(issue.code == "date_association_changed" for issue in result.issues)
+
+    year_swap = assess(
+        "2025년 4월, 2026년 5월",
+        "April 2026 and May 2025",
+    )
+    assert year_swap.disposition == "review"
+    assert any(issue.code == "date_association_changed" for issue in year_swap.issues)
+
+
+def test_thousands_separator_is_not_treated_as_clause_punctuation():
+    assert assess("매출 1000원", "Revenue 1,000 won").disposition == "use"
 
 
 def test_ambiguous_scale_cannot_mask_an_explicit_currency_change():
