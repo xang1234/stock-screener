@@ -1,12 +1,33 @@
 """Shared bounded Kimi JSON transport for evidence image and text adapters."""
 
 import json
+import math
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from uuid import uuid4
 
 import httpx
 
+from .preparation_failures import PreparationFailure
+
 _OPENCODE_GO_ENDPOINT = "https://opencode.ai/zen/go/v1/chat/completions"
 _MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            return None
+        delay = max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    return delay if math.isfinite(delay) and delay >= 0 else None
 
 
 class OpenCodeGoKimi:
@@ -51,31 +72,64 @@ class OpenCodeGoKimi:
                 ) as response,
             ):
                 if not 200 <= response.status_code < 300:
-                    raise RuntimeError(f"opencode_go_http_error:{response.status_code}")
+                    status = response.status_code
+                    retry_after = (
+                        _retry_after_seconds(response.headers.get("retry-after"))
+                        if status == 429
+                        else None
+                    )
+                    code = (
+                        "model_rate_limited"
+                        if status == 429
+                        else "model_auth_failed"
+                        if status in {401, 403}
+                        else "model_server_error"
+                        if 500 <= status <= 599
+                        else "model_http_error"
+                    )
+                    raise PreparationFailure(
+                        code,
+                        http_status=status,
+                        retry_after_seconds=retry_after,
+                    )
                 content_length = response.headers.get("content-length")
                 if content_length is not None:
                     try:
                         if int(content_length) > _MAX_PROVIDER_RESPONSE_BYTES:
-                            raise RuntimeError("opencode_go_response_too_large")
+                            raise PreparationFailure("model_response_too_large")
                     except ValueError:
-                        raise RuntimeError("opencode_go_response_invalid") from None
+                        raise PreparationFailure("model_response_invalid") from None
                 raw = bytearray()
                 for chunk in response.iter_bytes():
                     raw.extend(chunk)
                     if len(raw) > _MAX_PROVIDER_RESPONSE_BYTES:
-                        raise RuntimeError("opencode_go_response_too_large")
+                        raise PreparationFailure("model_response_too_large")
+        except PreparationFailure:
+            raise
+        except httpx.TimeoutException:
+            raise PreparationFailure("model_timeout") from None
         except httpx.HTTPError:
-            raise RuntimeError("opencode_go_request_failed") from None
+            raise PreparationFailure("model_connection_failed") from None
 
         try:
             envelope = json.loads(raw)
+        except (TypeError, ValueError):
+            raise PreparationFailure("model_json_invalid") from None
+
+        try:
             choice = envelope["choices"][0]
             if choice.get("finish_reason") != "stop":
-                raise RuntimeError("opencode_go_response_incomplete")
+                raise PreparationFailure("model_response_incomplete")
             content = choice["message"]["content"]
+        except PreparationFailure:
+            raise
+        except (KeyError, IndexError, TypeError):
+            raise PreparationFailure("model_response_invalid") from None
+
+        try:
             result = json.loads(content)
-            if not isinstance(result, dict):
-                raise TypeError
-            return result
-        except (KeyError, IndexError, TypeError, ValueError):
-            raise RuntimeError("opencode_go_response_invalid") from None
+        except (TypeError, ValueError):
+            raise PreparationFailure("model_json_invalid") from None
+        if not isinstance(result, dict):
+            raise PreparationFailure("model_response_invalid")
+        return result

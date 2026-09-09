@@ -8,8 +8,10 @@ from base64 import b64encode
 from typing import Any, Protocol
 
 from PIL import Image, UnidentifiedImageError
+from pydantic import ValidationError
 
 from .kimi_client import OpenCodeGoKimi
+from .preparation_failures import PreparationFailure
 from .preparation_models import ImageObservation
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -98,4 +100,7 @@ def validate_image(data: bytes) -> dict[str, str | int]:
 def prepare_image(data: bytes, *, model_client: VisionClient) -> ImageObservation:
     metadata = validate_image(data)
     result = model_client.describe_image(data, str(metadata["mime_type"]))
-    return ImageObservation.model_validate(result)
+    try:
+        return ImageObservation.model_validate(result)
+    except ValidationError:
+        raise PreparationFailure("model_schema_invalid") from None

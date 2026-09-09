@@ -2,6 +2,8 @@ import base64
 import hashlib
 import io
 import json
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -10,6 +12,8 @@ from app.services.theme_evaluation.image_preparation import (
     prepare_image,
     validate_image,
 )
+from app.services.theme_evaluation.kimi_translation import OpenCodeGoTranslator
+from app.services.theme_evaluation.preparation_failures import PreparationFailure
 from app.services.theme_evaluation.preparation_models import ImageObservation, ImageType
 from PIL import Image
 
@@ -145,8 +149,10 @@ def test_prepare_image_rejects_malformed_provider_output():
         def describe_image(self, data, mime_type):
             return {"transcription": "invented conclusion", "image_type": "buy"}
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PreparationFailure, match="model_schema_invalid") as raised:
         prepare_image(image_bytes(), model_client=Client())
+
+    assert raised.value.retryable is False
 
 
 def test_opencode_go_requires_explicit_configuration():
@@ -226,34 +232,102 @@ def test_opencode_go_sends_bounded_kimi_vision_request_and_parses_json():
     assert client.describe_image(data, "image/png") == provider_result
 
 
-def test_opencode_go_does_not_retry_or_expose_secrets_on_http_failure():
+@pytest.mark.parametrize(
+    ("status", "code", "retryable"),
+    [
+        (429, "model_rate_limited", True),
+        (401, "model_auth_failed", False),
+        (403, "model_auth_failed", False),
+        (503, "model_server_error", True),
+        (400, "model_http_error", False),
+    ],
+)
+def test_opencode_go_diagnoses_http_failures_without_exposing_body(
+    status, code, retryable
+):
     calls = 0
 
     def handler(request):
         nonlocal calls
         calls += 1
-        return httpx.Response(503, text="private submitted content test-api-key")
+        return httpx.Response(
+            status,
+            text="private submitted content test-api-key",
+            headers={"Retry-After": "3"} if status == 429 else None,
+        )
 
     client = OpenCodeGoVision("test-api-key", transport=httpx.MockTransport(handler))
 
-    with pytest.raises(RuntimeError) as raised:
+    with pytest.raises(PreparationFailure, match=code) as raised:
         client.describe_image(image_bytes(), "image/png")
 
     assert calls == 1
-    assert "503" in str(raised.value)
+    assert raised.value.code == code
+    assert raised.value.retryable is retryable
+    assert raised.value.http_status == status
+    assert raised.value.retry_after_seconds == (3 if status == 429 else None)
     assert "test-api-key" not in str(raised.value)
     assert "private submitted content" not in str(raised.value)
 
 
-def test_opencode_go_wraps_transport_errors_without_exposing_their_message():
+@pytest.mark.parametrize("retry_after", ["not-a-delay", "NaN", "-1"])
+def test_invalid_retry_after_is_ignored_safely(retry_after):
+    client = OpenCodeGoVision(
+        "test-api-key",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                429,
+                headers={"Retry-After": retry_after},
+                text="private body",
+            )
+        ),
+    )
+
+    with pytest.raises(PreparationFailure, match="model_rate_limited") as raised:
+        client.describe_image(image_bytes(), "image/png")
+
+    assert raised.value.retry_after_seconds is None
+    assert "private body" not in str(raised.value)
+
+
+def test_http_date_retry_after_is_converted_to_a_bounded_delay():
+    retry_at = datetime.now(timezone.utc) + timedelta(seconds=20)
+    client = OpenCodeGoVision(
+        "test-api-key",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                429, headers={"Retry-After": format_datetime(retry_at, usegmt=True)}
+            )
+        ),
+    )
+
+    with pytest.raises(PreparationFailure) as raised:
+        client.describe_image(image_bytes(), "image/png")
+
+    assert 0 < raised.value.retry_after_seconds <= 20
+
+
+@pytest.mark.parametrize(
+    ("error_type", "code"),
+    [
+        (httpx.ConnectError, "model_connection_failed"),
+        (httpx.ReadTimeout, "model_timeout"),
+    ],
+)
+def test_opencode_go_diagnoses_transport_errors_without_exposing_them(
+    error_type, code
+):
     def handler(request):
-        raise httpx.ConnectError("private bytes and test-api-key", request=request)
+        raise error_type("private bytes and test-api-key", request=request)
 
     client = OpenCodeGoVision("test-api-key", transport=httpx.MockTransport(handler))
 
-    with pytest.raises(RuntimeError, match="opencode_go_request_failed") as raised:
+    with pytest.raises(PreparationFailure, match=code) as raised:
         client.describe_image(image_bytes(), "image/png")
 
+    assert raised.value.code == code
+    assert raised.value.retryable is True
+    assert raised.value.http_status is None
     assert "private bytes" not in str(raised.value)
     assert "test-api-key" not in str(raised.value)
 
@@ -290,9 +364,9 @@ def test_opencode_go_rejects_oversized_or_malformed_responses_safely():
         transport=httpx.MockTransport(lambda request: next(responses)),
     )
 
-    with pytest.raises(RuntimeError, match="opencode_go_response_too_large"):
+    with pytest.raises(PreparationFailure, match="model_response_too_large"):
         client.describe_image(image_bytes(), "image/png")
-    with pytest.raises(RuntimeError, match="opencode_go_response_invalid"):
+    with pytest.raises(PreparationFailure, match="model_json_invalid"):
         client.describe_image(image_bytes(), "image/png")
 
 
@@ -325,9 +399,10 @@ def test_opencode_go_rejects_incomplete_model_output_safely(finish_reason):
         ),
     )
 
-    with pytest.raises(RuntimeError, match="opencode_go_response_incomplete") as raised:
+    with pytest.raises(PreparationFailure, match="model_response_incomplete") as raised:
         client.describe_image(image_bytes(), "image/png")
 
+    assert raised.value.retryable is False
     assert "private truncated content" not in str(raised.value)
 
 
@@ -362,3 +437,32 @@ def test_go_identifies_client_and_reuses_session_for_one_preparation_run():
     assert UUID(headers[0]["x-opencode-session"])
     assert headers[0]["x-opencode-session"] == headers[1]["x-opencode-session"]
     assert headers[0]["user-agent"] == "stockscreen-evidence-preparation/1.0"
+
+
+def test_shared_transport_preserves_accepted_kimi_translation_behavior():
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["model"] == "kimi-k2.6"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                {"translation": "Samsung Electronics revenue increased."}
+                            )
+                        },
+                    }
+                ]
+            },
+        )
+
+    translator = OpenCodeGoTranslator(
+        "test-api-key", transport=httpx.MockTransport(handler)
+    )
+
+    assert translator("삼성전자 매출 증가", "ko", "en") == (
+        "Samsung Electronics revenue increased."
+    )
