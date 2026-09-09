@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import urljoin, urlsplit
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 from pydantic import AwareDatetime, Field, model_serializer
 
 from .bundle import sha256
@@ -83,7 +83,36 @@ def _text(value):
     return re.sub(r"\s+", " ", value).strip()
 
 
-_BLOCKS = "p, h1, h2, h3, h4, h5, h6, li, blockquote, pre"
+_BLOCK_NAMES = {
+    "address",
+    "article",
+    "blockquote",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "figcaption",
+    "figure",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "li",
+    "main",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "table",
+    "tbody",
+    "td",
+    "th",
+    "tr",
+    "ul",
+}
 _CONTROLS = (
     "script, style, noscript, template, nav, footer, form, aside, button, "
     "select, input, textarea, svg, [role='toolbar'], [role='navigation'], "
@@ -91,20 +120,42 @@ _CONTROLS = (
 )
 
 
+def _text_tokens(node):
+    if isinstance(node, NavigableString):
+        yield str(node)
+        return
+    if not isinstance(node, Tag):
+        return
+    if node.name == "br":
+        yield None
+        return
+    block = node.name in _BLOCK_NAMES
+    if block:
+        yield None
+    for child in node.children:
+        yield from _text_tokens(child)
+    if block:
+        yield None
+
+
 def _region_text(region):
     clean = BeautifulSoup(str(region), "html.parser")
     for element in clean.select(_CONTROLS):
         element.decompose()
-    blocks = []
-    for element in clean.select(_BLOCKS):
-        if element.select_one(_BLOCKS):
+    units = []
+    pending = []
+    for token in _text_tokens(clean):
+        if token is not None:
+            pending.append(token)
             continue
-        value = _text(element.get_text(" ", strip=True))
+        value = _text("".join(pending))
         if value:
-            blocks.append(value)
-    if blocks:
-        return "\n\n".join(blocks)
-    return _text(clean.get_text(" ", strip=True))
+            units.append(value)
+        pending = []
+    value = _text("".join(pending))
+    if value:
+        units.append(value)
+    return "\n\n".join(units)
 
 
 def _publisher_regions(soup, final_url):

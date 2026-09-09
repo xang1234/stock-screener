@@ -252,3 +252,32 @@ def test_new_parse_stores_body_hash_but_legacy_serialization_shape_is_stable():
         "match_basis": None,
     }
     assert a.ArticleRecovery.model_validate(legacy).model_dump(mode="json") == legacy
+
+
+def test_owned_direct_and_block_text_are_preserved_in_dom_order():
+    a, _ = api()
+    result = a.parse_article(
+        b"<article>Revenue rose 10%."
+        b"<p>Margin reached <strong>20%</strong>.</p>"
+        b"Guidance was cut.</article>",
+        "https://publisher.example/news/123",
+    )
+    assert result.text == (
+        "Revenue rose 10%.\n\nMargin reached 20%.\n\nGuidance was cut."
+    )
+
+
+def test_nested_list_lead_text_and_figure_caption_are_preserved_once():
+    a, _ = api()
+    result = a.parse_article(
+        b"<article><section>Key points"
+        b"<ul><li>Demand <strong>rose</strong>"
+        b"<ul><li>HBM led growth.</li></ul></li></ul>"
+        b"</section><figure><img><figcaption>Quarterly shipments.</figcaption>"
+        b"</figure></article>",
+        "https://publisher.example/news/123",
+    )
+    assert result.text == (
+        "Key points\n\nDemand rose\n\nHBM led growth.\n\nQuarterly shipments."
+    )
+    assert result.text.count("HBM led growth.") == 1

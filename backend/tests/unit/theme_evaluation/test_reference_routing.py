@@ -82,6 +82,26 @@ def test_canonical_alias_requires_same_origin_and_nonconflicting_article_identit
     ) == "https://publisher.example/story/17"
 
 
+@pytest.mark.parametrize(
+    "final_url,canonical_url",
+    [
+        (
+            "https://example.com/news/2026/09/article-a-123",
+            "https://example.com/news/2026/09/article-b-456",
+        ),
+        ("https://example.com/news/123", "https://example.com/"),
+        (
+            "https://example.com/view?article_id=123",
+            "https://example.com/view?article_id=456",
+        ),
+        ("https://example.com/view?page=123", "https://example.com/view"),
+    ],
+)
+def test_canonical_alias_cannot_discard_article_identity(final_url, canonical_url):
+    r = routing_api()
+    assert r.destination_identity(final_url, canonical_url) == final_url
+
+
 def test_linked_post_manifest_deduplicates_and_bounds_one_hop():
     r = routing_api()
     routes = [
@@ -184,6 +204,38 @@ def test_article_stage_exposes_credible_canonical_identity_on_each_route():
     )
     assert outcome.routes[0].canonical_url == "https://publisher.example/story/17"
     assert list(outcome.captures) == ["https://publisher.example/story/17"]
+
+
+def test_article_stage_does_not_reuse_body_across_conflicting_canonical_articles():
+    from app.services.theme_evaluation import article_stage
+    from app.services.theme_evaluation.public_fetch import PublicResponse
+
+    responses = {
+        "https://t.co/a": PublicResponse(
+            body=(
+                b'<link rel="canonical" href="/news/2026/09/article-b-456">'
+                b"<article><p>Article A body.</p></article>"
+            ),
+            final_url="https://publisher.example/news/2026/09/article-a-123",
+            content_type="text/html",
+        ),
+        "https://t.co/b": PublicResponse(
+            body=b"<article><p>Article B body.</p></article>",
+            final_url="https://publisher.example/news/2026/09/article-b-456",
+            content_type="text/html",
+        ),
+    }
+    outcome = article_stage.recover_references(
+        [
+            article_stage.ReferenceInput("ref:a", "post:1", "https://t.co/a"),
+            article_stage.ReferenceInput("ref:b", "post:2", "https://t.co/b"),
+        ],
+        fetcher=responses.__getitem__,
+    )
+    assert len(outcome.captures) == 2
+    assert outcome.capture_for("ref:a").recovery.text == "Article A body."
+    assert outcome.capture_for("ref:b").recovery.text == "Article B body."
+    assert outcome.capture_for("ref:a") is not outcome.capture_for("ref:b")
 
 
 @pytest.mark.parametrize(

@@ -33,3 +33,12 @@
 - `preparation_pipeline.py` and `preparation_cli.py` were intentionally not edited; the integration steps above are required in the shared integration task.
 
 Commit: `fix: recover and classify article evidence by destination`
+
+## Controller review remediation
+
+- Canonical aliases now require positive agreement on the leaf article identity and identical retained query parameters. A canonical home page, a query-dropping alias, or another article that merely shares category/date path segments cannot redirect the destination cache.
+- Owned-region text is traversed once in DOM order after explicit controls are removed. Direct text beside block elements, nested-list lead text, inline punctuation, and `figcaption` text are retained without duplicating descendant content.
+- Added direct routing/parser regressions and a stage-level cross-body regression. Focused article and routing suites pass 37 tests.
+- Saved baseline replay after the fix: Daum bodies contain 1,166 and 1,403 characters, Oracle contains 1,087, and Substack contains 9,425 with `access_restricted`; all remain partial and completeness-unverified.
+
+Follow-up commit: `fix: preserve article identity and owned source text`
