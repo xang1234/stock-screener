@@ -58,19 +58,26 @@ def _parser():
                 action="store_true",
                 help="Enable approved Kimi K2.6 translation through OpenCode Go.",
             )
+            command.add_argument("--text-policy", choices=["v1", "v2"], default="v1")
             command.add_argument("--max-images", type=int, default=100)
             command.add_argument("--max-documents", type=int, default=500)
         elif name in ("import-articles", "import-translations"):
             command.add_argument("--records", type=Path, required=True)
         elif name == "review":
             command.add_argument("--output", type=Path, required=True)
+            command.add_argument("--annotations", type=Path)
     return parser
 
 
 def _run(args):
     store = PreparationStore(args.output_root)
     if args.command == "review":
-        return render_preparation(args.bundle, store, args.preparation, args.output)
+        annotations = (
+            json.loads(args.annotations.read_bytes()) if args.annotations else []
+        )
+        return render_preparation(
+            args.bundle, store, args.preparation, args.output, annotations=annotations
+        )
     if args.command == "verify":
         store.verify_all()
         manifest = store.load(args.bundle, args.preparation)
@@ -97,6 +104,7 @@ def _run(args):
         else Handoff(bundle_id=args.bundle.name)
     )
     validate_handoff(args.bundle, handoff)
+    stats = {}
     if args.command == "prepare":
         vision = None
         translator = None
@@ -119,6 +127,8 @@ def _run(args):
             prior_id=args.prior_preparation,
             max_images=args.max_images,
             max_documents=args.max_documents,
+            text_policy=args.text_policy,
+            run_summary=stats,
         )
     else:
         records = json.loads(args.records.read_bytes())
@@ -137,6 +147,7 @@ def _run(args):
     return {
         "preparation_id": pid,
         "output_root": str(args.output_root.resolve()),
+        **stats,
         "evidence_review": "pending",
     }
 

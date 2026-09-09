@@ -1,13 +1,16 @@
 """Explicit preparation stages; no extraction or production database access."""
 
 from pathlib import Path
+from time import monotonic
 
 from pydantic import field_validator
 
-from .article_recovery import ArticleRecovery, parse_article
+from .article_recovery import ArticleRecovery
 from .bundle import IntegrityError, sha256
-from .image_preparation import prepare_image, validate_image
+from .image_stage import ImageStage
 from .multilingual_preparation import prepare_text
+from .multilingual_v2 import preparation_cache_policy, prepare_text_v2
+from .preparation_article_stage import prepare_articles
 from .preparation_records import (
     Handoff,
     PreparationBinding,
@@ -16,10 +19,10 @@ from .preparation_results import (
     ArticleRequest,
     ArticleResult,
     ImageRequest,
-    ImageResult,
     TextRequest,
     TextResult,
 )
+from .preparation_run import CountedTranslator, save_run
 from .preparation_state import PreparationState
 from .preparation_store import PreparationStore, validate_handoff
 from .public_fetch import fetch_public
@@ -60,7 +63,7 @@ def _binding(stage, kind, doc, result_id, source_id=None, parent=None, locator=N
     )
 
 
-def _text_result(store, text, language, translator):
+def _text_result(store, text, language, translator, text_policy="v1"):
     request = _request(
         "text",
         sha256(text.encode()),
@@ -69,120 +72,35 @@ def _text_result(store, text, language, translator):
         target_language="en",
         max_chars=4000,
     )
+    if text_policy == "v2":
+        request = request.model_copy(
+            update={"policy_version": preparation_cache_policy(translator)}
+        )
     cached = store.cached(request)
     if cached:
         return cached[0]
-    prepared = prepare_text(text, language=language, translator=translator)
+    text_preparer = prepare_text_v2 if text_policy == "v2" else prepare_text
+    prepared = text_preparer(text, language=language, translator=translator)
     return store.save_result(TextResult(request=request, payload=prepared))
 
 
-def _document_translation(state, store, doc, language, translator):
+def _document_translation(state, store, doc, language, translator, text_policy="v1"):
     captured = captured_translation_result(doc)
     x_id = store.save_result(captured) if captured else None
     initial = select_translation(doc.text, language, captured, None)
     kimi_id = None
     kimi = None
-    if initial.selected_candidate is None and initial.assessment.disposition == "fallback":
-        kimi_id = _text_result(store, doc.text, language, translator)
+    if (
+        initial.selected_candidate is None
+        and initial.assessment.disposition == "fallback"
+    ):
+        kimi_id = _text_result(store, doc.text, language, translator, text_policy)
         kimi = store.load_result(kimi_id)
     decision = select_translation(doc.text, language, captured, kimi)
     for result_id in (x_id, kimi_id):
         if result_id is not None:
             state.record(_binding("text", "document", doc, result_id))
     return selection_record(doc.document_id, x_id, kimi_id, decision)
-
-
-def _image_result(store, location, is_local, vision, fetcher, allow_network):
-    assets = []
-    request = _request("image", sha256(location.encode()), vision)
-    try:
-        if is_local:
-            with Path(location).open("rb") as handle:
-                data = handle.read(10 * 1024 * 1024 + 1)
-        elif allow_network:
-            data = fetcher(location, max_bytes=10 * 1024 * 1024).body
-        else:
-            return store.save_result(
-                ImageResult(
-                    request=request,
-                    failure_reasons=["network_disabled"],
-                    source_url=location,
-                )
-            )
-        metadata = validate_image(data)
-        assets = [store.save_asset(data)]
-        request = _request("image", metadata["sha256"], vision)
-        cached = store.cached(request)
-        if cached:
-            return cached[0]
-        if vision is None:
-            return store.save_result(
-                ImageResult(
-                    request=request,
-                    assets=assets,
-                    failure_reasons=["vision_provider_unavailable"],
-                    source_url=None if is_local else location,
-                )
-            )
-        prepared = prepare_image(data, model_client=vision)
-        result = ImageResult(
-            request=request,
-            payload=prepared,
-            assets=assets,
-            source_url=None if is_local else location,
-        )
-    except IntegrityError:
-        raise
-    except (ValueError, OSError, RuntimeError):
-        result = ImageResult(
-            request=request,
-            assets=assets,
-            failure_reasons=["image_validation_or_processing_failed"],
-            source_url=None if is_local else location,
-        )
-    return store.save_result(result)
-
-
-def _article_result(store, url, fetcher, allow_network):
-    request = _request("article", sha256(url.encode()), destination_url=url)
-    if not allow_network:
-        return store.save_result(
-            ArticleResult(
-                request=request,
-                failure_reasons=["network_disabled", "browser_followup_required"],
-                source_url=url,
-            )
-        )
-    try:
-        response = fetcher(url)
-        if response.content_type and not any(
-            kind in response.content_type.lower() for kind in ("html", "xhtml")
-        ):
-            raise ValueError("unsupported_article_type")
-        raw_id = store.save_asset(response.body)
-        article = parse_article(response.body, response.final_url)
-        request = _request("article", raw_id, destination_url=url)
-        return store.save_result(
-            ArticleResult(
-                request=request,
-                payload=article,
-                assets=[raw_id],
-                source_url=response.final_url,
-            )
-        )
-    except IntegrityError:
-        raise
-    except (ValueError, OSError):
-        return store.save_result(
-            ArticleResult(
-                request=request,
-                failure_reasons=[
-                    "article_fetch_or_parse_failed",
-                    "browser_followup_required",
-                ],
-                source_url=url,
-            )
-        )
 
 
 def prepare(
@@ -198,8 +116,15 @@ def prepare(
     prior_id=None,
     max_images=100,
     max_documents=500,
+    text_policy="v1",
+    run_summary=None,
 ) -> str:
     bundle = validate_handoff(base, handoff)
+    if text_policy not in {"v1", "v2"}:
+        raise ValueError("invalid_text_policy")
+    started = monotonic()
+    stats = {}
+    translator = CountedTranslator(translator) if translator is not None else None
     if not stages or not set(stages).issubset({"article", "text", "image"}):
         raise ValueError("invalid_preparation_stages")
     if len(bundle.documents) > max_documents or max_images < 0 or max_documents < 1:
@@ -221,42 +146,28 @@ def prepare(
     if "image" in stages and len(images) > max_images:
         raise ValueError("image_limit_exceeded")
     if "article" in stages:
-        for ref in bundle.followups:
-            if ref.investment_related == "no" or ref.status in {
-                "not_article",
-                "skipped_noninvestment",
-            }:
-                continue
-            url = handoff.references.get(ref.reference_id, ref.candidate_url)
-            if url:
-                rid = _article_result(store, url, fetcher, allow_network)
-            else:
-                rid = store.save_result(
-                    ArticleResult(
-                        request=_request(
-                            "article", sha256(ref.reference_text.encode())
-                        ),
-                        failure_reasons=[
-                            "article_destination_unknown",
-                            "browser_followup_required",
-                        ],
-                    )
-                )
-            state.record(
-                _binding(
-                    "article",
-                    "reference",
-                    documents[ref.post_id],
-                    rid,
-                    ref.reference_id,
-                )
+        stats.update(
+            prepare_articles(
+                bundle,
+                store,
+                state,
+                handoff,
+                fetcher=fetcher,
+                allow_network=allow_network,
             )
+        )
     if "image" in stages:
+        image_stage = ImageStage(
+            store, vision=vision, fetcher=fetcher, allow_network=allow_network
+        )
         for doc, location, is_local in images:
-            rid = _image_result(
-                store, location, is_local, vision, fetcher, allow_network
-            )
-            state.record(_binding("image", "document", doc, rid, locator=location))
+            outcome = image_stage.process(location, is_local=is_local)
+            for rid in outcome.attempt_ids:
+                state.record(_binding("image", "document", doc, rid, locator=location))
+        stats.update(
+            image_model_request_count=image_stage.model_request_count,
+            image_download_request_count=image_stage.download_request_count,
+        )
     if "text" in stages:
         translation_decisions = []
         for doc in bundle.documents:
@@ -267,7 +178,9 @@ def prepare(
                 else doc.original_language
             )
             translation_decisions.append(
-                _document_translation(state, store, doc, language, translator)
+                _document_translation(
+                    state, store, doc, language, translator, text_policy
+                )
             )
         references = {r.reference_id: r for r in bundle.followups}
         for binding in state.manifest.current_bindings:
@@ -283,7 +196,7 @@ def prepare(
                 if binding.source_kind == "document"
                 else documents[references[binding.source_id].post_id]
             )
-            rid = _text_result(store, text, None, translator)
+            rid = _text_result(store, text, None, translator, text_policy)
             state.record(
                 _binding(
                     "text",
@@ -307,7 +220,15 @@ def prepare(
                 if str(exc) != "missing_translation_selection":
                     raise
     if translation_decisions is not None:
-        save_translation_selection(base, store, preparation_id, translation_decisions)
+        stats["selection_id"] = save_translation_selection(
+            base, store, preparation_id, translation_decisions
+        )
+    stats["translation_model_request_count"] = translator.calls if translator else 0
+    stats["elapsed_seconds"] = round(monotonic() - started, 6)
+    stats["text_policy"] = text_policy
+    stats["run_id"] = save_run(store, base.name, preparation_id, stats)
+    if run_summary is not None:
+        run_summary.update(stats)
     return preparation_id
 
 
@@ -342,12 +263,22 @@ def import_articles(base, store, handoff, records, *, prior_id=None):
             or not row.article.text.strip()
         ):
             raise ValueError("article_import_provenance_required")
+        if (
+            row.article.capture_status == "full"
+            and not (row.article.completeness_basis or "").strip()
+        ):
+            raise ValueError("article_import_completeness_basis_required")
+        if row.article.body_sha256 is not None and row.article.body_sha256 != sha256(
+            row.article.text.encode()
+        ):
+            raise ValueError("article_import_body_hash_mismatch")
         if sha256(row.article.text.encode()) != row.article.response_sha256:
             raise ValueError("article_import_text_hash_mismatch")
     state = PreparationState(base, store, handoff, prior_id)
     for row in imports:
         asset = store.save_asset(row.article.text.encode())
         request = _request("article", asset, destination_url=row.destination_url)
+        request = request.model_copy(update={"policy_version": "article-v2"})
         rid = store.save_result(
             ArticleResult(
                 request=request,

@@ -180,6 +180,7 @@ def test_resolved_article_import_clears_active_followups_but_keeps_history(
             "response_sha256": sha256(body.encode()),
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "match_basis": "Same canonical URL and title.",
+            "completeness_basis": "Reviewer inspected the complete body through its end.",
         },
     }
     second = pipeline.import_articles(base, store, handoff, [row], prior_id=first)

@@ -3,12 +3,20 @@
 import json
 from pathlib import Path
 
+from .evidence_assessment import build_assessment, save_assessment
+from .evidence_followups import reference_manifest
+from .evidence_packet import write_assessment_packet
 from .image_preparation import validate_image
 from .preparation_results import ArticleResult, ImageResult, TextResult
+from .preparation_run import runs_for_preparation
 from .review import _text, _write_csv, render_review
 
 
-def render_preparation(base, store, preparation_id: str, output: Path):
+def render_preparation(
+    base, store, preparation_id: str, output: Path, *, annotations=()
+):
+    # Validate annotations and evidence before creating or touching any packet files.
+    assessment = build_assessment(base, store, preparation_id, annotations=annotations)
     manifest = store.load(base, preparation_id)
     bundle = store.validate(base, manifest)
     output.mkdir(parents=True, exist_ok=False)
@@ -160,6 +168,52 @@ def render_preparation(base, store, preparation_id: str, output: Path):
             for d in bundle.documents
         ),
     }
+    (output / "coverage.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    references, linked = reference_manifest(bundle, manifest, store)
+    (output / "linked-post-manifest.json").write_text(
+        json.dumps(linked, indent=2), encoding="utf-8"
+    )
+    _write_csv(
+        output / "reference-manifest.csv",
+        [
+            "reference_id",
+            "source_post_id",
+            "original_url",
+            "final_url",
+            "result_id",
+            "article_id",
+            "original_disposition",
+            "investment_related",
+        ],
+        references,
+    )
+    linked_lines = [
+        "# Linked-post follow-up evidence",
+        "",
+        "[Review overview](START_HERE.md)",
+        "",
+        "This one-hop queue is separate from the selected-post quota. Queued means requested follow-up, not captured or processed evidence. Supplemental captures require their own explicit read/import provenance.",
+        "",
+    ]
+    linked_lines.extend(
+        f"- Post `{entry['target_post_id']}` from `{entry['reference_id']}`: **{entry['disposition']}**."
+        for entry in linked["entries"]
+    )
+    (output / "linked-post-review.md").write_text(
+        "\n".join(linked_lines), encoding="utf-8"
+    )
+    (output / "preparation-runs.json").write_text(
+        json.dumps(runs_for_preparation(store, base.name, preparation_id), indent=2),
+        encoding="utf-8",
+    )
+    summary.update(
+        linked_post_references=len(linked["entries"]),
+        linked_posts_queued=len(linked["post_ids"]),
+    )
+    assessment_id = save_assessment(base, store, assessment)
+    summary.update(write_assessment_packet(output, assessment, assessment_id))
     (output / "coverage.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )
