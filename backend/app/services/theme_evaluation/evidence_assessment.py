@@ -5,10 +5,14 @@ from .evidence_findings import findings
 from .evidence_followups import unprepared_reference_entries
 from .preparation_store import _atomic
 from .reference_routing import destination_identity
-from .translation_selection_store import selection_for_preparation
+from .translation_selection_store import (
+    load_translation_selection,
+    selection_for_preparation,
+)
 
 POLICY = "evidence-assessment-v2"
 PRIORITY = {"hold": 0, "review": 1, "info": 2}
+_LATEST_SELECTION = object()
 
 
 def _original_completeness(doc, policy_version):
@@ -35,19 +39,32 @@ def _original_completeness(doc, policy_version):
 
 
 def build_assessment(
-    base, store, preparation_id, *, annotations=(), policy_version=POLICY
+    base,
+    store,
+    preparation_id,
+    *,
+    annotations=(),
+    policy_version=POLICY,
+    selection_id=_LATEST_SELECTION,
 ):
     if policy_version not in {"evidence-assessment-v1", POLICY}:
         raise ValueError("unsupported_assessment_policy")
     manifest = store.load(base, preparation_id)
     bundle = store.validate(base, manifest)
-    try:
-        selection_id, sidecar = selection_for_preparation(base, store, preparation_id)
-        decisions = {d.document_id: d for d in sidecar.decisions}
-    except IntegrityError as exc:
-        if str(exc) != "missing_translation_selection":
-            raise
-        selection_id, decisions = None, {}
+    sidecar = None
+    if selection_id is _LATEST_SELECTION:
+        try:
+            selection_id, sidecar = selection_for_preparation(
+                base, store, preparation_id
+            )
+        except IntegrityError as exc:
+            if str(exc) != "missing_translation_selection":
+                raise
+            selection_id = None
+    elif selection_id is not None:
+        sidecar = load_translation_selection(base, store, preparation_id, selection_id)
+    decisions = {d.document_id: d for d in sidecar.decisions} if sidecar else {}
+    quality_policy = sidecar.policy_version if sidecar else "translation-quality-v1"
     entries = {}
     destinations = set()
     image_inputs, image_outputs = set(), set()
@@ -79,7 +96,7 @@ def build_assessment(
             if result.payload:
                 image_outputs.add(result.request.input_sha256)
         for index, (code, severity, eligible, explanation, action) in enumerate(
-            findings(result, decision, root_text)
+            findings(result, decision, root_text, quality_policy=quality_policy)
         ):
             entry_id = sha256(
                 canonical_bytes(
@@ -230,6 +247,7 @@ def save_assessment(base, store, assessment):
         assessment["preparation_id"],
         annotations=annotations,
         policy_version=assessment["policy_version"],
+        selection_id=assessment["selection_id"],
     )
     if assessment != expected:
         raise ValueError("assessment_evidence_mismatch")
@@ -256,6 +274,7 @@ def load_assessment(base, store, preparation_id, assessment_id):
         preparation_id,
         annotations=annotations,
         policy_version=assessment["policy_version"],
+        selection_id=assessment["selection_id"],
     ):
         raise ValueError("assessment_evidence_mismatch")
     return assessment

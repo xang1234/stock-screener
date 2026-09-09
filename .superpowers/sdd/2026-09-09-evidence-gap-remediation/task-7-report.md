@@ -60,3 +60,15 @@ The corrected default has a new policy version. Archived `evidence-assessment-v1
 Verification after correction: **48 passed** across assessment, stage integration, pipeline, CLI and xui importer suites; scoped Ruff and diff checks pass. No saved live packets or source artifacts were changed. The controller will create new packet directories.
 
 FINAL: completion — corrected completeness assessment ready for packet regeneration and review.
+
+## Translation policy coexistence compatibility
+
+Archived assessment save/load now reconstructs from the exact stored `selection_id`, including an explicit missing selection (`null`), instead of rediscovering whichever policy sidecar is newest. New `build_assessment` calls still discover the latest supported policy by default; callers can pin a specific selection ID. Sidecar loading retains its exact preparation/content validation.
+
+Text findings use the pinned sidecar's quality policy. Eligible root explanations name that actual policy; derivative adequacy explicitly passes the same policy instead of relying on the mutable default. When no selection existed in an archived assessment, derivative evaluation retains the original v1 policy. Existing v1 wording and assessment bytes remain unchanged.
+
+Regressions cover archived load/save avoiding discovery, an archived missing selection remaining missing after a sidecar is added, and exact v1 assessment byte preservation when v1/v2 selections coexist for one preparation. The coexistence test uses actual persisted sidecars and confirms new builds select v2 and report its policy.
+
+Verification with the new sidecar APIs: **65 passed** across assessment, stage integration, pipeline, CLI, store, review and translation-selection suites. Scoped Ruff and diff checks pass. No pipeline/helper ownership changes or live evidence mutations were made.
+
+FINAL: completion — archived assessments pin their exact selection and quality policy; coexistence regression verified.

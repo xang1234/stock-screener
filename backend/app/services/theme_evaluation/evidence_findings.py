@@ -4,7 +4,7 @@ from .preparation_results import ImageResult
 from .translation_quality import assess_translation
 
 
-def _text_findings(result, decision, root):
+def _text_findings(result, decision, root, quality_policy):
     if (
         result.payload.source_language == "zxx"
         and "nonlinguistic_content" in result.warnings
@@ -35,7 +35,7 @@ def _text_findings(result, decision, root):
                     "translation_adequate",
                     "info",
                     True,
-                    "Selected candidate passes translation-quality-v1; earlier attempts remain in detailed evidence.",
+                    f"Selected candidate passes {quality_policy}; earlier attempts remain in detailed evidence.",
                     "Review source and selected translation.",
                 )
             ]
@@ -72,6 +72,7 @@ def _text_findings(result, decision, root):
         result.source_text,
         "".join(s.translated or "" for s in result.payload.segments),
         language=result.payload.source_language,
+        policy_version=quality_policy,
     )
     return [
         (
@@ -93,9 +94,9 @@ def _text_findings(result, decision, root):
     ]
 
 
-def findings(result, decision, root):
+def findings(result, decision, root, *, quality_policy="translation-quality-v1"):
     if result.stage == "text":
-        return _text_findings(result, decision, root)
+        return _text_findings(result, decision, root, quality_policy)
     if isinstance(result, ImageResult):
         if not result.payload:
             return [

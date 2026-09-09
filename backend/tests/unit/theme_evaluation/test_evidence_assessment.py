@@ -456,3 +456,81 @@ def test_corrected_completeness_policy_preserves_archived_assessment_validation(
     assert corrected["coverage"]["original_completeness_unknown"] == 1
     assert load_assessment(base, store, pid, legacy_id) == legacy
     assert store._read("assessments", legacy_id, ".json") == legacy_bytes
+
+
+def test_archived_assessment_load_and_save_do_not_rediscover_selection(
+    tmp_path, bundle, document, monkeypatch
+):
+    from app.services.theme_evaluation import evidence_assessment
+
+    base, store, pid = prepared(tmp_path, bundle, document)
+    assessment = evidence_assessment.build_assessment(base, store, pid)
+    aid = evidence_assessment.save_assessment(base, store, assessment)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Archived assessment used latest selection discovery")
+
+    monkeypatch.setattr(evidence_assessment, "selection_for_preparation", forbidden)
+    assert evidence_assessment.load_assessment(base, store, pid, aid) == assessment
+    assert evidence_assessment.save_assessment(base, store, assessment) == aid
+
+
+def test_archived_missing_selection_stays_missing_after_sidecar_is_added(
+    tmp_path, bundle
+):
+    from app.services.theme_evaluation.evidence_assessment import (
+        build_assessment,
+        load_assessment,
+        save_assessment,
+    )
+    from app.services.theme_evaluation.preparation_records import PreparationManifest
+
+    base = seal_bundle(tmp_path, Bundle.model_validate(bundle()))
+    store = PreparationStore(tmp_path / "store")
+    handoff = Handoff(bundle_id=base.name)
+    pid = store.seal(base, PreparationManifest(bundle_id=base.name, handoff=handoff))
+    archived = build_assessment(base, store, pid)
+    assert archived["selection_id"] is None
+    aid = save_assessment(base, store, archived)
+    assert prepare(base, store, handoff, stages=["image"], prior_id=pid) == pid
+    # A missing prior sidecar remains missing by design; explicitly add an empty sidecar.
+    from app.services.theme_evaluation.translation_selection_store import (
+        save_translation_selection,
+    )
+
+    save_translation_selection(base, store, pid, [])
+    assert build_assessment(base, store, pid)["selection_id"] is not None
+    assert load_assessment(base, store, pid, aid) == archived
+
+
+def test_v1_assessment_remains_exact_when_v2_selection_coexists(tmp_path, bundle):
+    from app.services.theme_evaluation.evidence_assessment import (
+        build_assessment,
+        load_assessment,
+        save_assessment,
+    )
+    from app.services.theme_evaluation.translation_selection_store import (
+        save_translation_selection,
+        selection_for_preparation,
+    )
+
+    base = seal_bundle(tmp_path, Bundle.model_validate(bundle()))
+    store = PreparationStore(tmp_path / "store")
+    pid = prepare(base, store, Handoff(bundle_id=base.name), stages=["text"])
+    decisions = selection_for_preparation(base, store, pid)[1].decisions
+    v1_id = save_translation_selection(
+        base, store, pid, decisions, policy_version="translation-quality-v1"
+    )
+    archived = build_assessment(base, store, pid, selection_id=v1_id)
+    aid = save_assessment(base, store, archived)
+    original_bytes = store._read("assessments", aid, ".json")
+    v2_id = save_translation_selection(
+        base, store, pid, decisions, policy_version="translation-quality-v2"
+    )
+    latest = build_assessment(base, store, pid)
+    assert latest["selection_id"] == v2_id != v1_id
+    selected = next(e for e in latest["entries"].values() if e["stage"] == "text")
+    assert "translation-quality-v2" in selected["explanation"]
+    assert load_assessment(base, store, pid, aid) == archived
+    assert save_assessment(base, store, archived) == aid
+    assert store._read("assessments", aid, ".json") == original_bytes
