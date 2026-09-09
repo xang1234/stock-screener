@@ -172,7 +172,7 @@ def test_social_signal_operations_snapshot_uses_db_runtime_and_shared_ttls(db_se
     assert payload["budget"]["pricing_status"] == "absent"
 
 
-def test_social_freshness_ignores_failed_collection_observation(db_session):
+def test_social_health_requires_every_enabled_source_to_be_fresh(db_session):
     from app.infra.db.models.social_signals import (
         SocialSignalRun,
         SocialSourceConfiguration,
@@ -185,8 +185,10 @@ def test_social_freshness_ignores_failed_collection_observation(db_session):
     admin.ensure_seed_sources()
     runtime = admin.read_runtime()
     runtime = admin.apply_runtime("validation", "official", runtime.version, "admin")
-    source = db_session.get(SocialSourceConfiguration, 1)
-    source.last_successful_collection_at = now - timedelta(hours=100)
+    fresh_source = db_session.get(SocialSourceConfiguration, 1)
+    stale_source = db_session.get(SocialSourceConfiguration, 2)
+    fresh_source.last_successful_collection_at = now - timedelta(hours=1)
+    stale_source.last_successful_collection_at = now - timedelta(hours=100)
     db_session.add(SocialSignalRun(
         id="failed-latest",
         registry_id=1,
@@ -211,8 +213,19 @@ def test_social_freshness_ignores_failed_collection_observation(db_session):
         clock=lambda: now,
     ).snapshot(db_session)
 
-    assert payload["last_collection_at"] == (now - timedelta(hours=100)).isoformat()
+    assert payload["last_collection_at"] == (now - timedelta(hours=1)).isoformat()
     assert payload["social_fresh"] is False
+    assert payload["collection_status"] == "incomplete"
+
+    stale_source.lifecycle_state = "disabled"
+    db_session.commit()
+
+    payload = SocialSignalOperationsService(
+        redis_client=False,
+        clock=lambda: now,
+    ).snapshot(db_session)
+
+    assert payload["social_fresh"] is True
 
 
 def test_social_health_reports_terminal_analysis_failure(db_session):
@@ -255,6 +268,7 @@ def test_social_health_reports_terminal_analysis_failure(db_session):
     ).snapshot(db_session)
 
     assert payload["processing_status"] == "failed"
+    assert payload["collection_status"] == "complete"
     assert payload["reason_codes"] == ["analysis_failed"]
 
 

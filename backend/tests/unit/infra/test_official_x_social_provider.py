@@ -71,6 +71,45 @@ def test_caps_pages_to_run_limit_and_resumes_from_application_progress():
     assert batch.outcome.proposed_progress == "unused"
 
 
+def test_retains_minimum_page_overflow_before_advancing_cursor():
+    def raw_post(post_id):
+        return {
+            "id": str(post_id),
+            "author_id": "u",
+            "text": f"post {post_id}",
+            "created_at": "2026-09-05T01:00:00Z",
+            "public_metrics": {},
+        }
+
+    payloads = [
+        {
+            "data": [raw_post(index) for index in range(100)],
+            "includes": {"users": [{"id": "u", "username": "a"}]},
+            "meta": {"next_token": "page-2"},
+        },
+        {
+            "data": [raw_post(index) for index in range(100, 105)],
+            "includes": {"users": [{"id": "u", "username": "a"}]},
+            "meta": {"next_token": "page-3"},
+        },
+    ]
+    calls = []
+
+    def handler(req):
+        calls.append(dict(req.url.params))
+        return httpx.Response(200, json=payloads[len(calls) - 1])
+
+    batch = make_provider(handler).read_source(
+        read_request(intent="initial", limit=101)
+    )
+
+    assert [call["max_results"] for call in calls] == ["100", "5"]
+    assert len(batch.posts) == batch.outcome.received_count == 105
+    assert batch.request.limit == 105
+    assert batch.outcome.proposed_progress == "page-3"
+    assert batch.posts[-1].provider_post_id == "104"
+
+
 def test_sub_five_reservation_is_exhausted_without_sending_invalid_request():
     requested = []
     provider = OfficialXSocialProvider(

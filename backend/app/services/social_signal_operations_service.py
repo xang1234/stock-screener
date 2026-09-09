@@ -76,13 +76,34 @@ class SocialSignalOperationsService:
             SocialLLMBudgetDay.period_end_utc > now,
         ).order_by(SocialLLMBudgetDay.period_start_utc.desc()).limit(1))
         observations = (run.application_progress_json.get("observations", {}) if run else {})
+        enabled_sources = [source for source in sources if source.lifecycle_state == "enabled"]
         successful_collections = [
             _utc(source.last_successful_collection_at)
-            for source in sources
+            for source in enabled_sources
             if source.last_successful_collection_at is not None
         ]
         last_collection = max(successful_collections, default=None)
         source_outcomes = run.source_outcomes_json if run else {}
+        pinned_source_ids = set(
+            run.application_progress_json.get("sources", {}) if run else {}
+        )
+        collection_complete = bool(
+            run
+            and pinned_source_ids
+            and set(observations) == pinned_source_ids
+            and set(source_outcomes) == pinned_source_ids
+            and all(
+                source_outcomes[source_id].get("read_status") == "success"
+                for source_id in pinned_source_ids
+            )
+        )
+        social_fresh = bool(enabled_sources) and all(
+            source.last_successful_collection_at is not None
+            and (
+                now - _utc(source.last_successful_collection_at)
+            ).total_seconds() <= settings.social_stale_after_hours * 3600
+            for source in enabled_sources
+        )
         prepared = run.application_progress_json.get("prepared", {}) if run else {}
         failure = run.application_progress_json.get("failure", {}) if run else {}
         context = prepared.get("context") or {}
@@ -154,7 +175,7 @@ class SocialSignalOperationsService:
             "registry_version": registry.version if registry else 0,
             "run_id": run.id if run else None,
             "run_status": run.status if run else None,
-            "collection_status": "complete" if run and set(observations) == set(run.application_progress_json.get("sources", {})) else "incomplete",
+            "collection_status": "complete" if collection_complete else "incomplete",
             "processing_status": (
                 "complete"
                 if run and run.status in {"staged", "completed", "published"}
@@ -169,7 +190,7 @@ class SocialSignalOperationsService:
             "participating_source_count": len(observations),
             "unknown_company_identity_count": unknown_identity_count,
             "last_collection_at": last_collection.isoformat() if last_collection else None,
-            "social_fresh": bool(last_collection and (now - last_collection).total_seconds() <= settings.social_stale_after_hours * 3600),
+            "social_fresh": social_fresh,
             "formula_version": context.get("formula_version"),
             "extraction_versions": context.get("extraction_versions", []),
             "model_labels": sorted({row.actual_model or row.selected_model for row in work}),

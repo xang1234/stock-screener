@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import time
 from typing import Callable
@@ -55,12 +56,14 @@ class OfficialXSocialProvider:
                 if post.created_at < request.target_published_after:
                     reached_boundary = True
                     break
-                if len(posts) < effective_limit:
-                    posts.append(post)
+                # X enforces a five-result minimum. Keep the whole returned page
+                # before committing its cursor so the surplus is never skipped.
+                posts.append(post)
             cursor = next_cursor
             if reached_boundary or not cursor or not page_posts:
                 break
         ordered = tuple(posts)
+        bounded_request = replace(request, limit=max(request.limit, len(ordered)))
         timestamps = [post.created_at for post in ordered]
         observed_initial_window = (
             request.intent == "initial" and (reached_boundary or not cursor)
@@ -75,7 +78,7 @@ class OfficialXSocialProvider:
             observed_newest_at=max(timestamps) if timestamps else None,
             received_count=len(ordered), committed_progress=None, error_code=None,
             proposed_progress=cursor if request.intent != "test" else None)
-        return SocialSourceBatch(request, ordered, outcome)
+        return SocialSourceBatch(bounded_request, ordered, outcome)
 
     def _request_page(self, request, cursor, capacity):
         day = request.observed_at.astimezone(self._timezone).date()
