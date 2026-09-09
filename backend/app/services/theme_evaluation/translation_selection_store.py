@@ -8,7 +8,12 @@ from pydantic import ConfigDict, model_validator
 from .bundle import IntegrityError, canonical_bytes, load_bundle, sha256
 from .preparation_store import PreparationStore, _atomic
 from .records import SHA, Record
-from .translation_quality import QualityIssue
+from .translation_quality import (
+    QUALITY_POLICY_V1,
+    QUALITY_POLICY_V2,
+    QualityIssue,
+    QualityPolicy,
+)
 from .translation_selection import TranslationSelection, select_translation
 from .xui_translation import captured_translation_result
 
@@ -30,7 +35,10 @@ class TranslationSelectionRecord(Record):
         candidates = {
             value for value in (self.x_result_id, self.kimi_result_id) if value
         }
-        if self.selected_result_id is not None and self.selected_result_id not in candidates:
+        if (
+            self.selected_result_id is not None
+            and self.selected_result_id not in candidates
+        ):
             raise ValueError("selection_decision_inconsistent")
         if self.disposition == "use":
             valid = self.eligible and self.selected_result_id is not None
@@ -47,7 +55,9 @@ class TranslationSelectionSidecar(Record):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, frozen=True)
 
     schema_version: Literal[1] = 1
-    policy_version: Literal["translation-quality-v1"] = "translation-quality-v1"
+    policy_version: Literal["translation-quality-v1", "translation-quality-v2"] = (
+        QUALITY_POLICY_V2
+    )
     bundle_id: SHA
     preparation_id: SHA
     decisions: tuple[TranslationSelectionRecord, ...]
@@ -151,7 +161,13 @@ def _validate_sidecar(
             record.document_id,
             record.x_result_id,
             record.kimi_result_id,
-            select_translation(document.text, language, x_result, kimi_result),
+            select_translation(
+                document.text,
+                language,
+                x_result,
+                kimi_result,
+                policy_version=sidecar.policy_version,
+            ),
         )
         if record != expected:
             raise ValueError("selection_decision_inconsistent")
@@ -162,12 +178,16 @@ def save_translation_selection(
     store: PreparationStore,
     preparation_id: str,
     decisions,
+    *,
+    policy_version: QualityPolicy = QUALITY_POLICY_V2,
 ) -> str:
     sidecar = TranslationSelectionSidecar(
+        policy_version=policy_version,
         bundle_id=base.name,
         preparation_id=preparation_id,
         decisions=tuple(
-            TranslationSelectionRecord.model_validate(decision) for decision in decisions
+            TranslationSelectionRecord.model_validate(decision)
+            for decision in decisions
         ),
     )
     _validate_sidecar(base, store, sidecar)
@@ -196,6 +216,8 @@ def selection_for_preparation(
     base: Path,
     store: PreparationStore,
     preparation_id: str,
+    *,
+    policy_version: QualityPolicy | None = None,
 ) -> tuple[str, TranslationSelectionSidecar]:
     matches = []
     for path in sorted((store.root / "selection-decisions").glob("*.json")):
@@ -203,17 +225,25 @@ def selection_for_preparation(
         if sha256(raw) != path.stem:
             raise IntegrityError("preparation_hash_mismatch")
         candidate = TranslationSelectionSidecar.model_validate_json(raw)
-        if candidate.preparation_id == preparation_id:
+        if candidate.preparation_id == preparation_id and (
+            policy_version is None or candidate.policy_version == policy_version
+        ):
             matches.append(
                 (
                     path.stem,
-                    load_translation_selection(
-                        base, store, preparation_id, path.stem
-                    ),
+                    load_translation_selection(base, store, preparation_id, path.stem),
                 )
             )
     if not matches:
         raise IntegrityError("missing_translation_selection")
-    if len(matches) != 1:
+    by_policy = {
+        quality_policy: [
+            match for match in matches if match[1].policy_version == quality_policy
+        ]
+        for quality_policy in (QUALITY_POLICY_V1, QUALITY_POLICY_V2)
+    }
+    if any(len(policy_matches) > 1 for policy_matches in by_policy.values()):
         raise IntegrityError("ambiguous_translation_selection")
-    return matches[0]
+    if policy_version is not None:
+        return by_policy[policy_version][0]
+    return (by_policy[QUALITY_POLICY_V2] or by_policy[QUALITY_POLICY_V1])[0]

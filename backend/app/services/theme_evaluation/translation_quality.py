@@ -14,10 +14,15 @@ from typing import Literal
 from .translation_normalization import (
     NormalizedText,
     ambiguous_values,
+    normalize_decimal_percentages,
     normalize_text,
     quantity_associations,
     quantity_counter,
 )
+
+QUALITY_POLICY_V1 = "translation-quality-v1"
+QUALITY_POLICY_V2 = "translation-quality-v2"
+QualityPolicy = Literal["translation-quality-v1", "translation-quality-v2"]
 
 
 @dataclass(frozen=True)
@@ -118,7 +123,11 @@ def _compare_quantities(
 
 
 def _token_issues(
-    source: NormalizedText, target: NormalizedText, original: str, translated: str
+    source: NormalizedText,
+    target: NormalizedText,
+    original: str,
+    translated: str,
+    policy_version: QualityPolicy,
 ) -> list[QualityIssue]:
     issues: list[QualityIssue] = []
     if source.temporal != target.temporal:
@@ -135,9 +144,27 @@ def _token_issues(
     if source.directions != target.directions and (
         source.directions or target.directions
     ):
-        issues.append(_issue("direction_changed", "blocker", original, translated))
+        issues.append(
+            _issue(
+                "direction_changed"
+                if policy_version == QUALITY_POLICY_V1
+                else "direction_unanchored",
+                "blocker" if policy_version == QUALITY_POLICY_V1 else "review",
+                original,
+                translated,
+            )
+        )
     if source.negated != target.negated:
-        issues.append(_issue("negation_changed", "blocker", original, translated))
+        issues.append(
+            _issue(
+                "negation_changed"
+                if policy_version == QUALITY_POLICY_V1
+                else "negation_unanchored",
+                "blocker" if policy_version == QUALITY_POLICY_V1 else "review",
+                original,
+                translated,
+            )
+        )
     if source.metrics != target.metrics and (source.metrics or target.metrics):
         issues.append(_issue("metric_changed", "review", original, translated))
     return issues
@@ -163,17 +190,43 @@ def _association_context(associations: Counter) -> Counter:
 
 
 def assess_translation(
-    original: str, translated: str, *, language: str | None
+    original: str,
+    translated: str,
+    *,
+    language: str | None,
+    policy_version: QualityPolicy = QUALITY_POLICY_V2,
 ) -> TranslationAssessment:
     """Assess a derivative without mutating canonical text or archived status."""
-    source = normalize_text(original)
-    target = normalize_text(translated)
-    issues = _token_issues(source, target, original, translated)
+    if policy_version not in {QUALITY_POLICY_V1, QUALITY_POLICY_V2}:
+        raise ValueError("unsupported_translation_quality_policy")
+    source_text = (
+        original
+        if policy_version == QUALITY_POLICY_V1
+        else normalize_decimal_percentages(original)
+    )
+    target_text = (
+        translated
+        if policy_version == QUALITY_POLICY_V1
+        else normalize_decimal_percentages(translated)
+    )
+    source = normalize_text(source_text)
+    target = normalize_text(target_text)
+    issues = _token_issues(
+        source,
+        target,
+        original,
+        translated,
+        policy_version,
+    )
 
     if original.strip() and not translated.strip():
         issues.insert(0, _issue("translation_empty", "blocker", original, translated))
 
-    if not issues:
+    unanchored_polarity = {"direction_unanchored", "negation_unanchored"}
+    if not issues or (
+        policy_version == QUALITY_POLICY_V2
+        and all(issue.code in unanchored_polarity for issue in issues)
+    ):
         source_associations = quantity_associations(source.text)
         target_associations = quantity_associations(target.text)
         if (
@@ -221,7 +274,14 @@ def assess_translation(
         disposition = "review"
     else:
         disposition = "use"
-    return TranslationAssessment("translation-quality-v1", disposition, tuple(issues))
+    return TranslationAssessment(policy_version, disposition, tuple(issues))
 
 
-__all__ = ["QualityIssue", "TranslationAssessment", "assess_translation"]
+__all__ = [
+    "QUALITY_POLICY_V1",
+    "QUALITY_POLICY_V2",
+    "QualityIssue",
+    "QualityPolicy",
+    "TranslationAssessment",
+    "assess_translation",
+]

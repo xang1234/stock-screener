@@ -1,4 +1,4 @@
-"""Normalize the finite token classes covered by translation-quality-v1."""
+"""Normalize the finite token classes covered by translation-quality policies."""
 
 from __future__ import annotations
 
@@ -189,10 +189,21 @@ _NEGATION = re.compile(
 _QUARTER = re.compile(
     r"\bQ([1-4])\b|(?:第\s*)?([1-4])\s*(?:분기|四半期|季度)", re.IGNORECASE
 )
+_EUROPEAN_DECIMAL_PERCENT = re.compile(
+    r"(?<![\d,.])(?P<integer>[+−-]?\d+),(?P<fraction>\d{1,2})(?=\s*%)"
+)
 
 
 def _clean(text: str) -> str:
     return _HANDLE.sub(" ", _URL.sub(" ", text))
+
+
+def normalize_decimal_percentages(text: str) -> str:
+    """Canonicalize comma decimals only when directly typed as percentages."""
+    return _EUROPEAN_DECIMAL_PERCENT.sub(
+        lambda match: f"{match.group('integer')}.{match.group('fraction')}",
+        text,
+    )
 
 
 def _overlaps(start: int, end: int, spans: list[tuple[int, int]]) -> bool:

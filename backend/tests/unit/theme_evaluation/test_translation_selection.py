@@ -126,6 +126,7 @@ def test_selector_uses_adequate_x_and_is_frozen():
     assert decision.selected_provider == "X translation"
     assert decision.selected_candidate == "x"
     assert decision.eligible is True
+    assert decision.assessment.policy_version == "translation-quality-v2"
     assert decision.assessment.disposition == "use"
     with pytest.raises(FrozenInstanceError):
         decision.eligible = False
@@ -142,7 +143,9 @@ def test_selector_keeps_ambiguous_x_pending_review_without_second_candidate():
     assert decision.assessment.disposition == "review"
 
 
-@pytest.mark.parametrize("kimi_text", [None, "Bought 7.18 million shares for 1.8 trillion won"])
+@pytest.mark.parametrize(
+    "kimi_text", [None, "Bought 7.18 million shares for 1.8 trillion won"]
+)
 def test_rejected_x_cannot_become_eligible_when_kimi_has_a_blocker(kimi_text):
     original = "718만주 1.9조원에 매수"
     x_result = candidate(original, "Samsung", provider="X translation")
@@ -165,7 +168,9 @@ def test_incomplete_multisegment_candidate_is_never_eligible():
         provider="opencode-go",
         segments=[
             TranslationSegment(
-                original="매출 증가\n\n", translated="Revenue grew\n\n", status="translated"
+                original="매출 증가\n\n",
+                translated="Revenue grew\n\n",
+                status="translated",
             ),
             TranslationSegment(
                 original="고용 증가",
@@ -337,7 +342,7 @@ def test_english_article_identity_does_not_call_translator(tmp_path, bundle, doc
                         "evidence_urls": ["https://example.com/article"],
                         "error_code": None,
                     }
-                ]
+                ],
             )
         ),
     )
@@ -373,9 +378,7 @@ def test_english_article_identity_does_not_call_translator(tmp_path, bundle, doc
     )
 
 
-def test_legacy_current_x_is_not_eligible_after_failed_kimi(
-    tmp_path, bundle, document
-):
+def test_legacy_current_x_is_not_eligible_after_failed_kimi(tmp_path, bundle, document):
     original = "718만주 1.9조원에 매수"
     doc = document(
         text=original,
@@ -439,9 +442,7 @@ def test_sidecar_round_trip_is_content_addressed_and_bound_to_exact_inputs(
         "Samsung",
         "Bought 7.18 million shares for 1.9 trillion won",
     )
-    choice = select_translation(
-        x_result.source_text, "ko", x_result, kimi_result
-    )
+    choice = select_translation(x_result.source_text, "ko", x_result, kimi_result)
     entry = selection_record("post:1", x_id, kimi_id, choice)
 
     sidecar_id = save_translation_selection(base, store, pid, [entry])
@@ -450,7 +451,7 @@ def test_sidecar_round_trip_is_content_addressed_and_bound_to_exact_inputs(
     assert loaded_id == sidecar_id
     assert loaded == load_translation_selection(base, store, pid, sidecar_id)
     assert loaded.schema_version == 1
-    assert loaded.policy_version == "translation-quality-v1"
+    assert loaded.policy_version == "translation-quality-v2"
     assert loaded.bundle_id == base.name
     assert loaded.preparation_id == pid
     assert loaded.decisions[0].source_text_sha256 == sha256(
@@ -500,9 +501,7 @@ def test_sidecar_rejects_bound_result_that_is_not_the_document_x_capture(
             }
         },
     )
-    base = seal_bundle(
-        tmp_path, Bundle.model_validate(bundle(documents=[doc]))
-    )
+    base = seal_bundle(tmp_path, Bundle.model_validate(bundle(documents=[doc])))
     store = PreparationStore(tmp_path / "prepared")
     forged = candidate(
         original,
@@ -586,3 +585,60 @@ def test_nontext_stage_preserves_missing_sidecar_from_legacy_preparation(
     assert store.load(base, next_pid).bindings == store.load(base, pid).bindings
     with pytest.raises(IntegrityError, match="missing_translation_selection"):
         selection_for_preparation(base, store, next_pid)
+
+
+def test_v1_and_v2_sidecars_coexist_and_discovery_prefers_latest_policy(
+    tmp_path, bundle, document
+):
+    base, store, pid, x_result, x_id, kimi_result, kimi_id = sealed_candidates(
+        tmp_path,
+        bundle,
+        document,
+        "Samsung",
+        "Bought 7.18 million shares for 1.9 trillion won",
+    )
+
+    v1_choice = select_translation(
+        x_result.source_text,
+        "ko",
+        x_result,
+        kimi_result,
+        policy_version="translation-quality-v1",
+    )
+    v1_id = save_translation_selection(
+        base,
+        store,
+        pid,
+        [selection_record("post:1", x_id, kimi_id, v1_choice)],
+        policy_version="translation-quality-v1",
+    )
+    v2_choice = select_translation(
+        x_result.source_text,
+        "ko",
+        x_result,
+        kimi_result,
+        policy_version="translation-quality-v2",
+    )
+    v2_id = save_translation_selection(
+        base,
+        store,
+        pid,
+        [selection_record("post:1", x_id, kimi_id, v2_choice)],
+    )
+
+    selected_id, selected = selection_for_preparation(base, store, pid)
+    archived_id, archived = selection_for_preparation(
+        base,
+        store,
+        pid,
+        policy_version="translation-quality-v1",
+    )
+    assert (selected_id, selected.policy_version) == (
+        v2_id,
+        "translation-quality-v2",
+    )
+    assert (archived_id, archived.policy_version) == (
+        v1_id,
+        "translation-quality-v1",
+    )
+    assert load_translation_selection(base, store, pid, v1_id) == archived

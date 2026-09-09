@@ -7,10 +7,21 @@ from app.services.theme_evaluation.bundle import canonical_bytes, sha256
 from app.services.theme_evaluation.preparation_results import RESULT_ADAPTER
 
 
-def assess(source: str, target: str, language: str | None = "ko"):
+def assess(
+    source: str,
+    target: str,
+    language: str | None = "ko",
+    *,
+    policy_version: str = "translation-quality-v2",
+):
     from app.services.theme_evaluation.translation_quality import assess_translation
 
-    return assess_translation(source, target, language=language)
+    return assess_translation(
+        source,
+        target,
+        language=language,
+        policy_version=policy_version,
+    )
 
 
 @pytest.mark.parametrize(
@@ -39,7 +50,7 @@ def assess(source: str, target: str, language: str | None = "ko"):
 def test_assessment(source, target, language, expected):
     result = assess(source, target, language)
 
-    assert result.policy_version == "translation-quality-v1"
+    assert result.policy_version == "translation-quality-v2"
     assert result.disposition == expected
     assert isinstance(result.issues, tuple)
 
@@ -97,7 +108,6 @@ def test_korean_particles_do_not_break_explicit_quantity_units():
         ("매출 100억원", "Revenue was 10 billion dollars"),
         ("매출 100억원", "Revenue was 10 billion"),
         ("매출 10% 증가", "Revenue decreased 10%"),
-        ("적자가 아니다", "It is a loss"),
         ("2026년 4월 5일", "April 2026"),
         ("판매량 10개, 10개", "Sales volume was 10 units"),
         ("GPT-6 출시", "GPT-7 launched"),
@@ -110,6 +120,69 @@ def test_verified_material_changes_require_fallback(source, target):
 
     assert result.disposition == "fallback"
     assert any(issue.severity == "blocker" for issue in result.issues)
+
+
+def test_unanchored_lexical_polarity_differences_require_review():
+    french = assess(
+        "La note est là pour m’abattre… Le mec est sur un tapis volant.",
+        "The grade is there to bring me down… The guy is on a flying carpet.",
+        "fr",
+    )
+    korean = assess(
+        "AI 반도체 인프라 투자는 쉽게 멈추기 어렵습니다.",
+        "It is hard to easily halt AI semiconductor infrastructure investment.",
+        "ko",
+    )
+
+    assert french.disposition == "review"
+    assert korean.disposition == "review"
+    assert assess("적자가 아니다", "It is a loss").disposition == "review"
+    assert any(issue.code == "direction_unanchored" for issue in french.issues)
+    assert not any(
+        issue.severity == "blocker" for issue in (*french.issues, *korean.issues)
+    )
+
+
+def test_value_bound_negation_change_remains_a_blocker():
+    result = assess("매출 10% 증가하지 않았다", "Revenue increased 10%")
+
+    assert result.disposition == "fallback"
+    assert any(issue.code == "polarity_association_changed" for issue in result.issues)
+
+
+def test_v1_preserves_archived_global_polarity_blockers():
+    result = assess(
+        "La note est là pour m’abattre.",
+        "The grade is there to bring me down.",
+        "fr",
+        policy_version="translation-quality-v1",
+    )
+
+    assert result.policy_version == "translation-quality-v1"
+    assert result.disposition == "fallback"
+    assert [issue.code for issue in result.issues] == ["direction_changed"]
+
+
+def test_european_decimal_percentages_match_dot_decimal_transcription():
+    source = "Sivers ▲ 8,72 %\nCorning ▲ 1,40 %\nAXT ▲ 2,73 %"
+    target = "Sivers ▲ 8.72 %\nCorning ▲ 1.40 %\nAXT ▲ 2.73 %"
+
+    locale_unknown = assess(source, target, "und")
+    assert locale_unknown.disposition == "review"
+    assert not any(issue.severity == "blocker" for issue in locale_unknown.issues)
+    assert not any(
+        issue.code.startswith("quantity_") for issue in locale_unknown.issues
+    )
+    assert (
+        assess(
+            source,
+            target,
+            "und",
+            policy_version="translation-quality-v1",
+        ).disposition
+        == "fallback"
+    )
+    assert assess("Volume 1,000%", "Volume 1.000%", "en").disposition == "fallback"
 
 
 def test_ambiguous_scale_without_a_unit_requires_review_not_conversion():
