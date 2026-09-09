@@ -28,6 +28,8 @@ def grant_eligibility(db, content_item_id, pipeline, channel, originating_source
     validate_utc_timestamp(observed_at, "observed_at")
     if pipeline not in {"technical", "fundamental"} or channel not in {"legacy", "social"}:
         raise ValueError("invalid_content_eligibility")
+    if originating_source_id is None:
+        raise ValueError("eligibility_source_required")
     if channel == "legacy" and is_social_owned_source(db, originating_source_id):
         raise ValueError("social_collection_owned")
     if db.get_bind().dialect.name == "postgresql":
@@ -37,7 +39,9 @@ def grant_eligibility(db, content_item_id, pipeline, channel, originating_source
     db.execute(insert(ContentPipelineEligibility).values(
         content_item_id=content_item_id, pipeline=pipeline, channel=channel,
         originating_source_id=originating_source_id, observed_at=observed_at,
-    ).on_conflict_do_nothing(index_elements=["content_item_id", "pipeline", "channel"]))
+    ).on_conflict_do_nothing(index_elements=[
+        "content_item_id", "pipeline", "channel", "originating_source_id",
+    ]))
 
 
 def is_social_owned_source(db, source_or_id):

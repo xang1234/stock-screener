@@ -16,7 +16,7 @@ from app.domain.social_signals.records import (PreparedSocialPublication, SavedS
     SocialCollectionProgress, SocialReadRequest, SocialSourceOutcome, SocialSourceBatch,
     SocialRunResult, validate_utc_timestamp)
 from app.infra.db.models.social_signals import (
-    ContentPipelineEligibility, SocialContentMetrics, SocialPostSource,
+    SocialContentMetrics, SocialPostSource,
     SocialSignalRun, SocialSourceConfiguration, SocialSignalSnapshot, SocialSignalRunPointer, SocialPostTicker,
 )
 from app.models.theme import ContentItem, ContentSource
@@ -25,6 +25,7 @@ from app.services.social_theme_projection_service import SocialThemeProjectionSe
 from app.infra.db.models.social_analysis import SocialRunWork, SocialExtractionWork
 from app.services.social_extraction_service import SocialExtractionService
 from app.services.twitter_content_identity import twitter_external_id
+from app.services.theme_evidence_eligibility_service import grant_eligibility
 
 METRICS = ("likes", "reposts", "replies", "quotes", "bookmarks", "views")
 
@@ -376,9 +377,14 @@ class SocialSignalWriter:
                 elif utc(membership.observed_at) < post.observed_at:
                     membership.observed_at = post.observed_at
                 for pipeline in ("technical", "fundamental"):
-                    if db.get(ContentPipelineEligibility, (item.id, pipeline, "social")) is None:
-                        db.add(ContentPipelineEligibility(content_item_id=item.id, pipeline=pipeline, channel="social",
-                            originating_source_id=source.content_source_id, observed_at=post.observed_at))
+                    grant_eligibility(
+                        db,
+                        item.id,
+                        pipeline,
+                        "social",
+                        source.content_source_id,
+                        post.observed_at,
+                    )
                 metrics = db.get(SocialContentMetrics, item.id)
                 if metrics is None:
                     metrics = SocialContentMetrics(content_item_id=item.id, provider=post.provider,

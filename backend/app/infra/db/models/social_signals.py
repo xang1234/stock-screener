@@ -29,12 +29,17 @@ class SocialSourceRegistry(Base):
 
 class ContentPipelineEligibility(Base):
     __tablename__ = "content_pipeline_eligibility"
-    content_item_id = Column(Integer, ForeignKey("content_items.id", ondelete="RESTRICT"), primary_key=True)
-    pipeline = Column(Text, primary_key=True)
-    channel = Column(Text, primary_key=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    content_item_id = Column(Integer, ForeignKey("content_items.id", ondelete="RESTRICT"), nullable=False)
+    pipeline = Column(Text, nullable=False)
+    channel = Column(Text, nullable=False)
     originating_source_id = Column(Integer, ForeignKey("content_sources.id", ondelete="RESTRICT"), nullable=True)
     observed_at = Column(DateTime(timezone=True), nullable=False)
     __table_args__ = (
+        UniqueConstraint(
+            "content_item_id", "pipeline", "channel", "originating_source_id",
+            name="uq_content_eligibility_source",
+        ),
         CheckConstraint("channel IN ('legacy','social')", name="ck_content_eligibility_channel"),
         CheckConstraint("pipeline IN ('technical','fundamental')", name="ck_content_eligibility_pipeline"),
     )

@@ -1150,6 +1150,7 @@ class ThemeDiscoveryService:
         }
 
         mentions = self.db.query(
+            ThemeMention.content_item_id,
             func.max(ThemeMention.mentioned_at),
             func.avg(ThemeMention.confidence),
             ContentSource.source_type,
@@ -1164,31 +1165,36 @@ class ThemeDiscoveryService:
             ThemeMention.pipeline == self.pipeline,
             ThemeMention.mentioned_at >= cutoff_30d,
             ThemeMention.mentioned_at <= now,
-            legacy_eligibility_exists(ThemeMention.content_item_id, self.pipeline),
             ThemeMention.social_work_id.is_(None),
+            ContentSource.is_active == True,
         ).group_by(ThemeMention.content_item_id, ContentSource.source_type, ContentSource.name).all()
 
-        mentions_7d = 0
-        mentions_30d = 0
+        posts: dict[int, tuple[datetime, float]] = {}
         sources_7d: set[str] = set()
-        persistence_days_7d: set[str] = set()
-        weighted_conf_sum = 0.0
-        latest_mention_at: datetime | None = None
 
-        for mentioned_at, confidence, source_type, source_name in mentions:
+        for content_item_id, mentioned_at, confidence, source_type, source_name in mentions:
             seen_at = _coerce_utc_datetime(mentioned_at) or comparison_now
             confidence_value = max(0.0, min(1.0, float(confidence or 0.5)))
             quality_weight = source_quality.get((source_type or "").strip().lower(), 0.75)
-            weighted_conf_sum += confidence_value * quality_weight
-            mentions_30d += 1
-            if latest_mention_at is None or seen_at > latest_mention_at:
-                latest_mention_at = seen_at
+            weighted_confidence = confidence_value * quality_weight
+            prior = posts.get(content_item_id)
+            posts[content_item_id] = (
+                max(prior[0], seen_at) if prior else seen_at,
+                max(prior[1], weighted_confidence) if prior else weighted_confidence,
+            )
 
             if seen_at >= comparison_cutoff_7d:
-                mentions_7d += 1
                 source_marker = (source_name or source_type or "unknown").strip().lower()
                 sources_7d.add(source_marker)
-                persistence_days_7d.add(seen_at.date().isoformat())
+
+        current_posts = [value for value in posts.values()
+                         if value[0] >= comparison_cutoff_7d]
+        mentions_7d = len(current_posts)
+        mentions_30d = len(posts)
+        persistence_days_7d = {seen_at.date().isoformat()
+                               for seen_at, _ in current_posts}
+        weighted_conf_sum = sum(value[1] for value in posts.values())
+        latest_mention_at = max((value[0] for value in posts.values()), default=None)
 
         avg_quality_confidence_30d = (weighted_conf_sum / mentions_30d) if mentions_30d else 0.0
         days_since_last_mention = 9999
