@@ -28,6 +28,14 @@ def social_budget_date(now: datetime, timezone_name: str) -> date:
     return now.astimezone(ZoneInfo(timezone_name)).date()
 
 
+def social_budget_period(now: datetime, timezone_name: str) -> tuple[date, datetime, datetime]:
+    day = social_budget_date(now, timezone_name)
+    zone = ZoneInfo(timezone_name)
+    start = datetime.combine(day, time.min, zone).astimezone(timezone.utc)
+    end = datetime.combine(day + timedelta(days=1), time.min, zone).astimezone(timezone.utc)
+    return day, start, end
+
+
 @contextmanager
 def social_analysis_transaction(factory):
     """Reuse the migration-seeded registry lock without changing its version."""
@@ -109,9 +117,7 @@ class SocialLLMBudgetService:
             "2",
             override=limit_override,
         )))
-        day = social_budget_date(now, zone)
-        start = datetime.combine(day, time.min, ZoneInfo(zone)).astimezone(timezone.utc)
-        end = datetime.combine(day + timedelta(days=1), time.min, ZoneInfo(zone)).astimezone(timezone.utc)
+        day, start, end = social_budget_period(now, zone)
         row = db.scalar(select(SocialLLMBudgetDay).where(
             SocialLLMBudgetDay.period_start_utc == start, SocialLLMBudgetDay.period_end_utc == end))
         if row is None:

@@ -13,6 +13,7 @@ import {
 import ChartViewerModal from '../../components/Scan/ChartViewerModalLazy';
 import { useMarket } from '../../contexts/MarketContext';
 import SocialEvidenceDrawer from './SocialEvidenceDrawer';
+import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
 import SocialSignalsTable from './SocialSignalsTable';
 import { socialFreshnessLabel, visibleSocialRows } from './socialSignalPresentation';
 
@@ -32,6 +33,7 @@ export default function SocialSignalsTab() {
   const navigate = useNavigate();
   const { selectedMarket } = useMarket();
   const market = selectedMarket || 'US';
+  const marketSupported = isSocialSignalMarket(market);
   const [window, setWindow] = useState('7d');
   const [view, setView] = useState('actionable');
   const [rankMode, setRankMode] = useState('blended');
@@ -44,22 +46,22 @@ export default function SocialSignalsTab() {
   const controls = { market, window, view, rankMode, page, pageSize: 50, filters };
   const queueQuery = useQuery({
     queryKey: socialQueueKey(controls), queryFn: () => getSocialQueue(controls),
-    staleTime: 60_000,
+    staleTime: 60_000, enabled: marketSupported,
   });
   const contextQuery = useQuery({
     queryKey: ['socialSignals', 'context', market, window, contextPage],
     queryFn: () => getSocialContext({ market, window, page: contextPage, pageSize: 50 }),
-    enabled: view === 'all',
+    enabled: marketSupported && view === 'all',
   });
   const unresolvedQuery = useQuery({
     queryKey: ['socialSignals', 'unresolved', 'global', window, unresolvedPage],
     queryFn: () => getSocialUnresolved({ market, window, page: unresolvedPage, pageSize: 50 }),
-    enabled: view === 'all',
+    enabled: marketSupported && view === 'all',
   });
   const evidenceQuery = useQuery({
     queryKey: ['socialSignals', 'evidence', selected?.candidate_key, window],
     queryFn: () => getSocialEvidence(selected.candidate_key, window),
-    enabled: Boolean(selected),
+    enabled: marketSupported && Boolean(selected),
   });
   const rows = useMemo(
     () => visibleSocialRows(queueQuery.data?.items || EMPTY, filters),
@@ -111,7 +113,10 @@ export default function SocialSignalsTab() {
         </Stack>
       </Paper>
 
-      {queueQuery.isLoading ? <Box textAlign="center" py={8}><CircularProgress aria-label="Loading Social Signals" /></Box> : null}
+      {!marketSupported ? <Alert severity="info">
+        {SOCIAL_SIGNAL_MARKETS_COPY}
+      </Alert> : null}
+      {marketSupported && queueQuery.isLoading ? <Box textAlign="center" py={8}><CircularProgress aria-label="Loading Social Signals" /></Box> : null}
       {queueQuery.isError ? <Alert severity="error">
         {queueQuery.error?.response?.status === 401 ? 'Your session expired. Sign in again.' : 'Social Signals could not be loaded.'}
       </Alert> : null}

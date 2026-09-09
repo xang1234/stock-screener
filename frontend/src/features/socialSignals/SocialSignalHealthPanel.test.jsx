@@ -48,9 +48,10 @@ function seedMocks() {
 
 function renderPanel() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><ThemeProvider theme={createTheme()}>
+  const rendered = render(<QueryClientProvider client={client}><ThemeProvider theme={createTheme()}>
     <SocialSignalHealthPanel />
   </ThemeProvider></QueryClientProvider>);
+  return { ...rendered, client };
 }
 
 async function unlock() {
@@ -91,6 +92,22 @@ describe('SocialSignalHealthPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Test Asia Growth' }));
     await waitFor(() => expect(api.testSocialSource).toHaveBeenCalledWith('secret', '9', 3));
     expect(screen.queryByRole('button', { name: 'Enable Asia Growth' })).not.toBeInTheDocument();
+  });
+
+  it('refreshes installation capabilities after changing the runtime', async () => {
+    api.updateSocialAdminRuntime.mockResolvedValue({ mode: 'live', provider: 'xui', version: 8 });
+    const { client } = renderPanel();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    await unlock();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save runtime' }));
+
+    await waitFor(() => expect(api.updateSocialAdminRuntime).toHaveBeenCalledWith(
+      'secret', { mode: 'validation', provider: 'xui', expected_version: 7 },
+    ));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith(
+      { queryKey: ['appCapabilities'] },
+    ));
   });
 
   it('supports refresh cooldown, outside-window retry and reasoned decisions', async () => {

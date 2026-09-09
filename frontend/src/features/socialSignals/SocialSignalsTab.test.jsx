@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SocialSignalsTab from './SocialSignalsTab';
 import * as socialApi from '../../api/socialSignals';
 
+const marketState = vi.hoisted(() => ({ selectedMarket: 'HK' }));
+
 vi.mock('../../api/socialSignals', async () => {
   const actual = await vi.importActual('../../api/socialSignals');
   return {
@@ -16,7 +18,7 @@ vi.mock('../../api/socialSignals', async () => {
   };
 });
 vi.mock('../../contexts/MarketContext', () => ({
-  useMarket: () => ({ selectedMarket: 'HK' }),
+  useMarket: () => marketState,
 }));
 vi.mock('../../components/common/AddToWatchlistMenu', () => ({
   default: ({ symbols }) => <button type="button">Watch {symbols}</button>,
@@ -62,6 +64,7 @@ function renderTab() {
 describe('SocialSignalsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    marketState.selectedMarket = 'HK';
     socialApi.getSocialQueue.mockResolvedValue(queue());
     socialApi.getSocialContext.mockResolvedValue(queue({ total: 0, items: [] }));
     socialApi.getSocialUnresolved.mockResolvedValue(queue({ total: 0, items: [] }));
@@ -73,6 +76,18 @@ describe('SocialSignalsTab', () => {
         url: 'https://x.com/analyst/status/1', source_names: ['Asia Growth'],
         engagement: { likes: 10 } }],
     });
+  });
+
+  it('shows an unsupported-market state without calling Social APIs', async () => {
+    marketState.selectedMarket = 'KR';
+
+    renderTab();
+
+    expect(await screen.findByText(/available for US, HK, CN, JP, and TW markets/)).toBeInTheDocument();
+    expect(socialApi.getSocialQueue).not.toHaveBeenCalled();
+    expect(socialApi.getSocialContext).not.toHaveBeenCalled();
+    expect(socialApi.getSocialUnresolved).not.toHaveBeenCalled();
+    expect(socialApi.getSocialEvidence).not.toHaveBeenCalled();
   });
 
   it('renders a dense truthful queue with warming-up and stale states', async () => {

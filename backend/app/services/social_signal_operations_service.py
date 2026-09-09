@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
@@ -22,6 +21,7 @@ from app.services.social_signal_runtime_gate import (
     PROVIDER_COOLDOWN_KEY,
     PROVIDER_LEASE_KEY,
 )
+from app.services.social_llm_budget_service import social_budget_period
 
 
 _PUBLIC_REASON_CODES = {
@@ -71,10 +71,6 @@ class SocialSignalOperationsService:
         waiting_states = {"pending", "waiting_budget", "failed_retryable", "running"}
         waiting = [row for row in work if row.state in waiting_states]
         oldest = min((_utc(row.created_at) for row in waiting), default=None)
-        budget = db.scalar(select(SocialLLMBudgetDay).where(
-            SocialLLMBudgetDay.period_start_utc <= now,
-            SocialLLMBudgetDay.period_end_utc > now,
-        ).order_by(SocialLLMBudgetDay.period_start_utc.desc()).limit(1))
         observations = (run.application_progress_json.get("observations", {}) if run else {})
         enabled_sources = [source for source in sources if source.lifecycle_state == "enabled"]
         successful_collections = [
@@ -119,10 +115,11 @@ class SocialSignalOperationsService:
         }))).all()
         policy = {row.key: row.value for row in policy_rows}
         budget_limit = policy.get(
-            "social_llm_daily_limit_usd", str(budget.limit_usd) if budget else "2"
+            "social_llm_daily_limit_usd",
+            format(settings.social_llm_daily_budget_usd.normalize(), "f"),
         )
         budget_timezone = policy.get(
-            "social_llm_budget_timezone", budget.timezone if budget else "Asia/Singapore"
+            "social_llm_budget_timezone", settings.social_llm_budget_timezone
         )
         pricing_status, pricing_version, blocked_models = "absent", None, []
         if "social_llm_pricing" in policy:
@@ -145,16 +142,17 @@ class SocialSignalOperationsService:
                     pricing_status = "configured_with_blocks"
             except (TypeError, ValueError, json.JSONDecodeError):
                 pricing_status, pricing_version, blocked_models = "invalid", None, []
-        next_reset_at = _utc(budget.period_end_utc) if budget else None
-        if next_reset_at is None:
-            try:
-                local = now.astimezone(ZoneInfo(budget_timezone))
-                next_day = local.date() + timedelta(days=1)
-                next_reset_at = datetime.combine(
-                    next_day, time.min, ZoneInfo(budget_timezone)
-                ).astimezone(timezone.utc)
-            except (ValueError, KeyError):
-                next_reset_at = None
+        budget_rows = []
+        try:
+            _local_day, period_start, next_reset_at = social_budget_period(
+                now, budget_timezone
+            )
+            budget_rows = db.scalars(select(SocialLLMBudgetDay).where(
+                SocialLLMBudgetDay.period_start_utc < next_reset_at,
+                SocialLLMBudgetDay.period_end_utc > period_start,
+            )).all()
+        except (TypeError, ValueError, KeyError):
+            next_reset_at = None
 
         def ttl(key):
             if not self.redis:
@@ -162,10 +160,10 @@ class SocialSignalOperationsService:
             value = self.redis.ttl(key)
             return value if isinstance(value, int) and value > 0 else None
 
-        spent = budget.actual_usd if budget else 0
-        reserved = budget.reserved_usd if budget else 0
+        spent = sum((row.actual_usd for row in budget_rows), Decimal(0))
+        reserved = sum((row.reserved_usd for row in budget_rows), Decimal(0))
         try:
-            limit = budget.limit_usd if budget else Decimal(str(budget_limit))
+            limit = Decimal(str(budget_limit))
         except (InvalidOperation, ValueError):
             limit = Decimal(0)
         return {

@@ -175,10 +175,13 @@ export default function SocialSignalHealthPanel() {
             onChange={(event) => setProviderDraft(event.target.value)}>
             {['disabled', 'official', 'xui'].map((value) => <MenuItem key={value} value={value}>{value}</MenuItem>)}
           </Select>
-          <Button onClick={() => mutation.mutate(() => updateSocialAdminRuntime(adminKey, {
-            mode: modeDraft ?? runtimeDraft.mode, provider: providerDraft ?? runtimeDraft.provider,
-            expected_version: runtimeDraft.version,
-          }))}>Save runtime</Button>
+          <Button onClick={() => mutation.mutate(
+            () => updateSocialAdminRuntime(adminKey, {
+              mode: modeDraft ?? runtimeDraft.mode, provider: providerDraft ?? runtimeDraft.provider,
+              expected_version: runtimeDraft.version,
+            }),
+            { onSuccess: () => queryClient.invalidateQueries({ queryKey: ['appCapabilities'] }) },
+          )}>Save runtime</Button>
           <Button variant="outlined" onClick={doRefresh}>Refresh Social Signals</Button>
         </Stack>
         <Divider sx={{ my: 2 }} />

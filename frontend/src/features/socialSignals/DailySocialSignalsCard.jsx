@@ -4,6 +4,7 @@ import {
 } from '@mui/material';
 
 import { getSocialSummary } from '../../api/socialSignals';
+import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
 import { formatSocialScore } from './socialSignalPresentation';
 
 const unavailableCopy = {
@@ -15,10 +16,12 @@ const themeLabel = (value) => String(value || '').replaceAll('_', ' ')
   .replace(/^./, (letter) => letter.toUpperCase());
 
 export default function DailySocialSignalsCard({ market, onOpen }) {
+  const marketSupported = isSocialSignalMarket(market);
   const query = useQuery({
     queryKey: ['socialSignals', 'summary', market],
     queryFn: () => getSocialSummary(market),
     staleTime: 60_000,
+    enabled: marketSupported,
   });
   const data = query.data;
   const signals = (data?.top_signals || []).slice(0, 5);
@@ -32,10 +35,13 @@ export default function DailySocialSignalsCard({ market, onOpen }) {
           <Typography variant="subtitle1" fontWeight={700}>Social Signals</Typography>
           <Typography variant="caption" color="text.secondary">Published X-list attention for {market}</Typography>
         </Box>
-        <Button size="small" onClick={onOpen}>Open Social Signals</Button>
+        <Button size="small" onClick={onOpen} disabled={!marketSupported}>Open Social Signals</Button>
       </Stack>
-      {query.isLoading ? <CircularProgress size={20} aria-label="Loading Social summary" /> : null}
-      {query.isError ? <Alert severity="warning">Social summary could not be loaded.</Alert> : null}
+      {!marketSupported ? <Alert severity="info" sx={{ mt: 1 }}>
+        {SOCIAL_SIGNAL_MARKETS_COPY}
+      </Alert> : null}
+      {marketSupported && query.isLoading ? <CircularProgress size={20} aria-label="Loading Social summary" /> : null}
+      {marketSupported && query.isError ? <Alert severity="warning">Social summary could not be loaded.</Alert> : null}
       {data?.available === false ? (
         <Alert severity="info" sx={{ mt: 1 }}>
           {unavailableCopy[data.reason_code] || 'Social Signals are temporarily unavailable.'}

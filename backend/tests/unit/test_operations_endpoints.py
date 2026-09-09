@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -295,3 +296,42 @@ def test_social_signal_health_reports_pricing_blocks_without_secret_configuratio
     assert payload["budget"]["pricing_version"] == "v2"
     assert payload["budget"]["blocked_models"] == ["small"]
     assert "billing_mismatch" not in str(payload)
+
+
+def test_social_health_aggregates_budget_buckets_overlapping_current_policy_day(db_session):
+    from app.infra.db.models.social_analysis import SocialLLMBudgetDay
+    from app.models.app_settings import AppSetting
+    from app.services.social_signal_operations_service import SocialSignalOperationsService
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    SocialSourceAdminService(db_session).ensure_seed_sources()
+    db_session.add_all([
+        AppSetting(key="social_llm_daily_limit_usd", value="2", category="social"),
+        AppSetting(key="social_llm_budget_timezone", value="Asia/Singapore", category="social"),
+        SocialLLMBudgetDay(
+            budget_date=date(2026, 9, 7), timezone="UTC",
+            period_start_utc=datetime(2026, 9, 7, tzinfo=timezone.utc),
+            period_end_utc=datetime(2026, 9, 8, tzinfo=timezone.utc),
+            limit_usd=Decimal("2"), actual_usd=Decimal("0.50"),
+            reserved_usd=Decimal("0.10"),
+        ),
+        SocialLLMBudgetDay(
+            budget_date=date(2026, 9, 7), timezone="Asia/Singapore",
+            period_start_utc=datetime(2026, 9, 6, 16, tzinfo=timezone.utc),
+            period_end_utc=datetime(2026, 9, 7, 16, tzinfo=timezone.utc),
+            limit_usd=Decimal("2"), actual_usd=Decimal("0.25"),
+            reserved_usd=Decimal("0.15"),
+        ),
+    ])
+    db_session.commit()
+
+    payload = SocialSignalOperationsService(
+        redis_client=False,
+        clock=lambda: now,
+    ).snapshot(db_session)
+
+    assert Decimal(payload["budget"]["spent_usd"]) == Decimal("0.75")
+    assert Decimal(payload["budget"]["reserved_usd"]) == Decimal("0.25")
+    assert Decimal(payload["budget"]["remaining_usd"]) == Decimal("1.00")
+    assert payload["budget"]["next_reset_at"] == "2026-09-07T16:00:00+00:00"

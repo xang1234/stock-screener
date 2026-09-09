@@ -24,6 +24,7 @@ from ..services.theme_content_recovery_service import (
     attempt_reindex_theme_content_storage,
     reset_corrupt_theme_content_storage,
 )
+from ..services.theme_evidence_eligibility_service import legacy_eligibility_exists
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,6 @@ def _build_content_items_browser_base_query(
 
     base_query = db.query(ContentItem).join(
         ContentSource, ContentItem.source_id == ContentSource.id
-    ).filter(
-        ContentSource.is_active == True
     )
 
     if pipeline:
@@ -89,9 +88,17 @@ def _build_content_items_browser_base_query(
             pipeline_source_ids = resolve_source_ids_for_pipeline(db, pipeline)
         if not pipeline_source_ids:
             return None
-        base_query = base_query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+        base_query = base_query.filter(legacy_eligibility_exists(
+            ContentItem.id,
+            pipeline,
+            active_only=True,
+            source_ids=pipeline_source_ids,
+        ))
     else:
-        base_query = base_query.filter(ContentItem.is_processed == True)
+        base_query = base_query.filter(
+            ContentSource.is_active == True,
+            ContentItem.is_processed == True,
+        )
 
     if source_type:
         base_query = base_query.filter(ContentItem.source_type == source_type)

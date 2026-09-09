@@ -8,12 +8,12 @@ import { getSocialSummary } from '../../api/socialSignals';
 
 vi.mock('../../api/socialSignals', () => ({ getSocialSummary: vi.fn() }));
 
-function renderCard(onOpen = vi.fn()) {
+function renderCard(onOpen = vi.fn(), market = 'US') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <ThemeProvider theme={createTheme()}>
-        <DailySocialSignalsCard market="US" onOpen={onOpen} />
+        <DailySocialSignalsCard market={market} onOpen={onOpen} />
       </ThemeProvider>
     </QueryClientProvider>,
   );
@@ -55,5 +55,13 @@ describe('DailySocialSignalsCard', () => {
     });
     renderCard();
     expect(await screen.findByText(/first Social Signal run/i)).toBeInTheDocument();
+  });
+
+  it('shows unsupported markets without requesting a summary', async () => {
+    renderCard(vi.fn(), 'KR');
+
+    expect(await screen.findByText(/available for US, HK, CN, JP, and TW markets/)).toBeInTheDocument();
+    expect(getSocialSummary).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Open Social Signals' })).toBeDisabled();
   });
 });
