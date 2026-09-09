@@ -79,7 +79,14 @@ class ClassificationResult:
     # soft-attach keeps coverage high even after the deadline).
     processed: int = 0
     llm_calls: int = 0
+    llm_attempts: int = 0
+    llm_successes: int = 0
+    llm_failures: int = 0
+    llm_parse_failures: int = 0
+    llm_fallbacks: int = 0
     llm_cache_hits: int = 0
+    llm_circuit_open: bool = False
+    llm_circuit_reason: Optional[str] = None
     deadline_hit: bool = False
     llm_budget_exhausted: bool = False
 
@@ -100,7 +107,14 @@ class ClassificationResult:
             "coverage_pct": round(100.0 * classified / total_active, 2) if total_active else 0.0,
             "processed": self.processed,
             "llm_calls": self.llm_calls,
+            "llm_attempts": self.llm_attempts,
+            "llm_successes": self.llm_successes,
+            "llm_failures": self.llm_failures,
+            "llm_parse_failures": self.llm_parse_failures,
+            "llm_fallbacks": self.llm_fallbacks,
             "llm_cache_hits": self.llm_cache_hits,
+            "llm_circuit_open": self.llm_circuit_open,
+            "llm_circuit_reason": self.llm_circuit_reason,
             # ``partial`` flags the *abnormal* case: the runtime deadline cut the
             # high-quality (LLM) tier short. Hitting the LLM call budget is a
             # by-design cost cap, reported separately so it doesn't dilute the
@@ -150,8 +164,19 @@ class _LLMTier:
         self._start = clock()
         self._cache: dict[tuple, Optional[str]] = {}
         self.calls = 0
+        self.successes = 0
+        self.failures = 0
+        self.parse_failures = 0
+        self.fallbacks = 0
         self.cache_hits = 0
         self.deadline_reached = False
+        self.circuit_open = False
+        self.circuit_reason: Optional[str] = None
+        self._consecutive_failures = 0
+
+    @property
+    def enabled(self) -> bool:
+        return self._tiebreaker is not None
 
     @property
     def budget_exhausted(self) -> bool:
@@ -162,6 +187,33 @@ class _LLMTier:
             self._deadline_seconds is not None
             and (self._clock() - self._start) >= self._deadline_seconds
         )
+
+    @staticmethod
+    def _provider_failure(exc: Exception) -> tuple[str, bool]:
+        status = getattr(exc, "status_code", None)
+        if not isinstance(status, int):
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            if status == 429:
+                return "provider_rate_limited", False
+            if status in {408, 409, 425} or status >= 500:
+                return f"provider_http_{status}", False
+            if 400 <= status < 500:
+                return f"provider_http_{status}", True
+        name = type(exc).__name__.lower()
+        if isinstance(exc, TimeoutError) or "timeout" in name:
+            return "provider_timeout", False
+        if isinstance(exc, ConnectionError) or "connection" in name or "network" in name:
+            return "provider_network_error", False
+        return "provider_error", False
+
+    def _record_unsuccessful(self, reason: str, *, terminal: bool = False) -> None:
+        self._consecutive_failures += 1
+        if terminal or self._consecutive_failures >= 3:
+            self.circuit_open = True
+            self.circuit_reason = reason
+            logger.warning("IBD LLM circuit opened: %s", reason)
 
     def choose(self, ctx: "StockContext", shortlist: list[str]) -> Optional[str]:
         if self._tiebreaker is None or not shortlist:
@@ -175,6 +227,8 @@ class _LLMTier:
         if key in self._cache:
             self.cache_hits += 1
             return self._cache[key]
+        if self.circuit_open:
+            return None
         if self._past_deadline():
             self.deadline_reached = True
             return None
@@ -186,9 +240,19 @@ class _LLMTier:
         self.calls += 1
         try:
             chosen = self._tiebreaker(ctx.text(), shortlist)
-        except Exception:  # noqa: BLE001 — a misbehaving tiebreaker must not break the run
-            logger.warning("IBD LLM tier: tiebreaker raised; treating as no match")
+        except Exception as exc:  # noqa: BLE001 — failures degrade to deterministic fallback
+            reason, terminal = self._provider_failure(exc)
+            self.failures += 1
+            self._record_unsuccessful(reason, terminal=terminal)
             chosen = None
+        else:
+            if chosen not in shortlist:
+                self.parse_failures += 1
+                self._record_unsuccessful("invalid_response")
+                chosen = None
+            else:
+                self.successes += 1
+                self._consecutive_failures = 0
         self._cache[key] = chosen
         return chosen
 
@@ -410,7 +474,8 @@ class IBDClassificationService:
             return self._embedding_assignment(ctx, best_group, best_score, "centroid_nn")
 
         # Tier 4: rationed/deduped LLM tiebreaker over the embedding shortlist.
-        if ranking and llm_tier is not None:
+        llm_declined = False
+        if ranking and llm_tier is not None and llm_tier.enabled:
             shortlist = [g for g, _ in ranking[: self.LLM_SHORTLIST_SIZE]]
             chosen = llm_tier.choose(ctx, shortlist)
             if chosen and chosen in shortlist:
@@ -419,12 +484,15 @@ class IBDClassificationService:
                     source=SOURCE_LLM, confidence=None, method="llm_shortlist",
                     model_id=llm_tier.model_id,
                 )
+            llm_declined = True
 
         # Free deterministic fallbacks — keep coverage high (without the LLM) when
         # the LLM is unavailable, over budget, past the deadline, or unhelpful.
         if soft_attach:
             if resolution is not None and resolution.plurality is not None:
                 soft = resolution.plurality
+                if llm_declined:
+                    llm_tier.fallbacks += 1
                 return Assignment(
                     symbol=ctx.symbol, market=ctx.market, industry_group=soft.group,
                     source=SOURCE_CROSSWALK, confidence=soft.confidence,
@@ -432,6 +500,8 @@ class IBDClassificationService:
                 )
             if ranking:
                 best_group, best_score = ranking[0]
+                if llm_declined:
+                    llm_tier.fallbacks += 1
                 return self._embedding_assignment(ctx, best_group, best_score, "centroid_nn_soft")
 
         return None
@@ -508,6 +578,12 @@ class IBDClassificationService:
                     "market": market, "processed": i, "total": total,
                     "assigned": len(result.assignments), "unresolved": len(result.unresolved),
                     "llm_calls": llm_tier.calls, "llm_cache_hits": llm_tier.cache_hits,
+                    "llm_successes": llm_tier.successes,
+                    "llm_failures": llm_tier.failures,
+                    "llm_parse_failures": llm_tier.parse_failures,
+                    "llm_fallbacks": llm_tier.fallbacks,
+                    "llm_circuit_open": llm_tier.circuit_open,
+                    "llm_circuit_reason": llm_tier.circuit_reason,
                     "by_source": by_source, "elapsed_sec": round(clock() - start, 1),
                 }
                 logger.info("IBD %s progress: %s", market, record)
@@ -515,7 +591,14 @@ class IBDClassificationService:
                     progress_callback(record)
 
         result.llm_calls = llm_tier.calls
+        result.llm_attempts = llm_tier.calls
+        result.llm_successes = llm_tier.successes
+        result.llm_failures = llm_tier.failures
+        result.llm_parse_failures = llm_tier.parse_failures
+        result.llm_fallbacks = llm_tier.fallbacks
         result.llm_cache_hits = llm_tier.cache_hits
+        result.llm_circuit_open = llm_tier.circuit_open
+        result.llm_circuit_reason = llm_tier.circuit_reason
         result.llm_budget_exhausted = llm_tier.budget_exhausted
         logger.info("IBD classification %s: %s", market, result.summary())
         return result

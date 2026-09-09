@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 from collections.abc import Iterable, Mapping
@@ -28,7 +27,6 @@ from app.domain.scanning.materialization import (
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
-from app.infra.serialization import json_safe
 from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
 from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.key_market_history import build_key_market_entries
@@ -81,6 +79,11 @@ from app.services.static_site_manifest import (
     coerce_datetime,
     static_market_metadata_path,
     write_static_market_metadata,
+)
+from app.services.static_social_isolation import (
+    StaticSocialIsolationError,
+    assert_live_only_static_isolation,
+    write_isolated_json,
 )
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
@@ -300,6 +303,7 @@ class StaticSiteExportService:
         )
         if write_manifest:
             self._write_json(output_dir / "manifest.json", manifest)
+        self.assert_live_only_isolation(output_dir)
 
         return StaticSiteExportResult(
             output_dir=output_dir,
@@ -361,6 +365,7 @@ class StaticSiteExportService:
             market_metadata_path=(Path(output_dir) / cls._market_metadata_path("US")),
         )
         warnings.extend(options_result.warnings)
+        cls.assert_live_only_isolation(Path(output_dir))
         return StaticSiteExportResult(
             output_dir=combined.output_dir,
             generated_at=combined.generated_at,
@@ -980,14 +985,8 @@ class StaticSiteExportService:
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                json_safe(payload),
-                allow_nan=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        write_isolated_json(path, payload)
+
+    @staticmethod
+    def assert_live_only_isolation(output_dir: Path) -> None:
+        assert_live_only_static_isolation(output_dir)

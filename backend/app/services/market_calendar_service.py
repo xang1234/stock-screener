@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterable, Mapping
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from importlib import metadata
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -58,7 +58,9 @@ class MarketCalendarService:
         market_catalog: MarketCatalog | None = None,
         session_overrides: Iterable[CalendarSessionOverride] | None = None,
         calendar_coverage_registry: CalendarCoverageRegistry | None = None,
+        use_shared_cache: bool = True,
     ):
+        self._use_shared_cache = use_shared_cache
         self._market_catalog = market_catalog or get_market_catalog()
         self._calendar_coverage_registry = (
             calendar_coverage_registry
@@ -180,6 +182,7 @@ class MarketCalendarService:
         if cache_key not in self._calendar_cache:
             self._calendar_cache[cache_key] = RawMarketCalendarAdapter(
                 provider(provider_calendar_id),
+                use_shared_cache=self._use_shared_cache,
                 cache_namespace=(
                     f"{provider_engine.value}:{calendar_id}:{provider_calendar_id}"
                 ),
@@ -488,6 +491,37 @@ class MarketCalendarService:
             market_open.floor("min") <= minute_utc < market_close.floor("min")
             for market_open, market_close in session_ranges
         )
+
+    def session_close(
+        self, market: str, day: date, *, mic: str | None = None,
+    ) -> datetime:
+        """Verified effective session close in UTC, without an update buffer.
+
+        Official primary-MIC close exceptions take precedence over the provider;
+        an unavailable alternate-MIC schedule cannot borrow the primary close.
+        """
+        normalized = self.normalize_market(market)
+        coverage = self._require_verified_calculation_date(normalized, day, mic=mic)
+        # Validate the MIC even when an official manifest can answer membership.
+        zone = self.market_timezone(normalized, mic=mic)
+        if not self._is_effective_trading_day(normalized, day, coverage, mic=mic):
+            raise ValueError("not_a_trading_session")
+        official = self._official_manifest_for_day(coverage, day, mic=mic)
+        if official is not None and day in official.close_exceptions:
+            return datetime.combine(day, official.close_exceptions[day], tzinfo=zone).astimezone(timezone.utc)
+        try:
+            close = self._get_calendar(normalized, mic=mic).session_close(day)
+        except Exception as exc:
+            if official is None or not (self._is_calendar_bounds_error(exc) or isinstance(exc, CalendarScheduleUnavailable)):
+                raise
+            close = None
+        if close is None:
+            if official is None:
+                raise CalendarScheduleUnavailable("Session close unavailable")
+            return datetime.combine(day, REGULAR_MARKET_CLOSE_TIMES[normalized], tzinfo=zone).astimezone(timezone.utc)
+        if pd.isna(close) or close.tzinfo is None:
+            raise CalendarScheduleUnavailable("Session close is not an aware timestamp")
+        return close.to_pydatetime().astimezone(timezone.utc)
 
     def last_completed_trading_day(
         self,

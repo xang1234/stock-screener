@@ -13,37 +13,21 @@ from app.services.task_registry_service import TaskRegistryService
 from app.services.theme_discovery_service import ThemeDiscoveryService
 
 
-class _FakeQuery:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def filter(self, *args, **kwargs):
-        return self
-
-    def all(self):
-        return self._rows
-
-
-class _FakeDb:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def query(self, *args, **kwargs):
-        return _FakeQuery(self._rows)
-
-
-def test_lifecycle_snapshot_normalizes_aware_mentions_with_naive_now():
+def test_lifecycle_snapshot_normalizes_aware_mentions_with_naive_now(db_session):
+    from app.models.theme import ContentItem, ContentSource, ThemeMention
+    from app.services.theme_evidence_eligibility_service import grant_eligibility
+    seen_at = datetime(2026, 3, 27, 8, 0, tzinfo=timezone.utc)
+    source = ContentSource(name="Macro Desk", source_type="news", is_active=True)
+    db_session.add(source)
+    db_session.flush()
+    item = ContentItem(source_id=source.id, source_type="news", published_at=seen_at)
+    db_session.add(item)
+    db_session.flush()
+    grant_eligibility(db_session, item.id, "technical", "legacy", source.id, seen_at)
+    db_session.add(ThemeMention(content_item_id=item.id, source_type="news", raw_theme="Macro", theme_cluster_id=101, pipeline="technical", mentioned_at=seen_at, confidence=0.9))
+    db_session.commit()
     service = ThemeDiscoveryService.__new__(ThemeDiscoveryService)
-    service.db = _FakeDb(
-        [
-            (
-                datetime(2026, 3, 27, 8, 0, tzinfo=timezone.utc),
-                0.9,
-                "news",
-                "Macro Desk",
-            )
-        ]
-    )
+    service.db = db_session
     service.pipeline = "technical"
 
     observation = service._lifecycle_snapshot(101, now=datetime(2026, 3, 27, 12, 0, 0))

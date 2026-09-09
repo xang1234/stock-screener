@@ -14,6 +14,7 @@ import os
 import random
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional
+from uuid import uuid4
 
 import litellm
 from litellm import acompletion, completion
@@ -41,11 +42,17 @@ litellm.drop_params = True  # Drop unsupported params instead of erroring
 litellm.set_verbose = False  # Set to True for debugging
 
 _ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
+_OPENCODE_GO_API_BASE_DEFAULT = "https://opencode.ai/zen/go/v1"
+_OPENCODE_GO_SESSION_ID = f"social-{uuid4().hex}"
 
 
 class LLMError(Exception):
     """Base exception for LLM errors."""
     pass
+
+
+class LLMPreDispatchError(LLMError):
+    """The provider request is confirmed not to have been dispatched."""
 
 
 class LLMRateLimitError(LLMError):
@@ -133,6 +140,16 @@ class LLMService:
                 "MINIMAX_API_KEY not set — extraction will fall back to next provider in chain"
             )
 
+        self._opencode_go_api_key = (
+            getattr(settings, "opencode_go_api_key", None)
+            or os.environ.get("OPENCODE_GO_API_KEY")
+        )
+        self._opencode_go_api_base = (
+            getattr(settings, "opencode_go_api_base", None)
+            or os.environ.get("OPENCODE_GO_API_BASE")
+            or _OPENCODE_GO_API_BASE_DEFAULT
+        )
+
     async def completion(
         self,
         messages: List[Dict[str, Any]],
@@ -145,6 +162,7 @@ class LLMService:
         response_format: Optional[Dict] = None,
         stream: bool = False,
         num_retries: int = 3,
+        metered: bool = False,
         **kwargs
     ) -> Any:
         """
@@ -165,6 +183,8 @@ class LLMService:
         Returns:
             ChatCompletion or AsyncGenerator if streaming
         """
+        if metered and (stream or allow_fallbacks or num_retries != 0):
+            raise LLMError("metered_completion_requires_single_nonstream_attempt")
         if stream:
             return self._completion_stream(
                 messages=messages,
@@ -200,6 +220,22 @@ class LLMService:
 
         if response_format:
             params["response_format"] = response_format
+
+        if metered:
+            # Both LiteLLM and its provider SDK have retry layers. This path is
+            # one reserved dispatch and must bypass the outer fallback/error logs.
+            params.update(num_retries=0, max_retries=0)
+            params["no-log"] = True
+            try:
+                self._apply_provider_overrides(params)
+            except Exception:
+                raise LLMPreDispatchError(
+                    "metered_provider_configuration_error"
+                ) from None
+            try:
+                return await acompletion(**params)
+            except Exception:
+                raise LLMError("metered_provider_error") from None
 
         # Build fallback list
         fallback_models = self._resolve_fallback_models(
@@ -294,6 +330,9 @@ class LLMService:
 
         is_zai = self._is_zai_model(model)
         is_minimax = self._is_minimax_model(model)
+        is_opencode_go = model.startswith("opencode-go/")
+        if is_opencode_go and not self._opencode_go_api_key:
+            raise LLMError("opencode_go_api_key_not_configured")
 
         if key_manager and len(key_manager) > 0:
             provider_key = key_manager.get_key()
@@ -302,6 +341,9 @@ class LLMService:
         elif is_minimax:
             provider_key = self._minimax_api_key
             provider_name = "minimax"
+        elif is_opencode_go:
+            provider_key = self._opencode_go_api_key
+            provider_name = "opencode-go"
 
         if provider_key:
             params["api_key"] = provider_key
@@ -315,6 +357,21 @@ class LLMService:
             params["api_base"] = zai_base
         elif is_minimax:
             params["api_base"] = self._minimax_api_base
+        elif is_opencode_go:
+            params["model"] = f"openai/{model.split('/', 1)[1]}"
+            params["api_base"] = self._opencode_go_api_base
+            # LiteLLM treats OpenCode Go as a generic OpenAI-compatible endpoint.
+            # Its OpenAI parameter filter drops ``reasoning_effort`` for this
+            # model, so put the gateway-specific field in ``extra_body`` where
+            # LiteLLM forwards it verbatim.
+            extra_body = dict(params.get("extra_body") or {})
+            extra_body["reasoning_effort"] = "none"
+            params["extra_body"] = extra_body
+            params.pop("reasoning_effort", None)
+            headers = dict(params.get("extra_headers") or {})
+            headers.setdefault("User-Agent", "StockScreen/1.0")
+            headers.setdefault("x-opencode-session", _OPENCODE_GO_SESSION_ID)
+            params["extra_headers"] = headers
 
         return provider_name, provider_key, key_manager
 

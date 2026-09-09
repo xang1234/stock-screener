@@ -5,7 +5,7 @@ Provides access to task schedules, execution history,
 and manual task triggering.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from ...database import get_db
@@ -15,8 +15,9 @@ from ...schemas.task import (
     TriggerTaskResponse,
     TaskStatusResponse,
 )
-from ...services.task_registry_service import SCHEDULED_TASKS
+from ...services.task_registry_service import SCHEDULED_TASKS, TaskCooldownError
 from ...wiring.bootstrap import get_task_registry_service
+from .config import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,9 @@ async def get_scheduled_tasks(db: Session = Depends(get_db)):
 @router.post("/{task_name}/run", response_model=TriggerTaskResponse)
 async def trigger_task(
     task_name: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+    authorization: str | None = Header(default=None),
 ):
     """
     Manually trigger a scheduled task.
@@ -65,10 +68,19 @@ async def trigger_task(
             detail=f"Unknown task: {task_name}. Available tasks: {list(SCHEDULED_TASKS.keys())}"
         )
 
+    if SCHEDULED_TASKS[task_name].get("admin_only"):
+        require_admin(x_admin_key=x_admin_key, authorization=authorization)
+
     try:
         service = get_task_registry_service()
         result = service.trigger_task(task_name, db)
         return TriggerTaskResponse(**result)
+    except TaskCooldownError as e:
+        raise HTTPException(
+            status_code=429,
+            detail="manual_refresh_cooldown",
+            headers={"Retry-After": str(e.retry_after)},
+        )
     except Exception as e:
         logger.error(f"Error triggering task {task_name}: {e}", exc_info=True)
         raise HTTPException(

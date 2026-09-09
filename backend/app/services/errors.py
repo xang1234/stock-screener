@@ -60,3 +60,13 @@ class CacheRefreshError(ServiceError):
     """Raised when cache refresh/update workflow fails in critical hot paths."""
 
     error_code = "cache_refresh_failed"
+
+
+class TaskCooldownError(ServiceError):
+    """Raised when a manually triggered task is still inside its cooldown."""
+
+    error_code = "manual_refresh_cooldown"
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(self.error_code)
+        self.retry_after = retry_after

@@ -21,6 +21,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from ..database import Base
+from ..infra.db.models.social_signals import ContentPipelineEligibility
 
 
 class ContentSource(Base):
@@ -117,6 +118,8 @@ class ThemeMention(Base):
     __tablename__ = "theme_mentions"
 
     id = Column(Integer, primary_key=True, index=True)
+    social_work_id = Column(Integer, ForeignKey("social_extraction_work.id", ondelete="RESTRICT"))
+    social_run_id = Column(Text, ForeignKey("social_signal_runs.id", ondelete="RESTRICT"))
 
     # Source reference
     content_item_id = Column(Integer, index=True)  # FK to content_items
@@ -167,6 +170,7 @@ class ThemeMention(Base):
     translation_metadata = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"))
 
     __table_args__ = (
+        UniqueConstraint("social_work_id", "theme_cluster_id", name="uq_social_work_theme_mention"),
         Index("idx_theme_mention_date", "canonical_theme", "mentioned_at"),
         Index("idx_mention_cluster", "theme_cluster_id", "mentioned_at"),
         Index("idx_theme_mentions_pipeline", "pipeline"),

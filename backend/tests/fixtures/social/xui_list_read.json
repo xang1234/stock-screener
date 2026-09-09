@@ -1,0 +1,12 @@
+{
+  "failed_sources": 0,
+  "items": [
+    {"tweet_id": "syn-101", "author_handle": "@alpha_research", "text": "$NVDA demand remains strong", "tweet_url": "https://x.com/alpha_research/status/syn-101", "created_at": "2026-09-05T01:00:00+00:00", "likes": 42, "retweets": 7, "replies": 3, "views": 1200, "bookmarks": null, "is_repost": false},
+    {"tweet_id": "syn-102", "author_handle": "@gamma_asia", "text": "台積電先進封裝需求增長", "tweet_url": "https://x.com/gamma_asia/status/syn-102", "created_at": "2026-09-05T03:00:00+00:00", "likes": 3, "retweets": 1, "replies": 0, "views": null, "bookmarks": null, "is_repost": false}
+  ],
+  "outcomes": [{"source_id": "list:1522014550211457024", "source_kind": "list", "ok": true, "item_count": 2, "page_loads": 1, "scroll_rounds": 1, "observed_ids": 2, "error": null, "html_artifact_path": null, "selector_report_path": null}],
+  "page_loads": 1,
+  "scroll_rounds": 1,
+  "seen_items": 2,
+  "succeeded_sources": 1
+}

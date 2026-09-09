@@ -1,7 +1,7 @@
 """Theme lifecycle state-machine transitions + audit trail helpers."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -9,6 +9,20 @@ from sqlalchemy.orm import Session
 from ..models.theme import ThemeCluster, ThemeLifecycleTransition
 
 LIFECYCLE_STATES = {"candidate", "active", "dormant", "reactivated", "retired"}
+
+
+def has_current_social_lifecycle_evidence(theme, now):
+    """Legacy passes cannot judge evidence deliberately absent from their inputs."""
+    metadata = theme.lifecycle_state_metadata or {}
+    value = metadata.get("social_valid_until")
+    if metadata.get("social_policy_version") != "social-theme-v1" or not value:
+        return False
+    try:
+        expires = datetime.fromisoformat(value)
+        current = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        return current <= expires
+    except (ValueError, TypeError):
+        return False
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "candidate": {"active", "retired"},
     "active": {"dormant", "retired"},

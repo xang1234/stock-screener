@@ -11,6 +11,7 @@ from ...config import settings
 from ...database import get_db
 from ...domain.markets.catalog import get_market_catalog
 from ...domain.scanning.defaults import get_default_scan_profile
+from ...infra.db.models.social_signals import SocialSourceRegistry
 from ...schemas.app_runtime import (
     AppAuthStatusResponse,
     AppCapabilitiesResponse,
@@ -100,8 +101,16 @@ async def get_app_capabilities(
     auth = get_server_auth_status(request)
     bootstrap_status = get_runtime_bootstrap_status(db)
     market_catalog = get_market_catalog()
+    features = settings.capability_flags()
+    if hasattr(db, "get"):
+        social_runtime = db.get(SocialSourceRegistry, 1)
+        if social_runtime is not None:
+            features["social_signals"] = (
+                social_runtime.mode == "live"
+                and social_runtime.provider != "disabled"
+            )
     return AppCapabilitiesResponse(
-        features=settings.capability_flags(),
+        features=features,
         ui_snapshots=get_ui_snapshot_service().ui_snapshot_flags(),
         scan_defaults=ScanDefaultsResponse(
             **get_default_scan_profile(bootstrap_status.primary_market)

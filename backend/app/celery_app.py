@@ -28,6 +28,10 @@ def _offset_schedule(hour: int, minute: int, offset_minutes: int) -> tuple[int, 
     total_minutes = minute + offset_minutes
     return (hour + total_minutes // 60) % 24, total_minutes % 60
 
+
+def _social_refresh_hour_expression(interval_hours: int) -> str:
+    return ",".join(str(hour) for hour in range(0, 24, interval_hours))
+
 # Import scanners to trigger registration
 # This ensures all screeners are registered with the registry before tasks run
 import app.scanners  # noqa: F401
@@ -54,6 +58,7 @@ celery_app = Celery(
         'app.tasks.static_export_tasks',  # Scheduled static-data bundle export
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
         'app.interfaces.tasks.options_analytics_tasks',  # US options follow-on
+        'app.interfaces.tasks.social_signal_tasks',  # Social collection/analysis
     ]
 )
 celery_app.loader.override_backends = {
@@ -335,6 +340,12 @@ celery_app.conf.task_routes.update({
     task_name: {'queue': market_jobs_queue_for_market("US")}
     for task_name in _MARKET_JOB_TASKS
 })
+for _social_task in (
+    'app.interfaces.tasks.social_signal_tasks.refresh_social_signals',
+    'app.interfaces.tasks.social_signal_tasks.resume_social_analysis',
+    'app.interfaces.tasks.social_signal_tasks.validate_social_source',
+):
+    celery_app.conf.task_routes[_social_task] = {'queue': 'social_ingestion'}
 
 # User scans: same default-to-shared pattern; API layer sets the queue explicitly.
 celery_app.conf.task_routes['app.tasks.scan_tasks.run_bulk_scan'] = {
@@ -423,6 +434,23 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
     # already do a full refresh that supersedes the stale-intraday refresh.
     # The task function remains available for manual invocation via the API.
     _shared_entries = {
+        # Delivery performs the DB-authoritative mode/provider check. Keeping
+        # the clock entry stable lets an admin enable Social without restarting Beat.
+        'social-signal-refresh-six-hourly': {
+            'task': 'app.interfaces.tasks.social_signal_tasks.refresh_social_signals',
+            'schedule': crontab(
+                hour=_social_refresh_hour_expression(settings.social_refresh_hours),
+                minute=17,
+            ),
+            'options': {'queue': 'social_ingestion'},
+            'kwargs': {'origin': 'scheduled'},
+        },
+        # Safety sweep; deferred runs also schedule their exact next DB budget reset.
+        'social-signal-budget-resume': {
+            'task': 'app.interfaces.tasks.social_signal_tasks.resume_social_analysis',
+            'schedule': crontab(hour=0, minute=2),
+            'options': {'queue': 'social_ingestion'},
+        },
         # Static-data bundle export for nginx /static-data/ (opt-in).
         # Runs after the Asia-close and US-close daily pipelines so each
         # rebuild picks up the freshest published runs.
@@ -539,11 +567,11 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
     return beat_schedule
 
 
-# Celery Beat Schedule - Periodic Tasks
-if settings.cache_warmup_enabled:
-    celery_app.conf.beat_schedule = _build_cache_warmup_beat_schedule(
-        settings.enabled_markets_list
-    )
+# Celery Beat Schedule - Periodic Tasks. Social delivery remains installed when
+# cache warming is disabled; its own DB runtime gate decides whether work is due.
+celery_app.conf.beat_schedule = _build_cache_warmup_beat_schedule(
+    settings.enabled_markets_list if settings.cache_warmup_enabled else []
+)
 
 if __name__ == '__main__':
     celery_app.start()

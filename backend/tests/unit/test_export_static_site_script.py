@@ -94,6 +94,17 @@ def test_static_export_markets_match_market_registry():
     assert export_script.STATIC_EXPORT_MARKETS == market_registry.supported_market_codes()
 
 
+def test_static_export_cli_exposes_no_social_signal_switch(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        export_script.main(["--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out.lower()
+    assert "social" not in help_text
+    assert "x-post" not in help_text
+    assert "tweet" not in help_text
+
+
 def _stub_static_market_exposure(monkeypatch):
     monkeypatch.setattr(
         export_script,

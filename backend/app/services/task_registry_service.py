@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from celery.result import AsyncResult
-from sqlalchemy import desc
+from sqlalchemy import desc, inspect
 from sqlalchemy.orm import Session
 
 from ..models.task_execution import TaskExecutionHistory
 from ..config import settings
+from .errors import TaskCooldownError
 from ..tasks.market_queues import (
     SHARED_DATA_FETCH_QUEUE,
     SUPPORTED_MARKETS,
@@ -72,6 +73,16 @@ def _daily_market_pipeline_task_definitions() -> Dict[str, Dict]:
 
 # Task definitions with metadata
 SCHEDULED_TASKS = {
+    'social-signal-refresh': {
+        'task_function': 'app.interfaces.tasks.social_signal_tasks.refresh_social_signals',
+        'display_name': 'Refresh Social Signals',
+        'description': 'Collects configured X lists and refreshes the Social Signal Queue',
+        'schedule_description': 'Every six hours at minute 17',
+        'manual_dispatch_kwargs': {'origin': 'manual'},
+        'manual_dispatch_options': {'queue': 'social_ingestion'},
+        'db_runtime_social': True,
+        'admin_only': True,
+    },
     # ===== SUNDAY (Off-Market Maintenance) =====
     'weekly-orphaned-scan-cleanup': {
         'task_function': 'app.tasks.cache_tasks.cleanup_orphaned_scans',
@@ -130,9 +141,17 @@ class TaskRegistryService:
     - Task status polling via AsyncResult
     """
 
-    def __init__(self):
+    def __init__(self, *, social_gate=None):
         """Initialize the service with task imports."""
         self._task_imports = {}
+        self._social_gate = social_gate
+
+    def _gate(self):
+        if self._social_gate is None:
+            from app.services.redis_pool import get_redis_client
+            from app.services.social_signal_runtime_gate import RedisSocialSignalGate
+            self._social_gate = RedisSocialSignalGate(get_redis_client())
+        return self._social_gate
 
     def _get_task(self, task_name: str):
         """Lazy-load and cache task imports."""
@@ -168,18 +187,31 @@ class TaskRegistryService:
                 TaskExecutionHistory.task_name.in_(history_task_names)
             ).order_by(desc(TaskExecutionHistory.started_at)).first()
 
+            if task_info.get('db_runtime_social'):
+                from app.infra.db.models.social_signals import SocialSourceRegistry
+                bind = db.get_bind()
+                if inspect(bind).has_table(SocialSourceRegistry.__tablename__):
+                    runtime = db.get(SocialSourceRegistry, 1)
+                    is_enabled = bool(
+                        runtime
+                        and runtime.mode in {'validation', 'live'}
+                        and runtime.provider != 'disabled'
+                    )
+                else:
+                    # Older/partial databases cannot run Social Signals, but
+                    # must still expose the rest of the task registry.
+                    is_enabled = False
+            else:
+                is_enabled = bool(getattr(
+                    settings, task_info.get('enabled_setting', 'cache_warmup_enabled')
+                ))
             task_data = {
                 'name': task_name,
                 'display_name': task_info['display_name'],
                 'task_function': task_info['task_function'],
                 'description': task_info['description'],
                 'schedule_description': task_info['schedule_description'],
-                'is_enabled': bool(
-                    getattr(
-                        settings,
-                        task_info.get('enabled_setting', 'cache_warmup_enabled'),
-                    )
-                ),
+                'is_enabled': is_enabled,
                 'last_run': None,
             }
 
@@ -216,19 +248,34 @@ class TaskRegistryService:
         task_info = SCHEDULED_TASKS[task_name]
         logger.info(f"Manually triggering task: {task_name}")
 
-        # Get the task function and dispatch it
-        task_func = self._get_task(task_name)
-        manual_dispatch_kwargs = task_info.get('manual_dispatch_kwargs')
-        manual_dispatch_headers = task_info.get('manual_dispatch_headers')
-        manual_dispatch_options = task_info.get('manual_dispatch_options') or {}
-        if manual_dispatch_kwargs or manual_dispatch_headers or manual_dispatch_options:
-            celery_task = task_func.apply_async(
-                kwargs=manual_dispatch_kwargs or {},
-                headers=manual_dispatch_headers,
-                **manual_dispatch_options,
+        cooldown_owner = None
+        if task_info.get('db_runtime_social'):
+            cooldown_owner = f"manual:{datetime.now(timezone.utc).isoformat()}"
+            accepted, retry_after = self._gate().acquire_manual_cooldown(
+                cooldown_owner,
+                settings.social_manual_refresh_cooldown_seconds,
             )
-        else:
-            celery_task = task_func.delay()
+            if not accepted:
+                raise TaskCooldownError(retry_after)
+
+        # Get the task function and dispatch it
+        try:
+            task_func = self._get_task(task_name)
+            manual_dispatch_kwargs = task_info.get('manual_dispatch_kwargs')
+            manual_dispatch_headers = task_info.get('manual_dispatch_headers')
+            manual_dispatch_options = task_info.get('manual_dispatch_options') or {}
+            if manual_dispatch_kwargs or manual_dispatch_headers or manual_dispatch_options:
+                celery_task = task_func.apply_async(
+                    kwargs=manual_dispatch_kwargs or {},
+                    headers=manual_dispatch_headers,
+                    **manual_dispatch_options,
+                )
+            else:
+                celery_task = task_func.delay()
+        except Exception:
+            if cooldown_owner is not None:
+                self._gate().release_manual_cooldown(cooldown_owner)
+            raise
 
         # Record the execution in history
         execution = TaskExecutionHistory(

@@ -105,6 +105,28 @@ services:
         max-size: "20m"
         max-file: "3"
 
+  celery-social:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d social@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
   celery-marketjobs-us:
     env_file:
       - .env.docker

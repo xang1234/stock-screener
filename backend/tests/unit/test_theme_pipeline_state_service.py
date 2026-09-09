@@ -50,6 +50,9 @@ def test_reconcile_add_pipeline_creates_pending_rows():
             is_processed=False,
         )
         db.add(item)
+        db.flush()
+        from app.services.theme_evidence_eligibility_service import grant_eligibility
+        grant_eligibility(db, item.id, "technical", "legacy", source.id, datetime.now(timezone.utc))
         db.commit()
 
         result = reconcile_source_pipeline_change(
@@ -94,6 +97,9 @@ def test_reconcile_remove_pipeline_preserves_mentions_and_marks_in_progress():
         )
         db.add(item)
         db.flush()
+
+        from app.services.theme_evidence_eligibility_service import grant_eligibility
+        grant_eligibility(db, item.id, "fundamental", "legacy", source.id, datetime.now(timezone.utc))
 
         mention = ThemeMention(
             content_item_id=item.id,

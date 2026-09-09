@@ -145,6 +145,23 @@ def evaluate_gate(
     if coverage < min_coverage_pct:
         breaches.append(f"coverage {coverage}% < min {min_coverage_pct}%")
 
+    summary = report.get("summary") or {}
+    attempts = summary.get("llm_attempts")
+    successes = summary.get("llm_successes")
+    if (
+        report.get("model_id")
+        and isinstance(attempts, (int, float))
+        and attempts > 0
+        and successes == 0
+    ):
+        failures = summary.get("llm_failures", 0)
+        parse_failures = summary.get("llm_parse_failures", 0)
+        breaches.append(
+            "configured model produced zero successful LLM classifications "
+            f"({attempts} attempts, {failures} provider failures, "
+            f"{parse_failures} invalid responses)"
+        )
+
     diff = report.get("diff")
     if diff is not None:
         churn = diff.get("churn_pct", 0.0)

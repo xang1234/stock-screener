@@ -12,8 +12,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  private-boundary:
+    name: Public/private dependency boundary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify private Social dependency is absent from public paths
+        run: python3 scripts/verify_social_private_boundary.py
+
   backend:
     name: Backend Quality Gates
+    needs: [private-boundary]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -75,6 +86,7 @@ jobs:
 
   backend-unit:
     name: Backend Unit Suite (${{ matrix.shard }}/4)
+    needs: [private-boundary]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -144,6 +156,9 @@ jobs:
 
       - name: Install Playwright browser
         run: cd frontend && npx playwright install --with-deps chromium
+
+      - name: Social Signals fixture acceptance
+        run: cd frontend && npx playwright test --grep "Social Signals"
 
       - name: Smoke test
         run: cd frontend && npm run test:smoke

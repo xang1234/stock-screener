@@ -1,5 +1,7 @@
 .git
 .github
+.ssh
+**/.ssh
 .beads
 .plans
 .DS_Store
@@ -24,6 +26,10 @@ backend/alembic/__pycache__
 backend/tests/__pycache__
 data
 docker-data
+xui-reader
+data/xui-reader
+**/xui-reader/config.toml
+**/xui-reader/profiles
 frontend/node_modules
 frontend/dist
 frontend/coverage

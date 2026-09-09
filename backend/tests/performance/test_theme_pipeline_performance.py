@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import numpy as np
@@ -26,6 +26,7 @@ from app.models.theme import ContentItem, ContentSource, ThemeCluster, ThemeEmbe
 from app.services import server_auth
 from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.theme_embedding_service import ThemeEmbeddingEngine
+from app.services.theme_evidence_eligibility_service import grant_eligibility
 from app.services.theme_extraction_service import ThemeExtractionService
 from app.services.theme_merging_service import ThemeMergingService
 
@@ -352,18 +353,30 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         seed_session.flush()
 
         # Use enough requests that p95 is not effectively the single worst sample.
+        items = []
         for i in range(110):
-            seed_session.add(
-                ContentItem(
-                    source_id=source.id,
-                    source_type="news",
-                    source_name=source.name,
-                    external_id=f"perf-{round_idx}-{i}",
-                    title=f"Title {i}",
-                    content=f"Body {i}",
-                    published_at=datetime.utcnow() - timedelta(minutes=i),
-                    is_processed=False,
-                )
+            item = ContentItem(
+                source_id=source.id,
+                source_type="news",
+                source_name=source.name,
+                external_id=f"perf-{round_idx}-{i}",
+                title=f"Title {i}",
+                content=f"Body {i}",
+                published_at=datetime.utcnow() - timedelta(minutes=i),
+                is_processed=False,
+            )
+            seed_session.add(item)
+            items.append(item)
+        seed_session.flush()
+        observed_at = datetime.now(timezone.utc)
+        for item in items:
+            grant_eligibility(
+                seed_session,
+                item.id,
+                "technical",
+                "legacy",
+                source.id,
+                observed_at,
             )
         seed_session.commit()
         seed_session.close()

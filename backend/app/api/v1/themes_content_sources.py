@@ -6,10 +6,12 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...models.theme import ContentSource
+from ...infra.db.models.social_signals import SocialSourceConfiguration
 from ...schemas.theme import (
     ContentSourceCreate,
     ContentSourceResponse,
@@ -33,6 +35,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_SOCIAL_SOURCE_DETAIL = {
+    "code": "social_source_managed_elsewhere",
+    "message": "Manage this list in Operations → Social Sources.",
+}
+
+
+def _social_list_id(value: str | None) -> str | None:
+    """Recognize accepted legacy spellings without accepting them for creation."""
+    if not value:
+        return None
+    import re
+    match = re.fullmatch(
+        r"https://(?:x|twitter)\.com/i/lists/([0-9]{1,32})/?", value.strip()
+    )
+    return str(int(match.group(1))) if match else None
+
+
+def _reject_social_owned(db: Session, *, source_id=None, url=None) -> None:
+    query = db.query(SocialSourceConfiguration)
+    if source_id is not None and query.filter_by(content_source_id=source_id).first():
+        raise HTTPException(status_code=409, detail=_SOCIAL_SOURCE_DETAIL)
+    list_id = _social_list_id(url)
+    if list_id and query.filter_by(x_list_id=list_id).first():
+        raise HTTPException(status_code=409, detail=_SOCIAL_SOURCE_DETAIL)
+
+
 @router.get("/sources", response_model=list[ContentSourceResponse])
 def list_content_sources(
     active_only: bool = Query(True),
@@ -53,7 +81,12 @@ def list_content_sources(
             if pipeline in normalize_pipelines(source.pipelines)
         ]
 
-    return [ContentSourceResponse.model_validate(source) for source in sources]
+    social_ids = set(db.scalars(select(
+        SocialSourceConfiguration.content_source_id
+    )).all())
+    return [ContentSourceResponse.model_validate(source).model_copy(
+        update={"social_managed": source.id in social_ids}
+    ) for source in sources]
 
 
 @router.post("/sources", response_model=ContentSourceResponse)
@@ -62,6 +95,7 @@ def add_content_source(
     db: Session = Depends(get_db),
 ):
     """Add a new content source for theme extraction."""
+    _reject_social_owned(db, url=source.url)
     detected_type = detect_source_type_from_url(source.url or source.name, source.source_type)
 
     if detected_type != source.source_type:
@@ -100,6 +134,7 @@ def update_content_source(
     db: Session = Depends(get_db),
 ):
     """Update an existing content source and reconcile pipeline state assignments."""
+    _reject_social_owned(db, source_id=source_id, url=source.url)
     existing = db.query(ContentSource).filter(ContentSource.id == source_id).first()
     if not existing:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -155,6 +190,7 @@ def delete_content_source(
     db: Session = Depends(get_db),
 ):
     """Deactivate a content source."""
+    _reject_social_owned(db, source_id=source_id)
     source = db.query(ContentSource).filter(ContentSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")

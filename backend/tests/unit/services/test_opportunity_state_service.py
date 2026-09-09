@@ -12,6 +12,34 @@ from app.services.opportunity_state_service import (
 )
 
 
+@pytest.mark.parametrize("market,volume,available,passed", [
+    ("US", 99_999_999, True, False),
+    ("US", 100_000_000, True, True),
+    (" hk ", 8_000_000, True, True),
+    ("HK", 7_999_999, True, False),
+    ("CN", "7000000", True, True),
+    ("JP", 149_999_999, True, False),
+    ("TW", 30_000_000, True, True),
+    ("UNKNOWN", 1_000_000_000, False, None),
+    (None, 1_000_000_000, False, None),
+    ("US", None, False, None),
+    ("US", True, False, None),
+    ("US", float("inf"), False, None),
+    ("US", float("nan"), False, None),
+    ("US", "unavailable", False, None),
+])
+def test_public_liquidity_evidence_preserves_market_floor_and_missing_values(
+    market, volume, available, passed,
+):
+    """Catch shared Social liquidity drifting from local floors or treating missing as fail."""
+    from app.services import opportunity_state_service
+    adapter = getattr(opportunity_state_service, "read_liquidity_evidence", None)
+    assert callable(adapter), "public liquidity evidence adapter is missing"
+    evidence = adapter(market, volume)
+    assert evidence.available is available
+    assert evidence.value is passed
+
+
 @pytest.fixture
 def stock_data() -> StockData:
     dates = pd.DatetimeIndex(["2026-08-20", "2026-08-21"])

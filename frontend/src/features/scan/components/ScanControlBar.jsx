@@ -98,6 +98,8 @@ export default function ScanControlBar({
   refreshStaleDataPending = false,
   refreshStaleDataError = null,
   scanWarnings = [],
+  customSymbols = [],
+  onClearCustomSymbols,
 }) {
   const controlsDisabled = createScanPending || scanStatus === 'running';
   const universeMarkets = universeSelections?.markets ?? [];
@@ -106,10 +108,11 @@ export default function ScanControlBar({
     scopeOptions,
     scopeOption: selectedScopeOption,
   } = selectRuntimeUniverseOption(universeSelections, universeMarket, universeScope);
-  const needsScope = universeMarket && universeMarket !== 'TEST';
+  const hasCustomSymbols = customSymbols.length > 0;
+  const needsScope = universeMarket && universeMarket !== 'TEST' && !hasCustomSymbols;
   const startDisabled =
     createScanPending
-    || !universeMarket
+    || (!hasCustomSymbols && !universeMarket)
     || (needsScope && !universeScope)
     || Boolean(selectedMarketOption?.disabled)
     || Boolean(selectedScopeOption?.disabled)
@@ -135,6 +138,13 @@ export default function ScanControlBar({
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
       <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+        {hasCustomSymbols ? (
+          <Chip
+            color="primary"
+            label={`Social selection: ${customSymbols.length} symbols`}
+            onDelete={onClearCustomSymbols}
+          />
+        ) : null}
         <FormControl size="small" sx={{ minWidth: 200 }}>
           <InputLabel id="prev-scan-label">Previous Scans</InputLabel>
           <Select

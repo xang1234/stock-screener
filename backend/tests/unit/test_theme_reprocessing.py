@@ -1,6 +1,6 @@
 """Tests for theme extraction reprocessing: bug fix, retry logic, and silent failure detection."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 
 from sqlalchemy import create_engine
@@ -61,6 +61,10 @@ def _make_content_item(db_session, source, **overrides):
     defaults.update(overrides)
     item = ContentItem(**defaults)
     db_session.add(item)
+    db_session.flush()
+    from app.services.theme_evidence_eligibility_service import grant_eligibility
+    for pipeline in source.pipelines:
+        grant_eligibility(db_session, item.id, pipeline, "legacy", source.id, datetime.now(timezone.utc))
     db_session.commit()
     return item
 

@@ -5,6 +5,7 @@ import { renderWithProviders } from '../test/renderWithProviders';
 
 const runtimeState = {
   runtimeReady: true,
+  features: { social_signals: false },
   uiSnapshots: {
     themes: false,
   },
@@ -35,6 +36,10 @@ vi.mock('../components/Themes/ThemeReviewDialog', () => ({
 
 vi.mock('../components/Themes/ModelSettingsModal', () => ({
   default: () => null,
+}));
+
+vi.mock('../features/socialSignals/SocialThemePulse', () => ({
+  default: ({ enabled }) => enabled ? <div>Published Social Pulse</div> : null,
 }));
 
 vi.mock('../api/themes', () => {
@@ -92,6 +97,7 @@ describe('ThemesPage', () => {
     localStorage.clear();
     runtimeState.runtimeReady = true;
     runtimeState.uiSnapshots = { themes: false };
+    runtimeState.features = { social_signals: false };
   });
 
   it('resets grouped category filter when pipeline toggles', async () => {
@@ -117,5 +123,12 @@ describe('ThemesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(screen.getByText('Theme Review')).toBeInTheDocument();
+  });
+
+  it('adds display-only Social Pulse without changing the Theme ranking surface', async () => {
+    runtimeState.features = { social_signals: true };
+    renderPage();
+    expect(await screen.findByText('Published Social Pulse')).toBeInTheDocument();
+    expect(screen.getByTestId('taxonomy')).toHaveTextContent('technical:none');
   });
 });

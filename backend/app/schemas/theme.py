@@ -71,6 +71,7 @@ class ContentSourceResponse(BaseModel):
     total_items_fetched: int
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
+    social_managed: bool = False
 
     @field_validator("pipelines", mode="before")
     @classmethod
@@ -128,6 +129,10 @@ class ThemeConstituentResponse(BaseModel):
     correlation_to_theme: Optional[float]
     first_mentioned_at: Optional[datetime]
     last_mentioned_at: Optional[datetime]
+    market: Optional[str] = None
+    company_key: Optional[str] = None
+    company_count_eligible: bool = False
+    origins: list[str] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

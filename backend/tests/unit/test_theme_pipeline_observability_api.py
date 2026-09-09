@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -52,6 +52,8 @@ def _seed_source_and_item(db_session, *, idx: int) -> ContentItem:
     )
     db_session.add(item)
     db_session.flush()
+    from app.services.theme_evidence_eligibility_service import grant_eligibility
+    grant_eligibility(db_session, item.id, "technical", "legacy", source.id, datetime.now(timezone.utc))
     return item
 
 
@@ -161,9 +163,10 @@ def test_pipeline_observability_emits_actionable_alerts_with_runbook_links(db_se
 
     # Mention mix with high new-cluster rate.
     for i in range(30):
+        mention_item = _seed_source_and_item(db_session, idx=100 + i)
         db_session.add(
             ThemeMention(
-                content_item_id=None,
+                content_item_id=mention_item.id,
                 source_type="news",
                 source_name="news",
                 raw_theme=f"Theme-{i}",

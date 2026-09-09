@@ -321,6 +321,10 @@ describe('fallback capabilities', () => {
   it('keeps options analytics disabled until the backend opts in', () => {
     expect(DEFAULT_CAPABILITIES.features.options_analytics).toBe(false);
   });
+
+  it('keeps social signals disabled until the backend opts in', () => {
+    expect(DEFAULT_CAPABILITIES.features.social_signals).toBe(false);
+  });
 });
 
 describe('mergeBootstrapCapabilities', () => {

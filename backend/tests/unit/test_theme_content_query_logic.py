@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.v1.themes import _fetch_content_items_with_themes
+from app.infra.db.models.social_signals import ContentPipelineEligibility
 from app.models.theme import (
     ContentItem,
     ContentItemPipelineState,
@@ -21,6 +22,7 @@ def _build_session():
     engine = create_engine("sqlite:///:memory:")
     ContentSource.__table__.create(engine)
     ContentItem.__table__.create(engine)
+    ContentPipelineEligibility.__table__.create(engine)
     ContentItemPipelineState.__table__.create(engine)
     ThemeCluster.__table__.create(engine)
     ThemeMention.__table__.create(engine)
@@ -28,7 +30,7 @@ def _build_session():
 
 
 def _seed_fundamental_twitter_data(db):
-    now = datetime(2026, 3, 1, 10, 0, 0)
+    now = datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
     source = ContentSource(
         name="@fund_source",
         source_type="twitter",
@@ -65,6 +67,13 @@ def _seed_fundamental_twitter_data(db):
     )
     db.add_all([newest_unprocessed, older_processed])
     db.flush()
+    db.add_all([
+        ContentPipelineEligibility(
+            content_item_id=item.id, pipeline="fundamental", channel="legacy",
+            originating_source_id=source.id, observed_at=now,
+        )
+        for item in (newest_unprocessed, older_processed)
+    ])
 
     cluster = ThemeCluster(
         name="Memory Pricing",
@@ -103,6 +112,40 @@ def _seed_fundamental_twitter_data(db):
     )
     db.commit()
     return newest_unprocessed.id, older_processed.id
+
+
+def test_pipeline_browser_excludes_social_only_content():
+    db = _build_session()
+    try:
+        now = datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
+        source = ContentSource(
+            name="Social validation list", source_type="twitter",
+            url="https://x.com/i/lists/123", is_active=True,
+            pipelines=["technical", "fundamental"],
+        )
+        db.add(source)
+        db.flush()
+        item = ContentItem(
+            source_id=source.id, source_type="twitter", source_name=source.name,
+            external_id="validation-only", content="Staged Social observation",
+            published_at=now, is_processed=False,
+        )
+        db.add(item)
+        db.flush()
+        db.add(ContentPipelineEligibility(
+            content_item_id=item.id, pipeline="fundamental", channel="social",
+            originating_source_id=source.id, observed_at=now,
+        ))
+        db.commit()
+
+        items, total = _fetch_content_items_with_themes(
+            db, pipeline="fundamental", limit=10, offset=0,
+        )
+
+        assert total == 0
+        assert items == []
+    finally:
+        db.close()
 
 
 def test_sentiment_filter_applies_before_pagination():

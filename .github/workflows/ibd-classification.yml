@@ -167,6 +167,9 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
+      # Every matrix job shares the same OpenCode Go account. Serial execution
+      # guarantees that separate markets never dispatch LLM calls concurrently.
+      max-parallel: 1
       matrix:
         # Specific market on dispatch, full matrix otherwise (inputs are null on
         # workflow_run / schedule, so coerce to 'all').
@@ -196,6 +199,9 @@ jobs:
       # Per-call timeout (seconds) so a hung request can't exceed the job cap;
       # unset → 30s default in build_ibd_tiebreaker.
       IBD_LLM_TIMEOUT: ${{ vars.IBD_LLM_TIMEOUT }}
+      # Minimum delay between provider dispatches. OpenCode Go is shared by all
+      # classifications in this job; pacing avoids burst traffic.
+      IBD_LLM_MIN_INTERVAL_SECONDS: ${{ vars.IBD_LLM_MIN_INTERVAL_SECONDS || '5' }}
       # Authenticate sentence-transformers' all-MiniLM-L6-v2 download from the HF
       # Hub (higher rate limits, no "unauthenticated requests" warning). Optional:
       # unset → anonymous download still works.

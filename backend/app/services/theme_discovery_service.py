@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import case, func, and_, or_
 from sqlalchemy.orm import Session
+from app.services.theme_evidence_eligibility_service import legacy_eligibility_exists
+from app.infra.db.models.social_signals import ContentPipelineEligibility
 
 from ..models.theme import (
     ThemeCluster,
@@ -36,6 +38,21 @@ from .theme_lifecycle_service import apply_lifecycle_transition
 logger = logging.getLogger(__name__)
 
 VALID_LIFECYCLE_STATES = {"candidate", "active", "dormant", "reactivated", "retired"}
+
+
+def theme_relative_return_score(basket_return: float, benchmark_return: float) -> float:
+    """Shared one-month price confirmation scale; callers establish validity."""
+    return max(0, min(100, 50 + (basket_return - benchmark_return) * 500))
+
+
+def compound_theme_returns(series: pd.Series, periods: int) -> float | None:
+    """Compound a complete daily window; missing history is not a zero return."""
+    window = series.tail(periods)
+    if len(window) != periods or window.isna().any():
+        return None
+    return float((1 + window).prod() - 1)
+
+
 LIFECYCLE_RANK_WEIGHTS = {
     "candidate": 0.78,
     "active": 1.0,
@@ -101,18 +118,19 @@ class ThemeDiscoveryService:
     def _count_active_ingestion_days(self, since: datetime, until: datetime) -> int:
         """Count distinct calendar days with at least one ContentItem ingested.
 
-        Uses ContentItem.fetched_at (when the pipeline ran), not published_at,
-        so it reflects actual pipeline uptime. Only counts items from active sources.
+        Uses the first independent legacy observation, so a Social insertion
+        cannot manufacture an ingestion day. Only active legacy origins count.
         This is theme-agnostic — pipeline downtime affects all themes equally.
         """
-        from sqlalchemy import cast, Date
         count = self.db.query(
-            func.count(func.distinct(cast(ContentItem.fetched_at, Date)))
+            func.count(func.distinct(func.date(ContentPipelineEligibility.observed_at)))
         ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
+            ContentSource, ContentPipelineEligibility.originating_source_id == ContentSource.id
         ).filter(
-            ContentItem.fetched_at >= since,
-            ContentItem.fetched_at <= until,
+            ContentPipelineEligibility.channel == "legacy",
+            ContentPipelineEligibility.pipeline == self.pipeline,
+            ContentPipelineEligibility.observed_at >= since,
+            ContentPipelineEligibility.observed_at <= until,
             ContentSource.is_active == True,
         ).scalar() or 0
         return count
@@ -172,30 +190,38 @@ class ThemeDiscoveryService:
         date_7d = as_of_date - timedelta(days=7)
         date_30d = as_of_date - timedelta(days=30)
 
-        rows = self.db.query(
+        # Multiple extraction channels/aliases may describe the same canonical
+        # post. Each post contributes once to legacy attention and sentiment.
+        posts = self.db.query(
             ThemeMention.theme_cluster_id,
-            func.sum(case((ThemeMention.mentioned_at >= date_1d, 1), else_=0)).label("mentions_1d"),
-            func.sum(case((ThemeMention.mentioned_at >= date_7d, 1), else_=0)).label("mentions_7d"),
-            func.count(ThemeMention.id).label("mentions_30d"),
-            func.sum(
+            ThemeMention.content_item_id,
+            func.max(ThemeMention.mentioned_at).label("mentioned_at"),
+            func.avg(
                 case(
                     (ThemeMention.sentiment == "bullish", ThemeMention.confidence),
                     (ThemeMention.sentiment == "bearish", -ThemeMention.confidence),
                     else_=0.0,
                 )
-            ).label("sentiment_weighted_sum"),
+            ).label("sentiment"),
         ).join(
             ContentItem, ThemeMention.content_item_id == ContentItem.id
-        ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
         ).filter(
             ThemeMention.theme_cluster_id.in_(cluster_ids),
             ThemeMention.mentioned_at >= date_30d,
             ThemeMention.mentioned_at <= as_of_date,
-            ContentSource.is_active == True,
+            legacy_eligibility_exists(ContentItem.id, self.pipeline, active_only=True),
+            ThemeMention.pipeline == self.pipeline,
+            ThemeMention.social_work_id.is_(None),
         ).group_by(
-            ThemeMention.theme_cluster_id
-        ).all()
+            ThemeMention.theme_cluster_id, ThemeMention.content_item_id,
+        ).subquery()
+        rows = self.db.query(
+            posts.c.theme_cluster_id,
+            func.sum(case((posts.c.mentioned_at >= date_1d, 1), else_=0)).label("mentions_1d"),
+            func.sum(case((posts.c.mentioned_at >= date_7d, 1), else_=0)).label("mentions_7d"),
+            func.count(posts.c.content_item_id).label("mentions_30d"),
+            func.sum(posts.c.sentiment).label("sentiment_weighted_sum"),
+        ).group_by(posts.c.theme_cluster_id).all()
 
         metrics_by_cluster = {
             cluster_id: self._empty_mention_metrics()
@@ -342,9 +368,8 @@ class ThemeDiscoveryService:
 
         def _compound_return(series: pd.Series, periods: int) -> float:
             window = series.tail(periods).dropna()
-            if len(window) < periods:
-                return 0
-            return (1 + window).prod() - 1
+            value = compound_theme_returns(window, periods)
+            return value if value is not None else 0
 
         # Calculate period returns (compounded)
         basket_return_1d = basket_returns.iloc[-1] if len(basket_returns) > 0 else 0
@@ -353,11 +378,8 @@ class ThemeDiscoveryService:
 
         # Calculate RS vs SPY (1-month compounded)
         spy_return_1m = _compound_return(spy_returns, 21)
-        relative_return = basket_return_1m - spy_return_1m
-
         # Convert to RS rating (0-100 scale, 50 = market, 100 = +10% outperformance)
-        basket_rs_vs_spy = 50 + (relative_return * 500)  # +1% = 55, +10% = 100
-        basket_rs_vs_spy = max(0, min(100, basket_rs_vs_spy))
+        basket_rs_vs_spy = theme_relative_return_score(basket_return_1m, spy_return_1m)
 
         # Breadth metrics
         num_above_50ma = sum(1 for s, p in current_prices.items() if s in ma_50 and p > ma_50[s])
@@ -1128,38 +1150,51 @@ class ThemeDiscoveryService:
         }
 
         mentions = self.db.query(
-            ThemeMention.mentioned_at,
-            ThemeMention.confidence,
-            ThemeMention.source_type,
-            ThemeMention.source_name,
-        ).filter(
+            ThemeMention.content_item_id,
+            func.max(ThemeMention.mentioned_at),
+            func.avg(ThemeMention.confidence),
+            ContentSource.source_type,
+            ContentSource.name,
+        ).join(
+            ContentPipelineEligibility,
+            and_(ContentPipelineEligibility.content_item_id == ThemeMention.content_item_id,
+                 ContentPipelineEligibility.pipeline == self.pipeline,
+                 ContentPipelineEligibility.channel == "legacy"),
+        ).join(ContentSource, ContentSource.id == ContentPipelineEligibility.originating_source_id).filter(
             ThemeMention.theme_cluster_id == theme_cluster_id,
             ThemeMention.pipeline == self.pipeline,
             ThemeMention.mentioned_at >= cutoff_30d,
             ThemeMention.mentioned_at <= now,
-        ).all()
+            ThemeMention.social_work_id.is_(None),
+            ContentSource.is_active == True,
+        ).group_by(ThemeMention.content_item_id, ContentSource.source_type, ContentSource.name).all()
 
-        mentions_7d = 0
-        mentions_30d = 0
+        posts: dict[int, tuple[datetime, float]] = {}
         sources_7d: set[str] = set()
-        persistence_days_7d: set[str] = set()
-        weighted_conf_sum = 0.0
-        latest_mention_at: datetime | None = None
 
-        for mentioned_at, confidence, source_type, source_name in mentions:
+        for content_item_id, mentioned_at, confidence, source_type, source_name in mentions:
             seen_at = _coerce_utc_datetime(mentioned_at) or comparison_now
             confidence_value = max(0.0, min(1.0, float(confidence or 0.5)))
             quality_weight = source_quality.get((source_type or "").strip().lower(), 0.75)
-            weighted_conf_sum += confidence_value * quality_weight
-            mentions_30d += 1
-            if latest_mention_at is None or seen_at > latest_mention_at:
-                latest_mention_at = seen_at
+            weighted_confidence = confidence_value * quality_weight
+            prior = posts.get(content_item_id)
+            posts[content_item_id] = (
+                max(prior[0], seen_at) if prior else seen_at,
+                max(prior[1], weighted_confidence) if prior else weighted_confidence,
+            )
 
             if seen_at >= comparison_cutoff_7d:
-                mentions_7d += 1
                 source_marker = (source_name or source_type or "unknown").strip().lower()
                 sources_7d.add(source_marker)
-                persistence_days_7d.add(seen_at.date().isoformat())
+
+        current_posts = [value for value in posts.values()
+                         if value[0] >= comparison_cutoff_7d]
+        mentions_7d = len(current_posts)
+        mentions_30d = len(posts)
+        persistence_days_7d = {seen_at.date().isoformat()
+                               for seen_at, _ in current_posts}
+        weighted_conf_sum = sum(value[1] for value in posts.values())
+        latest_mention_at = max((value[0] for value in posts.values()), default=None)
 
         avg_quality_confidence_30d = (weighted_conf_sum / mentions_30d) if mentions_30d else 0.0
         days_since_last_mention = 9999
@@ -1328,6 +1363,10 @@ class ThemeDiscoveryService:
         }
 
         def _apply_state_policy(cluster: ThemeCluster) -> None:
+            from .theme_lifecycle_service import has_current_social_lifecycle_evidence
+            if has_current_social_lifecycle_evidence(cluster, now):
+                result["unchanged"] += 1
+                return
             observation = self._lifecycle_snapshot(cluster.id, now=now)
             state = (cluster.lifecycle_state or "candidate").strip()
 

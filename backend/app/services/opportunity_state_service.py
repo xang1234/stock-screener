@@ -29,6 +29,14 @@ if TYPE_CHECKING:
     from app.scanners.base_screener import StockData
 
 
+def read_liquidity_evidence(market: object, avg_dollar_volume: object) -> EvidenceValue:
+    """Expose the existing local-currency gate without evaluating opportunity policy."""
+    floor = resolve_default_scan_filters(_normalized_market(market)).get("minVolume")
+    volume = _finite_float(avg_dollar_volume)
+    available = floor is not None and volume is not None
+    return EvidenceValue(volume >= floor if available else None, available)
+
+
 def build_opportunity_projection(
     result: Mapping[str, object],
     stock_data: StockData,
@@ -43,7 +51,6 @@ def build_opportunity_projection(
     market = _normalized_market(stock_data.market)
     as_of_date = _last_frame_date(stock_data.price_data)
     liquidity_floor = resolve_default_scan_filters(market).get("minVolume")
-    avg_dollar_volume = _finite_float(result.get("avg_dollar_volume"))
     invalidation_flags = _invalidation_flags(setup)
     pattern_primary, pattern_primary_available = _optional_text_field(
         setup,
@@ -86,15 +93,7 @@ def build_opportunity_projection(
             volume_dry_up_max=parameters.volume_vs_50d_max_for_ready,
         ),
         tradability=TradabilityEvidence(
-            liquidity=EvidenceValue(
-                value=(
-                    avg_dollar_volume >= liquidity_floor
-                    if liquidity_floor is not None and avg_dollar_volume is not None
-                    else None
-                ),
-                available=liquidity_floor is not None
-                and avg_dollar_volume is not None,
-            ),
+            liquidity=read_liquidity_evidence(market, result.get("avg_dollar_volume")),
             feature_status=_text_from(result, "data_status"),
             is_scannable=_bool_or_none(result.get("is_scannable")),
         ),
@@ -135,7 +134,6 @@ def build_data_limited_projection(
         key_present=stock_data.event_calendar_available,
     )
     liquidity_floor = resolve_default_scan_filters(market).get("minVolume")
-    avg_dollar_volume = _finite_float(result.get("avg_dollar_volume"))
 
     evidence = OpportunityEvidence(
         provenance=ProvenanceEvidence(
@@ -157,15 +155,7 @@ def build_data_limited_projection(
             None,
         ),
         tradability=TradabilityEvidence(
-            liquidity=EvidenceValue(
-                value=(
-                    avg_dollar_volume >= liquidity_floor
-                    if liquidity_floor is not None and avg_dollar_volume is not None
-                    else None
-                ),
-                available=liquidity_floor is not None
-                and avg_dollar_volume is not None,
-            ),
+            liquidity=read_liquidity_evidence(market, result.get("avg_dollar_volume")),
             feature_status=_text_from(result, "data_status"),
             is_scannable=_bool_or_none(result.get("is_scannable")),
         ),
@@ -314,4 +304,4 @@ def _invalidation_flags(
     return tuple(flags)
 
 
-__all__ = ["build_data_limited_projection", "build_opportunity_projection"]
+__all__ = ["build_data_limited_projection", "build_opportunity_projection", "read_liquidity_evidence"]

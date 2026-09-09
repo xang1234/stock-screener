@@ -74,6 +74,7 @@ vi.mock('../api/scans', () => ({
 }));
 
 beforeEach(() => {
+  window.history.replaceState(null, '', '/scan');
   vi.clearAllMocks();
   runtimeState.runtimeReady = false;
   runtimeState.uiSnapshots = { scan: false };
@@ -101,6 +102,22 @@ beforeEach(() => {
 });
 
 describe('ScanPage', () => {
+  it('turns a URL-safe Social selection into a custom scan universe', async () => {
+    runtimeState.runtimeReady = true;
+    window.history.replaceState(null, '', '/scan?market=HK&symbols=0700%2C9988');
+    scanApi.createScan.mockResolvedValueOnce({ scan_id: 'social-scan', status: 'queued' });
+
+    renderWithProviders(<ScanPage />);
+
+    expect(await screen.findByText('Social selection: 2 symbols')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Scan' }));
+    await waitFor(() => expect(scanApi.createScan.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        universe_def: { type: 'custom', symbols: ['0700', '9988'] },
+      })
+    ));
+  });
+
   it('renders without a temporal-dead-zone crash before runtime bootstrap completes', () => {
     renderWithProviders(<ScanPage />);
 

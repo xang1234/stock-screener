@@ -162,14 +162,9 @@ def _theme_automation_gate_result(db) -> dict[str, object] | None:
         )
 
     from ..models.theme import ContentSource
+    from ..services.theme_evidence_eligibility_service import legacy_sources
 
-    has_active_sources = (
-        db.query(ContentSource.id)
-        .filter(ContentSource.is_active.is_(True))
-        .limit(1)
-        .first()
-        is not None
-    )
+    has_active_sources = bool(legacy_sources(db, db.query(ContentSource).filter(ContentSource.is_active.is_(True))))
     if not has_active_sources:
         return _theme_automation_skip_payload(
             reason="no_active_content_sources",
@@ -1314,9 +1309,10 @@ def poll_due_sources():
         #
         # SQLAlchemy doesn't support arithmetic with columns directly in filter,
         # so we fetch all active sources and filter in Python
-        all_active_sources = db.query(ContentSource).filter(
+        from ..services.theme_evidence_eligibility_service import legacy_sources
+        all_active_sources = legacy_sources(db, db.query(ContentSource).filter(
             ContentSource.is_active.is_(True)
-        ).order_by(ContentSource.priority.desc()).all()
+        ).order_by(ContentSource.priority.desc()))
 
         due_sources = []
         for source in all_active_sources:

@@ -652,4 +652,15 @@ describe('StaticHomePage', () => {
     expect(await screen.findByText('Survivor data incomplete')).toBeInTheDocument();
     expect(screen.queryByText('No correction survivors in this snapshot.')).not.toBeInTheDocument();
   });
+
+  it('does not request or render the live-only Social summary', async () => {
+    renderWithProviders(<StaticHomePage />);
+
+    expect(await screen.findByText('Top Scan Candidates')).toBeInTheDocument();
+    expect(screen.queryByText(/social signals/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/social pulse/i)).not.toBeInTheDocument();
+    expect(
+      fetchStaticJson.mock.calls.every(([path]) => !String(path).includes('social'))
+    ).toBe(true);
+  });
 });

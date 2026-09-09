@@ -6,6 +6,35 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 
+def test_initialize_runtime_seeds_declared_social_sources(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app import main as module
+    from app.database import Base
+    from app.infra.db.models.social_signals import SocialSourceConfiguration
+    from app.services.social_source_admin_service import SEED_SOCIAL_SOURCES
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'startup.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    monkeypatch.setattr(module, "engine", engine)
+    monkeypatch.setattr(module, "SessionLocal", sessions)
+    monkeypatch.setattr(module, "migrate_database_to_head", lambda selected: "current")
+
+    module.initialize_runtime()
+
+    with sessions() as db:
+        rows = db.query(SocialSourceConfiguration).order_by(
+            SocialSourceConfiguration.x_list_id
+        ).all()
+        assert [(row.x_list_id, row.lifecycle_state, row.provenance) for row in rows] == sorted(
+            (list_id, "enabled", "system_seed")
+            for list_id, _name, _url in SEED_SOCIAL_SOURCES
+        )
+    engine.dispose()
+
+
 def test_group_history_startup_trigger_uses_shutdown_independent_daemon(monkeypatch):
     from app import main as module
 

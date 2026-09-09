@@ -1,0 +1,178 @@
+name: Private Social Worker Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-social-worker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke-private-image:
+    name: Private image smoke (${{ matrix.suffix }})
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: private-social-worker-release
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            suffix: amd64
+          - platform: linux/arm64
+            suffix: arm64
+    steps:
+      - name: Validate trusted event and pinned commit
+        shell: bash
+        env:
+          XUI_READER_REF: ${{ vars.XUI_READER_REF }}
+        run: |
+          [[ "${XUI_READER_REF}" =~ ^[0-9a-fA-F]{40}$ ]]
+          case "${GITHUB_REF}" in
+            refs/heads/main|refs/tags/v*) ;;
+            *) [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] ;;
+          esac
+
+      - uses: actions/checkout@v4
+
+      - name: Load read-only xui deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.XUI_READER_DEPLOY_KEY }}
+
+      - name: Prepare verified GitHub host keys
+        shell: bash
+        env:
+          VERIFIED_GITHUB_KNOWN_HOSTS: ${{ secrets.GITHUB_KNOWN_HOSTS }}
+        run: |
+          test -n "${VERIFIED_GITHUB_KNOWN_HOSTS}"
+          umask 077
+          printf '%s\n' "${VERIFIED_GITHUB_KNOWN_HOSTS}" > "${RUNNER_TEMP}/github_known_hosts"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build one-architecture private smoke image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: social-xui
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: stock-screener-social-xui:smoke-${{ matrix.suffix }}
+          build-args: |
+            XUI_READER_REF=${{ vars.XUI_READER_REF }}
+          ssh: default
+          secret-files: |
+            github_known_hosts=${{ runner.temp }}/github_known_hosts
+
+      - name: Launch Chromium as the non-root worker against local content
+        shell: bash
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" \
+            --entrypoint python "stock-screener-social-xui:smoke-${{ matrix.suffix }}" \
+            -c "import os; from playwright.sync_api import sync_playwright; assert os.getuid() != 0; p=sync_playwright().start(); b=p.chromium.launch(headless=True); page=b.new_page(); page.set_content('<title>local smoke</title>'); assert page.title() == 'local smoke'; b.close(); p.stop()"
+
+      - name: Scan private image configuration and history for credential material
+        shell: bash
+        run: |
+          inspection="$(docker image inspect "stock-screener-social-xui:smoke-${{ matrix.suffix }}"; docker history --no-trunc "stock-screener-social-xui:smoke-${{ matrix.suffix }}")"
+          if grep -Eiq 'BEGIN (OPENSSH|RSA|EC) PRIVATE KEY|github_pat_|ghp_|XUI_READER_DEPLOY_KEY|VERIFIED_GITHUB_KNOWN_HOSTS' <<<"${inspection}"; then
+            echo "Credential-like material found in image metadata/history" >&2
+            exit 1
+          fi
+
+  publish-private-image:
+    name: Publish private multi-architecture image
+    needs: [smoke-private-image]
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: private-social-worker-release
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Validate trusted event and pinned commit
+        shell: bash
+        env:
+          XUI_READER_REF: ${{ vars.XUI_READER_REF }}
+        run: |
+          [[ "${XUI_READER_REF}" =~ ^[0-9a-fA-F]{40}$ ]]
+          case "${GITHUB_REF}" in
+            refs/heads/main|refs/tags/v*) ;;
+            *) [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] ;;
+          esac
+
+      - uses: actions/checkout@v4
+
+      - name: Load read-only xui deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.XUI_READER_DEPLOY_KEY }}
+
+      - name: Prepare verified GitHub host keys
+        shell: bash
+        env:
+          VERIFIED_GITHUB_KNOWN_HOSTS: ${{ secrets.GITHUB_KNOWN_HOSTS }}
+        run: |
+          test -n "${VERIFIED_GITHUB_KNOWN_HOSTS}"
+          umask 077
+          printf '%s\n' "${VERIFIED_GITHUB_KNOWN_HOSTS}" > "${RUNNER_TEMP}/github_known_hosts"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR with the workflow token
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require an existing private GHCR package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          visibility="$(gh api /users/xang1234/packages/container/stock-screener-social-xui --jq .visibility)"
+          if [[ "${visibility}" != "private" ]]; then
+            echo "Refusing to publish: GHCR package is missing or not private" >&2
+            exit 1
+          fi
+
+      - name: Build and push private multi-architecture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: social-xui
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/xang1234/stock-screener-social-xui:sha-${{ github.sha }}
+            ${{ startsWith(github.ref, 'refs/tags/v') && format('ghcr.io/xang1234/stock-screener-social-xui:{0}', github.ref_name) || '' }}
+          build-args: |
+            XUI_READER_REF=${{ vars.XUI_READER_REF }}
+          ssh: default
+          secret-files: |
+            github_known_hosts=${{ runner.temp }}/github_known_hosts
+          provenance: mode=max
+          sbom: true
+
+      - name: Reconfirm private package visibility
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          visibility="$(gh api /users/xang1234/packages/container/stock-screener-social-xui --jq .visibility)"
+          test "${visibility}" = "private"

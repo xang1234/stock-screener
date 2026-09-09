@@ -10,6 +10,7 @@ const KeyMarketsTab = lazy(() => import('../components/MarketScan/KeyMarketsTab'
 const ThemesTab = lazy(() => import('../components/MarketScan/ThemesTab'));
 const WatchlistsTab = lazy(() => import('../components/MarketScan/WatchlistsTab'));
 const StockbeeMmTab = lazy(() => import('../components/MarketScan/StockbeeMmTab'));
+const SocialSignalsTab = lazy(() => import('../features/socialSignals/SocialSignalsTab'));
 
 function LazyTabFallback() {
   return (
@@ -34,14 +35,20 @@ function MarketScanPage() {
   // Markets mounts the TradingView widget (~180 external requests) — only
   // pay that cost when the user opens that tab.
   const subTabs = useMemo(() => ([
-    { id: 'daily_snapshot', label: 'Daily Snapshot', render: () => <DailyMarketSnapshotTab /> },
+    { id: 'daily_snapshot', label: 'Daily Snapshot', render: () => (
+      <DailyMarketSnapshotTab showSocialSignals={features.social_signals}
+        onOpenSocialSignals={() => setSelectedTab(1)} />
+    ) },
+    ...(features.social_signals
+      ? [{ id: 'social_signals', label: 'Social Signals', render: () => renderLazyTab(SocialSignalsTab) }]
+      : []),
     { id: 'key_markets', label: 'Key Markets', render: () => renderLazyTab(KeyMarketsTab) },
     ...(features.themes
       ? [{ id: 'themes', label: 'Themes', render: () => renderLazyTab(ThemesTab) }]
       : []),
     { id: 'watchlists', label: 'Watchlists', render: () => renderLazyTab(WatchlistsTab) },
     { id: 'stockbee_mm', label: 'Stockbee MM', render: () => renderLazyTab(StockbeeMmTab) },
-  ]), [features.themes]);
+  ]), [features.social_signals, features.themes]);
 
   useEffect(() => {
     if (selectedTab >= subTabs.length) {

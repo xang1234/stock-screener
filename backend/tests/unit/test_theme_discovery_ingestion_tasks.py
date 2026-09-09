@@ -119,6 +119,9 @@ def test_poll_due_sources_handles_aware_last_fetched_at(
             ]
 
     class FakeSession:
+        def get(self, model, ident):
+            return None
+
         def query(self, *args, **kwargs):
             return FakeQuery()
 

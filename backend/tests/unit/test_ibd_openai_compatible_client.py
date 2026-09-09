@@ -56,12 +56,60 @@ def test_tiebreaker_call_uses_injected_completion():
     assert "Computers-Software" in captured["prompt"]  # shortlist rendered
 
 
-def test_tiebreaker_call_swallows_errors():
+def test_tiebreaker_propagates_provider_errors_to_batch_guard():
     def boom(prompt: str) -> str:
         raise RuntimeError("network down")
 
     tb = OpenAICompatibleTiebreaker(model="x", api_base=None, api_key=None, complete_fn=boom)
-    assert tb("text", SHORTLIST) is None  # never propagates
+    with pytest.raises(RuntimeError, match="network down"):
+        tb("text", SHORTLIST)
+
+
+def test_opencode_go_params_include_required_session_headers_and_disable_retries():
+    tb = OpenAICompatibleTiebreaker(
+        model="deepseek-v4-flash",
+        api_base="https://opencode.ai/zen/go/v1",
+        api_key="go-secret",
+    )
+
+    first = tb._litellm_params("a chip maker")
+    second = tb._litellm_params("another chip maker")
+
+    assert first["extra_headers"]["User-Agent"].startswith("StockScreen/")
+    assert first["extra_headers"]["x-opencode-session"].startswith("ibd-")
+    assert second["extra_headers"]["x-opencode-session"] == first["extra_headers"]["x-opencode-session"]
+    assert first["num_retries"] == 0
+    assert first["max_retries"] == 0
+
+
+def test_non_opencode_compatible_endpoint_does_not_receive_opencode_headers():
+    tb = OpenAICompatibleTiebreaker(
+        model="deepseek-chat", api_base="https://api.deepseek.com/v1", api_key="secret",
+    )
+
+    assert "extra_headers" not in tb._litellm_params("a chip maker")
+
+
+def test_tiebreaker_spaces_provider_dispatches():
+    now = {"value": 10.0}
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        now["value"] += seconds
+
+    tb = OpenAICompatibleTiebreaker(
+        model="x", api_base=None, api_key=None,
+        min_interval_seconds=5.0,
+        clock=lambda: now["value"],
+        sleep=fake_sleep,
+        complete_fn=lambda _prompt: "Computers-Software",
+    )
+
+    assert tb("first", SHORTLIST) == "Computers-Software"
+    now["value"] = 12.0
+    assert tb("second", SHORTLIST) == "Computers-Software"
+    assert sleeps == [3.0]
 
 
 def test_litellm_params_include_timeout():
@@ -92,6 +140,18 @@ def test_build_tiebreaker_env_driven(monkeypatch):
     assert isinstance(tb, OpenAICompatibleTiebreaker)
     assert tb.api_base == "https://api.deepseek.com/v1"
     assert tb.timeout == 45.0
+    assert tb.min_interval_seconds == 5.0
+
+
+def test_build_tiebreaker_accepts_custom_dispatch_interval(monkeypatch):
+    monkeypatch.setenv("IBD_LLM_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("IBD_LLM_API_BASE", "https://opencode.ai/zen/go/v1")
+    monkeypatch.setenv("IBD_LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("IBD_LLM_MIN_INTERVAL_SECONDS", "9.5")
+
+    tb, _ = build_ibd_tiebreaker()
+
+    assert tb.min_interval_seconds == 9.5
 
 
 def test_build_tiebreaker_none_when_unconfigured(monkeypatch):
