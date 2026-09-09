@@ -1,7 +1,7 @@
 """Resolve, route, and recover references while reusing destination work."""
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
-from typing import Callable, Iterable
 
 from .article_recovery import ArticleRecovery, parse_article
 from .public_fetch import PublicResponse, fetch_public

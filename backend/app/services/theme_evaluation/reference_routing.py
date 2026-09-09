@@ -1,12 +1,12 @@
 """Structural routing and destination identity for collected references."""
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .records import http_url
-
 
 ReferenceKind = Literal[
     "article_candidate", "linked_x_post", "same_x_post", "not_article"

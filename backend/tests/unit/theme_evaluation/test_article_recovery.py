@@ -4,9 +4,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from app.services.theme_evaluation.bundle import sha256
-
 
 FIXTURES = Path(__file__).parent / "fixtures" / "articles"
 
