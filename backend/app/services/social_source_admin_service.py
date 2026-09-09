@@ -282,6 +282,23 @@ class SocialSourceAdminService:
             row.test_status, row.test_sample_count, row.tested_at = outcome.status, outcome.sample_count, outcome.tested_at
             return self._changed(row, "test_completed", actor, before)
 
+    def record_test_dispatch_failure(self, request, actor):
+        """End an exact queued request so a broker failure remains retryable."""
+        return self.record_test_result(
+            request.source_id,
+            request.provider,
+            SourceTestOutcome(
+                request.provider,
+                "failed",
+                0,
+                datetime.now(timezone.utc),
+                "source_test_dispatch_failed",
+            ),
+            actor,
+            request_id=request.request_id,
+            expected_version=request.version,
+        )
+
     def transition_source(self, source_id, target, expected_version, actor):
         if target not in {"enabled", "disabled", "archived"}:
             raise SocialSourceStateError("invalid_target_state")

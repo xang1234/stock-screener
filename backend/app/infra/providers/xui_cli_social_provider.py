@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from datetime import timedelta
@@ -26,7 +27,10 @@ _OUTCOME_KEYS = frozenset({
     "scroll_rounds", "observed_ids", "error", "html_artifact_path",
     "selector_report_path",
 })
-_AUTH_REASONS = ("challenge", "login wall", "login_wall", "reauth", "auth", "session")
+_AUTH_REASONS = (
+    "challenge", "login wall", "login_wall", "reauth", "reauthentication",
+    "auth", "authentication", "unauthorized", "session",
+)
 _NETWORK_REASONS = (
     "network", "connection reset", "connection refused", "temporary failure",
     "timed out", "timeout", "dns",
@@ -217,7 +221,11 @@ class XuiCliSocialProvider:
         outcomes = payload.get("outcomes") if isinstance(payload, dict) else None
         error = outcomes[0].get("error") if isinstance(outcomes, list) and outcomes and isinstance(outcomes[0], dict) else ""
         lowered = str(error or "").lower()
-        if any(term in lowered for term in _AUTH_REASONS):
+        normalized = re.sub(r"[_-]+", " ", lowered)
+        if any(
+            re.search(rf"\b{re.escape(term.replace('_', ' '))}\b", normalized)
+            for term in _AUTH_REASONS
+        ):
             return "reauthentication_required"
         if any(term in lowered for term in _NETWORK_REASONS):
             return "provider_network_error"

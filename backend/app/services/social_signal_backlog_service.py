@@ -114,10 +114,20 @@ class _MeteredCompletion:
                     and datetime.fromisoformat(work.input_snapshot_json["created_at"])
                     < dispatch_now - timedelta(days=14)
                 }
-                calls_today = db.scalar(select(func.count(SocialLLMAttempt.id)).where(
-                    SocialLLMAttempt.budget_day_id == day.id,
-                    SocialLLMAttempt.state.in_({"dispatched", "reconciled", "uncertain"}),
-                )) or 0
+                calls_today = db.scalar(
+                    select(func.count(SocialLLMAttempt.id))
+                    .join(
+                        SocialLLMBudgetDay,
+                        SocialLLMBudgetDay.id == SocialLLMAttempt.budget_day_id,
+                    )
+                    .where(
+                        SocialLLMBudgetDay.period_start_utc < day.period_end_utc,
+                        SocialLLMBudgetDay.period_end_utc > day.period_start_utc,
+                        SocialLLMAttempt.state.in_({
+                            "dispatched", "reconciled", "uncertain",
+                        }),
+                    )
+                ) or 0
                 call_available = calls_today < self.owner.max_calls_per_day
                 valid = (owned and row.state == "reserved"
                     and all(_utc(work.claim_expires_at) > dispatch_now for work in works)

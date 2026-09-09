@@ -148,6 +148,36 @@ def test_daily_call_cap_defers_without_a_third_provider_call(backlog):
         )
 
 
+def test_daily_call_cap_counts_attempts_from_overlapping_timezone_buckets(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = FakeLLM()
+    worker = ProcessSocialBacklog(
+        backlog, llm=llm, batch_size=1, max_calls_per_day=1,
+    )
+    enqueue(backlog, worker, post(1))
+    deferred_id = enqueue(backlog, worker, post(2))
+
+    assert asyncio.run(worker.execute(NOW, 1)).succeeded == 1
+    with backlog.begin() as db:
+        timezone_setting = db.scalar(select(AppSetting).where(
+            AppSetting.key == "social_llm_budget_timezone"
+        ))
+        timezone_setting.value = "UTC"
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    assert (result.succeeded, result.deferred) == (0, 1)
+    assert llm.calls == 1
+    with backlog() as db:
+        deferred = db.get(SocialExtractionWork, deferred_id)
+        assert (deferred.state, deferred.error_code) == (
+            "waiting_budget", "daily_call_limit_exhausted",
+        )
+
+
 def test_waits_between_sequential_provider_calls(backlog):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 

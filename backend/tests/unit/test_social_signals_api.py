@@ -751,6 +751,60 @@ async def test_admin_runtime_and_source_lifecycle_are_audited_and_redacted(
 
 
 @pytest.mark.asyncio
+async def test_admin_source_test_dispatch_failure_is_visible_and_retryable(
+    db_session, social_runtime, monkeypatch
+):
+    from app.api.v1 import config
+    from app.interfaces.tasks import social_signal_tasks
+    from app.services import server_auth
+
+    class Dispatched:
+        id = "retry-task"
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime(
+        "validation", "official", runtime.version, "admin"
+    )
+    source = social_runtime.create_source("Retryable", "123457", "admin")
+    headers = {"X-Admin-Key": "admin-secret"}
+    monkeypatch.setattr(
+        social_signal_tasks.validate_social_source,
+        "apply_async",
+        lambda **_kwargs: (_ for _ in ()).throw(ConnectionError("broker down")),
+    )
+
+    failed = await _request(
+        db_session, "POST",
+        f"/api/v1/social-signals/admin/sources/{source.source_id}/test",
+        headers=headers, json={"expected_version": source.version},
+    )
+
+    assert failed.status_code == 503
+    assert failed.json()["detail"] == {"code": "source_test_dispatch_failed"}
+    current = next(
+        row for row in social_runtime.list_sources()
+        if row.source_id == source.source_id
+    )
+    assert current.test_progress is None
+    assert current.test_outcome.status == "failed"
+
+    monkeypatch.setattr(
+        social_signal_tasks.validate_social_source,
+        "apply_async",
+        lambda **_kwargs: Dispatched(),
+    )
+    retried = await _request(
+        db_session, "POST",
+        f"/api/v1/social-signals/admin/sources/{source.source_id}/test",
+        headers=headers, json={"expected_version": current.version},
+    )
+    assert retried.status_code == 202
+    assert retried.json()["task_id"] == "retry-task"
+
+
+@pytest.mark.asyncio
 async def test_admin_company_identity_configuration_is_optimistic(
     db_session, social_runtime, monkeypatch
 ):

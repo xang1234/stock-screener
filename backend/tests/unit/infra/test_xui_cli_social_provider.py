@@ -258,6 +258,8 @@ def test_failed_auth_prevents_read_and_starts_reauthentication_cooldown():
 @pytest.mark.parametrize(("error_text", "expected"), [
     ("challenge required", "reauthentication_required"),
     ("login wall detected", "reauthentication_required"),
+    ("reauthentication_required", "reauthentication_required"),
+    ("author selector missing", "provider_error"),
     ("selector drift report at /private/artifact.html", "provider_error"),
 ])
 def test_failed_list_outcome_starts_cooldown_and_cannot_be_complete(error_text, expected):

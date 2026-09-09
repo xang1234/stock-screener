@@ -265,15 +265,27 @@ def test_admin_source(
 ):
     from app.interfaces.tasks.social_signal_tasks import validate_social_source
     from app.services.social_source_admin_service import SocialSourceAdminService
+    service = SocialSourceAdminService(db)
     try:
-        request = SocialSourceAdminService(db).request_test(
+        request = service.request_test(
             source_id, body.expected_version, ADMIN_ACTOR
         )
     except ValueError as exc:
         raise _admin_error(exc) from exc
-    task = validate_social_source.apply_async(
-        args=[source_id, ADMIN_ACTOR], queue="social_ingestion"
-    )
+    try:
+        task = validate_social_source.apply_async(
+            args=[source_id, ADMIN_ACTOR], queue="social_ingestion"
+        )
+    except Exception as exc:
+        try:
+            service.record_test_dispatch_failure(request, ADMIN_ACTOR)
+        except ValueError:
+            # The task may have reached a worker despite an ambiguous broker error.
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "source_test_dispatch_failed"},
+        ) from exc
     return {"task_id": task.id, "status": "queued", "request_id": request.request_id}
 
 
