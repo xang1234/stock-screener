@@ -1,0 +1,29 @@
+{
+  "classifications": [
+    {
+      "url": "https://x.com/owner/status/123?utm_source=share",
+      "parent_post_id": "post:123",
+      "expected": "same_x_post"
+    },
+    {
+      "url": "https://twitter.com/other/status/456/photo/1",
+      "parent_post_id": "123",
+      "expected": "linked_x_post"
+    },
+    {
+      "url": "https://investor.oracle.com/home/default.aspx",
+      "parent_post_id": "123",
+      "expected": "not_article"
+    },
+    {
+      "url": "https://investor.oracle.com/investor-news/news-details/2026/Oracle-Sets-the-Date/default.aspx",
+      "parent_post_id": "123",
+      "expected": "article_candidate"
+    },
+    {
+      "url": "https://x.com/i/article/2095754781381799937",
+      "parent_post_id": "123",
+      "expected": "article_candidate"
+    }
+  ]
+}
