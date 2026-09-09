@@ -297,7 +297,7 @@ def prepare(
             )
     preparation_id = store.seal(base, state.manifest)
     if "text" not in stages:
-        translation_decisions = []
+        translation_decisions = [] if not prior_id else None
         if prior_id:
             try:
                 translation_decisions = list(
@@ -306,7 +306,8 @@ def prepare(
             except IntegrityError as exc:
                 if str(exc) != "missing_translation_selection":
                     raise
-    save_translation_selection(base, store, preparation_id, translation_decisions)
+    if translation_decisions is not None:
+        save_translation_selection(base, store, preparation_id, translation_decisions)
     return preparation_id
 
 

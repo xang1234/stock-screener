@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 
 import pytest
-from app.services.theme_evaluation.bundle import seal_bundle, sha256
+from app.services.theme_evaluation.bundle import IntegrityError, seal_bundle, sha256
 from app.services.theme_evaluation.multilingual_preparation import (
     TextPreparation,
     TranslationSegment,
@@ -29,7 +29,14 @@ from app.services.theme_evaluation.translation_selection_store import (
 NOW = datetime(2026, 9, 9, tzinfo=timezone.utc)
 
 
-def candidate(original, translated, *, provider, segments=None):
+def candidate(
+    original,
+    translated,
+    *,
+    provider,
+    segments=None,
+    target_language="en",
+):
     if segments is None:
         segments = [
             TranslationSegment(
@@ -48,12 +55,13 @@ def candidate(original, translated, *, provider, segments=None):
                 "x-rendered-v1" if provider == "X translation" else "candidate-v1"
             ),
             language="ko",
+            target_language=target_language,
             method="translation_import" if provider == "X translation" else "prepare",
         ),
         payload=TextPreparation(
             source_language="ko",
             supplied_language="ko",
-            target_language="en",
+            target_language=target_language,
             segments=segments,
         ),
         created_at=NOW,
@@ -179,6 +187,99 @@ def test_selector_rejects_candidate_bound_to_different_source():
     result = candidate("다른 원문", "Different source", provider="X translation")
     with pytest.raises(ValueError, match="translation_candidate_source_mismatch"):
         select_translation("매출 10% 증가", "ko", result, None)
+
+
+@pytest.mark.parametrize(
+    "original, expected_disposition, expected_eligible",
+    [("", "review", False), ("   ", "review", False)],
+)
+def test_empty_or_whitespace_document_gets_an_explicit_identity_decision(
+    tmp_path,
+    bundle,
+    document,
+    original,
+    expected_disposition,
+    expected_eligible,
+):
+    from app.services.theme_evaluation.preparation_pipeline import prepare
+
+    base = seal_bundle(
+        tmp_path,
+        Bundle.model_validate(
+            bundle(documents=[document(text=original, original_language=None)])
+        ),
+    )
+    store = PreparationStore(tmp_path / "prepared")
+
+    pid = prepare(base, store, Handoff(bundle_id=base.name), stages=["text"])
+
+    _, sidecar = selection_for_preparation(base, store, pid)
+    decision = sidecar.decisions[0]
+    assert decision.kimi_result_id is not None
+    assert decision.selected_result_id == decision.kimi_result_id
+    assert decision.disposition == expected_disposition
+    assert decision.eligible is expected_eligible
+
+
+def test_absent_candidates_are_explicitly_unresolved():
+    decision = select_translation("", None, None, None)
+
+    assert decision.selected_result is None
+    assert decision.eligible is False
+    assert decision.assessment.disposition == "fallback"
+    assert [issue.code for issue in decision.issues] == [
+        "translation_candidate_missing"
+    ]
+
+
+def test_non_english_candidate_cannot_be_selected_or_persisted(
+    tmp_path, bundle, document
+):
+    original = "점유율 10%"
+    french = candidate(
+        original,
+        "Part de marché 10%",
+        provider="opencode-go",
+        target_language="fr",
+    )
+    with pytest.raises(ValueError, match="translation_candidate_target_mismatch"):
+        select_translation(original, "ko", None, french)
+
+    base = seal_bundle(
+        tmp_path,
+        Bundle.model_validate(
+            bundle(documents=[document(text=original, original_language="ko")])
+        ),
+    )
+    store = PreparationStore(tmp_path / "prepared")
+    result_id = store.save_result(french)
+    binding = PreparationBinding(
+        stage="text",
+        source_kind="document",
+        source_id="post:1",
+        source_text_sha256=sha256(original.encode()),
+        result_id=result_id,
+    )
+    manifest = PreparationManifest(
+        bundle_id=base.name,
+        handoff=Handoff(bundle_id=base.name),
+        bindings=[binding],
+        current={binding.slot_id: binding.binding_id},
+    )
+    pid = store.seal(base, manifest)
+    forged = {
+        "document_id": "post:1",
+        "source_text_sha256": sha256(original.encode()),
+        "x_result_id": None,
+        "kimi_result_id": result_id,
+        "selected_result_id": result_id,
+        "eligible": True,
+        "disposition": "use",
+        "issues": [],
+    }
+
+    with pytest.raises(ValueError, match="translation_candidate_target_mismatch"):
+        save_translation_selection(base, store, pid, [forged])
 
 
 def test_no_translator_candidate_is_explicitly_unresolved(tmp_path, bundle, document):
@@ -464,3 +565,24 @@ def test_sidecar_load_rejects_wrong_preparation_id(tmp_path, bundle, document):
 
     with pytest.raises(ValueError, match="selection_preparation_mismatch"):
         load_translation_selection(base, store, "0" * 64, sidecar_id)
+
+
+def test_nontext_stage_preserves_missing_sidecar_from_legacy_preparation(
+    tmp_path, bundle, document
+):
+    from app.services.theme_evaluation.preparation_pipeline import prepare
+
+    base, store, pid, *_ = sealed_candidates(
+        tmp_path,
+        bundle,
+        document,
+        "Samsung",
+        "Bought 7.18 million shares for 1.9 trillion won",
+    )
+    handoff = store.load(base, pid).handoff
+
+    next_pid = prepare(base, store, handoff, stages=["image"], prior_id=pid)
+
+    assert store.load(base, next_pid).bindings == store.load(base, pid).bindings
+    with pytest.raises(IntegrityError, match="missing_translation_selection"):
+        selection_for_preparation(base, store, next_pid)

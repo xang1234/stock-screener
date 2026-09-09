@@ -25,6 +25,11 @@ class TranslationSelection:
 
 def _translated_text(original: str, result: TextResult) -> str:
     if (
+        result.request.target_language != "en"
+        or result.payload.target_language != "en"
+    ):
+        raise ValueError("translation_candidate_target_mismatch")
+    if (
         result.request.input_sha256 != sha256(original.encode())
         or result.source_text != original
     ):
@@ -63,6 +68,20 @@ def select_translation(
     kimi_result: TextResult | None,
 ) -> TranslationSelection:
     """Select already-created candidates without performing network or model calls."""
+    if x_result is None and kimi_result is None:
+        policy_version = _assessment(original, language, None).policy_version
+        issue = QualityIssue(
+            code="translation_candidate_missing",
+            severity="blocker",
+            source_excerpt=original,
+            translated_excerpt="",
+        )
+        assessment = TranslationAssessment(
+            policy_version=policy_version,
+            disposition="fallback",
+            issues=(issue,),
+        )
+        return _selection(original, None, None, assessment, assessment.issues)
     x_assessment = _assessment(original, language, x_result) if x_result else None
     if x_assessment and x_assessment.disposition != "fallback":
         return _selection(

@@ -77,3 +77,25 @@ No live model or browser calls were made.
 ## Commit
 
 `fix: fall back from materially incomplete X translations` (this task commit).
+
+## Review remediation
+
+The three Important findings in `task-4-review.md` were addressed in a scoped
+follow-up:
+
+- Empty and whitespace-only document text now produces a stored local preparation
+  candidate and an explicit pending selection instead of failing sidecar construction.
+  The pure selector also classifies a call with no candidates as
+  `translation_candidate_missing` with a blocker/fallback disposition.
+- A later non-text stage can consume a legacy or manually imported preparation that
+  has root text bindings but no selection sidecar. It preserves the missing-sidecar
+  state as unresolved and does not synthesize clean eligibility from legacy `current`.
+- Candidate validation now requires both the request and payload target language to
+  be English before adequacy assessment. The same check runs again while a sidecar is
+  persisted or loaded, so a forged French-target decision is rejected.
+
+Regression tests first reproduced all three review failures. The six-suite verification
+command documented above was rerun after the fixes with `58 passed, 2 warnings in
+3.90s`. Scoped Ruff validation passed. No live calls were made.
+
+Follow-up commit: `fix: close translation selection review gaps`.
