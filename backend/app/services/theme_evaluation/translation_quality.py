@@ -44,6 +44,23 @@ def _issue(
     return QualityIssue(code, severity, source, target)
 
 
+_QUOTED_TEXT = re.compile(r'[『「“"]([^』」”"]+)[』」”"]')
+
+
+def _repeated_quoted_quantities(
+    source_quantities: Counter,
+    target_quantities: Counter,
+    original: str,
+    translated: str,
+) -> bool:
+    retained = Counter()
+    for match in _QUOTED_TEXT.finditer(original):
+        content = match.group(1)
+        if re.search(r"\d", content) and content in translated:
+            retained.update(quantity_counter(normalize_text(content).quantities))
+    return bool(retained) and target_quantities == source_quantities + retained
+
+
 def _compare_quantities(
     source: NormalizedText, target: NormalizedText, original: str, translated: str
 ) -> QualityIssue | None:
@@ -55,6 +72,13 @@ def _compare_quantities(
     if not source_ambiguous and not target_ambiguous:
         if source_unambiguous == target_unambiguous:
             return None
+        if _repeated_quoted_quantities(
+            source_unambiguous,
+            target_unambiguous,
+            original,
+            translated,
+        ):
+            return _issue("quantity_repeated_in_gloss", "review", original, translated)
         source_values = Counter(value for value, _unit in source_unambiguous.elements())
         target_values = Counter(value for value, _unit in target_unambiguous.elements())
         code = (

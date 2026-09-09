@@ -96,26 +96,40 @@ _UNIT_ALIASES = {
     "개": "count",
     "unit": "count",
     "units": "count",
+    "台": "count",
     "%": "percent",
     "percent": "percent",
+    "percentage point": "percentage_point",
+    "percentage points": "percentage_point",
+    "個百分點": "percentage_point",
+    "个百分点": "percentage_point",
+    "個百分点": "percentage_point",
+    "个百分點": "percentage_point",
+    "人民币": "CNY",
+    "美元": "USD",
+    "us dollar": "USD",
+    "us dollars": "USD",
 }
 _CJK_QUANTITY = re.compile(
-    r"[+−-]?\d[\d,.]*(?:\s*(?:兆|億|亿|万|萬|억|조|만)\s*[\d,.]*)+"
-    r"\s*(?:원|円|元|株|주|개)?"
+    r"(?:(?P<prefix>人民币|RMB|CNY|USD)\s*)?"
+    r"(?P<amount>[+−-]?\d[\d,.]*(?:\s*(?:兆|億|亿|万|萬|억|조|만)\s*[\d,.]*)+)"
+    r"\s*(?P<unit>US\s+dollars?|美元|원|円|元|株|주|개|台|units?)?",
+    re.IGNORECASE,
 )
 _PLAIN_QUANTITY = re.compile(
-    r"(?<![\w.$€£¥₩+−-])"
+    r"(?<![A-Za-z0-9_.$€£¥₩+−-])"
     r"(?P<head>(?:[+−-]\s*[$€£¥₩]?|[$€£¥₩]\s*[+−-]?))?\s*"
     r"(?P<number>\d[\d,]*(?:\.\d+)?)\s*"
     r"(?P<scale>thousand|million|billion|trillion)?\s*"
-    r"(?P<unit>percent|%|won|krw|yen|jpy|yuan|rmb|cny|dollars?|usd|"
-    r"euros?|eur|pounds?|gbp|shares?|stocks?|units?|원|円|元|株|주|개)?"
-    r"(?![A-Za-z0-9_.])",
+    r"(?P<unit>percentage\s+points?|[個个]百分[點点]|percent|%|won|krw|yen|jpy|"
+    r"yuan|rmb|cny|dollars?|usd|euros?|eur|pounds?|gbp|shares?|stocks?|units?|"
+    r"원|円|元|株|주|개|台)?"
+    r"(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 _IDENTIFIER = re.compile(
-    r"(?<![\w])(?:[A-Za-z]+(?:[-.]?\d+)+(?:\.[A-Za-z]+)?|"
-    r"\d+(?:\.\d+)*\.[A-Za-z][A-Za-z0-9]*)(?![\w])"
+    r"(?<![A-Za-z0-9_])(?:[A-Za-z]+(?:[-.]?\d+)+(?:\.[A-Za-z]+)?|"
+    r"\d+(?:\.\d+)*\.[A-Za-z][A-Za-z0-9]*)(?![A-Za-z0-9_])"
 )
 _MONTHS = {
     name: index
@@ -155,7 +169,8 @@ _METRICS = {
 }
 _DIRECTIONS = {
     "increase": re.compile(
-        r"증가|상승|급증|성장|확대|올랐|上昇|増加|增长|增長|"
+        r"증가|상승|급증|성장|확대|올랐|늘(?:었|어|어난|어나|고|며|다)|"
+        r"上昇|増加|增长|增長|涨|漲|\+\s*\d|"
         r"\b(?:increase[ds]?|increasing|rose|risen|grew|growth|up)\b",
         re.IGNORECASE,
     ),
@@ -167,7 +182,8 @@ _DIRECTIONS = {
 }
 _NEGATION = re.compile(
     r"아니(?:다|며|고|라고)|않(?:다|았다|는다|고)|없(?:다|었다)|"
-    r"ではない|ない|不是|没有|沒有|\b(?:not|no|never|without|isn't|wasn't|doesn't|didn't)\b",
+    r"ㄴㄴ|ではない|ない|不是|没有|沒有|"
+    r"\b(?:not|no|never|without|isn't|wasn't|doesn't|didn't)\b",
     re.IGNORECASE,
 )
 _QUARTER = re.compile(
@@ -240,7 +256,19 @@ def _temporal_tokens(
             text[match.end() :],
             re.IGNORECASE,
         )
-        if match.group(1).lower() == "may" and match.group(1) != "May" and not after:
+        before = re.search(
+            r"\b(3[01]|[12]\d|[1-9])(?:st|nd|rd|th)?\s*$",
+            text[: match.start()],
+            re.IGNORECASE,
+        )
+        year_after_context = re.match(r"\s*,?\s*(?:19|20)\d{2}\b", text[match.end() :])
+        year_before_context = re.search(r"\b(?:19|20)\d{2}\s*$", text[: match.start()])
+        other_month = any(
+            other.span() != match.span() for other in _MONTH_NAME.finditer(text)
+        )
+        if match.group(1).lower() == "may" and not (
+            after or before or year_after_context or year_before_context or other_month
+        ):
             continue
         month = _MONTHS[match.group(1).lower()]
         tokens[("month", month)] += 1
@@ -252,11 +280,6 @@ def _temporal_tokens(
             day = int(after.group(1))
             tokens[("day", day)] += 1
             spans.append((start, end))
-        before = re.search(
-            r"\b(3[01]|[12]\d|[1-9])(?:st|nd|rd|th)?\s*$",
-            text[: match.start()],
-            re.IGNORECASE,
-        )
         if before and day is None:
             day = int(before.group(1))
             tokens[("day", day)] += 1
@@ -329,7 +352,7 @@ def _identifiers(
 
 
 def _cjk_quantity(match: re.Match[str]) -> Quantity:
-    raw = match.group()
+    raw = match.group("amount")
     sign = Decimal(-1) if raw.startswith(("-", "−")) else Decimal(1)
     pairs = list(re.finditer(r"(\d[\d,.]*)\s*(兆|億|亿|万|萬|억|조|만)", raw))
     value = sum(
@@ -339,12 +362,14 @@ def _cjk_quantity(match: re.Match[str]) -> Quantity:
         ),
         Decimal(0),
     )
-    unit_match = re.search(r"(원|円|元|株|주|개)\s*$", raw)
-    tail_end = unit_match.start() if unit_match else len(raw)
-    tail = raw[pairs[-1].end() : tail_end].strip()
+    tail = raw[pairs[-1].end() :].strip()
     if re.search(r"\d", tail):
         value += _decimal(tail)
-    unit = _UNIT_ALIASES[unit_match.group(1)] if unit_match else "ambiguous"
+    explicit_unit = match.group("unit") or match.group("prefix")
+    unit_text = (
+        re.sub(r"\s+", " ", explicit_unit.strip().lower()) if explicit_unit else None
+    )
+    unit = _UNIT_ALIASES[unit_text] if unit_text else "ambiguous"
     return Quantity(sign * value, unit, match.start(), match.end())
 
 
@@ -361,7 +386,9 @@ def _quantities(text: str, occupied: list[tuple[int, int]]) -> tuple[Quantity, .
         head = match.group("head") or ""
         prefix_match = re.search(r"[$€£¥₩]", head)
         prefix = prefix_match.group() if prefix_match else None
-        unit_text = (match.group("unit") or prefix or "number").lower()
+        unit_text = re.sub(
+            r"\s+", " ", (match.group("unit") or prefix or "number").lower()
+        )
         unit = _UNIT_ALIASES.get(unit_text, "number")
         scale = _ENGLISH_SCALES[(match.group("scale") or "").lower() or None]
         sign = Decimal(-1) if "-" in head or "−" in head else Decimal(1)
@@ -457,12 +484,17 @@ def quantity_associations(text: str) -> Counter:
             ),
             len(normalized.text),
         )
-        local_directions = {
-            direction
-            for start, _end, direction in directions
-            if region_start <= start < region_end
-        }
-        direction = next(iter(local_directions)) if len(local_directions) == 1 else None
+        local_directions = [
+            marker for marker in directions if region_start <= marker[0] < region_end
+        ]
+        direction_marker = min(
+            local_directions,
+            key=lambda marker: min(
+                abs(marker[0] - quantity.end), abs(quantity.start - marker[1])
+            ),
+            default=None,
+        )
+        direction = direction_marker[2] if direction_marker else None
         quarter_marker = _nearest_label(quarters, quantity.start)
         quarter = quarter_marker[2] if quarter_marker else None
         negated = bool(_NEGATION.search(normalized.text[region_start:region_end]))

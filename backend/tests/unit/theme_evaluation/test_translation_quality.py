@@ -155,6 +155,11 @@ def test_complete_calendar_date_and_matching_direction_are_supported():
 
 def test_temporal_rules_do_not_invent_a_month_or_hide_explicit_units():
     assert assess("매출이 증가할 수 있다", "Revenue may increase").disposition == "use"
+    titlecase_modal = assess("회사는 증가할 수 있다", "May increase")
+    assert titlecase_modal.disposition == "review"
+    assert not any(
+        issue.code == "temporal_value_changed" for issue in titlecase_modal.issues
+    )
     assert assess("2026주", "2026 shares").disposition == "use"
     assert assess("2026주", "2026 won").disposition == "fallback"
 
@@ -167,6 +172,107 @@ def test_metric_bound_direction_reversal_requires_fallback():
 
     assert result.disposition == "fallback"
     assert any(issue.code == "polarity_association_changed" for issue in result.issues)
+
+
+def test_each_quantity_retains_its_nearby_direction_within_one_metric():
+    result = assess(
+        "매출 10% 증가, 20% 감소",
+        "Revenue decreased 10%, increased 20%",
+    )
+
+    assert result.disposition == "fallback"
+    assert any(issue.code == "polarity_association_changed" for issue in result.issues)
+
+
+@pytest.mark.parametrize(
+    "source,target,language",
+    [
+        (
+            "영업이익은 -12.5% 감소했고 비용은 ₩320억원 늘었다.",
+            "Operating profit decreased by -12.5%, and expenses rose by ₩320억원.",
+            "ko",
+        ),
+        (
+            "매출 2조원 돌파, 실적 대박.\n\n근데 가이던스는 3% 하향이라 추격매수는 ㄴㄴ.",
+            (
+                "Revenue surpassed 2조원, a blockbuster performance.\n\n"
+                "But guidance was lowered by 3%, so chasing buys is a no-go."
+            ),
+            "ko",
+        ),
+        (
+            "利益率は−8.4%で、8,000万株を消却する。",
+            "The profit margin is -8.4%, and it will write off 8,000万株.",
+            "ja",
+        ),
+        (
+            "受注は前年比+25%。\r\n\r\nでも材料出尽くしで、今から買うのは微妙。",
+            (
+                "Orders are up 25% year-on-year.\n\n"
+                "But with the positive news already priced in, buying from here is iffy."
+            ),
+            "ja",
+        ),
+        (
+            "宁德时代季度收入为人民币718亿元，同比增长19%。",
+            "CATL quarterly revenue was RMB 718亿, up 19% year on year.",
+            "zh",
+        ),
+        (
+            "台積電毛利率變動-2.3個百分點，資本支出為320億美元。",
+            (
+                "TSMC gross margin changed by -2.3 percentage points, and capital "
+                "expenditure was 320億 US dollars."
+            ),
+            "zh",
+        ),
+        (
+            "小米集团（1810.HK）称SU7 Ultra订单达到10万台。",
+            "Xiaomi Group (1810.HK) stated that SU7 Ultra orders reached 10万 units.",
+            "zh",
+        ),
+        (
+            "订单增长30%，基本面很顶。\n\n不过股价已涨80%，别上头。",
+            (
+                "Order growth is 30%, and the fundamentals are very strong.\n\n"
+                "However, the stock price has already risen 80%, so don't get carried away."
+            ),
+            "zh",
+        ),
+        (
+            "HBM4 ramp looks good, 하지만 수율은 아직 65% 수준.",
+            "HBM4 ramp looks good, but yield is still at around 65%.",
+            "ko",
+        ),
+    ],
+    ids=[
+        "korean-direction",
+        "korean-negation-slang",
+        "japanese-unicode-minus",
+        "japanese-explicit-plus",
+        "simplified-chinese-currency",
+        "traditional-chinese-percentage-points",
+        "chinese-product-and-count",
+        "chinese-script-adjacent-percentages",
+        "mixed-korean-percent-suffix",
+    ],
+)
+def test_saved_multilingual_challenge_equivalences_are_recognized(
+    source, target, language
+):
+    assert assess(source, target, language).disposition == "use"
+
+
+def test_retained_quoted_quantity_with_an_english_gloss_requires_review():
+    result = assess(
+        "会社は『收入增长20%』と説明したが、株価は-4%。",
+        'The company explained "收入增长20%" (revenue growth of 20%), '
+        "but the stock price was -4%.",
+        "ja",
+    )
+
+    assert result.disposition == "review"
+    assert any(issue.code == "quantity_repeated_in_gloss" for issue in result.issues)
 
 
 @pytest.mark.parametrize(
