@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Alert, Box, Chip, CircularProgress, Paper, Stack, Typography } from '@mui/material';
 
 import { getSocialThemePulse } from '../../api/socialSignals';
+import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
 import { formatSocialScore } from './socialSignalPresentation';
 
 const STATUS = {
@@ -10,10 +11,11 @@ const STATUS = {
 };
 
 export default function SocialThemePulse({ enabled, market }) {
+  const marketSupported = isSocialSignalMarket(market);
   const query = useQuery({
     queryKey: ['socialSignals', 'themePulse', market],
     queryFn: () => getSocialThemePulse(market),
-    enabled,
+    enabled: enabled && marketSupported,
     staleTime: 60_000,
   });
   if (!enabled) return null;
@@ -23,14 +25,17 @@ export default function SocialThemePulse({ enabled, market }) {
       <Typography variant="body2" color="text.secondary">
         Display-only evidence from the published Social run; it does not change legacy Theme ordering.
       </Typography>
-      {query.isLoading ? <CircularProgress size={20} aria-label="Loading Theme Social Pulse" /> : null}
-      {query.isError ? <Alert severity="warning">Theme Social Pulse could not be loaded.</Alert> : null}
-      {query.data?.available === false ? <Alert severity="info" sx={{ mt: 1 }}>
+      {!marketSupported ? <Alert severity="info" sx={{ mt: 1 }}>
+        {SOCIAL_SIGNAL_MARKETS_COPY}
+      </Alert> : null}
+      {marketSupported && query.isLoading ? <CircularProgress size={20} aria-label="Loading Theme Social Pulse" /> : null}
+      {marketSupported && query.isError ? <Alert severity="warning">Theme Social Pulse could not be loaded.</Alert> : null}
+      {marketSupported && query.data?.available === false ? <Alert severity="info" sx={{ mt: 1 }}>
         {query.data.reason_code === 'no_published_run'
           ? 'The first Social Signal run is still warming up.'
           : 'Theme Social Pulse is unavailable.'}
       </Alert> : null}
-      <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
+      {marketSupported ? <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
         {(query.data?.items || []).map((item) => (
           <Box key={item.theme_key} sx={{ p: 1, minWidth: 220, border: 1, borderColor: 'divider', borderRadius: 1 }}>
             <Stack direction="row" justifyContent="space-between" gap={1}>
@@ -45,7 +50,7 @@ export default function SocialThemePulse({ enabled, market }) {
             </Typography>
           </Box>
         ))}
-      </Stack>
+      </Stack> : null}
     </Paper>
   );
 }

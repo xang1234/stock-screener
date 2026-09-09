@@ -29,7 +29,7 @@ async def _request(db_session, method, path, **kwargs):
 
 def _publish_rows(
     db, records, *, observations=None, context=None,
-    theme_evidence=None, projection=None,
+    theme_evidence=None, projection=None, generated_at=None, published_at=None,
 ):
     from app.infra.db.models.social_signals import (
         SocialSignalRun, SocialSignalRunPointer, SocialSignalSnapshot,
@@ -56,9 +56,9 @@ def _publish_rows(
             },
         },
         feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
-        created_at=records[0].latest_mention,
-        completed_at=records[0].latest_mention,
-        published_at=records[0].latest_mention,
+        created_at=generated_at or records[0].latest_mention,
+        completed_at=published_at or records[0].latest_mention,
+        published_at=published_at or records[0].latest_mention,
     )
     db.add(run)
     db.flush()
@@ -321,6 +321,39 @@ async def test_published_queue_keeps_rank_modes_and_unranked_sections_separate(
     )
     assert [item["canonical_symbol"] for item in context.json()["items"]] == ["SPY"]
     assert [item["canonical_symbol"] for item in unresolved.json()["items"]] == ["$ZZZ"]
+
+
+def test_published_queue_freshness_uses_oldest_successful_collection(
+    db_session, social_runtime, monkeypatch,
+):
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from app.domain.social_signals.records import SocialSnapshotRecord
+    from app.services.social_signal_query_service import SocialSignalQueries
+
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.services.social_signal_query_service.settings.social_stale_after_hours", 7)
+    record = SocialSnapshotRecord(
+        "published-1", "US:AAA", "AAA", "US", "actionable",
+        Decimal("82"), Decimal("79"), Decimal("81"), (), (), now,
+        "AAA", "US:AAA", 7, 4, 2, 2,
+    )
+    _publish_rows(db_session, (record,), observations={
+        "1": {"observed_at": (now - timedelta(hours=8)).isoformat()},
+        "2": {"observed_at": (now - timedelta(hours=1)).isoformat()},
+    }, generated_at=now, published_at=now)
+
+    payload = SocialSignalQueries(
+        db_session, clock=lambda: now,
+    ).queue(
+        market="US", window="7d", view="actionable",
+        rank_mode="blended", page=1, page_size=50,
+    )
+
+    assert payload["stale"] is True
 
 
 @pytest.mark.asyncio

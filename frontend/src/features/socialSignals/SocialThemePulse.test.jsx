@@ -8,12 +8,12 @@ import SocialThemePulse from './SocialThemePulse';
 
 vi.mock('../../api/socialSignals', () => ({ getSocialThemePulse: vi.fn() }));
 
-function renderPulse(enabled = true) {
+function renderPulse(enabled = true, market = 'HK') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <ThemeProvider theme={createTheme()}>
-        <SocialThemePulse enabled={enabled} market="HK" />
+        <SocialThemePulse enabled={enabled} market={market} />
       </ThemeProvider>
     </QueryClientProvider>,
   );
@@ -48,5 +48,13 @@ describe('SocialThemePulse', () => {
     renderPulse(false);
     expect(getSocialThemePulse).not.toHaveBeenCalled();
     expect(screen.queryByText('Social Pulse')).not.toBeInTheDocument();
+  });
+
+  it('renders an unsupported-market state without fetching', async () => {
+    renderPulse(true, 'IN');
+
+    expect(await screen.findByText(/available for US, HK, CN, JP, and TW markets/)).toBeInTheDocument();
+    expect(getSocialThemePulse).not.toHaveBeenCalled();
+    expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
   });
 });

@@ -61,6 +61,36 @@ class SocialSignalQueries:
         pointer = self.db.get(SocialSignalRunPointer, "latest_published")
         return self.db.get(SocialSignalRun, pointer.run_id) if pointer else None
 
+    @staticmethod
+    def _oldest_successful_observation_at(run):
+        source_ids = set(run.application_progress_json.get("sources", {}))
+        observations = run.application_progress_json.get("observations", {})
+        outcomes = run.source_outcomes_json or {}
+        observed_at = []
+        for source_id in source_ids:
+            outcome = (
+                outcomes.get(source_id) or outcomes.get(str(source_id)) or {}
+            )
+            observation = (
+                observations.get(source_id)
+                or observations.get(str(source_id))
+                or {}
+            )
+            if (
+                outcome.get("read_status") != "success"
+                or not observation.get("observed_at")
+            ):
+                return None
+            value = observation["observed_at"]
+            try:
+                parsed = value if isinstance(value, datetime) else datetime.fromisoformat(
+                    str(value).replace("Z", "+00:00")
+                )
+            except (TypeError, ValueError):
+                return None
+            observed_at.append(_utc(parsed))
+        return min(observed_at) if observed_at else None
+
     def _latest_attempt(self):
         run = self.db.scalar(select(SocialSignalRun).where(
             SocialSignalRun.mode == "live"
@@ -240,6 +270,7 @@ class SocialSignalQueries:
             }
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)
+        oldest_observation_at = self._oldest_successful_observation_at(run)
         return {
             **base,
             "available": True,
@@ -250,8 +281,8 @@ class SocialSignalQueries:
             "generated_at": generated_at,
             "published_at": published_at,
             "stale": bool(
-                published_at
-                and (self.clock() - published_at).total_seconds()
+                oldest_observation_at is None
+                or (self.clock() - oldest_observation_at).total_seconds()
                 > settings.social_stale_after_hours * 3600
             ),
         }
