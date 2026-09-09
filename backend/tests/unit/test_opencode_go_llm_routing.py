@@ -1,5 +1,7 @@
 """OpenCode Go is a named, extraction-only OpenAI-compatible provider."""
 
+import asyncio
+
 import pytest
 
 from app.services.llm.config import (
@@ -8,7 +10,7 @@ from app.services.llm.config import (
     is_model_supported_for_use_case,
 )
 from app.services.llm.groq_key_manager import GroqKeyManager
-from app.services.llm.llm_service import LLMError, LLMService
+from app.services.llm.llm_service import LLMError, LLMPreDispatchError, LLMService
 from app.services.llm.zai_key_manager import ZAIKeyManager
 
 
@@ -65,3 +67,28 @@ def test_opencode_go_never_falls_back_to_an_unrelated_openai_key():
 
     with pytest.raises(LLMError, match="opencode_go_api_key_not_configured"):
         service._apply_provider_overrides({"model": MODEL})
+
+
+def test_metered_missing_key_is_classified_before_provider_dispatch(monkeypatch):
+    from app.services.llm import llm_service as llm_module
+
+    service = LLMService(use_case="extraction")
+    service._opencode_go_api_key = ""
+    calls = []
+
+    async def provider_call(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(llm_module, "acompletion", provider_call)
+
+    with pytest.raises(LLMPreDispatchError):
+        asyncio.run(service.completion(
+            model=MODEL,
+            messages=[{"role": "user", "content": "fixture"}],
+            max_tokens=20,
+            allow_fallbacks=False,
+            num_retries=0,
+            metered=True,
+        ))
+
+    assert calls == []

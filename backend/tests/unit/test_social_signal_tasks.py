@@ -115,6 +115,65 @@ def test_budget_resume_ignores_runs_with_failed_source_collection(
     assert tasks._latest_resumable_run() is None
 
 
+def test_budget_resume_ignores_generation_with_replay_descendant(
+    db_session, monkeypatch
+):
+    from sqlalchemy.orm import sessionmaker
+
+    from app import database
+    from app.infra.db.models.social_signals import (
+        SocialSignalRun,
+        SocialSourceRegistry,
+    )
+    from app.interfaces.tasks import social_signal_tasks as tasks
+
+    registry = db_session.get(SocialSourceRegistry, 1)
+    if registry is None:
+        registry = SocialSourceRegistry(id=1, version=1)
+        db_session.add(registry)
+    elif registry.version is None:
+        registry.version = 1
+    registry.mode, registry.provider = "live", "official"
+    source_state = {
+        "sources": {"1": {}, "2": {}},
+        "observations": {"1": {}, "2": {}},
+    }
+    outcomes = {
+        "1": {"read_status": "success"},
+        "2": {"read_status": "success"},
+    }
+    db_session.add_all([
+        SocialSignalRun(
+            id="deferred-source", registry_id=1,
+            registry_version=registry.version, mode="live", provider="official",
+            status="running", source_outcomes_json=outcomes,
+            application_progress_json=source_state, feature_run_ids_json={},
+            exposure_dates_json={}, coverage_json={}, created_at=NOW,
+        ),
+        SocialSignalRun(
+            id="published-replay", registry_id=1,
+            registry_version=registry.version, mode="live", provider="official",
+            status="published", source_outcomes_json=outcomes,
+            application_progress_json={
+                **source_state,
+                "replay": {"saved_run_id": "deferred-source"},
+            },
+            feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+            created_at=NOW + timedelta(hours=1),
+            completed_at=NOW + timedelta(hours=1),
+            published_at=NOW + timedelta(hours=1),
+        ),
+    ])
+    db_session.commit()
+    monkeypatch.setattr(
+        database,
+        "SessionLocal",
+        sessionmaker(db_session.get_bind(), expire_on_commit=False),
+    )
+
+    assert tasks._latest_resumable_run() is None
+
+
 def test_source_task_returns_redacted_typed_outcome_without_outer_provider_retry(monkeypatch):
     from app.interfaces.tasks import social_signal_tasks as tasks
     from app.wiring import use_case_factories

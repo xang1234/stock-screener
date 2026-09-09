@@ -567,6 +567,34 @@ def test_cancelled_provider_attempt_is_uncertain_and_never_automatically_retried
     assert asyncio.run(processor(backlog, FakeLLM()).execute(NOW + timedelta(minutes=2), 10)).succeeded == 0
 
 
+def test_confirmed_pre_dispatch_failure_releases_budget_without_retry(backlog):
+    from app.infra.db.models.social_analysis import (
+        SocialExtractionWork,
+        SocialLLMAttempt,
+        SocialLLMBudgetDay,
+    )
+    from app.services.llm.llm_service import LLMPreDispatchError
+
+    class MissingConfigurationLLM:
+        async def completion(self, **_kwargs):
+            raise LLMPreDispatchError("metered_provider_configuration_error")
+
+    worker = processor(backlog, MissingConfigurationLLM())
+    work_id = enqueue(backlog, worker, post(1))
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    assert result.failed == 1
+    with backlog() as db:
+        attempt = db.scalar(select(SocialLLMAttempt))
+        day = db.scalar(select(SocialLLMBudgetDay))
+        work = db.get(SocialExtractionWork, work_id)
+        assert attempt.state == "released"
+        assert day.reserved_usd == day.actual_usd == 0
+        assert work.state == "failed_terminal"
+        assert work.error_code == "llm_configuration_error"
+
+
 @pytest.mark.parametrize("admin_requested", [False, True])
 def test_queued_post_aging_out_before_dispatch_releases_only_unused_reservation(backlog, monkeypatch, admin_requested):
     from app.services import social_signal_backlog_service as process_backlog

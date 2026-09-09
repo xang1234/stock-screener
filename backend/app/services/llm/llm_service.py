@@ -51,6 +51,10 @@ class LLMError(Exception):
     pass
 
 
+class LLMPreDispatchError(LLMError):
+    """The provider request is confirmed not to have been dispatched."""
+
+
 class LLMRateLimitError(LLMError):
     """Raised when rate limit is exceeded after retries."""
     def __init__(self, message: str, retry_after: Optional[float] = None):
@@ -224,6 +228,11 @@ class LLMService:
             params["no-log"] = True
             try:
                 self._apply_provider_overrides(params)
+            except Exception:
+                raise LLMPreDispatchError(
+                    "metered_provider_configuration_error"
+                ) from None
+            try:
                 return await acompletion(**params)
             except Exception:
                 raise LLMError("metered_provider_error") from None

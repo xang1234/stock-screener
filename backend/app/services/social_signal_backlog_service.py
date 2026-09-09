@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from app.domain.social_signals.records import BacklogResult, ExtractionResult, SocialPostRecord
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt, SocialLLMBudgetDay, SocialRunWork
 from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
-from app.services.llm.llm_service import LLMService
+from app.services.llm.llm_service import LLMPreDispatchError, LLMService
 from app.services.social_extraction_service import SocialExtractionError, SocialExtractionService, VERSION
 from app.services.social_llm_budget_service import SocialLLMBudgetService, social_analysis_transaction
 
@@ -148,6 +148,9 @@ class _MeteredCompletion:
             try:
                 llm = self.owner.llm if self.owner.llm is not None else LLMService(use_case="extraction")
                 response = await llm.completion(**kwargs, metered=True)
+            except LLMPreDispatchError:
+                budget.release_pre_dispatch(attempt)
+                raise SocialExtractionError("llm_configuration_error") from None
             except BaseException:
                 budget.reconcile(attempt, None, None)
                 raise

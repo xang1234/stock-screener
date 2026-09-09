@@ -57,9 +57,18 @@ def _latest_resumable_run():
         registry = db.get(SocialSourceRegistry, 1)
         if registry is None or registry.mode == "off" or registry.provider == "disabled":
             return None
-        runs = db.scalars(select(SocialSignalRun).where(
-            SocialSignalRun.status == "running"
-        ).order_by(SocialSignalRun.created_at.desc(), SocialSignalRun.id.desc())).all()
+        all_runs = db.scalars(select(SocialSignalRun).order_by(
+            SocialSignalRun.created_at.desc(), SocialSignalRun.id.desc()
+        )).all()
+        replayed_run_ids = {
+            run.application_progress_json.get("replay", {}).get("saved_run_id")
+            for run in all_runs
+            if run.application_progress_json.get("replay")
+        }
+        runs = (
+            run for run in all_runs
+            if run.status == "running" and run.id not in replayed_run_ids
+        )
         return next((run.id for run in runs if (
             set(run.application_progress_json.get("observations", {}))
             == set(run.application_progress_json.get("sources", {}))
