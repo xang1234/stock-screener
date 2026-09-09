@@ -91,6 +91,10 @@ def test_canonical_alias_requires_same_origin_and_nonconflicting_article_identit
         ),
         ("https://example.com/news/123", "https://example.com/"),
         (
+            "https://example.com/news/2026/earnings",
+            "https://example.com/press/2025/earnings",
+        ),
+        (
             "https://example.com/view?article_id=123",
             "https://example.com/view?article_id=456",
         ),
@@ -236,6 +240,41 @@ def test_article_stage_does_not_reuse_body_across_conflicting_canonical_articles
     assert outcome.capture_for("ref:a").recovery.text == "Article A body."
     assert outcome.capture_for("ref:b").recovery.text == "Article B body."
     assert outcome.capture_for("ref:a") is not outcome.capture_for("ref:b")
+
+
+def test_article_stage_does_not_reuse_same_slug_from_a_different_path():
+    from app.services.theme_evaluation import article_stage
+    from app.services.theme_evaluation.public_fetch import PublicResponse
+
+    responses = {
+        "https://t.co/news": PublicResponse(
+            body=(
+                b'<link rel="canonical" href="/press/2025/earnings">'
+                b"<article><p>News body.</p></article>"
+            ),
+            final_url="https://publisher.example/news/2026/earnings",
+            content_type="text/html",
+        ),
+        "https://t.co/press": PublicResponse(
+            body=b"<article><p>Press body.</p></article>",
+            final_url="https://publisher.example/press/2025/earnings",
+            content_type="text/html",
+        ),
+    }
+    outcome = article_stage.recover_references(
+        [
+            article_stage.ReferenceInput(
+                "ref:news", "post:1", "https://t.co/news"
+            ),
+            article_stage.ReferenceInput(
+                "ref:press", "post:2", "https://t.co/press"
+            ),
+        ],
+        fetcher=responses.__getitem__,
+    )
+    assert len(outcome.captures) == 2
+    assert outcome.capture_for("ref:news").recovery.text == "News body."
+    assert outcome.capture_for("ref:press").recovery.text == "Press body."
 
 
 @pytest.mark.parametrize(

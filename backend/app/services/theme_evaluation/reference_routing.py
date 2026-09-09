@@ -94,46 +94,13 @@ def normalize_destination(url: str) -> str:
     return urlunsplit((scheme, netloc, path, query, ""))
 
 
-def _origin(url):
-    parts = urlsplit(url)
-    return parts.scheme, parts.netloc
-
-
-_PRESENTATION_PATHS = {"amp", "print", "index.html", "index.htm", "default.aspx"}
-_NONIDENTITY_PATHS = {"article", "articles", "detail", "home", "news", "story", "view"}
-
-
-def _path_article_identity(url):
-    parts = urlsplit(url)
-    segments = [segment for segment in parts.path.split("/") if segment]
-    while segments and segments[-1].lower() in _PRESENTATION_PATHS:
-        segments.pop()
-    if not segments or segments[-1].lower() in _NONIDENTITY_PATHS:
-        return None
-    return segments[-1]
-
-
 def destination_identity(final_url: str, canonical_url: str | None = None) -> str:
-    """Use a canonical alias only when it cannot cross origin or article identity."""
+    """Share work only for destinations equal after safe transport cleanup."""
     final = normalize_destination(final_url)
     if not canonical_url:
         return final
     canonical = normalize_destination(canonical_url)
-    if _origin(final) != _origin(canonical):
-        return final
-    if final == canonical:
-        return canonical
-    if sorted(parse_qsl(urlsplit(final).query, keep_blank_values=True)) != sorted(
-        parse_qsl(urlsplit(canonical).query, keep_blank_values=True)
-    ):
-        return final
-    final_identity = _path_article_identity(final)
-    canonical_identity = _path_article_identity(canonical)
-    return (
-        canonical
-        if final_identity is not None and final_identity == canonical_identity
-        else final
-    )
+    return canonical if final == canonical else final
 
 
 @dataclass(frozen=True)

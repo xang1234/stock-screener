@@ -42,3 +42,10 @@ Commit: `fix: recover and classify article evidence by destination`
 - Saved baseline replay after the fix: Daum bodies contain 1,166 and 1,403 characters, Oracle contains 1,087, and Substack contains 9,425 with `access_restricted`; all remain partial and completeness-unverified.
 
 Follow-up commit: `fix: preserve article identity and owned source text`
+
+## Independent review remediation
+
+- Removed global path-slug canonical aliasing. Destination work is now shared only when the final and canonical URLs are exactly equal after scheme/host normalization, fragment removal, default-port cleanup, and removal of known tracking parameters.
+- Added direct and stage-level regressions for `/news/2026/earnings` versus `/press/2025/earnings`; each reference retains its own capture and body.
+
+Second follow-up commit: `fix: require exact article destination identity`
