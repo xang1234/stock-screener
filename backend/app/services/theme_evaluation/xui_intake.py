@@ -16,6 +16,7 @@ from .records import (
     Membership,
     SourceMetadata,
     SourceOutcome,
+    XTranslation,
 )
 
 _DATE = TypeAdapter(AwareDatetime)
@@ -127,7 +128,8 @@ def import_xui(payloads: dict[str, dict], *, captured_at: datetime,
     for source in outcomes:
         unique = {}
         for row in sorted(candidates[source.source_id], key=lambda r: (
-            *_sort_row(r), canonical_bytes(r)
+            *_sort_row(r), 0 if (r.get('x_translation') or {}).get('status') == 'captured' else 1,
+            canonical_bytes(r)
         )):
             unique.setdefault(str(row['tweet_id']), row)
         rows = [row for key, row in unique.items() if key not in conflicts][:max_posts_per_source]
@@ -137,14 +139,25 @@ def import_xui(payloads: dict[str, dict], *, captured_at: datetime,
             key = 'post:' + str(row['tweet_id'])
             observed = _date(row.get('observed_at')) or source.captured_at
             member = Membership(source_id=source.source_id, observed_at=observed)
+            translation = (
+                XTranslation.model_validate(row['x_translation'])
+                if row.get('x_translation') else None
+            )
+            if translation:
+                translation.check_source(str(row['tweet_id']), row['text'])
             if key in documents:
                 documents[key].memberships.append(member)
                 documents[key].retrieved_at = min(documents[key].retrieved_at, observed)
+                current = documents[key].source_metadata.x_translation
+                if translation and (current is None or (
+                    current.status != 'captured' and translation.status == 'captured'
+                )):
+                    documents[key].source_metadata.x_translation = translation
                 continue
             meta_fields = ('extraction_method', 'extraction_version', 'quality_tier',
                            'quality_score', 'quote_tweet_id', 'is_reply', 'is_article', 'image_urls',
                            'image_captions', 'article_urls', 'reply_tweet_id', 'text_source',
-                           'text_complete', 'incomplete_text_reasons')
+                           'text_complete', 'incomplete_text_reasons', 'x_translation')
             metadata = {k: row[k] for k in meta_fields if row.get(k) is not None}
             metadata['observed_at_fallback'] = not bool(row.get('observed_at'))
             author = row.get('author_handle') or row.get('author')

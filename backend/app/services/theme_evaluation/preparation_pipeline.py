@@ -24,6 +24,7 @@ from .preparation_state import PreparationState
 from .preparation_store import PreparationStore, validate_handoff
 from .public_fetch import fetch_public
 from .records import URL, Record
+from .xui_translation import captured_translation_result
 
 
 def _request(stage, digest, client=None, **options):
@@ -242,7 +243,14 @@ def prepare(
                 if override and override.language
                 else doc.original_language
             )
-            rid = _text_result(store, doc.text, language, translator)
+            captured = captured_translation_result(doc)
+            # Already captured translations are imported directly, never selected
+            # from a cache shared by different captures of the same original.
+            rid = (
+                store.save_result(captured)
+                if captured
+                else _text_result(store, doc.text, language, translator)
+            )
             state.record(_binding("text", "document", doc, rid))
         references = {r.reference_id: r for r in bundle.followups}
         for binding in state.manifest.current_bindings:

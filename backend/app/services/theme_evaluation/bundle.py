@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .records import Bundle, REQUIRED_SOURCE_IDS
+from .records import REQUIRED_SOURCE_IDS, Bundle
 
 
 class IntegrityError(ValueError):
@@ -44,6 +44,10 @@ def validate_bundle(bundle: Bundle) -> None:
     for doc in bundle.documents:
         if sha256(doc.text.encode()) != doc.text_sha256:
             raise ValueError('text_hash_mismatch')
+        if doc.source_metadata.x_translation is not None:
+            if doc.kind != 'post':
+                raise ValueError('x_translation_requires_post')
+            doc.source_metadata.x_translation.check_source(doc.document_id.removeprefix('post:'), doc.text)
         if bundle.mode != 'controlled' and doc.kind == 'controlled':
             raise ValueError('mixed_controlled_evidence')
         _unique((m.source_id for m in doc.memberships), 'duplicate_membership')

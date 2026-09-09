@@ -107,3 +107,20 @@ To import attributed translations offline, take a text-stage result from a seale
 ```
 
 Imports attach directly to the stored original segments, supplied/inferred language and language warnings. They do not repeat language detection or segmentation. Identity segments (including whitespace) must remain byte-for-byte equal to their stored originals. Both live translations and imports use the same finalization and numerical checks. Unknown result IDs, changed source hashes and missing segment slots are rejected. `null` retains an explicit missing translation. Number, sign, currency, large-unit changes and unchanged foreign-language output are review warnings. These checks do not establish semantic translation accuracy. Imported provenance is supplied by the importer, not independently verified with the named provider.
+
+## X-rendered translations (reader update September 9)
+
+The importer preserves the nullable `x_translation` record exactly as supplied,
+including status, display mode, capture time and failure reason. The post ID and
+`sha256:`-prefixed hash must match the exact original UTF-8 text. Invalid or
+misbound records are rejected; originals are never replaced with translations.
+A captured translation from another membership of the same unchanged post can
+fill a failed first capture.
+
+Text preparation prefers a valid captured X translation over Kimi. It imports
+one whole-post translation without pretending paragraph alignment is known,
+records provider `X translation`, policy `x-rendered-v1`, and the actual capture
+time, and applies the same numerical review checks. It does not call a model or
+reuse a translation from another capture of the same source. X failures remain
+in source metadata, and the approved Kimi adapter remains the fallback. Technical
+success is not semantic approval; compare each derivative with its source.

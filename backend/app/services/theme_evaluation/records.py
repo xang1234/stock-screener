@@ -1,5 +1,6 @@
 """Versioned records for the evidence-review checkpoint."""
 
+from hashlib import sha256
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -10,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     model_serializer,
+    model_validator,
 )
 
 REQUIRED_LIST_IDS = ('1986290701492232693', '1522014550211457024')
@@ -52,6 +54,34 @@ class Membership(Record):
     observed_at: AwareDatetime
 
 
+class XTranslation(Record):
+    status: Literal['captured', 'unavailable', 'action_failed', 'capture_failed']
+    text: str | None
+    post_id: str
+    original_text_sha256: Annotated[str, Field(pattern=r'^sha256:[a-f0-9]{64}$')] | None
+    source_language: str | None
+    target_language: Literal['en']
+    captured_at: AwareDatetime
+    provider: Literal['X translation']
+    display_mode: Literal['automatic', 'on_demand'] | None = None
+    failure_reason: str | None = None
+
+    @model_validator(mode='after')
+    def valid_capture(self):
+        if self.status == 'captured':
+            if (not self.text or not self.text.strip()
+                    or not self.original_text_sha256 or self.failure_reason):
+                raise ValueError('invalid_x_translation_capture')
+        elif self.text is not None or not self.failure_reason:
+            raise ValueError('failed_x_translation_requires_reason_and_no_text')
+        return self
+
+    def check_source(self, post_id: str, text: str):
+        expected = 'sha256:' + sha256(text.encode()).hexdigest() if text else None
+        if self.post_id != post_id or self.original_text_sha256 != expected:
+            raise ValueError('x_translation_source_mismatch')
+
+
 class SourceMetadata(Record):
     extraction_method: str | None = None
     extraction_version: str | None = None
@@ -67,6 +97,7 @@ class SourceMetadata(Record):
     text_source: str | None = None
     text_complete: bool | None = None
     incomplete_text_reasons: list[str] = Field(default_factory=list)
+    x_translation: XTranslation | None = None
     observed_at_fallback: bool = False
     pdf_sha256: SHA | None = None
     pdf_title: str | None = None
@@ -78,7 +109,7 @@ class SourceMetadata(Record):
         result = handler(self)
         # Additive reader fields must not change IDs of previously sealed v1 bundles.
         for name in ('image_captions', 'article_urls', 'reply_tweet_id', 'text_source',
-                     'text_complete', 'incomplete_text_reasons'):
+                     'text_complete', 'incomplete_text_reasons', 'x_translation'):
             if name not in self.model_fields_set:
                 result.pop(name, None)
         return result
