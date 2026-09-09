@@ -24,6 +24,12 @@ from .preparation_state import PreparationState
 from .preparation_store import PreparationStore, validate_handoff
 from .public_fetch import fetch_public
 from .records import URL, Record
+from .translation_selection import select_translation
+from .translation_selection_store import (
+    save_translation_selection,
+    selection_for_preparation,
+    selection_record,
+)
 from .xui_translation import captured_translation_result
 
 
@@ -68,6 +74,22 @@ def _text_result(store, text, language, translator):
         return cached[0]
     prepared = prepare_text(text, language=language, translator=translator)
     return store.save_result(TextResult(request=request, payload=prepared))
+
+
+def _document_translation(state, store, doc, language, translator):
+    captured = captured_translation_result(doc)
+    x_id = store.save_result(captured) if captured else None
+    initial = select_translation(doc.text, language, captured, None)
+    kimi_id = None
+    kimi = None
+    if initial.selected_candidate is None and initial.assessment.disposition == "fallback":
+        kimi_id = _text_result(store, doc.text, language, translator)
+        kimi = store.load_result(kimi_id)
+    decision = select_translation(doc.text, language, captured, kimi)
+    for result_id in (x_id, kimi_id):
+        if result_id is not None:
+            state.record(_binding("text", "document", doc, result_id))
+    return selection_record(doc.document_id, x_id, kimi_id, decision)
 
 
 def _image_result(store, location, is_local, vision, fetcher, allow_network):
@@ -236,6 +258,7 @@ def prepare(
             )
             state.record(_binding("image", "document", doc, rid, locator=location))
     if "text" in stages:
+        translation_decisions = []
         for doc in bundle.documents:
             override = handoff.documents.get(doc.document_id)
             language = (
@@ -243,15 +266,9 @@ def prepare(
                 if override and override.language
                 else doc.original_language
             )
-            captured = captured_translation_result(doc)
-            # Already captured translations are imported directly, never selected
-            # from a cache shared by different captures of the same original.
-            rid = (
-                store.save_result(captured)
-                if captured
-                else _text_result(store, doc.text, language, translator)
+            translation_decisions.append(
+                _document_translation(state, store, doc, language, translator)
             )
-            state.record(_binding("text", "document", doc, rid))
         references = {r.reference_id: r for r in bundle.followups}
         for binding in state.manifest.current_bindings:
             result = store.load_result(binding.result_id)
@@ -278,7 +295,19 @@ def prepare(
                     locator=binding.input_locator,
                 )
             )
-    return store.seal(base, state.manifest)
+    preparation_id = store.seal(base, state.manifest)
+    if "text" not in stages:
+        translation_decisions = []
+        if prior_id:
+            try:
+                translation_decisions = list(
+                    selection_for_preparation(base, store, prior_id)[1].decisions
+                )
+            except IntegrityError as exc:
+                if str(exc) != "missing_translation_selection":
+                    raise
+    save_translation_selection(base, store, preparation_id, translation_decisions)
+    return preparation_id
 
 
 class ArticleImport(Record):

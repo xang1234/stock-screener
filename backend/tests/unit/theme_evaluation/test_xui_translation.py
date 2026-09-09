@@ -8,6 +8,9 @@ from app.services.theme_evaluation.bundle import load_bundle, seal_bundle, sha25
 from app.services.theme_evaluation.preparation_pipeline import prepare
 from app.services.theme_evaluation.preparation_records import Handoff
 from app.services.theme_evaluation.preparation_store import PreparationStore
+from app.services.theme_evaluation.translation_selection_store import (
+    selection_for_preparation,
+)
 from app.services.theme_evaluation.xui_intake import import_xui
 
 NOW = datetime(2026, 9, 9, tzinfo=timezone.utc)
@@ -17,15 +20,15 @@ def payloads_with_translation(payloads):
     for payload in payloads.values():
         row = payload["items"][0]
         row.update(
-            text="매출 10% 증가\n\n전망 유지",
+            text="718만주 1.9조원",
             lang="ko",
             text_complete=True,
             x_translation={
                 "status": "captured",
-                "text": "Revenue increased 10%.\n\nOutlook unchanged.",
+                "text": "7.18 million shares, 1.9 trillion won",
                 "post_id": "1",
                 "original_text_sha256": "sha256:"
-                + sha256("매출 10% 증가\n\n전망 유지".encode()),
+                + sha256("718만주 1.9조원".encode()),
                 "source_language": "ko",
                 "target_language": "en",
                 "captured_at": NOW.isoformat(),
@@ -47,9 +50,8 @@ def test_captured_translation_is_preferred_without_model_call(xui_payloads, tmp_
     bundle = ingest(payloads_with_translation(xui_payloads))
     base = seal_bundle(tmp_path, bundle)
     assert (
-        load_bundle(base)
-        .documents[0]
-        .source_metadata.x_translation.text.startswith("Revenue")
+        load_bundle(base).documents[0].source_metadata.x_translation.text
+        == "7.18 million shares, 1.9 trillion won"
     )
 
     class ForbiddenTranslator:
@@ -71,10 +73,10 @@ def test_captured_translation_is_preferred_without_model_call(xui_payloads, tmp_
     result = store.load_result(store.load(base, pid).current_bindings[0].result_id)
     assert result.request.provider == "X translation"
     assert result.created_at == NOW
-    assert result.source_text == "매출 10% 증가\n\n전망 유지"
+    assert result.source_text == "718만주 1.9조원"
     assert (
         "".join(s.translated for s in result.payload.segments)
-        == "Revenue increased 10%.\n\nOutlook unchanged."
+        == "7.18 million shares, 1.9 trillion won"
     )
 
 
@@ -141,10 +143,79 @@ def test_failed_x_translation_preserves_reason_and_uses_fallback(
     assert all(s.translated == "Fallback English" for s in result.payload.segments)
 
 
+def test_materially_incomplete_x_capture_falls_back_once_and_preserves_both_attempts(
+    xui_payloads, tmp_path
+):
+    original = (
+        "이재용 삼성전자 회장, 母홍라희 보유 718만주 1.9조원에 매수 - 조선비즈 "
+        "https://t.co/yZWIyQI9gK"
+    )
+    assert sha256(original.encode()) == (
+        "82390db58687dbb27615c8f67acd5580a90da628a7a90d9179cf8a652a27b241"
+    )
+    payloads = payloads_with_translation(xui_payloads)
+    for payload in payloads.values():
+        row = payload["items"][0]
+        row["text"] = original
+        row["x_translation"].update(
+            text="Samsung",
+            original_text_sha256="sha256:" + sha256(original.encode()),
+        )
+    base = seal_bundle(tmp_path, ingest(payloads))
+
+    class Translator:
+        provider = "opencode-go"
+        model = "kimi-k2.6"
+        policy_version = "translation-v3"
+
+        def __init__(self):
+            self.inputs = []
+
+        def __call__(self, text, source, target):
+            self.inputs.append(text)
+            return (
+                "이재용, chairman of 삼성전자, buys 7.18 million shares held by "
+                "母홍라희 for 1.9 trillion won - 조선비즈"
+            )
+
+    translator = Translator()
+    store = PreparationStore(tmp_path / "prepared")
+    pid = prepare(
+        base,
+        store,
+        Handoff(bundle_id=base.name),
+        stages=["text"],
+        translator=translator,
+    )
+
+    assert translator.inputs == [original]
+    manifest = store.load(base, pid)
+    results = [store.load_result(binding.result_id) for binding in manifest.bindings]
+    assert [r.payload.segments[0].translated for r in results] == [
+        "Samsung",
+        (
+            "이재용, chairman of 삼성전자, buys 7.18 million shares held by "
+            "母홍라희 for 1.9 trillion won - 조선비즈"
+        ),
+    ]
+    _, sidecar = selection_for_preparation(base, store, pid)
+    decision = sidecar.decisions[0]
+    selected = store.load_result(decision.selected_result_id)
+    selected_text = "".join(segment.translated for segment in selected.payload.segments)
+    assert decision.eligible is True
+    assert "7.18 million shares" in selected_text
+    assert "1.9 trillion won" in selected_text
+
+
 def test_new_x_capture_does_not_reuse_previous_translation(xui_payloads, tmp_path):
     payloads = payloads_with_translation(xui_payloads)
     store = PreparationStore(tmp_path / "prepared")
-    for translated in ("Revenue increased 10%.", "Revenue rose by 10%."):
+    result_ids = []
+    sidecar_ids = []
+    for translated in (
+        "7.18 million shares, 1.9 trillion won",
+        "1.9 trillion won for 7.18 million shares",
+    ):
         new = copy.deepcopy(payloads)
         for p in new.values():
             p["items"][0]["x_translation"]["text"] = translated
@@ -152,3 +223,7 @@ def test_new_x_capture_does_not_reuse_previous_translation(xui_payloads, tmp_pat
         pid = prepare(base, store, Handoff(bundle_id=base.name), stages=["text"])
         result = store.load_result(store.load(base, pid).current_bindings[0].result_id)
         assert result.payload.segments[0].translated == translated
+        result_ids.append(store.load(base, pid).current_bindings[0].result_id)
+        sidecar_ids.append(selection_for_preparation(base, store, pid)[0])
+    assert len(set(result_ids)) == 2
+    assert len(set(sidecar_ids)) == 2
