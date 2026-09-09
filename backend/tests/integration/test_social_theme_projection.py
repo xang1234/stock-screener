@@ -396,6 +396,89 @@ def test_identical_legacy_social_post_preserves_legacy_attention(social_fixture,
     assert discovery._count_active_ingestion_days(NOW - timedelta(days=14), NOW) == 1
 
 
+def test_taxonomy_fallback_name_ignores_social_mention_on_dual_eligible_post(social_fixture):
+    from app.models.theme import ContentSource
+    from app.services.theme_evidence_eligibility_service import grant_eligibility
+    from app.services.theme_taxonomy_service import ThemeTaxonomyService
+
+    f = social_fixture
+    work_id = f.save()
+    f.apply(f.prepare([work_id]))
+    social_theme = f.db.query(ThemeCluster).one()
+    social_item_id = f.db.get(SocialExtractionWork, work_id).content_item_id
+
+    source = ContentSource(
+        name="Independent legacy",
+        source_type="news",
+        url="https://example.test/taxonomy-fallback",
+        is_active=True,
+    )
+    legacy_theme = ThemeCluster(
+        name="Legacy Winner",
+        display_name="Legacy Winner",
+        canonical_key="legacy_winner",
+        pipeline="technical",
+        is_active=True,
+    )
+    legacy_item = ContentItem(
+        source_type="news",
+        external_id="legacy-taxonomy-fallback",
+        content="Legacy theme evidence",
+        published_at=NOW - timedelta(days=1),
+    )
+    f.db.add_all([source, legacy_theme, legacy_item])
+    f.db.flush()
+    legacy_item.source_id = source.id
+    grant_eligibility(f.db, social_item_id, "technical", "legacy", source.id, NOW)
+    grant_eligibility(f.db, legacy_item.id, "technical", "legacy", source.id, NOW)
+    f.db.add(ThemeMention(
+        content_item_id=legacy_item.id,
+        source_type="news",
+        raw_theme="Legacy Winner",
+        theme_cluster_id=legacy_theme.id,
+        pipeline="technical",
+        mentioned_at=NOW,
+        confidence=1.0,
+        sentiment="bullish",
+    ))
+    f.db.commit()
+
+    result = ThemeTaxonomyService(f.db)._fallback_name_cluster(
+        [social_theme, legacy_theme]
+    )
+
+    assert result["l1_name"] == "Legacy Winner"
+
+
+def test_taxonomy_noise_threshold_ignores_social_mentions_on_dual_eligible_posts(social_fixture):
+    from app.models.theme import ContentSource
+    from app.services.theme_evidence_eligibility_service import grant_eligibility
+    from app.services.theme_taxonomy_service import ThemeTaxonomyService
+
+    f = social_fixture
+    work_ids = [f.save(age=age) for age in (1, 2, 3)]
+    f.apply(f.prepare(work_ids))
+    theme = f.db.query(ThemeCluster).one()
+    source = ContentSource(
+        name="Independent legacy",
+        source_type="news",
+        url="https://example.test/taxonomy-noise",
+        is_active=True,
+    )
+    f.db.add(source)
+    f.db.flush()
+    for work_id in work_ids:
+        item_id = f.db.get(SocialExtractionWork, work_id).content_item_id
+        grant_eligibility(f.db, item_id, "technical", "legacy", source.id, NOW)
+    f.db.commit()
+
+    ThemeTaxonomyService(f.db)._handle_noise_themes([theme])
+    f.db.flush()
+
+    parent = f.db.get(ThemeCluster, theme.parent_cluster_id)
+    assert parent.display_name == "Uncategorized Themes"
+
+
 def test_social_mention_cannot_hide_failed_legacy_extraction(social_fixture):
     from app.models.theme import ContentSource, ContentItemPipelineState
     from app.services.theme_evidence_eligibility_service import grant_eligibility

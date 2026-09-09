@@ -232,7 +232,7 @@ class ProcessSocialBacklog:
             return work.id
 
     def _claim(self, now, limit, admin_work_ids, eligible_work_ids=()):
-        claimed, outside = [], 0
+        claimed, outside, terminal = [], 0, 0
         with social_analysis_transaction(self.session_factory) as db:
             query = select(SocialExtractionWork).where(SocialExtractionWork.state != "succeeded")
             if eligible_work_ids:
@@ -259,7 +259,11 @@ class ProcessSocialBacklog:
                     if not ambiguous:
                         row.claim_token = None
                     row.claim_expires_at = None
-                if row.state in {"running", "failed_terminal"}:
+                if row.state == "failed_terminal":
+                    if eligible_work_ids:
+                        terminal += 1
+                    continue
+                if row.state == "running":
                     continue
                 published = datetime.fromisoformat(row.input_snapshot_json["created_at"])
                 if published < now - timedelta(days=14) and not row.requested_by_admin:
@@ -276,7 +280,7 @@ class ProcessSocialBacklog:
                 row.updated_at = now
                 claimed.append((row.id, row.claim_token, row.selected_model, row.prompt_version,
                     row.schema_version, dict(row.input_snapshot_json)))
-        return claimed, outside
+        return claimed, outside, terminal
 
     def _finish(self, work_id, token, state, error=None, result=None):
         with social_analysis_transaction(self.session_factory) as db:
@@ -327,8 +331,10 @@ class ProcessSocialBacklog:
         started = monotonic()
         current_time = lambda: now + timedelta(seconds=monotonic() - started)
         claim_limit = min(limit, self.batch_size * self.max_calls_per_run)
-        claimed, outside = self._claim(now, claim_limit, admin_work_ids, work_ids)
-        succeeded = deferred = failed = 0
+        claimed, outside, failed = self._claim(
+            now, claim_limit, admin_work_ids, work_ids
+        )
+        succeeded = deferred = 0
         for batch in self._groups(claimed, self.batch_size):
             model, prompt, schema = batch[0][2:5]
             claims = tuple((item[0], item[1]) for item in batch)

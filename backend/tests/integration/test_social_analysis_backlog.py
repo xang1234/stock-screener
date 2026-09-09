@@ -302,6 +302,23 @@ def test_parse_failure_and_ambiguous_billing_are_not_refunded(backlog, malformed
         assert attempt.state == ("reconciled" if usage and model == "actual-model" else "uncertain")
 
 
+def test_explicit_generation_counts_preexisting_terminal_work_as_failed(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+
+    llm = FakeLLM()
+    worker = processor(backlog, llm)
+    work_id = enqueue(backlog, worker, post(1))
+    with backlog.begin() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        work.state = "failed_terminal"
+        work.error_code = "malformed_json"
+
+    result = asyncio.run(worker.execute(NOW, 10, work_ids=(work_id,)))
+
+    assert result.failed == 1
+    assert llm.seen == []
+
+
 def test_pricing_mismatch_pauses_later_dispatch_until_version_corrected(backlog):
     llm = FakeLLM(model="different-model")
     worker = processor(backlog, llm)

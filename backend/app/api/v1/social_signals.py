@@ -23,7 +23,7 @@ from app.api.v1.config import require_admin
 router = APIRouter()
 ADMIN_ACTOR = "server-admin"
 _SAFE_REASON_CODES = {
-    "analysis_incomplete", "bounded_provider_read", "daily_budget_exhausted",
+    "analysis_failed", "analysis_incomplete", "bounded_provider_read", "daily_budget_exhausted",
     "invalid_provider_json", "invalid_provider_schema", "provider_error",
     "provider_lease_unavailable", "provider_network_error", "provider_timeout",
     "provider_unavailable",

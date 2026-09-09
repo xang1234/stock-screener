@@ -176,13 +176,16 @@ const attemptReasonCopy = {
 
 function LatestAttemptPanel({ attempt, onOpenOperations }) {
   const collectionFailed = attempt.status === 'collection_failed';
+  const analysisFailed = attempt.status === 'failed';
   const title = collectionFailed
     ? 'Latest collection did not publish'
+    : analysisFailed
+      ? 'Latest analysis failed'
     : attempt.status === 'processing'
       ? 'Posts collected; analysis is in progress'
       : 'First collection is in progress';
   return (
-    <Alert severity={collectionFailed ? 'error' : 'info'} sx={{ mb: 1.5 }}>
+    <Alert severity={collectionFailed || analysisFailed ? 'error' : 'info'} sx={{ mb: 1.5 }}>
       <AlertTitle>{title}</AlertTitle>
       <Typography variant="body2" sx={{ mb: 1 }}>
         Started {new Date(attempt.started_at).toLocaleString()}
@@ -210,6 +213,9 @@ function LatestAttemptPanel({ attempt, onOpenOperations }) {
       </Stack>
       {collectionFailed ? <Typography variant="body2" sx={{ mt: 1 }}>
         Analysis did not start because every enabled list must collect successfully.
+      </Typography> : null}
+      {analysisFailed ? <Typography variant="body2" sx={{ mt: 1 }}>
+        Collected posts were not published because analysis failed. Review and retry failed work in Operations.
       </Typography> : null}
       <Button size="small" sx={{ mt: 1 }} onClick={onOpenOperations}>Open Operations</Button>
     </Alert>

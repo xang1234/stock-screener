@@ -112,6 +112,7 @@ class Writer:
         self.collection_progress = {
             "2": SocialCollectionProgress(initial_complete=True, cursor="prior-cursor")
         }
+        self.failures = []
 
     def create_run(self, run_id, as_of):
         self.events.append("writer.create")
@@ -148,6 +149,10 @@ class Writer:
     def current_inputs_ready(self, run_id):
         return True
 
+    def fail_analysis(self, run_id, reason_code):
+        self.events.append("writer.fail_analysis")
+        self.failures.append((run_id, reason_code))
+
     def prepare_run(self, run_id, rows, as_of, *, theme_evidence=(), context=None):
         self.events.append("writer.prepare")
         self.prepared = (rows, theme_evidence, context)
@@ -159,9 +164,10 @@ class Writer:
 
 
 class Backlog:
-    def __init__(self, events, *, deferred=0):
+    def __init__(self, events, *, deferred=0, failed=0):
         self.events = events
         self.deferred = deferred
+        self.failed = failed
         self.enqueued = []
 
     def enqueue(self, content_item_id, post, **kwargs):
@@ -172,7 +178,13 @@ class Backlog:
     async def execute(self, now, limit, admin_work_ids=(), work_ids=()):
         self.events.append("backlog.execute")
         assert tuple(value[0] for value in self.enqueued) == work_ids
-        return BacklogResult(max(0, limit - self.deferred), self.deferred, 0, 0, NOW + timedelta(hours=12))
+        return BacklogResult(
+            max(0, limit - self.deferred - self.failed),
+            self.deferred,
+            self.failed,
+            0,
+            NOW + timedelta(hours=12),
+        )
 
 
 class EvidenceReader:
@@ -229,14 +241,14 @@ class ConfirmationReader:
         )
 
 
-def use_case(*, mode="live", fail_source=None, deferred=0, current=True):
+def use_case(*, mode="live", fail_source=None, deferred=0, failed=0, current=True):
     from app.use_cases.social_signals.refresh import RefreshSocialSignals
 
     events = []
     catalog = Catalog(mode=mode, current=current)
     provider = Provider(events, fail_source=fail_source)
     writer = Writer(events, mode=mode)
-    backlog = Backlog(events, deferred=deferred)
+    backlog = Backlog(events, deferred=deferred, failed=failed)
     evidence = EvidenceReader(events)
     evidence.writer = writer
     lease = Lease(events=events)
@@ -318,6 +330,19 @@ async def test_budget_pause_keeps_work_and_does_not_prepare():
     refresh, events, _, _, backlog, _ = use_case(deferred=1)
     result = await refresh.execute("scheduled", NOW)
     assert result.processing_status == "deferred"
+    assert backlog.enqueued
+    assert "writer.prepare" not in events
+
+
+@pytest.mark.asyncio
+async def test_terminal_analysis_failure_fails_generation_without_budget_resume_state():
+    refresh, events, _, writer, backlog, _ = use_case(failed=1)
+
+    result = await refresh.execute("scheduled", NOW)
+
+    assert result.processing_status == "failed"
+    assert result.reason_codes == ("analysis_failed",)
+    assert writer.failures == [(result.run_id, "analysis_failed")]
     assert backlog.enqueued
     assert "writer.prepare" not in events
 

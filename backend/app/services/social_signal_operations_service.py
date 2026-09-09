@@ -25,6 +25,7 @@ from app.services.social_signal_runtime_gate import (
 
 
 _PUBLIC_REASON_CODES = {
+    "analysis_failed",
     "analysis_incomplete",
     "bounded_provider_read",
     "daily_budget_exhausted",
@@ -83,6 +84,7 @@ class SocialSignalOperationsService:
         last_collection = max(successful_collections, default=None)
         source_outcomes = run.source_outcomes_json if run else {}
         prepared = run.application_progress_json.get("prepared", {}) if run else {}
+        failure = run.application_progress_json.get("failure", {}) if run else {}
         context = prepared.get("context") or {}
         unknown_identity_count = db.scalar(select(func.count()).select_from(
             SocialThemeAssociation
@@ -153,7 +155,13 @@ class SocialSignalOperationsService:
             "run_id": run.id if run else None,
             "run_status": run.status if run else None,
             "collection_status": "complete" if run and set(observations) == set(run.application_progress_json.get("sources", {})) else "incomplete",
-            "processing_status": "complete" if run and run.status in {"staged", "completed", "published"} else "pending",
+            "processing_status": (
+                "complete"
+                if run and run.status in {"staged", "completed", "published"}
+                else "failed"
+                if run and run.status == "failed"
+                else "pending"
+            ),
             "history_by_source": {key: value.get("history_status", "unknown") for key, value in source_outcomes.items()},
             "source_count": sum(row.lifecycle_state != "archived" for row in sources),
             "archived_source_count": sum(row.lifecycle_state == "archived" for row in sources),
@@ -188,11 +196,15 @@ class SocialSignalOperationsService:
                     provider=registry.provider if registry else "disabled"
                 )
             ),
-            "reason_codes": sorted({
-                reason for value in source_outcomes.values()
-                for reason in value.get("coverage_reason_codes", [])
-                if reason in _PUBLIC_REASON_CODES
-            }),
+            "reason_codes": sorted(
+                {
+                    reason
+                    for value in source_outcomes.values()
+                    for reason in value.get("coverage_reason_codes", [])
+                    if reason in _PUBLIC_REASON_CODES
+                }
+                | ({failure.get("reason_code")} & _PUBLIC_REASON_CODES)
+            ),
         }
 
 

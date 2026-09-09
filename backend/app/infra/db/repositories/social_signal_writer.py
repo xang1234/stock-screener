@@ -118,6 +118,10 @@ class SocialSignalWriter:
                 historical_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(SocialRunWork.run_id == old.id).order_by(SocialRunWork.work_id)))
             else:
                 historical_ids = old_payload.get("prepared", {}).get("work_ids")
+                if historical_ids is None and old.status == "failed":
+                    failure = old_payload.get("failure", {})
+                    if failure.get("reason_code") == "analysis_failed":
+                        historical_ids = failure.get("work_ids")
                 if historical_ids is None:
                     raise ValueError("terminal_run_manifest_missing")
                 historical_ids = tuple(historical_ids)
@@ -184,6 +188,36 @@ class SocialSignalWriter:
             else:
                 raise ValueError("unsupported_existing_run_state")
         return self.publish(run_id, expected_mode_version)
+
+    def fail_analysis(self, run_id, reason_code):
+        """Close a generation on terminal extraction failure without publishing it."""
+        if reason_code != "analysis_failed":
+            raise ValueError("unsupported_social_run_failure")
+        completed_at = self.clock()
+        validate_utc_timestamp(completed_at, "completed_at")
+        with self.session_factory.begin() as db:
+            _lock_registry(db)
+            run = db.get(SocialSignalRun, run_id)
+            if run is None or run.status != "running":
+                raise ValueError("run_not_collecting")
+            work_ids = tuple(db.scalars(
+                select(SocialRunWork.work_id)
+                .where(SocialRunWork.run_id == run_id)
+                .order_by(SocialRunWork.work_id)
+            ))
+            run.application_progress_json = {
+                **deepcopy(run.application_progress_json),
+                "failure": {
+                    "reason_code": reason_code,
+                    "work_ids": list(work_ids),
+                },
+            }
+            run.source_outcomes_json = {
+                source_id: {**value, "processing_status": "failed"}
+                for source_id, value in run.source_outcomes_json.items()
+            }
+            run.coverage_json = deepcopy(run.source_outcomes_json)
+            run.status, run.completed_at = "failed", completed_at
 
     @staticmethod
     def _post(value):
@@ -447,6 +481,10 @@ class SocialSignalWriter:
                 work_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(SocialRunWork.run_id == run_id).order_by(SocialRunWork.work_id)))
             else:
                 manifest = run.application_progress_json.get("prepared", {}).get("work_ids")
+                if manifest is None and run.status == "failed":
+                    failure = run.application_progress_json.get("failure", {})
+                    if failure.get("reason_code") == "analysis_failed":
+                        manifest = failure.get("work_ids")
                 if manifest is None:
                     raise ValueError("terminal_run_manifest_missing")
                 work_ids = tuple(manifest)

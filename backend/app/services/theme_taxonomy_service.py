@@ -879,6 +879,7 @@ class ThemeTaxonomyService:
         for theme in themes:
             mention_count = self.db.query(func.count(ThemeMention.id)).filter(
                 ThemeMention.theme_cluster_id == theme.id,
+                ThemeMention.social_work_id.is_(None),
                 legacy_eligibility_exists(ThemeMention.content_item_id, theme.pipeline),
             ).scalar() or 0
             if mention_count > best_mentions:
@@ -899,6 +900,7 @@ class ThemeTaxonomyService:
         for theme in noise_themes:
             mention_count = self.db.query(func.count(ThemeMention.id)).filter(
                 ThemeMention.theme_cluster_id == theme.id,
+                ThemeMention.social_work_id.is_(None),
                 legacy_eligibility_exists(ThemeMention.content_item_id, theme.pipeline),
             ).scalar() or 0
 

@@ -215,6 +215,49 @@ def test_social_freshness_ignores_failed_collection_observation(db_session):
     assert payload["social_fresh"] is False
 
 
+def test_social_health_reports_terminal_analysis_failure(db_session):
+    from app.infra.db.models.social_signals import SocialSignalRun
+    from app.services.social_signal_operations_service import SocialSignalOperationsService
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    admin = SocialSourceAdminService(db_session)
+    admin.ensure_seed_sources()
+    runtime = admin.read_runtime()
+    runtime = admin.apply_runtime("live", "official", runtime.version, "admin")
+    db_session.add(SocialSignalRun(
+        id="failed-analysis",
+        registry_id=1,
+        registry_version=runtime.version,
+        mode="live",
+        provider="official",
+        status="failed",
+        source_outcomes_json={
+            "1": {"read_status": "success", "processing_status": "failed"},
+            "2": {"read_status": "success", "processing_status": "failed"},
+        },
+        application_progress_json={
+            "sources": {"1": {}, "2": {}},
+            "observations": {"1": {}, "2": {}},
+            "failure": {"reason_code": "analysis_failed", "work_ids": [1]},
+        },
+        feature_run_ids_json={},
+        exposure_dates_json={},
+        coverage_json={},
+        created_at=now,
+        completed_at=now,
+    ))
+    db_session.commit()
+
+    payload = SocialSignalOperationsService(
+        redis_client=False,
+        clock=lambda: now,
+    ).snapshot(db_session)
+
+    assert payload["processing_status"] == "failed"
+    assert payload["reason_codes"] == ["analysis_failed"]
+
+
 def test_social_signal_health_reports_pricing_blocks_without_secret_configuration(db_session):
     from app.models.app_settings import AppSetting
     from app.services.social_signal_operations_service import SocialSignalOperationsService

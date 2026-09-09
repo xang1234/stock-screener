@@ -201,7 +201,16 @@ class RefreshSocialSignals:
             processed = await self.backlog.execute(
                 now, len(run_work_ids), work_ids=tuple(sorted(set(run_work_ids)))
             )
-            if processed.deferred or processed.failed:
+            if processed.failed:
+                self.writer.fail_analysis(run_id, "analysis_failed")
+                return self._result(
+                    run_id,
+                    runtime.mode,
+                    "failed",
+                    "analysis_failed",
+                    sources=enabled,
+                )
+            if processed.deferred:
                 return self._result(run_id, runtime.mode, "deferred", "analysis_incomplete", sources=enabled)
         self.writer.select_current_inputs(run_id)
         if hasattr(self.writer, "current_inputs_ready") and not self.writer.current_inputs_ready(run_id):

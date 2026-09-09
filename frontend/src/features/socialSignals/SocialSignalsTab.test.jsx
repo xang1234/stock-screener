@@ -166,4 +166,26 @@ describe('SocialSignalsTab', () => {
     expect(screen.getByText(/Analysis did not start because every enabled list/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Operations' })).toBeInTheDocument();
   });
+
+  it('explains terminal analysis failure and directs the admin to retry', async () => {
+    socialApi.getSocialQueue.mockResolvedValueOnce(queue({
+      available: false, reason_code: 'no_published_run', total: 0, items: [],
+      latest_attempt: {
+        run_id: 'failed-analysis-1', status: 'failed',
+        started_at: '2026-09-08T05:49:14Z', completed_at: '2026-09-08T05:50:14Z',
+        sources: [
+          { name: 'Minervini', read_status: 'success', received_count: 20,
+            history_status: 'limited', reason_codes: [] },
+          { name: 'AI Investing', read_status: 'success', received_count: 50,
+            history_status: 'limited', reason_codes: [] },
+        ],
+      },
+    }));
+
+    renderTab();
+
+    expect(await screen.findByText('Latest analysis failed')).toBeInTheDocument();
+    expect(screen.getByText(/Review and retry failed work in Operations/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Operations' })).toBeInTheDocument();
+  });
 });

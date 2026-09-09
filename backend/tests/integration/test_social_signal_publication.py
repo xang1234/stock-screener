@@ -259,6 +259,49 @@ def test_current_replay_preserves_terminal_history_and_collection_freshness(stor
         assert tuple(s.last_successful_collection_at for s in db.query(SocialSourceConfiguration).order_by(SocialSourceConfiguration.content_source_id)) == timestamps
 
 
+def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(store):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.models.theme import ContentItem
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    w = writer(store)
+    w.create_run("failed", NOW)
+    value = batch()
+    w.persist_observations(value, run_id="failed")
+    w.persist_observations(empty_batch(2), run_id="failed")
+    with store() as db:
+        item_id = db.query(ContentItem).one().id
+    work_id = ProcessSocialBacklog(store).enqueue(
+        item_id,
+        value.posts[0],
+        selected_model="synthetic/model",
+        now=NOW,
+        run_id="failed",
+    )
+    w.select_current_inputs("failed")
+
+    w.fail_analysis("failed", "analysis_failed")
+
+    with store() as db:
+        run = db.get(SocialSignalRun, "failed")
+        assert run.status == "failed"
+        assert run.application_progress_json["failure"] == {
+            "reason_code": "analysis_failed",
+            "work_ids": [work_id],
+        }
+        work = db.get(SocialExtractionWork, work_id)
+        work.requested_by_admin = True
+        work.state = "pending"
+        work.error_code = None
+        db.commit()
+
+    w.create_replay_run("admin-retry", "failed", NOW + timedelta(hours=1))
+
+    saved = w.read_run_inputs("admin-retry")
+    assert saved.replay_manifest.saved_run_id == "failed"
+    assert saved.replay_manifest.required_inputs
+
+
 def test_replay_flushes_run_before_linking_successful_work(store):
     """Postgres must see the parent run before replay work links are inserted."""
     from app.infra.db.models.social_analysis import SocialRunWork
