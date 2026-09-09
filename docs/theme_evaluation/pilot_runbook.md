@@ -101,6 +101,11 @@ python scripts/prepare_theme_evidence.py verify \
 
 Review outputs:
 
+- `START_HERE.md`: material holds, review work, informational notes, exclusions and coverage.
+- `translation-review.md` / `.csv`, `article-review.md` / `.csv`, `image-review.md` / `.csv`: prioritized findings with exact result/source hashes and next actions.
+- `assessment.json`: immutable, reproducible assessment; separate from legacy processing statuses.
+- `linked-post-manifest.json`, `linked-post-review.md`, `reference-manifest.csv`: all reference relationships and bounded follow-up work, separate from selected-post counts.
+- `preparation-runs.json`: measured request counts and elapsed time for recorded runs.
 - `evidence.md`: original evidence link, images, transcription, visual observations, original/translated segments, provenance and gaps.
 - `preparations.csv`: detailed payloads, parent/source links, model/policy, timestamps, warnings, and current/superseded status.
 - `article_followups.csv`: only current unresolved/partial article versions, ready for assisted recovery.
@@ -136,3 +141,22 @@ Enable translation explicitly with `--stages text --allow-translation-calls`, us
 The [live validation report](kimi_translation_validation_2026-09-08.md) records 20 final-round translations, 10/10 preserved large quantities and two contextual issues. Policy `translation-v3` retains written CJK large quantities in source notation; it does not ask Kimi to convert them into billions. Each protected token must return exactly once before original quantities are restored. Invalid/truncated output remains unavailable. Name, supplier/customer direction and speaker attribution still need evidence review.
 
 The adapter bounds each segment to 4,000 characters and each output to 4,096 tokens, with a 45-second read timeout. This is a short-passage validation, not a measured long-article throughput or accuracy guarantee. The configured route remains Go; a direct API route has not been provisioned.
+
+### Evidence quality and language policy
+
+New preparation assesses X output before using it. Missing text or supported material quantity/polarity discrepancies trigger Kimi fallback when explicitly enabled. Ambiguous meaning remains review work; the checks are not a semantic correctness guarantee. Original X candidates, failed Kimi attempts and their provenance remain inspectable. Use the selected-result sidecar rather than a legacy `success` or `current` field to determine deterministic eligibility.
+
+Opt into language preparation v2 with:
+
+```bash
+python scripts/prepare_theme_evidence.py prepare \
+  --bundle <bundle-directory> --output-root <preparation-root> \
+  --handoff <reader-handoff.json> --prior-preparation <preparation-id> \
+  --stages text --text-policy v2 --allow-translation-calls
+```
+
+V2 preserves observed metadata separately from its conservative language decision, avoids translating URL/emoji-only content, and packs adjacent paragraphs into bounded segments without losing source characters. Article language comes from that article. Legacy behavior remains the default for compatibility; the v2 cache namespace prevents incompatible reuse. See [language challenge](language_challenge.md) and [remediation validation](gap_remediation_validation.md).
+
+Image processing records specific sanitized failure codes. One run permits at most one retry for an eligible transient failure per input/provider/policy, reusing validated bytes. Malformed, truncated, authentication and deterministic validation failures do not trigger blind retries. Every attempt is preserved, and actual download/model calls are reported separately from reused outcomes.
+
+The review command accepts `--annotations <annotations.json>` containing an array of evidence decisions. Copy exact `entry_id`, `result_id`, `input_sha256`, `source_text_sha256`, bundle and preparation IDs from the assessment, then add `decision` (`accept`, `exclude`, `hold`), `reviewer`, `reviewed_at` with timezone, and a nonblank `reason`. Scope defaults to one `claim`; `evidence` covers that source/result/stage. Image uncertainty can additionally be classified as `cosmetic`, `material` or `unknown`. Stale hashes, conflicting scopes and malformed annotations are rejected before writing a packet. Always render to a new directory. An annotation never changes original artifacts, deterministic selection, or the extraction approval gate.

@@ -74,13 +74,14 @@ Assisted browser recovery can supply accessible exact-match article text through
       "warnings": [],
       "response_sha256": "<SHA-256 of UTF-8 text field for browser imports>",
       "retrieved_at": "<actual capture time with UTC offset>",
-      "match_basis": "How URL, title and publisher establish this is the referenced article"
+      "match_basis": "How URL, title and publisher establish this is the referenced article",
+      "completeness_basis": "What was checked to establish that the complete article body was captured"
     }
   }]
 }
 ```
 
-`retrieved_at` must be explicitly supplied. Use `partial` whenever the captured body is incomplete or uncertain. `full` is an attributed completeness assertion for review, not automated proof or evidence approval. Preserve access restrictions; do not bypass logins/paywalls.
+`retrieved_at` must be explicitly supplied. New `full` browser imports also require nonblank `completeness_basis`; title/URL matching alone is insufficient. Use `partial` whenever the captured body is incomplete or uncertain. `full` is an attributed completeness assertion for review, not automated proof or evidence approval. Preserve access restrictions; do not bypass logins/paywalls. Existing stored artifacts retain their original serialization.
 
 ## Translation import
 
@@ -117,10 +118,27 @@ misbound records are rejected; originals are never replaced with translations.
 A captured translation from another membership of the same unchanged post can
 fill a failed first capture.
 
-Text preparation prefers a valid captured X translation over Kimi. It imports
+Text preparation assesses a captured X translation before preferring it over Kimi. It imports
 one whole-post translation without pretending paragraph alignment is known,
 records provider `X translation`, policy `x-rendered-v1`, and the actual capture
-time, and applies the same numerical review checks. It does not call a model or
-reuse a translation from another capture of the same source. X failures remain
-in source metadata, and the approved Kimi adapter remains the fallback. Technical
-success is not semantic approval; compare each derivative with its source.
+time. The versioned adequacy check distinguishes eligible output, uncertain output
+requiring review, and material failures requiring fallback. A material failure
+retains the X candidate and creates an approved Kimi candidate when translation
+calls are enabled. A failed fallback cannot make the rejected X candidate eligible.
+X capture failures remain in source metadata. Technical success is not semantic
+approval; compare each derivative with its source.
+
+Selection decisions are immutable sidecars bound to the exact bundle, preparation,
+source text and candidate result IDs. Legacy preparations with no selection
+sidecar remain unresolved; do not infer eligibility from their current result.
+Use `--text-policy v2` for the opt-in language/segmentation policy. It preserves
+observed metadata, handles conflicting script evidence conservatively, packs
+paragraphs without dropping separators, and skips model calls for nonlinguistic
+content. Its cache namespace differs from legacy preparation.
+
+Article recovery uses the article's own language metadata. A linking post's
+language must not be assigned to the article. Exact normalized destinations can
+share recovery work while all reference relationships remain visible. Native
+X Article documents already attached to the bundle are retained. Linked X posts
+are exported as a bounded one-hop follow-up manifest; a manifest entry is not a
+captured or approved source.

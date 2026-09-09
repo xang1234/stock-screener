@@ -20,17 +20,19 @@ The helper returns the existing `TextPreparation` model. This avoids new seriali
 
 ## Optional live Kimi review
 
-No live Kimi calls were run while creating this fixture, and this document makes no multilingual-accuracy claim. If a controller later authorizes a live validation, process each case exactly once with Kimi K2.6 through the existing OpenCode Go adapter. Save the raw preparation output separately from this fixture, then compare it manually with both `expected_meaning` and every `expected_quantity_facts` entry.
+No live Kimi calls were run while creating this fixture. The subsequent controlled run on September 10 used the approved Kimi K2.6 adapter once per required translation segment: 20 cases, 16 model calls, 35.88 seconds. Two English cases used identity and two nonlinguistic cases retained the original without a model call. Outputs and the agent's comparison against the synthetic reference are retained under `data/xui-reader/theme-evaluation/gap-remediation-20260910/`; they are not human evidence approval or a population accuracy estimate.
 
 Record results by category with these columns:
 
 | Category | Cases | Material meaning errors | Material quantity errors | Uncertain cases | Review status |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Korean | 4 | not run | not run | not run | pending live review |
-| Japanese | 4 | not run | not run | not run | pending live review |
-| Chinese | 4 | not run | not run | not run | pending live review |
-| Mixed | 4 | not run | not run | not run | pending live review |
-| English/nonlinguistic | 4 | not run | not run | not run | pending live review |
+| Korean | 4 | 0 confirmed | 0 confirmed | 1 | Signed-decrease wording needs review |
+| Japanese | 4 | 0 confirmed | 0 confirmed | 1 | “Write off shares” versus cancel/retire needs review |
+| Chinese | 4 | 0 identified | 0 identified | 0 | Consistent with synthetic references |
+| Mixed | 4 | 0 identified | 0 identified | 0 | Consistent; quoted bilingual quantities need careful counting |
+| English/nonlinguistic | 4 | 0 identified | 0 identified | 0 | Two identities, two retained originals |
+
+The Korean source itself combines a negative sign with a decrease; preserving that phrasing does not resolve its intended polarity. The Japanese output uses less precise corporate-action wording. CJK magnitude notation remains in the translated text by design. Some company names were rendered only in English despite the prompt's original-script instruction; source text remains visible, and prompt compliance is not guaranteed. The first adequacy-policy pass produced several false warnings on these outputs; these triggered deterministic regression fixes rather than new model calls. See the remediation validation report for final warning counts.
 
 A material meaning error changes or omits a company, action, polarity, qualification, attribution, or reported-versus-forecast relationship. A material quantity error changes or omits a number, sign, unit, currency, date/period, ticker, or product identifier. Mark a case uncertain when manual reviewers cannot establish faithful meaning from the fixture; do not resolve uncertainty by model agreement.
 
