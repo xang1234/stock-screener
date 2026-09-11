@@ -52,6 +52,39 @@ def test_translation_sends_source_as_data_and_preserves_returned_text():
     assert client.policy_version == "translation-v3"
 
 
+def test_kimi_sessions_are_stable_per_client_distinct_across_clients_and_honor_ids():
+    from app.services.theme_evaluation.kimi_client import OpenCodeGoKimi
+
+    sessions = []
+
+    def handle(request):
+        sessions.append(request.headers["x-opencode-session"])
+        return response({"translation": "ok"})
+
+    transport = httpx.MockTransport(handle)
+    first = OpenCodeGoKimi("test-key", transport=transport)
+    first.complete_json([], max_tokens=1)
+    first.complete_json([], max_tokens=1)
+    explicit = OpenCodeGoKimi(
+        "test-key", session_id="evaluation-batch-42", transport=transport
+    )
+    explicit.complete_json([], max_tokens=1)
+    second = OpenCodeGoKimi("test-key", transport=transport)
+    second.complete_json([], max_tokens=1)
+
+    assert sessions[0] == sessions[1]
+    assert sessions[2] == "evaluation-batch-42"
+    assert sessions[3] != sessions[0]
+
+
+@pytest.mark.parametrize("session_id", ["", " ", "line\nbreak", "x" * 129, 1])
+def test_kimi_rejects_unsafe_or_invalid_session_ids(session_id):
+    from app.services.theme_evaluation.kimi_client import OpenCodeGoKimi
+
+    with pytest.raises(ValueError, match="session"):
+        OpenCodeGoKimi("test-key", session_id=session_id)
+
+
 @pytest.mark.parametrize(
     "content",
     [

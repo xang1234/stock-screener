@@ -9,6 +9,8 @@ from .evidence_packet import write_assessment_packet
 from .image_preparation import validate_image
 from .preparation_results import ArticleResult, ImageResult, TextResult
 from .preparation_run import runs_for_preparation
+from .quantity_display import POLICY_VERSION as QUANTITY_POLICY
+from .quantity_review import normalized_segments, render_normalized_segment
 from .review import _text, _write_csv, render_review
 
 
@@ -21,7 +23,7 @@ def render_preparation(
     bundle = store.validate(base, manifest)
     output.mkdir(parents=True, exist_ok=False)
     render_review(bundle, output / "original")
-    rows, followups = [], []
+    rows, followups, quantity_results = [], [], []
     active = set(manifest.current.values())
     lines = [
         "# Prepared evidence — review before extraction",
@@ -36,11 +38,15 @@ def render_preparation(
         (
             "Transcriptions, translations and visual observations are derivatives of the original evidence. "
             "They do not count as independent corroboration. "
-            "Translations may retain original quantity notation: 억/億/亿 = 100 million; "
-            "만/万/萬 = 10 thousand; 조/兆 = one trillion. Check the source currency and units."
+            "English quantity displays use deterministic arithmetic for supported explicit units. "
+            "Original notation remains below; ambiguous amounts stay unchanged and flagged. "
+            "Normalization does not resolve translation quality holds or grant extraction approval."
         ),
         "",
     ]
+    lines.extend(
+        ["[Structured quantities and original spans](normalized-quantities.json)", ""]
+    )
     images = output / "images"
     for number, binding in enumerate(manifest.bindings, 1):
         result = store.load_result(binding.result_id)
@@ -110,7 +116,19 @@ def render_preparation(
                 lines.append("")
         elif isinstance(result, TextResult):
             lines.extend(["Language: " + _text(result.payload.source_language), ""])
-            for segment in result.payload.segments:
+            normalized = normalized_segments(result.payload)
+            quantity_results.append(
+                {
+                    "binding_id": binding.binding_id,
+                    "result_id": binding.result_id,
+                    "source_id": binding.source_id,
+                    "version": row["version"],
+                    "legacy_status": result.status,
+                    "input_sha256": result.request.input_sha256,
+                    "segments": normalized,
+                }
+            )
+            for segment, view in zip(result.payload.segments, normalized):
                 lines.extend(["**Original segment**", ""])
                 lines.extend(
                     "> " + _text(line) for line in segment.original.splitlines()
@@ -121,6 +139,7 @@ def render_preparation(
                     for line in (segment.translated or "[unavailable]").splitlines()
                 )
                 lines.append("")
+                lines.extend(render_normalized_segment(view))
         elif isinstance(result, ArticleResult):
             lines.extend("> " + _text(line) for line in result.source_text.splitlines())
             lines.append("")
@@ -214,6 +233,21 @@ def render_preparation(
     )
     assessment_id = save_assessment(base, store, assessment)
     summary.update(write_assessment_packet(output, assessment, assessment_id))
+    (output / "normalized-quantities.json").write_text(
+        json.dumps(
+            {
+                "policy_version": QUANTITY_POLICY,
+                "bundle_id": manifest.bundle_id,
+                "preparation_id": preparation_id,
+                "assessment_id": assessment_id,
+                "extraction": "awaiting_evidence_approval",
+                "results": quantity_results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     (output / "coverage.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )

@@ -86,6 +86,8 @@ class ContentItem(Base):
     processed_at = Column(DateTime(timezone=True))
     extraction_error = Column(Text)  # If extraction failed
 
+    attachment_revision = Column(String(64))
+
     # Multilingual support (T7.1). Original title/content above stay authoritative;
     # translated_* are the derivative the extraction pipeline consumes when
     # source_language != extraction_target_language. translation_metadata is a
@@ -154,6 +156,9 @@ class ThemeMention(Base):
 
     # Context
     excerpt = Column(Text)  # Relevant excerpt from source
+    development = Column(Text, nullable=True)  # Source-specific summary, separate from theme identity
+    grounding_context = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=True)
+    claim_support = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"))
 
     # Timestamps
     mentioned_at = Column(DateTime(timezone=True), index=True)  # When content was published
@@ -177,6 +182,38 @@ class ThemeMention(Base):
     )
 
 
+class ContentAttachment(Base):
+    """Prepared child evidence; never an independent theme mention/source."""
+
+    __tablename__ = "content_attachments"
+    id = Column(Integer, primary_key=True)
+    content_item_id = Column(Integer, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(10), nullable=False)
+    url = Column(Text, nullable=False)
+    reference_key = Column(String(64), nullable=False)
+    policy_version = Column(String(40), nullable=False, default="live-attachment-v1")
+    status = Column(String(20), nullable=False, default="pending")
+    observed_at = Column(DateTime(timezone=True), nullable=False)
+    prepared_at = Column(DateTime(timezone=True))
+    next_attempt_at = Column(DateTime(timezone=True))
+    lease_until = Column(DateTime(timezone=True))
+    lease_token = Column(String(36))
+    attempt_count = Column(Integer, nullable=False, default=0)
+    error_code = Column(String(100))
+    content_sha256 = Column(String(64))
+    final_url = Column(Text)
+    original_text = Column(Text)
+    prepared_text = Column(Text)
+    provenance = Column(JSON)
+
+    __table_args__ = (
+        UniqueConstraint("content_item_id", "reference_key", name="uix_attachment_parent_reference"),
+        CheckConstraint("kind IN ('image', 'article')", name="ck_attachment_kind"),
+        CheckConstraint("status IN ('pending', 'processing', 'complete', 'partial', 'failed')", name="ck_attachment_status"),
+        Index("idx_attachment_pending", "status", "next_attempt_at"),
+    )
+
+
 class ContentItemPipelineState(Base):
     """Per-pipeline processing state for each content item."""
 
@@ -187,6 +224,8 @@ class ContentItemPipelineState(Base):
     pipeline = Column(String(20), nullable=False)
     status = Column(String(30), nullable=False, default="pending")
     attempt_count = Column(Integer, nullable=False, default=0)
+    evidence_revision = Column(String(64))
+    claim_review = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"))
     error_code = Column(String(100))
     error_message = Column(Text)
     last_attempt_at = Column(DateTime(timezone=True))

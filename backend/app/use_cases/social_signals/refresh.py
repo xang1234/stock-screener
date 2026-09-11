@@ -168,8 +168,14 @@ class RefreshSocialSignals:
                 content_id = content_ids.get(post.provider_post_id)
                 if content_id is not None:
                     posts_by_identity[(content_id, self.input_hash(post))] = post
+        directly_collected_content_ids = {content_id for content_id, _ in posts_by_identity}
         if hasattr(self.evidence_reader, "retained_posts"):
             for content_id, post in self.evidence_reader.retained_posts(run_id, now):
+                # The generation already froze a direct observation for this parent.
+                # A late attachment belongs to the next generation, never a second
+                # same-parent input that would add weight to this one.
+                if content_id in directly_collected_content_ids:
+                    continue
                 posts_by_identity[(content_id, self.input_hash(post))] = post
         run_work_ids = []
         required_identities = {(required.content_item_id, required.input_hash)

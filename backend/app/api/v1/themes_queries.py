@@ -39,8 +39,8 @@ from ...schemas.theme import (
     ThemeMatchMethodDistributionResponse,
     ThemeMatchTelemetryResponse,
     ThemeMatchTelemetrySliceResponse,
-    ThemeMentionsResponse,
     ThemeMentionDetailResponse,
+    ThemeMentionsResponse,
     ThemeMetricsResponse,
     ThemeRankingItem,
     ThemeRankingsResponse,
@@ -49,6 +49,7 @@ from ...schemas.theme import (
     ThemeValidationResponse,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...services.live_attachment_service import attachment_snapshot
 from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_discovery_service import ThemeDiscoveryService
 from ...services.theme_merging_service import ThemeMergingService
@@ -467,7 +468,9 @@ def get_theme_detail(
     from app.infra.db.models.social_signals import SocialSourceRegistry
     registry = db.get(SocialSourceRegistry, 1)
     if registry is not None and registry.mode == "live":
-        from app.services.social_theme_projection_service import SocialThemeProjectionService
+        from app.services.social_theme_projection_service import (
+            SocialThemeProjectionService,
+        )
         effective = SocialThemeProjectionService(db).effective_live_membership(theme_id)
         by_symbol = {item.symbol: item for item in constituent_payloads}
         for member in effective:
@@ -545,6 +548,11 @@ def get_theme_mentions(
         ThemeMention.mentioned_at.desc()
     ).limit(limit).all()
 
+    attachment_snapshots = {
+        content.id: attachment_snapshot(db, content.id)
+        for _, content in mentions
+    }
+
     return ThemeMentionsResponse(
         theme_name=cluster.display_name,
         theme_id=theme_id,
@@ -557,6 +565,9 @@ def get_theme_mentions(
                 author=content.author,
                 published_at=content.published_at,
                 excerpt=mention.excerpt,
+                development=mention.development,
+                grounding_context=mention.grounding_context,
+                claim_support=mention.claim_support,
                 sentiment=mention.sentiment,
                 confidence=mention.confidence,
                 tickers=mention.tickers or [],
@@ -573,6 +584,16 @@ def get_theme_mentions(
                     mention.translation_metadata
                     if mention.translation_metadata is not None
                     else content.translation_metadata
+                ),
+                attachment_status=(
+                    attachment_snapshots[content.id]["status"]
+                    if attachment_snapshots[content.id]["status"] != "none"
+                    else None
+                ),
+                attachments=(
+                    attachment_snapshots[content.id]["attachments"]
+                    if attachment_snapshots[content.id]["attachments"]
+                    else None
                 ),
             )
             for mention, content in mentions

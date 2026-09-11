@@ -20,6 +20,17 @@ def _utc(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+def _post_snapshot(post: SocialPostRecord) -> dict:
+    """Keep text-only work snapshots byte-compatible with the earlier schema."""
+    snapshot = asdict(post)
+    for field in ("attachments", "prepared_evidence", "evidence_digest"):
+        if not snapshot.get(field):
+            snapshot.pop(field, None)
+    snapshot["created_at"] = post.created_at.isoformat()
+    snapshot["observed_at"] = post.observed_at.isoformat()
+    return snapshot
+
+
 class _Deferred(Exception):
     pass
 
@@ -128,9 +139,7 @@ class ProcessSocialBacklog:
         if not selected_model or not prompt_version or not schema_version:
             raise ValueError("extraction_configuration_missing")
         input_hash = SocialExtractionService.input_hash((post,))
-        snapshot = asdict(post)
-        snapshot["created_at"] = post.created_at.isoformat()
-        snapshot["observed_at"] = post.observed_at.isoformat()
+        snapshot = _post_snapshot(post)
         with social_analysis_transaction(self.session_factory) as db:
             if run_id:
                 run = db.get(SocialSignalRun, run_id)

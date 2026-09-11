@@ -98,7 +98,7 @@ def test_extract_from_content_filters_empty_and_unknown_themes():
         title="title",
     )
 
-    mentions = service.extract_from_content(content_item)
+    mentions = service.extract_from_content(content_item, verify_claims=False)
     assert len(mentions) == 1
     assert mentions[0]["theme"] == "AI infrastructure"
 

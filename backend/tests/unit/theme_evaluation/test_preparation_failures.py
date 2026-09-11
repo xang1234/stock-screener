@@ -17,6 +17,7 @@ from app.services.theme_evaluation.preparation_failures import (
         ("image_download_timeout", True),
         ("image_download_rate_limited", True),
         ("image_download_server_error", True),
+        ("attachment_fetch_transient", True),
         ("invalid_image", False),
         ("image_pixel_limit", False),
         ("model_auth_failed", False),

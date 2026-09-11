@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -106,6 +106,7 @@ class OfficialXTwitterFetcher:
         max_pages = max(1, int(settings.x_api_max_pages_per_source))
         combined_data: list[dict[str, Any]] = []
         users_by_id: dict[str, dict[str, Any]] = {}
+        media_by_key: dict[str, dict[str, Any]] = {}
         fallback_newest_id: str | None = None
         next_token: str | None = None
 
@@ -123,6 +124,9 @@ class OfficialXTwitterFetcher:
             for user in payload.get("includes", {}).get("users", []):
                 if isinstance(user, dict) and user.get("id"):
                     users_by_id[str(user["id"])] = user
+            for media in payload.get("includes", {}).get("media", []):
+                if isinstance(media, dict) and isinstance(media.get("media_key"), str):
+                    media_by_key[media["media_key"]] = media
 
             meta = payload.get("meta") or {}
             if isinstance(meta, dict):
@@ -131,11 +135,12 @@ class OfficialXTwitterFetcher:
             else:
                 next_token = None
             if not next_token:
-                return _timeline_payload(combined_data, users_by_id, fallback_newest_id)
+                return _timeline_payload(combined_data, users_by_id, media_by_key, fallback_newest_id)
 
         return _timeline_payload(
             combined_data,
             users_by_id,
+            media_by_key,
             fallback_newest_id,
             cap_reached=True,
         )
@@ -244,9 +249,10 @@ def _looks_like_handle(value: str) -> bool:
 def _timeline_params(since: datetime | None, *, since_id: str | None = None) -> dict[str, object]:
     params: dict[str, object] = {
         "max_results": max(5, min(int(settings.x_api_max_results_per_page), 100)),
-        "tweet.fields": "created_at,author_id",
-        "expansions": "author_id",
+        "tweet.fields": "created_at,author_id,entities",
+        "expansions": "author_id,attachments.media_keys",
         "user.fields": "username",
+        "media.fields": "media_key,type,url",
     }
     if since_id:
         params["since_id"] = since_id
@@ -260,13 +266,14 @@ def _timeline_params(since: datetime | None, *, since_id: str | None = None) -> 
 def _timeline_payload(
     data: list[dict[str, Any]],
     users_by_id: dict[str, dict[str, Any]],
+    media_by_key: dict[str, dict[str, Any]],
     fallback_newest_id: str | None,
     *,
     cap_reached: bool = False,
 ) -> dict[str, Any]:
     payload = {
         "data": data,
-        "includes": {"users": list(users_by_id.values())},
+        "includes": {"users": list(users_by_id.values()), "media": list(media_by_key.values())},
         "meta": {"newest_id": _max_tweet_id(data) or fallback_newest_id},
     }
     if cap_reached:
@@ -285,6 +292,11 @@ def _records_from_api_payload(
         for user in payload.get("includes", {}).get("users", [])
         if isinstance(user, dict) and user.get("id") and user.get("username")
     }
+    media_by_key = {
+        str(media.get("media_key")): media
+        for media in payload.get("includes", {}).get("media", [])
+        if isinstance(media, dict) and media.get("media_key")
+    }
     data = payload.get("data") or []
     if not isinstance(data, list):
         raise TwitterIngestionProviderError("Official X API returned unexpected timeline data.")
@@ -293,7 +305,7 @@ def _records_from_api_payload(
     if isinstance(meta, dict):
         newest_id = _normalize_tweet_id(meta.get("newest_id")) or _max_tweet_id(data)
     return [
-        _record_from_api_tweet(item, source, users_by_id, fallback_author, since_id=newest_id)
+        _record_from_api_tweet(item, source, users_by_id, media_by_key, fallback_author, since_id=newest_id)
         for item in data
         if isinstance(item, dict)
     ]
@@ -303,6 +315,7 @@ def _record_from_api_tweet(
     item: dict[str, Any],
     source: ContentSource,
     users_by_id: dict[str, str],
+    media_by_key: dict[str, dict[str, Any]],
     fallback_author: str | None,
     *,
     since_id: str | None,
@@ -318,8 +331,56 @@ def _record_from_api_tweet(
         "url": _tweet_url(tweet_id, author),
         "author": _format_author(author),
         "published_at": _parse_x_datetime(item.get("created_at")),
+        "attachments": _attachment_refs(item, media_by_key),
         "_twitter_since_id": since_id or tweet_id,
     }
+
+
+def _attachment_refs(item: dict[str, Any], media_by_key: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    attachments = item.get("attachments", {})
+    if isinstance(attachments, dict):
+        keys = attachments.get("media_keys", [])
+        if isinstance(keys, list):
+            for key in keys:
+                media = media_by_key.get(str(key))
+                if media is None or media.get("type") != "photo":
+                    continue
+                url = media.get("url")
+                if _is_http_url(url):
+                    refs.append({"kind": "image", "url": url})
+    entities = item.get("entities", {})
+    if isinstance(entities, dict):
+        urls = entities.get("urls", [])
+        if isinstance(urls, list):
+            for entry in urls:
+                if not isinstance(entry, dict):
+                    continue
+                url = entry.get("unwound_url") or entry.get("expanded_url") or entry.get("url")
+                if _is_article_url(url):
+                    refs.append({"kind": "article", "url": url})
+    return [
+        {"kind": kind, "url": url}
+        for kind, url in dict.fromkeys((ref["kind"], ref["url"]) for ref in refs)
+    ]
+
+
+def _is_http_url(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def _is_article_url(value: Any) -> bool:
+    if not _is_http_url(value):
+        return False
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    x_hosts = {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}
+    return (host not in x_hosts | {"t.co"} and not host.endswith(".twimg.com")) or (
+        host in x_hosts and "/article/" in parsed.path
+    )
 
 
 def _tweet_url(tweet_id: str, author: str | None) -> str:

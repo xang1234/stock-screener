@@ -47,6 +47,7 @@ celery_app = Celery(
         'app.tasks.market_rs_tasks',  # Canonical Market RS snapshot tasks
         'app.tasks.industry_tasks',  # Tracked IBD industry reference loading
         'app.tasks.theme_discovery_tasks',  # Theme discovery pipeline tasks
+        'app.tasks.live_attachment_tasks',
         'app.tasks.universe_tasks',  # Stock universe management tasks
         'app.tasks.daily_market_pipeline_tasks',  # Per-market daily refresh + scan pipeline
         'app.tasks.telemetry_tasks',  # Weekly telemetry governance audit (asia.10.4)
@@ -430,6 +431,11 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
     # already do a full refresh that supersedes the stale-intraday refresh.
     # The task function remains available for manual invocation via the API.
     _shared_entries = {
+        'live-attachment-preparation': {
+            'task': 'app.tasks.live_attachment_tasks.prepare_live_attachments',
+            'schedule': crontab(minute='*'),
+            'options': {'queue': 'social_ingestion', 'expires': 55},
+        },
         # Delivery performs the DB-authoritative mode/provider check. Keeping
         # the clock entry stable lets an admin enable Social without restarting Beat.
         'social-signal-refresh-six-hourly': {

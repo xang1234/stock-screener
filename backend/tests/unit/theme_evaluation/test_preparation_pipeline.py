@@ -3,11 +3,12 @@
 from io import BytesIO
 
 import pytest
+from PIL import Image
+
 from app.services.theme_evaluation.bundle import seal_bundle
 from app.services.theme_evaluation.preparation_records import Handoff
 from app.services.theme_evaluation.preparation_store import PreparationStore
 from app.services.theme_evaluation.records import Bundle
-from PIL import Image
 
 
 def api():
@@ -366,3 +367,55 @@ def test_shared_image_result_does_not_keep_translation_for_changed_attachment(
         b for b in store.load(base, second).current_bindings if b.parent_result_id
     ]
     assert [b.input_locator for b in children] == [str(images[1])]
+
+
+def test_review_exports_normalized_quantities_without_changing_saved_evidence(
+    bundle, document, tmp_path
+):
+    import json
+
+    from app.services.theme_evaluation.bundle import sha256
+
+    class Translator:
+        provider = "test"
+        model = "test"
+        policy_version = "text-v1"
+
+        def __call__(self, text, source, target):
+            return "Bought 718만주 for 1.9조원; another 2조 is ambiguous."
+
+    pipeline, review = api()
+    source = "삼성전자는 자사주 718만주를 1.9조원에 매입했다. 2조"
+    base = seal_bundle(
+        tmp_path,
+        Bundle.model_validate(
+            bundle(documents=[document(text=source, original_language="ko")])
+        ),
+    )
+    store = PreparationStore(tmp_path / "prepared")
+    pid = pipeline.prepare(
+        base,
+        store,
+        Handoff(bundle_id=base.name),
+        stages=["text"],
+        translator=Translator(),
+    )
+    saved = {p: p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
+    output = tmp_path / "review"
+    summary = review.render_preparation(base, store, pid, output)
+    report = (output / "evidence.md").read_text().replace(chr(92), "")
+    assert "Bought 7.18 million shares for KRW 1.9 trillion" in report
+    assert "Bought 718만주 for 1.9조원" in report
+    assert "ambiguous_quantity_unit" in report
+    normalized = json.loads((output / "normalized-quantities.json").read_text())
+    assert normalized["assessment_id"] == summary["assessment_id"]
+    row = normalized["results"][0]
+    assert row["result_id"] in [b.result_id for b in store.load(base, pid).bindings]
+    segment = row["segments"][0]
+    assert segment["source"]["source_text_sha256"] == sha256(source.encode())
+    translated = segment["translation"]
+    assert translated["quantities"][0]["value"] == "7180000"
+    assert translated["quantities"][0]["unit"] == "shares"
+    assert translated["issues"][0]["code"] == "ambiguous_quantity_unit"
+    assert normalized["extraction"] == "awaiting_evidence_approval"
+    assert all(path.read_bytes() == content for path, content in saved.items())

@@ -294,6 +294,21 @@ async def test_budget_pause_keeps_work_and_does_not_prepare():
 
 
 @pytest.mark.asyncio
+async def test_current_parent_wins_over_retained_evidence_to_prevent_duplicate_weight():
+    """Adding a retained revision beside the fresh post would process one parent twice."""
+    refresh, _, _, _, backlog, _ = use_case()
+    retained = SocialPostRecord(
+        "official", "old-parent", "1", "$AAA evidence", "https://x.com/a/status/old-parent",
+        "author", NOW - timedelta(days=2), NOW,
+    )
+    refresh.evidence_reader.retained_posts = lambda run_id, as_of: ((10, retained),)
+
+    await refresh.execute("scheduled", NOW)
+
+    assert [content_id for content_id, _, _ in backlog.enqueued] == [10, 11]
+
+
+@pytest.mark.asyncio
 async def test_validation_stages_admin_result_without_live_publication():
     refresh, events, _, writer, _, _ = use_case(mode="validation")
     result = await refresh.execute("scheduled", NOW)

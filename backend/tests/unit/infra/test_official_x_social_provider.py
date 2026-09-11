@@ -42,7 +42,8 @@ def test_reads_approved_dialect_and_normalizes_posts_with_proposed_progress():
     assert seen[0].url.path == "/2/lists/1986290701492232693/tweets"
     assert dict(seen[0].url.params) == {
         "tweet.fields":"created_at,public_metrics,author_id,referenced_tweets,entities",
-        "expansions":"author_id", "user.fields":"username", "max_results":"2"}
+        "expansions":"author_id,attachments.media_keys", "user.fields":"username",
+        "media.fields":"media_key,type,url", "max_results":"2"}
     assert seen[0].headers["authorization"] == "Bearer secret"
     assert reservations == [(date(2026, 9, 7), 2, 2000)]
     assert batch.outcome.proposed_progress == "page-2"
@@ -52,6 +53,35 @@ def test_reads_approved_dialect_and_normalizes_posts_with_proposed_progress():
     assert batch.posts[0].source_id == "source-9"
     assert (batch.posts[0].likes, batch.posts[0].views, batch.posts[0].quotes, batch.posts[0].bookmarks) == (0, 12, None, None)
     assert batch.posts[1].quoted_text is None and batch.posts[1].created_at.tzinfo == timezone.utc
+
+
+def test_preserves_expanded_articles_and_attached_photos_only():
+    payload = {
+        "data": [{
+            "id": "1", "author_id": "u", "text": "attached research",
+            "created_at": "2026-09-05T01:00:00Z", "public_metrics": {},
+            "attachments": {"media_keys": ["photo", "video"]},
+            "entities": {"urls": [
+                {"url": "https://t.co/article", "expanded_url": "https://publisher.example.com/report"},
+                {"url": "https://t.co/post", "expanded_url": "https://x.com/a/status/2"},
+            ]},
+        }],
+        "includes": {
+            "users": [{"id": "u", "username": "a"}],
+            "media": [
+                {"media_key": "photo", "type": "photo", "url": "https://pbs.twimg.com/media/chart.jpg"},
+                {"media_key": "video", "type": "video", "preview_image_url": "https://pbs.twimg.com/ext_tw_video_thumb/video.jpg"},
+            ],
+        },
+        "meta": {},
+    }
+
+    batch = make_provider(lambda _: httpx.Response(200, json=payload)).read_source(read_request(limit=1))
+
+    assert [(attachment.kind, attachment.url) for attachment in batch.posts[0].attachments] == [
+        ("image", "https://pbs.twimg.com/media/chart.jpg"),
+        ("article", "https://publisher.example.com/report"),
+    ]
 
 
 def test_caps_pages_to_run_limit_and_resumes_from_application_progress():
@@ -172,7 +202,8 @@ def test_diagnostic_is_capped_at_five_and_history_stops_before_boundary():
     batch = make_provider(handler).read_source(read_request(intent="test", limit=100))
     assert calls == [{
         "tweet.fields":"created_at,public_metrics,author_id,referenced_tweets,entities",
-        "expansions":"author_id", "user.fields":"username", "max_results":"5"}]
+        "expansions":"author_id,attachments.media_keys", "user.fields":"username",
+        "media.fields":"media_key,type,url", "max_results":"5"}]
     assert [post.provider_post_id for post in batch.posts] == ["new"]
     assert batch.outcome.proposed_progress is None
 

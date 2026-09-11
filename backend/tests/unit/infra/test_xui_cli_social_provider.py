@@ -73,6 +73,25 @@ def test_executes_exact_noninteractive_commands_and_normalizes_fixture():
     assert batch.outcome.proposed_progress is None
 
 
+def test_preserves_photo_and_expanded_article_references_but_drops_video_thumbnails():
+    payload = json.loads(FIXTURE.read_text())
+    payload["items"][0]["image_urls"] = [
+        "https://pbs.twimg.com/media/chart.jpg",
+        "https://pbs.twimg.com/ext_tw_video_thumb/clip.jpg",
+    ]
+    payload["items"][0]["article_urls"] = [
+        "https://publisher.example.com/semiconductor-report",
+        "https://x.com/a/status/other-post",
+    ]
+
+    batch = provider(SyntheticRunner(auth(), completed(payload))).read_source(request())
+
+    assert [(attachment.kind, attachment.url) for attachment in batch.posts[0].attachments] == [
+        ("image", "https://pbs.twimg.com/media/chart.jpg"),
+        ("article", "https://publisher.example.com/semiconductor-report"),
+    ]
+
+
 def test_test_intent_caps_cli_limit_at_five_and_never_uses_application_progress():
     payload = json.loads(FIXTURE.read_text())
     runner = SyntheticRunner(auth(), completed(payload))

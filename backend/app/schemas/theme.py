@@ -2,7 +2,8 @@
 import json
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TranslationMetadata(BaseModel):
@@ -341,6 +342,16 @@ class CandidateThemeReviewResponse(BaseModel):
 
 
 # Theme Mentions Schemas (for viewing news sources)
+class ContentAttachmentResponse(BaseModel):
+    """Preparation state for a child attachment of a source post."""
+
+    kind: str
+    url: str
+    status: str
+    error_code: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ThemeMentionDetailResponse(BaseModel):
     mention_id: int
     content_title: Optional[str]
@@ -348,6 +359,9 @@ class ThemeMentionDetailResponse(BaseModel):
     author: Optional[str]
     published_at: Optional[datetime]
     excerpt: Optional[str]
+    development: str | None = None
+    grounding_context: dict | None = None
+    claim_support: dict | None = None
     sentiment: Optional[str]
     confidence: Optional[float]
     tickers: list[str]
@@ -361,6 +375,10 @@ class ThemeMentionDetailResponse(BaseModel):
     translated_excerpt: Optional[str] = None
     translated_raw_theme: Optional[str] = None
     translation_metadata: Optional[TranslationMetadata] = None
+    # Child attachments are evidence preparation state. They are never
+    # independent source mentions and do not change ``total_count``.
+    attachment_status: Optional[str] = None
+    attachments: Optional[list[ContentAttachmentResponse]] = None
 
     class Config:
         from_attributes = True

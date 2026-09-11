@@ -1,4 +1,5 @@
 import asyncio
+from hashlib import sha256
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -42,6 +43,85 @@ def test_original_language_and_semantic_judgment_preserved(extraction_parser, su
     assert result.error_code is None
     assert result.claim.excerpt == "AAA 供應冷卻設備"
     assert result.claim.support == support
+
+
+def test_attachment_claim_requires_a_matching_evidence_quote_and_company_token(extraction_parser):
+    """Removing attachment citation binding would let a parent post fabricate a claim."""
+    evidence_id = "a" * 64
+    source = {
+        "post_id": "101",
+        "text": "See the attached company presentation.",
+        "evidence": [{
+            "id": evidence_id,
+            "kind": "image",
+            "url": "https://pbs.twimg.com/media/example.jpg",
+            "text": "Nebius ($NBIS) is expanding its AI cloud capacity.",
+        }],
+    }
+    value = claim()
+    value.update(
+        company_token="$NBIS",
+        excerpt="Nebius ($NBIS) is expanding its AI cloud capacity.",
+        evidence_id=evidence_id,
+    )
+
+    result = extraction_parser.parse(source, value)
+
+    assert result.error_code is None
+    assert result.claim.evidence_id == evidence_id
+
+
+def test_prepared_attachment_evidence_changes_the_social_work_input_hash():
+    """Dropping the evidence revision would reuse a text-only extraction after preparation."""
+    from app.domain.social_signals.records import SocialPreparedEvidence
+    from app.services.social_extraction_service import SocialExtractionService
+
+    baseline = post()
+    enriched = replace(
+        baseline,
+        prepared_evidence=(SocialPreparedEvidence(
+            id="a" * 64,
+            kind="image",
+            url="https://pbs.twimg.com/media/example.jpg",
+            text="Nebius ($NBIS) is expanding its AI cloud capacity.",
+            original_text_sha256="b" * 64,
+            text_sha256=sha256("Nebius ($NBIS) is expanding its AI cloud capacity.".encode()).hexdigest(),
+            available_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
+            provenance_json='{"policy_version":"live-attachment-v1"}',
+        ),),
+        evidence_digest="d" * 64,
+    )
+
+    source = SocialExtractionService.source_inputs((enriched,))
+
+    assert source[0]["evidence_digest"] == "d" * 64
+    assert source[0]["evidence"][0]["id"] == "a" * 64
+    assert SocialExtractionService.input_hash((baseline,)) != SocialExtractionService.input_hash((enriched,))
+
+
+def test_attachment_evidence_counts_toward_the_social_batch_limit():
+    """Ignoring attachment length could send an unbounded image/article payload to the model."""
+    from app.domain.social_signals.records import SocialPreparedEvidence
+    from app.services.social_extraction_service import SocialExtractionError, SocialExtractionService
+
+    text = "x" * 6_000
+    oversized = tuple(replace(
+        post(str(index)),
+        prepared_evidence=(SocialPreparedEvidence(
+            id=f"{index:064x}",
+            kind="article",
+            url=f"https://example.com/article/{index}",
+            text=text,
+            original_text_sha256="b" * 64,
+            text_sha256=sha256(text.encode()).hexdigest(),
+            available_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
+            provenance_json='{"policy_version":"live-attachment-v1"}',
+        ),),
+        evidence_digest=f"{index + 100:064x}",
+    ) for index in range(17))
+
+    with pytest.raises(SocialExtractionError, match="batch_text_limit"):
+        SocialExtractionService.source_inputs(oversized)
 
 
 class FakeLLM:
@@ -110,7 +190,7 @@ def test_result_identity_metadata_and_no_live_writes(db_session):
     changed = asyncio.run(svc.extract((post(text="$AAA supplies cooling equipment today"),)))
     assert result.input_hash == again.input_hash != changed.input_hash
     assert (result.provider, result.model) == ("synthetic", "actual-model")
-    assert result.prompt_version == result.schema_version == "social-extraction-v1"
+    assert result.prompt_version == result.schema_version == "social-extraction-v2"
     assert result.usage_input_tokens == 100 and result.usage_output_tokens == 20
     assert result.claims[0].post_id == "101" and result.judgments[0].has_new_thesis
     assert not db_session.new and not db_session.dirty
@@ -182,7 +262,7 @@ def test_bare_cooccurrence_judgment_remains_unsupported(db_session):
 
 def test_changed_model_or_prompt_has_separate_result_identity(db_session):
     original = asyncio.run(service(db_session, output()).extract((post(),)))
-    changed = asyncio.run(service(db_session, output(), prompt_version="social-extraction-v2").extract((post(),)))
+    changed = asyncio.run(service(db_session, output(), prompt_version="social-extraction-v3").extract((post(),)))
     assert (original.input_hash, original.model, original.prompt_version) != (changed.input_hash, changed.model, changed.prompt_version)
     with pytest.raises(TypeError):
         replace(original, claims=[original.claims[0]])

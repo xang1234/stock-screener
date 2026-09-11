@@ -16,6 +16,7 @@ _RETRYABLE_CODES = frozenset(
         "image_download_timeout",
         "image_download_rate_limited",
         "image_download_server_error",
+        "attachment_fetch_transient",
     }
 )
 

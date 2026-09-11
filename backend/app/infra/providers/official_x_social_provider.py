@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import time
+from datetime import datetime, timezone
 from typing import Callable
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.domain.social_signals.records import (
-    SocialPostRecord, SocialReadRequest, SocialSourceBatch, SocialSourceOutcome,
+    SocialPostRecord,
+    SocialReadRequest,
+    SocialSourceBatch,
+    SocialSourceOutcome,
 )
 
 Reservation = Callable[[object, int, int], int]
@@ -77,7 +81,8 @@ class OfficialXSocialProvider:
         day = request.observed_at.astimezone(self._timezone).date()
         params = {
             "tweet.fields": "created_at,public_metrics,author_id,referenced_tweets,entities",
-            "expansions": "author_id", "user.fields": "username",
+            "expansions": "author_id,attachments.media_keys", "user.fields": "username",
+            "media.fields": "media_key,type,url",
             "max_results": str(capacity),
         }
         if cursor:
@@ -129,13 +134,22 @@ class OfficialXSocialProvider:
         if not isinstance(data, list) or not isinstance(meta, dict) or not isinstance(includes, dict):
             raise ValueError("envelope")
         users = includes.get("users", [])
-        if not isinstance(users, list):
+        media = includes.get("media", [])
+        if not isinstance(users, list) or not isinstance(media, list):
             raise ValueError("users")
         authors = {}
         for user in users:
             if not isinstance(user, dict) or not isinstance(user.get("id"), str) or not isinstance(user.get("username"), str):
                 raise ValueError("user")
             authors[user["id"]] = user["username"]
+        media_by_key = {}
+        for item in media:
+            if not isinstance(item, dict):
+                raise ValueError("media")
+            key, media_type = item.get("media_key"), item.get("type")
+            if not isinstance(key, str) or not isinstance(media_type, str):
+                raise ValueError("media")
+            media_by_key[key] = item
         posts = []
         for raw in data:
             if not isinstance(raw, dict):
@@ -169,6 +183,7 @@ class OfficialXSocialProvider:
                 "id": post_id, "text": raw["text"], "created_at": raw["created_at"],
                 "url": url, "canonical_url": url, "username": username,
                 "is_repost": any(ref.get("type") in {"retweeted", "reposted"} for ref in references if isinstance(ref, dict)),
+                "attachments": _attachment_refs(raw, media_by_key),
                 **normalized_metrics,
             }, provider="official", source_id=request.source_id, observed_at=request.observed_at))
         next_token = meta.get("next_token")
@@ -189,3 +204,57 @@ class OfficialXSocialProvider:
             coverage_reason_codes=(code,), known_gap_intervals=(), observed_oldest_at=None,
             observed_newest_at=None, received_count=0, committed_progress=None,
             error_code=code, proposed_progress=None, rate_limit_reset_at=reset_at))
+
+
+def _attachment_refs(raw: dict, media_by_key: dict[str, dict]) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    attachments = raw.get("attachments", {})
+    if attachments is not None and not isinstance(attachments, dict):
+        raise ValueError("attachments")
+    keys = attachments.get("media_keys", []) if attachments else []
+    if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+        raise ValueError("media_keys")
+    for key in keys:
+        media = media_by_key.get(key)
+        if media is None:
+            continue
+        if media.get("type") != "photo":
+            continue
+        url = media.get("url")
+        if _is_http_url(url):
+            refs.append({"kind": "image", "url": url})
+
+    entities = raw.get("entities", {})
+    if entities is not None and not isinstance(entities, dict):
+        raise ValueError("entities")
+    urls = entities.get("urls", []) if entities else []
+    if not isinstance(urls, list):
+        raise ValueError("entity_urls")
+    for entity in urls:
+        if not isinstance(entity, dict):
+            raise ValueError("entity_url")
+        url = entity.get("unwound_url") or entity.get("expanded_url") or entity.get("url")
+        if _is_article_url(url):
+            refs.append({"kind": "article", "url": url})
+    return [
+        {"kind": kind, "url": url}
+        for kind, url in dict.fromkeys((ref["kind"], ref["url"]) for ref in refs)
+    ]
+
+
+def _is_http_url(value: object) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def _is_article_url(value: object) -> bool:
+    if not _is_http_url(value):
+        return False
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    x_hosts = {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}
+    return (host not in x_hosts | {"t.co"} and not host.endswith(".twimg.com")) or (
+        host in x_hosts and "/article/" in parsed.path
+    )

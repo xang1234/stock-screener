@@ -12,6 +12,7 @@ from .preparation_failures import PreparationFailure
 
 _OPENCODE_GO_ENDPOINT = "https://opencode.ai/zen/go/v1/chat/completions"
 _MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024
+_MAX_SESSION_ID_LENGTH = 128
 
 
 def _retry_after_seconds(value: str | None) -> float | None:
@@ -30,16 +31,35 @@ def _retry_after_seconds(value: str | None) -> float | None:
     return delay if math.isfinite(delay) and delay >= 0 else None
 
 
+def _session_id(value: str | None) -> str:
+    if value is None:
+        return str(uuid4())
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > _MAX_SESSION_ID_LENGTH
+        or any(not 33 <= ord(character) <= 126 for character in value)
+    ):
+        raise ValueError("opencode_go_session_id_invalid")
+    return value
+
+
 class OpenCodeGoKimi:
     provider = "opencode-go"
     model = "kimi-k2.6"
 
-    def __init__(self, api_key: str, *, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        session_id: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ):
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("opencode_go_api_key_required")
         self._api_key = api_key.strip()
         self._transport = transport
-        self._session_id = str(uuid4())
+        self._session_id = _session_id(session_id)
 
     def complete_json(
         self, messages: list[dict], *, max_tokens: int, read_timeout=20.0

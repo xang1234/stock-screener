@@ -6,6 +6,7 @@ import json
 import subprocess
 from datetime import timedelta
 from typing import Callable
+from urllib.parse import urlparse
 
 from app.domain.social_signals.records import (
     SocialPostRecord,
@@ -13,7 +14,6 @@ from app.domain.social_signals.records import (
     SocialSourceBatch,
     SocialSourceOutcome,
 )
-
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 _READ_KEYS = frozenset({
@@ -179,6 +179,7 @@ class XuiCliSocialProvider:
                 "likes": raw.get("likes"), "reposts": raw.get("retweets"),
                 "replies": raw.get("replies"), "bookmarks": raw.get("bookmarks"),
                 "views": raw.get("views"), "is_repost": raw.get("is_repost", False),
+                "attachments": _attachment_refs(raw),
             }
             post = SocialPostRecord.from_untrusted(
                 normalized, provider="xui", source_id=request.source_id,
@@ -207,3 +208,34 @@ class XuiCliSocialProvider:
             committed_progress=None, error_code=code, proposed_progress=None,
             rate_limit_reset_at=reset_at,
         ))
+
+
+def _attachment_refs(raw: dict) -> list[dict[str, str]]:
+    """Map xui's post-owned evidence fields without treating video previews as photos."""
+
+    refs: list[dict[str, str]] = []
+    for value in _string_list(raw.get("image_urls")):
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower()
+        if host == "pbs.twimg.com" and parsed.path.startswith("/media/"):
+            refs.append({"kind": "image", "url": value})
+    for value in _string_list(raw.get("article_urls")):
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower()
+        x_hosts = {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}
+        is_x_article = host in x_hosts and "/article/" in parsed.path
+        is_external_article = host not in x_hosts | {"t.co"} and not host.endswith(".twimg.com")
+        if parsed.scheme in {"http", "https"} and host and (is_x_article or is_external_article):
+            refs.append({"kind": "article", "url": value})
+    return [
+        {"kind": kind, "url": url}
+        for kind, url in dict.fromkeys((ref["kind"], ref["url"]) for ref in refs)
+    ]
+
+
+def _string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError("attachment_list")
+    return [item.strip() for item in value if item.strip()]
