@@ -5,6 +5,14 @@ from datetime import datetime, timezone
 from app.models.theme import ThemeCluster, ThemeMention
 from app.models.theme_intelligence import ThemeEquivalenceOperation
 
+LIFECYCLE_VISIBILITY_LEVEL = {
+    "retired": 0,
+    "dormant": 1,
+    "candidate": 2,
+    "active": 3,
+    "reactivated": 3,
+}
+
 
 class EquivalenceConflict(ValueError):
     pass
@@ -74,6 +82,20 @@ class ThemeEquivalenceService:
                     all_rows[parent].parent_cluster_id if parent in all_rows else None
                 )
         target_id = group.representative(target_id)
+        target = all_rows[target_id]
+        target_level = LIFECYCLE_VISIBILITY_LEVEL.get(
+            (target.lifecycle_state or "candidate").strip().lower(), 0
+        )
+        member_level = max(
+            LIFECYCLE_VISIBILITY_LEVEL.get(
+                (row.lifecycle_state or "candidate").strip().lower(), 0
+            )
+            for row in rows
+        )
+        if target_level < member_level:
+            raise EquivalenceConflict(
+                "Target lifecycle state would weaken grouped theme visibility"
+            )
         parents = (
             self.db.query(ThemeMention.content_item_id)
             .filter(

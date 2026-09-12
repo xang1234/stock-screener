@@ -247,7 +247,7 @@ def test_candidate_promotion_honors_current_grouped_social_lifecycle(db_session)
         db_session,
         name="Social CPO",
         canonical_key="social_cpo",
-        state="active",
+        state="candidate",
         now=now,
     )
     representative = _make_theme(
@@ -257,12 +257,6 @@ def test_candidate_promotion_honors_current_grouped_social_lifecycle(db_session)
         state="candidate",
         now=now,
     )
-    member.lifecycle_state_metadata = {
-        "social_policy_version": "social-theme-v1",
-        "social_valid_until": (
-            now.replace(tzinfo=timezone.utc) + timedelta(days=1)
-        ).isoformat(),
-    }
     ThemeEquivalenceService(db_session).apply(
         member.id,
         representative.id,
@@ -270,6 +264,13 @@ def test_candidate_promotion_honors_current_grouped_social_lifecycle(db_session)
         reason="Equivalent exposure",
         key="social-lifecycle-promotion-group",
     )
+    member.lifecycle_state = "active"
+    member.lifecycle_state_metadata = {
+        "social_policy_version": "social-theme-v1",
+        "social_valid_until": (
+            now.replace(tzinfo=timezone.utc) + timedelta(days=1)
+        ).isoformat(),
+    }
     db_session.commit()
 
     result = ThemeDiscoveryService(
@@ -383,7 +384,7 @@ def test_dormant_representative_reactivates_from_grouped_social_lifecycle(
         db_session,
         name="Social CPO Member",
         canonical_key="social_cpo_member",
-        state="active",
+        state="dormant",
         now=now,
     )
     representative = _make_theme(
@@ -393,12 +394,6 @@ def test_dormant_representative_reactivates_from_grouped_social_lifecycle(
         state="dormant",
         now=now,
     )
-    member.lifecycle_state_metadata = {
-        "social_policy_version": "social-theme-v1",
-        "social_valid_until": (
-            now.replace(tzinfo=timezone.utc) + timedelta(days=1)
-        ).isoformat(),
-    }
     ThemeEquivalenceService(db_session).apply(
         member.id,
         representative.id,
@@ -406,6 +401,13 @@ def test_dormant_representative_reactivates_from_grouped_social_lifecycle(
         reason="Equivalent exposure",
         key="social-lifecycle-reactivation-group",
     )
+    member.lifecycle_state = "active"
+    member.lifecycle_state_metadata = {
+        "social_policy_version": "social-theme-v1",
+        "social_valid_until": (
+            now.replace(tzinfo=timezone.utc) + timedelta(days=1)
+        ).isoformat(),
+    }
     db_session.commit()
 
     result = ThemeDiscoveryService(

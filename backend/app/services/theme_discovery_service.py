@@ -1650,19 +1650,23 @@ class ThemeDiscoveryService:
         actor: str = "analyst",
         note: str | None = None,
     ) -> dict:
-        requested_ids = sorted(
-            {
-                self.groups.representative(int(theme_id))
-                for theme_id in theme_cluster_ids
-                if int(theme_id) > 0
-            }
+        submitted_ids = sorted(
+            {int(theme_id) for theme_id in theme_cluster_ids if int(theme_id) > 0}
         )
-        if not requested_ids:
+        if not submitted_ids:
             return {"success": False, "action": action, "updated": 0, "skipped": 0, "results": [], "error": "No candidate IDs provided"}
 
         normalized_action = (action or "").strip().lower()
         if normalized_action not in {"promote", "reject"}:
-            return {"success": False, "action": normalized_action, "updated": 0, "skipped": len(requested_ids), "results": [], "error": "Unsupported action"}
+            return {"success": False, "action": normalized_action, "updated": 0, "skipped": len(submitted_ids), "results": [], "error": "Unsupported action"}
+
+        from .theme_equivalence_service import ThemeEquivalenceService
+
+        ThemeEquivalenceService(self.db)._lock()
+        self.__dict__.pop("groups", None)
+        requested_ids = sorted(
+            {self.groups.representative(theme_id) for theme_id in submitted_ids}
+        )
 
         target_state = "active" if normalized_action == "promote" else "retired"
         reason = "analyst_review_promote" if normalized_action == "promote" else "analyst_review_reject"

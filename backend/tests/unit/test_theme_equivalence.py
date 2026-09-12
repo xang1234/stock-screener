@@ -93,6 +93,22 @@ def test_rejects_hierarchy_cross_pipeline_and_key_reuse(db):
         svc.apply(hbm.id, memory.id, actor="r", reason="same", key="ok")
 
 
+def test_rejects_target_that_weakens_group_lifecycle_visibility(db):
+    active = theme(db, "Active CPO", lifecycle_state="active")
+    candidate = theme(db, "Candidate CPO", lifecycle_state="candidate")
+
+    with pytest.raises(EquivalenceConflict, match="lifecycle"):
+        ThemeEquivalenceService(db).apply(
+            active.id,
+            candidate.id,
+            actor="reviewer",
+            reason="Equivalent exposure",
+            key="weaker-lifecycle-target",
+        )
+
+    assert ThemeEquivalenceService(db).members(active.id) == [active.id]
+
+
 def test_alias_target_idempotency_and_stale_preview(db):
     a, b, c = (
         theme(db, "CPO"),

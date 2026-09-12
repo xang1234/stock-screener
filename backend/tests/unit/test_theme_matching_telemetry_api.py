@@ -505,6 +505,66 @@ def test_candidate_review_uses_group_representatives(db_session):
     assert member.lifecycle_state == "candidate"
 
 
+def test_candidate_review_locks_and_refreshes_group_snapshot(
+    db_session, monkeypatch
+):
+    now = datetime.utcnow()
+    member = ThemeCluster(
+        name="Stale CPO Candidate",
+        canonical_key="stale_cpo_candidate",
+        display_name="Stale CPO Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=2),
+        first_seen_at=now - timedelta(days=3),
+    )
+    representative = ThemeCluster(
+        name="Current CPO Candidate",
+        canonical_key="current_cpo_candidate",
+        display_name="Current CPO Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=1),
+        first_seen_at=now - timedelta(days=3),
+    )
+    db_session.add_all([member, representative])
+    db_session.flush()
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    assert service.groups.representative(member.id) == member.id
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="candidate-review-refresh-group",
+    )
+    db_session.commit()
+    lock_calls = []
+    original_lock = ThemeEquivalenceService._lock
+
+    def tracked_lock(grouping):
+        lock_calls.append(grouping.db)
+        original_lock(grouping)
+
+    monkeypatch.setattr(ThemeEquivalenceService, "_lock", tracked_lock)
+
+    result = service.review_candidate_themes(
+        theme_cluster_ids=[member.id],
+        action="promote",
+        actor="analyst:test",
+    )
+
+    db_session.refresh(member)
+    db_session.refresh(representative)
+    assert lock_calls == [db_session]
+    assert result["updated"] == 1
+    assert result["results"][0]["theme_cluster_id"] == representative.id
+    assert member.lifecycle_state == "candidate"
+    assert representative.lifecycle_state == "active"
+
+
 def test_review_candidate_themes_promote_transitions_to_active(db_session):
     candidate = ThemeCluster(
         name="Grid Load",
