@@ -427,10 +427,13 @@ def test_generation_reuses_one_kimi_client_for_all_batch_records(
     assert len(created) == 1
 
 
-def test_kimi_extraction_session_header_is_stable_and_supports_an_explicit_id():
+def test_kimi_extraction_session_header_is_stable_and_supports_an_explicit_id(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "opencode_go_api_base", "https://gateway.example/v1/")
     sessions = []
 
     def handle(request):
+        assert str(request.url) == "https://gateway.example/v1/chat/completions"
         sessions.append(request.headers["x-opencode-session"])
         return httpx.Response(
             200,

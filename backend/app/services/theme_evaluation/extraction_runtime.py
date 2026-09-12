@@ -364,8 +364,9 @@ class _KimiExtractionClient:
         session_id: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ):
-        from .kimi_client import _session_id
+        from .kimi_client import _session_id, opencode_go_endpoint
 
+        self._endpoint = opencode_go_endpoint()
         self._api_key = api_key
         self._transport = transport
         self._session_id = _session_id(session_id)
@@ -383,7 +384,6 @@ class _KimiExtractionClient:
         # production extractor's normal parser expects an array, not an object.
         from .kimi_client import (
             _MAX_PROVIDER_RESPONSE_BYTES,
-            _OPENCODE_GO_ENDPOINT,
             _retry_after_seconds,
         )
 
@@ -402,7 +402,7 @@ class _KimiExtractionClient:
                 ) as client,
                 client.stream(
                     "POST",
-                    _OPENCODE_GO_ENDPOINT,
+                    self._endpoint,
                     headers={
                         "Authorization": f"Bearer {self._api_key}",
                         "User-Agent": "stockscreen-theme-evaluation/1.0",

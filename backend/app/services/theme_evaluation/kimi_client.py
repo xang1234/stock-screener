@@ -18,6 +18,13 @@ _MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024
 _MAX_SESSION_ID_LENGTH = 128
 
 
+def opencode_go_endpoint() -> str:
+    """Use the same configured route for preparation and extraction fallback."""
+    base = (getattr(settings, "opencode_go_api_base", None)
+            or os.environ.get("OPENCODE_GO_API_BASE") or _OPENCODE_GO_BASE)
+    return base.rstrip("/") + "/chat/completions"
+
+
 def _retry_after_seconds(value: str | None) -> float | None:
     if value is None:
         return None
@@ -60,9 +67,7 @@ class OpenCodeGoKimi:
     ):
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("opencode_go_api_key_required")
-        base = (getattr(settings, "opencode_go_api_base", None)
-                or os.environ.get("OPENCODE_GO_API_BASE") or _OPENCODE_GO_BASE)
-        self._endpoint = base.rstrip("/") + "/chat/completions"
+        self._endpoint = opencode_go_endpoint()
         self._api_key = api_key.strip()
         self._transport = transport
         self._session_id = _session_id(session_id)
