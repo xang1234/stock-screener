@@ -228,6 +228,31 @@ def test_compatible_batch_combines_memberships_and_citations(db):
     assert "theme_ids" not in rows[0].facts
 
 
+def test_duplicate_theme_ids_create_one_membership_link(db):
+    item, _ = add(db)
+    duplicate = dict(event(), theme_ids=[1, 1])
+
+    rows = record_developments(
+        db,
+        item=item,
+        pipeline="technical",
+        revision="d" * 64,
+        theme_ids=[1],
+        sources={"primary": "Nebius Project A order 2026-09"},
+        observations=[duplicate],
+        available_at=NOW,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].theme_ids == [1]
+    assert (
+        db.query(ThemeDevelopmentTheme)
+        .filter(ThemeDevelopmentTheme.observation_id == rows[0].id)
+        .count()
+        == 1
+    )
+
+
 def test_combined_batch_revalidates_citation_limit(db):
     item, existing = add(db)
     observations = []

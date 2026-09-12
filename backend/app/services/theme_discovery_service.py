@@ -1575,6 +1575,7 @@ class ThemeDiscoveryService:
             ThemeCluster.is_active == True,
             ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state == "candidate",
+            self.groups.visible(ThemeCluster.id),
         )
         total_count = base_query.count()
         candidates = base_query.order_by(ThemeCluster.candidate_since_at.asc(), ThemeCluster.id.asc()).offset(offset).limit(limit).all()
@@ -1621,6 +1622,7 @@ class ThemeDiscoveryService:
             ThemeCluster.is_active == True,
             ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state == "candidate",
+            self.groups.visible(ThemeCluster.id),
         ).all()
         band_counts: dict[str, int] = defaultdict(int)
         for (cluster_id,) in candidates:
@@ -1638,7 +1640,13 @@ class ThemeDiscoveryService:
         actor: str = "analyst",
         note: str | None = None,
     ) -> dict:
-        requested_ids = sorted({int(theme_id) for theme_id in theme_cluster_ids if int(theme_id) > 0})
+        requested_ids = sorted(
+            {
+                self.groups.representative(int(theme_id))
+                for theme_id in theme_cluster_ids
+                if int(theme_id) > 0
+            }
+        )
         if not requested_ids:
             return {"success": False, "action": action, "updated": 0, "skipped": 0, "results": [], "error": "No candidate IDs provided"}
 
@@ -2138,6 +2146,10 @@ class ThemeDiscoveryService:
         primary_normalized = sorted(
             edge_rows.values(), key=edge_sort_key
         )[:limit]
+        primary_keys = [
+            (source_id, target_id, edge.relationship_type)
+            for edge, source_id, target_id in primary_normalized
+        ]
         edge_rows = {
             (source_id, target_id, edge.relationship_type): (
                 edge,
@@ -2161,10 +2173,19 @@ class ThemeDiscoveryService:
             for edge in secondary_edges:
                 include_edge(edge)
 
-        normalized_edges = sorted(
-            edge_rows.values(),
+        root_edges = [edge_rows[key] for key in primary_keys if key in edge_rows]
+        root_edge_keys = set(primary_keys)
+        secondary_candidates = sorted(
+            (
+                row
+                for key, row in edge_rows.items()
+                if key not in root_edge_keys
+            ),
             key=edge_sort_key,
-        )[:limit]
+        )
+        normalized_edges = root_edges + secondary_candidates[
+            : max(0, limit - len(root_edges))
+        ]
         node_ids = {theme_cluster_id}
         for _, source_id, target_id in normalized_edges:
             node_ids.update((source_id, target_id))

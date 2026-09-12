@@ -66,6 +66,7 @@ def normalize_batch(observations, *, item_id, theme_ids, sources):
     result = {}
     for value in observations:
         facts = DevelopmentFacts.model_validate(value)
+        facts = facts.model_copy(update={"theme_ids": sorted(set(facts.theme_ids))})
         if not set(facts.theme_ids).issubset(theme_ids):
             raise ValueError("invalid_development_themes")
         for citation in facts.citations:

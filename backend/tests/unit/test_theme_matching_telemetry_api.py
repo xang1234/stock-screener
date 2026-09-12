@@ -21,6 +21,7 @@ from app.models.theme import (
     ThemeRelationship,
 )
 from app.schemas.theme import CandidateThemeReviewRequest
+from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.theme_equivalence_service import ThemeEquivalenceService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -451,6 +452,59 @@ def test_get_candidate_theme_queue_band_summary_is_global_not_page_scoped(db_ses
     assert sum(bucket.count for bucket in payload.confidence_bands) == 2
 
 
+def test_candidate_review_uses_group_representatives(db_session):
+    now = datetime.utcnow()
+    member = ThemeCluster(
+        name="CPO Candidate",
+        canonical_key="cpo_candidate",
+        display_name="CPO Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=2),
+        first_seen_at=now - timedelta(days=3),
+    )
+    representative = ThemeCluster(
+        name="Co-Packaged Optics Candidate",
+        canonical_key="co_packaged_optics_candidate",
+        display_name="Co-Packaged Optics Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=1),
+        first_seen_at=now - timedelta(days=3),
+    )
+    db_session.add_all([member, representative])
+    db_session.flush()
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="candidate-review-group",
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    rows, total = service.get_candidate_theme_queue(limit=20)
+    bands = service.get_candidate_theme_confidence_bands()
+    result = service.review_candidate_themes(
+        theme_cluster_ids=[member.id, representative.id],
+        action="promote",
+        actor="analyst:test",
+    )
+
+    db_session.refresh(member)
+    db_session.refresh(representative)
+    assert total == 1
+    assert [row["theme_cluster_id"] for row in rows] == [representative.id]
+    assert sum(row["count"] for row in bands) == 1
+    assert result["updated"] == 1
+    assert result["results"][0]["theme_cluster_id"] == representative.id
+    assert representative.lifecycle_state == "active"
+    assert member.lifecycle_state == "candidate"
+
+
 def test_review_candidate_themes_promote_transitions_to_active(db_session):
     candidate = ThemeCluster(
         name="Grid Load",
@@ -624,6 +678,26 @@ def test_get_relationship_graph_canonicalizes_group_members(db_session):
                 pipeline="technical",
                 relationship_type="subset",
                 confidence=0.85,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=peer_representative.id,
+                target_cluster_id=other_peer.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.98,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=peer_representative.id,
+                target_cluster_id=other_peer.id,
+                pipeline="technical",
+                relationship_type="distinct",
+                confidence=0.97,
                 provenance="test_fixture",
                 evidence={},
                 is_active=True,
