@@ -25,11 +25,14 @@ class ThemeGroupSnapshot:
             .order_by(ThemeEquivalenceOperation.id)
             .all()
         )
+        relevant = [
+            operation
+            for operation in operations
+            if pipeline is None or operation.pipeline == pipeline
+        ]
         mapping = {}
-        for operation in operations:
-            if operation.active and (
-                pipeline is None or operation.pipeline == pipeline
-            ):
+        for operation in relevant:
+            if operation.active:
                 mapping.update(
                     {member: operation.target_id for member in operation.member_ids}
                 )
@@ -37,7 +40,7 @@ class ThemeGroupSnapshot:
         for member, root in mapping.items():
             groups.setdefault(root, set()).update((member, root))
         version = sha256(
-            json.dumps([(op.id, op.active) for op in operations]).encode()
+            json.dumps([(op.id, op.active) for op in relevant]).encode()
         ).hexdigest()
         return cls(
             MappingProxyType(mapping),

@@ -142,3 +142,32 @@ def test_snapshot_is_immutable_and_requires_no_more_operation_reads(db):
     service.undo(operation["id"], actor="reviewer", reason="Correction")
     assert snapshot.representative(a.id) == b.id
     assert service.snapshot().representative(a.id) == a.id
+
+
+def test_versions_are_isolated_by_pipeline(db):
+    technical_a = theme(db, "CPO")
+    technical_b = theme(db, "Co-Packaged Optics")
+    fundamental_a = theme(db, "Bitcoin Miners", pipeline="fundamental")
+    fundamental_b = theme(db, "Bitcoin Mining", pipeline="fundamental")
+    service = ThemeEquivalenceService(db)
+
+    technical_version = service.version("technical")
+    fundamental_preview = service.preview(fundamental_a.id, fundamental_b.id)
+    service.apply(
+        fundamental_a.id,
+        fundamental_b.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="fundamental-group",
+        expected_version=fundamental_preview["version"],
+    )
+
+    assert service.version("technical") == technical_version
+    service.apply(
+        technical_a.id,
+        technical_b.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="technical-group",
+        expected_version=technical_version,
+    )

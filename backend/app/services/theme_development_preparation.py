@@ -127,6 +127,7 @@ def generate_facts(pipeline, db, bundle):
         .all()
     )
     service = ThemeExtractionService(db, pipeline=pipeline)
+    service._rate_limit()
     raw = service._try_generate_litellm(
         json.dumps(
             {

@@ -9,11 +9,11 @@ from __future__ import annotations
 from app.celery_app import _build_cache_warmup_beat_schedule, celery_app
 from app.config import settings
 from app.tasks.market_queues import (
+    SHARED_DATA_FETCH_QUEUE,
     SUPPORTED_MARKETS,
     data_fetch_queue_for_market,
     market_jobs_queue_for_market,
 )
-
 
 # Beat entry name prefixes that MUST be fanned out per market onto the
 # external-fetch lane.
@@ -51,6 +51,10 @@ def _deployment_enabled_markets():
 
 
 class TestBeatScheduleFanout:
+    def test_development_model_work_uses_shared_data_fetch_queue(self):
+        entry = celery_app.conf.beat_schedule["theme-development-preparation"]
+        assert entry["options"]["queue"] == SHARED_DATA_FETCH_QUEUE
+
     def test_each_external_fetch_entry_has_market_kwarg(self):
         for name, entry, expected_market in _market_entries(EXTERNAL_FETCH_PREFIXES):
             kwargs = entry.get("kwargs", {})

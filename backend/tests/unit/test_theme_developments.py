@@ -170,6 +170,7 @@ def test_correction_reduces_current_event_history(db):
 
 def test_quantity_history_is_specific_to_claim_status():
     from types import SimpleNamespace
+
     from app.services.theme_development_facts import DevelopmentFacts
     from app.services.theme_event_state import classify
 
@@ -221,6 +222,31 @@ def test_compatible_batch_combines_memberships_and_citations(db):
         "article",
     }
     assert "theme_ids" not in rows[0].facts
+
+
+def test_combined_batch_revalidates_citation_limit(db):
+    item, _ = add(db)
+    observations = []
+    sources = {}
+    for index in range(9):
+        source_id = f"source-{index}"
+        quote = "Nebius Project A order 2026-09"
+        sources[source_id] = quote
+        observations.append(
+            dict(event(), citations=[{"source_id": source_id, "quote": quote}])
+        )
+
+    with pytest.raises(ValueError):
+        record_developments(
+            db,
+            item=item,
+            pipeline="technical",
+            revision="c" * 64,
+            theme_ids=[1],
+            sources=sources,
+            observations=observations,
+            available_at=NOW,
+        )
 
 
 def test_returning_to_prior_evidence_reactivates_its_observation(db):

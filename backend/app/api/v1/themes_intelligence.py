@@ -3,11 +3,12 @@
 import os
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import exists, func
+from sqlalchemy import String, cast, exists, func, or_
 from sqlalchemy.orm import Session
 
+from app.api.v1.config import require_admin
 from app.database import get_db
 from app.models.theme import ContentItem, ThemeCluster, ThemeMention
 from app.models.theme_intelligence import (
@@ -28,14 +29,12 @@ DbSession = Annotated[Session, Depends(get_db)]
 class GroupRequest(BaseModel):
     source_id: int
     target_id: int
-    actor: str = Field(min_length=1, max_length=120)
     reason: str = Field(min_length=1, max_length=2000)
     operation_key: str = Field(min_length=1, max_length=120)
     expected_version: str = Field(min_length=64, max_length=64)
 
 
 class UndoRequest(BaseModel):
-    actor: str = Field(min_length=1, max_length=120)
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -52,14 +51,18 @@ def preview_equivalence(source_id: int, target_id: int, db: DbSession):
         raise HTTPException(409, str(exc)) from exc
 
 
-@router.post("/equivalence")
-def apply_equivalence(request: GroupRequest, db: DbSession):
+@router.post("/equivalence", dependencies=[Depends(require_admin)])
+def apply_equivalence(
+    request: GroupRequest,
+    db: DbSession,
+    x_admin_actor: str = Header(default="admin", alias="X-Admin-Actor"),
+):
     service = ThemeEquivalenceService(db)
     try:
         result = service.apply(
             request.source_id,
             request.target_id,
-            actor=request.actor,
+            actor=x_admin_actor,
             reason=request.reason,
             key=request.operation_key,
             expected_version=request.expected_version,
@@ -70,7 +73,7 @@ def apply_equivalence(request: GroupRequest, db: DbSession):
         raise HTTPException(409, str(exc)) from exc
     return {
         **result,
-        "version": service.version(),
+        "version": service.version(result["pipeline"]),
         "refresh_status": "pending",
     }
 
@@ -82,7 +85,7 @@ def equivalence_history(
 ):
     service = ThemeEquivalenceService(db)
     return {
-        "version": service.version(),
+        "version": service.version(pipeline),
         "operations": [
             {
                 "id": row.id,
@@ -96,6 +99,7 @@ def equivalence_history(
                 "refresh_pending": row.refresh_pending,
                 "created_at": row.created_at,
                 "undone_at": row.undone_at,
+                "undone_by": row.undone_by,
                 "undo_reason": row.undo_reason,
             }
             for row in reversed(service.operations(pipeline))
@@ -103,18 +107,25 @@ def equivalence_history(
     }
 
 
-@router.post("/equivalence/{operation_id}/undo")
-def undo_equivalence(operation_id: int, request: UndoRequest, db: DbSession):
+@router.post(
+    "/equivalence/{operation_id}/undo", dependencies=[Depends(require_admin)]
+)
+def undo_equivalence(
+    operation_id: int,
+    request: UndoRequest,
+    db: DbSession,
+    x_admin_actor: str = Header(default="admin", alias="X-Admin-Actor"),
+):
     service = ThemeEquivalenceService(db)
     try:
-        result = service.undo(operation_id, actor=request.actor, reason=request.reason)
+        result = service.undo(operation_id, actor=x_admin_actor, reason=request.reason)
         db.commit()
     except EquivalenceConflict as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
     return {
         **result,
-        "version": service.version(),
+        "version": service.version(result["pipeline"]),
         "refresh_status": "pending",
     }
 
@@ -131,13 +142,27 @@ def search_equivalent_themes(
     query = db.query(ThemeCluster).filter_by(
         pipeline=pipeline, is_active=True, is_l1=False
     )
+    normalized_q = q.strip()
+    if normalized_q:
+        query = query.filter(
+            or_(
+                ThemeCluster.name.icontains(normalized_q, autoescape=True),
+                ThemeCluster.display_name.icontains(normalized_q, autoescape=True),
+                cast(ThemeCluster.aliases, String).icontains(
+                    normalized_q, autoescape=True
+                ),
+            )
+        )
+    matching = query.order_by(ThemeCluster.name).limit(100).all()
+    root_ids = {mapping.get(row.id, row.id) for row in matching}
+    roots = {
+        row.id: row
+        for row in db.query(ThemeCluster).filter(ThemeCluster.id.in_(root_ids)).all()
+    }
     results = {}
-    for row in query.order_by(ThemeCluster.name):
-        names = [row.name, row.display_name or "", *(row.aliases or [])]
-        if q.casefold() not in " ".join(names).casefold():
-            continue
+    for row in matching:
         root = mapping.get(row.id, row.id)
-        target = db.get(ThemeCluster, root)
+        target = roots[root]
         results[root] = {
             "id": root,
             "name": target.display_name or target.name,
@@ -145,7 +170,7 @@ def search_equivalent_themes(
         }
         if len(results) >= 100:
             break
-    return {"themes": list(results.values()), "version": service.version()}
+    return {"themes": list(results.values()), "version": snapshot.version}
 
 
 @router.post("/developments/backfill")

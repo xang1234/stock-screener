@@ -20,7 +20,7 @@ def _refresh_groups(db, pipeline):
     from app.services.theme_taxonomy_service import ThemeTaxonomyService
     from app.services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
 
-    version = ThemeEquivalenceService(db).version()
+    version = ThemeEquivalenceService(db).version(pipeline)
     try:
         result = ThemeDiscoveryService(db, pipeline=pipeline).update_all_theme_metrics()
         if result.get("errors"):
@@ -32,7 +32,7 @@ def _refresh_groups(db, pipeline):
             return "pending"
         grouping = ThemeEquivalenceService(db)
         grouping._lock()
-        if grouping.version() != version:
+        if grouping.version(pipeline) != version:
             db.query(ThemeEquivalenceOperation).filter_by(pipeline=pipeline).update(
                 {"refresh_pending": True}, synchronize_session=False
             )

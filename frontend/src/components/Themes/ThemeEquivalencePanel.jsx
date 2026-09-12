@@ -10,6 +10,7 @@ export default function ThemeEquivalencePanel() {
   const [target, setTarget] = useState(null);
   const [search, setSearch] = useState('');
   const [actor, setActor] = useState('');
+  const [adminKey, setAdminKey] = useState('');
   const [reason, setReason] = useState('');
   const [preview, setPreview] = useState(null);
   const [message, setMessage] = useState('');
@@ -18,20 +19,21 @@ export default function ThemeEquivalencePanel() {
   const mutation = useMutation({
     mutationFn: async ({ action, id }) => {
       if (action === 'preview') return { preview: await previewThemeEquivalence(source.id, target.id) };
-      const body = { actor: actor.trim(), reason: reason.trim() };
-      if (action === 'undo') return undoThemeEquivalence(id, body);
+      const body = { reason: reason.trim() };
+      if (action === 'undo') return undoThemeEquivalence(id, body, adminKey, actor.trim());
       return applyThemeEquivalence({ ...body, source_id: source.id, target_id: target.id,
-        expected_version: preview.version, operation_key: preview.operationKey });
+        expected_version: preview.version, operation_key: preview.operationKey }, adminKey, actor.trim());
     },
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
       if (data.preview) { setPreview({ ...data.preview, operationKey: crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), (v) => v.toString(16).padStart(2, '0')).join('') }); return; }
       setPreview(null); setSource(null); setTarget(null);
-      setMessage(data.refresh_status === 'complete' ? 'Grouping saved. Current results refreshed.' : 'Grouping saved. Current results are awaiting a refresh.');
+      const action = variables.action === 'undo' ? 'Grouping undone' : 'Grouping saved';
+      setMessage(data.refresh_status === 'complete' ? `${action}. Current results refreshed.` : `${action}. Current results are awaiting a refresh.`);
       client.invalidateQueries();
     },
   });
   const error = mutation.error || choices.error || history.error;
-  const canReview = actor.trim() && reason.trim() && !mutation.isPending;
+  const canReview = adminKey && actor.trim() && reason.trim() && !mutation.isPending;
   return <Stack spacing={2} sx={{ p: 2 }}>
     <Alert severity="info">Group only equivalent investment exposures. Keep broader and narrower themes, such as Memory and HBM, separate. Original names and evidence are preserved; grouping can be undone.</Alert>
     {error && <Alert severity="error">{error.response?.data?.detail || error.message || 'Unable to load grouping'}</Alert>}
@@ -48,6 +50,7 @@ export default function ThemeEquivalencePanel() {
     <Button disabled={!source || !target || source.id === target.id || mutation.isPending} onClick={() => mutation.mutate({ action: 'preview' })}>Preview grouping</Button>
     {preview && <Alert severity="info">{preview.aliases.map((a) => a.name).join(' + ')}: {preview.parent_posts} distinct source posts. Display under {target?.name}.</Alert>}
     <TextField label="Reviewer" value={actor} onChange={(e) => setActor(e.target.value)} inputProps={{ maxLength: 120 }} />
+    <TextField label="Admin key" type="password" value={adminKey} onChange={(e) => setAdminKey(e.target.value)} />
     <TextField label="Reason for grouping or undo" value={reason} onChange={(e) => setReason(e.target.value)} multiline inputProps={{ maxLength: 2000 }} />
     <Button variant="contained" disabled={!preview || !canReview} onClick={() => mutation.mutate({ action: 'apply' })}>Apply reviewed grouping</Button>
     <Typography variant="h6">Grouping history</Typography>
@@ -56,7 +59,7 @@ export default function ThemeEquivalencePanel() {
       <Typography>{op.aliases.map((a) => a.name).join(' + ')} — {op.active ? 'Active' : 'Undone'}</Typography>
       <Typography variant="body2">{op.actor}: {op.reason}</Typography>
       {op.refresh_pending && <Typography variant="body2">Current rankings are awaiting refresh.</Typography>}
-      {!op.active && <Typography variant="body2">Undo: {op.undo_reason}</Typography>}
+      {!op.active && <Typography variant="body2">Undo by {op.undone_by || 'unknown reviewer'}: {op.undo_reason}</Typography>}
       {op.active && <Button disabled={!canReview} onClick={() => mutation.mutate({ action: 'undo', id: op.id })}>Undo grouping {op.id}</Button>}
     </Box>)}
   </Stack>;

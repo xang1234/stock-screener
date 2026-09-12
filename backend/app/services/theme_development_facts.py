@@ -89,8 +89,9 @@ def normalize_batch(observations, *, item_id, theme_ids, sources):
         citations = {
             (c.source_id, c.quote): c for c in [*previous.citations, *facts.citations]
         }
-        result[key] = previous.model_copy(
-            update={
+        result[key] = DevelopmentFacts.model_validate(
+            {
+                **previous.model_dump(),
                 "theme_ids": sorted(set(previous.theme_ids + facts.theme_ids)),
                 "citations": list(citations.values()),
             }

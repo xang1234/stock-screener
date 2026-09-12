@@ -1,10 +1,10 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { renderWithProviders } from '../../test/renderWithProviders';
 import ThemeEquivalencePanel from './ThemeEquivalencePanel';
 import ThemeDevelopmentTimeline from './ThemeDevelopmentTimeline';
 import * as api from '../../api/themes';
 vi.mock('../../api/themes', () => ({ searchThemeEquivalence: vi.fn(), previewThemeEquivalence: vi.fn(), applyThemeEquivalence: vi.fn(), getThemeEquivalenceHistory: vi.fn(), undoThemeEquivalence: vi.fn(), getThemeDevelopments: vi.fn() }));
-function show(component) { return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{component}</QueryClientProvider>); }
+function show(component) { return renderWithProviders(component); }
 beforeEach(() => {
   vi.clearAllMocks();
   api.searchThemeEquivalence.mockResolvedValue({ themes: [{ id: 1, name: 'CPO' }, { id: 2, name: 'Co-Packaged Optics' }] });
@@ -23,10 +23,27 @@ it('requires preview and attribution before grouping', async () => {
   await screen.findByText(/4 distinct source posts/);
   expect(screen.getByRole('button', { name: 'Apply reviewed grouping' })).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Reviewer'), { target: { value: 'Reviewer' } });
+  fireEvent.change(screen.getByLabelText('Admin key'), { target: { value: 'secret' } });
   fireEvent.change(screen.getByLabelText('Reason for grouping or undo'), { target: { value: 'Same exposure' } });
   fireEvent.click(screen.getByRole('button', { name: 'Apply reviewed grouping' }));
   expect(await screen.findByText('Grouping saved. Current results are awaiting a refresh.')).toBeInTheDocument();
-  await waitFor(() => expect(api.applyThemeEquivalence).toHaveBeenCalledWith(expect.objectContaining({ source_id: 1, target_id: 2, expected_version: 'a'.repeat(64), reason: 'Same exposure' })));
+  await waitFor(() => expect(api.applyThemeEquivalence).toHaveBeenCalledWith(expect.objectContaining({ source_id: 1, target_id: 2, expected_version: 'a'.repeat(64), reason: 'Same exposure' }), 'secret', 'Reviewer'));
+});
+it('shows undo attribution and an action-specific success message', async () => {
+  api.getThemeEquivalenceHistory.mockResolvedValue({ operations: [{ id: 7, aliases: [{ name: 'CPO' }, { name: 'Co-Packaged Optics' }], active: false, actor: 'Reviewer', reason: 'Same exposure', undone_by: 'Corrector', undo_reason: 'Different exposures' }] });
+  show(<ThemeEquivalencePanel />);
+  expect(await screen.findByText('Undo by Corrector: Different exposures')).toBeInTheDocument();
+});
+it('labels a successful undo distinctly from an apply', async () => {
+  api.getThemeEquivalenceHistory.mockResolvedValue({ operations: [{ id: 7, aliases: [{ name: 'CPO' }, { name: 'Co-Packaged Optics' }], active: true, actor: 'Reviewer', reason: 'Same exposure' }] });
+  api.undoThemeEquivalence.mockResolvedValue({ refresh_status: 'pending' });
+  show(<ThemeEquivalencePanel />);
+  await screen.findByRole('button', { name: 'Undo grouping 7' });
+  fireEvent.change(screen.getByLabelText('Reviewer'), { target: { value: 'Corrector' } });
+  fireEvent.change(screen.getByLabelText('Admin key'), { target: { value: 'secret' } });
+  fireEvent.change(screen.getByLabelText('Reason for grouping or undo'), { target: { value: 'Different exposures' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Undo grouping 7' }));
+  expect(await screen.findByText('Grouping undone. Current results are awaiting a refresh.')).toBeInTheDocument();
 });
 it('shows repeated and superseded evidence and failures without unsafe links', async () => {
   api.getThemeDevelopments.mockResolvedValue({ tracking_enabled: true, event_count: 1, material_update_count: 0, work_counts: { failed: 1 }, observations: [{ id: 1, event_id: 8, facts: { summary: 'An attributed report', status: 'rumored' }, classification: 'repeated_coverage', superseded: true, available_at: '2026-09-12T00:00:00Z', url: 'javascript:alert(1)', citations: [{ source_id: 'primary', quote: 'Exact evidence' }] }] });

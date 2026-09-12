@@ -8,7 +8,7 @@ import importlib.util
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
+from threading import Barrier, Event
 from uuid import uuid4
 
 import pytest
@@ -36,7 +36,13 @@ def engine(request):
     schema = "theme_review_" + uuid4().hex
     with admin.begin() as connection:
         connection.execute(sa.text(f"CREATE SCHEMA {schema}"))
-    engine = sa.create_engine(url, connect_args={"options": f"-csearch_path={schema}"})
+    engine = sa.create_engine(
+        url,
+        connect_args={"options": f"-csearch_path={schema}"},
+        pool_size=2,
+        max_overflow=0,
+        pool_timeout=1,
+    )
     try:
         yield engine
     finally:
@@ -154,6 +160,94 @@ def test_publication_releases_lock_after_failure(engine):
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(publish).result(timeout=3)
+
+
+def test_waiting_publisher_does_not_starve_owner_of_pool_connection(engine):
+    if engine.dialect.name != "postgresql":
+        pytest.skip("Requires PostgreSQL advisory locks")
+    waiting = Event()
+
+    def wait_to_publish():
+        waiting.set()
+        with Session(engine) as db, publication_scope(db):
+            return True
+
+    with ThreadPoolExecutor(max_workers=1) as pool, Session(engine) as db:
+        with publication_scope(db):
+            future = pool.submit(wait_to_publish)
+            assert waiting.wait(3)
+            with Session(engine) as nested:
+                assert nested.execute(sa.text("SELECT 1")).scalar_one() == 1
+        assert future.result(timeout=3)
+
+
+def test_concurrent_identical_developments_share_one_event(engine):
+    if engine.dialect.name != "postgresql":
+        pytest.skip("Requires PostgreSQL row-level concurrency")
+    from datetime import datetime, timezone
+
+    from app.database import Base
+    from app.models.theme import ContentItem, ThemeCluster
+    from app.models.theme_intelligence import ThemeDevelopmentEvent
+    from app.services.theme_development_service import record_developments
+
+    Base.metadata.create_all(engine)
+    now = datetime.now(timezone.utc)
+    with Session(engine) as db:
+        theme = ThemeCluster(
+            name="AI Infrastructure",
+            display_name="AI Infrastructure",
+            canonical_key="ai_infrastructure",
+            pipeline="technical",
+        )
+        items = [
+            ContentItem(source_type="news", content="Nebius order 2026-09")
+            for _ in range(2)
+        ]
+        db.add_all([theme, *items])
+        db.commit()
+        theme_id = theme.id
+        item_ids = [item.id for item in items]
+    barrier = Barrier(2)
+
+    def record(item_id):
+        with Session(engine) as db:
+            item = db.get(ContentItem, item_id)
+            barrier.wait(timeout=3)
+            record_developments(
+                db,
+                item=item,
+                pipeline="technical",
+                revision=(str(item_id) * 64)[:64],
+                theme_ids=[theme_id],
+                sources={"primary": "Nebius order 2026-09"},
+                observations=[
+                    {
+                        "theme_ids": [theme_id],
+                        "actor": "Nebius",
+                        "action": "order",
+                        "object": "order",
+                        "event_time": "2026-09",
+                        "status": "confirmed",
+                        "summary": "Nebius order",
+                        "citations": [
+                            {
+                                "source_id": "primary",
+                                "quote": "Nebius order 2026-09",
+                            }
+                        ],
+                    }
+                ],
+                available_at=now,
+            )
+            db.commit()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(record, item_id) for item_id in item_ids]
+        for future in futures:
+            future.result(timeout=5)
+    with Session(engine) as db:
+        assert db.query(ThemeDevelopmentEvent).count() == 1
 
 
 def test_group_post_counts_handle_duplicate_posts_and_missing_tickers(engine):

@@ -28,8 +28,8 @@ class ThemeEquivalenceService:
     def mapping(self, pipeline=None):
         return dict(self.snapshot(pipeline).mapping)
 
-    def version(self):
-        return self.snapshot().version
+    def version(self, pipeline=None):
+        return self.snapshot(pipeline).version
 
     def representative(self, theme_id):
         return self.snapshot().representative(theme_id)
@@ -54,7 +54,7 @@ class ThemeEquivalenceService:
             raise EquivalenceConflict("Theme not found")
         if source.pipeline != target.pipeline:
             raise EquivalenceConflict("Cross-pipeline grouping is not allowed")
-        group = self.snapshot()
+        group = self.snapshot(source.pipeline)
         members = group.expand([source_id, target_id])
         rows = self.db.query(ThemeCluster).filter(ThemeCluster.id.in_(members)).all()
         if any(not row.is_active or row.is_l1 for row in rows):
@@ -120,11 +120,12 @@ class ThemeEquivalenceService:
                 raise EquivalenceConflict(
                     "Operation key was used for a different grouping"
                 )
-            return {"id": old.id, "active": old.active}
-        if expected_version is not None and expected_version != self.version():
-            raise EquivalenceConflict("Grouping changed; refresh the preview")
+            return {"id": old.id, "active": old.active, "pipeline": old.pipeline}
         preview = self.preview(source_id, target_id)
-        if self.representative(source_id) == self.representative(target_id):
+        if expected_version is not None and expected_version != preview["version"]:
+            raise EquivalenceConflict("Grouping changed; refresh the preview")
+        group = self.snapshot(preview["pipeline"])
+        if group.representative(source_id) == group.representative(target_id):
             raise EquivalenceConflict("Themes already belong to the same group")
         row = ThemeEquivalenceOperation(
             operation_key=key,
@@ -140,7 +141,7 @@ class ThemeEquivalenceService:
         )
         self.db.add(row)
         self.db.flush()
-        return {"id": row.id, "active": True}
+        return {"id": row.id, "active": True, "pipeline": row.pipeline}
 
     def undo(self, operation_id, *, actor, reason):
         self._attribution(actor, reason)
@@ -151,7 +152,7 @@ class ThemeEquivalenceService:
         if row is None:
             raise EquivalenceConflict("Grouping operation not found")
         if not row.active:
-            return {"id": row.id, "active": False}
+            return {"id": row.id, "active": False, "pipeline": row.pipeline}
         for later in self.operations(row.pipeline):
             if (
                 later.active
@@ -164,7 +165,7 @@ class ThemeEquivalenceService:
         row.undone_at = datetime.now(timezone.utc)
         row.undone_by, row.undo_reason = actor.strip(), reason.strip()
         self.db.flush()
-        return {"id": row.id, "active": False}
+        return {"id": row.id, "active": False, "pipeline": row.pipeline}
 
 
 def guard_grouped_merge(db, source_id, target_id):

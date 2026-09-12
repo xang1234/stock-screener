@@ -454,7 +454,7 @@ def get_theme_detail(
 
     from ...services.theme_equivalence_service import ThemeEquivalenceService
     from ...services.theme_group_reads import grouped_constituents
-    group = ThemeEquivalenceService(db).snapshot()
+    group = ThemeEquivalenceService(db).snapshot(cluster.pipeline)
     theme_id = group.representative(theme_id)
     cluster = db.get(ThemeCluster, theme_id)
     constituents = grouped_constituents(db, theme_id, snapshot=group)

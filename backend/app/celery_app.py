@@ -444,7 +444,7 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
         'theme-development-preparation': {
             'task': 'app.tasks.theme_intelligence_tasks.prepare_developments',
             'schedule': crontab(minute='*'),
-            'options': {'queue': 'celery', 'expires': 55},
+            'options': {'queue': SHARED_DATA_FETCH_QUEUE, 'expires': 55},
         },
         'live-attachment-preparation': {
             'task': 'app.tasks.live_attachment_tasks.prepare_live_attachments',

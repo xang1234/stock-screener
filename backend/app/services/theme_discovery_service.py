@@ -921,10 +921,11 @@ class ThemeDiscoveryService:
                     thresholds=thresholds,
                 )
             ):
-                # Get constituents
-                constituents = self.db.query(ThemeConstituent).filter(
-                    ThemeConstituent.theme_cluster_id == cluster.id,
-                ).order_by(ThemeConstituent.mention_count.desc()).limit(10).all()
+                from .theme_group_reads import grouped_constituents
+
+                constituents = grouped_constituents(
+                    self.db, cluster.id, snapshot=self.groups, limit=10
+                )
 
                 results.append({
                     "theme": cluster.name,
@@ -1991,37 +1992,53 @@ class ThemeDiscoveryService:
         return result
 
     def get_theme_relationships(self, theme_cluster_id: int, *, limit: int = 50) -> list[dict]:
+        group = self.groups
+        theme_cluster_id = group.representative(theme_cluster_id)
+        member_ids = group.members(theme_cluster_id)
         edges = self.db.query(ThemeRelationship).filter(
             ThemeRelationship.pipeline == self.pipeline,
             ThemeRelationship.is_active == True,
             or_(
-                ThemeRelationship.source_cluster_id == theme_cluster_id,
-                ThemeRelationship.target_cluster_id == theme_cluster_id,
+                ThemeRelationship.source_cluster_id.in_(member_ids),
+                ThemeRelationship.target_cluster_id.in_(member_ids),
             ),
-        ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.created_at.desc()).limit(limit).all()
+        ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.created_at.desc()).all()
 
         if not edges:
             return []
 
-        related_ids = {
-            edge.source_cluster_id if edge.source_cluster_id != theme_cluster_id else edge.target_cluster_id
-            for edge in edges
-        }
+        related_ids = set()
+        normalized = []
+        seen = set()
+        for edge in edges:
+            source_inside = edge.source_cluster_id in member_ids
+            target_inside = edge.target_cluster_id in member_ids
+            if source_inside and target_inside:
+                continue
+            peer_id = edge.target_cluster_id if source_inside else edge.source_cluster_id
+            peer_id = group.representative(peer_id)
+            direction = "outgoing" if source_inside else "incoming"
+            key = (peer_id, edge.relationship_type, direction)
+            if key in seen:
+                continue
+            seen.add(key)
+            related_ids.add(peer_id)
+            normalized.append((edge, peer_id, direction))
+            if len(normalized) >= limit:
+                break
         related_clusters = {
             cluster.id: cluster
             for cluster in self.db.query(ThemeCluster).filter(ThemeCluster.id.in_(list(related_ids))).all()
         }
 
         payload = []
-        for edge in edges:
-            is_outgoing = edge.source_cluster_id == theme_cluster_id
-            peer_id = edge.target_cluster_id if is_outgoing else edge.source_cluster_id
+        for edge, peer_id, direction in normalized:
             peer = related_clusters.get(peer_id)
             payload.append(
                 {
                     "relation_id": edge.id,
                     "relationship_type": edge.relationship_type,
-                    "direction": "outgoing" if is_outgoing else "incoming",
+                    "direction": direction,
                     "confidence": float(edge.confidence or 0.0),
                     "provenance": edge.provenance,
                     "evidence": edge.evidence or {},

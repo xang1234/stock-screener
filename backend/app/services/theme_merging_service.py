@@ -1413,6 +1413,10 @@ class ThemeMergingService:
         llm_result: dict = None
     ) -> Optional[ThemeMergeSuggestion]:
         """Create a merge suggestion record"""
+        grouped_ids, _ = self._reject_grouped_pending_suggestions()
+        if source_id in grouped_ids or target_id in grouped_ids:
+            self.db.commit()
+            return None
         pair_min_id, pair_max_id = self._canonical_pair_ids(source_id, target_id)
         existing = self._get_suggestion_for_pair(source_id, target_id)
 
@@ -1468,6 +1472,39 @@ class ThemeMergingService:
             self.db.commit()
             return existing
         return suggestion
+
+    def _reject_grouped_pending_suggestions(self) -> tuple[set[int], int]:
+        from .theme_equivalence_service import ThemeEquivalenceService
+
+        grouping = ThemeEquivalenceService(self.db)
+        grouping._lock()
+        grouped_ids = set(grouping.mapping())
+        if not grouped_ids:
+            return grouped_ids, 0
+        now = datetime.utcnow()
+        payload = json.dumps(
+            {
+                "reviewer": "system-grouping-guard",
+                "action": "reject",
+                "reason": "theme_already_in_reversible_group",
+                "reviewed_at": now.isoformat(),
+            }
+        )
+        updated = self.db.query(ThemeMergeSuggestion).filter(
+            ThemeMergeSuggestion.status == "pending",
+            or_(
+                ThemeMergeSuggestion.source_cluster_id.in_(grouped_ids),
+                ThemeMergeSuggestion.target_cluster_id.in_(grouped_ids),
+            ),
+        ).update(
+            {
+                ThemeMergeSuggestion.status: "rejected",
+                ThemeMergeSuggestion.reviewed_at: now,
+                ThemeMergeSuggestion.approval_result_json: payload,
+            },
+            synchronize_session=False,
+        )
+        return grouped_ids, int(updated or 0)
 
     def execute_merge(
         self,
@@ -1889,6 +1926,10 @@ class ThemeMergingService:
                     suggestion = self.create_merge_suggestion(
                         source_id, target_id, similarity, llm_result
                     )
+                    if suggestion is None:
+                        detail["action"] = "already_grouped"
+                        results["merge_details"].append(detail)
+                        continue
                     merge_result = self.execute_merge(
                         source_id,
                         target_id,
@@ -1910,10 +1951,15 @@ class ThemeMergingService:
                 # Queue for review
                 detail["action"] = "queue_review"
                 if not dry_run:
-                    self.create_merge_suggestion(
+                    suggestion = self.create_merge_suggestion(
                         theme1.id, theme2.id, similarity, llm_result
                     )
-                results["queued_for_review"] += 1
+                    if suggestion is None:
+                        detail["action"] = "already_grouped"
+                    else:
+                        results["queued_for_review"] += 1
+                else:
+                    results["queued_for_review"] += 1
 
             else:
                 detail["action"] = "no_action"
@@ -1956,6 +2002,9 @@ class ThemeMergingService:
         pipeline: str | None = None,
         limit: int = 500,
     ) -> list[ThemeMergeSuggestion]:
+        _, rejected = self._reject_grouped_pending_suggestions()
+        if rejected:
+            self.db.commit()
         bounded_limit = max(1, min(int(limit or 500), 2000))
         query = self.db.query(ThemeMergeSuggestion).filter(
             ThemeMergeSuggestion.status == "pending",
@@ -2478,6 +2527,12 @@ class ThemeMergingService:
                 similarity,
                 llm_result,
             )
+            if suggestion is None:
+                skip_counter["already_grouped"] += 1
+                action["decision"] = "skipped"
+                action["reason"] = "already_grouped"
+                results["merge_actions"].append(action)
+                continue
             merge_result = self.execute_merge(
                 source_id,
                 target_id,

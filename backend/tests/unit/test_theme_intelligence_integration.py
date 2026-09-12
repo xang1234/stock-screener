@@ -16,6 +16,7 @@ from app.models.theme import (
     ThemeCluster,
     ThemeConstituent,
     ThemeMention,
+    ThemeRelationship,
 )
 from app.models.theme_intelligence import (
     ThemeDevelopmentObservation,
@@ -241,29 +242,30 @@ def test_group_api_preview_apply_search_undo_and_conflict(sessions, monkeypatch)
         request = api.GroupRequest(
             source_id=a.id,
             target_id=b.id,
-            actor="Reviewer",
             reason="Equivalent exposure",
             operation_key="api-test",
             expected_version=preview["version"],
         )
-        result = api.apply_equivalence(request, db)
+        result = api.apply_equivalence(request, db, x_admin_actor="Reviewer")
         assert result["refresh_status"] == "pending"
         choices = api.search_equivalent_themes(db, q="CPO", pipeline="technical")[
             "themes"
         ]
         assert [row["id"] for row in choices] == [b.id]
-        assert api.apply_equivalence(request, db)["id"] == result["id"]
+        assert api.apply_equivalence(request, db, x_admin_actor="Reviewer")["id"] == result["id"]
         assert api.equivalence_history(db, pipeline="technical")["operations"][0][
             "active"
         ]
         with pytest.raises(HTTPException) as error:
             api.apply_equivalence(
-                request.model_copy(update={"operation_key": "stale"}), db
+                request.model_copy(update={"operation_key": "stale"}), db, x_admin_actor="Reviewer"
             )
         assert error.value.status_code == 409
         api.undo_equivalence(
-            result["id"], api.UndoRequest(actor="Reviewer", reason="Separate again"), db
+            result["id"], api.UndoRequest(reason="Separate again"), db, x_admin_actor="Undo Reviewer"
         )
+        operation = api.equivalence_history(db, pipeline="technical")["operations"][0]
+        assert operation["undone_by"] == "Undo Reviewer"
         assert ThemeEquivalenceService(db).members(a.id) == [a.id]
 
 
@@ -284,6 +286,37 @@ def test_disabled_backfill_is_read_only_and_rejects_model_work(sessions, monkeyp
         with pytest.raises(HTTPException) as error:
             backfill_developments(BackfillRequest(item_ids=[item.id], apply=True), db)
         assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_equivalence_mutations_require_admin_key(sessions, monkeypatch):
+    import httpx
+    from app.api.v1.config import settings as config_settings
+    from app.database import get_db
+    from app.main import app
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config_settings, "admin_api_key", "review-secret")
+    with sessions() as db:
+        app.dependency_overrides[get_db] = lambda: db
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/api/v1/themes/equivalence",
+                    json={
+                        "source_id": 1,
+                        "target_id": 2,
+                        "reason": "Equivalent",
+                        "operation_key": "auth-test",
+                        "expected_version": "a" * 64,
+                    },
+                )
+                assert response.status_code == 401
+        finally:
+            app.dependency_overrides.pop(get_db, None)
 
 
 def test_grouped_timeline_deduplicates_events_and_retains_alias_provenance(sessions):
@@ -323,11 +356,11 @@ def test_category_view_hides_alias_children_and_clears_emptied_parent(sessions):
                 is_active=True,
                 is_l1=True,
             )
-            for name in ["parent-a", "parent-b"]
+            for name in ["parent-a", "parent-b", "unrelated-parent"]
         ]
         db.add_all(parents)
         db.flush()
-        a.parent_cluster_id, b.parent_cluster_id = [row.id for row in parents]
+        a.parent_cluster_id, b.parent_cluster_id = [row.id for row in parents[:2]]
         for theme in [a, b, *parents]:
             db.add(
                 ThemeMetrics(
@@ -355,6 +388,10 @@ def test_category_view_hides_alias_children_and_clears_emptied_parent(sessions):
         )
         target = db.query(ThemeMetrics).filter_by(theme_cluster_id=parents[1].id).one()
         assert target.mentions_7d == 1 and target.num_constituents == 1
+        unrelated = (
+            db.query(ThemeMetrics).filter_by(theme_cluster_id=parents[2].id).one()
+        )
+        assert unrelated.mentions_7d == 1
 
 
 def test_model_preparation_reuses_route_and_existing_event_hints(sessions, monkeypatch):
@@ -375,6 +412,8 @@ def test_model_preparation_reuses_route_and_existing_event_hints(sessions, monke
         prompts.append(json.loads(prompt))
         return "[]"
 
+    rate_limits = []
+    monkeypatch.setattr(ThemeExtractionService, "_rate_limit", lambda self: rate_limits.append(True))
     monkeypatch.setattr(ThemeExtractionService, "_try_generate_litellm", model)
     with sessions() as db:
         bundle = input_bundle(db, item_id, "technical")
@@ -383,6 +422,74 @@ def test_model_preparation_reuses_route_and_existing_event_hints(sessions, monke
             "Prepared English evidence" in prompts[0]["sources"]["translated_primary"]
         )
         assert len(prompts[0]["known_event_identities"]) == 1
+        assert rate_limits == [True]
+
+
+def test_grouped_detail_aggregates_alias_relationships(sessions):
+    from app.api.v1.themes_queries import get_theme_detail
+
+    with sessions.begin() as db:
+        _, alias, representative = seed(db)
+        alias.first_seen_at = representative.first_seen_at = NOW
+        peer = ThemeCluster(
+            name="Datacenter Networking",
+            display_name="Datacenter Networking",
+            canonical_key="datacenter_networking",
+            pipeline="technical",
+            is_active=True,
+        )
+        db.add(peer)
+        db.flush()
+        db.add(
+            ThemeRelationship(
+                source_cluster_id=alias.id,
+                target_cluster_id=peer.id,
+                relationship_type="related",
+                pipeline="technical",
+                confidence=0.8,
+                is_active=True,
+            )
+        )
+        ThemeEquivalenceService(db).apply(
+            alias.id,
+            representative.id,
+            actor="reviewer",
+            reason="Equivalent",
+            key="relationship-group",
+        )
+
+        detail = get_theme_detail(alias.id, db)
+        assert [row.peer_theme_id for row in detail.relationships] == [peer.id]
+
+
+def test_emerging_group_includes_alias_constituents(sessions, monkeypatch):
+    with sessions.begin() as db:
+        _, alias, representative = seed(db)
+        alias.first_seen_at = representative.first_seen_at = NOW
+        db.query(ThemeConstituent).filter_by(theme_cluster_id=alias.id).update(
+            {"symbol": "MRVL"}
+        )
+        ThemeEquivalenceService(db).apply(
+            alias.id,
+            representative.id,
+            actor="reviewer",
+            reason="Equivalent",
+            key="emerging-group",
+        )
+        service = ThemeDiscoveryService(db)
+        monkeypatch.setattr(
+            service,
+            "calculate_mention_metrics",
+            lambda _theme_id: {
+                "mentions_7d": 3,
+                "mention_velocity": 2.0,
+                "sentiment_score": 0.5,
+            },
+        )
+        monkeypatch.setattr(service, "_passes_emerging_lifecycle_gate", lambda **_kw: True)
+
+        rows = service.discover_emerging_themes(min_velocity=1, min_mentions=1)
+        assert set(rows[0]["tickers"]) == {"MRVL", "NBIS"}
 
 
 def test_source_and_history_queries_use_the_same_representative(sessions):
@@ -400,7 +507,7 @@ def test_source_and_history_queries_use_the_same_representative(sessions):
                 pipeline="technical",
                 date=NOW.date(),
                 mentions_7d=1,
-                grouping_version=ThemeEquivalenceService(db).version(),
+                grouping_version=ThemeEquivalenceService(db).version("technical"),
             )
         )
         db.flush()
@@ -430,6 +537,61 @@ def test_changed_evidence_is_requeued_without_new_mentions(sessions):
             db.query(ThemeDevelopmentWork).filter_by(status="superseded").count() == 1
         )
         assert db.query(ThemeDevelopmentWork).filter_by(status="pending").count() == 1
+
+
+def test_development_enqueue_failure_preserves_extracted_mentions(
+    sessions, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.services import theme_development_worker
+    from app.services.theme_extraction_service import ThemeExtractionService
+    from app.services.theme_taxonomy_service import ThemeTaxonomyService
+    from app.tasks import theme_intelligence_tasks
+    from sqlalchemy.exc import SQLAlchemyError
+
+    with sessions.begin() as db:
+        item, cluster, _ = seed(db)
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db
+        service.pipeline = "technical"
+        service.last_grounding_context = None
+        service.extract_from_content = lambda *_args, **_kwargs: [
+            {
+                "theme": "CPO",
+                "tickers": ["MRVL"],
+                "sentiment": "bullish",
+                "confidence": 0.9,
+                "excerpt": "CPO demand",
+                "development": "Demand increased",
+                "claim_support": None,
+            }
+        ]
+        decision = SimpleNamespace(
+            method="exact",
+            score=1.0,
+            threshold=0.9,
+            threshold_version="test",
+            score_model=None,
+            score_model_version=None,
+            fallback_reason=None,
+            best_alternative_cluster_id=None,
+            best_alternative_score=None,
+            score_margin=None,
+        )
+        service._resolve_cluster_match = lambda *_args, **_kwargs: (cluster, decision)
+        service._update_theme_constituents = lambda *_args: None
+        monkeypatch.setattr(ThemeTaxonomyService, "classify_new_l2_to_l1", lambda *_args: None)
+        monkeypatch.setattr(theme_intelligence_tasks, "tracking_enabled", lambda: True)
+        monkeypatch.setattr(
+            theme_development_worker,
+            "enqueue",
+            lambda *_args: (_ for _ in ()).throw(SQLAlchemyError("queue unavailable")),
+        )
+
+        assert service._extract_and_store_mentions(item) == 1
+        assert db.query(ThemeMention).filter_by(content_item_id=item.id).count() == 1
+        assert db.execute(text("SELECT 1")).scalar_one() == 1
 
 
 def test_bounded_discovery_rotates_completed_work_and_notices_translation(sessions):

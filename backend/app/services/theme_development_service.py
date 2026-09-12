@@ -1,5 +1,7 @@
 """Persist validated observations with a single membership authority."""
 
+from sqlalchemy.exc import IntegrityError
+
 from app.models.theme_intelligence import (
     ThemeDevelopmentEvent,
     ThemeDevelopmentObservation,
@@ -58,11 +60,20 @@ def record_developments(
             .first()
         )
         if event is None:
-            event = ThemeDevelopmentEvent(
-                pipeline=pipeline, event_key=key, identity=event_identity
-            )
-            db.add(event)
-            db.flush()
+            try:
+                with db.begin_nested():
+                    event = ThemeDevelopmentEvent(
+                        pipeline=pipeline, event_key=key, identity=event_identity
+                    )
+                    db.add(event)
+                    db.flush()
+            except IntegrityError:
+                event = (
+                    db.query(ThemeDevelopmentEvent)
+                    .filter_by(pipeline=pipeline, event_key=key)
+                    .with_for_update()
+                    .one()
+                )
         obs_key = digest([item.id, pipeline, revision, key])
         row = ThemeDevelopmentObservation(
             event_id=event.id,

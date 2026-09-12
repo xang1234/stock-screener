@@ -1018,9 +1018,11 @@ class ThemeTaxonomyService:
         ).all()
 
         mapping = self.groups.mapping
+        grouped_ids = set(mapping) | set(mapping.values())
         parents = {row.id: row.parent_cluster_id for row in self.db.query(ThemeCluster).filter(
-            ThemeCluster.id.in_(set(mapping.values())),
+            ThemeCluster.id.in_(grouped_ids),
         )}
+        regrouped_parents = {parent for parent in parents.values() if parent is not None}
         effective_parent = (case(
             {member: parents.get(root) for member, root in mapping.items()},
             value=ThemeCluster.id, else_=ThemeCluster.parent_cluster_id,
@@ -1039,7 +1041,7 @@ class ThemeTaxonomyService:
         metrics_updated = 0
         for l1 in l1_themes:
             agg = agg_map.get(l1.id)
-            if not agg and not mapping:
+            if not agg and l1.id not in regrouped_parents:
                 continue
 
             unique_constituents = constituent_map.get(l1.id, 0)

@@ -5,9 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base
 from app.models.theme import (
     ThemeCluster,
@@ -16,7 +13,10 @@ from app.models.theme import (
     ThemeMergeHistory,
     ThemeMergeSuggestion,
 )
+from app.services.theme_equivalence_service import ThemeEquivalenceService
 from app.services.theme_merging_service import ThemeMergingService
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -189,6 +189,58 @@ def test_create_merge_suggestion_deduplicates_reversed_pairs(db_session):
     assert only.pair_min_cluster_id == min(left.id, right.id)
     assert only.pair_max_cluster_id == max(left.id, right.id)
     assert only.embedding_similarity == 0.95
+
+
+def test_grouped_pair_is_not_added_to_destructive_merge_queue(db_session):
+    left = _make_cluster(db_session, key="cpo", name="CPO")
+    right = _make_cluster(
+        db_session, key="co_packaged_optics", name="Co-Packaged Optics"
+    )
+    ThemeEquivalenceService(db_session).apply(
+        left.id,
+        right.id,
+        actor="reviewer",
+        reason="Equivalent",
+        key="reviewed-group",
+    )
+    db_session.commit()
+
+    suggestion = _make_service(db_session).create_merge_suggestion(
+        left.id, right.id, 0.98, {"confidence": 0.99}
+    )
+
+    assert suggestion is None
+    assert db_session.query(ThemeMergeSuggestion).count() == 0
+
+
+def test_existing_pending_suggestion_is_rejected_after_grouping(db_session):
+    left = _make_cluster(db_session, key="miners", name="Bitcoin Miners")
+    right = _make_cluster(db_session, key="mining", name="Bitcoin Mining")
+    suggestion = ThemeMergeSuggestion(
+        source_cluster_id=left.id,
+        target_cluster_id=right.id,
+        pair_min_cluster_id=left.id,
+        pair_max_cluster_id=right.id,
+        embedding_similarity=0.9,
+        llm_confidence=0.8,
+        llm_relationship="identical",
+        status="pending",
+    )
+    db_session.add(suggestion)
+    db_session.commit()
+    ThemeEquivalenceService(db_session).apply(
+        left.id,
+        right.id,
+        actor="reviewer",
+        reason="Equivalent",
+        key="later-group",
+    )
+    db_session.commit()
+
+    assert _make_service(db_session)._iter_manual_review_queue() == []
+    db_session.refresh(suggestion)
+    assert suggestion.status == "rejected"
+    assert "theme_already_in_reversible_group" in suggestion.approval_result_json
 
 
 def test_get_merge_suggestions_exposes_canonical_and_legacy_contract_fields(db_session):

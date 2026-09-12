@@ -970,7 +970,16 @@ Example themes for this pipeline: {examples_str}
         from .theme_development_worker import enqueue
         from app.tasks.theme_intelligence_tasks import tracking_enabled
         if tracking_enabled():
-            enqueue(self.db, content_item.id, self.pipeline)
+            try:
+                with self.db.begin_nested():
+                    enqueue(self.db, content_item.id, self.pipeline)
+            except SQLAlchemyError as exc:
+                logger.warning(
+                    "Development preparation enqueue failed for content item %s "
+                    "(non-fatal): %s",
+                    content_item.id,
+                    exc,
+                )
         return mention_count
 
     def _get_match_threshold_config(self) -> MatchThresholdConfig:
