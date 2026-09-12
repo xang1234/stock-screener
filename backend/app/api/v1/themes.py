@@ -32,6 +32,7 @@ from .themes_common import (
     resolve_source_ids_for_pipeline as _resolve_source_ids_for_pipeline,
     safe_theme_cluster_response as _safe_theme_cluster_response,
 )
+from .themes_intelligence import router as intelligence_router
 from .themes_queries import router as queries_router
 from .themes_queries import (
     get_lifecycle_transitions,
@@ -174,4 +175,5 @@ router.include_router(content_sources_router)
 router.include_router(content_pipeline_router)
 router.include_router(review_merge_router)
 router.include_router(taxonomy_router)
+router.include_router(intelligence_router)
 router.include_router(queries_router)

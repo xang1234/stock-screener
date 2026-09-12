@@ -452,10 +452,12 @@ def get_theme_detail(
     if not cluster:
         raise HTTPException(status_code=404, detail="Theme not found")
 
-    constituents = db.query(ThemeConstituent).filter(
-        ThemeConstituent.theme_cluster_id == theme_id,
-        ThemeConstituent.is_active == True,
-    ).order_by(ThemeConstituent.mention_count.desc()).all()
+    from ...services.theme_equivalence_service import ThemeEquivalenceService
+    from ...services.theme_group_reads import grouped_constituents
+    group = ThemeEquivalenceService(db).snapshot(cluster.pipeline)
+    theme_id = group.representative(theme_id)
+    cluster = db.get(ThemeCluster, theme_id)
+    constituents = grouped_constituents(db, theme_id, snapshot=group)
 
     latest_metrics = db.query(ThemeMetrics).filter(
         ThemeMetrics.theme_cluster_id == theme_id
@@ -471,7 +473,8 @@ def get_theme_detail(
         from app.services.social_theme_projection_service import (
             SocialThemeProjectionService,
         )
-        effective = SocialThemeProjectionService(db).effective_live_membership(theme_id)
+        effective = [member for member_id in group.members(theme_id)
+                     for member in SocialThemeProjectionService(db).effective_live_membership(member_id)]
         by_symbol = {item.symbol: item for item in constituent_payloads}
         for member in effective:
             current = by_symbol.get(member.canonical_symbol)
@@ -486,7 +489,7 @@ def get_theme_detail(
             current.market = member.market
             current.company_key = member.company_key
             current.company_count_eligible = member.company_count_eligible
-            current.origins = list(member.origins)
+            current.origins = sorted(set(current.origins or []) | set(member.origins))
 
     return ThemeDetailResponse(
         theme=safe_theme_cluster_response(cluster),
@@ -507,6 +510,10 @@ def get_theme_history(
     if not cluster:
         raise HTTPException(status_code=404, detail="Theme not found")
 
+    from ...services.theme_equivalence_service import ThemeEquivalenceService
+    theme_id = ThemeEquivalenceService(db).representative(theme_id)
+    cluster = db.get(ThemeCluster, theme_id)
+
     cutoff_date = datetime.utcnow().date() - timedelta(days=days)
     metrics = db.query(ThemeMetrics).filter(
         ThemeMetrics.theme_cluster_id == theme_id,
@@ -523,6 +530,7 @@ def get_theme_history(
                 "mention_velocity": metric.mention_velocity,
                 "basket_rs_vs_spy": metric.basket_rs_vs_spy,
                 "status": metric.status,
+                "grouping_version": metric.grouping_version,
             }
             for metric in metrics
         ],
@@ -540,13 +548,26 @@ def get_theme_mentions(
     if not cluster:
         raise HTTPException(status_code=404, detail="Theme not found")
 
-    mentions = db.query(ThemeMention, ContentItem).join(
+    from ...services.theme_equivalence_service import ThemeEquivalenceService
+    group = ThemeEquivalenceService(db).snapshot()
+    member_ids = group.members(theme_id)
+    theme_id = group.representative(theme_id)
+    cluster = db.get(ThemeCluster, theme_id)
+
+    query = db.query(ThemeMention, ContentItem).join(
         ContentItem, ThemeMention.content_item_id == ContentItem.id
     ).filter(
-        ThemeMention.theme_cluster_id == theme_id
+        ThemeMention.theme_cluster_id.in_(member_ids)
     ).order_by(
         ThemeMention.mentioned_at.desc()
-    ).limit(limit).all()
+    )
+    if len(member_ids) > 1:
+        from sqlalchemy import func
+        selected = db.query(func.min(ThemeMention.id)).filter(
+            ThemeMention.theme_cluster_id.in_(member_ids)
+        ).group_by(ThemeMention.content_item_id)
+        query = query.filter(ThemeMention.id.in_(selected))
+    mentions = query.limit(limit).all()
 
     snapshots = attachment_snapshots(db, [content.id for _, content in mentions])
 

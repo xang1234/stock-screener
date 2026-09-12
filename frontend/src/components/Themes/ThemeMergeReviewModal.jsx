@@ -1,3 +1,4 @@
+import ThemeEquivalencePanel from './ThemeEquivalencePanel';
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -511,8 +512,11 @@ export function ThemeMergeReviewContent({ onClose }) {
             }
           />
           <Tab label="History" />
+          <Tab label="Reversible grouping" />
         </Tabs>
       </Box>
+
+      {activeTab === 2 && <ThemeEquivalencePanel />}
 
       {/* Pending Tab */}
       {activeTab === 0 && (

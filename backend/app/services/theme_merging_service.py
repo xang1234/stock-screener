@@ -1413,6 +1413,10 @@ class ThemeMergingService:
         llm_result: dict = None
     ) -> Optional[ThemeMergeSuggestion]:
         """Create a merge suggestion record"""
+        grouped_ids, _ = self._reject_grouped_pending_suggestions()
+        if source_id in grouped_ids or target_id in grouped_ids:
+            self.db.commit()
+            return None
         pair_min_id, pair_max_id = self._canonical_pair_ids(source_id, target_id)
         existing = self._get_suggestion_for_pair(source_id, target_id)
 
@@ -1469,6 +1473,39 @@ class ThemeMergingService:
             return existing
         return suggestion
 
+    def _reject_grouped_pending_suggestions(self) -> tuple[set[int], int]:
+        from .theme_equivalence_service import ThemeEquivalenceService
+
+        grouping = ThemeEquivalenceService(self.db)
+        grouping._lock()
+        grouped_ids = set(grouping.mapping())
+        if not grouped_ids:
+            return grouped_ids, 0
+        now = datetime.utcnow()
+        payload = json.dumps(
+            {
+                "reviewer": "system-grouping-guard",
+                "action": "reject",
+                "reason": "theme_already_in_reversible_group",
+                "reviewed_at": now.isoformat(),
+            }
+        )
+        updated = self.db.query(ThemeMergeSuggestion).filter(
+            ThemeMergeSuggestion.status == "pending",
+            or_(
+                ThemeMergeSuggestion.source_cluster_id.in_(grouped_ids),
+                ThemeMergeSuggestion.target_cluster_id.in_(grouped_ids),
+            ),
+        ).update(
+            {
+                ThemeMergeSuggestion.status: "rejected",
+                ThemeMergeSuggestion.reviewed_at: now,
+                ThemeMergeSuggestion.approval_result_json: payload,
+            },
+            synchronize_session=False,
+        )
+        return grouped_ids, int(updated or 0)
+
     def execute_merge(
         self,
         source_id: int,
@@ -1489,6 +1526,8 @@ class ThemeMergingService:
                 )
             from .social_theme_projection_service import guard_social_theme_merge
             guard_social_theme_merge(self.db, source_id, target_id)
+            from .theme_equivalence_service import guard_grouped_merge
+            guard_grouped_merge(self.db, source_id, target_id)
             ordered_theme_ids = sorted({source_id, target_id})
             locked_themes = self._maybe_with_for_update(
                 self.db.query(ThemeCluster)
@@ -1887,6 +1926,10 @@ class ThemeMergingService:
                     suggestion = self.create_merge_suggestion(
                         source_id, target_id, similarity, llm_result
                     )
+                    if suggestion is None:
+                        detail["action"] = "already_grouped"
+                        results["merge_details"].append(detail)
+                        continue
                     merge_result = self.execute_merge(
                         source_id,
                         target_id,
@@ -1908,10 +1951,15 @@ class ThemeMergingService:
                 # Queue for review
                 detail["action"] = "queue_review"
                 if not dry_run:
-                    self.create_merge_suggestion(
+                    suggestion = self.create_merge_suggestion(
                         theme1.id, theme2.id, similarity, llm_result
                     )
-                results["queued_for_review"] += 1
+                    if suggestion is None:
+                        detail["action"] = "already_grouped"
+                    else:
+                        results["queued_for_review"] += 1
+                else:
+                    results["queued_for_review"] += 1
 
             else:
                 detail["action"] = "no_action"
@@ -1953,13 +2001,27 @@ class ThemeMergingService:
         *,
         pipeline: str | None = None,
         limit: int = 500,
+        dry_run: bool = False,
     ) -> list[ThemeMergeSuggestion]:
+        if dry_run:
+            from .theme_equivalence_service import ThemeEquivalenceService
+
+            grouped_ids = set(ThemeEquivalenceService(self.db).mapping())
+        else:
+            grouped_ids, rejected = self._reject_grouped_pending_suggestions()
+            if rejected:
+                self.db.commit()
         bounded_limit = max(1, min(int(limit or 500), 2000))
         query = self.db.query(ThemeMergeSuggestion).filter(
             ThemeMergeSuggestion.status == "pending",
             ThemeMergeSuggestion.embedding_similarity.isnot(None),
             ThemeMergeSuggestion.llm_confidence.isnot(None),
         )
+        if grouped_ids:
+            query = query.filter(
+                ~ThemeMergeSuggestion.source_cluster_id.in_(grouped_ids),
+                ~ThemeMergeSuggestion.target_cluster_id.in_(grouped_ids),
+            )
         ordered_query = query.order_by(
             ThemeMergeSuggestion.llm_confidence.desc(),
             ThemeMergeSuggestion.embedding_similarity.desc(),
@@ -2100,7 +2162,9 @@ class ThemeMergingService:
         before_counts = self._snapshot_wave_counts(pipeline=pipeline)
         if not dry_run:
             self._resolve_stale_pending_suggestions(pipeline=pipeline)
-        queue = self._iter_manual_review_queue(pipeline=pipeline, limit=queue_limit)
+        queue = self._iter_manual_review_queue(
+            pipeline=pipeline, limit=queue_limit, dry_run=dry_run
+        )
         decision_by_suggestion: dict[int, dict[str, object]] = {}
         for row in decisions or []:
             raw_id = row.get("suggestion_id")
@@ -2239,7 +2303,11 @@ class ThemeMergingService:
 
         ended_at = datetime.utcnow()
         elapsed_hours = max(1e-9, (ended_at - started_at).total_seconds() / 3600.0)
-        pending_after = len(self._iter_manual_review_queue(pipeline=pipeline, limit=queue_limit))
+        pending_after = len(
+            self._iter_manual_review_queue(
+                pipeline=pipeline, limit=queue_limit, dry_run=dry_run
+            )
+        )
         reviewed_effective = approved + rejected
         after_counts = self._snapshot_wave_counts(pipeline=pipeline)
         history_rows = []
@@ -2476,6 +2544,12 @@ class ThemeMergingService:
                 similarity,
                 llm_result,
             )
+            if suggestion is None:
+                skip_counter["already_grouped"] += 1
+                action["decision"] = "skipped"
+                action["reason"] = "already_grouped"
+                results["merge_actions"].append(action)
+                continue
             merge_result = self.execute_merge(
                 source_id,
                 target_id,
@@ -2837,7 +2911,10 @@ class ThemeMergingService:
 
     def approve_suggestion(self, suggestion_id: int, idempotency_key: str | None = None) -> MergeActionResult:
         """Approve and execute a merge suggestion"""
+        from .theme_equivalence_service import ThemeEquivalenceService
+
         operation_key = idempotency_key.strip()[:128] if idempotency_key and idempotency_key.strip() else None
+        ThemeEquivalenceService(self.db)._lock()
         suggestion = self._maybe_with_for_update(
             self.db.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == suggestion_id)
         ).first()

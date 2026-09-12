@@ -9,6 +9,9 @@ import {
   reviewCandidateThemes,
   getContentItems,
   exportContentItems,
+  applyThemeEquivalence,
+  undoThemeEquivalence,
+  assertSecureAdminTransport,
 } from './themes';
 
 vi.mock('./client', () => ({
@@ -141,6 +144,35 @@ describe('theme api helpers', () => {
 
     expect(promoted.status).toBe('applied');
     expect(reverted.status).toBe('applied');
+  });
+
+  it('sends admin credentials outside equivalence audit bodies', async () => {
+    apiClient.post
+      .mockResolvedValueOnce({ data: { id: 4 } })
+      .mockResolvedValueOnce({ data: { id: 4, active: false } });
+
+    await applyThemeEquivalence({ source_id: 1, target_id: 2, reason: 'Same' }, 'key', 'reviewer');
+    await undoThemeEquivalence(4, { reason: 'Correction' }, 'key', 'corrector');
+
+    expect(apiClient.post).toHaveBeenNthCalledWith(
+      1,
+      '/v1/themes/equivalence',
+      { source_id: 1, target_id: 2, reason: 'Same' },
+      { headers: { 'X-Admin-Key': 'key', 'X-Admin-Actor': 'reviewer' } },
+    );
+    expect(apiClient.post).toHaveBeenNthCalledWith(
+      2,
+      '/v1/themes/equivalence/4/undo',
+      { reason: 'Correction' },
+      { headers: { 'X-Admin-Key': 'key', 'X-Admin-Actor': 'corrector' } },
+    );
+  });
+
+  it('rejects admin credentials over insecure production transport', () => {
+    expect(() => assertSecureAdminTransport({ production: true, protocol: 'http:', apiBaseUrl: '/api' })).toThrow(/HTTPS/);
+    expect(() => assertSecureAdminTransport({ production: true, protocol: 'https:', apiBaseUrl: 'http://api.example.com' })).toThrow(/HTTPS/);
+    expect(() => assertSecureAdminTransport({ production: false, protocol: 'http:', apiBaseUrl: '/api' })).not.toThrow();
+    expect(() => assertSecureAdminTransport({ production: true, protocol: 'https:', apiBaseUrl: '/api' })).not.toThrow();
   });
 
   it('passes pipeline to content items endpoint', async () => {

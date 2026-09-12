@@ -235,6 +235,11 @@ class UISnapshotService:
         )
 
     def publish_themes_bootstrap(self, pipeline: str = "technical", theme_view: str = "grouped") -> SnapshotResult:
+        from .theme_group_coordination import publication_scope
+        with self._session_factory() as db, publication_scope(db):
+            return self._publish_themes_bootstrap(pipeline, theme_view)
+
+    def _publish_themes_bootstrap(self, pipeline: str, theme_view: str) -> SnapshotResult:
         self._ensure_schema()
         variant_key = self._themes_variant_key(pipeline, theme_view)
         return self._run_with_storage_recovery(

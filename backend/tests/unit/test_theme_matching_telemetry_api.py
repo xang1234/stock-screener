@@ -5,9 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from app.api.v1.themes import (
     get_candidate_theme_queue,
     get_lifecycle_transitions,
@@ -17,8 +14,17 @@ from app.api.v1.themes import (
     review_candidate_themes,
 )
 from app.database import Base
-from app.models.theme import ThemeCluster, ThemeLifecycleTransition, ThemeMention, ThemeRelationship
+from app.models.theme import (
+    ThemeCluster,
+    ThemeLifecycleTransition,
+    ThemeMention,
+    ThemeRelationship,
+)
 from app.schemas.theme import CandidateThemeReviewRequest
+from app.services.theme_discovery_service import ThemeDiscoveryService
+from app.services.theme_equivalence_service import ThemeEquivalenceService
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -311,6 +317,7 @@ def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
 
 def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
     from datetime import timezone
+
     from app.models.theme import ContentItem, ContentSource
     from app.services.theme_evidence_eligibility_service import grant_eligibility
     def legacy_item(source_type):
@@ -445,6 +452,119 @@ def test_get_candidate_theme_queue_band_summary_is_global_not_page_scoped(db_ses
     assert sum(bucket.count for bucket in payload.confidence_bands) == 2
 
 
+def test_candidate_review_uses_group_representatives(db_session):
+    now = datetime.utcnow()
+    member = ThemeCluster(
+        name="CPO Candidate",
+        canonical_key="cpo_candidate",
+        display_name="CPO Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=2),
+        first_seen_at=now - timedelta(days=3),
+    )
+    representative = ThemeCluster(
+        name="Co-Packaged Optics Candidate",
+        canonical_key="co_packaged_optics_candidate",
+        display_name="Co-Packaged Optics Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=1),
+        first_seen_at=now - timedelta(days=3),
+    )
+    db_session.add_all([member, representative])
+    db_session.flush()
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="candidate-review-group",
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    rows, total = service.get_candidate_theme_queue(limit=20)
+    bands = service.get_candidate_theme_confidence_bands()
+    result = service.review_candidate_themes(
+        theme_cluster_ids=[member.id, representative.id],
+        action="promote",
+        actor="analyst:test",
+    )
+
+    db_session.refresh(member)
+    db_session.refresh(representative)
+    assert total == 1
+    assert [row["theme_cluster_id"] for row in rows] == [representative.id]
+    assert sum(row["count"] for row in bands) == 1
+    assert result["updated"] == 1
+    assert result["results"][0]["theme_cluster_id"] == representative.id
+    assert representative.lifecycle_state == "active"
+    assert member.lifecycle_state == "candidate"
+
+
+def test_candidate_review_locks_and_refreshes_group_snapshot(
+    db_session, monkeypatch
+):
+    now = datetime.utcnow()
+    member = ThemeCluster(
+        name="Stale CPO Candidate",
+        canonical_key="stale_cpo_candidate",
+        display_name="Stale CPO Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=2),
+        first_seen_at=now - timedelta(days=3),
+    )
+    representative = ThemeCluster(
+        name="Current CPO Candidate",
+        canonical_key="current_cpo_candidate",
+        display_name="Current CPO Candidate",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=1),
+        first_seen_at=now - timedelta(days=3),
+    )
+    db_session.add_all([member, representative])
+    db_session.flush()
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    assert service.groups.representative(member.id) == member.id
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="candidate-review-refresh-group",
+    )
+    db_session.commit()
+    lock_calls = []
+    original_lock = ThemeEquivalenceService._lock
+
+    def tracked_lock(grouping):
+        lock_calls.append(grouping.db)
+        original_lock(grouping)
+
+    monkeypatch.setattr(ThemeEquivalenceService, "_lock", tracked_lock)
+
+    result = service.review_candidate_themes(
+        theme_cluster_ids=[member.id],
+        action="promote",
+        actor="analyst:test",
+    )
+
+    db_session.refresh(member)
+    db_session.refresh(representative)
+    assert lock_calls == [db_session]
+    assert result["updated"] == 1
+    assert result["results"][0]["theme_cluster_id"] == representative.id
+    assert member.lifecycle_state == "candidate"
+    assert representative.lifecycle_state == "active"
+
+
 def test_review_candidate_themes_promote_transitions_to_active(db_session):
     candidate = ThemeCluster(
         name="Grid Load",
@@ -518,3 +638,234 @@ def test_get_relationship_graph_returns_nodes_and_edges(db_session):
     assert payload.total_edges >= 1
     assert any(node.theme_cluster_id == source.id and node.is_root for node in payload.nodes)
     assert any(edge.relationship_type == "related" for edge in payload.edges)
+
+
+def test_get_relationship_graph_canonicalizes_group_members(db_session):
+    alias = ThemeCluster(
+        name="CPO",
+        canonical_key="cpo",
+        display_name="CPO",
+        pipeline="technical",
+        lifecycle_state="active",
+        is_active=True,
+    )
+    representative = ThemeCluster(
+        name="Co-Packaged Optics",
+        canonical_key="co_packaged_optics",
+        display_name="Co-Packaged Optics",
+        pipeline="technical",
+        lifecycle_state="active",
+        is_active=True,
+    )
+    peer_alias = ThemeCluster(
+        name="Optical Engines",
+        canonical_key="optical_engines",
+        display_name="Optical Engines",
+        pipeline="technical",
+        lifecycle_state="active",
+        is_active=True,
+    )
+    peer_representative = ThemeCluster(
+        name="Silicon Photonics",
+        canonical_key="silicon_photonics",
+        display_name="Silicon Photonics",
+        pipeline="technical",
+        lifecycle_state="active",
+        is_active=True,
+    )
+    other_peer = ThemeCluster(
+        name="Optical Networking",
+        canonical_key="optical_networking",
+        display_name="Optical Networking",
+        pipeline="technical",
+        lifecycle_state="active",
+        is_active=True,
+    )
+    db_session.add_all(
+        [alias, representative, peer_alias, peer_representative, other_peer]
+    )
+    db_session.flush()
+    grouping = ThemeEquivalenceService(db_session)
+    grouping.apply(
+        alias.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="graph-group",
+    )
+    grouping.apply(
+        peer_alias.id,
+        peer_representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="graph-peer-group",
+    )
+    db_session.add_all(
+        [
+            ThemeRelationship(
+                source_cluster_id=alias.id,
+                target_cluster_id=representative.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.99,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=alias.id,
+                target_cluster_id=peer_alias.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.81,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=representative.id,
+                target_cluster_id=peer_representative.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.91,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=representative.id,
+                target_cluster_id=other_peer.id,
+                pipeline="technical",
+                relationship_type="subset",
+                confidence=0.85,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=peer_representative.id,
+                target_cluster_id=other_peer.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.98,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=peer_representative.id,
+                target_cluster_id=other_peer.id,
+                pipeline="technical",
+                relationship_type="distinct",
+                confidence=0.97,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = get_relationship_graph(
+        theme_cluster_id=alias.id,
+        pipeline="technical",
+        limit=2,
+        db=db_session,
+    )
+
+    assert payload.theme_cluster_id == representative.id
+    assert {node.theme_cluster_id for node in payload.nodes} == {
+        representative.id,
+        peer_representative.id,
+        other_peer.id,
+    }
+    assert all(
+        node.theme_cluster_id not in {alias.id, peer_alias.id}
+        for node in payload.nodes
+    )
+    assert {
+        (edge.source_theme_id, edge.target_theme_id, edge.relationship_type)
+        for edge in payload.edges
+    } == {
+        (representative.id, peer_representative.id, "related"),
+        (representative.id, other_peer.id, "subset"),
+    }
+    related = next(
+        edge for edge in payload.edges if edge.relationship_type == "related"
+    )
+    assert related.confidence == 0.91
+
+
+def test_relationship_graph_canonicalizes_unordered_edges_after_grouping(
+    db_session,
+):
+    alias = ThemeCluster(
+        name="CPO Alias",
+        canonical_key="cpo_alias",
+        display_name="CPO Alias",
+        pipeline="technical",
+        is_active=True,
+    )
+    peer = ThemeCluster(
+        name="Optical Interconnects",
+        canonical_key="optical_interconnects",
+        display_name="Optical Interconnects",
+        pipeline="technical",
+        is_active=True,
+    )
+    representative = ThemeCluster(
+        name="Co-Packaged Optics",
+        canonical_key="co_packaged_optics",
+        display_name="Co-Packaged Optics",
+        pipeline="technical",
+        is_active=True,
+    )
+    db_session.add_all([alias, peer, representative])
+    db_session.flush()
+    ThemeEquivalenceService(db_session).apply(
+        alias.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="unordered-edge-group",
+    )
+    db_session.add_all(
+        [
+            ThemeRelationship(
+                source_cluster_id=alias.id,
+                target_cluster_id=peer.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.81,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=peer.id,
+                target_cluster_id=representative.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.91,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = get_relationship_graph(
+        theme_cluster_id=representative.id,
+        pipeline="technical",
+        limit=10,
+        db=db_session,
+    )
+
+    assert len(payload.edges) == 1
+    assert (
+        payload.edges[0].source_theme_id,
+        payload.edges[0].target_theme_id,
+        payload.edges[0].relationship_type,
+    ) == (peer.id, representative.id, "related")
+    assert payload.edges[0].confidence == 0.91

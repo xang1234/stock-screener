@@ -37,6 +37,7 @@ from ...schemas.theme import (
 )
 from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_discovery_service import ThemeDiscoveryService
+from ...services.theme_equivalence_service import ThemeEquivalenceService
 from ...services.theme_merging_service import ThemeMergingService
 
 router = APIRouter()
@@ -298,7 +299,7 @@ def get_relationship_graph(
     service = ThemeDiscoveryService(db, pipeline=pipeline)
     graph = service.get_theme_relationship_graph(theme_cluster_id, limit=limit)
     return ThemeRelationshipGraphResponse(
-        theme_cluster_id=theme_cluster_id,
+        theme_cluster_id=graph["theme_cluster_id"],
         total_nodes=len(graph["nodes"]),
         total_edges=len(graph["edges"]),
         nodes=[ThemeRelationshipGraphNodeResponse(**node) for node in graph["nodes"]],
@@ -402,9 +403,20 @@ def deactivate_theme(
     db: Session = Depends(get_db),
 ):
     """Deactivate a theme."""
-    cluster = db.query(ThemeCluster).filter(ThemeCluster.id == theme_id).first()
+    grouping = ThemeEquivalenceService(db)
+    grouping._lock()
+    cluster = db.query(ThemeCluster).filter(
+        ThemeCluster.id == theme_id
+    ).with_for_update().first()
     if not cluster:
         raise HTTPException(status_code=404, detail="Theme not found")
+
+    group = grouping.snapshot(cluster.pipeline)
+    if len(group.members(theme_id)) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Undo the active theme grouping before deactivating this theme",
+        )
 
     cluster.is_active = False
     db.commit()
