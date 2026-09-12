@@ -631,3 +631,32 @@ def test_normalized_source_span_cannot_exceed_citation_size_bound():
             [decision(verdict(refs=refs), verdict("absent"))],
             text=text,
         )
+
+
+@pytest.mark.parametrize("body", ["", "Talks are ongoing."])
+def test_headline_is_available_for_exact_claim_citations(body):
+    from types import SimpleNamespace
+
+    from app.services.theme_extraction_service import ThemeExtractionService
+
+    service = ThemeExtractionService.__new__(ThemeExtractionService)
+    service.provider = "litellm"
+    service.db = None
+    service._valid_tickers = set()
+    service._rate_limit = lambda: None
+    headline = "Co-packaged optics demand is rising."
+    refs = [{"source_id": "primary", "quote": headline}]
+    service._try_generate_litellm = lambda prompt, **kwargs: json.dumps(
+        [decision(verdict(refs=refs), verdict("absent"))] if kwargs
+        else [candidate(theme="Co-packaged optics", development=None)]
+    )
+    item = SimpleNamespace(content=body, title=headline, source_name="Feed",
+        source_type="news", source_language="en", published_at=None)
+    assert len(service.extract_from_content(item)) == 1
+
+
+def test_review_preserves_already_bounded_title_and_body():
+    from app.services.theme_claim_evidence import evidence_sources
+
+    source = "Title: Headline\n\nContent:\n" + "x" * 9970 + "Co-packaged optics demand rises"
+    assert evidence_sources(source, GroundingContext())["primary"] == source

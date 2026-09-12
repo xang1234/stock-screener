@@ -28,9 +28,8 @@ def _utc(value):
 
 def _with_latest_prepared_evidence(db, content_item_id, post, *, as_of):
     """Make a new generation see durable prepared evidence without mutating its parent post."""
-    from app.domain.social_signals.records import SocialPreparedEvidence
+    from app.domain.social_signals.records import SocialPreparedEvidence, prepared_provenance_json
     from app.services.live_attachment_service import attachment_snapshot
-    import json
 
     snapshot = attachment_snapshot(db, content_item_id, as_of=as_of)
     if not snapshot["evidence"]:
@@ -39,8 +38,7 @@ def _with_latest_prepared_evidence(db, content_item_id, post, *, as_of):
         id=value["id"], kind=value["kind"], url=value["url"], text=value["text"],
         original_text_sha256=value["original_text_sha256"], text_sha256=value["text_sha256"],
         available_at=datetime.fromisoformat(value["available_at"]),
-        provenance_json=json.dumps(value["provenance"], sort_keys=True, ensure_ascii=False,
-            separators=(",", ":")),
+        provenance_json=prepared_provenance_json(value["provenance"]),
     ) for value in snapshot["evidence"])
     return replace(post, prepared_evidence=evidence, evidence_digest=snapshot["revision"])
 

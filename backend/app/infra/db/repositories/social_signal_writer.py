@@ -81,7 +81,7 @@ class SocialSignalWriter:
     @staticmethod
     def _with_prepared_evidence(db, item, post, *, as_of):
         """Freeze only evidence prepared by the generation's observation time."""
-        from app.domain.social_signals.records import SocialPreparedEvidence
+        from app.domain.social_signals.records import SocialPreparedEvidence, prepared_provenance_json
         from app.services.live_attachment_service import attachment_snapshot
 
         snapshot = attachment_snapshot(db, item.id, as_of=as_of)
@@ -91,8 +91,7 @@ class SocialSignalWriter:
             id=value["id"], kind=value["kind"], url=value["url"], text=value["text"],
             original_text_sha256=value["original_text_sha256"], text_sha256=value["text_sha256"],
             available_at=datetime.fromisoformat(value["available_at"]),
-            provenance_json=json.dumps(value["provenance"], sort_keys=True, ensure_ascii=False,
-                separators=(",", ":")),
+            provenance_json=prepared_provenance_json(value["provenance"]),
         ) for value in snapshot["evidence"])
         return replace(post, prepared_evidence=evidence, evidence_digest=snapshot["revision"])
 

@@ -37,7 +37,8 @@ class Decision(BaseModel):
 
 
 def evidence_sources(primary_text: str, context: GroundingContext) -> dict[str, str]:
-    sources = {"primary": primary_text[:10000]}
+    # Extraction already bounds the body; keep its title and exact source bytes.
+    sources = {"primary": primary_text}
     sources.update({f"related:{e.input_id}": e.text for e in context.evidence})
     for company in context.companies:
         for field in ("name", "sector", "industry", "business_description"):

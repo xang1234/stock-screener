@@ -531,3 +531,42 @@ def test_batch_snapshots_match_single_reads_with_one_query(sessions):
             assert queries == []
         finally:
             event.remove(db.bind, "before_cursor_execute", capture)
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_social_snapshot_bounds_large_provenance(sessions, retained):
+    import json
+
+    from app.infra.db.repositories.social_refresh_support import (
+        _with_latest_prepared_evidence,
+    )
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+
+    item_id = seed(sessions)
+    with sessions.begin() as db:
+        row = db.query(ContentAttachment).one()
+        row.status = "complete"
+        row.prepared_at = NOW
+        row.prepared_text = "Nebius expands AI infrastructure."
+        row.original_text = row.prepared_text
+        row.content_sha256 = "a" * 64
+        row.provenance = {"model": "kimi-k2.6", "quantities": ["韓国" * 1000] * 20}
+    # A dataclass is sufficient here: conversion only replaces evidence fields.
+    from dataclasses import dataclass
+    @dataclass(frozen=True)
+    class Post:
+        prepared_evidence: tuple = ()
+        evidence_digest: str = ""
+    with sessions() as db:
+        if retained:
+            result = _with_latest_prepared_evidence(db, item_id, Post(), as_of=NOW)
+        else:
+            result = SocialSignalWriter._with_prepared_evidence(
+                db, db.get(ContentItem, item_id), Post(), as_of=NOW)
+        value = result.prepared_evidence[0]
+        assert len(value.provenance_json) <= 8192
+        summary = json.loads(value.provenance_json)
+        assert summary["provenance_summarized"] is True
+        assert summary["model"] == "kimi-k2.6"
+        assert len(summary["full_provenance_sha256"]) == 64
+        assert len(db.query(ContentAttachment).one().provenance["quantities"]) == 20

@@ -143,6 +143,31 @@ def _attachment_refs(value: object) -> tuple[SocialAttachmentRef, ...]:
     return tuple(refs)
 
 
+def prepared_provenance_json(provenance: dict) -> str:
+    """Bound derived social metadata; the attachment retains the complete audit."""
+    def encode(value):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+    full = encode(provenance)
+    if len(full) <= _MAX_EVIDENCE_PROVENANCE_CHARACTERS:
+        return full
+    summary = {
+        "provenance_summarized": True,
+        "full_provenance_sha256": sha256(full.encode()).hexdigest(),
+    }
+    # Preserve compact identity/quality fields before variable-length audit lists.
+    keys = sorted(provenance, key=lambda key: (
+        isinstance(provenance[key], (dict, list)), key
+    ))
+    for key in keys:
+        if key in summary:
+            continue
+        candidate = {**summary, key: provenance[key]}
+        if len(encode(candidate)) <= _MAX_EVIDENCE_PROVENANCE_CHARACTERS:
+            summary = candidate
+    return encode(summary)
+
+
 @dataclass(frozen=True, slots=True)
 class SocialPreparedEvidence:
     """Prepared attachment evidence pinned into a new social work generation."""

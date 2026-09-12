@@ -831,7 +831,11 @@ Example themes for this pipeline: {examples_str}
                 })
 
             if verify_claims:
-                cleaned_mentions = self._review_claims(cleaned_mentions, content_item.content or "", grounding_context)
+                cleaned_mentions = self._review_claims(
+                    cleaned_mentions,
+                    f"Title: {content_item.title or ''}\n\nContent:\n{content}",
+                    grounding_context,
+                )
             _telem_success = True
             return cleaned_mentions
 
