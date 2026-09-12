@@ -1267,6 +1267,22 @@ class ThemeDiscoveryService:
             merged["last_evaluated_at"] = now.isoformat()
         return merged
 
+    def _current_group_social_lifecycle_states(
+        self,
+        theme_cluster_id: int,
+        now: datetime,
+    ) -> set[str]:
+        from .theme_lifecycle_service import has_current_social_lifecycle_evidence
+
+        members = self.db.query(ThemeCluster).filter(
+            ThemeCluster.id.in_(self.groups.members(theme_cluster_id))
+        ).all()
+        return {
+            (member.lifecycle_state or "candidate").strip().lower()
+            for member in members
+            if has_current_social_lifecycle_evidence(member, now)
+        }
+
     def promote_candidate_themes(
         self,
         *,
@@ -1301,7 +1317,13 @@ class ThemeDiscoveryService:
 
         def _apply_candidate_policy(cluster: ThemeCluster) -> None:
             observation = self._lifecycle_snapshot(cluster.id, now=now)
-            should_promote = (
+            social_states = self._current_group_social_lifecycle_states(
+                cluster.id, now
+            )
+            grouped_social_promotion = bool(
+                social_states.intersection({"active", "reactivated"})
+            )
+            should_promote = grouped_social_promotion or (
                 observation["mentions_7d"] >= thresholds["promotion_min_mentions_7d"]
                 and observation["source_diversity_7d"] >= thresholds["promotion_min_source_diversity_7d"]
                 and observation["avg_quality_confidence_30d"] >= thresholds["promotion_min_avg_confidence_30d"]
@@ -1309,7 +1331,11 @@ class ThemeDiscoveryService:
             )
 
             if should_promote:
-                transition_reason = "candidate_promotion_thresholds_met"
+                transition_reason = (
+                    "grouped_social_lifecycle_evidence"
+                    if grouped_social_promotion
+                    else "candidate_promotion_thresholds_met"
+                )
                 transition_rule_version = "lifecycle-v2"
                 metadata = self._merge_lifecycle_metadata(
                     cluster,
@@ -1396,8 +1422,7 @@ class ThemeDiscoveryService:
         }
 
         def _apply_state_policy(cluster: ThemeCluster) -> None:
-            from .theme_lifecycle_service import has_current_social_lifecycle_evidence
-            if has_current_social_lifecycle_evidence(cluster, now):
+            if self._current_group_social_lifecycle_states(cluster.id, now):
                 result["unchanged"] += 1
                 return
             observation = self._lifecycle_snapshot(cluster.id, now=now)
@@ -2078,7 +2103,7 @@ class ThemeDiscoveryService:
                 ThemeRelationship.source_cluster_id.in_(root_members),
                 ThemeRelationship.target_cluster_id.in_(root_members),
             ),
-        ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.id.desc()).limit(limit).all()
+        ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.id.desc()).all()
 
         node_ids: set[int] = {theme_cluster_id}
         edge_rows: dict[
@@ -2102,6 +2127,29 @@ class ThemeDiscoveryService:
         for edge in primary_edges:
             include_edge(edge)
 
+        def edge_sort_key(row: tuple[ThemeRelationship, int, int]) -> tuple:
+            return (
+                -float(row[0].confidence or 0.0),
+                row[1],
+                row[2],
+                row[0].id,
+            )
+
+        primary_normalized = sorted(
+            edge_rows.values(), key=edge_sort_key
+        )[:limit]
+        edge_rows = {
+            (source_id, target_id, edge.relationship_type): (
+                edge,
+                source_id,
+                target_id,
+            )
+            for edge, source_id, target_id in primary_normalized
+        }
+        node_ids = {theme_cluster_id}
+        for _, source_id, target_id in primary_normalized:
+            node_ids.update((source_id, target_id))
+
         if len(node_ids) > 1:
             expanded_node_ids = group.expand(node_ids)
             secondary_edges = self.db.query(ThemeRelationship).filter(
@@ -2109,18 +2157,13 @@ class ThemeDiscoveryService:
                 ThemeRelationship.is_active == True,
                 ThemeRelationship.source_cluster_id.in_(expanded_node_ids),
                 ThemeRelationship.target_cluster_id.in_(expanded_node_ids),
-            ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.id.desc()).limit(limit).all()
+            ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.id.desc()).all()
             for edge in secondary_edges:
                 include_edge(edge)
 
         normalized_edges = sorted(
             edge_rows.values(),
-            key=lambda row: (
-                -float(row[0].confidence or 0.0),
-                row[1],
-                row[2],
-                row[0].id,
-            ),
+            key=edge_sort_key,
         )[:limit]
         node_ids = {theme_cluster_id}
         for _, source_id, target_id in normalized_edges:

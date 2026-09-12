@@ -590,6 +590,16 @@ def test_get_relationship_graph_canonicalizes_group_members(db_session):
         [
             ThemeRelationship(
                 source_cluster_id=alias.id,
+                target_cluster_id=representative.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.99,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=alias.id,
                 target_cluster_id=peer_alias.id,
                 pipeline="technical",
                 relationship_type="related",
@@ -625,7 +635,7 @@ def test_get_relationship_graph_canonicalizes_group_members(db_session):
     payload = get_relationship_graph(
         theme_cluster_id=alias.id,
         pipeline="technical",
-        limit=50,
+        limit=2,
         db=db_session,
     )
 

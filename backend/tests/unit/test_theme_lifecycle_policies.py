@@ -241,6 +241,50 @@ def test_candidate_promotion_uses_grouped_evidence_on_representative(db_session)
     ]
 
 
+def test_candidate_promotion_honors_current_grouped_social_lifecycle(db_session):
+    now = datetime(2026, 2, 24, 15, 40, 0)
+    member = _make_theme(
+        db_session,
+        name="Social CPO",
+        canonical_key="social_cpo",
+        state="active",
+        now=now,
+    )
+    representative = _make_theme(
+        db_session,
+        name="Social Co-Packaged Optics",
+        canonical_key="social_co_packaged_optics",
+        state="candidate",
+        now=now,
+    )
+    member.lifecycle_state_metadata = {
+        "social_policy_version": "social-theme-v1",
+        "social_valid_until": (
+            now.replace(tzinfo=timezone.utc) + timedelta(days=1)
+        ).isoformat(),
+    }
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="social-lifecycle-promotion-group",
+    )
+    db_session.commit()
+
+    result = ThemeDiscoveryService(
+        db_session, pipeline="technical"
+    ).promote_candidate_themes(now=now)
+
+    db_session.refresh(representative)
+    assert result["scanned"] == 1
+    assert result["promoted"] == 1
+    assert representative.lifecycle_state == "active"
+    transition = db_session.query(ThemeLifecycleTransition).one()
+    assert transition.theme_cluster_id == representative.id
+    assert transition.reason == "grouped_social_lifecycle_evidence"
+
+
 def test_dormancy_policy_uses_grouped_evidence_on_representative(db_session):
     now = datetime(2026, 2, 24, 15, 45, 0)
     source = _make_source(db_session, name="Grouped Current", source_type="news")
@@ -286,6 +330,48 @@ def test_dormancy_policy_uses_grouped_evidence_on_representative(db_session):
     assert result["to_dormant"] == 0
     assert representative.lifecycle_state == "active"
     assert member.lifecycle_state == "active"
+    assert db_session.query(ThemeLifecycleTransition).count() == 0
+
+
+def test_dormancy_policy_honors_current_grouped_social_lifecycle(db_session):
+    now = datetime(2026, 2, 24, 15, 50, 0)
+    member = _make_theme(
+        db_session,
+        name="Social Bitcoin Miners",
+        canonical_key="social_bitcoin_miners",
+        state="active",
+        now=now,
+    )
+    representative = _make_theme(
+        db_session,
+        name="Social Bitcoin Mining",
+        canonical_key="social_bitcoin_mining",
+        state="active",
+        now=now,
+    )
+    member.lifecycle_state_metadata = {
+        "social_policy_version": "social-theme-v1",
+        "social_valid_until": (
+            now.replace(tzinfo=timezone.utc) + timedelta(days=1)
+        ).isoformat(),
+    }
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="social-lifecycle-dormancy-group",
+    )
+    db_session.commit()
+
+    result = ThemeDiscoveryService(
+        db_session, pipeline="technical"
+    ).apply_dormancy_and_reactivation_policies(now=now)
+
+    db_session.refresh(representative)
+    assert result["scanned"] == 1
+    assert result["to_dormant"] == 0
+    assert representative.lifecycle_state == "active"
     assert db_session.query(ThemeLifecycleTransition).count() == 0
 
 
