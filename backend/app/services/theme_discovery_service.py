@@ -2123,6 +2123,11 @@ class ThemeDiscoveryService:
             target_id = group.representative(edge.target_cluster_id)
             if source_id == target_id:
                 return
+            source_id, target_id = self._canonicalize_relationship_edge(
+                source_cluster_id=source_id,
+                target_cluster_id=target_id,
+                relationship_type=edge.relationship_type,
+            )
             key = (source_id, target_id, edge.relationship_type)
             current = edge_rows.get(key)
             if current is not None and float(current[0].confidence or 0.0) >= float(

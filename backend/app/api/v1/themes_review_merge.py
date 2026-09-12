@@ -37,6 +37,7 @@ from ...schemas.theme import (
 )
 from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_discovery_service import ThemeDiscoveryService
+from ...services.theme_equivalence_service import ThemeEquivalenceService
 from ...services.theme_merging_service import ThemeMergingService
 
 router = APIRouter()
@@ -405,6 +406,13 @@ def deactivate_theme(
     cluster = db.query(ThemeCluster).filter(ThemeCluster.id == theme_id).first()
     if not cluster:
         raise HTTPException(status_code=404, detail="Theme not found")
+
+    group = ThemeEquivalenceService(db).snapshot(cluster.pipeline)
+    if len(group.members(theme_id)) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Undo the active theme grouping before deactivating this theme",
+        )
 
     cluster.is_active = False
     db.commit()

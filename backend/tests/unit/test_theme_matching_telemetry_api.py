@@ -734,3 +734,78 @@ def test_get_relationship_graph_canonicalizes_group_members(db_session):
         edge for edge in payload.edges if edge.relationship_type == "related"
     )
     assert related.confidence == 0.91
+
+
+def test_relationship_graph_canonicalizes_unordered_edges_after_grouping(
+    db_session,
+):
+    alias = ThemeCluster(
+        name="CPO Alias",
+        canonical_key="cpo_alias",
+        display_name="CPO Alias",
+        pipeline="technical",
+        is_active=True,
+    )
+    peer = ThemeCluster(
+        name="Optical Interconnects",
+        canonical_key="optical_interconnects",
+        display_name="Optical Interconnects",
+        pipeline="technical",
+        is_active=True,
+    )
+    representative = ThemeCluster(
+        name="Co-Packaged Optics",
+        canonical_key="co_packaged_optics",
+        display_name="Co-Packaged Optics",
+        pipeline="technical",
+        is_active=True,
+    )
+    db_session.add_all([alias, peer, representative])
+    db_session.flush()
+    ThemeEquivalenceService(db_session).apply(
+        alias.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="unordered-edge-group",
+    )
+    db_session.add_all(
+        [
+            ThemeRelationship(
+                source_cluster_id=alias.id,
+                target_cluster_id=peer.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.81,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+            ThemeRelationship(
+                source_cluster_id=peer.id,
+                target_cluster_id=representative.id,
+                pipeline="technical",
+                relationship_type="related",
+                confidence=0.91,
+                provenance="test_fixture",
+                evidence={},
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = get_relationship_graph(
+        theme_cluster_id=representative.id,
+        pipeline="technical",
+        limit=10,
+        db=db_session,
+    )
+
+    assert len(payload.edges) == 1
+    assert (
+        payload.edges[0].source_theme_id,
+        payload.edges[0].target_theme_id,
+        payload.edges[0].relationship_type,
+    ) == (peer.id, representative.id, "related")
+    assert payload.edges[0].confidence == 0.91

@@ -269,6 +269,29 @@ def test_group_api_preview_apply_search_undo_and_conflict(sessions, monkeypatch)
         assert ThemeEquivalenceService(db).members(a.id) == [a.id]
 
 
+def test_grouped_themes_must_be_ungrouped_before_deactivation(sessions):
+    from app.api.v1.themes_review_merge import deactivate_theme
+    from fastapi import HTTPException
+
+    with sessions() as db:
+        _, alias, representative = seed(db)
+        ThemeEquivalenceService(db).apply(
+            alias.id,
+            representative.id,
+            actor="reviewer",
+            reason="Equivalent exposure",
+            key="deactivation-guard",
+        )
+
+        for theme_id in (alias.id, representative.id):
+            with pytest.raises(HTTPException) as error:
+                deactivate_theme(theme_id, db)
+            assert error.value.status_code == 409
+
+        assert alias.is_active
+        assert representative.is_active
+
+
 def test_disabled_backfill_is_read_only_and_rejects_model_work(sessions, monkeypatch):
     from app.api.v1.themes_intelligence import BackfillRequest, backfill_developments
     from fastapi import HTTPException
