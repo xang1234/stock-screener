@@ -494,3 +494,40 @@ def test_deferred_unauthorized_parent_does_not_block_later_attachment(sessions):
     assert prepare_pending_attachment(sessions, prepared, now=NOW, authorize=allow)
     with sessions() as db:
         assert attachment_snapshot(db, second)["status"] == "complete"
+
+
+def test_attachment_sweep_uses_standard_worker_queue():
+    from app.celery_app import _build_cache_warmup_beat_schedule
+
+    entry = _build_cache_warmup_beat_schedule(["US"])["live-attachment-preparation"]
+    assert entry["options"]["queue"] == "celery"
+
+
+def test_batch_snapshots_match_single_reads_with_one_query(sessions):
+    from app.services.live_attachment_service import attachment_snapshots
+    from sqlalchemy import event
+
+    first = seed(sessions)
+    with sessions.begin() as db:
+        other = ContentItem(source_type="twitter", external_id="2", content="Other")
+        db.add(other)
+        db.flush()
+        second = other.id
+        record_attachments(db, other, [
+            {"kind": "article", "url": "https://example.com/article"}
+        ], NOW + timedelta(days=1))
+    with sessions() as db:
+        expected = {i: attachment_snapshot(db, i, as_of=NOW) for i in (first, second, 999)}
+        queries = []
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            queries.append(statement)
+        event.listen(db.bind, "before_cursor_execute", capture)
+        try:
+            actual = attachment_snapshots(db, [first, first, second, 999], as_of=NOW)
+            assert actual == expected
+            assert len(queries) == 1
+            queries.clear()
+            assert attachment_snapshots(db, [], as_of=NOW) == {}
+            assert queries == []
+        finally:
+            event.remove(db.bind, "before_cursor_execute", capture)

@@ -49,7 +49,7 @@ from ...schemas.theme import (
     ThemeValidationResponse,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
-from ...services.live_attachment_service import attachment_snapshot
+from ...services.live_attachment_service import attachment_snapshots
 from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_discovery_service import ThemeDiscoveryService
 from ...services.theme_merging_service import ThemeMergingService
@@ -548,10 +548,7 @@ def get_theme_mentions(
         ThemeMention.mentioned_at.desc()
     ).limit(limit).all()
 
-    attachment_snapshots = {
-        content.id: attachment_snapshot(db, content.id)
-        for _, content in mentions
-    }
+    snapshots = attachment_snapshots(db, [content.id for _, content in mentions])
 
     return ThemeMentionsResponse(
         theme_name=cluster.display_name,
@@ -586,13 +583,13 @@ def get_theme_mentions(
                     else content.translation_metadata
                 ),
                 attachment_status=(
-                    attachment_snapshots[content.id]["status"]
-                    if attachment_snapshots[content.id]["status"] != "none"
+                    snapshots[content.id]["status"]
+                    if snapshots[content.id]["status"] != "none"
                     else None
                 ),
                 attachments=(
-                    attachment_snapshots[content.id]["attachments"]
-                    if attachment_snapshots[content.id]["attachments"]
+                    snapshots[content.id]["attachments"]
+                    if snapshots[content.id]["attachments"]
                     else None
                 ),
             )

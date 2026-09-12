@@ -20,7 +20,7 @@ LIVE_ATTACHMENT_PREPARATION_ENABLED=true
 OPENCODE_GO_API_KEY=<approved OpenCode Go key>
 ```
 
-Both variables are passed through the shared Docker worker environment. The flag defaults to false; a missing key leaves preparation blocked without consuming attempts. Restart the updated application, Celery workers and Beat after migration/configuration. The `social_ingestion` queue must have a worker. Theme extraction continues to use its configured model route; social extraction continues through its existing budget wrapper.
+Both variables are passed through the shared Docker worker environment. The flag defaults to false; a missing key leaves preparation blocked without consuming attempts. Restart the updated application, Celery workers and Beat after migration/configuration. Attachment preparation runs on the standard `celery` queue, consumed by `celery-general` in the base Compose deployment. The optional social pipeline still requires its `social_ingestion` worker. Theme extraction continues to use its configured model route; social extraction continues through its existing budget wrapper.
 
 The implementation session did not apply migrations, change live configuration, restart services or call external model services.
 

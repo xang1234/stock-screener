@@ -438,7 +438,7 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
         'live-attachment-preparation': {
             'task': 'app.tasks.live_attachment_tasks.prepare_live_attachments',
             'schedule': crontab(minute='*'),
-            'options': {'queue': 'social_ingestion', 'expires': 55},
+            'options': {'queue': 'celery', 'expires': 55},
         },
         # Delivery performs the DB-authoritative mode/provider check. Keeping
         # the clock entry stable lets an admin enable Social without restarting Beat.

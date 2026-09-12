@@ -97,12 +97,29 @@ def record_attachments(db, item, refs, observed_at=None):
 
 def attachment_snapshot(db, item_id, as_of=None):
     """A derivative snapshot, limited to evidence actually available at as_of."""
+    return attachment_snapshots(db, [item_id], as_of=as_of)[item_id]
+
+
+def attachment_snapshots(db, item_ids, as_of=None):
+    """Load all requested parents in one query with a shared evidence cutoff."""
+    grouped = {item_id: [] for item_id in item_ids}
+    if not grouped:
+        return {}
     rows = db.scalars(
         select(ContentAttachment)
-        .where(ContentAttachment.content_item_id == item_id)
+        .where(ContentAttachment.content_item_id.in_(grouped))
         .order_by(ContentAttachment.id)
     ).all()
+    for row in rows:
+        grouped[row.content_item_id].append(row)
     cutoff = utc(as_of) if as_of else datetime.now(timezone.utc)
+    return {
+        item_id: _attachment_snapshot_from_rows(item_id, rows, cutoff)
+        for item_id, rows in grouped.items()
+    }
+
+
+def _attachment_snapshot_from_rows(item_id, rows, cutoff):
     rows = [r for r in rows if utc(r.observed_at) <= cutoff]
     evidence, summary = [], []
     remaining = MAX_RELATED_CHARACTERS
