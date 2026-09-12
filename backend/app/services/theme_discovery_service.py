@@ -135,6 +135,17 @@ class ThemeDiscoveryService:
         ).scalar() or 0
         return count
 
+    def _group_mapping(self):
+        if not hasattr(self, "_equivalence_map"):
+            from .theme_equivalence_service import ThemeEquivalenceService
+            self._equivalence_map, self._equivalence_version = ThemeEquivalenceService(self.db).snapshot(self.pipeline)
+        return self._equivalence_map
+
+    def _theme_members(self, theme_id):
+        mapping = self._group_mapping()
+        root = mapping.get(theme_id, theme_id)
+        return sorted({root, *(key for key, value in mapping.items() if value == root)})
+
     def _empty_mention_metrics(self) -> dict:
         return {
             "mentions_1d": 0,
@@ -186,6 +197,13 @@ class ThemeDiscoveryService:
         if not cluster_ids:
             return {}
 
+        requested_ids = cluster_ids
+        mapping = self._group_mapping()
+        roots = {mapping.get(value, value) for value in cluster_ids}
+        cluster_ids = sorted(roots | {key for key, value in mapping.items() if value in roots})
+        identity = (case(mapping, value=ThemeMention.theme_cluster_id, else_=ThemeMention.theme_cluster_id)
+                    if mapping else ThemeMention.theme_cluster_id)
+
         date_1d = as_of_date - timedelta(days=1)
         date_7d = as_of_date - timedelta(days=7)
         date_30d = as_of_date - timedelta(days=30)
@@ -193,7 +211,7 @@ class ThemeDiscoveryService:
         # Multiple extraction channels/aliases may describe the same canonical
         # post. Each post contributes once to legacy attention and sentiment.
         posts = self.db.query(
-            ThemeMention.theme_cluster_id,
+            identity.label("theme_cluster_id"),
             ThemeMention.content_item_id,
             func.max(ThemeMention.mentioned_at).label("mentioned_at"),
             func.avg(
@@ -213,7 +231,7 @@ class ThemeDiscoveryService:
             ThemeMention.pipeline == self.pipeline,
             ThemeMention.social_work_id.is_(None),
         ).group_by(
-            ThemeMention.theme_cluster_id, ThemeMention.content_item_id,
+            identity, ThemeMention.content_item_id,
         ).subquery()
         rows = self.db.query(
             posts.c.theme_cluster_id,
@@ -247,7 +265,8 @@ class ThemeDiscoveryService:
                 "sentiment_score": round(sentiment_score, 3),
             }
 
-        return metrics_by_cluster
+        return {value: metrics_by_cluster.get(mapping.get(value, value), self._empty_mention_metrics())
+                for value in requested_ids}
 
     def calculate_mention_metrics(self, theme_cluster_id: int, as_of_date: Optional[datetime] = None) -> dict:
         """
@@ -284,14 +303,14 @@ class ThemeDiscoveryService:
 
         # Get theme constituents
         constituents = self.db.query(ThemeConstituent).filter(
-            ThemeConstituent.theme_cluster_id == theme_cluster_id,
+            ThemeConstituent.theme_cluster_id.in_(self._theme_members(theme_cluster_id)),
             ThemeConstituent.is_active == True,
         ).all()
 
         if not constituents:
             return self._empty_price_metrics()
 
-        symbols = [c.symbol for c in constituents]
+        symbols = sorted({c.symbol for c in constituents})
 
         # Fetch price data for constituents
         # Use extended lookback so 200-day MA and 1-month correlations have enough data.
@@ -441,14 +460,14 @@ class ThemeDiscoveryService:
         Returns count of stocks passing Minervini, stage 2, avg RS
         """
         constituents = self.db.query(ThemeConstituent).filter(
-            ThemeConstituent.theme_cluster_id == theme_cluster_id,
+            ThemeConstituent.theme_cluster_id.in_(self._theme_members(theme_cluster_id)),
             ThemeConstituent.is_active == True,
         ).all()
 
         if not constituents:
             return {"num_passing_minervini": 0, "num_stage_2": 0, "avg_rs_rating": 0}
 
-        symbols = [c.symbol for c in constituents]
+        symbols = sorted({c.symbol for c in constituents})
 
         # Get most recent scan results for these symbols
         # Find latest scan
@@ -646,6 +665,8 @@ class ThemeDiscoveryService:
 
         # Ensure pipeline is set on existing metrics too
         metrics.pipeline = self.pipeline
+        self._group_mapping()
+        metrics.grouping_version = self._equivalence_version
 
         # Update all fields
         metrics.mentions_1d = mention_metrics["mentions_1d"]
@@ -697,6 +718,9 @@ class ThemeDiscoveryService:
             ThemeCluster.is_l1 == False,
             ThemeCluster.pipeline == self.pipeline,
         ).all()
+
+        mapping = self._group_mapping()
+        clusters = [cluster for cluster in clusters if mapping.get(cluster.id, cluster.id) == cluster.id]
 
         results = {
             "themes_updated": 0,
@@ -796,6 +820,11 @@ class ThemeDiscoveryService:
             ThemeCluster.pipeline == self.pipeline,  # Filter by pipeline
         )
 
+        mapping = self._group_mapping()
+        hidden = [key for key, value in mapping.items() if key != value]
+        if hidden:
+            base_query = base_query.filter(~ThemeCluster.id.in_(hidden))
+
         if status_filter:
             base_query = base_query.filter(ThemeMetrics.status == status_filter)
 
@@ -807,7 +836,10 @@ class ThemeDiscoveryService:
 
         # Filter by source types if specified
         if source_types_filter:
-            theme_ids_with_sources = self.db.query(ThemeMention.theme_cluster_id).filter(
+            theme_ids_with_sources = self.db.query(
+                case(mapping, value=ThemeMention.theme_cluster_id, else_=ThemeMention.theme_cluster_id)
+                if mapping else ThemeMention.theme_cluster_id
+            ).filter(
                 ThemeMention.source_type.in_(source_types_filter),
                 ThemeMention.pipeline == self.pipeline,  # Filter mentions by pipeline too
             ).distinct().subquery()
@@ -822,10 +854,8 @@ class ThemeDiscoveryService:
         results = []
         for metrics, cluster in query.all():
             # Get top constituents
-            top_constituents = self.db.query(ThemeConstituent).filter(
-                ThemeConstituent.theme_cluster_id == cluster.id,
-                ThemeConstituent.is_active == True,
-            ).order_by(ThemeConstituent.mention_count.desc()).limit(15).all()
+            from .theme_group_reads import grouped_constituents
+            top_constituents = grouped_constituents(self.db, cluster.id)[:15]
 
             results.append({
                 "theme_cluster_id": cluster.id,
@@ -876,6 +906,8 @@ class ThemeDiscoveryService:
 
         results = []
         for cluster in emerging:
+            if self._group_mapping().get(cluster.id, cluster.id) != cluster.id:
+                continue
             if normalized_lifecycle_states and (cluster.lifecycle_state or "candidate") not in normalized_lifecycle_states:
                 continue
 

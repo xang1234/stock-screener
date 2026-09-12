@@ -432,6 +432,8 @@ class ThemeMetrics(Base):
 
     __tablename__ = "theme_metrics"
 
+    grouping_version = Column(String(64))
+
     id = Column(Integer, primary_key=True, index=True)
 
     theme_cluster_id = Column(Integer, nullable=False, index=True)  # FK to theme_clusters

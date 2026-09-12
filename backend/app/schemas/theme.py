@@ -160,6 +160,7 @@ class ThemeDetailResponse(BaseModel):
 
 # Theme Metrics Schemas
 class ThemeMetricsResponse(BaseModel):
+    grouping_version: Optional[str] = None
     date: datetime
     rank: Optional[int]
     status: Optional[str]

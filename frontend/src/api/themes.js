@@ -784,3 +784,16 @@ export const revertThemePolicy = async (payload, adminKey = null, adminActor = n
   });
   return response.data;
 };
+
+export const searchThemeEquivalence = async (pipeline, q = '') =>
+  (await apiClient.get('/v1/themes/equivalence/search', { params: { pipeline, q } })).data;
+export const previewThemeEquivalence = async (source_id, target_id) =>
+  (await apiClient.get('/v1/themes/equivalence/preview', { params: { source_id, target_id } })).data;
+export const applyThemeEquivalence = async (body) =>
+  (await apiClient.post('/v1/themes/equivalence', body)).data;
+export const getThemeEquivalenceHistory = async (pipeline) =>
+  (await apiClient.get('/v1/themes/equivalence/history', { params: { pipeline } })).data;
+export const undoThemeEquivalence = async (id, body) =>
+  (await apiClient.post(`/v1/themes/equivalence/${id}/undo`, body)).data;
+export const getThemeDevelopments = async (id) =>
+  (await apiClient.get(`/v1/themes/${id}/developments`)).data;

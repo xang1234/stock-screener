@@ -1,3 +1,4 @@
+import ThemeDevelopmentTimeline from '../../../components/Themes/ThemeDevelopmentTimeline';
 import { useQuery } from '@tanstack/react-query';
 import {
   Box,
@@ -82,7 +83,7 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
         <Box display="flex" justifyContent="space-between" alignItems="center">
           <Box display="flex" alignItems="center">
             <BubbleChartIcon sx={{ mr: 1, color: 'primary.main' }} />
-            <Typography variant="h6">{themeName}</Typography>
+            <Typography variant="h6">{detail?.theme?.display_name || themeName}</Typography>
             {detail?.theme?.is_validated && (
               <Chip label="Validated" size="small" color="success" sx={{ ml: 1 }} />
             )}
@@ -99,6 +100,7 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
           </Box>
         ) : detail ? (
           <Box>
+            <ThemeDevelopmentTimeline themeId={themeId} />
             {detail.metrics && (
               <Box
                 sx={{
@@ -174,6 +176,7 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
                 <Typography variant="subtitle2" gutterBottom>
                   Momentum Score History
                 </Typography>
+                <Typography variant="caption" color="text.secondary">Historical scores retain the grouping used on each date.</Typography>
                 <Box sx={{ height: 200 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={history.history}>

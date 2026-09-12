@@ -1,6 +1,6 @@
 # Open theme consolidation and development tracking
 
-Status: proposed for review before implementation.
+Status: approved by user; implement inline.
 Branch: feat/theme-consolidation-developments, based on main after PR #363.
 
 ## Outcome

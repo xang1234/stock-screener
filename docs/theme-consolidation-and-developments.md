@@ -1,0 +1,39 @@
+# Reversible theme consolidation and developments
+
+## What changes
+
+Theme names remain open. A reviewed equivalence operation chooses one display representative while retaining the original clusters, aliases, mentions, constituents and embeddings. CPO and Co-Packaged Optics can appear together; HBM and Memory remain separate when related by hierarchy. Similarity is not sufficient authorization to group names.
+
+In the merge review screen, open **Reversible grouping**, choose the two themes and display representative, preview the affected names and distinct source posts, enter a reviewer and reason, then apply. Use the same screen to undo. Overlapping later operations must be undone first. The server rejects stale previews, cross-pipeline grouping, inactive themes, parent themes and hierarchy conflicts. Existing destructive merge paths refuse active group members.
+
+Flat rankings, category children, detail constituents and sources combine member evidence. A parent post contributes once within a group even if it mentions both spellings. New extraction keeps its original matching identity. Undo therefore also separates evidence collected after grouping. Historic destructive merges cannot be reconstructed by this feature.
+
+Current metrics and bootstrap snapshots refresh after apply/undo. An operation retains `refresh_pending` until refresh succeeds; the `theme-group-refresh` task retries each minute. Grouping history exposes pending refresh state. Daily metrics and the history endpoint carry `grouping_version`; earlier dates are not recomputed. A refresh replaces the current day's derived snapshot, as ordinary metric refresh already does.
+
+## Development preparation
+
+The theme detail screen includes an attributed development timeline, distinct event count and substantive update count. Events have source observations with exact cited text and source URLs. Prepared image/article text stays under its parent post. Existing translated primary text is available as a separately identified source. Original source publication time and preparation time are both shown.
+
+Preparation uses the existing configured theme extraction model route. Recent known event identities provide wording hints, not evidence. The server requires source-backed actor/object names and event anchors. Matching uses normalized actor, action, specific object and a source-stated reference or event period. Without an anchor, reports remain separate and marked uncertain. This intentionally favors missed joins over conflating unrelated orders. Semantic paraphrases may still remain separate when their structured identity differs.
+
+Repeated coverage, additional detail, substantive updates and conflicting reports are distinguished. Confirmation remains an attributed source claim. A weaker report does not reset confirmation into novelty. Numeric representations are normalized before comparing quantities. Ranking weights remain unchanged; these counts are inputs for subsequent novelty/speed evaluation, not a validated novelty score.
+
+The initial worker consumes the standard technical/fundamental theme pipeline's active **legacy eligibility grants**, including X sources still ingested through that pipeline. It excludes native Social shadow/rejected work; native Social-only observations are not prepared by this worker. Grouped detail membership still preserves accepted Social constituent origins. A future Social-native event adapter must use its pinned publication evidence and budget policies rather than treating every stored Social extraction as live.
+
+## Deployment and bounded operation
+
+1. Deploy the branch and run the normal Alembic upgrade to `20260912_0043` before starting the updated application/workers. This adds five tables plus `theme_metrics.grouping_version`. It does not regroup existing records or call a model.
+2. Reversible grouping is available after migration. Keep the standard Celery worker and beat running for refresh retries.
+3. Automatic development preparation is **off by default**. Set `THEME_DEVELOPMENT_TRACKING_ENABLED=true` for backend and workers when ready to activate it. The shared Docker environment exposes this setting.
+4. Enabled ingestion queues a source revision after extraction. A minute task also discovers recent eligible posts (two-day fetch window), capped at 50 items per sweep. Each task processes at most two revisions. Jobs use a five-minute lease and at most three attempts with backoff. Failed preparation leaves prior observations intact and appears in the timeline.
+5. Older sources require an explicit bounded backfill. `POST /api/v1/themes/developments/backfill` with `{"item_ids":[123,456],"apply":false}` previews the supplied existing IDs without model work. Repeat with `apply:true` only after checking that list and enabling preparation. Maximum 100 IDs per request and 100 item/pipeline jobs per discovery call. The preview lists source IDs, not an estimate of eligible model calls. No full-database backfill runs on deployment.
+
+The source fingerprint includes evidence, URLs, original theme assignments and extraction attempt. Results are discarded if the source changes during preparation. A valid new revision supersedes prior observations without deleting them; even an empty corrected result supersedes old findings. Failed revisions remain visible; a newer extraction supersedes pending/failed work. Exact same revisions are idempotent.
+
+To retry a terminal failure, first resolve the provider/input problem and rerun the normal theme extraction for that source. The new extraction attempt produces a new event revision. Disabling the flag stops future automatic preparation; existing history remains readable.
+
+This implementation does not migrate the developer's current database, deploy the application, enable paid model processing or regenerate the benchmark. Review collected evidence before any new benchmark extraction, as previously agreed.
+
+## Verification
+
+Behavior tests cover non-destructive apply/undo and alias-target retries, hierarchy and pipeline boundaries, parent-post deduplication, grouped event views, source attribution, rumor confirmation, weaker later coverage, numeric wording, corrections, stale results, worker failures and leases, bounded/disabled backfill, API review and SQLite migration upgrade/downgrade. UI tests cover required preview/reviewer input and attributed timeline/failure rendering. Run the broader theme regressions and frontend production build before release.

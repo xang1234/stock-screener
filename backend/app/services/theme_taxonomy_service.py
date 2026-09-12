@@ -200,6 +200,11 @@ class ThemeTaxonomyService:
         "basket_return_1w", "basket_rs_vs_spy", "display_name", "rank",
     }
 
+    def _visible_theme_filter(self):
+        from .theme_equivalence_service import ThemeEquivalenceService
+        mapping = ThemeEquivalenceService(self.db).mapping(self.pipeline)
+        return ~ThemeCluster.id.in_([key for key, value in mapping.items() if key != value])
+
     def get_l1_themes(
         self,
         *,
@@ -224,6 +229,7 @@ class ThemeTaxonomyService:
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_l1 == True,
             ThemeCluster.is_active == True,
+            self._visible_theme_filter(),
         )
         if category_filter:
             base_query = base_query.filter(ThemeCluster.category == category_filter)
@@ -249,6 +255,7 @@ class ThemeTaxonomyService:
                 child_count = self.db.query(func.count(ThemeCluster.id)).filter(
                     ThemeCluster.parent_cluster_id == l1.id,
                     ThemeCluster.is_active == True,
+                    self._visible_theme_filter(),
                 ).scalar() or 0
                 row["num_l2_children"] = child_count
 
@@ -312,6 +319,7 @@ class ThemeTaxonomyService:
         children_query = self.db.query(ThemeCluster).filter(
             ThemeCluster.parent_cluster_id == l1_id,
             ThemeCluster.is_active == True,
+            self._visible_theme_filter(),
         )
         total_children = children_query.count()
         # Fetch all children (sort after metric enrichment)
@@ -421,6 +429,7 @@ class ThemeTaxonomyService:
         base_query = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_active == True,
+            self._visible_theme_filter(),
             ThemeCluster.is_l1 == False,
             ThemeCluster.parent_cluster_id.is_(None),
         )
@@ -949,6 +958,7 @@ class ThemeTaxonomyService:
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_l1 == True,
             ThemeCluster.is_active == True,
+            self._visible_theme_filter(),
         ).all()
 
         if not l1_themes:
@@ -992,6 +1002,7 @@ class ThemeTaxonomyService:
         ).filter(
             ThemeCluster.parent_cluster_id.in_(l1_ids),
             ThemeCluster.is_active == True,
+            self._visible_theme_filter(),
             ThemeCluster.is_l1 == False,
             ThemeCluster.pipeline == self.pipeline,
             ThemeMetrics.date == latest_l2_date,
@@ -999,21 +1010,23 @@ class ThemeTaxonomyService:
             ThemeCluster.parent_cluster_id,
         ).all()
 
-        # Also get distinct constituent counts per L1
+        from .theme_equivalence_service import ThemeEquivalenceService
+        group = ThemeEquivalenceService(self.db)
+        mapping = group.mapping(self.pipeline)
+        parents = {row.id: row.parent_cluster_id for row in self.db.query(ThemeCluster).filter(
+            ThemeCluster.id.in_(set(mapping.values())),
+        )}
+        effective_parent = (case(
+            {member: parents.get(root) for member, root in mapping.items()},
+            value=ThemeCluster.id, else_=ThemeCluster.parent_cluster_id,
+        ) if mapping else ThemeCluster.parent_cluster_id)
         constituent_counts = self.db.query(
-            ThemeCluster.parent_cluster_id,
-            func.count(distinct(ThemeConstituent.symbol)).label("unique_symbols"),
-        ).join(
-            ThemeConstituent, ThemeConstituent.theme_cluster_id == ThemeCluster.id,
-        ).filter(
-            ThemeCluster.parent_cluster_id.in_(l1_ids),
-            ThemeCluster.is_active == True,
-            ThemeCluster.is_l1 == False,
-            ThemeConstituent.is_active == True,
-        ).group_by(
-            ThemeCluster.parent_cluster_id,
-        ).all()
-        constituent_map = {row[0]: row[1] for row in constituent_counts}
+            effective_parent, func.count(distinct(ThemeConstituent.symbol)),
+        ).join(ThemeConstituent, ThemeConstituent.theme_cluster_id == ThemeCluster.id).filter(
+            ThemeCluster.pipeline == self.pipeline, ThemeCluster.is_active.is_(True),
+            ThemeConstituent.is_active.is_(True), effective_parent.in_(l1_ids),
+        ).group_by(effective_parent).all()
+        constituent_map = dict(constituent_counts)
 
         # Build lookup from aggregation
         agg_map = {row.parent_cluster_id: row for row in agg_rows}
@@ -1021,7 +1034,7 @@ class ThemeTaxonomyService:
         metrics_updated = 0
         for l1 in l1_themes:
             agg = agg_map.get(l1.id)
-            if not agg:
+            if not agg and not mapping:
                 continue
 
             unique_constituents = constituent_map.get(l1.id, 0)
@@ -1040,24 +1053,25 @@ class ThemeTaxonomyService:
 
             metrics_data = {
                 "pipeline": self.pipeline,
-                "mentions_1d": _safe_int(agg.sum_mentions_1d),
-                "mentions_7d": _safe_int(agg.sum_mentions_7d),
-                "mentions_30d": _safe_int(agg.sum_mentions_30d),
-                "mention_velocity": _safe_float(agg.avg_velocity),
-                "sentiment_score": _safe_float(agg.avg_sentiment),
-                "basket_return_1d": _safe_float(agg.avg_return_1d),
-                "basket_return_1w": _safe_float(agg.avg_return_1w),
-                "basket_return_1m": _safe_float(agg.avg_return_1m),
-                "basket_rs_vs_spy": _safe_float(agg.avg_rs),
-                "avg_internal_correlation": _safe_float(agg.avg_corr),
+                "grouping_version": group.version(),
+                "mentions_1d": _safe_int(getattr(agg, "sum_mentions_1d", None)),
+                "mentions_7d": _safe_int(getattr(agg, "sum_mentions_7d", None)),
+                "mentions_30d": _safe_int(getattr(agg, "sum_mentions_30d", None)),
+                "mention_velocity": _safe_float(getattr(agg, "avg_velocity", None)),
+                "sentiment_score": _safe_float(getattr(agg, "avg_sentiment", None)),
+                "basket_return_1d": _safe_float(getattr(agg, "avg_return_1d", None)),
+                "basket_return_1w": _safe_float(getattr(agg, "avg_return_1w", None)),
+                "basket_return_1m": _safe_float(getattr(agg, "avg_return_1m", None)),
+                "basket_rs_vs_spy": _safe_float(getattr(agg, "avg_rs", None)),
+                "avg_internal_correlation": _safe_float(getattr(agg, "avg_corr", None)),
                 "num_constituents": unique_constituents,
-                "pct_above_50ma": _safe_float(agg.avg_pct_50ma),
-                "pct_above_200ma": _safe_float(agg.avg_pct_200ma),
-                "pct_positive_1w": _safe_float(agg.avg_pct_pos_1w),
-                "num_passing_minervini": _safe_int(agg.sum_minervini),
-                "num_stage_2": _safe_int(agg.sum_stage2),
-                "avg_rs_rating": _safe_float(agg.avg_rs_rating),
-                "momentum_score": _safe_float(agg.avg_momentum),
+                "pct_above_50ma": _safe_float(getattr(agg, "avg_pct_50ma", None)),
+                "pct_above_200ma": _safe_float(getattr(agg, "avg_pct_200ma", None)),
+                "pct_positive_1w": _safe_float(getattr(agg, "avg_pct_pos_1w", None)),
+                "num_passing_minervini": _safe_int(getattr(agg, "sum_minervini", None)),
+                "num_stage_2": _safe_int(getattr(agg, "sum_stage2", None)),
+                "avg_rs_rating": _safe_float(getattr(agg, "avg_rs_rating", None)),
+                "momentum_score": _safe_float(getattr(agg, "avg_momentum", None)),
             }
 
             if existing:

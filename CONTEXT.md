@@ -223,3 +223,9 @@ _Avoid_: dealer position, market-maker fact
 - Multi-Market scans are not multiple **Scans** by default. Resolution: one **Scan** has one **Universe**, and row-level Market/MIC/currency plus mixed-market policy govern result semantics.
 - **Universe** row identity remains canonical symbol for now, but `(Market, MIC, local code)` is a required active-row invariant.
 - "Scan-ready Market" previously risked meaning only enabled in Runtime Preferences. Resolution: **Scan Readiness** is a scan-admission decision using Universe data, freshness, field coverage, and Market Workload state.
+
+## Theme equivalence and event history
+
+An **equivalence group** is a reversible current view over original theme identities, not a destructive merge or a broader/narrower taxonomy relationship. Its **representative** supplies the display identity; member aliases and evidence retain their originating cluster IDs. An audited operation and dependency-safe undo rebuild the current view. Daily metrics record the grouping version used to produce them.
+
+A **development event** is distinct from a theme. **Observations** retain each source's cited facts, reported status, source publication time and preparation time. A corrected source revision supersedes prior observations; repeated coverage does not create another distinct event. Event matching remains conservative and attributed. The opt-in worker uses the standard theme pipeline's eligible evidence and configured model route, with bounded retries. Native Social-only event preparation remains outside this initial adapter. See [operator notes](docs/theme-consolidation-and-developments.md).

@@ -68,7 +68,20 @@ from app.infra.db.models.social_signals import (
     SocialPostTicker, SocialSignalRun, SocialSignalSnapshot, SocialSignalRunPointer,
 )
 
+from .theme_intelligence import (
+    ThemeDevelopmentEvent,
+    ThemeDevelopmentObservation,
+    ThemeDevelopmentTheme,
+    ThemeDevelopmentWork,
+    ThemeEquivalenceOperation,
+)
+
 __all__ = [
+    "ThemeDevelopmentEvent",
+    "ThemeDevelopmentObservation",
+    "ThemeDevelopmentTheme",
+    "ThemeDevelopmentWork",
+    "ThemeEquivalenceOperation",
     "SocialExtractionWork", "SocialRunWork", "SocialLLMBudgetDay", "SocialLLMAttempt",
     "ContentPipelineEligibility", "SocialSourceRegistry", "SocialSourceConfiguration",
     "SocialSourceAuditEvent", "SocialPostSource", "SocialContentMetrics",

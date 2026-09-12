@@ -967,6 +967,10 @@ Example themes for this pipeline: {examples_str}
 
         self.db.flush()
         refresh_constituent_confidence(self.db, affected)
+        from .theme_development_worker import enqueue
+        from app.tasks.theme_intelligence_tasks import tracking_enabled
+        if tracking_enabled():
+            enqueue(self.db, content_item.id, self.pipeline)
         return mention_count
 
     def _get_match_threshold_config(self) -> MatchThresholdConfig:
@@ -2092,6 +2096,8 @@ class ThemeNormalizationService:
         """Merge source cluster into target cluster"""
         from .social_theme_projection_service import guard_social_theme_merge
         guard_social_theme_merge(self.db, source_id, target_id)
+        from .theme_equivalence_service import guard_grouped_merge
+        guard_grouped_merge(self.db, source_id, target_id)
         source = self.db.query(ThemeCluster).filter(ThemeCluster.id == source_id).first()
         target = self.db.query(ThemeCluster).filter(ThemeCluster.id == target_id).first()
 

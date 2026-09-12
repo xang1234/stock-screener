@@ -1489,6 +1489,8 @@ class ThemeMergingService:
                 )
             from .social_theme_projection_service import guard_social_theme_merge
             guard_social_theme_merge(self.db, source_id, target_id)
+            from .theme_equivalence_service import guard_grouped_merge
+            guard_grouped_merge(self.db, source_id, target_id)
             ordered_theme_ids = sorted({source_id, target_id})
             locked_themes = self._maybe_with_for_update(
                 self.db.query(ThemeCluster)
