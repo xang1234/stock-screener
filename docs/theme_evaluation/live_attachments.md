@@ -44,3 +44,13 @@ This connects preparation to ordinary ingestion; it does not create benchmark re
 Focused tests cover real provider attachment fields, idempotent persistence, multilingual/image preparation, late evidence, targeted dispatch, disabled sources, stale leases, bounded retries, duplicate evidence, historical social snapshots and transaction-safe mention replacement. The migration is exercised against an isolated SQLite database. Frontend source-status tests and a production build are included in verification.
 
 Validation recorded on 2026-09-11: 807 tests passed in the related backend suite, plus the final 14-case live attachment service run including two new queue-recovery cases. The frontend attachment-status test and production build passed. Targeted lint and diff whitespace checks passed.
+
+## Local activation: 2026-09-12
+
+Activated from `feat/live-theme-evidence` (deployment merge `b90ea92b`), without merging into or changing `main`. The existing `stockscanner` database advanced from `20260908_0038` to `20260911_0042`; the latter joins the source-membership and evidence migration histories. Backend, frontend, Beat, social/general/data-fetch workers and all five enabled markets' workers were rebuilt and restarted.
+
+The pre-migration PostgreSQL rehearsal passed. The final backup is `data/backups/live-theme-evidence-20260911/stockscanner-quiesced.dump`; its checksum, migration details and row counts are in the adjacent `activation.json`. The migration preserved 1,203 content items, 118 theme mentions, 2,406 eligibility rows and 17,211 stock-universe rows. The temporary rehearsal database was removed.
+
+The app readiness endpoint returned HTTP 200 with database and Redis checks OK. Attachment preparation is enabled, the approved key is available to its worker, and a task through the actual social queue returned `processed: 0` on the initially empty attachment queue. Existing posts were preserved; attachments will be collected by subsequent ingestion. The installed XUI reader is pinned to `89f4195a488a41911811e7261833b52c6fab505e`.
+
+Merged verification ran 7,492 unit tests: 7,477 passed initially. All 15 remaining failures passed after test-only corrections for optional options-analytics fixtures, a helper signature and a checked archival fixture. Additional provider/social tests and the production frontend build passed. The original worktree and evidence artifacts remain available.
