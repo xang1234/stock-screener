@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -201,6 +202,8 @@ def test_candidate_promotion_uses_grouped_evidence_on_representative(db_session)
         state="candidate",
         now=now,
     )
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    assert service.groups.representative(member.id) == member.id
     for source, days_ago, suffix in [
         (source_a, 1, "1"),
         (source_b, 2, "2"),
@@ -225,9 +228,7 @@ def test_candidate_promotion_uses_grouped_evidence_on_representative(db_session)
     )
     db_session.commit()
 
-    result = ThemeDiscoveryService(
-        db_session, pipeline="technical"
-    ).promote_candidate_themes(now=now)
+    result = service.promote_candidate_themes(now=now)
 
     db_session.refresh(member)
     db_session.refresh(representative)
@@ -303,6 +304,8 @@ def test_dormancy_policy_uses_grouped_evidence_on_representative(db_session):
         state="active",
         now=now,
     )
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    assert service.groups.representative(member.id) == member.id
     _add_mention(
         db_session,
         theme=member,
@@ -321,9 +324,7 @@ def test_dormancy_policy_uses_grouped_evidence_on_representative(db_session):
     )
     db_session.commit()
 
-    result = ThemeDiscoveryService(
-        db_session, pipeline="technical"
-    ).apply_dormancy_and_reactivation_policies(now=now)
+    result = service.apply_dormancy_and_reactivation_policies(now=now)
 
     db_session.refresh(member)
     db_session.refresh(representative)
@@ -332,6 +333,31 @@ def test_dormancy_policy_uses_grouped_evidence_on_representative(db_session):
     assert representative.lifecycle_state == "active"
     assert member.lifecycle_state == "active"
     assert db_session.query(ThemeLifecycleTransition).count() == 0
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    ["promote_candidate_themes", "apply_dormancy_and_reactivation_policies"],
+)
+def test_standalone_lifecycle_pass_holds_group_publication_scope(
+    db_session, monkeypatch, method_name
+):
+    from app.services import theme_group_coordination
+
+    events = []
+
+    @contextmanager
+    def tracked_scope(db):
+        events.append(("enter", db))
+        yield
+        events.append(("exit", db))
+
+    monkeypatch.setattr(theme_group_coordination, "publication_scope", tracked_scope)
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    getattr(service, method_name)(now=datetime(2026, 2, 24, 15, 47, 0))
+
+    assert events == [("enter", db_session), ("exit", db_session)]
 
 
 def test_dormancy_policy_honors_current_grouped_social_lifecycle(db_session):

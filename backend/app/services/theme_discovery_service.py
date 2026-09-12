@@ -1290,6 +1290,23 @@ class ThemeDiscoveryService:
         limit: int | None = None,
         auto_commit: bool = True,
     ) -> dict:
+        from .theme_group_coordination import publication_scope
+
+        with publication_scope(self.db):
+            self.__dict__.pop("groups", None)
+            return self._promote_candidate_themes(
+                now=now,
+                limit=limit,
+                auto_commit=auto_commit,
+            )
+
+    def _promote_candidate_themes(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int | None = None,
+        auto_commit: bool = True,
+    ) -> dict:
         """
         Promote candidate themes to active when evidence exceeds policy thresholds.
         """
@@ -1390,6 +1407,23 @@ class ThemeDiscoveryService:
         return result
 
     def apply_dormancy_and_reactivation_policies(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int | None = None,
+        auto_commit: bool = True,
+    ) -> dict:
+        from .theme_group_coordination import publication_scope
+
+        with publication_scope(self.db):
+            self.__dict__.pop("groups", None)
+            return self._apply_dormancy_and_reactivation_policies(
+                now=now,
+                limit=limit,
+                auto_commit=auto_commit,
+            )
+
+    def _apply_dormancy_and_reactivation_policies(
         self,
         *,
         now: datetime | None = None,
