@@ -319,6 +319,34 @@ async def test_equivalence_mutations_require_admin_key(sessions, monkeypatch):
             app.dependency_overrides.pop(get_db, None)
 
 
+@pytest.mark.asyncio
+async def test_development_backfill_apply_requires_admin_key(sessions, monkeypatch):
+    import httpx
+    from app.api.v1.config import settings as config_settings
+    from app.database import get_db
+    from app.main import app
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config_settings, "admin_api_key", "review-secret")
+    monkeypatch.setenv("THEME_DEVELOPMENT_TRACKING_ENABLED", "true")
+    with sessions() as db:
+        item, _, _ = seed(db)
+        app.dependency_overrides[get_db] = lambda: db
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/api/v1/themes/developments/backfill",
+                    json={"item_ids": [item.id], "apply": True},
+                )
+                assert response.status_code == 401
+                assert db.query(ThemeDevelopmentWork).count() == 0
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
 def test_grouped_timeline_deduplicates_events_and_retains_alias_provenance(sessions):
     with sessions.begin() as db:
         item, a, b = seed(db)

@@ -789,15 +789,30 @@ export const searchThemeEquivalence = async (pipeline, q = '') =>
   (await apiClient.get('/v1/themes/equivalence/search', { params: { pipeline, q } })).data;
 export const previewThemeEquivalence = async (source_id, target_id) =>
   (await apiClient.get('/v1/themes/equivalence/preview', { params: { source_id, target_id } })).data;
-export const applyThemeEquivalence = async (body, adminKey, adminActor) =>
-  (await apiClient.post('/v1/themes/equivalence', body, {
+export const assertSecureAdminTransport = ({
+  production = import.meta.env.PROD,
+  protocol = globalThis.location?.protocol,
+  apiBaseUrl = import.meta.env.VITE_API_URL || '/api',
+} = {}) => {
+  if (!production) return;
+  const absoluteProtocol = /^[a-z][a-z\d+.-]*:/i.exec(apiBaseUrl)?.[0]?.toLowerCase();
+  if (absoluteProtocol === 'http:' || (!absoluteProtocol && protocol !== 'https:')) {
+    throw new Error('Admin actions require HTTPS in production.');
+  }
+};
+export const applyThemeEquivalence = async (body, adminKey, adminActor) => {
+  assertSecureAdminTransport();
+  return (await apiClient.post('/v1/themes/equivalence', body, {
     headers: { 'X-Admin-Key': adminKey, 'X-Admin-Actor': adminActor },
   })).data;
+};
 export const getThemeEquivalenceHistory = async (pipeline) =>
   (await apiClient.get('/v1/themes/equivalence/history', { params: { pipeline } })).data;
-export const undoThemeEquivalence = async (id, body, adminKey, adminActor) =>
-  (await apiClient.post(`/v1/themes/equivalence/${id}/undo`, body, {
+export const undoThemeEquivalence = async (id, body, adminKey, adminActor) => {
+  assertSecureAdminTransport();
+  return (await apiClient.post(`/v1/themes/equivalence/${id}/undo`, body, {
     headers: { 'X-Admin-Key': adminKey, 'X-Admin-Actor': adminActor },
   })).data;
+};
 export const getThemeDevelopments = async (id) =>
   (await apiClient.get(`/v1/themes/${id}/developments`)).data;

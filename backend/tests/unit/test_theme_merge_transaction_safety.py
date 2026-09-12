@@ -243,6 +243,60 @@ def test_existing_pending_suggestion_is_rejected_after_grouping(db_session):
     assert "theme_already_in_reversible_group" in suggestion.approval_result_json
 
 
+def test_dry_run_hides_grouped_suggestion_without_rejecting_it(db_session):
+    left = _make_cluster(db_session, key="dry_left", name="Dry Left")
+    right = _make_cluster(db_session, key="dry_right", name="Dry Right")
+    suggestion = ThemeMergeSuggestion(
+        source_cluster_id=left.id,
+        target_cluster_id=right.id,
+        pair_min_cluster_id=left.id,
+        pair_max_cluster_id=right.id,
+        embedding_similarity=0.9,
+        llm_confidence=0.8,
+        llm_relationship="identical",
+        status="pending",
+    )
+    db_session.add(suggestion)
+    db_session.commit()
+    ThemeEquivalenceService(db_session).apply(
+        left.id,
+        right.id,
+        actor="reviewer",
+        reason="Equivalent",
+        key="dry-group",
+    )
+    db_session.commit()
+
+    result = _make_service(db_session).run_manual_review_wave(
+        decisions=[{"suggestion_id": suggestion.id, "action": "approve"}],
+        dry_run=True,
+    )
+
+    db_session.refresh(suggestion)
+    assert suggestion.status == "pending"
+    assert result["reviewed"] == 0
+
+
+def test_approval_acquires_grouping_lock_before_suggestion_row_lock(
+    db_session, monkeypatch
+):
+    events = []
+    service = _make_service(db_session)
+    monkeypatch.setattr(
+        ThemeEquivalenceService, "_lock", lambda _service: events.append("grouping")
+    )
+    original = service._maybe_with_for_update
+
+    def row_lock(query):
+        events.append("suggestion")
+        return original(query)
+
+    service._maybe_with_for_update = row_lock
+
+    assert service.approve_suggestion(999)["success"] is False
+    assert events[:2] == ["grouping", "suggestion"]
+
+
 def test_get_merge_suggestions_exposes_canonical_and_legacy_contract_fields(db_session):
     source = _make_cluster(db_session, key="contract_source", name="Contract Source")
     target = _make_cluster(db_session, key="contract_target", name="Contract Target")

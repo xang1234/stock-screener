@@ -11,6 +11,7 @@ import {
   exportContentItems,
   applyThemeEquivalence,
   undoThemeEquivalence,
+  assertSecureAdminTransport,
 } from './themes';
 
 vi.mock('./client', () => ({
@@ -165,6 +166,13 @@ describe('theme api helpers', () => {
       { reason: 'Correction' },
       { headers: { 'X-Admin-Key': 'key', 'X-Admin-Actor': 'corrector' } },
     );
+  });
+
+  it('rejects admin credentials over insecure production transport', () => {
+    expect(() => assertSecureAdminTransport({ production: true, protocol: 'http:', apiBaseUrl: '/api' })).toThrow(/HTTPS/);
+    expect(() => assertSecureAdminTransport({ production: true, protocol: 'https:', apiBaseUrl: 'http://api.example.com' })).toThrow(/HTTPS/);
+    expect(() => assertSecureAdminTransport({ production: false, protocol: 'http:', apiBaseUrl: '/api' })).not.toThrow();
+    expect(() => assertSecureAdminTransport({ production: true, protocol: 'https:', apiBaseUrl: '/api' })).not.toThrow();
   });
 
   it('passes pipeline to content items endpoint', async () => {

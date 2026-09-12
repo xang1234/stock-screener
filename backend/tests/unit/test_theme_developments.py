@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 import pytest
 from app.database import Base
 from app.models.theme import ContentItem, ThemeCluster
-from app.models.theme_intelligence import ThemeDevelopmentObservation
+from app.models.theme_intelligence import (
+    ThemeDevelopmentEvent,
+    ThemeDevelopmentObservation,
+    ThemeDevelopmentTheme,
+)
 from app.services.theme_development_service import record_developments
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -225,7 +229,7 @@ def test_compatible_batch_combines_memberships_and_citations(db):
 
 
 def test_combined_batch_revalidates_citation_limit(db):
-    item, _ = add(db)
+    item, existing = add(db)
     observations = []
     sources = {}
     for index in range(9):
@@ -236,6 +240,15 @@ def test_combined_batch_revalidates_citation_limit(db):
             dict(event(), citations=[{"source_id": source_id, "quote": quote}])
         )
 
+    before = (
+        db.query(ThemeDevelopmentEvent).count(),
+        db.query(ThemeDevelopmentObservation).count(),
+        db.query(ThemeDevelopmentTheme).count(),
+        existing[0].facts.copy(),
+        list(existing[0].citations),
+        existing[0].classification,
+        existing[0].superseded,
+    )
     with pytest.raises(ValueError):
         record_developments(
             db,
@@ -247,6 +260,17 @@ def test_combined_batch_revalidates_citation_limit(db):
             observations=observations,
             available_at=NOW,
         )
+    db.expire_all()
+    unchanged = db.get(ThemeDevelopmentObservation, existing[0].id)
+    assert (
+        db.query(ThemeDevelopmentEvent).count(),
+        db.query(ThemeDevelopmentObservation).count(),
+        db.query(ThemeDevelopmentTheme).count(),
+        unchanged.facts,
+        unchanged.citations,
+        unchanged.classification,
+        unchanged.superseded,
+    ) == before
 
 
 def test_returning_to_prior_evidence_reactivates_its_observation(db):
