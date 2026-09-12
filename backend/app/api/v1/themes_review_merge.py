@@ -298,7 +298,7 @@ def get_relationship_graph(
     service = ThemeDiscoveryService(db, pipeline=pipeline)
     graph = service.get_theme_relationship_graph(theme_cluster_id, limit=limit)
     return ThemeRelationshipGraphResponse(
-        theme_cluster_id=theme_cluster_id,
+        theme_cluster_id=graph["theme_cluster_id"],
         total_nodes=len(graph["nodes"]),
         total_edges=len(graph["edges"]),
         nodes=[ThemeRelationshipGraphNodeResponse(**node) for node in graph["nodes"]],

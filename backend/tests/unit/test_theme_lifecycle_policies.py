@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import warnings
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base
+from app.models.app_settings import AppSetting
 from app.models.stock import StockPrice
 from app.models.theme import (
     ContentItem,
@@ -23,8 +21,10 @@ from app.models.theme import (
     ThemeMetrics,
     ThemeRelationship,
 )
-from app.models.app_settings import AppSetting
 from app.services.theme_discovery_service import ThemeDiscoveryService
+from app.services.theme_equivalence_service import ThemeEquivalenceService
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -181,6 +181,112 @@ def test_candidate_promotion_policy_promotes_theme_with_persistent_diverse_evide
     assert alerts[0].metrics["reason"] == "candidate_promotion_thresholds_met"
     assert "transition_history_path" in alerts[0].metrics
     assert "runbook_url" in alerts[0].metrics
+
+
+def test_candidate_promotion_uses_grouped_evidence_on_representative(db_session):
+    now = datetime(2026, 2, 24, 15, 30, 0)
+    source_a = _make_source(db_session, name="Grouped Alpha", source_type="news")
+    source_b = _make_source(db_session, name="Grouped Bravo", source_type="substack")
+    member = _make_theme(
+        db_session,
+        name="CPO",
+        canonical_key="cpo",
+        state="candidate",
+        now=now,
+    )
+    representative = _make_theme(
+        db_session,
+        name="Co-Packaged Optics",
+        canonical_key="co_packaged_optics",
+        state="candidate",
+        now=now,
+    )
+    for source, days_ago, suffix in [
+        (source_a, 1, "1"),
+        (source_b, 2, "2"),
+        (source_a, 3, "3"),
+        (source_b, 5, "4"),
+    ]:
+        _add_mention(
+            db_session,
+            theme=member,
+            source=source,
+            now=now,
+            days_ago=days_ago,
+            confidence=0.9,
+            external_suffix=suffix,
+        )
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="lifecycle-promotion-group",
+    )
+    db_session.commit()
+
+    result = ThemeDiscoveryService(
+        db_session, pipeline="technical"
+    ).promote_candidate_themes(now=now)
+
+    db_session.refresh(member)
+    db_session.refresh(representative)
+    assert result["scanned"] == 1
+    assert result["promoted"] == 1
+    assert representative.lifecycle_state == "active"
+    assert member.lifecycle_state == "candidate"
+    transitions = db_session.query(ThemeLifecycleTransition).all()
+    assert [transition.theme_cluster_id for transition in transitions] == [
+        representative.id
+    ]
+
+
+def test_dormancy_policy_uses_grouped_evidence_on_representative(db_session):
+    now = datetime(2026, 2, 24, 15, 45, 0)
+    source = _make_source(db_session, name="Grouped Current", source_type="news")
+    member = _make_theme(
+        db_session,
+        name="Bitcoin Miners",
+        canonical_key="bitcoin_miners",
+        state="active",
+        now=now,
+    )
+    representative = _make_theme(
+        db_session,
+        name="Bitcoin Mining",
+        canonical_key="bitcoin_mining",
+        state="active",
+        now=now,
+    )
+    _add_mention(
+        db_session,
+        theme=member,
+        source=source,
+        now=now,
+        days_ago=1,
+        confidence=0.9,
+        external_suffix="current",
+    )
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="lifecycle-dormancy-group",
+    )
+    db_session.commit()
+
+    result = ThemeDiscoveryService(
+        db_session, pipeline="technical"
+    ).apply_dormancy_and_reactivation_policies(now=now)
+
+    db_session.refresh(member)
+    db_session.refresh(representative)
+    assert result["scanned"] == 1
+    assert result["to_dormant"] == 0
+    assert representative.lifecycle_state == "active"
+    assert member.lifecycle_state == "active"
+    assert db_session.query(ThemeLifecycleTransition).count() == 0
 
 
 def test_dormancy_and_reactivation_policies_increment_counters(db_session):

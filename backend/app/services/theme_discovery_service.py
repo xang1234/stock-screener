@@ -1192,7 +1192,7 @@ class ThemeDiscoveryService:
                  ContentPipelineEligibility.pipeline == self.pipeline,
                  ContentPipelineEligibility.channel == "legacy"),
         ).join(ContentSource, ContentSource.id == ContentPipelineEligibility.originating_source_id).filter(
-            ThemeMention.theme_cluster_id == theme_cluster_id,
+            ThemeMention.theme_cluster_id.in_(self.groups.members(theme_cluster_id)),
             ThemeMention.pipeline == self.pipeline,
             ThemeMention.mentioned_at >= cutoff_30d,
             ThemeMention.mentioned_at <= now,
@@ -1285,6 +1285,7 @@ class ThemeDiscoveryService:
             ThemeCluster.is_active == True,
             ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state == "candidate",
+            self.groups.visible(ThemeCluster.id),
         ).order_by(ThemeCluster.candidate_since_at.asc(), ThemeCluster.id.asc())
         if limit is not None and limit > 0:
             query = query.limit(limit)
@@ -1379,6 +1380,7 @@ class ThemeDiscoveryService:
             ThemeCluster.is_active == True,
             ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state.in_(["active", "reactivated", "dormant"]),
+            self.groups.visible(ThemeCluster.id),
         ).order_by(ThemeCluster.lifecycle_state_updated_at.asc(), ThemeCluster.id.asc())
         if limit is not None and limit > 0:
             query = query.limit(limit)
@@ -2055,38 +2057,74 @@ class ThemeDiscoveryService:
         *,
         limit: int = 120,
     ) -> dict:
+        group = self.groups
+        theme_cluster_id = group.representative(theme_cluster_id)
         root_cluster = self.db.query(ThemeCluster).filter(
             ThemeCluster.id == theme_cluster_id,
             ThemeCluster.pipeline == self.pipeline,
         ).first()
         if root_cluster is None:
-            return {"nodes": [], "edges": []}
+            return {
+                "theme_cluster_id": theme_cluster_id,
+                "nodes": [],
+                "edges": [],
+            }
 
+        root_members = group.members(theme_cluster_id)
         primary_edges = self.db.query(ThemeRelationship).filter(
             ThemeRelationship.pipeline == self.pipeline,
             ThemeRelationship.is_active == True,
             or_(
-                ThemeRelationship.source_cluster_id == theme_cluster_id,
-                ThemeRelationship.target_cluster_id == theme_cluster_id,
+                ThemeRelationship.source_cluster_id.in_(root_members),
+                ThemeRelationship.target_cluster_id.in_(root_members),
             ),
         ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.id.desc()).limit(limit).all()
 
         node_ids: set[int] = {theme_cluster_id}
-        edge_rows: dict[int, ThemeRelationship] = {}
+        edge_rows: dict[
+            tuple[int, int, str], tuple[ThemeRelationship, int, int]
+        ] = {}
+
+        def include_edge(edge: ThemeRelationship) -> None:
+            source_id = group.representative(edge.source_cluster_id)
+            target_id = group.representative(edge.target_cluster_id)
+            if source_id == target_id:
+                return
+            key = (source_id, target_id, edge.relationship_type)
+            current = edge_rows.get(key)
+            if current is not None and float(current[0].confidence or 0.0) >= float(
+                edge.confidence or 0.0
+            ):
+                return
+            edge_rows[key] = (edge, source_id, target_id)
+            node_ids.update((source_id, target_id))
+
         for edge in primary_edges:
-            node_ids.add(edge.source_cluster_id)
-            node_ids.add(edge.target_cluster_id)
-            edge_rows[edge.id] = edge
+            include_edge(edge)
 
         if len(node_ids) > 1:
+            expanded_node_ids = group.expand(node_ids)
             secondary_edges = self.db.query(ThemeRelationship).filter(
                 ThemeRelationship.pipeline == self.pipeline,
                 ThemeRelationship.is_active == True,
-                ThemeRelationship.source_cluster_id.in_(list(node_ids)),
-                ThemeRelationship.target_cluster_id.in_(list(node_ids)),
+                ThemeRelationship.source_cluster_id.in_(expanded_node_ids),
+                ThemeRelationship.target_cluster_id.in_(expanded_node_ids),
             ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.id.desc()).limit(limit).all()
             for edge in secondary_edges:
-                edge_rows[edge.id] = edge
+                include_edge(edge)
+
+        normalized_edges = sorted(
+            edge_rows.values(),
+            key=lambda row: (
+                -float(row[0].confidence or 0.0),
+                row[1],
+                row[2],
+                row[0].id,
+            ),
+        )[:limit]
+        node_ids = {theme_cluster_id}
+        for _, source_id, target_id in normalized_edges:
+            node_ids.update((source_id, target_id))
 
         clusters = self.db.query(ThemeCluster).filter(ThemeCluster.id.in_(list(node_ids))).all()
         cluster_by_id = {cluster.id: cluster for cluster in clusters}
@@ -2103,15 +2141,15 @@ class ThemeDiscoveryService:
         ]
 
         edges = []
-        for edge in edge_rows.values():
-            source_cluster = cluster_by_id.get(edge.source_cluster_id)
-            target_cluster = cluster_by_id.get(edge.target_cluster_id)
+        for edge, source_id, target_id in normalized_edges:
+            source_cluster = cluster_by_id.get(source_id)
+            target_cluster = cluster_by_id.get(target_id)
             edges.append(
                 {
                     "relation_id": edge.id,
-                    "source_theme_id": edge.source_cluster_id,
+                    "source_theme_id": source_id,
                     "source_theme_name": source_cluster.name if source_cluster else None,
-                    "target_theme_id": edge.target_cluster_id,
+                    "target_theme_id": target_id,
                     "target_theme_name": target_cluster.name if target_cluster else None,
                     "relationship_type": edge.relationship_type,
                     "confidence": float(edge.confidence or 0.0),
@@ -2121,4 +2159,8 @@ class ThemeDiscoveryService:
             )
 
         edges.sort(key=lambda row: (-row["confidence"], row["source_theme_id"], row["target_theme_id"], row["relation_id"]))
-        return {"nodes": nodes, "edges": edges}
+        return {
+            "theme_cluster_id": theme_cluster_id,
+            "nodes": nodes,
+            "edges": edges,
+        }
