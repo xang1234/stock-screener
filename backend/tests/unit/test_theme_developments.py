@@ -127,3 +127,106 @@ def test_unsupported_identity_is_rejected_before_superseding(db):
     with pytest.raises(ValueError, match="anchor"):
         add(db, item=item, revision="b", facts=bad)
     assert not first[0].superseded
+
+
+def test_repeated_confirmation_after_weaker_coverage_is_not_an_update(db):
+    rows = [
+        add(db, facts=event(status))[1][0]
+        for status in ["rumored", "confirmed", "rumored", "confirmed"]
+    ]
+    assert [row.classification for row in rows].count("material_update") == 1
+    assert rows[-1].classification == "repeated_coverage"
+
+
+def test_conflicting_batch_is_rejected_before_any_write(db):
+    item, _ = add(db)
+    before = db.query(ThemeDevelopmentObservation).count()
+    with pytest.raises(ValueError, match="conflicting_development_batch"):
+        record_developments(
+            db,
+            item=item,
+            pipeline="technical",
+            revision="z" * 64,
+            theme_ids=[1],
+            sources={"primary": "Nebius Project A order 2026-09"},
+            observations=[event("rumored"), event("confirmed")],
+            available_at=NOW,
+        )
+    assert db.query(ThemeDevelopmentObservation).count() == before
+
+
+def test_facts_do_not_duplicate_theme_membership(db):
+    _, rows = add(db)
+    assert "theme_ids" not in rows[0].facts
+
+
+def test_correction_reduces_current_event_history(db):
+    add(db, facts=event("rumored"))
+    item, original = add(db, facts=event("confirmed"))
+    _, replacement = add(db, item=item, revision="b", facts=event("confirmed"))
+    assert original[0].superseded
+    assert replacement[0].classification == "material_update"
+
+
+def test_quantity_history_is_specific_to_claim_status():
+    from types import SimpleNamespace
+    from app.services.theme_development_facts import DevelopmentFacts
+    from app.services.theme_event_state import classify
+
+    prior = [
+        dict(event("rumored"), quantities=["USD 2 million"]),
+        dict(event("confirmed"), quantities=["USD 1 million"]),
+    ]
+    current = DevelopmentFacts.model_validate(
+        dict(event("confirmed"), quantities=["USD 2 million"])
+    )
+    assert (
+        classify(current, [SimpleNamespace(facts=facts) for facts in prior])
+        == "material_update"
+    )
+
+
+def test_compatible_batch_combines_memberships_and_citations(db):
+    item, _ = add(db)
+    other = ThemeCluster(
+        name="Optics",
+        display_name="Optics",
+        canonical_key="optics",
+        pipeline="technical",
+    )
+    db.add(other)
+    db.flush()
+    second = dict(
+        event(),
+        theme_ids=[other.id],
+        citations=[{"source_id": "article", "quote": "Nebius Project A order 2026-09"}],
+    )
+    rows = record_developments(
+        db,
+        item=item,
+        pipeline="technical",
+        revision="b" * 64,
+        theme_ids=[1, other.id],
+        sources={
+            "primary": "Nebius Project A order 2026-09",
+            "article": "Nebius Project A order 2026-09",
+        },
+        observations=[event(), second],
+        available_at=NOW,
+    )
+    assert len(rows) == 1
+    assert rows[0].theme_ids == [1, other.id]
+    assert {citation["source_id"] for citation in rows[0].citations} == {
+        "primary",
+        "article",
+    }
+    assert "theme_ids" not in rows[0].facts
+
+
+def test_returning_to_prior_evidence_reactivates_its_observation(db):
+    item, first = add(db)
+    _, correction = add(db, item=item, revision="b", facts=event("confirmed"))
+    _, restored = add(db, item=item)
+    assert restored[0].id == first[0].id
+    assert not restored[0].superseded
+    assert correction[0].superseded

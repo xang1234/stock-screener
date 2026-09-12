@@ -44,9 +44,6 @@ class BackfillRequest(BaseModel):
     apply: bool = False
 
 
-from app.services.theme_group_refresh import refresh_groups
-
-
 @router.get("/equivalence/preview")
 def preview_equivalence(source_id: int, target_id: int, db: DbSession):
     try:
@@ -71,11 +68,10 @@ def apply_equivalence(request: GroupRequest, db: DbSession):
     except EquivalenceConflict as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
-    pipeline = db.get(ThemeCluster, request.target_id).pipeline
     return {
         **result,
         "version": service.version(),
-        "refresh_status": refresh_groups(db, pipeline),
+        "refresh_status": "pending",
     }
 
 
@@ -112,9 +108,6 @@ def undo_equivalence(operation_id: int, request: UndoRequest, db: DbSession):
     service = ThemeEquivalenceService(db)
     try:
         result = service.undo(operation_id, actor=request.actor, reason=request.reason)
-        pipeline = next(
-            row.pipeline for row in service.operations() if row.id == operation_id
-        )
         db.commit()
     except EquivalenceConflict as exc:
         db.rollback()
@@ -122,7 +115,7 @@ def undo_equivalence(operation_id: int, request: UndoRequest, db: DbSession):
     return {
         **result,
         "version": service.version(),
-        "refresh_status": refresh_groups(db, pipeline),
+        "refresh_status": "pending",
     }
 
 
@@ -133,7 +126,8 @@ def search_equivalent_themes(
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
 ):
     service = ThemeEquivalenceService(db)
-    mapping = service.mapping(pipeline)
+    snapshot = service.snapshot(pipeline)
+    mapping = snapshot.mapping
     query = db.query(ThemeCluster).filter_by(
         pipeline=pipeline, is_active=True, is_l1=False
     )
@@ -147,7 +141,7 @@ def search_equivalent_themes(
         results[root] = {
             "id": root,
             "name": target.display_name or target.name,
-            "member_ids": service.members(root),
+            "member_ids": snapshot.members(root),
         }
         if len(results) >= 100:
             break
@@ -183,7 +177,8 @@ def theme_developments(
     if theme is None:
         raise HTTPException(404, "Theme not found")
     service = ThemeEquivalenceService(db)
-    members = set(service.members(theme_id))
+    snapshot = service.snapshot(theme.pipeline)
+    members = snapshot.members(theme_id)
     membership = exists().where(
         ThemeDevelopmentTheme.observation_id == ThemeDevelopmentObservation.id,
         ThemeDevelopmentTheme.theme_id.in_(members),
@@ -235,8 +230,8 @@ def theme_developments(
         .all()
     )
     return {
-        "theme_id": service.representative(theme_id),
-        "grouping_version": service.version(),
+        "theme_id": snapshot.representative(theme_id),
+        "grouping_version": snapshot.version,
         "tracking_enabled": os.environ.get(
             "THEME_DEVELOPMENT_TRACKING_ENABLED", "false"
         ).lower()

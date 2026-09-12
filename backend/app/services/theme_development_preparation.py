@@ -11,7 +11,7 @@ from app.models.theme import (
     ThemeMention,
 )
 from app.services.live_attachment_service import attachment_snapshot
-from app.services.theme_development_service import digest
+from app.services.theme_development_facts import digest
 from app.services.theme_evidence_eligibility_service import legacy_eligibility_exists
 
 SYSTEM = """Extract distinct investment developments from the supplied sources.
@@ -93,7 +93,6 @@ def input_bundle(db, item_id, pipeline):
             r.id: r.display_name or r.name
             for r in db.query(ThemeCluster).filter(ThemeCluster.id.in_(theme_ids))
         },
-        "source_marker": max((row.id for row in mentions), default=0),
     }
 
 
@@ -108,10 +107,8 @@ def generate_facts(pipeline, db, bundle):
     from app.services.theme_equivalence_service import ThemeEquivalenceService
     from app.services.theme_extraction_service import ThemeExtractionService
 
-    group = ThemeEquivalenceService(db)
-    members = {
-        member for theme_id in bundle["theme_ids"] for member in group.members(theme_id)
-    }
+    group = ThemeEquivalenceService(db).snapshot(pipeline)
+    members = group.expand(bundle["theme_ids"])
     # EXISTS deduplicates matching observations without DISTINCT over JSON,
     # which PostgreSQL's JSON type cannot compare for equality.
     known = (

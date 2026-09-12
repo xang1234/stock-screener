@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import exists, func, or_
+from sqlalchemy import func, or_
 
 from app.models.theme import ContentItem, ThemeMention
 from app.models.theme_intelligence import ThemeDevelopmentWork
@@ -27,24 +27,27 @@ def enqueue(db, item_id, pipeline):
             content_item_id=item_id,
             pipeline=pipeline,
             revision=bundle["revision"],
-            source_marker=bundle["source_marker"],
+            checked_at=datetime.now(timezone.utc),
             status="pending",
             attempts=0,
-        )
-        db.query(ThemeDevelopmentWork).filter(
-            ThemeDevelopmentWork.content_item_id == item_id,
-            ThemeDevelopmentWork.pipeline == pipeline,
-            ThemeDevelopmentWork.status.in_(
-                ["pending", "retry", "failed", "processing"]
-            ),
-        ).update(
-            {"status": "superseded", "claim_token": None, "lease_until": None},
-            synchronize_session=False,
         )
         db.add(row)
         db.flush()
     else:
-        row.source_marker = max(row.source_marker, bundle["source_marker"])
+        row.checked_at = datetime.now(timezone.utc)
+        if row.status == "superseded":
+            row.status, row.attempts, row.next_attempt_at = "pending", 0, None
+    db.query(ThemeDevelopmentWork).filter(
+        ThemeDevelopmentWork.content_item_id == item_id,
+        ThemeDevelopmentWork.pipeline == pipeline,
+        ThemeDevelopmentWork.revision != bundle["revision"],
+        ThemeDevelopmentWork.status.in_(
+            ["pending", "retry", "failed", "processing", "complete"]
+        ),
+    ).update(
+        {"status": "superseded", "claim_token": None, "lease_until": None},
+        synchronize_session=False,
+    )
     return row
 
 
@@ -53,7 +56,6 @@ def discover(db, limit=50, item_ids=None):
         db.query(
             ThemeMention.content_item_id.label("item"),
             ThemeMention.pipeline.label("pipeline"),
-            func.max(ThemeMention.id).label("marker"),
         )
         .filter(
             ThemeMention.pipeline.in_(["technical", "fundamental"]),
@@ -73,17 +75,31 @@ def discover(db, limit=50, item_ids=None):
         )
     else:
         query = query.filter(latest.c.item.in_(item_ids))
-    query = query.filter(
-        ~exists().where(
-            ThemeDevelopmentWork.content_item_id == latest.c.item,
-            ThemeDevelopmentWork.pipeline == latest.c.pipeline,
-            ThemeDevelopmentWork.source_marker == latest.c.marker,
+    checked = (
+        db.query(
+            ThemeDevelopmentWork.content_item_id.label("item"),
+            ThemeDevelopmentWork.pipeline.label("pipeline"),
+            func.max(ThemeDevelopmentWork.checked_at).label("checked_at"),
         )
+        .group_by(ThemeDevelopmentWork.content_item_id, ThemeDevelopmentWork.pipeline)
+        .subquery()
     )
-    rows = query.order_by(latest.c.marker).limit(min(limit, 100)).all()
+    query = query.outerjoin(
+        checked,
+        (checked.c.item == latest.c.item) & (checked.c.pipeline == latest.c.pipeline),
+    )
+    rows = (
+        query.order_by(
+            checked.c.checked_at.asc().nullsfirst(), latest.c.item, latest.c.pipeline
+        )
+        .limit(min(limit, 100))
+        .all()
+    )
+    queued = 0
     for row in rows:
-        enqueue(db, row.item, row.pipeline)
-    return len(rows)
+        work = enqueue(db, row.item, row.pipeline)
+        queued += work.status == "pending"
+    return queued
 
 
 def process_one(sessions, generate=generate_facts):
@@ -154,6 +170,7 @@ def process_one(sessions, generate=generate_facts):
             current = input_bundle(db, item_id, pipeline)
             if values is None or current["revision"] != revision:
                 row.status = "superseded"
+                enqueue(db, item_id, pipeline)
             else:
                 record_developments(
                     db,

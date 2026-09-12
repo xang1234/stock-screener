@@ -12,7 +12,7 @@ beforeEach(() => {
 });
 it('requires preview and attribution before grouping', async () => {
   api.previewThemeEquivalence.mockResolvedValue({ version: 'a'.repeat(64), parent_posts: 4, aliases: [{ name: 'CPO' }, { name: 'Co-Packaged Optics' }] });
-  api.applyThemeEquivalence.mockResolvedValue({ refresh_status: 'complete' });
+  api.applyThemeEquivalence.mockResolvedValue({ refresh_status: 'pending' });
   show(<ThemeEquivalencePanel />);
   expect(screen.getByRole('button', { name: 'Apply reviewed grouping' })).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Theme to group'), { target: { value: 'CPO' } });
@@ -25,6 +25,7 @@ it('requires preview and attribution before grouping', async () => {
   fireEvent.change(screen.getByLabelText('Reviewer'), { target: { value: 'Reviewer' } });
   fireEvent.change(screen.getByLabelText('Reason for grouping or undo'), { target: { value: 'Same exposure' } });
   fireEvent.click(screen.getByRole('button', { name: 'Apply reviewed grouping' }));
+  expect(await screen.findByText('Grouping saved. Current results are awaiting a refresh.')).toBeInTheDocument();
   await waitFor(() => expect(api.applyThemeEquivalence).toHaveBeenCalledWith(expect.objectContaining({ source_id: 1, target_id: 2, expected_version: 'a'.repeat(64), reason: 'Same exposure' })));
 });
 it('shows repeated and superseded evidence and failures without unsafe links', async () => {

@@ -1,56 +1,102 @@
-"""Current group views built from original source assignments."""
+"""SQL aggregation over original evidence using one grouping snapshot."""
 
-from types import SimpleNamespace
+from dataclasses import dataclass
+from datetime import datetime
+
+from sqlalchemy import JSON, case, func, literal, true
 
 from app.models.theme import ThemeCluster, ThemeConstituent, ThemeMention
-from app.services.theme_equivalence_service import ThemeEquivalenceService
 from app.services.theme_evidence_eligibility_service import legacy_eligibility_exists
+from app.services.theme_group_snapshot import ThemeGroupSnapshot
 
 
-def grouped_constituents(db, theme_id):
-    members = ThemeEquivalenceService(db).members(theme_id)
-    rows = (
-        db.query(ThemeConstituent)
-        .filter(
-            ThemeConstituent.theme_cluster_id.in_(members),
-            ThemeConstituent.is_active.is_(True),
+@dataclass(frozen=True)
+class GroupConstituent:
+    symbol: str
+    source: str | None
+    confidence: float
+    mention_count: int
+    correlation_to_theme: float | None
+    first_mentioned_at: datetime | None
+    last_mentioned_at: datetime | None
+
+
+def _post_counts(db, members, pipeline):
+    if db.get_bind().dialect.name == "postgresql":
+        tickers = (
+            func.json_array_elements_text(
+                case(
+                    (
+                        func.json_typeof(ThemeMention.tickers) == "array",
+                        ThemeMention.tickers,
+                    ),
+                    else_=literal([], type_=JSON),
+                )
+            )
+            .table_valued("symbol")
+            .render_derived(name="expanded_tickers")
         )
-        .order_by(ThemeConstituent.mention_count.desc())
-        .all()
-    )
-    if len(members) == 1:
-        return rows
-    pipeline = db.get(ThemeCluster, theme_id).pipeline
-    mentions = (
-        db.query(ThemeMention)
+        symbol = tickers.c.symbol
+    else:
+        tickers = func.json_each(ThemeMention.tickers).table_valued("value")
+        symbol = tickers.c.value
+    return (
+        db.query(
+            symbol.label("symbol"),
+            func.count(func.distinct(ThemeMention.content_item_id)).label("count"),
+        )
+        .select_from(ThemeMention)
+        .join(tickers, true())
         .filter(
             ThemeMention.theme_cluster_id.in_(members),
+            ThemeMention.pipeline == pipeline,
             ThemeMention.social_work_id.is_(None),
             legacy_eligibility_exists(
                 ThemeMention.content_item_id, pipeline, active_only=True
             ),
         )
-        .all()
+        .group_by(symbol)
+        .subquery()
     )
-    parents = {}
-    for mention in mentions:
-        for symbol in set(mention.tickers or []):
-            parents.setdefault(symbol, set()).add(mention.content_item_id)
-    result = {}
-    for row in rows:
-        if row.symbol not in result:
-            result[row.symbol] = SimpleNamespace(
-                **{
-                    column.name: getattr(row, column.name)
-                    for column in ThemeConstituent.__table__.columns
-                }
+
+
+def grouped_constituents(db, theme_id, *, snapshot=None, limit=None):
+    snapshot = snapshot if snapshot is not None else ThemeGroupSnapshot.read(db)
+    members = snapshot.members(theme_id)
+    c = ThemeConstituent
+    if len(members) == 1:
+        query = db.query(
+            c.symbol,
+            c.source,
+            func.coalesce(c.confidence, 0).label("confidence"),
+            c.mention_count,
+            c.correlation_to_theme,
+            c.first_mentioned_at,
+            c.last_mentioned_at,
+        ).filter(c.theme_cluster_id == members[0], c.is_active.is_(True))
+        ordering = c.mention_count
+    else:
+        pipeline = db.get(ThemeCluster, theme_id).pipeline
+        counts = _post_counts(db, members, pipeline)
+        ordering = func.coalesce(func.max(counts.c.count), 0)
+        query = (
+            db.query(
+                c.symbol,
+                case(
+                    (func.count(func.distinct(c.source)) > 1, "mixed"),
+                    else_=func.min(c.source),
+                ).label("source"),
+                func.coalesce(func.max(c.confidence), 0).label("confidence"),
+                ordering.label("mention_count"),
+                func.avg(c.correlation_to_theme).label("correlation_to_theme"),
+                func.min(c.first_mentioned_at).label("first_mentioned_at"),
+                func.max(c.last_mentioned_at).label("last_mentioned_at"),
             )
-        value = result[row.symbol]
-        value.mention_count = len(parents.get(row.symbol, set()))
-        for field, choose in [("first_mentioned_at", min), ("last_mentioned_at", max)]:
-            times = [
-                v for v in (getattr(value, field), getattr(row, field)) if v is not None
-            ]
-            setattr(value, field, choose(times) if times else None)
-        value.confidence = max(value.confidence or 0, row.confidence or 0)
-    return sorted(result.values(), key=lambda row: (-row.mention_count, row.symbol))
+            .outerjoin(counts, counts.c.symbol == c.symbol)
+            .filter(c.theme_cluster_id.in_(members), c.is_active.is_(True))
+            .group_by(c.symbol)
+        )
+    query = query.order_by(ordering.desc(), c.symbol)
+    if limit is not None:
+        query = query.limit(limit)
+    return [GroupConstituent(**row._mapping) for row in query.all()]

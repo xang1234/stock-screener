@@ -454,10 +454,10 @@ def get_theme_detail(
 
     from ...services.theme_equivalence_service import ThemeEquivalenceService
     from ...services.theme_group_reads import grouped_constituents
-    group = ThemeEquivalenceService(db)
+    group = ThemeEquivalenceService(db).snapshot()
     theme_id = group.representative(theme_id)
     cluster = db.get(ThemeCluster, theme_id)
-    constituents = grouped_constituents(db, theme_id)
+    constituents = grouped_constituents(db, theme_id, snapshot=group)
 
     latest_metrics = db.query(ThemeMetrics).filter(
         ThemeMetrics.theme_cluster_id == theme_id
@@ -549,7 +549,7 @@ def get_theme_mentions(
         raise HTTPException(status_code=404, detail="Theme not found")
 
     from ...services.theme_equivalence_service import ThemeEquivalenceService
-    group = ThemeEquivalenceService(db)
+    group = ThemeEquivalenceService(db).snapshot()
     member_ids = group.members(theme_id)
     theme_id = group.representative(theme_id)
     cluster = db.get(ThemeCluster, theme_id)

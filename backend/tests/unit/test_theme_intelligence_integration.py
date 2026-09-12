@@ -190,7 +190,9 @@ def test_stale_model_result_is_discarded(sessions):
     process_one(sessions, generate=changed)
     with sessions() as db:
         assert db.query(ThemeDevelopmentObservation).count() == 0
-        assert db.query(ThemeDevelopmentWork).one().status == "superseded"
+        assert (
+            db.query(ThemeDevelopmentWork).filter_by(status="superseded").count() == 1
+        )
 
 
 def test_expired_final_attempt_becomes_visible_failure(sessions):
@@ -233,7 +235,6 @@ def test_group_api_preview_apply_search_undo_and_conflict(sessions, monkeypatch)
     from app.api.v1 import themes_intelligence as api
     from fastapi import HTTPException
 
-    monkeypatch.setattr(api, "refresh_groups", lambda db, pipeline: "complete")
     with sessions() as db:
         _, a, b = seed(db)
         preview = api.preview_equivalence(a.id, b.id, db)
@@ -246,7 +247,7 @@ def test_group_api_preview_apply_search_undo_and_conflict(sessions, monkeypatch)
             expected_version=preview["version"],
         )
         result = api.apply_equivalence(request, db)
-        assert result["refresh_status"] == "complete"
+        assert result["refresh_status"] == "pending"
         choices = api.search_equivalent_themes(db, q="CPO", pipeline="technical")[
             "themes"
         ]
@@ -409,4 +410,85 @@ def test_source_and_history_queries_use_the_same_representative(sessions):
         assert history["theme"] == b.display_name
         assert (
             len(history["history"]) == 1 and history["history"][0]["grouping_version"]
+        )
+
+
+def test_changed_evidence_is_requeued_without_new_mentions(sessions):
+    with sessions.begin() as db:
+        item, _, _ = seed(db)
+        enqueue(db, item.id, "technical")
+
+    def changed(pipeline, db, bundle):
+        values = facts(bundle)
+        bundle["item"].translated_content = "Updated English evidence"
+        db.commit()
+        return values
+
+    process_one(sessions, generate=changed)
+    with sessions() as db:
+        assert (
+            db.query(ThemeDevelopmentWork).filter_by(status="superseded").count() == 1
+        )
+        assert db.query(ThemeDevelopmentWork).filter_by(status="pending").count() == 1
+
+
+def test_bounded_discovery_rotates_completed_work_and_notices_translation(sessions):
+    from app.services.theme_development_worker import discover
+
+    with sessions.begin() as db:
+        item, a, _ = seed(db)
+        first_id = item.id
+        # A second eligible source reuses the same theme.
+        second = ContentItem(
+            source_id=item.source_id,
+            source_type="news",
+            content="Second report",
+            fetched_at=NOW,
+        )
+        db.add(second)
+        db.flush()
+        second_id = second.id
+        db.add(
+            ContentPipelineEligibility(
+                content_item_id=second.id,
+                pipeline="technical",
+                channel="legacy",
+                originating_source_id=item.source_id,
+                observed_at=NOW,
+            )
+        )
+        db.add(
+            ThemeMention(
+                content_item_id=second.id,
+                theme_cluster_id=a.id,
+                pipeline="technical",
+                source_type="news",
+                raw_theme="CPO",
+            )
+        )
+        assert discover(db, limit=1) == 1
+        db.query(ThemeDevelopmentWork).one().status = "complete"
+    with sessions.begin() as db:
+        assert discover(db, limit=1) == 1
+        assert (
+            db.query(ThemeDevelopmentWork)
+            .filter_by(content_item_id=second_id)
+            .one()
+            .status
+            == "pending"
+        )
+        db.get(ContentItem, first_id).translated_content = "Updated English evidence"
+    with sessions.begin() as db:
+        assert discover(db, limit=1) == 1
+        assert (
+            db.query(ThemeDevelopmentWork)
+            .filter_by(content_item_id=first_id, status="pending")
+            .count()
+            == 1
+        )
+        assert (
+            db.query(ThemeDevelopmentWork)
+            .filter_by(content_item_id=first_id, status="superseded")
+            .count()
+            == 1
         )

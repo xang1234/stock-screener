@@ -9,6 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 def refresh_groups(db, pipeline):
+    from .theme_group_coordination import publication_scope
+
+    with publication_scope(db):
+        return _refresh_groups(db, pipeline)
+
+
+def _refresh_groups(db, pipeline):
     from app.services.theme_discovery_service import ThemeDiscoveryService
     from app.services.theme_taxonomy_service import ThemeTaxonomyService
     from app.services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
@@ -26,6 +33,10 @@ def refresh_groups(db, pipeline):
         grouping = ThemeEquivalenceService(db)
         grouping._lock()
         if grouping.version() != version:
+            db.query(ThemeEquivalenceOperation).filter_by(pipeline=pipeline).update(
+                {"refresh_pending": True}, synchronize_session=False
+            )
+            db.commit()
             return "pending"
         db.query(ThemeEquivalenceOperation).filter_by(
             pipeline=pipeline, refresh_pending=True

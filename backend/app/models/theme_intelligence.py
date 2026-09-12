@@ -11,6 +11,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -74,7 +75,14 @@ class ThemeDevelopmentObservation(Base):
     pipeline = Column(String(20), nullable=False)
     revision = Column(String(64), nullable=False)
     observation_key = Column(String(64), nullable=False, unique=True)
-    theme_ids = Column(JSON, nullable=False)
+    theme_links = relationship(
+        "ThemeDevelopmentTheme", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    @property
+    def theme_ids(self):
+        return sorted(link.theme_id for link in self.theme_links)
+
     facts = Column(JSON, nullable=False)
     citations = Column(JSON, nullable=False)
     classification = Column(String(30), nullable=False)
@@ -94,7 +102,9 @@ class ThemeDevelopmentWork(Base):
     )
     pipeline = Column(String(20), nullable=False)
     revision = Column(String(64), nullable=False)
-    source_marker = Column(Integer, nullable=False, default=0)
+    checked_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     status = Column(String(20), nullable=False, default="pending", index=True)
     attempts = Column(Integer, nullable=False, default=0)
     error_code = Column(String(80))

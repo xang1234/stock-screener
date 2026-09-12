@@ -17,12 +17,12 @@ import re
 import time
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Optional
+from functools import cached_property
+from typing import Any
 
 import numpy as np
-from sqlalchemy import func, case, distinct, or_
+from sqlalchemy import case, distinct, func, or_
 from sqlalchemy.orm import Session
-from .theme_evidence_eligibility_service import legacy_eligibility_exists
 
 from ..models.theme import (
     ThemeCluster,
@@ -32,8 +32,9 @@ from ..models.theme import (
     ThemeMetrics,
 )
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
+from .theme_evidence_eligibility_service import legacy_eligibility_exists
 from .theme_identity_normalization import canonical_theme_key
-from .theme_taxonomy_prompts import build_l1_naming_prompt, L1_CATEGORIES
+from .theme_taxonomy_prompts import L1_CATEGORIES, build_l1_naming_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -200,10 +201,10 @@ class ThemeTaxonomyService:
         "basket_return_1w", "basket_rs_vs_spy", "display_name", "rank",
     }
 
-    def _visible_theme_filter(self):
-        from .theme_equivalence_service import ThemeEquivalenceService
-        mapping = ThemeEquivalenceService(self.db).mapping(self.pipeline)
-        return ~ThemeCluster.id.in_([key for key, value in mapping.items() if key != value])
+    @cached_property
+    def groups(self):
+        from .theme_group_snapshot import ThemeGroupSnapshot
+        return ThemeGroupSnapshot.read(self.db, self.pipeline)
 
     def get_l1_themes(
         self,
@@ -229,7 +230,7 @@ class ThemeTaxonomyService:
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_l1 == True,
             ThemeCluster.is_active == True,
-            self._visible_theme_filter(),
+            self.groups.visible(ThemeCluster.id),
         )
         if category_filter:
             base_query = base_query.filter(ThemeCluster.category == category_filter)
@@ -255,7 +256,7 @@ class ThemeTaxonomyService:
                 child_count = self.db.query(func.count(ThemeCluster.id)).filter(
                     ThemeCluster.parent_cluster_id == l1.id,
                     ThemeCluster.is_active == True,
-                    self._visible_theme_filter(),
+                    self.groups.visible(ThemeCluster.id),
                 ).scalar() or 0
                 row["num_l2_children"] = child_count
 
@@ -319,7 +320,7 @@ class ThemeTaxonomyService:
         children_query = self.db.query(ThemeCluster).filter(
             ThemeCluster.parent_cluster_id == l1_id,
             ThemeCluster.is_active == True,
-            self._visible_theme_filter(),
+            self.groups.visible(ThemeCluster.id),
         )
         total_children = children_query.count()
         # Fetch all children (sort after metric enrichment)
@@ -429,7 +430,7 @@ class ThemeTaxonomyService:
         base_query = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_active == True,
-            self._visible_theme_filter(),
+            self.groups.visible(ThemeCluster.id),
             ThemeCluster.is_l1 == False,
             ThemeCluster.parent_cluster_id.is_(None),
         )
@@ -787,7 +788,7 @@ class ThemeTaxonomyService:
             themes: Cluster of L2 themes to name.
             llm: Optional shared LLMService instance (avoids per-call init overhead).
         """
-        from .llm import LLMService, LLMError, LLMRateLimitError
+        from .llm import LLMError, LLMRateLimitError, LLMService
 
         if llm is None:
             return None
@@ -945,6 +946,12 @@ class ThemeTaxonomyService:
     # ── L1 Metrics Aggregation ────────────────────────────────────────
 
     def compute_all_l1_metrics(self, *, as_of_date: datetime | None = None) -> dict:
+        from .theme_group_coordination import lock_grouping_mutation
+        lock_grouping_mutation(self.db)
+        self.__dict__.pop("groups", None)
+        return self._compute_all_l1_metrics(as_of_date=as_of_date)
+
+    def _compute_all_l1_metrics(self, *, as_of_date: datetime | None = None) -> dict:
         """
         Aggregate L2 metrics → L1 metrics via batch SQL.
 
@@ -958,7 +965,7 @@ class ThemeTaxonomyService:
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_l1 == True,
             ThemeCluster.is_active == True,
-            self._visible_theme_filter(),
+            self.groups.visible(ThemeCluster.id),
         ).all()
 
         if not l1_themes:
@@ -1002,7 +1009,7 @@ class ThemeTaxonomyService:
         ).filter(
             ThemeCluster.parent_cluster_id.in_(l1_ids),
             ThemeCluster.is_active == True,
-            self._visible_theme_filter(),
+            self.groups.visible(ThemeCluster.id),
             ThemeCluster.is_l1 == False,
             ThemeCluster.pipeline == self.pipeline,
             ThemeMetrics.date == latest_l2_date,
@@ -1010,9 +1017,7 @@ class ThemeTaxonomyService:
             ThemeCluster.parent_cluster_id,
         ).all()
 
-        from .theme_equivalence_service import ThemeEquivalenceService
-        group = ThemeEquivalenceService(self.db)
-        mapping = group.mapping(self.pipeline)
+        mapping = self.groups.mapping
         parents = {row.id: row.parent_cluster_id for row in self.db.query(ThemeCluster).filter(
             ThemeCluster.id.in_(set(mapping.values())),
         )}
@@ -1053,7 +1058,7 @@ class ThemeTaxonomyService:
 
             metrics_data = {
                 "pipeline": self.pipeline,
-                "grouping_version": group.version(),
+                "grouping_version": self.groups.version,
                 "mentions_1d": _safe_int(getattr(agg, "sum_mentions_1d", None)),
                 "mentions_7d": _safe_int(getattr(agg, "sum_mentions_7d", None)),
                 "mentions_30d": _safe_int(getattr(agg, "sum_mentions_30d", None)),

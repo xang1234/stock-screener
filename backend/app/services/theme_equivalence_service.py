@@ -1,8 +1,6 @@
 """Reviewed equivalence operations; original cluster assignments never move."""
 
-import json
 from datetime import datetime, timezone
-from hashlib import sha256
 
 from app.models.theme import ThemeCluster, ThemeMention
 from app.models.theme_intelligence import ThemeEquivalenceOperation
@@ -23,36 +21,26 @@ class ThemeEquivalenceService:
         return query.order_by(ThemeEquivalenceOperation.id).all()
 
     def snapshot(self, pipeline=None):
-        operations = self.operations()
-        mapping = {}
-        for operation in operations:
-            if operation.active and (
-                pipeline is None or operation.pipeline == pipeline
-            ):
-                for member in operation.member_ids:
-                    mapping[member] = operation.target_id
-        version = sha256(
-            json.dumps([(o.id, o.active) for o in operations]).encode()
-        ).hexdigest()
-        return mapping, version
+        from .theme_group_snapshot import ThemeGroupSnapshot
+
+        return ThemeGroupSnapshot.read(self.db, pipeline)
 
     def mapping(self, pipeline=None):
-        return self.snapshot(pipeline)[0]
+        return dict(self.snapshot(pipeline).mapping)
 
     def version(self):
-        return self.snapshot()[1]
+        return self.snapshot().version
 
     def representative(self, theme_id):
-        return self.mapping().get(theme_id, theme_id)
+        return self.snapshot().representative(theme_id)
 
     def members(self, theme_id):
-        mapping = self.mapping()
-        target = mapping.get(theme_id, theme_id)
-        return sorted(
-            {target, *(key for key, value in mapping.items() if value == target)}
-        )
+        return list(self.snapshot().members(theme_id))
 
     def _lock(self):
+        from .theme_group_coordination import lock_grouping_mutation
+
+        lock_grouping_mutation(self.db)
         # Serialize membership edits with a consistent lock order. Extraction keeps
         # writing original IDs and needs no group lock.
         self.db.query(ThemeCluster).order_by(ThemeCluster.id).with_for_update().all()
@@ -66,7 +54,8 @@ class ThemeEquivalenceService:
             raise EquivalenceConflict("Theme not found")
         if source.pipeline != target.pipeline:
             raise EquivalenceConflict("Cross-pipeline grouping is not allowed")
-        members = sorted(set(self.members(source_id) + self.members(target_id)))
+        group = self.snapshot()
+        members = group.expand([source_id, target_id])
         rows = self.db.query(ThemeCluster).filter(ThemeCluster.id.in_(members)).all()
         if any(not row.is_active or row.is_l1 for row in rows):
             raise EquivalenceConflict("Only active non-parent themes can be grouped")
@@ -84,7 +73,7 @@ class ThemeEquivalenceService:
                 parent = (
                     all_rows[parent].parent_cluster_id if parent in all_rows else None
                 )
-        target_id = self.representative(target_id)
+        target_id = group.representative(target_id)
         parents = (
             self.db.query(ThemeMention.content_item_id)
             .filter(
@@ -100,7 +89,7 @@ class ThemeEquivalenceService:
             "pipeline": source.pipeline,
             "member_ids": members,
             "parent_posts": parents,
-            "version": self.version(),
+            "version": group.version,
             "aliases": [
                 {
                     "theme_id": row.id,

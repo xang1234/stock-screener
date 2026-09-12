@@ -113,3 +113,32 @@ def test_alias_target_idempotency_and_stale_preview(db):
         )
     result = svc.apply(c.id, a.id, actor="test", reason="Equivalent", key="ca")
     assert svc.apply(c.id, a.id, actor="test", reason="Equivalent", key="ca") == result
+
+
+def test_snapshot_is_immutable_and_requires_no_more_operation_reads(db):
+    from sqlalchemy import event
+
+    a, b = theme(db, "CPO"), theme(db, "Co-Packaged Optics")
+    service = ThemeEquivalenceService(db)
+    operation = service.apply(
+        a.id, b.id, actor="reviewer", reason="Equivalent", key="snapshot"
+    )
+    snapshot = service.snapshot()
+    reads = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        reads.append(statement)
+
+    event.listen(db.bind, "before_cursor_execute", capture)
+    try:
+        assert snapshot.representative(a.id) == b.id
+        assert snapshot.expand([a.id, b.id]) == [a.id, b.id]
+        assert snapshot.members(a.id) == (a.id, b.id)
+        with pytest.raises(TypeError):
+            snapshot.mapping[a.id] = a.id
+        assert not reads
+    finally:
+        event.remove(db.bind, "before_cursor_execute", capture)
+    service.undo(operation["id"], actor="reviewer", reason="Correction")
+    assert snapshot.representative(a.id) == b.id
+    assert service.snapshot().representative(a.id) == a.id
