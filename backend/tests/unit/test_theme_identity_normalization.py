@@ -81,7 +81,7 @@ def test_extract_from_content_filters_empty_and_unknown_themes():
     service.provider = "litellm"
     service.gemini_client = None
     service._rate_limit = lambda: None
-    service._clean_tickers = lambda _tickers: []
+    service._clean_tickers = lambda _tickers, *, source_text=None: []
     service._try_generate_litellm = lambda _prompt: json.dumps(
         [
             {"theme": "   ", "tickers": [], "sentiment": "neutral", "confidence": 0.5, "excerpt": ""},
@@ -98,7 +98,7 @@ def test_extract_from_content_filters_empty_and_unknown_themes():
         title="title",
     )
 
-    mentions = service.extract_from_content(content_item)
+    mentions = service.extract_from_content(content_item, verify_claims=False)
     assert len(mentions) == 1
     assert mentions[0]["theme"] == "AI infrastructure"
 

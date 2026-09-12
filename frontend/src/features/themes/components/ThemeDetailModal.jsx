@@ -35,6 +35,7 @@ import {
   getThemeMentions,
 } from '../../../api/themes';
 import TranslatedText from '../../../components/common/TranslatedText';
+import { AttachmentEvidence } from '../../../components/Themes/ThemeSourcesModal';
 
 function getSafeExternalUrl(url) {
   if (!url) {
@@ -314,6 +315,20 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
                             )}
                             </TableCell>
                             <TableCell sx={{ maxWidth: 280 }}>
+                              {mention.claim_support?.theme === 'inferred' && (
+                                <Typography variant="caption" color="text.secondary" display="block">
+                                  Theme inferred from source context
+                                </Typography>
+                              )}
+                              {mention.development && (
+                                <Box sx={{ fontSize: '11px', mb: 0.75 }}>
+                                  <strong>Development: </strong>{mention.development}
+                                </Box>
+                              )}
+                              <AttachmentEvidence
+                                status={mention.attachment_status}
+                                attachments={mention.attachments}
+                              />
                               <TranslatedText
                                 originalText={mention.excerpt}
                                 translatedText={mention.translated_excerpt}

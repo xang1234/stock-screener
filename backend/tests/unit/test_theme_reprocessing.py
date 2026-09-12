@@ -122,7 +122,7 @@ class TestExtractFromContentBugFix:
         # Simulate a rate limit error from LLM
         with patch.object(service, '_try_generate_litellm', side_effect=Exception("429 Rate limit exceeded")):
             with pytest.raises(Exception, match="429 Rate limit"):
-                service.extract_from_content(item)
+                service.extract_from_content(item, verify_claims=False)
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
@@ -152,7 +152,7 @@ class TestExtractFromContentBugFix:
         # LLM returns invalid JSON
         with patch.object(service, '_try_generate_litellm', return_value="This is not JSON at all"):
             with pytest.raises(ThemeExtractionParseError, match="Failed to parse LLM response"):
-                service.extract_from_content(item)
+                service.extract_from_content(item, verify_claims=False)
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
@@ -184,7 +184,7 @@ class TestExtractFromContentBugFix:
         item = _make_content_item(db_session, pipeline_source)
 
         with pytest.raises(ThemeExtractionProviderUnavailableError, match="No LLM provider available"):
-            service.extract_from_content(item)
+            service.extract_from_content(item, verify_claims=False)
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
@@ -234,9 +234,162 @@ class TestExtractFromContentBugFix:
             "_try_generate_litellm",
             return_value='[{"theme":"AI Capex Beneficiaries","tickers":[],"sentiment":"bullish","confidence":0.8,"excerpt":"Nvidia should benefit from AI capex."}]',
         ):
-            mentions = service.extract_from_content(item)
+            mentions = service.extract_from_content(item, verify_claims=False)
 
         assert mentions[0]["tickers"] == ["NVDA"]
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_extract_from_content_avoids_ordinary_word_company_alias_collisions(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        """Generated post titles and ordinary prose must not become company tickers."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        db_session.add_all([
+            StockUniverse(symbol="POST", name="Post Holdings Inc", exchange="NYSE", is_active=True, status="active"),
+            StockUniverse(symbol="PRTH", name="Priority Technology Holdings Inc", exchange="NASDAQ", is_active=True, status="active"),
+            StockUniverse(symbol="KEEP", name="Keep", exchange="NASDAQ", is_active=True, status="active"),
+        ])
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "fundamental"
+        service.provider = "litellm"
+        service.llm = MagicMock()
+        service.gemini_client = None
+        service.configured_model = None
+        service.pipeline_config = None
+        service._valid_tickers = None
+        service._company_name_ticker_map = None
+        service._last_request_time = 0
+        service._min_request_interval = 0
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+        service.ticker_pattern = __import__("re").compile(r'^[A-Z]{1,5}$')
+
+        item = _make_content_item(
+            db_session,
+            pipeline_source,
+            title="Post by @marketwatch",
+            content="A captured social post.",
+        )
+        with patch.object(
+            service,
+            "_try_generate_litellm",
+            return_value=(
+                '[{"theme":"Market Commentary","tickers":[],"sentiment":"neutral","confidence":0.8,'
+                '"excerpt":"The post summarizes the market."},'
+                '{"theme":"Rankings","tickers":[],"sentiment":"neutral","confidence":0.8,'
+                '"excerpt":"Priority remains the main criterion."},'
+                '{"theme":"Consumer Staples","tickers":[],"sentiment":"bullish","confidence":0.8,'
+                '"excerpt":"Post Holdings and Priority Technology reported earnings."},'
+                '{"theme":"Software","tickers":[],"sentiment":"bullish","confidence":0.8,'
+                '"excerpt":"Keep Inc. shares rose after earnings."},'
+                '{"theme":"Portfolio Advice","tickers":[],"sentiment":"neutral","confidence":0.8,'
+                '"excerpt":"Keep shares in your portfolio."},'
+                '{"theme":"Software","tickers":[],"sentiment":"bullish","confidence":0.8,'
+                '"excerpt":"KEEP reported revenue growth."},'
+                '{"theme":"Explicit Symbols","tickers":["$POST","$PRTH","$KEEP"],"sentiment":"bullish","confidence":0.8,'
+                '"excerpt":"The companies were mentioned explicitly."}]'
+            ),
+        ):
+            mentions = service.extract_from_content(item, verify_claims=False)
+
+        assert [mention["tickers"] for mention in mentions] == [
+            [],
+            [],
+            ["PRTH", "POST"],
+            ["KEEP"],
+            [],
+            ["KEEP"],
+            ["POST", "PRTH", "KEEP"],
+        ]
+
+    def test_generated_capture_title_requires_a_known_wrapper(self):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+
+        assert service._is_generated_capture_title("Post by @marketwatch")
+        assert service._is_generated_capture_title("Post by unknown author")
+        assert not service._is_generated_capture_title("Post by Nvidia")
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_company_enrichment_ignores_generated_titles_but_keeps_real_headlines(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        db_session.add(
+            StockUniverse(symbol="NVDA", name="NVIDIA Corporation", exchange="NASDAQ", is_active=True, status="active")
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "fundamental"
+        service.provider = "litellm"
+        service.llm = MagicMock()
+        service.gemini_client = None
+        service.configured_model = None
+        service.pipeline_config = None
+        service._valid_tickers = None
+        service._company_name_ticker_map = None
+        service._last_request_time = 0
+        service._min_request_interval = 0
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+        service.ticker_pattern = __import__("re").compile(r'^[A-Z]{1,5}$')
+
+        generated_title_item = _make_content_item(
+            db_session, pipeline_source, title="Post by @Nvidia", content="Unrelated capture.",
+        )
+        headline_item = _make_content_item(
+            db_session, pipeline_source, title="Nvidia earnings preview", content="Unrelated article.",
+        )
+        response = (
+            '[{"theme":"AI","tickers":[],"sentiment":"neutral","confidence":0.8,'
+            '"excerpt":"The sector is under review."}]'
+        )
+        with patch.object(service, "_try_generate_litellm", side_effect=[response, response]):
+            generated_mentions = service.extract_from_content(generated_title_item, verify_claims=False)
+            headline_mentions = service.extract_from_content(headline_item, verify_claims=False)
+
+        assert generated_mentions[0]["tickers"] == []
+        assert headline_mentions[0]["tickers"] == ["NVDA"]
+
+    def test_ambiguous_company_alias_requires_entity_evidence(self):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+
+        assert not service._has_ambiguous_company_name_context("Keep shares in your portfolio.", "keep")
+        assert service._has_ambiguous_company_name_context("KEEP reported revenue growth.", "keep")
+        assert service._has_ambiguous_company_name_context("NASDAQ: KEEP reported revenue growth.", "keep")
+
+    def test_next_alias_requires_issuer_context_but_keeps_clear_company_references(self):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service._company_name_ticker_map = [
+            ("next technology", "NXTT"),
+            ("next", "NXTT"),
+        ]
+
+        assert service._resolve_company_name_tickers(
+            "second contract comes next year"
+        ) == []
+        assert service._resolve_company_name_tickers(
+            "Next Technology Holding announced revenue"
+        ) == ["NXTT"]
+        assert service._resolve_company_name_tickers("NEXT reported revenue") == ["NXTT"]
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
@@ -1894,3 +2047,114 @@ class TestThemeClusterLabelPreservation:
         assert mention.threshold_version == "embedding-v1"
         assert mention.match_score_model == "all-MiniLM-L6-v2"
         assert mention.match_score_model_version == "embedding-v1"
+
+
+class TestCompanyNameTickerResolution:
+    def _service(self, db_session):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        return service
+
+    def test_does_not_promote_generic_words_from_stripped_company_aliases(self, db_session):
+        """Generic prose must not become a stock solely through suffix stripping."""
+        db_session.add_all(
+            [
+                StockUniverse(
+                    symbol="CPHI",
+                    name="China Pharma Holdings Inc",
+                    market="US",
+                    is_active=True,
+                ),
+                StockUniverse(
+                    symbol="ATGL",
+                    name="Alpha Technology Group Ltd",
+                    market="US",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        service = self._service(db_session)
+
+        assert service._resolve_company_name_tickers("China wants inventory rebuilt.") == []
+        assert service._resolve_company_name_tickers("China reported sales.") == []
+        assert service._resolve_company_name_tickers(
+            "Everybody had alpha seeing that rounded top $AMD"
+        ) == []
+        assert service._resolve_company_name_tickers("Alpha announced guidance.") == []
+
+    def test_keeps_unambiguous_full_company_name_resolutions(self, db_session):
+        db_session.add_all(
+            [
+                StockUniverse(
+                    symbol="CPHI",
+                    name="China Pharma Holdings Inc",
+                    market="US",
+                    is_active=True,
+                ),
+                StockUniverse(
+                    symbol="ATGL",
+                    name="Alpha Technology Group Ltd",
+                    market="US",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        service = self._service(db_session)
+
+        assert service._resolve_company_name_tickers(
+            "China Pharma Holdings Inc reported earnings."
+        ) == ["CPHI"]
+        assert service._resolve_company_name_tickers(
+            "China Pharma reported sales."
+        ) == ["CPHI"]
+        assert service._resolve_company_name_tickers(
+            "Alpha Technology Group Ltd announced results."
+        ) == ["ATGL"]
+        assert service._resolve_company_name_tickers(
+            "Alpha Technology announced guidance."
+        ) == ["ATGL"]
+
+    def test_drops_commodity_contract_symbol_from_model_tickers(self, db_session):
+        """A model must not persist an equity ticker for an identified commodity contract."""
+        from app.services.security_master_service import security_master_resolver
+
+        service = self._service(db_session)
+        service._valid_tickers = {"HG"}
+        service._security_master = security_master_resolver
+
+        assert service._clean_tickers(
+            ["HG"],
+            source_text="Do or die time for $HG $copper. Trying to complete the blowoff move.",
+        ) == []
+
+    def test_keeps_commodity_collision_when_source_names_equity_with_parenthetical_ticker(
+        self, db_session
+    ):
+        from app.services.security_master_service import security_master_resolver
+
+        db_session.add(
+            StockUniverse(
+                symbol="HG",
+                name="Hamilton Insurance Group Ltd",
+                market="US",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        service = self._service(db_session)
+        service._valid_tickers = {"HG"}
+        service._security_master = security_master_resolver
+
+        assert service._clean_tickers(
+            ["HG"],
+            source_text=(
+                "Hamilton Insurance ($HG) reported results. Copper prices also rose."
+            ),
+        ) == ["HG"]

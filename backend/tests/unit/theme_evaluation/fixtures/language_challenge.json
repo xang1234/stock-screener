@@ -1,0 +1,230 @@
+{
+  "schema_version": "language-challenge-v1",
+  "provenance": {
+    "kind": "synthetic",
+    "description": "Hand-authored language preparation cases; no item is attributed to a real post.",
+    "live_model_validated": false
+  },
+  "cases": [
+    {
+      "id": "ko-01-compound-quantity",
+      "category": "korean",
+      "label": "Korean company transaction with compound quantities",
+      "synthetic": true,
+      "source_language": "ko",
+      "text": "삼성전자는 자사주 718만주를 1.9조원에 매입했다.",
+      "expected_meaning": "Samsung Electronics bought 7.18 million treasury shares for 1.9 trillion won.",
+      "expected_quantity_facts": ["718만주", "1.9조원"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "ko-02-negative-percent",
+      "category": "korean",
+      "label": "Korean negative percentage and currency",
+      "synthetic": true,
+      "source_language": "ko",
+      "text": "영업이익은 -12.5% 감소했고 비용은 ₩320억원 늘었다.",
+      "expected_meaning": "Operating profit decreased by 12.5%, while costs increased by 32 billion won.",
+      "expected_quantity_facts": ["-12.5%", "₩320억원"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "ko-03-product-digits",
+      "category": "korean",
+      "label": "Korean company, product, and generation digits",
+      "synthetic": true,
+      "source_language": "ko",
+      "text": "SK하이닉스는 HBM3E 12단 제품 출하를 시작했다.",
+      "expected_meaning": "SK hynix began shipping its 12-layer HBM3E product.",
+      "expected_quantity_facts": ["HBM3E", "12단"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "ko-04-paragraph-slang",
+      "category": "korean",
+      "label": "Korean paragraph boundary and market slang",
+      "synthetic": true,
+      "source_language": "ko",
+      "text": "매출 2조원 돌파, 실적 대박.\n\n근데 가이던스는 3% 하향이라 추격매수는 ㄴㄴ.",
+      "expected_meaning": "Revenue exceeded 2 trillion won, but guidance was cut 3%; the slang advises against chasing the stock.",
+      "expected_quantity_facts": ["2조원", "3%"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "ja-01-compound-quantity",
+      "category": "japanese",
+      "label": "Japanese compound yen quantity",
+      "synthetic": true,
+      "source_language": "ja",
+      "text": "ソニーグループの売上高は1兆2,500億円だった。",
+      "expected_meaning": "Sony Group revenue was 1.25 trillion yen.",
+      "expected_quantity_facts": ["1兆2,500億円"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "ja-02-negative-percent",
+      "category": "japanese",
+      "label": "Japanese negative percentage and shares",
+      "synthetic": true,
+      "source_language": "ja",
+      "text": "利益率は−8.4%で、8,000万株を消却する。",
+      "expected_meaning": "The profit margin was negative 8.4%, and 80 million shares will be retired.",
+      "expected_quantity_facts": ["−8.4%", "8,000万株"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "ja-03-kana-kanji-product",
+      "category": "japanese",
+      "label": "Japanese kana plus kanji with product digits",
+      "synthetic": true,
+      "source_language": "ja",
+      "text": "トヨタ自動車は次世代EV『bZ4X 2.0』の生産を始める。",
+      "expected_meaning": "Toyota Motor will begin production of the next-generation EV bZ4X 2.0.",
+      "expected_quantity_facts": ["bZ4X 2.0"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "ja-04-paragraph-slang",
+      "category": "japanese",
+      "label": "Japanese paragraphs and investor slang",
+      "synthetic": true,
+      "source_language": "ja",
+      "text": "受注は前年比+25%。\r\n\r\nでも材料出尽くしで、今から買うのは微妙。",
+      "expected_meaning": "Orders rose 25% year over year, but the news may already be priced in and buying now is questionable.",
+      "expected_quantity_facts": ["+25%"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "zh-01-simplified-currency",
+      "category": "chinese",
+      "label": "Simplified Chinese revenue and currency",
+      "synthetic": true,
+      "source_language": "zh-CN",
+      "text": "宁德时代季度收入为人民币718亿元，同比增长19%。",
+      "expected_meaning": "CATL quarterly revenue was 71.8 billion yuan, up 19% year over year.",
+      "expected_quantity_facts": ["人民币718亿元", "19%"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "zh-02-traditional-negative",
+      "category": "chinese",
+      "label": "Traditional Chinese negative percentage",
+      "synthetic": true,
+      "source_language": "zh-TW",
+      "text": "台積電毛利率變動-2.3個百分點，資本支出為320億美元。",
+      "expected_meaning": "TSMC gross margin changed by negative 2.3 percentage points, and capital expenditure was 32 billion US dollars.",
+      "expected_quantity_facts": ["-2.3個百分點", "320億美元"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "zh-03-product-ticker",
+      "category": "chinese",
+      "label": "Chinese company, ticker, and product digits",
+      "synthetic": true,
+      "source_language": "zh-CN",
+      "text": "小米集团（1810.HK）称SU7 Ultra订单达到10万台。",
+      "expected_meaning": "Xiaomi Group (1810.HK) said SU7 Ultra orders reached 100,000 units.",
+      "expected_quantity_facts": ["1810.HK", "SU7 Ultra", "10万台"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "zh-04-paragraph-slang",
+      "category": "chinese",
+      "label": "Chinese paragraphs and market slang",
+      "synthetic": true,
+      "source_language": "zh-CN",
+      "text": "订单增长30%，基本面很顶。\n\n不过股价已涨80%，别上头。",
+      "expected_meaning": "Orders grew 30% and fundamentals look strong, but the stock has already risen 80%; do not get carried away.",
+      "expected_quantity_facts": ["30%", "80%"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "mixed-01-three-scripts",
+      "category": "mixed",
+      "label": "Japanese, Korean, and ticker paragraphs",
+      "synthetic": true,
+      "source_language": null,
+      "text": "売上高は1.9兆円。\r\n\r\n매출 718억원.\n\n$NVDA 전망 유지",
+      "expected_meaning": "Revenue was 1.9 trillion yen; revenue was 71.8 billion won; the NVDA outlook is maintained.",
+      "expected_quantity_facts": ["1.9兆円", "718억원", "$NVDA"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "mixed-02-english-korean",
+      "category": "mixed",
+      "label": "English and Korean prose with product digits",
+      "synthetic": true,
+      "source_language": null,
+      "text": "HBM4 ramp looks good, 하지만 수율은 아직 65% 수준.",
+      "expected_meaning": "The HBM4 ramp looks good, but yield remains around 65%.",
+      "expected_quantity_facts": ["HBM4", "65%"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "mixed-03-japanese-chinese",
+      "category": "mixed",
+      "label": "Japanese framing with Chinese quotation",
+      "synthetic": true,
+      "source_language": null,
+      "text": "会社は『收入增长20%』と説明したが、株価は-4%。",
+      "expected_meaning": "The company said revenue grew 20%, while the share price fell 4%.",
+      "expected_quantity_facts": ["20%", "-4%"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "mixed-04-slang-emoji",
+      "category": "mixed",
+      "label": "English, Chinese slang, and emoji",
+      "synthetic": true,
+      "source_language": null,
+      "text": "$TSLA Q2 deliveries +6%, 但别FOMO 🚀",
+      "expected_meaning": "Tesla Q2 deliveries rose 6%, but the reader is warned not to chase from fear of missing out.",
+      "expected_quantity_facts": ["$TSLA", "Q2", "+6%"],
+      "preparation_expectation": "translate"
+    },
+    {
+      "id": "en-01-article-metadata",
+      "category": "english_nonlinguistic",
+      "label": "English prose with valid observed metadata",
+      "synthetic": true,
+      "source_language": "en-US",
+      "text": "NVIDIA said Blackwell revenue rose 18% to $11.7 billion.",
+      "expected_meaning": "NVIDIA reported that Blackwell revenue rose 18% to 11.7 billion dollars.",
+      "expected_quantity_facts": ["18%", "$11.7 billion"],
+      "preparation_expectation": "identity"
+    },
+    {
+      "id": "zxx-02-url-emoji",
+      "category": "english_nonlinguistic",
+      "label": "URL and emoji only",
+      "synthetic": true,
+      "source_language": null,
+      "text": "https://t.co/AbC123 🚀📈",
+      "expected_meaning": "A URL followed by rocket and rising-chart emoji; no prose meaning is asserted.",
+      "expected_quantity_facts": [],
+      "preparation_expectation": "retain_original"
+    },
+    {
+      "id": "zxx-03-emoji-only",
+      "category": "english_nonlinguistic",
+      "label": "Emoji-only sentiment",
+      "synthetic": true,
+      "source_language": "zxx",
+      "text": "📉😬",
+      "expected_meaning": "Falling-chart and grimacing emoji; no linguistic proposition is asserted.",
+      "expected_quantity_facts": [],
+      "preparation_expectation": "retain_original"
+    },
+    {
+      "id": "en-04-ticker-product-digits",
+      "category": "english_nonlinguistic",
+      "label": "English ticker and product digits",
+      "synthetic": true,
+      "source_language": "en",
+      "text": "$AMD MI400 volume shipments start in Q3 2027; guidance stays at -5%.",
+      "expected_meaning": "AMD MI400 volume shipments start in the third quarter of 2027, and guidance remains negative 5%.",
+      "expected_quantity_facts": ["$AMD", "MI400", "Q3 2027", "-5%"],
+      "preparation_expectation": "identity"
+    }
+  ]
+}

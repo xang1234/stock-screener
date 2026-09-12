@@ -10,16 +10,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+import app.infra.db.models.feature_store  # noqa: F401
+import app.models.scan_result  # noqa: F401
 
-from app.database import Base
 # Register ORM models used by metadata.create_all.
 import app.models.theme  # noqa: F401
-import app.models.scan_result  # noqa: F401
-import app.infra.db.models.feature_store  # noqa: F401
-
+import pytest
+from app.database import Base
 from app.models.theme import (
     ContentItem,
     ContentSource,
@@ -31,6 +28,8 @@ from app.schemas.theme import (
     ThemeMentionDetailResponse,
     TranslationMetadata,
 )
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 class TestTranslationMetadataShape:
@@ -237,6 +236,58 @@ class TestGetThemeMentionsPopulatesTranslationFields:
         assert m.translated_raw_theme == "semiconductors"
         assert m.translation_metadata.provider == "deepl"
         assert m.translation_metadata.confidence == 0.92
+
+    def test_mention_response_exposes_pending_attachment_without_counting_it_as_a_source(
+        self, _session
+    ):
+        """A child attachment is visible as preparation state, not a second mention."""
+        from app.api.v1.themes_queries import get_theme_mentions
+        from app.services.live_attachment_service import record_attachments
+
+        source = ContentSource(name="Research list", source_type="twitter")
+        _session.add(source)
+        _session.flush()
+        content = ContentItem(
+            source_id=source.id,
+            source_type="twitter",
+            external_id="attachment-status-1",
+            content="A post with a chart attached",
+            url="https://x.com/example/status/1",
+        )
+        _session.add(content)
+        _session.flush()
+        record_attachments(
+            _session,
+            content,
+            [{"kind": "image", "url": "https://pbs.twimg.com/media/chart.jpg"}],
+            datetime.now(tz=timezone.utc),
+        )
+        cluster = ThemeCluster(
+            name="Optics", display_name="Optics", canonical_key="optics"
+        )
+        _session.add(cluster)
+        _session.flush()
+        _session.add(ThemeMention(
+            theme_cluster_id=cluster.id,
+            content_item_id=content.id,
+            source_type="twitter",
+            raw_theme="Optics",
+            excerpt="A post with a chart attached",
+            mentioned_at=datetime.now(tz=timezone.utc),
+        ))
+        _session.commit()
+
+        response = get_theme_mentions(theme_id=cluster.id, limit=50, db=_session)
+
+        assert response.total_count == 1
+        assert response.mentions[0].attachment_status == "pending"
+        assert [attachment.model_dump() for attachment in response.mentions[0].attachments] == [{
+            "kind": "image",
+            "url": "https://pbs.twimg.com/media/chart.jpg",
+            "status": "pending",
+            "error_code": None,
+            "warnings": [],
+        }]
 
     def test_mention_falls_back_to_content_translation_metadata(self, _session):
         # Pre-7.3 mentions rely on the ContentItem-level translation snapshot

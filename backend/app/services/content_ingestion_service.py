@@ -372,6 +372,9 @@ class ContentIngestionService:
             else:
                 self._seed_pipeline_state_rows_for_item(existing, source_pipelines)
 
+            from app.services.live_attachment_service import record_attachments
+            record_attachments(self.db, existing or content_item, item_data.get("attachments", []))
+
             for pipeline in source_pipelines:
                 grant_eligibility(self.db, (existing or content_item).id, pipeline, "legacy", source_id, datetime.now(timezone.utc))
 

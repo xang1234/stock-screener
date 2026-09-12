@@ -53,6 +53,72 @@ const sourceTypeLabels = {
   reddit: 'Reddit',
 };
 
+const attachmentStatusLabels = {
+  pending: 'Attachments processing',
+  processing: 'Attachments processing',
+  complete: 'Attachments ready',
+  partial: 'Attachments partially prepared',
+  failed: 'Attachments unavailable',
+};
+
+function getSafeExternalUrl(url) {
+  if (!url) return null;
+  try {
+    const parsedUrl = new URL(url, window.location.origin);
+    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:'
+      ? parsedUrl.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function AttachmentEvidence({ status, attachments }) {
+  if (!status || status === 'none') return null;
+
+  return (
+    <Box sx={{ mt: 0.75 }}>
+      <Chip
+        label={attachmentStatusLabels[status] || 'Attachment status unavailable'}
+        size="small"
+        variant="outlined"
+        color={status === 'failed' ? 'warning' : 'default'}
+        sx={{ height: 20, fontSize: '0.68rem', mb: attachments?.length ? 0.5 : 0 }}
+      />
+      {attachments?.map((attachment) => {
+        const safeUrl = getSafeExternalUrl(attachment.url);
+        const attachmentLabel = attachment.kind === 'image' ? 'Image attachment' : 'Linked article';
+        return (
+          <Box key={`${attachment.kind}-${attachment.url}`} sx={{ fontSize: '0.72rem', lineHeight: 1.45 }}>
+            {safeUrl ? (
+              <Link href={safeUrl} target="_blank" rel="noopener noreferrer">
+                {attachmentLabel}
+              </Link>
+            ) : (
+              <Typography component="span" variant="caption">{attachmentLabel}</Typography>
+            )}
+            {attachment.status && attachment.status !== 'complete' && (
+              <Typography component="span" variant="caption" color="text.secondary">
+                {' '}({attachment.status})
+              </Typography>
+            )}
+            {attachment.error_code && (
+              <Typography variant="caption" color="text.secondary" display="block">
+                Attachment unavailable: {attachment.error_code}
+              </Typography>
+            )}
+            {attachment.warnings?.map((warning) => (
+              <Typography key={warning} variant="caption" color="text.secondary" display="block">
+                Attachment note: {warning}
+              </Typography>
+            ))}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
 function ThemeSourcesModal({ open, onClose, themeId, themeName }) {
   const { data: mentionsData, isLoading, error } = useQuery({
     queryKey: ['themeMentions', themeId],
@@ -168,6 +234,20 @@ function ThemeSourcesModal({ open, onClose, themeId, themeName }) {
                       </TableCell>
 
                       <TableCell>
+                        {mention.claim_support?.theme === 'inferred' && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Theme inferred from source context
+                          </Typography>
+                        )}
+                        {mention.development && (
+                          <Typography variant="body2" sx={{ mb: 0.75 }}>
+                            <strong>Development: </strong>{mention.development}
+                          </Typography>
+                        )}
+                        <AttachmentEvidence
+                          status={mention.attachment_status}
+                          attachments={mention.attachments}
+                        />
                         <TranslatedText
                           originalText={mention.excerpt}
                           translatedText={mention.translated_excerpt}

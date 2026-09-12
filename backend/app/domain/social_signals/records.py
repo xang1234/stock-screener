@@ -5,12 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from hashlib import sha256
+import json
+import re
 from typing import Any, Literal, Mapping
-
+from urllib.parse import urlparse
 
 SUPPORTED_PROVIDERS = frozenset({"official", "xui"})
 SUPPORTED_MARKETS = frozenset({"US", "HK", "CN", "JP", "TW"})
 _MAX_CLOCK_SKEW = timedelta(minutes=5)
+_MAX_PREPARED_EVIDENCE = 10
+_MAX_PREPARED_EVIDENCE_CHARACTERS = 6_000
+_MAX_EVIDENCE_PROVENANCE_CHARACTERS = 8_192
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +108,116 @@ class SocialCollectionProgress:
 
 
 @dataclass(frozen=True, slots=True)
+class SocialAttachmentRef:
+    """One source-owned attachment; its parent remains the social post."""
+
+    kind: Literal["image", "article"]
+    url: str
+
+    def __post_init__(self) -> None:
+        _choice(self.kind, {"image", "article"}, "attachment_kind")
+        _required(self.url, "attachment_url")
+        parsed = urlparse(self.url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("invalid_attachment_url")
+
+
+def _attachment_refs(value: object) -> tuple[SocialAttachmentRef, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (tuple, list)):
+        raise TypeError("invalid_attachments")
+    refs: list[SocialAttachmentRef] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in value:
+        if isinstance(raw, SocialAttachmentRef):
+            ref = raw
+        elif isinstance(raw, Mapping) and set(raw) == {"kind", "url"}:
+            ref = SocialAttachmentRef(kind=raw["kind"], url=raw["url"])
+        else:
+            raise ValueError("invalid_attachment")
+        key = (ref.kind, ref.url)
+        if key not in seen:
+            seen.add(key)
+            refs.append(ref)
+    return tuple(refs)
+
+
+@dataclass(frozen=True, slots=True)
+class SocialPreparedEvidence:
+    """Prepared attachment evidence pinned into a new social work generation."""
+
+    id: str
+    kind: Literal["image", "article"]
+    url: str
+    text: str
+    original_text_sha256: str
+    text_sha256: str
+    available_at: datetime
+    provenance_json: str
+
+    def __post_init__(self) -> None:
+        for field in ("id", "original_text_sha256", "text_sha256"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise ValueError(f"invalid_evidence_{field}")
+        _choice(self.kind, {"image", "article"}, "prepared_evidence_kind")
+        SocialAttachmentRef(self.kind, self.url)
+        _required(self.text, "prepared_evidence_text")
+        if sha256(self.text.encode()).hexdigest() != self.text_sha256:
+            raise ValueError("prepared_evidence_text_hash_mismatch")
+        _utc(self.available_at, "prepared_evidence_available_at")
+        if (not isinstance(self.provenance_json, str) or not self.provenance_json
+                or len(self.provenance_json) > _MAX_EVIDENCE_PROVENANCE_CHARACTERS):
+            raise ValueError("invalid_evidence_provenance")
+        try:
+            provenance = json.loads(self.provenance_json)
+        except (TypeError, ValueError):
+            raise ValueError("invalid_evidence_provenance") from None
+        if not isinstance(provenance, dict):
+            raise ValueError("invalid_evidence_provenance")
+
+
+def _prepared_evidence(value: object) -> tuple[SocialPreparedEvidence, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (tuple, list)):
+        raise TypeError("invalid_prepared_evidence")
+    if len(value) > _MAX_PREPARED_EVIDENCE:
+        raise ValueError("too_many_prepared_evidence")
+    fields = {
+        "id", "kind", "url", "text", "original_text_sha256", "text_sha256",
+        "available_at", "provenance_json",
+    }
+    evidence: list[SocialPreparedEvidence] = []
+    seen: set[str] = set()
+    for raw in value:
+        if isinstance(raw, SocialPreparedEvidence):
+            item = raw
+        elif isinstance(raw, Mapping) and set(raw) == fields:
+            available_at = raw["available_at"]
+            if isinstance(available_at, str):
+                try:
+                    available_at = datetime.fromisoformat(available_at)
+                except ValueError as exc:
+                    raise ValueError("invalid_evidence_available_at") from exc
+            item = SocialPreparedEvidence(
+                id=raw["id"], kind=raw["kind"], url=raw["url"], text=raw["text"],
+                original_text_sha256=raw["original_text_sha256"], text_sha256=raw["text_sha256"],
+                available_at=available_at, provenance_json=raw["provenance_json"],
+            )
+        else:
+            raise ValueError("invalid_prepared_evidence")
+        if item.id in seen:
+            raise ValueError("duplicate_prepared_evidence")
+        seen.add(item.id)
+        evidence.append(item)
+    if sum(len(item.text) for item in evidence) > _MAX_PREPARED_EVIDENCE_CHARACTERS:
+        raise ValueError("prepared_evidence_text_limit")
+    return tuple(evidence)
+
+
+@dataclass(frozen=True, slots=True)
 class SocialPostRecord:
     provider: str
     provider_post_id: str
@@ -123,6 +239,9 @@ class SocialPostRecord:
     # Saved extraction judgments. No scorer infers a thesis or a copied claim.
     has_new_thesis: bool | None = None
     canonical_claim_key: str | None = None
+    attachments: tuple[SocialAttachmentRef, ...] = ()
+    prepared_evidence: tuple[SocialPreparedEvidence, ...] = ()
+    evidence_digest: str | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in SUPPORTED_PROVIDERS:
@@ -147,6 +266,14 @@ class SocialPostRecord:
             _required(self.canonical_url, "canonical_url")
         if self.canonical_claim_key is not None:
             _required(self.canonical_claim_key, "canonical_claim_key")
+        object.__setattr__(self, "attachments", _attachment_refs(self.attachments))
+        prepared_evidence = _prepared_evidence(self.prepared_evidence)
+        object.__setattr__(self, "prepared_evidence", prepared_evidence)
+        if self.evidence_digest is not None:
+            if not isinstance(self.evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", self.evidence_digest):
+                raise ValueError("invalid_evidence_digest")
+        if bool(prepared_evidence) != bool(self.evidence_digest):
+            raise ValueError("incomplete_prepared_evidence_snapshot")
 
     @classmethod
     def from_untrusted(
@@ -161,6 +288,7 @@ class SocialPostRecord:
             "tweet_id", "id", "provider_post_id", "created_at", "text", "url",
             "author_handle", "username", "likes", "reposts", "replies", "quotes",
             "bookmarks", "views", "canonical_url", "is_repost", "quoted_text",
+            "attachments",
         }
         unexpected = set(payload) - allowed
         if unexpected:
@@ -193,6 +321,7 @@ class SocialPostRecord:
             canonical_url=payload.get("canonical_url"),
             is_repost=bool(payload.get("is_repost", False)),
             quoted_text=payload.get("quoted_text"),
+            attachments=_attachment_refs(payload.get("attachments")),
         )
 
 
@@ -363,6 +492,7 @@ class ExtractionClaim:
     excerpt: str
     support: Literal["supported", "uncertain", "unsupported"]
     duplicate_of_post_ids: tuple[str, ...]
+    evidence_id: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("post_id", "theme_key", "raw_theme", "company_token", "relationship", "excerpt"):
@@ -371,6 +501,11 @@ class ExtractionClaim:
         _deeply_immutable(self.duplicate_of_post_ids, "duplicate_of_post_ids")
         for post_id in self.duplicate_of_post_ids:
             _required(post_id, "duplicate_post_id")
+        if self.evidence_id is not None and (
+            not isinstance(self.evidence_id, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", self.evidence_id)
+        ):
+            raise ValueError("invalid_evidence_id")
 
 
 @dataclass(frozen=True, slots=True)

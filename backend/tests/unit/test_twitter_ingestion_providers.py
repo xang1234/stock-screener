@@ -103,8 +103,9 @@ def test_official_fetcher_maps_user_timeline(monkeypatch: pytest.MonkeyPatch) ->
     timeline_url, timeline_params = calls[1]
     assert timeline_url.endswith("/2/users/42/tweets")
     assert timeline_params["start_time"] == "2026-02-28T00:00:00Z"
-    assert timeline_params["tweet.fields"] == "created_at,author_id"
-    assert timeline_params["expansions"] == "author_id"
+    assert timeline_params["tweet.fields"] == "created_at,author_id,entities"
+    assert timeline_params["expansions"] == "author_id,attachments.media_keys"
+    assert timeline_params["media.fields"] == "media_key,type,url"
 
 
 def test_official_fetcher_maps_list_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,6 +143,43 @@ def test_official_fetcher_maps_list_timeline(monkeypatch: pytest.MonkeyPatch) ->
 
     assert rows[0]["url"] == "https://x.com/bob/status/200"
     assert rows[0]["author"] == "@bob"
+
+
+def test_official_fetcher_preserves_photo_and_expanded_article_references(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "twitter_bearer_token", "token")
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        text = "ok"
+
+        def json(self):
+            return {
+                "data": [{
+                    "id": "200", "text": "linked research", "created_at": "2026-03-01T01:00:00Z",
+                    "author_id": "7", "attachments": {"media_keys": ["photo", "video"]},
+                    "entities": {"urls": [{"expanded_url": "https://publisher.example.com/report"}]},
+                }],
+                "meta": {"newest_id": "200"},
+                "includes": {
+                    "users": [{"id": "7", "username": "bob"}],
+                    "media": [
+                        {"media_key": "photo", "type": "photo", "url": "https://pbs.twimg.com/media/chart.jpg"},
+                        {"media_key": "video", "type": "video", "preview_image_url": "https://pbs.twimg.com/ext_tw_video_thumb/video.jpg"},
+                    ],
+                },
+            }
+
+    monkeypatch.setattr(provider_mod.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    rows = OfficialXTwitterFetcher().fetch(
+        ContentSource(name="Tech List", source_type="twitter", url="https://x.com/i/lists/84839422")
+    )
+
+    assert rows[0].get("attachments") == [
+        {"kind": "image", "url": "https://pbs.twimg.com/media/chart.jpg"},
+        {"kind": "article", "url": "https://publisher.example.com/report"},
+    ]
 
 
 def test_official_fetcher_requires_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:

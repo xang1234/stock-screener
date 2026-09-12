@@ -1,12 +1,14 @@
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from hashlib import sha256
 
 import pytest
 
 from app.domain.social_signals.records import (
     ComponentScore,
     SocialPostRecord,
+    SocialPreparedEvidence,
     SocialReadRequest,
     SocialSnapshotRecord,
     SocialSourceOutcome,
@@ -113,6 +115,63 @@ def test_untrusted_post_rejects_unknown_payload_fields():
             source_id="1522014550211457024",
             observed_at=NOW,
         )
+
+
+def test_untrusted_post_normalizes_immutable_attachment_references():
+    post = SocialPostRecord.from_untrusted(
+        {
+            "tweet_id": "101",
+            "text": "$NVDA attached evidence",
+            "url": "https://x.com/a/status/101",
+            "author_handle": "a",
+            "created_at": "2026-09-05T00:00:00Z",
+            "attachments": [
+                {"kind": "image", "url": "https://pbs.twimg.com/media/chart.jpg"},
+                {"kind": "article", "url": "https://example.com/research"},
+            ],
+        },
+        provider="xui",
+        source_id="1522014550211457024",
+        observed_at=NOW,
+    )
+
+    assert [(attachment.kind, attachment.url) for attachment in post.attachments] == [
+        ("image", "https://pbs.twimg.com/media/chart.jpg"),
+        ("article", "https://example.com/research"),
+    ]
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        post.attachments[0].url = "https://example.com/replaced"
+
+
+def test_prepared_evidence_rejects_a_tampered_text_hash():
+    with pytest.raises(ValueError, match="text_hash_mismatch"):
+        SocialPreparedEvidence(
+            id="a" * 64,
+            kind="image",
+            url="https://pbs.twimg.com/media/chart.jpg",
+            text="evidence",
+            original_text_sha256="b" * 64,
+            text_sha256="0" * 64,
+            available_at=NOW,
+            provenance_json='{"policy_version":"live-attachment-v1"}',
+        )
+
+
+def test_post_rejects_oversized_prepared_evidence():
+    text = "x" * 6_001
+    evidence = SocialPreparedEvidence(
+        id="a" * 64,
+        kind="image",
+        url="https://pbs.twimg.com/media/chart.jpg",
+        text=text,
+        original_text_sha256="b" * 64,
+        text_sha256=sha256(text.encode()).hexdigest(),
+        available_at=NOW,
+        provenance_json='{"policy_version":"live-attachment-v1"}',
+    )
+
+    with pytest.raises(ValueError, match="text_limit"):
+        _post(prepared_evidence=(evidence,), evidence_digest="c" * 64)
 
 
 def test_records_are_immutable():

@@ -76,6 +76,65 @@ def test_social_writer_reuses_legacy_twitter_content_identity(store):
         assert db.query(SocialPostSource).count() == 1
 
 
+def test_social_attachment_is_persisted_as_parent_bound_child_evidence(store):
+    """Dropping attachment persistence would leave a later social refresh text-only."""
+    from app.domain.social_signals.records import SocialAttachmentRef
+    from app.models.theme import ContentAttachment
+
+    original = batch()
+    attached = replace(
+        original,
+        posts=(replace(original.posts[0], attachments=(SocialAttachmentRef(
+            "image", "https://pbs.twimg.com/media/example.jpg"
+        ),)),),
+    )
+
+    writer(store).persist_observations(attached)
+
+    with store() as db:
+        evidence = db.query(ContentAttachment).one()
+        assert (evidence.kind, evidence.url, evidence.status) == (
+            "image", "https://pbs.twimg.com/media/example.jpg", "pending"
+        )
+
+
+def test_next_social_generation_rehydrates_prepared_evidence_for_a_retained_parent(store):
+    """Ignoring retained parents would strand a late image result until X repeats the post."""
+    from app.domain.social_signals.records import SocialAttachmentRef
+    from app.infra.db.repositories.social_refresh_support import SocialScoringEvidenceReader
+    from app.models.theme import ContentAttachment
+
+    w = writer(store)
+    w.create_run("old", NOW)
+    initial = batch()
+    initial = replace(initial, posts=(replace(initial.posts[0], attachments=(SocialAttachmentRef(
+        "image", "https://pbs.twimg.com/media/nebius.jpg"
+    ),)),))
+    w.persist_observations(initial, run_id="old")
+    w.persist_observations(batch(2, post_id="200"), run_id="old")
+    with store.begin() as db:
+        attachment = db.query(ContentAttachment).one()
+        attachment.status = "complete"
+        attachment.prepared_at = NOW + timedelta(minutes=30)
+        attachment.original_text = "Nebius slide"
+        attachment.prepared_text = "Nebius ($NBIS) is expanding AI cloud capacity."
+        attachment.content_sha256 = "a" * 64
+        attachment.final_url = attachment.url
+        attachment.provenance = {"policy_version": "live-attachment-v1"}
+
+    later = NOW + timedelta(hours=1)
+    w.clock = lambda: later + timedelta(minutes=1)
+    w.create_run("new", later)
+    w.persist_observations(batch(1, post_id="300", age=1), run_id="new")
+    w.persist_observations(batch(2, post_id="400", age=1), run_id="new")
+
+    retained = SocialScoringEvidenceReader(store).retained_posts("new", later)
+
+    retained_post = next(post for _, post in retained if post.provider_post_id == "100")
+    assert retained_post.evidence_digest is not None
+    assert retained_post.prepared_evidence[0].text == "Nebius ($NBIS) is expanding AI cloud capacity."
+
+
 def test_newer_partial_metrics_preserve_missing_and_older_cannot_overwrite(store):
     w = writer(store)
     w.persist_observations(batch())
