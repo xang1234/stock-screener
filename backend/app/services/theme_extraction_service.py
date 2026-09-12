@@ -527,7 +527,7 @@ class ThemeExtractionService:
         self, text: str, normalized_text: str, alias: str,
     ) -> bool:
         """Match a company alias, adding entity context for common words."""
-        if alias in self.AMBIGUOUS_COMPANY_NAME_ALIASES or len(alias.split()) == 1:
+        if alias in self.AMBIGUOUS_COMPANY_NAME_ALIASES:
             return self._has_ambiguous_company_name_context(text, alias)
         return f" {alias} " in normalized_text
 
@@ -795,6 +795,10 @@ Example themes for this pipeline: {examples_str}
 
             # Validate and clean extractions
             cleaned_mentions = []
+            ticker_source_text = "\n".join([
+                content_item.title or "", content,
+                *(e.text for e in grounding_context.evidence),
+            ])
             for mention in mentions:
                 if not mention.get("theme"):
                     continue
@@ -806,7 +810,7 @@ Example themes for this pipeline: {examples_str}
 
                 # Clean tickers
                 tickers = self._clean_tickers(
-                    mention.get("tickers", []), source_text=content_item.content or ""
+                    mention.get("tickers", []), source_text=ticker_source_text
                 )
                 company_name_texts = [mention.get("excerpt", "")]
                 if not self._is_generated_capture_title(content_item.title):

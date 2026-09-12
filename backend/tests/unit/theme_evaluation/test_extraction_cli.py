@@ -260,3 +260,35 @@ def test_generate_validates_and_passes_grounding_packet(tmp_path, capsys, monkey
     assert generated["grounding_manifest"] == validated["manifest"]
     assert generated["grounding_manifest"]["approval"] == approval
     assert "run_path" in json.loads(capsys.readouterr().out)
+
+
+def test_generate_completion_uses_requested_pipeline_coverage(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services.theme_evaluation import extraction_cli as cli
+    from app.services.theme_evaluation import extraction_runtime as runtime
+
+    approval = {"bundle_id": "a" * 64, "preparation_id": "b" * 64, "assessment_id": "c" * 64,
+        "reviewer": "Reviewer", "approved_at": "2026-09-01T00:00:00Z", "reason": "Reviewed",
+        "accepted_result_ids": []}
+    manifest = {key: approval[key] for key in ("bundle_id", "preparation_id", "assessment_id")}
+    manifest["approval"] = approval
+    run = {"manifest": manifest, "inputs": [SimpleNamespace(input_id="one")], "records": [], "run_id": "run"}
+    monkeypatch.setattr(cli, "load_extraction_run", lambda path: run)
+    captured = {}
+    def save(root, **kwargs):
+        captured.update(kwargs)
+        return tmp_path
+    monkeypatch.setattr(cli, "save_extraction_run", save)
+    monkeypatch.setattr(cli, "verify_extraction_run", lambda path: {})
+    for pipelines in (["technical"], ["fundamental"], ["technical", "fundamental"]):
+        for status in ("success", "failed"):
+            monkeypatch.setattr(runtime, "generate_extractions", lambda *args, status=status, pipelines=pipelines, **kwargs: [
+                SimpleNamespace(input_id="one", pipeline=p, status=status) for p in pipelines])
+            argv = ["generate", "--run", str(tmp_path), "--output-root", str(tmp_path),
+                    "--allow-model-calls", "--code-revision", "test"]
+            for pipeline in pipelines:
+                argv.extend(["--pipeline", pipeline])
+            cli._run(cli._parser().parse_args(argv))
+            assert captured["manifest"]["extraction_status"] == (
+                "complete" if status == "success" else "partial")

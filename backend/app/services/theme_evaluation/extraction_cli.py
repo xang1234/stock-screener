@@ -114,6 +114,11 @@ def _run(args):
         raise ValueError("approval_evidence_mismatch")
     if not approval.reviewer.strip() or not approval.reason.strip():
         raise ValueError("approval_attribution_required")
+    requested_pipelines = (
+        (args.pipeline or ["technical", "fundamental"])
+        if args.command == "generate"
+        else run["manifest"].get("requested_pipelines", ["technical", "fundamental"])
+    )
     if args.command == "import-extractions":
         imported = json.loads(args.records.read_text())
         if imported["input_run_id"] != run["run_id"]:
@@ -150,7 +155,7 @@ def _run(args):
             application_database_url=os.environ.get("DATABASE_URL"),
             reference_manifest=reference,
             model=args.model,
-            pipelines=args.pipeline or ["technical", "fundamental"],
+            pipelines=requested_pipelines,
             max_documents=args.max_documents,
             code_revision=args.code_revision,
             allow_model_calls=True,
@@ -162,10 +167,13 @@ def _run(args):
         **run["manifest"],
         "input_run_id": run["run_id"],
         "extraction_status": "partial",
+        "requested_pipelines": requested_pipelines,
     }
+    expected = {(item.input_id, pipeline) for item in run["inputs"] for pipeline in requested_pipelines}
     if (
-        run["inputs"]
-        and len(records) == len(run["inputs"]) * 2
+        expected
+        and len(records) == len(expected)
+        and {(r.input_id, r.pipeline) for r in records} == expected
         and all(r.status == "success" for r in records)
     ):
         manifest["extraction_status"] = "complete"
