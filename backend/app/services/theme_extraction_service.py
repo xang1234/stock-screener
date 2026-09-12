@@ -901,8 +901,10 @@ Example themes for this pipeline: {examples_str}
             content_item, verify_claims=getattr(self, "claim_review_enabled", True),
         )
 
-        from app.services.theme_mention_replacement import remove_previous_legacy_mentions
-        remove_previous_legacy_mentions(self.db, content_item.id, self.pipeline)
+        from app.services.theme_mention_replacement import (
+            remove_previous_legacy_mentions, refresh_constituent_confidence,
+        )
+        affected = remove_previous_legacy_mentions(self.db, content_item.id, self.pipeline)
 
         mention_count = 0
         for mention_data in mentions:
@@ -940,6 +942,7 @@ Example themes for this pipeline: {examples_str}
             mention_count += 1
 
             self._update_theme_constituents(mention_data, cluster)
+            affected.update((cluster.id, symbol) for symbol in mention_data["tickers"])
 
             # Auto-classify new L2 themes to L1 parent via centroid similarity
             if cluster.parent_cluster_id is None and not cluster.is_l1:
@@ -958,6 +961,8 @@ Example themes for this pipeline: {examples_str}
                     except Exception:
                         pass
 
+        self.db.flush()
+        refresh_constituent_confidence(self.db, affected)
         return mention_count
 
     def _get_match_threshold_config(self) -> MatchThresholdConfig:
@@ -1801,6 +1806,7 @@ Example themes for this pipeline: {examples_str}
                 # Update confidence (weighted average)
                 constituent.confidence = (
                     constituent.confidence * 0.8 + mention_data["confidence"] * 0.2
+                    if constituent.mention_count > 1 else mention_data["confidence"]
                 )
 
     def _get_pipeline_source_ids(self) -> list[int]:

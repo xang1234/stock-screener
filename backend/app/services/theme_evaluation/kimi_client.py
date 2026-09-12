@@ -2,15 +2,18 @@
 
 import json
 import math
+import os
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from uuid import uuid4
 
 import httpx
 
+from app.config import settings
+
 from .preparation_failures import PreparationFailure
 
-_OPENCODE_GO_ENDPOINT = "https://opencode.ai/zen/go/v1/chat/completions"
+_OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1"
 _MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024
 _MAX_SESSION_ID_LENGTH = 128
 
@@ -57,6 +60,9 @@ class OpenCodeGoKimi:
     ):
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("opencode_go_api_key_required")
+        base = (getattr(settings, "opencode_go_api_base", None)
+                or os.environ.get("OPENCODE_GO_API_BASE") or _OPENCODE_GO_BASE)
+        self._endpoint = base.rstrip("/") + "/chat/completions"
         self._api_key = api_key.strip()
         self._transport = transport
         self._session_id = _session_id(session_id)
@@ -82,7 +88,7 @@ class OpenCodeGoKimi:
                 ) as client,
                 client.stream(
                     "POST",
-                    _OPENCODE_GO_ENDPOINT,
+                    self._endpoint,
                     headers={
                         "Authorization": f"Bearer {self._api_key}",
                         "User-Agent": "stockscreen-evidence-preparation/1.0",

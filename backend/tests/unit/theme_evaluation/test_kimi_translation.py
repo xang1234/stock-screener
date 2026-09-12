@@ -182,3 +182,16 @@ def test_changed_or_duplicated_quantity_markers_are_rejected(output):
     )
     with pytest.raises(ValueError, match="quantity"):
         client("100억원", "ko", "en")
+
+
+def test_kimi_transport_uses_configured_base(monkeypatch):
+    from app.config import settings
+    from app.services.theme_evaluation.kimi_client import OpenCodeGoKimi
+    monkeypatch.setattr(settings, "opencode_go_api_base", "https://gateway.example/v1/")
+    seen = []
+    def handle(request):
+        seen.append(str(request.url))
+        return response({"ok": True})
+    client = OpenCodeGoKimi("test-key", transport=httpx.MockTransport(handle))
+    assert client.complete_json([], max_tokens=10) == {"ok": True}
+    assert seen == ["https://gateway.example/v1/chat/completions"]

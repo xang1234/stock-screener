@@ -213,7 +213,7 @@ def build_live_grounding(db, item, *, now=None, snapshot=None):
         else attachment_snapshot(db, item.id, as_of=now)
     )
     company_text = "\n".join(
-        [item.content or "", *(e["text"] for e in snapshot["evidence"])]
+        [item.title or "", item.content or "", *(e["text"] for e in snapshot["evidence"])]
     )
     facts = build_company_context(db, company_text, as_of=now)
     evidence = [

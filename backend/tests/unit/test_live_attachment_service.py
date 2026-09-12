@@ -570,3 +570,79 @@ def test_social_snapshot_bounds_large_provenance(sessions, retained):
         assert summary["model"] == "kimi-k2.6"
         assert len(summary["full_provenance_sha256"]) == 64
         assert len(db.query(ContentAttachment).one().provenance["quantities"]) == 20
+
+
+def test_live_company_lookup_includes_headline(sessions, monkeypatch):
+    from app.services import live_attachment_service as service
+    seen = []
+    monkeypatch.setattr(service, "build_company_context", lambda db, text, **kw:
+        seen.append(text) or {"companies": [], "warnings": []})
+    with sessions() as db:
+        item = ContentItem(id=99, title="$NBIS expansion", content="Details pending")
+        build_live_grounding(db, item)
+    assert "$NBIS expansion" in seen[0]
+
+
+@pytest.mark.parametrize("counter", [False, True])
+def test_replacement_removes_confidence_and_alias_contributions(sessions, counter):
+    from app.models.theme import (
+        ThemeAlias,
+        ThemeCluster,
+        ThemeConstituent,
+        ThemeMention,
+    )
+    from app.services.theme_mention_replacement import remove_previous_legacy_mentions
+
+    with sessions.begin() as db:
+        cluster = ThemeCluster(name="AI", display_name="AI", canonical_key="ai", pipeline="technical")
+        db.add(cluster)
+        db.flush()
+        items = [ContentItem(source_type="news", content="AI") for _ in range(2)]
+        db.add_all(items)
+        db.flush()
+        for item, confidence in zip(items, [.4, .8]):
+            db.add(ThemeMention(content_item_id=item.id, theme_cluster_id=cluster.id,
+                pipeline="technical", raw_theme="AI", canonical_theme="ai", tickers=["NBIS"],
+                confidence=confidence, source_type="news",
+                match_fallback_reason="alias_match_below_auto_attach_threshold"
+                if counter and item == items[1] else None))
+        alias = ThemeAlias(theme_cluster_id=cluster.id, pipeline="technical", alias_text="AI",
+            alias_key="ai", source="llm_extraction", confidence=.2 if counter else .6, evidence_count=2)
+        constituent = ThemeConstituent(theme_cluster_id=cluster.id, symbol="NBIS",
+            source="llm_extraction", confidence=.48, mention_count=2)
+        db.add_all([alias, constituent])
+        db.flush()
+        remove_previous_legacy_mentions(db, items[1].id, "technical")
+        assert constituent.mention_count == 1
+        assert constituent.confidence == pytest.approx(.4)
+        assert alias.evidence_count == 1
+        assert alias.confidence == pytest.approx(.4)
+        from app.infra.db.repositories.theme_alias_repo import SqlThemeAliasRepository
+        from app.services.theme_extraction_service import ThemeExtractionService
+        from app.services.theme_mention_replacement import (
+            refresh_constituent_confidence,
+        )
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db
+        for _ in range(3):
+            repo = SqlThemeAliasRepository(db)
+            if counter:
+                repo.record_counter_evidence(pipeline="technical", alias_key="ai")
+            else:
+                repo.record_observation(theme_cluster_id=cluster.id, pipeline="technical",
+                    alias_text="AI", confidence=.8)
+            db.add(ThemeMention(content_item_id=items[1].id, theme_cluster_id=cluster.id,
+                pipeline="technical", raw_theme="AI", tickers=["NBIS"], confidence=.8,
+                source_type="news", match_fallback_reason=
+                "alias_match_below_auto_attach_threshold" if counter else None))
+            service._update_theme_constituents({"tickers": ["NBIS"], "confidence": .8}, cluster)
+            db.flush()
+            refresh_constituent_confidence(db, {(cluster.id, "NBIS")})
+            assert constituent.mention_count == 2
+            assert constituent.confidence == pytest.approx(.48)
+            assert alias.evidence_count == 2
+            assert alias.confidence == pytest.approx(.2 if counter else .6)
+            remove_previous_legacy_mentions(db, items[1].id, "technical")
+        remove_previous_legacy_mentions(db, items[0].id, "technical")
+        assert alias.evidence_count == 0
+        assert alias.confidence == 0
