@@ -35,7 +35,13 @@ def utc(value):
 
 
 def serialized(value):
-    return json.loads(json.dumps(asdict(value), default=lambda v: v.isoformat() if isinstance(v, datetime) else str(v)))
+    result = json.loads(json.dumps(asdict(value), default=lambda v: v.isoformat() if isinstance(v, datetime) else str(v)))
+    # Empty optional evidence must not alter legacy frozen input shape or hashes.
+    if isinstance(value, SocialPostRecord):
+        for field in ("attachments", "prepared_evidence", "evidence_digest"):
+            if not result.get(field):
+                result.pop(field, None)
+    return result
 
 
 def _restore_record(kind, value):
@@ -71,6 +77,23 @@ class SocialSignalWriter:
             calendar = MarketCalendarService(use_shared_cache=False)
             confirmation_reader_factory = lambda db: SocialConfirmationReader(db, calendar=calendar)
         self.confirmation_reader_factory = confirmation_reader_factory
+
+    @staticmethod
+    def _with_prepared_evidence(db, item, post, *, as_of):
+        """Freeze only evidence prepared by the generation's observation time."""
+        from app.domain.social_signals.records import SocialPreparedEvidence, prepared_provenance_json
+        from app.services.live_attachment_service import attachment_snapshot
+
+        snapshot = attachment_snapshot(db, item.id, as_of=as_of)
+        if not snapshot["evidence"]:
+            return post
+        evidence = tuple(SocialPreparedEvidence(
+            id=value["id"], kind=value["kind"], url=value["url"], text=value["text"],
+            original_text_sha256=value["original_text_sha256"], text_sha256=value["text_sha256"],
+            available_at=datetime.fromisoformat(value["available_at"]),
+            provenance_json=prepared_provenance_json(value["provenance"]),
+        ) for value in snapshot["evidence"])
+        return replace(post, prepared_evidence=evidence, evidence_digest=snapshot["revision"])
 
     def create_run(self, run_id, as_of):
         validate_utc_timestamp(as_of, "as_of")
@@ -344,7 +367,7 @@ class SocialSignalWriter:
                     if existing["request_id"] != batch.request.request_id:
                         raise ValueError("source_already_collected")
                     if (existing["request"] != serialized(batch.request)
-                            or [i["post"] for i in existing["inputs"]] != [serialized(p) for p in batch.posts]
+                            or [i.get("source_post", i["post"]) for i in existing["inputs"]] != [serialized(p) for p in batch.posts]
                             or run.source_outcomes_json[batch.request.source_id] != serialized(replace(batch.outcome,
                                 committed_progress=existing["committed_progress"]))):
                         raise ValueError("duplicate_delivery_mismatch")
@@ -371,6 +394,8 @@ class SocialSignalWriter:
                         content=post.text, url=post.url, author=post.author_handle, published_at=post.created_at, fetched_at=post.observed_at)
                     db.add(item)
                     db.flush()
+                from app.services.live_attachment_service import record_attachments
+                record_attachments(db, item, post.attachments, observed_at=post.observed_at)
                 membership = db.get(SocialPostSource, (item.id, source.content_source_id))
                 if membership is None:
                     db.add(SocialPostSource(content_item_id=item.id, content_source_id=source.content_source_id, observed_at=post.observed_at))
@@ -398,7 +423,13 @@ class SocialSignalWriter:
                         if getattr(post, field) is not None:
                             setattr(metrics, field, getattr(post, field))
                     metrics.observed_at, metrics.provider = post.observed_at, post.provider
-                observations.append({"content_item_id": item.id, "post": serialized(post)})
+                frozen_post = self._with_prepared_evidence(
+                    db, item, post, as_of=batch.request.observed_at
+                )
+                observation = {"content_item_id": item.id, "post": serialized(frozen_post)}
+                if frozen_post != post:
+                    observation["source_post"] = serialized(post)
+                observations.append(observation)
                 self._map_cashtags(db, item.id, post.text)
             progress = batch.outcome.proposed_progress if batch.outcome.read_status == "success" else None
             outcome = replace(batch.outcome, committed_progress=progress)

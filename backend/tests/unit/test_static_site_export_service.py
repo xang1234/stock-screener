@@ -63,6 +63,7 @@ from app.services.static_groups_rrg_export import (
     StaticGroupsRRGPayloadBuilder,
     StaticGroupsRRGUnavailableError,
 )
+from app.services.static_options_section import StaticOptionsSection
 from app.services.static_site_export_service import (
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
     STATIC_DEFAULT_SCAN_FILTERS_FALLBACK,
@@ -111,7 +112,10 @@ def service_and_session_factory():
         )
         db.commit()
     try:
-        yield StaticSiteExportService(session_factory), session_factory
+        yield StaticSiteExportService(
+            session_factory,
+            options_section=StaticOptionsSection(enabled=False),
+        ), session_factory
     finally:
         engine.dispose()
 

@@ -65,7 +65,9 @@ TECHNICAL_PIPELINE = PipelineConfig(
     description="Price action, momentum, RS, chart patterns, breakouts",
 
     extraction_prompt_additions="""
-FOCUS ON TECHNICAL/PRICE-ACTION THEMES:
+FOCUS ON TECHNICAL/PRICE-ACTION EVIDENCE:
+Keep theme as the recurring investment exposure. Put the following observations
+in development; do not add "Breakouts", "RS Leaders" or "Momentum" to theme names.
 - Stage 2 breakouts and momentum plays
 - Relative strength leaders
 - Chart pattern setups (cup & handle, VCP, etc.)
@@ -80,14 +82,11 @@ AVOID extracting fundamental-only themes like:
 """,
 
     theme_examples=[
-        "AI Infrastructure Breakouts",
-        "Semiconductor RS Leaders",
-        "Defense Sector Stage 2",
-        "Nuclear Energy Momentum",
-        "Bitcoin Miners Breakout",
-        "China Tech Recovery",
-        "Small Cap Momentum",
-        "High RS Growth Stocks",
+        "Memory",
+        "Optics",
+        "Semiconductor Testing",
+        "Nuclear Energy",
+        "Bitcoin Miners",
     ],
 
     # Technical pipeline weights - emphasize velocity and RS
@@ -128,7 +127,9 @@ FUNDAMENTAL_PIPELINE = PipelineConfig(
     description="Earnings, valuation, macro themes, analyst coverage",
 
     extraction_prompt_additions="""
-FOCUS ON FUNDAMENTAL/MACRO THEMES:
+FOCUS ON FUNDAMENTAL/MACRO EVIDENCE:
+Keep theme as the recurring investment exposure. Put the following catalysts
+in development; do not turn an earnings event or demand change into a theme name.
 - Earnings growth stories (EPS acceleration, revenue beats)
 - Valuation plays (value rotations, multiple expansion)
 - Macro economic themes (inflation, rates, GDP)
@@ -145,14 +146,11 @@ AVOID extracting pure technical themes like:
 """,
 
     theme_examples=[
-        "AI Capex Beneficiaries",
-        "GLP-1 Drug Pipeline",
-        "EPS Revision Leaders",
-        "Dividend Aristocrats",
-        "FDA Approval Candidates",
-        "Nearshoring Beneficiaries",
-        "Rate Cut Winners",
-        "Inflation Hedge Plays",
+        "Memory",
+        "Optics",
+        "Semiconductor Testing",
+        "GLP-1 Drugs",
+        "Refiners",
     ],
 
     # Fundamental pipeline weights - emphasize breadth and quality

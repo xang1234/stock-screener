@@ -26,6 +26,23 @@ def _utc(value):
     return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
 
 
+def _with_latest_prepared_evidence(db, content_item_id, post, *, as_of):
+    """Make a new generation see durable prepared evidence without mutating its parent post."""
+    from app.domain.social_signals.records import SocialPreparedEvidence, prepared_provenance_json
+    from app.services.live_attachment_service import attachment_snapshot
+
+    snapshot = attachment_snapshot(db, content_item_id, as_of=as_of)
+    if not snapshot["evidence"]:
+        return post
+    evidence = tuple(SocialPreparedEvidence(
+        id=value["id"], kind=value["kind"], url=value["url"], text=value["text"],
+        original_text_sha256=value["original_text_sha256"], text_sha256=value["text_sha256"],
+        available_at=datetime.fromisoformat(value["available_at"]),
+        provenance_json=prepared_provenance_json(value["provenance"]),
+    ) for value in snapshot["evidence"])
+    return replace(post, prepared_evidence=evidence, evidence_digest=snapshot["revision"])
+
+
 class SqlSocialRefreshCatalog:
     """Read the DB-authoritative runtime and its exact enabled source generation."""
 
@@ -108,7 +125,8 @@ class SocialScoringEvidenceReader:
             ).order_by(SocialSignalRun.created_at, SocialSignalRun.id)).all()
             for generation in runs:
                 if ("replay" in generation.application_progress_json
-                        or (generation.id != current.id and _utc(generation.created_at) >= as_of)):
+                        or generation.id == current.id
+                        or _utc(generation.created_at) >= as_of):
                     continue
                 for source_id, observation in generation.application_progress_json.get("observations", {}).items():
                     if source_id not in source_ids or generation.source_outcomes_json.get(source_id, {}).get("read_status") != "success":
@@ -134,7 +152,9 @@ class SocialScoringEvidenceReader:
             canonical = self._merge_metrics_across_sources(canonical)
             unique = {}
             for (post_id, _), post in canonical.items():
-                unique[(content_ids[post_id], self._content_revision(post))] = post
+                content_id = content_ids[post_id]
+                post = _with_latest_prepared_evidence(db, content_id, post, as_of=as_of)
+                unique[(content_id, self._content_revision(post))] = post
             return tuple((content_id, post) for (content_id, _), post in sorted(unique.items()))
 
     @staticmethod

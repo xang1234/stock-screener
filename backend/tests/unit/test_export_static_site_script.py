@@ -130,6 +130,12 @@ def _stub_static_breadth_history(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _disable_options_analytics(monkeypatch):
+    """Keep refresh orchestration tests independent of optional options work."""
+    monkeypatch.setattr(export_script.settings, "options_analytics_enabled", False)
+
+
 def test_static_breadth_history_stub_preserves_default_market():
     result = export_script._ensure_breadth_history(as_of_date=date(2026, 7, 31))
 

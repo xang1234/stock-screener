@@ -100,7 +100,7 @@ class SqlThemeAliasRepository:
         if existing.first_seen_at is None:
             existing.first_seen_at = when
         # Smoothed confidence update weighted by historical observations.
-        old_count = max(1, existing.evidence_count or 1)
+        old_count = max(0, existing.evidence_count or 0)
         bounded = max(0.0, min(1.0, confidence))
         existing.confidence = ((existing.confidence * old_count) + bounded) / (old_count + 1)
         existing.evidence_count = old_count + 1
@@ -153,7 +153,7 @@ class SqlThemeAliasRepository:
         if row.first_seen_at is None:
             row.first_seen_at = when
         row.last_seen_at = when
-        old_count = max(1, row.evidence_count or 1)
+        old_count = max(0, row.evidence_count or 0)
         # Counter-evidence contributes a 0.0 confidence observation.
         row.confidence = (float(row.confidence or 0.0) * old_count) / (old_count + 1)
         row.evidence_count = old_count + 1

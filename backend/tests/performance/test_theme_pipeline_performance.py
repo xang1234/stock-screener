@@ -309,7 +309,7 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
     monkeypatch.setattr(
         ThemeExtractionService,
         "extract_from_content",
-        lambda self, content_item: [
+        lambda self, content_item, *, verify_claims=True: [
             {
                 "theme": "AI Infrastructure" if content_item.id % 2 == 0 else "Defense & Drones",
                 "tickers": ["NVDA", "AVGO"] if content_item.id % 2 == 0 else ["LMT", "NOC"],
