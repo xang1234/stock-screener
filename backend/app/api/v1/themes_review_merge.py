@@ -403,11 +403,15 @@ def deactivate_theme(
     db: Session = Depends(get_db),
 ):
     """Deactivate a theme."""
-    cluster = db.query(ThemeCluster).filter(ThemeCluster.id == theme_id).first()
+    grouping = ThemeEquivalenceService(db)
+    grouping._lock()
+    cluster = db.query(ThemeCluster).filter(
+        ThemeCluster.id == theme_id
+    ).with_for_update().first()
     if not cluster:
         raise HTTPException(status_code=404, detail="Theme not found")
 
-    group = ThemeEquivalenceService(db).snapshot(cluster.pipeline)
+    group = grouping.snapshot(cluster.pipeline)
     if len(group.members(theme_id)) > 1:
         raise HTTPException(
             status_code=409,

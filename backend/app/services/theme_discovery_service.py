@@ -1422,16 +1422,26 @@ class ThemeDiscoveryService:
         }
 
         def _apply_state_policy(cluster: ThemeCluster) -> None:
-            if self._current_group_social_lifecycle_states(cluster.id, now):
+            social_states = self._current_group_social_lifecycle_states(
+                cluster.id, now
+            )
+            state = (cluster.lifecycle_state or "candidate").strip()
+            grouped_social_reactivation = state == "dormant" and bool(
+                social_states.intersection({"active", "reactivated"})
+            )
+            if social_states and not grouped_social_reactivation:
                 result["unchanged"] += 1
                 return
             observation = self._lifecycle_snapshot(cluster.id, now=now)
-            state = (cluster.lifecycle_state or "candidate").strip()
 
             to_state: str | None = None
             reason: str | None = None
             counter_field: str | None = None
-            if state in {"active", "reactivated"}:
+            if grouped_social_reactivation:
+                to_state = "reactivated"
+                reason = "grouped_social_lifecycle_evidence"
+                counter_field = "reactivation_count"
+            elif state in {"active", "reactivated"}:
                 stale_inactive = observation["days_since_last_mention"] >= thresholds["dormancy_inactivity_days"]
                 low_volume_stale = (
                     observation["mentions_30d"] <= thresholds["dormancy_min_mentions_30d"]

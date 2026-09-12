@@ -375,6 +375,53 @@ def test_dormancy_policy_honors_current_grouped_social_lifecycle(db_session):
     assert db_session.query(ThemeLifecycleTransition).count() == 0
 
 
+def test_dormant_representative_reactivates_from_grouped_social_lifecycle(
+    db_session,
+):
+    now = datetime(2026, 2, 24, 15, 55, 0)
+    member = _make_theme(
+        db_session,
+        name="Social CPO Member",
+        canonical_key="social_cpo_member",
+        state="active",
+        now=now,
+    )
+    representative = _make_theme(
+        db_session,
+        name="Social CPO Representative",
+        canonical_key="social_cpo_representative",
+        state="dormant",
+        now=now,
+    )
+    member.lifecycle_state_metadata = {
+        "social_policy_version": "social-theme-v1",
+        "social_valid_until": (
+            now.replace(tzinfo=timezone.utc) + timedelta(days=1)
+        ).isoformat(),
+    }
+    ThemeEquivalenceService(db_session).apply(
+        member.id,
+        representative.id,
+        actor="reviewer",
+        reason="Equivalent exposure",
+        key="social-lifecycle-reactivation-group",
+    )
+    db_session.commit()
+
+    result = ThemeDiscoveryService(
+        db_session, pipeline="technical"
+    ).apply_dormancy_and_reactivation_policies(now=now)
+
+    db_session.refresh(representative)
+    assert result["scanned"] == 1
+    assert result["to_reactivated"] == 1
+    assert result["unchanged"] == 0
+    assert representative.lifecycle_state == "reactivated"
+    transition = db_session.query(ThemeLifecycleTransition).one()
+    assert transition.theme_cluster_id == representative.id
+    assert transition.reason == "grouped_social_lifecycle_evidence"
+
+
 def test_dormancy_and_reactivation_policies_increment_counters(db_session):
     now = datetime(2026, 2, 24, 16, 0, 0)
     source_a = _make_source(db_session, name="Gamma Wire", source_type="news")
