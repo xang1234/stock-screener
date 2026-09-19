@@ -83,7 +83,13 @@ def normalize_yahoo_earnings_dates(
             if date_column is None:
                 continue
             raw_value = row.get(date_column)
-            if raw_value is None or pd.isna(raw_value):
+            # Only guard on None here: pd.isna on a non-scalar cell (e.g. a
+            # multi-element list) returns an array whose Boolean evaluation
+            # raises and would abort the whole lookup via the outer handler.
+            # Let pd.Timestamp reject malformed values instead — all missing
+            # scalars (NA/NaT/NaN/None) parse to NaT and are skipped by the
+            # NaT check below.
+            if raw_value is None:
                 continue
             try:
                 timestamp = pd.Timestamp(raw_value)

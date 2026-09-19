@@ -84,6 +84,23 @@ class TestNormalizeYahooEarningsDates:
         assert dates == [date(2026, 10, 2)]
         assert available is True
 
+    def test_list_like_cell_is_skipped_without_aborting_the_lookup(self):
+        """A non-scalar cell must not poison isna or abort later rows."""
+        frame = pd.DataFrame(
+            {
+                "Earnings Date": [
+                    ["bad", "2026-09-01"],
+                    datetime(2026, 10, 2, 16, 0),
+                ],
+                "EPS Estimate": [1.0, 1.0],
+            }
+        )
+
+        dates, available = normalize_yahoo_earnings_dates(frame, symbol="AAPL")
+
+        assert dates == [date(2026, 10, 2)]
+        assert available is True
+
     def test_wholly_unparseable_rows_are_provider_failure_not_empty_success(self):
         """Garbage input must not stamp a known no-upcoming-earnings observation."""
         frame = _frame(["not-a-date", {"unexpected": "shape"}])
