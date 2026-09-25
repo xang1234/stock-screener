@@ -38,3 +38,71 @@ class FixedClock:
             raise ValueError("clock requires timezone-aware datetimes")
         self.now_value = when
         return self.now_value
+
+
+def make_security(db, symbol: str, *, market: str = "US", exchange: str = "NASDAQ"):
+    """Persist a StockUniverse listing (the existing security authority)."""
+
+    from app.models.stock_universe import StockUniverse
+
+    row = StockUniverse(
+        symbol=symbol,
+        name=f"{symbol} Listing",
+        market=market,
+        exchange=exchange,
+        is_active=True,
+        status="active",
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def make_issuer(db, label: str = "issuer", *, created_by: str = "test:factory"):
+    from app.models.company_exposure import ExposureIssuer
+
+    row = ExposureIssuer(
+        id=fixed_uuid(label), provenance={"label": label}, created_by=created_by
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def make_document(db, identity_key: str, *, provider: str = "sec", issuer=None):
+    from app.models.company_exposure import ExposureDocument
+
+    row = ExposureDocument(
+        id=fixed_uuid(f"document:{identity_key}"),
+        identity_key=identity_key,
+        provider=provider,
+        source_kind="periodic_report",
+        market="US",
+        issuer_id=issuer.id if issuer is not None else None,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def make_revision(db, document, content: bytes, *, published_at=None, period=None):
+    import hashlib
+
+    from app.models.company_exposure import ExposureDocumentRevision
+
+    digest = hashlib.sha256(content).hexdigest()
+    row = ExposureDocumentRevision(
+        document_id=document.id,
+        content_hash=digest,
+        media_type="text/html",
+        byte_length=len(content),
+        blob_key=f"sha256/{digest[:2]}/{digest}",
+        published_at=published_at,
+        reporting_period=period,
+        first_available_at=FIXED_NOW,
+        correction_identity={},
+        document_metadata={},
+    )
+    db.add(row)
+    db.flush()
+    return row

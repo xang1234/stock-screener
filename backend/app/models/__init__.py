@@ -156,7 +156,32 @@ from .economic_taxonomy_runtime import (
     ThemeSignalObservation,
 )
 
+from .company_exposure import (
+    DocumentCaptureEvent,
+    DocumentRelationRevision,
+    EvidenceTombstoneEvent,
+    ExposureDocument,
+    ExposureDocumentRevision,
+    ExposureIssuer,
+    ExposurePassage,
+    IssuerIdentifierRevision,
+    IssuerSecurityLinkRevision,
+    LegacyIssuerAttestationBridge,
+    PassageDerivative,
+)
+
 __all__ = [
+    "DocumentCaptureEvent",
+    "DocumentRelationRevision",
+    "EvidenceTombstoneEvent",
+    "ExposureDocument",
+    "ExposureDocumentRevision",
+    "ExposureIssuer",
+    "ExposurePassage",
+    "IssuerIdentifierRevision",
+    "IssuerSecurityLinkRevision",
+    "LegacyIssuerAttestationBridge",
+    "PassageDerivative",
     "EconomicThemeDevelopment",
     "LegacyDevelopmentEventMapping",
     "ThemeDevelopmentEvent",
