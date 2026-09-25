@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
@@ -38,6 +38,7 @@ from app.interfaces.tasks.feature_store_tasks import (
     _fail_stale_feature_runs,
     _is_market_trading_day,
     _repair_current_us_group_metadata,
+    _resolve_latest_published_run_for_market,
     _upsert_feature_run_pointer,
     build_daily_snapshot,
 )
@@ -2189,3 +2190,439 @@ def test_build_daily_snapshot_uses_market_calendar_for_non_us_market():
     assert result["reason"] == "not_trading_day"
     mock_is_trading_day.assert_called_once_with(date(2026, 3, 16), market="HK")
     assert fake_use_case.received_cmd is None
+
+
+def _build_run_resolution_schema(engine) -> None:
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            FeatureRunPointer.__table__,
+        ],
+    )
+
+
+def _add_run(
+    db,
+    *,
+    run_id: int,
+    rs_date: str | None,
+    pointer: str | None = None,
+    formula_version: str = BALANCED_RS_FORMULA_VERSION,
+    market: str = "US",
+    as_of_date: date | None = None,
+    published_at: datetime | None = None,
+):
+    """Insert a published run.
+
+    ``as_of_date`` defaults to the RS date. Pass it explicitly when a run covers
+    a different date than the one its RS metadata was stamped with.
+    """
+    config: dict = {"universe": {"market": market}}
+    if rs_date is not None:
+        config.update(
+            {
+                "rs_as_of_date": rs_date,
+                "rs_formula_version": formula_version,
+                "market_rs_run_id": 1,
+                "rs_universe_size": 100,
+            }
+        )
+    run = FeatureRun(
+        id=run_id,
+        as_of_date=as_of_date or date.fromisoformat(rs_date or "2026-09-18"),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=published_at,
+        config_json=config,
+    )
+    db.add(run)
+    if pointer is not None:
+        db.add(FeatureRunPointer(key=pointer, run_id=run_id))
+    return run
+
+
+def test_resolver_skips_a_stale_run_when_a_ranking_date_is_supplied():
+    """A published run from an earlier trading date must not be selected.
+
+    This is the case that aborted the daily chain: the pointer named a run from
+    a previous session, its metadata was enriched with newer rankings, and the
+    RS identity resolver raised instead of letting the chain continue.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        _add_run(
+            db,
+            run_id=31,
+            rs_date="2026-09-18",
+            pointer="latest_published_market:US",
+        )
+        db.commit()
+
+        stale = _resolve_latest_published_run_for_market(db=db, market="US")
+        matching = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 22),
+        )
+
+    assert stale == 31, "without a ranking date the pointer still wins"
+    assert matching is None, "a run from 2026-09-18 cannot serve 2026-09-22"
+    engine.dispose()
+
+
+def test_resolver_prefers_the_newest_run_that_serves_the_ranking_date():
+    """A run that does serve the date must be picked over a newer stale one."""
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        _add_run(db, run_id=31, rs_date="2026-09-22", pointer="latest_published_market:US")
+        _add_run(db, run_id=32, rs_date="2026-09-24", pointer="latest_published")
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 24),
+        )
+
+    assert resolved == 32
+    engine.dispose()
+
+
+def test_resolver_accepts_a_legacy_run_without_rs_metadata():
+    """Legacy runs keep working: the resolver encodes "any date is fine".
+
+    This is about *serving*, not about *coverage*. A hand-written
+    ``rs_as_of_date`` comparison would silently drop these runs, which is why the
+    identity check delegates to the identity resolver. The run still has to cover
+    the ranking date via ``as_of_date`` — that part is set explicitly here, and
+    ``test_resolver_does_not_reach_an_old_legacy_run_through_the_batch`` is the
+    counter-case that pins it.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        _add_run(
+            db,
+            run_id=33,
+            rs_date=None,
+            pointer="latest_published_market:US",
+            as_of_date=date(2026, 9, 24),
+        )
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 24),
+        )
+
+    assert resolved == 33
+    engine.dispose()
+
+
+def test_resolver_ignores_runs_from_another_market():
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        _add_run(
+            db,
+            run_id=34,
+            rs_date="2026-09-24",
+            pointer="latest_published_market:US",
+            market="DE",
+        )
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 24),
+        )
+
+    assert resolved is None
+    engine.dispose()
+
+
+def test_metadata_repair_skips_instead_of_enriching_a_stale_run():
+    """The repair must not raise when no run serves the ranking date.
+
+    Regression guard: before this, the repair selected the stale run, enriched
+    it with the newer ranking date, and the identity resolver raised, which
+    aborted the whole daily pipeline chain.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            FeatureRunPointer.__table__,
+            StockFeatureDaily.__table__,
+            IBDIndustryGroup.__table__,
+            IBDGroupRank.__table__,
+            Scan.__table__,
+        ],
+    )
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        _add_run(
+            db,
+            run_id=31,
+            rs_date="2026-09-18",
+            pointer="latest_published_market:US",
+        )
+        db.add(
+            StockFeatureDaily(
+                run_id=31,
+                symbol="NVDA",
+                as_of_date=date(2026, 9, 18),
+                composite_score=99.0,
+                overall_rating=5,
+                passes_count=4,
+                details_json={"symbol": "NVDA"},
+            )
+        )
+        # Full IBD data for the ranking date, so enrichment WOULD succeed if the
+        # stale run were selected. Without this the "not enriched" assertion
+        # below would hold for the wrong reason.
+        db.add(IBDIndustryGroup(symbol="NVDA", industry_group="Semiconductors"))
+        db.add(
+            IBDGroupRank(
+                industry_group="Semiconductors",
+                date=date(2026, 9, 22),
+                rank=1,
+                avg_rs_rating=95.0,
+            )
+        )
+        db.commit()
+
+    with patch(
+        "app.services.ui_snapshot_service.safe_publish_scan_bootstrap",
+        return_value=None,
+    ):
+        stats = _repair_current_us_group_metadata(
+            ranking_date=date(2026, 9, 22),
+            session_factory=factory,
+        )
+
+    # The stale run is not enriched, so nothing is written for it...
+    assert stats["feature_run"] is None
+    with factory() as db:
+        nvda = db.query(StockFeatureDaily).filter_by(run_id=31, symbol="NVDA").one()
+        assert "ibd_industry_group" not in nvda.details_json
+
+    # ...but the repair still returns a normal result, so the chain continues.
+    assert stats["market"] == "US"
+    assert stats["ranking_date"] == "2026-09-22"
+    engine.dispose()
+
+
+def test_resolver_keeps_pointer_precedence_over_the_published_batch():
+    """The pointers must still decide before the catch-all batch does.
+
+    The market-specific pointer outranks the global fallback, and both outrank
+    a run merely found by ``published_at``. The resolver merges the three
+    sources into one candidate list, so without a test this ordering could be
+    lost the next time the candidate collection is touched.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    later = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+
+    with factory() as db:
+        # The fallback pointer names a run published LATER than the market one.
+        _add_run(db, run_id=10, rs_date="2026-09-24", pointer="latest_published_market:US")
+        db.query(FeatureRun).filter_by(id=10).update({"published_at": later})
+        _add_run(db, run_id=11, rs_date="2026-09-24", pointer="latest_published")
+        db.query(FeatureRun).filter_by(id=11).update(
+            {"published_at": later + timedelta(hours=1)}
+        )
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 24),
+        )
+
+    assert resolved == 10, "the market pointer outranks the global fallback"
+    engine.dispose()
+
+
+def test_resolver_falls_through_a_stale_market_pointer_to_the_fallback():
+    """A stale market pointer must not shadow a fallback that serves the date.
+
+    An unpointed run that is *newer* than the fallback is present on purpose:
+    the fallback must win on precedence, not because it happens to be the
+    newest published run. Without that run the assertion would also hold for a
+    resolver that consulted the published batch before the global pointer.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    later = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+
+    with factory() as db:
+        _add_run(db, run_id=10, rs_date="2026-09-18", pointer="latest_published_market:US")
+        _add_run(db, run_id=11, rs_date="2026-09-24", pointer="latest_published")
+        db.query(FeatureRun).filter_by(id=11).update({"published_at": later})
+        # Eligible for the ranking date, unpointed, and published after run 11.
+        _add_run(db, run_id=12, rs_date="2026-09-24")
+        db.query(FeatureRun).filter_by(id=12).update(
+            {"published_at": later + timedelta(hours=1)}
+        )
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 24),
+        )
+
+    assert resolved == 11, "the global pointer outranks a newer unpointed run"
+    engine.dispose()
+
+
+def test_resolver_falls_through_stale_pointers_to_the_published_batch():
+    """When both pointers are stale, a matching run is still found by date."""
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        _add_run(db, run_id=10, rs_date="2026-09-18", pointer="latest_published_market:US")
+        _add_run(db, run_id=11, rs_date="2026-09-18", pointer="latest_published")
+        _add_run(db, run_id=12, rs_date="2026-09-24")
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 24),
+        )
+
+    assert resolved == 12
+    engine.dispose()
+
+
+def test_resolver_does_not_reach_an_old_legacy_run_through_the_batch():
+    """A months-old legacy run must not be picked for a later ranking date.
+
+    Legacy runs carry no ``rs_as_of_date`` and therefore *serve* any date, so a
+    date-blind batch scan reached a pre-migration run from months ago. Enrichment
+    would then write today's group ranks into that run's rows and republish that
+    run's scan.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        # Pre-migration run: no RS metadata, covers its own long-past date.
+        _add_run(
+            db,
+            run_id=5,
+            rs_date=None,
+            as_of_date=date(2026, 5, 20),
+            published_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        # Yesterday's run, named by the pointer: the normal state on day D.
+        _add_run(
+            db,
+            run_id=31,
+            rs_date="2026-09-21",
+            pointer="latest_published_market:US",
+            as_of_date=date(2026, 9, 21),
+            published_at=datetime(2026, 9, 21, 22, tzinfo=timezone.utc),
+        )
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 22),
+        )
+
+    assert resolved is None, "today's snapshot does not exist yet"
+    engine.dispose()
+
+
+def test_resolver_keeps_a_legacy_run_that_covers_the_ranking_date():
+    """The coverage rule must not drop a legacy run for the date actually asked for."""
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        _add_run(
+            db,
+            run_id=5,
+            rs_date=None,
+            pointer="latest_published_market:US",
+            as_of_date=date(2026, 9, 22),
+        )
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 22),
+        )
+
+    assert resolved == 5
+    engine.dispose()
+
+
+def test_resolver_does_not_let_a_pointer_reach_a_run_from_another_date():
+    """A pointer naming a run from another date must be skipped.
+
+    This is the case the batch filter cannot help with: the pointer is collected
+    first, so the old run never passes through the date-limited query. Legacy runs
+    serve any date, so only the coverage check keeps it out — without it the
+    resolver returns a run from months ago and enrichment writes today's group
+    ranks into that run's rows.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    _build_run_resolution_schema(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with factory() as db:
+        # Pointer names a legacy run that covers a long-past date.
+        _add_run(
+            db,
+            run_id=5,
+            rs_date=None,
+            pointer="latest_published_market:US",
+            as_of_date=date(2026, 5, 20),
+            published_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        # No pointer names it, but it covers the ranking date.
+        _add_run(
+            db,
+            run_id=33,
+            rs_date="2026-09-22",
+            as_of_date=date(2026, 9, 22),
+            published_at=datetime(2026, 9, 22, 22, tzinfo=timezone.utc),
+        )
+        db.commit()
+
+        resolved = _resolve_latest_published_run_for_market(
+            db=db,
+            market="US",
+            ranking_date=date(2026, 9, 22),
+        )
+
+    assert resolved == 33, "the pointer's run covers another date and must be skipped"
+    engine.dispose()

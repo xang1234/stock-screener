@@ -55,6 +55,15 @@ ACTION_STATE_VALUES = tuple(state.value for state in ActionState)
 TOP_GROUPS_LIMIT = 10
 DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES = 32
 
+# The filter field the snapshot constrains against the per-market default
+# ``minVolume``. It has to be an indexed feature-store field: without an index
+# the planner re-parses ``details_json`` for every row of the run and the build
+# blows past the client timeout. ``test_feature_store_index_drift`` asserts this
+# exact field is covered by a migration, so changing it here fails that test
+# instead of silently reintroducing the full scan.
+VOLUME_FILTER_FIELD = "volume"
+
+
 
 @dataclass(frozen=True)
 class _DailySnapshotMemoryCacheEntry:
@@ -430,7 +439,7 @@ def build_daily_snapshot_payload(
     leaders: list[dict[str, Any]] = []
     if scan is not None:
         candidate_filters = FilterSpec()
-        candidate_filters.add_range("volume", min_volume, None)
+        candidate_filters.add_range(VOLUME_FILTER_FIELD, min_volume, None)
         top_candidates, _ = _query_scan_rows(
             uow=uow,
             use_case=scan_results_use_case,
@@ -439,7 +448,7 @@ def build_daily_snapshot_payload(
         )
 
         leader_filters = FilterSpec()
-        leader_filters.add_range("volume", min_volume, None)
+        leader_filters.add_range(VOLUME_FILTER_FIELD, min_volume, None)
         leader_filters.add_range("rs_rating", LEADERS_MIN_RS_RATING, None)
         leader_filters.add_range("ibd_group_rank", None, LEADERS_MAX_GROUP_RANK)
         leaders, _ = _query_scan_rows(
