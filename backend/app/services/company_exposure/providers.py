@@ -72,6 +72,7 @@ class ArtifactRunResult:
     payload: dict | None = field(default=None)
     reused: bool = False
     failure_code: str | None = None
+    retry_after_seconds: float | None = None
 
 
 ClientFactory = Callable[[str, str], OpenCodeGoKimi]
@@ -216,6 +217,7 @@ class SubscriptionArtifactRunner:
                 retryable=output.outcome.retryable,
                 pause_reason=None,
                 failure_code=output.outcome.failure_code,
+                retry_after_seconds=output.outcome.retry_after_seconds,
             )
         result = self.session.execute(
             select(ResearchProviderResult).where(

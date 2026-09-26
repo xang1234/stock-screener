@@ -140,7 +140,12 @@ class IssuerIdentityAdapter:
         )
 
     def _identifier_owner(self, key: tuple[str, str, str]) -> UUID | None:
-        revision = self.session.execute(
+        """Issuer of the latest accepted decision unless later rejected.
+
+        Like ``current_link``, a pending proposal never masks ownership.
+        """
+
+        revisions = self.session.execute(
             select(IssuerIdentifierRevision)
             .where(
                 IssuerIdentifierRevision.market == key[0],
@@ -148,11 +153,13 @@ class IssuerIdentityAdapter:
                 IssuerIdentifierRevision.value == key[2],
             )
             .order_by(IssuerIdentifierRevision.revision_number.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if revision is None or revision.state != LinkState.ACCEPTED:
-            return None
-        return revision.issuer_id
+        ).scalars()
+        for revision in revisions:
+            if revision.state == LinkState.ACCEPTED:
+                return revision.issuer_id
+            if revision.state == LinkState.REJECTED:
+                return None
+        return None
 
     def identifiers_for(self, issuer_id: UUID) -> dict[tuple[str, str], str]:
         rows = self.session.execute(

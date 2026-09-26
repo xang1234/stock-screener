@@ -6,7 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.domain.company_exposure.contracts import SERVICE_PRINCIPAL, RegistryMatch
+from app.domain.company_exposure.contracts import (
+    SERVICE_PRINCIPAL,
+    CoverageOutcome,
+    RegistryMatch,
+)
 from app.models.company_exposure import ExposureDocumentRevision
 from app.services.company_exposure.acquisition import (
     DocumentAcquisitionRegistry,
@@ -206,6 +210,21 @@ def test_cik_resolution_retains_registry_and_submissions_evidence(
         )
     }
     assert kinds == {"application/json"}
+
+
+def test_malformed_registry_json_is_a_retryable_fetch_failure(
+    us_resolver, us_security, budget, sec_mock
+):
+    for url in (
+        "https://www.sec.gov/files/company_tickers_exchange.json",
+        "https://www.sec.gov/files/company_tickers.json",
+    ):
+        sec_mock.serve_bytes(url, b'{"0": {"cik_str": 1234567, "ticker"')
+    gap = us_resolver.resolve_cik(us_security.id, budget)
+    assert (gap.outcome, gap.reason) == (
+        CoverageOutcome.FETCH_FAILED,
+        "invalid_json_payload",
+    )
 
 
 @pytest.mark.case("I02")

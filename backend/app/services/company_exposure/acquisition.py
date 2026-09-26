@@ -47,7 +47,11 @@ from app.services.company_exposure.network import (
     sniff_media_type,
 )
 from app.services.company_exposure.pacing import PacingUnavailable, ResearchRateGate
-from app.services.company_exposure.storage import OriginalStore, storage_lock
+from app.services.company_exposure.storage import (
+    OriginalStore,
+    StorageUnavailable,
+    storage_lock,
+)
 
 _GAP_OUTCOMES = {
     "http_status_404": CoverageOutcome.NO_MATCHING_DOCUMENT,
@@ -78,8 +82,11 @@ class DocumentAcquisitionRegistry:
         limits: ResearchLimits | None = None,
         commit: Callable[[], None] | None = None,
         clock: Callable[[], datetime] = utc_now,
+        before_io: Callable[[], None] | None = None,
     ):
         self.session = session
+        # Called before each network fetch, e.g. to renew a work lease.
+        self.before_io = before_io
         self.transport = transport
         self.store = store
         self.rate_gate = rate_gate
@@ -169,6 +176,32 @@ class DocumentAcquisitionRegistry:
             ),
         )
 
+    def _put(self, target, document, data, media_type, ticket):
+        """Store bytes; a failed write pauses the job with its ticket settled.
+
+        ``put`` settles the ticket before raising. Committing here keeps that
+        settlement even though the caller may roll the step back, so a
+        filesystem failure never strands a reservation in the storage pool.
+        """
+
+        try:
+            return self.store.put(data, media_type, ticket), None
+        except StorageUnavailable as exc:
+            self.commit()
+            return None, CaptureResult(
+                document.id,
+                None,
+                None,
+                None,
+                False,
+                CoverageItem(
+                    route=target.adapter,
+                    outcome=CoverageOutcome.UNAVAILABLE_CAPABILITY,
+                    reason="paused_storage",
+                    detail={"cause": exc.code, "required": exc.required},
+                ),
+            )
+
     # -- fetch ---------------------------------------------------------------------
 
     def fetch(self, target: DocumentTarget, budget: JobBudgetRef) -> CaptureResult:
@@ -202,6 +235,8 @@ class DocumentAcquisitionRegistry:
                     detail={"required": bound, "available": ticket.available},
                 ),
             )
+        if self.before_io is not None:
+            self.before_io()
         # No database locks are held across pacing waits or network I/O.
         self.commit()
 
@@ -286,7 +321,9 @@ class DocumentAcquisitionRegistry:
                     reason="unchanged",
                 ),
             )
-        blob = self.store.put(response.body, media_type, ticket)
+        blob, failed = self._put(target, document, response.body, media_type, ticket)
+        if failed is not None:
+            return failed
         revision = existing or ExposureDocumentRevision(
             document_id=document.id,
             content_hash=digest,
@@ -418,7 +455,9 @@ class DocumentAcquisitionRegistry:
                     reason="unchanged",
                 ),
             )
-        blob = self.store.put(data, media_type, ticket)
+        blob, failed = self._put(target, document, data, media_type, ticket)
+        if failed is not None:
+            return failed
         revision = existing or ExposureDocumentRevision(
             document_id=document.id,
             content_hash=digest,

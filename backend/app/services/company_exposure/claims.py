@@ -214,6 +214,7 @@ class ClaimReviewBatch:
     failure_code: str | None = None
     retryable: bool = False
     input_hash: str | None = None
+    retry_after_seconds: float | None = None
 
 
 def _normalize(text: str) -> str:
@@ -599,6 +600,7 @@ class ClaimVerifier:
                 failure_code=result.failure_code,
                 retryable=result.retryable,
                 input_hash=provider_input.input_hash,
+                retry_after_seconds=result.retry_after_seconds,
             )
         return self.validate_payload(
             result.payload,

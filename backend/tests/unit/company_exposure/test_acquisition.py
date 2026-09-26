@@ -4,15 +4,18 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
+from sqlalchemy import select
 
-from app.domain.company_exposure.contracts import DocumentTarget
+from app.domain.company_exposure.contracts import DocumentTarget, ReservationState
 from app.infra.db.repositories.company_exposure_work_repo import (
     CompanyExposureWorkRepository,
+    ReservationLedger,
 )
 from app.models.company_exposure import (
     DocumentCaptureEvent,
     ExposureClaimRevision,
     ExposureDocumentRevision,
+    ResearchReservation,
 )
 from app.services.company_exposure.acquisition import (
     DocumentAcquisitionRegistry,
@@ -180,6 +183,30 @@ def test_full_store_pauses_before_download(
     result = registry.fetch(document_target, root_budget)
     assert result.coverage.reason == "paused_storage"
     assert http_mock.calls == 0
+
+
+def test_write_failure_pauses_and_settles_the_storage_reservation(
+    acquisition, document_target, root_budget, http_mock, db_session, monkeypatch
+):
+    from app.services.company_exposure import storage
+
+    def disk_error(*_args):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(storage.os, "replace", disk_error)
+    http_mock.respond()
+    result = acquisition.fetch(document_target, root_budget)
+    assert result.coverage.reason == "paused_storage"
+    assert result.coverage.detail["cause"] == "storage_write_failed"
+    # The worker rolls the step back; the settled ticket must survive that.
+    db_session.rollback()
+    reservation = db_session.execute(
+        select(ResearchReservation).where(
+            ResearchReservation.purpose == "document_download"
+        )
+    ).scalar_one()
+    ledger = ReservationLedger(db_session)
+    assert ledger.state(reservation.id) == ReservationState.RECONCILED
 
 
 def test_executable_content_is_refused(

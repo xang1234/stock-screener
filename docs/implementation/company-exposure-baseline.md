@@ -66,7 +66,7 @@ Not available in this execution environment and not required for offline tests: 
 ## S1 delivery record (US verify-only shadow)
 
 - Tasks: 00–07, 09, 14–16, 17A, 21A, 22A, 23A, 26A, 27A on branch `claude/brave-carson-9i90ws`.
-- Backend S1 gate: `scripts/run_required_company_exposure_postgres.py --slice S1` on PostgreSQL 16 (local disposable cluster) — 278 passed, all required case/layer pairs and named invariants passed.
+- Backend S1 gate: `scripts/run_required_company_exposure_postgres.py --slice S1` on PostgreSQL 16 (local disposable cluster) — 283 passed, all required case/layer pairs and named invariants passed.
 - Frontend: full Vitest suite 824 passed; `npm run build` succeeded.
 - Execution mode: saved synthetic SEC fixtures, mocked SEC transport and a fake subscription transport. **No live SEC probe and no real model call were made**; both remain unverified until an operator with credentials and SEC egress runs them.
 - Not installed in S1 (reported `not_installed`): other markets, generation-bound reads, automatic admission, discovery, paid search, classifier grounding, browser rendering.

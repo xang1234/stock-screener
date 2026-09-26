@@ -19,7 +19,7 @@ theme-specific business exposure.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -185,7 +185,18 @@ class USDocumentAdapter:
             try:
                 payload = json.loads(self.acquisition.store.read(revision.blob_key))
             except (ValueError, UnicodeDecodeError):
+                # e.g. an HTML blocking page served with HTTP 200: retry it
+                # as a failed fetch, not a successful retrieval.
                 payload = None
+                capture = replace(
+                    capture,
+                    coverage=CoverageItem(
+                        route=target.adapter,
+                        outcome=CoverageOutcome.FETCH_FAILED,
+                        reason="invalid_json_payload",
+                        detail={"identity_key": target.identity_key},
+                    ),
+                )
         self._json_cache[key] = (capture, payload)
         return capture, payload
 

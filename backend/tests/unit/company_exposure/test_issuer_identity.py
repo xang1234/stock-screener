@@ -131,6 +131,30 @@ def test_admin_apply_accepts_proposal_and_rejects_stale_hash(
     assert resolution.identifiers[("US", "cik")] == "0000000042"
 
 
+def test_pending_proposal_does_not_mask_accepted_identifier_owner(
+    db_session, identity_adapter
+):
+    cik = ("US", "cik", "77")
+    owner = _accept(
+        identity_adapter, make_security(db_session, "OWNR").id, identifiers=(cik,)
+    )
+    rival = identity_adapter.propose_link(
+        LinkProposal(
+            security_id=make_security(db_session, "RIVL").id,
+            issuer_id=None,
+            identifiers=(cik,),
+            evidence={"reference": "other filing"},
+            requested_by="test:admin",
+            reason="reuses an owned CIK",
+        )
+    )
+    key = ("US", "cik")
+    assert identity_adapter.identifiers_for(owner.issuer_id)[key] == "0000000077"
+    with pytest.raises(IssuerIdentityError, match="identifier_owned_by_other_issuer"):
+        identity_adapter.apply_link(rival.link_revision_id, ADMIN, rival.proposal_hash)
+    assert identity_adapter.identifiers_for(owner.issuer_id)[key] == "0000000077"
+
+
 def test_identifier_schemes_never_collide():
     assert normalized_identifier("US", "cik", "0000123456") != normalized_identifier(
         "TW", "company_code", "123456"

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
 
+from app.domain.company_exposure.contracts import as_utc
 from app.infra.db.repositories.company_exposure_work_repo import WorkLeaseError
 from app.models.company_exposure import (
     AssessmentRevision,
     ExposureClaimRevision,
     ResearchProviderAttempt,
+    ResearchWorkItem,
 )
 from app.services.company_exposure.issuer_identity import (
     IssuerIdentityAdapter,
@@ -178,6 +181,35 @@ def test_stale_lease_cannot_run_a_step(harness):
     harness.db.commit()
     with pytest.raises(WorkLeaseError):
         harness.runner.run_step(item.id, item.id)
+
+
+def test_provider_retry_after_delays_the_retry(harness, db_session):
+    harness.serve_sec()
+    harness.go.queue_status(429, {"retry-after": "3600"})
+    harness.request()
+    results = harness.run_all(limit=3)
+    assert [(r.stage, r.status) for r in results][-1] == ("verify", "retryable")
+    item = db_session.execute(
+        select(ResearchWorkItem).where(ResearchWorkItem.stage == "verify")
+    ).scalar_one()
+    # The local backoff would retry after 2 minutes; the provider asked 1 hour.
+    assert as_utc(item.available_at) >= harness.clock.now() + timedelta(hours=1)
+
+
+def test_slow_io_renews_the_lease_instead_of_losing_the_stage(harness):
+    harness.serve_sec()
+    pace = harness.rate.acquire
+
+    def slow_pace(*args, **kwargs):
+        # Each SEC request takes 4 of the lease's 5 minutes.
+        harness.clock.advance(minutes=4)
+        return pace(*args, **kwargs)
+
+    harness.rate.acquire = slow_pace
+    harness.request()
+    step = harness.step()
+    assert (step.stage, step.status) == ("resolve_issuer", "completed")
+    assert len(harness.rate.provider_names) >= 2
 
 
 def test_worker_task_runs_leased_stages(harness, monkeypatch):

@@ -206,10 +206,10 @@ class OriginalStore:
             )
             return BlobRef(digest, media_type, len(data), key, deduplicated=True)
         temp_dir = self.root / "tmp"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        target.parent.mkdir(parents=True, exist_ok=True)
         temp = temp_dir / f"{uuid4().hex}.part"
         try:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            target.parent.mkdir(parents=True, exist_ok=True)
             with open(temp, "wb") as handle:
                 handle.write(data)
                 handle.flush()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,8 @@ def test_review_required_job_is_resolved_and_resumed(
 
     code, resumed = _run(capsys, ["resume", str(ref.id), "--apply"], **cli_kwargs)
     assert resumed == {"state": "queued", "previous_state": "review_required"}
+    # The CLI resumes on the real clock; the harness claims on its own.
+    harness.clock.advance_to(max(harness.clock.now(), datetime.now(timezone.utc)))
     step = harness.step()
     assert (step.stage, step.detail["source"]) == ("resolve_issuer", "accepted_link")
 

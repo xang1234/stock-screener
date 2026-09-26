@@ -139,6 +139,7 @@ class Harness:
             ),
             clock=self.clock.now,
         )
+        acquisition.before_io = self.runner.keep_lease
         self.repo = CompanyExposureWorkRepository(self.db, clock=self.clock.now)
 
     def serve_sec(self):

@@ -280,6 +280,7 @@ class ResearchStageRunner:
         self.commit = commit or session.commit
         self.repo = CompanyExposureWorkRepository(session, clock=clock)
         self.identity = IssuerIdentityAdapter(session, clock=clock)
+        self._lease: tuple[UUID, UUID] | None = None
         self._stages = dict(
             zip(
                 RESEARCH_STAGES,
@@ -289,6 +290,18 @@ class ResearchStageRunner:
         )
 
     # ---------------------------------------------------------------- steps
+    def keep_lease(self) -> None:
+        """Renew the running step's lease before one bounded I/O unit.
+
+        Stages run several fetches, extractions and a provider call, which
+        together can outlast one lease; each unit fits well inside one.
+        Raises ``WorkLeaseError`` once another worker owns the stage.
+        """
+
+        if self._lease is not None:
+            self.repo.heartbeat(*self._lease)
+            self.commit()
+
     def run_step(self, work_id: UUID, lease_token: UUID) -> ResearchStepResult:
         item = self.repo.heartbeat(work_id, lease_token)
         request = self.session.get(ExposureResearchRequest, item.request_id)
@@ -296,7 +309,14 @@ class ResearchStageRunner:
         # Release row locks before any pacing wait, network or provider call.
         self.commit()
         if self.config.research_mode == ResearchMode.SHADOW:
-            outcome = self._stages[stage](request)
+            self._lease = (work_id, lease_token)
+            try:
+                outcome = self._stages[stage](request)
+            except WorkLeaseError:
+                self.session.rollback()
+                return self._lease_lost(work_id, request, stage)
+            finally:
+                self._lease = None
         else:
             outcome = StageOutcome.pause(
                 ResearchJobState.UNAVAILABLE_CAPABILITY,
@@ -319,7 +339,7 @@ class ResearchStageRunner:
                 work_id,
                 lease_token,
                 status=outcome.status.value,
-                retry_at=self.clock() + RETRY_BASE * (2 ** max(0, attempts - 1))
+                retry_at=self._retry_at(outcome, attempts)
                 if outcome.status == StepStatus.RETRYABLE
                 else None,
                 pause_reason=outcome.state.value
@@ -329,13 +349,7 @@ class ResearchStageRunner:
         except WorkLeaseError:
             # The lease expired during I/O: another worker owns the stage now.
             self.session.rollback()
-            return ResearchStepResult(
-                work_id,
-                request.id,
-                stage,
-                StepStatus.LEASE_LOST,
-                StepStatus.LEASE_LOST.value,
-            )
+            return self._lease_lost(work_id, request, stage)
         self.repo.append_event(request.id, outcome.state, detail)
         if outcome.next_stage is not None:
             enqueue_stage(self.repo, request, outcome.next_stage)
@@ -351,6 +365,25 @@ class ResearchStageRunner:
         )
 
     # ------------------------------------------------------------- helpers
+    def _retry_at(self, outcome: StageOutcome, attempts: int) -> datetime:
+        """Local backoff, but never before the provider's advertised delay."""
+
+        delay = RETRY_BASE * (2 ** max(0, attempts - 1))
+        advertised = outcome.detail.get("retry_after_seconds")
+        if advertised is not None:
+            delay = max(delay, timedelta(seconds=float(advertised)))
+        return self.clock() + delay
+
+    @staticmethod
+    def _lease_lost(work_id, request, stage) -> ResearchStepResult:
+        return ResearchStepResult(
+            work_id,
+            request.id,
+            stage,
+            StepStatus.LEASE_LOST,
+            StepStatus.LEASE_LOST.value,
+        )
+
     @staticmethod
     def _budget(request) -> JobBudgetRef:
         return JobBudgetRef(root_request_id=request.effective_root_id)
@@ -519,6 +552,7 @@ class ResearchStageRunner:
             if remaining <= 0:
                 partial("passage_limit", revision_id)
                 continue
+            self.keep_lease()
             revision = self.session.get(ExposureDocumentRevision, revision_id)
             document = self.session.get(ExposureDocument, revision.document_id)
             try:
@@ -547,8 +581,11 @@ class ResearchStageRunner:
             )
             return StageOutcome.pause(state, batch.pause_reason)
         if batch.failure_code:
-            factory = StageOutcome.retry if batch.retryable else StageOutcome.fail
-            return factory(batch.failure_code)
+            if not batch.retryable:
+                return StageOutcome.fail(batch.failure_code)
+            delay = batch.retry_after_seconds
+            detail = {} if delay is None else {"retry_after_seconds": delay}
+            return StageOutcome.retry(batch.failure_code, **detail)
         return None
 
     def _scope(self, request, issuer: _Issuer, theme: ThemeContext) -> AssessmentScope:
@@ -586,6 +623,7 @@ class ResearchStageRunner:
         scope = self._scope(request, issuer, theme)
         claims, rejected, artifacts = (), (), ()
         if evidence:
+            self.keep_lease()
             batch = self.verifier.verify_claims(
                 evidence,
                 scope,
@@ -683,7 +721,7 @@ def build_runner(
             client_factory=default_client_factory(),
         ),
     )
-    return ResearchStageRunner(
+    stage_runner = ResearchStageRunner(
         session,
         config,
         markets={
@@ -694,6 +732,8 @@ def build_runner(
         verifier=ClaimVerifier(runner),
         store=store,
     )
+    acquisition.before_io = stage_runner.keep_lease
+    return stage_runner
 
 
 __all__ = (
