@@ -6,8 +6,8 @@ denominator and operand citations. It is never ``exposure_strength`` or a
 confidence score, and nothing here estimates a number the source did not
 disclose.
 
-V1 calculations: an explicit ratio of two compatible disclosed quantities,
-and a sum of explicitly non-overlapping quantities. Any mismatch in period,
+V1 calculation: an explicit ratio of two compatible disclosed quantities.
+Any mismatch in period,
 unit, currency, accounting basis or scope holds the derived value while the
 original reported numbers are retained. A segment or subsidiary share is
 reported as that scope's share, never relabelled as a theme share.
@@ -25,7 +25,9 @@ from app.domain.company_exposure.contracts import (
     QualitativeMateriality,
 )
 
-SHARE_METRICS = frozenset({"revenue_share", "profit_share", "capacity_share", "backlog_share", "asset_share"})
+SHARE_METRICS = frozenset(
+    {"revenue_share", "profit_share", "capacity_share", "backlog_share", "asset_share"}
+)
 _NUMBER = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
 
 
@@ -43,15 +45,6 @@ class Operand:
     passage_id: str | None = None
     quote: str | None = None
     forecast: bool = False
-
-    def compatibility_key(self) -> tuple:
-        return (
-            _norm(self.unit),
-            (self.currency or "").upper(),
-            _norm(self.period),
-            _norm(self.accounting_basis or ""),
-            self.forecast,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +153,17 @@ def validate_measure(
         reporting_scope=scope,
         scope_label=scope_label,
         operands=(
-            Operand(value, unit, period, scope, scope_label or "", currency, None, passage_id, quote),
+            Operand(
+                value,
+                unit,
+                period,
+                scope,
+                scope_label or "",
+                currency,
+                None,
+                passage_id,
+                quote,
+            ),
         ),
         raw_reported={"quote": quote, "value": format(value, "f"), "unit": unit},
         hold_reasons=tuple(holds),
@@ -187,7 +190,11 @@ def compatible_ratio(
     if denominator <= 0:
         holds.append("nonpositive_denominator_review_required")
     value = None if holds else numerator / denominator
-    if value is not None and metric in SHARE_METRICS and not (Decimal(0) <= value <= Decimal(1)):
+    if (
+        value is not None
+        and metric in SHARE_METRICS
+        and not (Decimal(0) <= value <= Decimal(1))
+    ):
         holds.append("share_out_of_range")
         value = None
     return MaterialityMeasureResult(
@@ -230,14 +237,21 @@ def calculate_materiality(
         holds.append("unit_mismatch")
     if (numerator.currency or "").upper() != (denominator.currency or "").upper():
         holds.append("currency_mismatch_requires_approved_conversion")
-    if _norm(numerator.accounting_basis or "") != _norm(denominator.accounting_basis or ""):
+    if _norm(numerator.accounting_basis or "") != _norm(
+        denominator.accounting_basis or ""
+    ):
         holds.append("accounting_basis_mismatch")
     # A subsidiary/segment figure may only be divided by a denominator of the
     # same reporting entity; never by the consolidated parent (I03).
-    if numerator.scope != denominator.scope and denominator.scope != "issuer_consolidated":
+    if (
+        numerator.scope != denominator.scope
+        and denominator.scope != "issuer_consolidated"
+    ):
         holds.append("scope_mismatch")
-    if numerator.scope == "segment_or_subsidiary" and denominator.scope == "issuer_consolidated" and (
-        "subsidiary" in _norm(numerator.label)
+    if (
+        numerator.scope == "segment_or_subsidiary"
+        and denominator.scope == "issuer_consolidated"
+        and ("subsidiary" in _norm(numerator.label))
     ):
         holds.append("subsidiary_share_of_parent_requires_consolidation_evidence")
     result = compatible_ratio(
@@ -251,7 +265,9 @@ def calculate_materiality(
         operands_compatible=not holds,
     )
     all_holds = tuple(dict.fromkeys([*holds, *result.hold_reasons]))
-    theme_specific = any(term.casefold() in numerator.label.casefold() for term in theme_terms)
+    theme_specific = any(
+        term.casefold() in numerator.label.casefold() for term in theme_terms
+    )
     return MaterialityMeasureResult(
         basis=MaterialityBasis.CALCULATED,
         metric=metric,
@@ -270,23 +286,20 @@ def calculate_materiality(
         },
         operands=(numerator, denominator),
         raw_reported={
-            "numerator": {"value": format(numerator.value, "f"), "unit": numerator.unit, "label": numerator.label},
-            "denominator": {"value": format(denominator.value, "f"), "unit": denominator.unit, "label": denominator.label},
+            "numerator": {
+                "value": format(numerator.value, "f"),
+                "unit": numerator.unit,
+                "label": numerator.label,
+            },
+            "denominator": {
+                "value": format(denominator.value, "f"),
+                "unit": denominator.unit,
+                "label": denominator.label,
+            },
         },
         hold_reasons=all_holds,
         theme_specific=theme_specific and not all_holds,
     )
-
-
-def sum_non_overlapping(operands: tuple[Operand, ...], *, overlapping: bool) -> Decimal | None:
-    """Sum only when the source states the components do not overlap."""
-
-    if overlapping or not operands:
-        return None
-    keys = {operand.compatibility_key() for operand in operands}
-    if len(keys) != 1:
-        return None
-    return sum((operand.value for operand in operands), Decimal(0))
 
 
 def qualitative_measure(label: str, quote: str) -> MaterialityMeasureResult:

@@ -11,12 +11,8 @@ resolves the issuer, reads SEC primary filings, verifies claims with the
 OpenCode Go subscription route, and shows a **shadow preview**. Nothing in
 this slice changes theme membership, live baskets, classifier grounding or
 any published generation. Search, discovery and paid search are not
-installed.
-
-| Stage | Status in this build |
-|---|---|
-| `shadow_verify_us` | installed; off until configured |
-| `shadow_verify_all_markets`, `generation_reads`, `automatic_admission`, `bounded_discovery`, `paid_search`, `classifier_grounding` | `not_installed` — no setting enables them |
+installed; other markets, generation reads, automatic admission and
+classifier grounding are later stages, and no setting enables them.
 
 `EXPOSURE_RESEARCH_MODE=live` is refused (`live_mode_not_installed`); use `shadow`.
 
@@ -70,8 +66,8 @@ cd backend
 ./venv/bin/python scripts/company_exposure.py status
 ```
 
-The output lists configuration (no secrets), each stage with `allowed` and
-its blocking reasons, job counts by state, work items by status, and the
+The output lists configuration (no secrets), whether `shadow_verify_us` is
+`allowed` with its blocking reasons, job counts by state, work items by status, and the
 database migration head. `shadow_verify_us` must show `allowed: true`
 before requesting research.
 
@@ -147,13 +143,12 @@ budgets.
   Holds block new automated use; they never delete or rewrite a sealed
   revision. Lifting a hold requires a reason and new cited support.
 - **Uncertain reservations**: a model request that may have executed (read
-  timeout, mid-stream failure) stays charged as `uncertain`. At period close
-  it becomes `expired_uncertain`; it is never refunded. Cancelling a job
-  releases only never-dispatched reservations.
+  timeout, mid-stream failure) stays charged as `uncertain`; it is never
+  refunded. Closing an allocation period marks it `expired_uncertain`; S1
+  schedules no period close, so it stays charged against its own day.
 - **Evidence retention**: originals are content-addressed under the store
-  (5 GiB cap, 1 GiB free-space floor). Unreferenced blobs are collected after
-  30 days (temporary files after 24 hours) and leave a tombstone; reads of a
-  tombstoned original fail with a typed reason rather than returning data.
+  (5 GiB cap, 1 GiB free-space floor). S1 never deletes an original: there
+  is no garbage collection or tombstone writer yet.
 
 ## 7. Stop conditions
 

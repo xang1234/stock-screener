@@ -22,7 +22,6 @@ from app.domain.company_exposure.contracts import (
     DispatchPhase,
     ReservationState,
     ResourceUnit,
-    as_utc,
     utc_now,
 )
 from app.infra.db.repositories.company_exposure_work_repo import (
@@ -377,22 +376,3 @@ class ResearchResources:
                 )
             )
         return PeriodCloseReport(period=period, expired_reservation_ids=tuple(expired))
-
-    def close_ended_periods(self) -> list[PeriodCloseReport]:
-        """Close every pool whose period has ended (provider-free maintenance)."""
-
-        now = self.clock()
-        pools = self.session.execute(
-            select(ResearchResourcePool).where(
-                ResearchResourcePool.closed_at.is_(None),
-                ResearchResourcePool.period_end.is_not(None),
-            )
-        ).scalars()
-        reports = []
-        seen = set()
-        for pool in list(pools):
-            end = as_utc(pool.period_end)
-            if end <= now and (pool.pool_key, pool.period) not in seen:
-                seen.add((pool.pool_key, pool.period))
-                reports.append(self.close_period(pool.pool_key, pool.period))
-        return reports

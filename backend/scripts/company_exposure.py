@@ -17,6 +17,7 @@ docs/runbooks/company-exposure-map.md). Secret values are never printed.
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import sys
 from collections import Counter
@@ -46,7 +47,7 @@ def status(session, config) -> dict:
     from sqlalchemy.exc import SQLAlchemyError
 
     from app.models.company_exposure import ResearchEvent, ResearchWorkItem
-    from app.services.company_exposure.activation import evaluate_all
+    from app.services.company_exposure.activation import evaluate
 
     latest = (
         select(ResearchEvent.request_id, func.max(ResearchEvent.sequence).label("seq"))
@@ -75,10 +76,7 @@ def status(session, config) -> dict:
     return {
         "configuration": config.public_status(),
         "document_store": config.document_store,
-        "activation": [
-            {"stage": d.stage, "allowed": d.allowed, "reasons": list(d.reasons)}
-            for d in evaluate_all(config, check_storage=True)
-        ],
+        "activation": asdict(evaluate(config, check_storage=True)),
         "jobs_by_state": dict(sorted(states.items())),
         "work_items_by_status": dict(sorted(work.items())),
         "migration_heads": head,
@@ -184,39 +182,10 @@ def _admin_subject() -> str:
     return (settings.admin_principal_id or "").strip()
 
 
-def _cmd_status(session, config, args):
-    return status(session, config), EXIT_OK
-
-
-def _cmd_job(session, config, args):
+def job(session, job_id: UUID) -> dict:
     from app.services.company_exposure.reads import ResearchJobReader
 
-    payload = ResearchJobReader(session).read(args.job_id)
-    return (payload, EXIT_OK) if payload else ({"state": "not_found"}, EXIT_BLOCKED)
-
-
-def _cmd_resolve_issuer(session, config, args):
-    payload = resolve_issuer(
-        session,
-        security_id=args.security_id,
-        cik=args.cik,
-        apply=args.apply,
-        admin_subject=_admin_subject(),
-    )
-    return payload, EXIT_BLOCKED if payload["state"] == "blocked" else EXIT_OK
-
-
-def _cmd_resume(session, config, args):
-    payload = resume(session, config, job_id=args.job_id, apply=args.apply)
-    return payload, EXIT_BLOCKED if payload["state"] == "not_found" else EXIT_OK
-
-
-def _cmd_inspect_holds(session, config, args):
-    return inspect_holds(session), EXIT_OK
-
-
-def _cmd_refresh_holds(session, config, args):
-    return refresh_holds(session, apply=args.apply), EXIT_OK
+    return ResearchJobReader(session).read(job_id) or {"state": "not_found"}
 
 
 def _cik(value: str) -> str:
@@ -235,26 +204,38 @@ def _steps(value: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Company exposure operator CLI")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("status").set_defaults(handler=_cmd_status)
-    job = sub.add_parser("job")
-    job.add_argument("job_id", type=UUID)
-    job.set_defaults(handler=_cmd_job)
+    sub.add_parser("status").set_defaults(handler=lambda s, c, a: status(s, c))
+    show = sub.add_parser("job")
+    show.add_argument("job_id", type=UUID)
+    show.set_defaults(handler=lambda s, c, a: job(s, a.job_id))
     resolve = sub.add_parser("resolve-issuer")
     resolve.add_argument("--security-id", type=int, required=True)
     resolve.add_argument("--cik", type=_cik, required=True)
     resolve.add_argument("--apply", action="store_true")
-    resolve.set_defaults(handler=_cmd_resolve_issuer)
+    resolve.set_defaults(
+        handler=lambda s, c, a: resolve_issuer(
+            s,
+            security_id=a.security_id,
+            cik=a.cik,
+            apply=a.apply,
+            admin_subject=_admin_subject(),
+        )
+    )
     res = sub.add_parser("resume")
     res.add_argument("job_id", type=UUID)
     res.add_argument("--apply", action="store_true")
-    res.set_defaults(handler=_cmd_resume)
+    res.set_defaults(
+        handler=lambda s, c, a: resume(s, c, job_id=a.job_id, apply=a.apply)
+    )
     proc = sub.add_parser("process")
     proc.add_argument("--max-steps", type=_steps, default=3)
     proc.set_defaults(handler=None)
-    sub.add_parser("inspect-holds").set_defaults(handler=_cmd_inspect_holds)
+    sub.add_parser("inspect-holds").set_defaults(
+        handler=lambda s, c, a: inspect_holds(s)
+    )
     refresh = sub.add_parser("refresh-holds")
     refresh.add_argument("--apply", action="store_true")
-    refresh.set_defaults(handler=_cmd_refresh_holds)
+    refresh.set_defaults(handler=lambda s, c, a: refresh_holds(s, apply=a.apply))
     return parser
 
 
@@ -287,11 +268,15 @@ def main(
         from app.services.company_exposure.config import load_config as config_loader
     session = (session_factory or _session_factory())()
     try:
-        payload, code = args.handler(session, config_loader(), args)
+        payload = args.handler(session, config_loader(), args)
     finally:
         session.close()
     _print(payload)
-    return code
+    blocked = isinstance(payload, dict) and payload.get("state") in {
+        "blocked",
+        "not_found",
+    }
+    return EXIT_BLOCKED if blocked else EXIT_OK
 
 
 if __name__ == "__main__":

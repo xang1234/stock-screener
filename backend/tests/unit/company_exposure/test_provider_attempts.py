@@ -15,7 +15,7 @@ from app.services.company_exposure.providers import (
     SubscriptionProvider,
     default_client_factory,
 )
-from app.services.company_exposure.resources import ResearchResources
+from app.services.company_exposure.resources import REQUEST_POOL, ResearchResources
 from tests.fixtures.company_exposure.factory import FakeGoTransport, FixedClock
 
 CONFIG = ExposureRuntimeConfig(
@@ -92,7 +92,11 @@ def test_retry_records_two_go_attempts_and_reuses_success(
 @pytest.mark.exposure_layer("unit")
 @pytest.mark.parametrize(
     "error",
-    [httpx.ConnectError("refused"), httpx.ConnectTimeout("connect"), httpx.PoolTimeout("pool")],
+    [
+        httpx.ConnectError("refused"),
+        httpx.ConnectTimeout("connect"),
+        httpx.PoolTimeout("pool"),
+    ],
 )
 def test_connect_phase_failure_is_pre_dispatch_and_released(
     subscription_runner, provider_input, go_transport, resources, error
@@ -134,8 +138,8 @@ def test_uncertain_reservation_expires_with_its_period(
     result = subscription_runner.run(provider_input)
     period, period_end = CONFIG.allocation_period(clock.now())
     clock.advance_to(period_end)
-    reports = resources.close_ended_periods()
-    assert [r.period for r in reports] == [period]
+    report = resources.close_period(REQUEST_POOL, period)
+    assert report.expired_reservation_ids
     assert resources.read(result.ticket_id).state == "expired_uncertain"
     next_period, _ = CONFIG.allocation_period(clock.now())
     assert (

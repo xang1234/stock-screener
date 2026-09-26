@@ -1,11 +1,8 @@
-"""Issuer identity: attestation import, reviewed links and registry matches.
+"""Issuer identity: reviewed links and registry matches.
 
 Rules (spec §4.2):
 
 * Names never merge issuers; identifiers are scheme- and market-scoped.
-* Existing Social administrator attestations are imported exactly, with
-  configuration version/hash and verification references. Re-importing the
-  same configuration creates no new history.
 * A new shared-issuer/cross-listing link needs administrator acceptance.
 * A single, unambiguous, non-conflicting official-registry match (e.g. SEC
   ticker→CIK confirmed by the submissions record) may be accepted by the
@@ -18,9 +15,8 @@ Rules (spec §4.2):
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
@@ -40,13 +36,9 @@ from app.models.company_exposure import (
     ExposureIssuer,
     IssuerIdentifierRevision,
     IssuerSecurityLinkRevision,
-    LegacyIssuerAttestationBridge,
 )
 from app.models.stock_universe import StockUniverse
 from app.services.company_exposure.fence import research_write
-
-SOCIAL_SCHEME = ("SOCIAL", "social_company_id")
-LEGACY_POLICY = "admin-attested-company-v1"
 
 
 class IssuerIdentityError(RuntimeError):
@@ -95,16 +87,6 @@ class LinkProposal:
     evidence: dict
     requested_by: str
     reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class ImportReport:
-    configuration_version: int
-    configuration_hash: str
-    imported: int
-    already_imported: int
-    unknown_symbols: tuple[str, ...]
-    conflicts: tuple[str, ...]
 
 
 def _is_admin(principal) -> bool:
@@ -306,135 +288,6 @@ class IssuerIdentityAdapter:
             raise IssuerIdentityError("security_not_found")
         return security
 
-    def import_attestations(self, snapshot, principal) -> ImportReport:
-        """Import a Social ``CompanyIdentityConfiguration`` exactly.
-
-        One issuer per attested ``company_id``; several symbols sharing a
-        company ID are administrator-attested cross-listings.
-        """
-
-        if not _is_admin(principal):
-            raise PermissionError("admin_required")
-        entries = [asdict(entry) for entry in snapshot.entries]
-        configuration = {
-            "version": snapshot.version,
-            "policy_version": snapshot.policy_version,
-            "entries": sorted(entries, key=lambda e: e["symbol"]),
-        }
-        configuration_hash = content_hash(configuration)
-        by_company: dict[str, list[dict]] = defaultdict(list)
-        for entry in entries:
-            by_company[entry["company_id"]].append(entry)
-        imported = already = 0
-        unknown: list[str] = []
-        conflicts: list[str] = []
-        with research_write(self.session):
-            for company_id, company_entries in sorted(by_company.items()):
-                key = (*SOCIAL_SCHEME, company_id)
-                issuer_id = self._identifier_owner(key)
-                for entry in sorted(company_entries, key=lambda e: e["symbol"]):
-                    security = self.session.execute(
-                        select(StockUniverse).where(
-                            StockUniverse.symbol == entry["symbol"]
-                        )
-                    ).scalar_one_or_none()
-                    if security is None:
-                        unknown.append(entry["symbol"])
-                        continue
-                    bridge = self.session.execute(
-                        select(LegacyIssuerAttestationBridge).where(
-                            LegacyIssuerAttestationBridge.configuration_version
-                            == snapshot.version,
-                            LegacyIssuerAttestationBridge.configuration_hash
-                            == configuration_hash,
-                            LegacyIssuerAttestationBridge.legacy_company_id
-                            == company_id,
-                            LegacyIssuerAttestationBridge.security_id == security.id,
-                        )
-                    ).scalar_one_or_none()
-                    if bridge is not None:
-                        already += 1
-                        continue
-                    if issuer_id is None:
-                        issuer_id = self._new_issuer(
-                            {
-                                "origin": "social_company_identity",
-                                "legacy_company_id": company_id,
-                            },
-                            principal.subject,
-                        ).id
-                        self._add_identifier(
-                            issuer_id,
-                            key,
-                            state=LinkState.ACCEPTED,
-                            policy=LinkAcceptancePolicy.LEGACY_ATTESTATION_IMPORT,
-                            evidence={
-                                "configuration_version": snapshot.version,
-                                "configuration_hash": configuration_hash,
-                            },
-                            actor=principal.subject,
-                            reason="imported administrator attestation",
-                        )
-                    existing = self.current_link(security.id)
-                    evidence = {
-                        "verification_reference": entry["verification_reference"],
-                        "verified_at": entry["verified_at"],
-                        "configuration_version": snapshot.version,
-                        "configuration_hash": configuration_hash,
-                    }
-                    if existing is not None and existing.issuer_id != issuer_id:
-                        link = self._add_link(
-                            security,
-                            issuer_id,
-                            state=LinkState.REVIEW_REQUIRED,
-                            policy=LinkAcceptancePolicy.LEGACY_ATTESTATION_IMPORT,
-                            actor=principal.subject,
-                            reason="attestation conflicts with accepted link",
-                            evidence=evidence,
-                        )
-                        conflicts.append(entry["symbol"])
-                    elif existing is not None:
-                        link = existing
-                    else:
-                        link = self._add_link(
-                            security,
-                            issuer_id,
-                            state=LinkState.ACCEPTED,
-                            policy=LinkAcceptancePolicy.LEGACY_ATTESTATION_IMPORT,
-                            actor=principal.subject,
-                            reason="imported administrator attestation",
-                            evidence=evidence,
-                        )
-                    self.session.add(
-                        LegacyIssuerAttestationBridge(
-                            configuration_version=snapshot.version,
-                            configuration_hash=configuration_hash,
-                            policy_version=snapshot.policy_version,
-                            legacy_company_id=company_id,
-                            legacy_symbol=entry["symbol"],
-                            verified_at=entry["verified_at"],
-                            security_id=security.id,
-                            verification_reference=entry["verification_reference"],
-                            issuer_id=issuer_id,
-                            link_revision_id=link.id,
-                            audit_provenance={
-                                "registry_version": snapshot.registry_version,
-                                "policy_version": snapshot.policy_version,
-                            },
-                            actor=principal.subject,
-                        )
-                    )
-                    self.session.flush()
-                    imported += 1
-        return ImportReport(
-            configuration_version=snapshot.version,
-            configuration_hash=configuration_hash,
-            imported=imported,
-            already_imported=already,
-            unknown_symbols=tuple(unknown),
-            conflicts=tuple(conflicts),
-        )
-
     def propose_link(self, proposal: LinkProposal) -> ProposalRef:
         """Record a link proposal for administrator review. Never accepts."""
 
@@ -487,7 +340,9 @@ class IssuerIdentityAdapter:
             }
         )
 
-    def apply_link(self, preview_id: UUID, principal, expected_hash: str) -> IssuerLinkRef:
+    def apply_link(
+        self, preview_id: UUID, principal, expected_hash: str
+    ) -> IssuerLinkRef:
         """Administrator acceptance of a pending proposal (trusted principal)."""
 
         if not _is_admin(principal):
@@ -579,7 +434,9 @@ class IssuerIdentityAdapter:
                     current.acceptance_policy,
                     created=False,
                 )
-            if owner is not None and (current is not None or self._issuer_listings(owner)):
+            if owner is not None and (
+                current is not None or self._issuer_listings(owner)
+            ):
                 reason = "cik_linked_to_other_issuer"
             elif current is not None:
                 existing = self.identifiers_for(current.issuer_id).get((key[0], key[1]))
@@ -659,7 +516,9 @@ class IssuerIdentityAdapter:
             LinkAcceptancePolicy.OFFICIAL_REGISTRY_SINGLE_LISTING.value,
         )
 
-    def _registry_blocker(self, security: StockUniverse, match: RegistryMatch) -> str | None:
+    def _registry_blocker(
+        self, security: StockUniverse, match: RegistryMatch
+    ) -> str | None:
         if security.market not in LAUNCH_MARKETS or security.market != match.market:
             return "unsupported_market"
         if not security.is_active or security.status != "active":
@@ -676,7 +535,9 @@ class IssuerIdentityAdapter:
             if identifier is not None:
                 prior = tuple(identifier)
                 try:
-                    wanted = normalized_identifier(match.market, match.scheme, match.value)
+                    wanted = normalized_identifier(
+                        match.market, match.scheme, match.value
+                    )
                 except ValueError:
                     return "invalid_identifier"
                 if prior != wanted:

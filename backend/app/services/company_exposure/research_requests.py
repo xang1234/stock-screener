@@ -57,10 +57,8 @@ class ResearchRequestInput:
     kind: str = "verify"
     security_id: int | None = None
     symbol: str | None = None
-    issuer_id: UUID | None = None
     supplied_links: tuple[str, ...] = ()
     supplied_cik: str | None = None
-    trigger_origin: str = "requested"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +93,7 @@ class ResearchRequests:
         self.repo = CompanyExposureWorkRepository(session, clock=clock)
         self.identity = IssuerIdentityAdapter(session, clock=clock)
 
-    def _listing(self, request: ResearchRequestInput) -> StockUniverse | None:
-        if request.security_id is None and request.symbol is None:
-            if request.issuer_id is None:
-                raise ValueError("security_or_issuer_required")
-            return None
+    def _listing(self, request: ResearchRequestInput) -> StockUniverse:
         if request.security_id is not None:
             security = self.session.get(StockUniverse, request.security_id)
         else:
@@ -133,17 +127,15 @@ class ResearchRequests:
             idempotency_namespace=f"company-exposure:{principal}",
             idempotency_key=idempotency_key,
             economic_theme_id=request.economic_theme_id,
-            security_id=None if security is None else security.id,
-            issuer_id=request.issuer_id,
-            market=None if security is None else security.market,
+            security_id=security.id,
+            market=security.market,
             supplied_links=list(request.supplied_links),
             limits=self.config.limits,
-            trigger_origin=request.trigger_origin,
         )
         proposal = None
         if created:
             enqueue_stage(self.repo, row, RESEARCH_STAGES[0])
-            if request.supplied_cik and security is not None:
+            if request.supplied_cik:
                 proposal = self._propose_cik(
                     security.id, request.supplied_cik, principal, row.id
                 )

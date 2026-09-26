@@ -315,72 +315,23 @@ class CompanyExposureWorkRepository:
         self.session.flush()
         return item
 
-    def _items_for(self, request_id: UUID) -> list[ResearchWorkItem]:
-        return list(
-            self.session.execute(
-                select(ResearchWorkItem)
-                .where(
-                    or_(
-                        ResearchWorkItem.request_id == request_id,
-                        ResearchWorkItem.root_request_id == request_id,
-                    )
-                )
-                .with_for_update()
-            ).scalars()
-        )
-
-    def pause(self, request_id: UUID, *, reason: str) -> None:
-        for item in self._items_for(request_id):
-            if item.status in {"pending", "retryable", "leased"}:
-                item.status = "paused"
-                item.pause_reason = reason
-                item.lease_token = None
-                item.lease_owner = None
-                item.lease_expires_at = None
-        self.append_event(request_id, reason, {"paused": True})
-
     def resume(self, request_id: UUID) -> None:
-        for item in self._items_for(request_id):
-            if item.status == "paused":
-                item.status = "pending"
-                item.pause_reason = None
-                item.available_at = self.clock()
-        self.append_event(request_id, ResearchJobState.QUEUED, {"resumed": True})
-
-    def cancel(self, request_id: UUID, *, reason: str) -> None:
-        """Stop further work. Only never-dispatched reservations are released;
-        a dispatched request may have executed, so it stays charged as
-        uncertain until a result reconciles it or its period expires."""
-
-        for item in self._items_for(request_id):
-            if item.status not in {"completed", "failed", "cancelled"}:
-                item.status = "cancelled"
-                item.lease_token = None
-                item.lease_owner = None
-                item.lease_expires_at = None
-        ledger = ReservationLedger(self.session, clock=self.clock)
-        reservations = self.session.execute(
-            select(ResearchReservation).where(
-                ResearchReservation.root_request_id == request_id
+        paused = self.session.execute(
+            select(ResearchWorkItem)
+            .where(
+                or_(
+                    ResearchWorkItem.request_id == request_id,
+                    ResearchWorkItem.root_request_id == request_id,
+                ),
+                ResearchWorkItem.status == "paused",
             )
+            .with_for_update()
         ).scalars()
-        for reservation in reservations:
-            state = ledger.state(reservation.id)
-            if state == ReservationState.RESERVED:
-                ledger.transition(
-                    reservation.id,
-                    ReservationState.RELEASED,
-                    dispatch_phase=DispatchPhase.PRE_DISPATCH,
-                    detail={"reason": reason},
-                )
-            elif state == ReservationState.DISPATCHED:
-                ledger.transition(
-                    reservation.id,
-                    ReservationState.UNCERTAIN,
-                    dispatch_phase=DispatchPhase.UNCERTAIN,
-                    detail={"reason": reason},
-                )
-        self.append_event(request_id, ResearchJobState.CANCELLED, {"reason": reason})
+        for item in paused:
+            item.status = "pending"
+            item.pause_reason = None
+            item.available_at = self.clock()
+        self.append_event(request_id, ResearchJobState.QUEUED, {"resumed": True})
 
 
 @dataclass(frozen=True, slots=True)

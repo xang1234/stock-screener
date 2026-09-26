@@ -53,8 +53,7 @@ class CaseInventory:
         return tuple(
             item.nodeid
             for item in self.items
-            if requirement.case_id in item.case_ids
-            and item.layer == requirement.layer
+            if requirement.case_id in item.case_ids and item.layer == requirement.layer
         )
 
 
@@ -146,14 +145,6 @@ def validate_case_report(
         execution_mode=report.execution_mode,
         errors=tuple(errors),
     )
-
-
-def load_contract_cases(path: Path) -> dict[str, dict]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    cases = payload["cases"]
-    if set(cases) != CASE_IDS:
-        raise ValueError("contract_case_manifest_incomplete")
-    return cases
 
 
 def load_requirements(path: Path, slice_id: str) -> frozenset[CaseLayerRequirement]:

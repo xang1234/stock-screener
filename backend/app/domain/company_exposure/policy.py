@@ -8,14 +8,12 @@ decision is made identically in research, publication and tests.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
 
 from app.domain.company_exposure.contracts import (
     PRIMARY_SUPPORT_BASES,
     ClaimKind,
     Conclusion,
     FreshnessState,
-    ResearchMode,
     SupportBasis,
 )
 
@@ -39,29 +37,6 @@ _TIME_BOUND_KINDS = frozenset(
 # Spec §5.4 bounded synthesis.
 MAX_SYNTHESIS_PRIMARY_PREMISES = 3
 MAX_SYNTHESIS_LINKS = 2
-
-
-def may_dispatch_paid_search(
-    *, enabled: bool, cap: Decimal | str | None, key_present: bool
-) -> bool:
-    """A paid search call needs explicit enablement, a positive cap and a key.
-
-    A credential alone never enables spending (spec D13, R01).
-    """
-
-    if enabled is not True or not key_present or cap is None:
-        return False
-    try:
-        amount = Decimal(str(cap))
-    except (InvalidOperation, ValueError):
-        return False
-    return amount.is_finite() and amount > 0
-
-
-def may_dispatch_research(mode: ResearchMode | str) -> bool:
-    """Only shadow and live modes may acquire documents or call providers."""
-
-    return ResearchMode(mode) in {ResearchMode.SHADOW, ResearchMode.LIVE}
 
 
 def freshness_deadline(

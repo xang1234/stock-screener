@@ -47,7 +47,7 @@ from app.services.company_exposure.network import (
     sniff_media_type,
 )
 from app.services.company_exposure.pacing import PacingUnavailable, ResearchRateGate
-from app.services.company_exposure.storage import OriginalStore, storage_lock
+from app.services.company_exposure.storage import OriginalStore
 
 _GAP_OUTCOMES = {
     "http_status_404": CoverageOutcome.NO_MATCHING_DOCUMENT,
@@ -237,19 +237,23 @@ class DocumentAcquisitionRegistry:
             self.commit()
             if response.not_modified:
                 return self._unchanged(target, document, capture)
-            return self._gap(target, response.failure_code, document=document, capture=capture)
+            return self._gap(
+                target, response.failure_code, document=document, capture=capture
+            )
 
         media_type, refusal = sniff_media_type(response.body, response.content_type)
         if refusal is not None:
             self.store.release(ticket, reason=refusal)
             capture = self._capture(
-                document, outcome=refusal, url=response.final_url, status=response.status
+                document,
+                outcome=refusal,
+                url=response.final_url,
+                status=response.status,
             )
             self.commit()
             return self._gap(target, refusal, document=document, capture=capture)
 
         digest = bytes_hash(response.body)
-        storage_lock(self.session, exclusive=False)
         existing = self.session.execute(
             select(ExposureDocumentRevision).where(
                 ExposureDocumentRevision.document_id == document.id,
@@ -371,7 +375,11 @@ class DocumentAcquisitionRegistry:
         )
         if not ticket.allowed:
             return CaptureResult(
-                document.id, None, None, None, False,
+                document.id,
+                None,
+                None,
+                None,
+                False,
                 CoverageItem(
                     route=target.adapter,
                     outcome=CoverageOutcome.UNAVAILABLE_CAPABILITY,
@@ -379,7 +387,6 @@ class DocumentAcquisitionRegistry:
                 ),
             )
         digest = bytes_hash(data)
-        storage_lock(self.session, exclusive=False)
         existing = self.session.execute(
             select(ExposureDocumentRevision).where(
                 ExposureDocumentRevision.document_id == document.id,
@@ -389,12 +396,20 @@ class DocumentAcquisitionRegistry:
         if existing is not None and self.store.exists(digest):
             self.store.release(ticket, reason="identical_content")
             capture = self._capture(
-                document, outcome="unchanged", url=target.url, revision=existing,
-                content_hash=digest, byte_length=len(data),
+                document,
+                outcome="unchanged",
+                url=target.url,
+                revision=existing,
+                content_hash=digest,
+                byte_length=len(data),
             )
             self.commit()
             return CaptureResult(
-                document.id, existing.id, capture.id, digest, False,
+                document.id,
+                existing.id,
+                capture.id,
+                digest,
+                False,
                 CoverageItem(
                     route=target.adapter,
                     outcome=CoverageOutcome.COMPLETE_FOR_REQUESTED_SCOPE,
@@ -420,12 +435,21 @@ class DocumentAcquisitionRegistry:
             self.session.add(revision)
             self.session.flush()
         capture = self._capture(
-            document, outcome="supplied", url=target.url, revision=revision,
-            changed=existing is None, content_hash=digest, byte_length=len(data),
+            document,
+            outcome="supplied",
+            url=target.url,
+            revision=revision,
+            changed=existing is None,
+            content_hash=digest,
+            byte_length=len(data),
         )
         self.commit()
         return CaptureResult(
-            document.id, revision.id, capture.id, digest, existing is None,
+            document.id,
+            revision.id,
+            capture.id,
+            digest,
+            existing is None,
             CoverageItem(
                 route=target.adapter,
                 outcome=CoverageOutcome.COMPLETE_FOR_REQUESTED_SCOPE,

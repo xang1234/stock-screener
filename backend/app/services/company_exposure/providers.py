@@ -77,16 +77,9 @@ class ArtifactRunResult:
 ClientFactory = Callable[[str, str], OpenCodeGoKimi]
 
 
-class ResearchDispatchBlocked(RuntimeError):
-    """A research model call did not produce a result (paused or failed)."""
-
-    def __init__(self, reason: str, *, retryable: bool = False):
-        super().__init__(reason)
-        self.reason = reason
-        self.retryable = retryable
-
-
-def default_client_factory(transport: httpx.BaseTransport | None = None) -> ClientFactory:
+def default_client_factory(
+    transport: httpx.BaseTransport | None = None,
+) -> ClientFactory:
     def build(api_key: str, session_id: str) -> OpenCodeGoKimi:
         return OpenCodeGoKimi(api_key, session_id=session_id, transport=transport)
 
@@ -104,7 +97,8 @@ class SubscriptionProvider:
         if (
             not ticket.allowed
             or ticket.attempt_id is None
-            or (ticket.route, ticket.model) != (SUBSCRIPTION_PROVIDER, SUBSCRIPTION_MODEL)
+            or (ticket.route, ticket.model)
+            != (SUBSCRIPTION_PROVIDER, SUBSCRIPTION_MODEL)
         ):
             raise ValueError("valid_reservation_ticket_required")
         if not self._api_key.strip():
@@ -247,51 +241,3 @@ class SubscriptionArtifactRunner:
             pause_reason=None,
             payload=output.data,
         )
-
-
-class ResearchJSONClient:
-    """``complete_json`` for existing Go adapters, one reservation per call.
-
-    Used by the translation/vision reuse adapters (Task 08A) so each
-    segment or image is its own accounted dispatch.
-    """
-
-    def __init__(
-        self,
-        runner: SubscriptionArtifactRunner,
-        *,
-        operation: str,
-        policy_hash: str,
-        capability: str = TEXT,
-        root_request_id: UUID | None = None,
-        request_id: UUID | None = None,
-    ):
-        self.runner = runner
-        self.operation = operation
-        self.policy_hash = policy_hash
-        self.capability = capability
-        self.root_request_id = root_request_id
-        self.request_id = request_id
-
-    def complete_json(self, messages: list[dict], *, max_tokens: int, read_timeout=20.0):
-        input_hash = content_hash({"messages": messages, "max_tokens": max_tokens})
-        result = self.runner.run(
-            ProviderInput(
-                operation=self.operation,
-                messages=messages,
-                input_hash=input_hash,
-                policy_hash=self.policy_hash,
-                max_output_tokens=max_tokens,
-                logical_operation_key=f"{self.operation}:{input_hash}",
-                capability=self.capability,
-                read_timeout_seconds=read_timeout,
-                root_request_id=self.root_request_id,
-                request_id=self.request_id,
-            )
-        )
-        if result.payload is None:
-            raise ResearchDispatchBlocked(
-                result.pause_reason or result.failure_code or "model_unavailable",
-                retryable=result.retryable,
-            )
-        return result.payload

@@ -11,23 +11,17 @@ from app.domain.company_exposure.contracts import (
     normalized_identifier,
 )
 from app.domain.economic_taxonomy.contracts import AdminPrincipal
-from app.models.company_exposure import (
-    IssuerSecurityLinkRevision,
-    LegacyIssuerAttestationBridge,
-)
 from app.services.company_exposure.issuer_identity import (
     IssuerIdentityAdapter,
     IssuerIdentityError,
     LinkProposal,
 )
-from app.services.social_company_identity_service import (
-    CompanyIdentityConfiguration,
-    CompanyIdentityEntry,
-)
 from tests.fixtures.company_exposure.factory import fixed_uuid, make_security
 
 ADMIN = AdminPrincipal(
-    subject="test:admin", auth_method="admin_api_key", roles=frozenset({"taxonomy:review"})
+    subject="test:admin",
+    auth_method="admin_api_key",
+    roles=frozenset({"taxonomy:review"}),
 )
 
 
@@ -36,65 +30,43 @@ def identity_adapter(db_session):
     return IssuerIdentityAdapter(db_session)
 
 
-def _config(*entries, version=3):
-    return CompanyIdentityConfiguration(
-        registry_version=7,
-        version=version,
-        entries=tuple(
-            CompanyIdentityEntry(
-                symbol=symbol,
-                company_id=company_id,
-                verification_reference=f"filing:{symbol}",
-                verified_at="2026-09-01T00:00:00+00:00",
-            )
-            for symbol, company_id in entries
-        ),
+def _accept(identity, security_id, *, issuer_id=None, identifiers=()):
+    """Administrator-reviewed link: propose, then apply."""
+
+    proposal = identity.propose_link(
+        LinkProposal(
+            security_id=security_id,
+            issuer_id=issuer_id,
+            identifiers=identifiers,
+            evidence={"reference": "filing cover page"},
+            requested_by="test:admin",
+            reason="administrator-verified listing",
+        )
     )
+    return identity.apply_link(proposal.link_revision_id, ADMIN, proposal.proposal_hash)
 
 
 @pytest.fixture
 def verified_cross_listings(db_session, identity_adapter):
     left = make_security(db_session, "TSM", market="US", exchange="NYSE")
     right = make_security(db_session, "2330.TW", market="TW", exchange="TWSE")
-    identity_adapter.import_attestations(
-        _config(("TSM", "company:tsmc"), ("2330.TW", "company:tsmc")), ADMIN
-    )
+    issuer = _accept(identity_adapter, left.id).issuer_id
+    _accept(identity_adapter, right.id, issuer_id=issuer)
     return SimpleNamespace(left_security_id=left.id, right_security_id=right.id)
 
 
 @pytest.mark.case("I01")
 @pytest.mark.exposure_layer("unit")
-def test_verified_cross_listings_resolve_one_issuer(identity_adapter, verified_cross_listings):
+def test_verified_cross_listings_resolve_one_issuer(
+    identity_adapter, verified_cross_listings
+):
     left = identity_adapter.resolve_security(verified_cross_listings.left_security_id)
     right = identity_adapter.resolve_security(verified_cross_listings.right_security_id)
     assert left.issuer_id == right.issuer_id
     assert left.security_id != right.security_id
     assert left.listing_security_ids == right.listing_security_ids
     assert len(left.listing_security_ids) == 2
-    assert left.acceptance_policy == "legacy_attestation_import"
-
-
-def test_reimporting_the_same_configuration_creates_no_history(
-    db_session, identity_adapter, verified_cross_listings
-):
-    before = db_session.query(IssuerSecurityLinkRevision).count()
-    report = identity_adapter.import_attestations(
-        _config(("TSM", "company:tsmc"), ("2330.TW", "company:tsmc")), ADMIN
-    )
-    assert (report.imported, report.already_imported) == (0, 2)
-    assert db_session.query(IssuerSecurityLinkRevision).count() == before
-    bridge = db_session.query(LegacyIssuerAttestationBridge).first()
-    assert bridge.legacy_company_id == "company:tsmc"  # not coerced to a UUID
-    assert bridge.verification_reference.startswith("filing:")
-
-
-def test_import_requires_trusted_admin_and_skips_unknown_symbols(
-    db_session, identity_adapter
-):
-    with pytest.raises(PermissionError):
-        identity_adapter.import_attestations(_config(("TSM", "c")), "forged-admin")
-    report = identity_adapter.import_attestations(_config(("NOPE", "c")), ADMIN)
-    assert report.unknown_symbols == ("NOPE",)
+    assert left.acceptance_policy == "administrator_reviewed"
 
 
 @pytest.fixture
@@ -112,15 +84,19 @@ def conflicting_link(db_session, identity_adapter, verified_cross_listings):
 @pytest.fixture
 def attestation_reader(identity_adapter, verified_cross_listings):
     return SimpleNamespace(
-        read=lambda: identity_adapter.resolve_security(
-            verified_cross_listings.left_security_id
-        ).issuer_id
+        read=lambda: (
+            identity_adapter.resolve_security(
+                verified_cross_listings.left_security_id
+            ).issuer_id
+        )
     )
 
 
 @pytest.mark.case("I02")
 @pytest.mark.exposure_layer("unit")
-def test_conflicting_link_stays_a_proposal(identity_adapter, conflicting_link, attestation_reader):
+def test_conflicting_link_stays_a_proposal(
+    identity_adapter, conflicting_link, attestation_reader
+):
     before = attestation_reader.read()
     proposal = identity_adapter.propose_link(conflicting_link)
     assert proposal.state == "review_required"
@@ -224,10 +200,8 @@ def registry_match_variant(db_session, identity_adapter):
             return _match(security)
         if variant == "cross_listed_issuer":
             twin = make_security(db_session, "VAR.TW", market="TW", exchange="TWSE")
-            identity_adapter.import_attestations(
-                _config(("VAR", "company:var"), ("VAR.TW", "company:var")), ADMIN
-            )
-            del twin
+            issuer = _accept(identity_adapter, twin.id).issuer_id
+            _accept(identity_adapter, security.id, issuer_id=issuer)
             return _match(security)
         if variant == "ticker_changed_since_prior_link":
             identity_adapter.accept_registry_match(_match(security), SERVICE_PRINCIPAL)

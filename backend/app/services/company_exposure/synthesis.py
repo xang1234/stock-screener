@@ -1,4 +1,4 @@
-"""Bounded primary synthesis and evidence-dependency checks (spec §5.4, §12.3).
+"""Bounded primary synthesis (spec §5.4).
 
 A synthesized claim may join at most three original primary premises with
 at most two explicit links. Each link must be stated in a premise quote that
@@ -29,10 +29,6 @@ APPLICATION_LINKS = frozenset(
     {"issuer_offers_product", "product_supports_application", "segment_of_issuer"}
 )
 CROSS_COMPANY_LINKS = frozenset({"supplies_to", "customer_of", "manufactures"})
-
-
-class EvidenceCycle(ValueError):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +85,10 @@ def validate_synthesis(
         if premise is None:
             reasons.append("link_premise_missing")
             continue
-        if not (_mentions(premise.quote, link.source) and _mentions(premise.quote, link.target)):
+        if not (
+            _mentions(premise.quote, link.source)
+            and _mentions(premise.quote, link.target)
+        ):
             reasons.append("link_not_stated_in_premise")
         if link.relationship in CROSS_COMPANY_LINKS:
             reasons.append("cross_company_link_cannot_carry_application")
@@ -115,47 +114,3 @@ def validate_synthesis(
         premises=tuple(premises),
         links=tuple(links),
     )
-
-
-def verify_evidence_dag(edges: dict[str, list[str]]) -> None:
-    """Reject any dependency cycle (e.g. research → classification → research).
-
-    ``edges`` maps a node to the nodes it depends on. Raises
-    ``EvidenceCycle`` naming the cycle.
-    """
-
-    white, grey, black = 0, 1, 2
-    colour: dict[str, int] = {}
-
-    def visit(node: str, path: list[str]) -> None:
-        colour[node] = grey
-        for dependency in edges.get(node, []):
-            state = colour.get(dependency, white)
-            if state == grey:
-                cycle = path[path.index(dependency) :] + [dependency] if dependency in path else [node, dependency]
-                raise EvidenceCycle("evidence_cycle:" + "->".join(cycle))
-            if state == white:
-                visit(dependency, [*path, dependency])
-        colour[node] = black
-
-    for start in list(edges):
-        if colour.get(start, white) == white:
-            visit(start, [start])
-
-
-def primary_leaves(edges: dict[str, list[str]], leaf_roles: dict[str, str], root: str) -> set[str]:
-    """Original-primary leaves reachable from ``root``; derivatives and
-    generated artifacts are traversed through, never counted as leaves."""
-
-    verify_evidence_dag(edges)
-    leaves, stack, seen = set(), [root], set()
-    while stack:
-        node = stack.pop()
-        if node in seen:
-            continue
-        seen.add(node)
-        dependencies = edges.get(node, [])
-        if not dependencies and leaf_roles.get(node) == "original_primary":
-            leaves.add(node)
-        stack.extend(dependencies)
-    return leaves

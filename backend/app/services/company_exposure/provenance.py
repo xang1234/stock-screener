@@ -108,8 +108,4 @@ def origin_groups(session: Session, passage_ids: Iterable[UUID]) -> dict[UUID, s
     }
 
 
-def independent_origin_count(session: Session, passage_ids: Iterable[UUID]) -> int:
-    return len(set(origin_groups(session, passage_ids).values()))
-
-
-__all__ = ("independent_origin_count", "origin_groups")
+__all__ = ("origin_groups",)

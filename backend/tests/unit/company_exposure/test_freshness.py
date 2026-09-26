@@ -9,7 +9,6 @@ from app.domain.company_exposure.contracts import FreshnessState
 from app.models.company_exposure import ExposureClaimRevision, ResearchProviderAttempt
 from app.services.company_exposure.freshness import claim_freshness, refresh_due_holds
 from app.services.company_exposure.holds import HoldRegistry
-from app.services.company_exposure.safety import ExposureSafety
 from tests.fixtures.company_exposure.factory import verified_claim
 
 ROLE_DATE = datetime(2025, 8, 1, tzinfo=timezone.utc)
@@ -67,19 +66,20 @@ def _no_provider_attempts(db):
     )
 
 
+def _claim_holds(db, revision_id):
+    revision = db.get(ExposureClaimRevision, revision_id)
+    return HoldRegistry(db).active_kinds_for_claim(revision.claim_id, revision.id)
+
+
 @pytest.mark.case("I05")
 @pytest.mark.case("R12")
 @pytest.mark.exposure_layer("unit")
-def test_expiry_blocks_new_use_without_research(dossier, selected_role):
-    safety = ExposureSafety(dossier.db, clock=dossier.clock.now)
-    assert safety.evaluate([selected_role]).allowed
+def test_expiry_holds_new_use_without_research(dossier, selected_role):
+    assert refresh_due_holds(dossier.db, dossier.clock.now()).new_holds == ()
     at = dossier.clock.advance_to(ROLE_EXPIRY)
-    decision = safety.evaluate([selected_role], at=at)
-    assert decision.allowed is False
-    assert decision.reasons == (f"{selected_role}:stale",)
-
     report = refresh_due_holds(dossier.db, at)
     assert len(report.new_holds) == 1
+    assert _claim_holds(dossier.db, selected_role) == {"stale"}
     assert refresh_due_holds(dossier.db, at).new_holds == ()  # idempotent
     assert _no_provider_attempts(dossier.db)
     # The existing accepted revision is not deleted or rewritten: only held.
@@ -89,7 +89,7 @@ def test_expiry_blocks_new_use_without_research(dossier, selected_role):
 
 @pytest.mark.case("I05")
 @pytest.mark.exposure_layer("unit")
-def test_disputed_hold_blocks_only_its_claim(dossier):
+def test_disputed_hold_affects_only_its_claim(dossier):
     role = verified_claim(
         "role", passage=dossier.passages["role"], supported_as_of=ROLE_DATE
     )
@@ -102,15 +102,15 @@ def test_disputed_hold_blocks_only_its_claim(dossier):
     _, ref = dossier.persist(dossier.attempt(role, other))
     held_id, free_id = ref.claim_revision_ids.values()
     registry = HoldRegistry(dossier.db)
-    hold, _ = registry.apply(
+    hold, created = registry.apply(
         "claim",
         dossier.db.get(ExposureClaimRevision, held_id).claim_id,
         "disputed",
         reason="customer disputes relationship",
     )
-    safety = ExposureSafety(dossier.db, clock=dossier.clock.now)
-    assert safety.evaluate([held_id]).reasons == (f"{held_id}:hold:disputed",)
-    assert safety.evaluate([free_id]).allowed
+    assert created
+    assert _claim_holds(dossier.db, held_id) == {"disputed"}
+    assert _claim_holds(dossier.db, free_id) == set()
 
     with pytest.raises(ValueError, match="lift_requires_new_support"):
         registry.lift(hold, actor="admin:alice", reason="resolved", lift_support={})
@@ -120,37 +120,14 @@ def test_disputed_hold_blocks_only_its_claim(dossier):
         reason="resolved",
         lift_support={"passage_id": str(dossier.passages["role"].id)},
     )
-    assert safety.evaluate([held_id]).allowed
+    assert _claim_holds(dossier.db, held_id) == set()
 
 
-def test_undated_and_unverified_support_are_held_from_automatic_use(dossier):
+def test_undated_support_is_held_from_automatic_use(dossier):
     undated = verified_claim(
         "role", passage=dossier.passages["role"], supported_as_of=None
     )
-    secondary = verified_claim(
-        "role",
-        passage=dossier.passages["other"],
-        product_key="probe-cards",
-        supported_as_of=ROLE_DATE,
-        basis="secondary_reported",
-        conclusion="unknown",
-        evidence_role="original_secondary",
-    )
-    _, ref = dossier.persist(dossier.attempt(undated, secondary))
-    safety = ExposureSafety(dossier.db, clock=dossier.clock.now)
-    reasons = set(safety.evaluate(ref.claim_revision_ids.values()).reasons)
-    ids = {
-        dossier.db.get(ExposureClaimRevision, i).support_basis: i
-        for i in ref.claim_revision_ids.values()
-    }
-    assert f"{ids['primary_explicit']}:undated" in reasons
-    assert f"{ids['secondary_reported']}:not_primary_supported" in reasons
-
-
-def test_safety_token_pins_time_and_reasons(dossier, selected_role):
-    safety = ExposureSafety(dossier.db, clock=dossier.clock.now)
-    first = safety.evaluate([selected_role])
-    assert first.token == safety.evaluate([selected_role]).token
-    assert first.minimum_expiry == ROLE_EXPIRY
-    later = safety.evaluate([selected_role], at=dossier.clock.now() + timedelta(days=1))
-    assert later.token != first.token
+    _, ref = dossier.persist(dossier.attempt(undated))
+    (revision_id,) = ref.claim_revision_ids.values()
+    refresh_due_holds(dossier.db, dossier.clock.now())
+    assert _claim_holds(dossier.db, revision_id) == {"undated"}

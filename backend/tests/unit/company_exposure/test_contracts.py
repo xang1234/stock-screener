@@ -25,15 +25,15 @@ from app.domain.company_exposure.manifest import CASE_IDS
 from app.domain.company_exposure.policy import (
     freshness_deadline,
     is_fresh,
-    may_dispatch_paid_search,
-    may_dispatch_research,
     within_synthesis_bound,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SPEC = REPO_ROOT / "docs/superpowers/specs/2026-09-25-company-exposure-map-design.md"
 PLAN = REPO_ROOT / "docs/superpowers/plans/2026-09-25-company-exposure-map.md"
-ACCEPTED_SPEC_SHA256 = "84784bdea4d789c2f7bb0f1e5529054259ab2fa8c66c504f30678efcc8fae2df"
+ACCEPTED_SPEC_SHA256 = (
+    "84784bdea4d789c2f7bb0f1e5529054259ab2fa8c66c504f30678efcc8fae2df"
+)
 
 
 @pytest.mark.case("R01")
@@ -45,30 +45,6 @@ def test_default_configuration_does_not_spend():
     assert limits.paid_search_enabled is False
     assert limits.llm_billing_mode is LLMBillingMode.SUBSCRIPTION
     assert limits.provider_dispatch_configured is False
-    assert not may_dispatch_research(limits.research_mode)
-    assert not may_dispatch_paid_search(enabled=False, cap=None, key_present=True)
-
-
-@pytest.mark.case("R01")
-@pytest.mark.exposure_layer("unit")
-@pytest.mark.parametrize(
-    ("enabled", "cap", "key_present", "allowed"),
-    [
-        (False, "5", True, False),
-        (True, None, True, False),
-        (True, "0", True, False),
-        (True, "-1", True, False),
-        (True, "NaN", True, False),
-        (True, "not-a-number", True, False),
-        (True, "5", False, False),
-        (True, "5", True, True),
-    ],
-)
-def test_paid_search_needs_enablement_cap_and_key(enabled, cap, key_present, allowed):
-    assert (
-        may_dispatch_paid_search(enabled=enabled, cap=cap, key_present=key_present)
-        is allowed
-    )
 
 
 def test_limits_match_approved_defaults():
@@ -118,7 +94,9 @@ def test_manifest_descriptions_are_verbatim_from_accepted_spec(contract_manifest
     spec = SPEC.read_text("utf-8")
     table = {
         match.group(1): match.group(2).strip()
-        for match in re.finditer(r"^\| ([EIR]\d\d) \| ([^|]+) \|\s*$", spec, re.MULTILINE)
+        for match in re.finditer(
+            r"^\| ([EIR]\d\d) \| ([^|]+) \|\s*$", spec, re.MULTILINE
+        )
     }
     assert {key: row["description"] for key, row in contract_manifest.items()} == table
 

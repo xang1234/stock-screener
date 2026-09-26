@@ -6,10 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.company_exposure import ClaimEvidenceLink, DocumentRelationRevision
-from app.services.company_exposure.provenance import (
-    independent_origin_count,
-    origin_groups,
-)
+from app.services.company_exposure.provenance import origin_groups
 from tests.fixtures.company_exposure.factory import (
     make_document,
     make_passage,
@@ -58,12 +55,12 @@ def test_mirrors_and_translation_are_one_origin(dossier, one_report_three_copies
     ids = [p.id for p in one_report_three_copies]
     groups = origin_groups(dossier.db, ids)
     assert len(set(groups.values())) == 1
-    assert independent_origin_count(dossier.db, ids) == 1
 
     _, independent = _passage(
         dossier.db, "trade-press:interview", b"different original"
     )
-    assert independent_origin_count(dossier.db, [*ids, independent.id]) == 2
+    groups = origin_groups(dossier.db, [*ids, independent.id])
+    assert len(set(groups.values())) == 2
 
 
 @pytest.mark.case("E13")

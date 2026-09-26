@@ -170,21 +170,13 @@ class MarketRoute:
 
     adapter: MarketDocumentAdapter
     resolve_registry: Callable[[int, JobBudgetRef], RegistryMatch | CoverageItem]
-    query: DocumentQuery = ANNUAL_REPORTS
 
 
 @dataclass(frozen=True, slots=True)
 class _Issuer:
     issuer_id: UUID
     identifiers: dict
-    link_revision_id: UUID | None
-
-
-@dataclass(frozen=True, slots=True)
-class _IssuerRef:
-    """What a market adapter needs to know about the issuer."""
-
-    identifiers: dict
+    link_revision_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,12 +356,6 @@ class ResearchStageRunner:
         return JobBudgetRef(root_request_id=request.effective_root_id)
 
     def _issuer(self, request) -> _Issuer | None:
-        if request.issuer_id is not None:
-            return _Issuer(
-                request.issuer_id,
-                self.identity.identifiers_for(request.issuer_id),
-                None,
-            )
         resolution = self.identity.resolve_security(request.security_id)
         if not resolution.resolved:
             return None
@@ -397,10 +383,8 @@ class ResearchStageRunner:
                 ResearchJobState.RESEARCHING,
                 "acquire",
                 issuer_id=str(issuer.issuer_id),
-                link_revision_id=None
-                if issuer.link_revision_id is None
-                else str(issuer.link_revision_id),
-                source="request" if request.issuer_id else "accepted_link",
+                link_revision_id=str(issuer.link_revision_id),
+                source="accepted_link",
             )
         route = self.markets.get(request.market)
         if route is None:
@@ -469,7 +453,7 @@ class ResearchStageRunner:
         else:
             budget = self._budget(request)
             discovery = route.adapter.discover(
-                _IssuerRef(issuer.identifiers), route.query, AcquisitionLimits(), budget
+                issuer, ANNUAL_REPORTS, AcquisitionLimits(), budget
             )
             coverage.extend(discovery.coverage)
             for target in discovery.targets:
@@ -580,9 +564,7 @@ class ResearchStageRunner:
             theme_label=theme.label,
             theme_terms=theme.terms,
             issuer_names=tuple(n for n in (getattr(security, "name", None),) if n),
-            link_revision_ids=()
-            if issuer.link_revision_id is None
-            else (str(issuer.link_revision_id),),
+            link_revision_ids=(str(issuer.link_revision_id),),
         )
 
     def _verify(self, request) -> StageOutcome:

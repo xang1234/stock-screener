@@ -13,7 +13,6 @@ from app.infra.db.repositories.company_exposure_work_repo import (
     WorkLeaseError,
 )
 from app.models.company_exposure import (
-    ResearchProviderAttempt,
     ResearchResourcePool,
     ResearchRootBudget,
 )
@@ -78,11 +77,20 @@ def _reserve(ledger, pool, request_row, key="op"):
 
 def test_claim_heartbeat_and_complete_require_the_live_lease(repo, request_row, clock):
     item = repo.enqueue(
-        request=request_row, stage="acquire", input_hash="a" * 64, policy_bundle_version="p1"
+        request=request_row,
+        stage="acquire",
+        input_hash="a" * 64,
+        policy_bundle_version="p1",
     )
-    assert repo.enqueue(
-        request=request_row, stage="acquire", input_hash="a" * 64, policy_bundle_version="p1"
-    ).id == item.id
+    assert (
+        repo.enqueue(
+            request=request_row,
+            stage="acquire",
+            input_hash="a" * 64,
+            policy_bundle_version="p1",
+        ).id
+        == item.id
+    )
     claimed = repo.claim_next(worker_id="w1")
     token = claimed.lease_token
     assert repo.claim_next(worker_id="w2") is None
@@ -100,12 +108,21 @@ def test_claim_heartbeat_and_complete_require_the_live_lease(repo, request_row, 
     assert item.status == "completed"
 
 
-def test_pause_and_resume_do_not_reset_root_budget(repo, ledger, pool, request_row, db_session):
+def test_pause_and_resume_do_not_reset_root_budget(
+    repo, ledger, pool, request_row, db_session
+):
     repo.enqueue(
-        request=request_row, stage="acquire", input_hash="a" * 64, policy_bundle_version="p1"
+        request=request_row,
+        stage="acquire",
+        input_hash="a" * 64,
+        policy_bundle_version="p1",
     )
     assert _reserve(ledger, pool, request_row).allowed
-    repo.pause(request_row.id, reason="paused_allowance")
+    item = repo.claim_next(worker_id="w1")
+    repo.complete_step(
+        item.id, item.lease_token, status="paused", pause_reason="paused_allowance"
+    )
+    repo.append_event(request_row.id, "paused_allowance", {})
     assert repo.claim_next(worker_id="w1") is None
     repo.resume(request_row.id)
     assert repo.claim_next(worker_id="w1") is not None
@@ -157,39 +174,6 @@ def test_root_budget_is_cumulative_across_attempts(ledger, request_row, db_sessi
     assert outcomes[-1].reason == "root_budget_exhausted"
 
 
-@pytest.mark.case("R04")
-@pytest.mark.exposure_layer("unit")
-def test_cancellation_keeps_dispatched_attempt_immutable(
-    repo, ledger, pool, request_row, db_session
-):
-    dispatched = _reserve(ledger, pool, request_row, "dispatched")
-    pending = _reserve(ledger, pool, request_row, "pending")
-    ledger.transition(dispatched.reservation_id, ReservationState.DISPATCHED)
-    attempt = ResearchProviderAttempt(
-        logical_operation_key="dispatched",
-        attempt_number=1,
-        request_id=request_row.id,
-        operation="claim_review",
-        route="opencode-go",
-        model="kimi-k2.6",
-        parameters={},
-        input_hash="a" * 64,
-        policy_hash="b" * 64,
-        reservation_id=dispatched.reservation_id,
-    )
-    db_session.add(attempt)
-    db_session.flush()
-
-    repo.cancel(request_row.id, reason="user_cancelled")
-    db_session.expire_all()
-
-    assert db_session.get(ResearchProviderAttempt, attempt.id) is not None
-    assert ledger.state(dispatched.reservation_id) is ReservationState.UNCERTAIN
-    assert ledger.state(pending.reservation_id) is ReservationState.RELEASED
-    pool_row = db_session.get(ResearchResourcePool, pool.id)
-    assert pool_row.reserved_amount == 1
-
-
 def test_dispatched_release_requires_pre_dispatch_phase(ledger, pool, request_row):
     outcome = _reserve(ledger, pool, request_row)
     ledger.transition(outcome.reservation_id, ReservationState.DISPATCHED)
@@ -202,7 +186,9 @@ def test_dispatched_release_requires_pre_dispatch_phase(ledger, pool, request_ro
         ledger.transition(outcome.reservation_id, ReservationState.DISPATCHED)
 
 
-def test_reconcile_adjusts_reserved_bound_to_reported_usage(ledger, request_row, db_session):
+def test_reconcile_adjusts_reserved_bound_to_reported_usage(
+    ledger, request_row, db_session
+):
     tokens = ledger.ensure_pool(
         pool_key="llm:opencode-go",
         unit=ResourceUnit.REPORTED_TOKENS,
@@ -211,7 +197,10 @@ def test_reconcile_adjusts_reserved_bound_to_reported_usage(ledger, request_row,
         capacity=10_000,
     )
     outcome = ledger.reserve(
-        pool_id=tokens.id, amount=4000, purpose="claim_review", logical_operation_key="t"
+        pool_id=tokens.id,
+        amount=4000,
+        purpose="claim_review",
+        logical_operation_key="t",
     )
     ledger.transition(outcome.reservation_id, ReservationState.DISPATCHED)
     ledger.transition(
@@ -225,7 +214,9 @@ def test_reconcile_adjusts_reserved_bound_to_reported_usage(ledger, request_row,
 
 @pytest.mark.case("R04")
 @pytest.mark.exposure_layer("unit")
-def test_close_period_expires_uncertain_and_never_refunds(ledger, pool, request_row, db_session):
+def test_close_period_expires_uncertain_and_never_refunds(
+    ledger, pool, request_row, db_session
+):
     uncertain = _reserve(ledger, pool, request_row, "u")
     ledger.transition(uncertain.reservation_id, ReservationState.DISPATCHED)
     ledger.transition(

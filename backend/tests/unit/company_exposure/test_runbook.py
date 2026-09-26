@@ -47,12 +47,14 @@ def cli_kwargs(db_session, tmp_path):
     }
 
 
-def test_status_reports_stages_without_secrets(capsys, cli_kwargs):
+def test_status_reports_activation_without_secrets(capsys, cli_kwargs):
     code, payload = _run(capsys, ["status"], **cli_kwargs)
     assert code == 0
-    stages = {s["stage"]: s for s in payload["activation"]}
-    assert stages["shadow_verify_us"]["allowed"] is True
-    assert stages["automatic_admission"]["reasons"] == ["not_installed"]
+    assert payload["activation"] == {
+        "stage": "shadow_verify_us",
+        "allowed": True,
+        "reasons": [],
+    }
     assert payload["configuration"]["subscription_key_present"] is True
     assert "api_key" not in json.dumps(payload["configuration"]).lower().replace(
         "subscription_key_present", ""
