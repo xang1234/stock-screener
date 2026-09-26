@@ -43,6 +43,7 @@ litellm.set_verbose = False  # Set to True for debugging
 
 _ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
 _OPENCODE_GO_API_BASE_DEFAULT = "https://opencode.ai/zen/go/v1"
+_OLLAMA_API_BASE_DEFAULT = "https://ollama.com"
 _OPENCODE_GO_SESSION_ID = f"social-{uuid4().hex}"
 
 
@@ -148,6 +149,20 @@ class LLMService:
             getattr(settings, "opencode_go_api_base", None)
             or os.environ.get("OPENCODE_GO_API_BASE")
             or _OPENCODE_GO_API_BASE_DEFAULT
+        )
+
+        # Ollama — Cloud or a local daemon. No API key is required for a local host, so an
+        # empty key is a valid configuration and must not raise. Normalised to an empty
+        # string so callers never have to distinguish ``None`` from "no key configured".
+        self._ollama_api_key = (
+            getattr(settings, "ollama_api_key", None)
+            or os.environ.get("OLLAMA_API_KEY")
+            or ""
+        )
+        self._ollama_api_base = (
+            getattr(settings, "ollama_api_base", None)
+            or os.environ.get("OLLAMA_API_BASE")
+            or _OLLAMA_API_BASE_DEFAULT
         )
 
     async def completion(
@@ -292,6 +307,11 @@ class LLMService:
         """Return True when a model should route through the Minimax endpoint."""
         return model.startswith("minimax/")
 
+    @staticmethod
+    def _is_ollama_model(model: str) -> bool:
+        """Return True when a model should route through Ollama (cloud or local)."""
+        return model.startswith("ollama/") or model.startswith("ollama_chat/")
+
     def _resolve_fallback_models(self, *, primary_model: str, allow_fallbacks: bool) -> List[str]:
         """Resolve fallback models for a request, excluding duplicates of the active model."""
         if not allow_fallbacks:
@@ -331,6 +351,7 @@ class LLMService:
         is_zai = self._is_zai_model(model)
         is_minimax = self._is_minimax_model(model)
         is_opencode_go = model.startswith("opencode-go/")
+        is_ollama = self._is_ollama_model(model)
         if is_opencode_go and not self._opencode_go_api_key:
             raise LLMError("opencode_go_api_key_not_configured")
 
@@ -344,6 +365,11 @@ class LLMService:
         elif is_opencode_go:
             provider_key = self._opencode_go_api_key
             provider_name = "opencode-go"
+        elif is_ollama:
+            # A local Ollama daemon ignores the key; Ollama Cloud requires it. Only a
+            # configured key is injected so local hosts keep working without one.
+            provider_key = self._ollama_api_key
+            provider_name = "ollama"
 
         if provider_key:
             params["api_key"] = provider_key
@@ -372,6 +398,13 @@ class LLMService:
             headers.setdefault("User-Agent", "StockScreen/1.0")
             headers.setdefault("x-opencode-session", _OPENCODE_GO_SESSION_ID)
             params["extra_headers"] = headers
+        elif is_ollama:
+            # LiteLLM's ``ollama_chat`` provider speaks the native Ollama API and appends
+            # ``/api/chat`` to the host. ``ollama_api_base`` is therefore a bare host
+            # (``https://ollama.com`` or ``http://ollama:11434``), not a ``/v1`` URL.
+            model_id = model.split("/", 1)[1] if "/" in model else model
+            params["model"] = f"ollama_chat/{model_id}"
+            params["api_base"] = self._ollama_api_base
 
         return provider_name, provider_key, key_manager
 

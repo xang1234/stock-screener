@@ -14,8 +14,20 @@ At least one LLM provider key is required for assistant and theme extraction wor
 | Z.AI | `ZAI_API_KEY` | [platform.z.ai](https://platform.z.ai) | GLM models |
 | Minimax | `MINIMAX_API_KEY` | [platform.minimax.io](https://platform.minimax.io) | Default for theme extraction |
 | OpenCode Go | `OPENCODE_GO_API_KEY` | [opencode.ai](https://opencode.ai/docs/go/) | Default `deepseek-v4-flash` provider for Social Signal extraction |
+| Ollama | `OLLAMA_API_KEY` | [ollama.com](https://ollama.com) | Open-weight models; set `OLLAMA_API_BASE` for a local daemon (no key needed) |
 
 Multiple keys for load balancing: `GROQ_API_KEYS=key1,key2,key3` (comma-separated).
+
+### Ollama
+
+`OLLAMA_API_BASE` is a bare host, not a `/v1` URL — LiteLLM appends `/api/chat` itself:
+
+| Target | `OLLAMA_API_BASE` | `OLLAMA_API_KEY` |
+|---|---|---|
+| Ollama Cloud | `https://ollama.com` (default) | required |
+| Local daemon | `http://ollama:11434` | not needed |
+
+Select a model in the UI as `ollama/<model>`, for example `ollama/deepseek-v4.1-flash`.
 
 ## Web Search Keys (Optional)
 
