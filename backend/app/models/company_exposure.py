@@ -6,9 +6,20 @@ its ORM and PostgreSQL immutability protections.
 
 # ruff: noqa: F401
 
+from app.models.company_exposure_assessments import (
+    AssessmentClaimSelection,
+    AssessmentRevision,
+    ClaimEvidenceLink,
+    ExposureClaim,
+    ExposureClaimRevision,
+    ExposureUseHoldRevision,
+    IssuerThemeAssessment,
+    MaterialityMeasure,
+)
 from app.models.company_exposure_common import (
     APPEND_ONLY_EXPOSURE_MODELS,
     SEALABLE_EXPOSURE_MODELS,
+    SEALED_CHILD_RELATIONS,
 )
 from app.models.company_exposure_documents import (
     DocumentCaptureEvent,

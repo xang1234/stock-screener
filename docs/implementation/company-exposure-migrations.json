@@ -17,6 +17,15 @@
       "parent": "20260925_0058",
       "sha256": "8c750436b5721ee786853fe05d74feae93abc5e881c48fc18532388f6cd85d76",
       "note": "Also adds fk_cx_derivative_attempt from passage derivatives to provider attempts."
+    },
+    {
+      "task": "03",
+      "slug": "exposure_claims_assessments",
+      "filename": "20260926_0060_exposure_claims_assessments.py",
+      "revision": "20260926_0060",
+      "parent": "20260925_0059",
+      "sha256": "63730257aeb93db147fd14b0ab9bf22c6fd0d9950b7c2b052fb2e2c424e4dcce",
+      "note": "Core claims/dossiers/holds only; membership and serving selection deferred to Tasks 18/19."
     }
   ]
 }

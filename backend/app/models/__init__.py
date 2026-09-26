@@ -157,6 +157,14 @@ from .economic_taxonomy_runtime import (
 )
 
 from .company_exposure import (
+    AssessmentClaimSelection,
+    AssessmentRevision,
+    ClaimEvidenceLink,
+    ExposureClaim,
+    ExposureClaimRevision,
+    ExposureUseHoldRevision,
+    IssuerThemeAssessment,
+    MaterialityMeasure,
     DocumentCaptureEvent,
     DocumentRelationRevision,
     EvidenceTombstoneEvent,
@@ -186,6 +194,14 @@ from .company_exposure import (
 )
 
 __all__ = [
+    "AssessmentClaimSelection",
+    "AssessmentRevision",
+    "ClaimEvidenceLink",
+    "ExposureClaim",
+    "ExposureClaimRevision",
+    "ExposureUseHoldRevision",
+    "IssuerThemeAssessment",
+    "MaterialityMeasure",
     "DocumentCaptureEvent",
     "DocumentRelationRevision",
     "EvidenceTombstoneEvent",
