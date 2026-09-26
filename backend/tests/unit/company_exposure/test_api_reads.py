@@ -66,6 +66,7 @@ async def test_shadow_preview_route_is_labeled_and_job_scoped(
         claim["materiality"]["display"]
         == "Not separately disclosed in reviewed evidence"
     )
+    assert claim["independent_origin_count"] == 1
     evidence = claim["evidence"][0]
     assert evidence["evidence_role"] == "original_primary"
     assert "high-bandwidth memory" in evidence["quote"]

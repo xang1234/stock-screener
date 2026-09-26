@@ -65,6 +65,7 @@ from app.services.company_exposure.freshness import (
     claim_freshness,
 )
 from app.services.company_exposure.materiality import MaterialityMeasureResult
+from app.services.company_exposure.provenance import origin_groups
 
 FRESHNESS_POLICY = "freshness-v1"
 SELECTION_POLICY = "selection-v1"
@@ -841,6 +842,9 @@ class ExposureAssessmentService:
         )
         self.session.add(revision)
         self.session.flush()
+        origins = origin_groups(
+            self.session, [c.passage_id for c in candidate.evidence]
+        )
         for cited in candidate.evidence:
             self.session.add(
                 ClaimEvidenceLink(
@@ -850,7 +854,7 @@ class ExposureAssessmentService:
                     passage_id=cited.passage_id,
                     quote=cited.quote,
                     locator={"passage_id": str(cited.passage_id)},
-                    attribution={},
+                    attribution={"origin_group": origins.get(cited.passage_id)},
                     join_scope={
                         "issuer": str(scope.issuer_id),
                         "theme": str(scope.economic_theme_id),

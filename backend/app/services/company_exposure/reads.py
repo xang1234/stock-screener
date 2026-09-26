@@ -175,6 +175,7 @@ class ResearchJobReader:
         ).all()
         claims = []
         for selection, claim_revision, claim in rows:
+            evidence = self._evidence(claim_revision.id)
             active = sorted(
                 {
                     h.hold_kind
@@ -206,7 +207,15 @@ class ResearchJobReader:
                     "carried_forward": bool(selection.carried_forward),
                     "selection_reason": selection.selection_reason,
                     "materiality": self._materiality(claim_revision.id),
-                    "evidence": self._evidence(claim_revision.id),
+                    "evidence": evidence,
+                    "independent_origin_count": len(
+                        {
+                            item["origin_group"]
+                            for item in evidence
+                            if item["direction"] == "supporting"
+                            and item["evidence_role"] == "original_primary"
+                        }
+                    ),
                 }
             )
         return claims
@@ -259,6 +268,8 @@ class ResearchJobReader:
                 "quote": (link.quote or "")[:MAX_EXCERPT_CHARS],
                 "language": None if passage is None else passage.language,
                 "locator": None if passage is None else passage.locator,
+                "origin_group": (link.attribution or {}).get("origin_group")
+                or _str(link.passage_id),
             }
             for link, passage in rows
         ]
