@@ -87,6 +87,16 @@ jobs:
           DATABASE_URL: postgresql://ci:ci@localhost:5432/economic_taxonomy_ci
           STOCKSCANNER_TEST_ALLOW_POSTGRES: "1"
 
+      - name: Required company exposure S1 PostgreSQL gate
+        run: |
+          PGPASSWORD=ci createdb -h localhost -U ci company_exposure_ci
+          cd backend
+          python scripts/run_required_company_exposure_postgres.py --slice S1 \
+            --artifact "$RUNNER_TEMP/company-exposure-s1-gate.json"
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/company_exposure_ci
+          STOCKSCANNER_TEST_ALLOW_POSTGRES: "1"
+
       - name: "Gate 4: Performance baselines"
         run: make gate-4
 

@@ -1,0 +1,42 @@
+{
+  "market": "US",
+  "adapter": "us_sec",
+  "status": "offline_fixtures_only",
+  "live_probe": "not_executed: SEC hosts are not reachable from the implementation sandbox (egress proxy returned 403 on 2026-09-26); Task 27 performs the opt-in operator probe",
+  "routes": [
+    {
+      "name": "sec_ticker_registry",
+      "urls": [
+        "https://www.sec.gov/files/company_tickers_exchange.json",
+        "https://www.sec.gov/files/company_tickers.json"
+      ],
+      "purpose": "ticker -> CIK candidates (identity input only)",
+      "observed_schema": {
+        "company_tickers_exchange.json": {"fields": ["cik", "name", "ticker", "exchange"], "data": "list of rows"},
+        "company_tickers.json": {"<index>": {"cik_str": "int", "ticker": "str", "title": "str"}}
+      },
+      "schema_status": "from SEC published format; recheck against a live capture in Task 27"
+    },
+    {
+      "name": "sec_submissions",
+      "url_template": "https://data.sec.gov/submissions/CIK##########.json",
+      "purpose": "ticker confirmation and filing discovery (filings.recent parallel arrays)",
+      "fields_used": ["tickers", "exchanges", "name", "filings.recent.accessionNumber", "filings.recent.filingDate", "filings.recent.reportDate", "filings.recent.form", "filings.recent.primaryDocument"]
+    },
+    {
+      "name": "sec_filing_documents",
+      "url_template": "https://www.sec.gov/Archives/edgar/data/<cik>/<accession without dashes>/<primaryDocument>",
+      "purpose": "primary filing documents (evidence)"
+    }
+  ],
+  "access_policy": {
+    "reference": ["https://www.sec.gov/search-filings/edgar-application-programming-interfaces", "https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data"],
+    "user_agent": "operator-configured identifying User-Agent required (EXPOSURE_SEC_USER_AGENT); missing value is a not_configured gap",
+    "pacing": "existing RateBudgetPolicy key sec_edgar (0.15 s global interval), strict distributed mode"
+  },
+  "fixtures": {
+    "documents/us/company_tickers_exchange.json": "synthetic excerpt in SEC's published shape",
+    "documents/us/submissions_example.json": "synthetic submissions record in SEC's published shape",
+    "documents/us/annual_report_example.htm": "synthetic filing text; not a real disclosure and excluded from any adjudicated corpus"
+  }
+}

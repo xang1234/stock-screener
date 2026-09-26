@@ -1,0 +1,407 @@
+{
+  "source_spec": "docs/superpowers/specs/2026-09-25-company-exposure-map-design.md",
+  "source_spec_sha256": "84784bdea4d789c2f7bb0f1e5529054259ab2fa8c66c504f30678efcc8fae2df",
+  "cases": {
+    "E01": {
+      "description": "AI and memory co-occur without a relationship: no verified AI Memory exposure.",
+      "owner_tasks": [
+        "14"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E02": {
+      "description": "Official issuer product X is commercially available; another official passage links X to HBM testing: allow the narrowly worded synthesis; do not invent HBM sales or named customers.",
+      "owner_tasks": [
+        "14"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E03": {
+      "description": "A supplies B and B manufactures HBM: missing application link remains unverified.",
+      "owner_tasks": [
+        "14"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E04": {
+      "description": "A server segment supplies 30% of revenue: do not assign 30% to AI Memory.",
+      "owner_tasks": [
+        "15"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E05": {
+      "description": "Compatible disclosed numerator/denominator: reproduce the decimal calculation with exact scope, period and operand citations.",
+      "owner_tasks": [
+        "15"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E06": {
+      "description": "Conflicting periods, currencies, overlapping segments, or zero/negative profit denominator: hold the derived share; retain original numbers.",
+      "owner_tasks": [
+        "15"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E07": {
+      "description": "A customer/consumer appears in primary evidence: the map may show the role but a producer-only basket rejects automatic admission.",
+      "owner_tasks": [
+        "18"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E08": {
+      "description": "Supported current commercial exposure has no materiality breakdown: admission can pass the reviewed role policy and displays materiality unknown.",
+      "owner_tasks": [
+        "18"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E09": {
+      "description": "Qualification/planned investment without the required commercial status: candidate only.",
+      "owner_tasks": [
+        "18"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E10": {
+      "description": "Official transcript analyst question, search snippet, generated assessment or third-party report hosted by an issuer: cannot be primary evidence for the issuer claim merely by location.",
+      "owner_tasks": [
+        "14"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E11": {
+      "description": "Japanese/Chinese negation, modal language, magnitude units, role direction and table context are preserved; material ambiguity holds only affected claims.",
+      "owner_tasks": [
+        "08A",
+        "11",
+        "12"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "frontend"
+      ]
+    },
+    "E12": {
+      "description": "A historical primary PDF is downloaded today: its business-evidence date does not advance.",
+      "owner_tasks": [
+        "16"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E13": {
+      "description": "Same original report via exchange, issuer site and translation: no multiplied corroboration count.",
+      "owner_tasks": [
+        "06"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E14": {
+      "description": "An old/partial capture arrives after a corrected source: cannot restore an obsolete exposure.",
+      "owner_tasks": [
+        "16"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "E15": {
+      "description": "An older document's still-valid role claim and a newer period's materiality coexist without source-level wholesale replacement.",
+      "owner_tasks": [
+        "16"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I01": {
+      "description": "Two verified cross-listings reuse one issuer assessment; securities remain separately eligible and distinct issuer count stays one.",
+      "owner_tasks": [
+        "05"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I02": {
+      "description": "Similar names or ticker reuse do not merge issuers. An administrator mapping conflict is held, not auto-overwritten.",
+      "owner_tasks": [
+        "05"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I03": {
+      "description": "Subsidiary materiality cannot silently become consolidated-parent share.",
+      "owner_tasks": [
+        "15"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I04": {
+      "description": "An administrator-rejected membership stays rejected after new primary evidence; a review proposal may be opened.",
+      "owner_tasks": [
+        "18"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I05": {
+      "description": "Stale/disputed claims cannot support a new automatic admission or new grounding, but existing research membership remains flagged pending review.",
+      "owner_tasks": [
+        "16"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I06": {
+      "description": "Research no longer finds a document: coverage worsens, not exposure truth.",
+      "owner_tasks": [
+        "06"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I07": {
+      "description": "New-source product orders plus accepted product context can support contextual theme inference; it cannot establish an unstated AI-demand cause.",
+      "owner_tasks": [
+        "24"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I08": {
+      "description": "Generic issuer price movement cannot fan out across all known themes.",
+      "owner_tasks": [
+        "24"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I09": {
+      "description": "Research → classification → research self-support is rejected; original primary support remains the only verification basis.",
+      "owner_tasks": [
+        "14",
+        "24"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "integration"
+      ]
+    },
+    "I10": {
+      "description": "Theme split/mechanism change cannot blindly copy accepted exposure to all destinations.",
+      "owner_tasks": [
+        "18"
+      ],
+      "full_scope_layers": [
+        "unit"
+      ]
+    },
+    "I11": {
+      "description": "Same theme/security can retain accepted revision 1 and rejected revision 2; pair-level identity does not forbid revision history.",
+      "owner_tasks": [
+        "18"
+      ],
+      "full_scope_layers": [
+        "schema",
+        "postgres"
+      ]
+    },
+    "R01": {
+      "description": "Paid search configured with credentials but enable flag false: zero paid search calls. Missing spending cap also blocks paid calls.",
+      "owner_tasks": [
+        "13"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "deployment"
+      ]
+    },
+    "R02": {
+      "description": "Subscription quota exhausted: durable pause, no metered fallback, no guessed dollar charges.",
+      "owner_tasks": [
+        "04"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "deployment"
+      ]
+    },
+    "R03": {
+      "description": "Transient provider failure then success: one logical request, two immutable attempts, one reusable success; another retry issues no call.",
+      "owner_tasks": [
+        "04"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R04": {
+      "description": "Ambiguous dispatched timeout/cancellation preserves uncertain allowance/cost reservation.",
+      "owner_tasks": [
+        "04"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R05": {
+      "description": "Pause/resume, model change and child investigation cannot reset cumulative job budgets.",
+      "owner_tasks": [
+        "02",
+        "17",
+        "23"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R06": {
+      "description": "Research and source/Social workers contend: one ordered fenced commit, with no provider call under the lock.",
+      "owner_tasks": [
+        "19"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R07": {
+      "description": "G1 stays reproducible after G2 assessment, mapping, membership, hold and policy revisions. Old generations lacking the exposure extension remain valid.",
+      "owner_tasks": [
+        "19",
+        "21",
+        "24",
+        "26"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres",
+        "api",
+        "frontend"
+      ]
+    },
+    "R08": {
+      "description": "Assessment publication changes no source-attention root counts or events. Research membership can change basket coverage through its own provenance.",
+      "owner_tasks": [
+        "19"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R09": {
+      "description": "Crash after generation commit before worker notification: compatibility delivery resumes from durable published state.",
+      "owner_tasks": [
+        "20"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R10": {
+      "description": "New membership projection arrives before old one: old delivery is a no-op; another origin's support is not deleted.",
+      "owner_tasks": [
+        "20"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R11": {
+      "description": "Ordinary research arrives during snapshot preparation: a coherent cutoff still publishes; a newly disqualified required support blocks only the unsafe automatic action.",
+      "owner_tasks": [
+        "19"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R12": {
+      "description": "Time-based freshness expires without new external documents: holds and a subsequent generation are produced without a provider call; automation checks expiry even if publication lags.",
+      "owner_tasks": [
+        "23"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres"
+      ]
+    },
+    "R13": {
+      "description": "Forged actor, unauthenticated mutation, or paid-enable change: rejected before durable decision/spend side effects.",
+      "owner_tasks": [
+        "21"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres",
+        "api"
+      ]
+    },
+    "R14": {
+      "description": "Private-network redirect, credential leakage, oversized archive/PDF, hostile document instructions: blocked or sandboxed with a typed failure.",
+      "owner_tasks": [
+        "06",
+        "07",
+        "08B"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "deployment"
+      ]
+    },
+    "R15": {
+      "description": "Feature disabled or rolled back: no new research spending/admissions; historical artifacts remain and existing source/Social behavior is preserved.",
+      "owner_tasks": [
+        "27"
+      ],
+      "full_scope_layers": [
+        "unit",
+        "postgres",
+        "deployment"
+      ]
+    }
+  }
+}

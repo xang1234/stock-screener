@@ -33,6 +33,7 @@ import { fetchAlerts, acknowledgeAlert } from '../api/telemetry';
 import { cancelOperationsJob, fetchOperationsJobs } from '../api/operations';
 import { useRuntimeActivity } from '../hooks/useRuntimeActivity';
 import SocialSignalHealthPanel from '../features/socialSignals/SocialSignalHealthPanel';
+import ExposureResearchWorkspace from '../features/companyExposure/ExposureResearchWorkspace';
 
 const POLL_MS = 30000;
 const ACTIVE_JOB_STATES = new Set(['queued', 'waiting', 'reserved', 'running', 'stale', 'stuck']);
@@ -753,6 +754,7 @@ export default function OperationsPage() {
         <AlertsTable alerts={alerts} onAcknowledge={(id) => ackMutation.mutate(id)} />
       )}
       <SocialSignalHealthPanel />
+      <ExposureResearchWorkspace />
     </Container>
   );
 }

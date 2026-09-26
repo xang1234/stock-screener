@@ -1,0 +1,6 @@
+# Hash-locked form of requirements-exposure-documents.txt for the research
+# worker image (installed with pip --require-hashes).
+# pypdf 6.19.0 — BSD-3-Clause, pure Python, no runtime dependencies on 3.11.
+# Resolved and hashed 2026-09-26 (pip download --no-deps; pip hash).
+pypdf==6.19.0 \
+    --hash=sha256:7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14

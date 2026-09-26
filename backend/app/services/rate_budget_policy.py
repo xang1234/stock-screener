@@ -52,6 +52,9 @@ class RateBudgetPolicy:
         "finviz": 0.5,
         "alpha_vantage": 3.0,  # 25 req/day → ~3s spacing if batched
         "sec_edgar": 0.15,     # 10 req/sec
+        # Verified issuer investor-relations/product pages fetched by
+        # company-exposure research: one request per second, shared.
+        "issuer_web": 1.0,
     }
 
     # Per-market batch sizes. Keep the defaults uniform unless operators
