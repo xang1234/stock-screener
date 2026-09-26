@@ -42,9 +42,17 @@ def test_overlay_worker_has_narrow_environment_and_dedicated_queue():
     assert command[command.index("-Q") + 1] == "exposure_research"
     assert "--concurrency=1" in command and "--prefetch-multiplier=1" in command
     environment = worker["environment"]
-    assert environment["EXPOSURE_RESEARCH_MODE"] == "${EXPOSURE_RESEARCH_MODE:-disabled}"
-    for unrelated in ("ADMIN_API_KEY", "GROQ_API_KEY", "MINIMAX_API_KEY", "ZAI_API_KEY",
-                      "TWITTER_BEARER_TOKEN", "SERVER_AUTH_PASSWORD"):
+    assert (
+        environment["EXPOSURE_RESEARCH_MODE"] == "${EXPOSURE_RESEARCH_MODE:-disabled}"
+    )
+    for unrelated in (
+        "ADMIN_API_KEY",
+        "GROQ_API_KEY",
+        "MINIMAX_API_KEY",
+        "ZAI_API_KEY",
+        "TWITTER_BEARER_TOKEN",
+        "SERVER_AUTH_PASSWORD",
+    ):
         assert unrelated not in environment
     assert worker["deploy"]["resources"]["limits"] == {"cpus": "1", "memory": "2G"}
     backend_mounts = overlay["services"]["backend"]["volumes"]
@@ -59,6 +67,6 @@ def test_start_script_launches_worker_only_when_enabled():
     assert "-Q exposure_research" in block.split("fi", 1)[0]
 
 
-def test_task_claims_no_work_until_the_verification_stage_is_installed():
+def test_task_claims_no_work_while_research_is_disabled():
     outcome = company_exposure_tasks.process_exposure_work.run()
-    assert outcome["status"] in {"skipped", "completed"}
+    assert (outcome["status"], outcome["reason"]) == ("skipped", "research_disabled")

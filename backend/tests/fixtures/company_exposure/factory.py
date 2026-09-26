@@ -301,6 +301,11 @@ class FakeGoTransport:
     def queue_exception(self, error: Exception):
         self._queue.append(("raise", error, None))
 
+    def queue_builder(self, build):
+        """Queue a response computed from the request's user message JSON."""
+
+        self._queue.append(("build", build, None))
+
     def _handle(self, request):
         import json
 
@@ -320,6 +325,9 @@ class FakeGoTransport:
             raise value
         if kind == "status":
             return httpx.Response(value, headers=extra)
+        if kind == "build":
+            messages = self.requests[-1].json["messages"]
+            value = value(json.loads(messages[-1]["content"]))
         body = {
             "id": f"resp-{len(self.requests)}",
             "model": "kimi-k2.6",
@@ -402,3 +410,40 @@ def make_text_pdf(pages: list[str]) -> bytes:
         f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
     ).encode()
     return bytes(output)
+
+
+class SecMock:
+    """Serves SEC URLs from registered payloads; unknown URLs return 404."""
+
+    def __init__(self):
+        self.routes: dict[str, bytes] = {}
+        self.requests: list = []
+
+    def serve_json(self, url: str, payload: dict):
+        import json
+
+        self.routes[url] = json.dumps(payload).encode()
+
+    def serve_company_tickers(self, mapping: dict):
+        self.serve_json("https://www.sec.gov/files/company_tickers.json", mapping)
+
+    def serve_submissions(self, cik: str, *, tickers, exchanges, filings=None):
+        from app.services.company_exposure.markets.us import sec_submission_url
+
+        payload = {"cik": cik, "tickers": tickers, "exchanges": exchanges}
+        if filings is not None:
+            payload["filings"] = filings
+        self.serve_json(sec_submission_url(cik), payload)
+
+    def serve_bytes(self, url: str, body: bytes):
+        self.routes[url] = body
+
+    def handler(self, request):
+        import httpx
+
+        self.requests.append(request)
+        url = f"https://{request.headers['host']}{request.url.path}"
+        body = self.routes.get(url)
+        if body is None:
+            return httpx.Response(404, stream=httpx.ByteStream(b""))
+        return httpx.Response(200, stream=httpx.ByteStream(body))

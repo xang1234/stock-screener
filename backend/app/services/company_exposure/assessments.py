@@ -764,9 +764,15 @@ class ExposureAssessmentService:
         ).scalar_one()
 
     def _unchanged(self, result: AssessmentResult, latest: AssessmentRevision) -> bool:
+        """Same selection and the same coverage gaps: nothing to record.
+
+        Successful captures differ only in audit detail (captured/unchanged),
+        which lives in capture events, not in a new dossier revision.
+        """
+
         return (
             not result.changes
-            and result.manifest["coverage"] == (latest.coverage or [])
+            and _gaps(result.manifest["coverage"]) == _gaps(latest.coverage or [])
             and result.manifest["unresolved_questions"]
             == (latest.unresolved_questions or [])
         )
@@ -912,6 +918,10 @@ def _with_holds(selected: SelectedClaim, kinds: tuple[str, ...]) -> SelectedClai
     from dataclasses import replace
 
     return replace(selected, hold_kinds=kinds)
+
+
+def _gaps(coverage: list[dict]) -> list[dict]:
+    return [c for c in coverage if c["outcome"] != "complete_for_requested_scope"]
 
 
 def _coverage_payload(items) -> list[dict]:
