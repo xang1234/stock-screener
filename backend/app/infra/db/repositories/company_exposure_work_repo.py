@@ -633,6 +633,45 @@ class ReservationLedger:
             detail=detail,
         )
 
+    def adjust_pool(self, pool_id: UUID, delta: int) -> ResearchResourcePool:
+        """Operational counter correction explained by an append-only record
+        elsewhere (e.g. an evidence tombstone for reclaimed blob bytes)."""
+
+        pool = self.session.execute(
+            select(ResearchResourcePool)
+            .where(ResearchResourcePool.id == pool_id)
+            .with_for_update()
+        ).scalar_one()
+        pool.reserved_amount = max(0, int(pool.reserved_amount) + int(delta))
+        self.session.flush()
+        return pool
+
+    def consume_root(
+        self, root_request_id: UUID, budget_key: str, amount: int = 1
+    ) -> ReserveOutcome:
+        """Charge a cumulative root budget that has no shared pool."""
+
+        budget = self.session.execute(
+            select(ResearchRootBudget)
+            .where(
+                ResearchRootBudget.root_request_id == root_request_id,
+                ResearchRootBudget.budget_key == budget_key,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if budget is None:
+            return ReserveOutcome(False, reason="root_budget_missing")
+        if int(budget.used_amount) + amount > int(budget.limit_amount):
+            return ReserveOutcome(
+                False,
+                reason="root_budget_exhausted",
+                requested=amount,
+                available=int(budget.limit_amount) - int(budget.used_amount),
+            )
+        budget.used_amount = int(budget.used_amount) + amount
+        self.session.flush()
+        return ReserveOutcome(True, requested=amount)
+
     def close_period(self, *, pool_key: str, unit: ResourceUnit | str, period: str) -> list[UUID]:
         """Expire every still-uncertain reservation of a closed period.
 

@@ -439,3 +439,53 @@ def normalized_identifier(market: str, scheme: str, value: str) -> tuple[str, st
             raise ValueError("invalid_cik")
         value = value.zfill(10)
     return (market, scheme, value)
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentTarget:
+    """One permitted original document to retrieve.
+
+    ``identity_key`` is the stable original-source identity (filing
+    accession, provider document ID, or a canonical URL bound to its
+    verified origin). ``allowed_hosts`` bounds every redirect hop.
+    """
+
+    adapter: str
+    provider: str
+    identity_key: str
+    url: str
+    source_kind: str
+    allowed_hosts: tuple[str, ...]
+    rate_provider: str
+    market: str | None = None
+    rate_market: str | None = None
+    issuer_id: UUID | None = None
+    publisher: str | None = None
+    verified_origin: str | None = None
+    provider_document_id: str | None = None
+    published_at: datetime | None = None
+    reporting_period: str | None = None
+    effective_at: datetime | None = None
+    correction_identity: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    retention_permitted: bool = True
+    max_bytes: int | None = None
+    accept: str = "*/*"
+
+    def __post_init__(self) -> None:
+        for name in ("adapter", "provider", "identity_key", "url", "source_kind"):
+            _require_text(getattr(self, name), name)
+        if not self.allowed_hosts:
+            raise ValueError("allowed_hosts must be non-empty")
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureResult:
+    """A retained revision (``changed`` only for new bytes) or a typed gap."""
+
+    document_id: UUID | None
+    revision_id: UUID | None
+    capture_id: UUID | None
+    content_hash: str | None
+    changed: bool
+    coverage: CoverageItem

@@ -256,3 +256,22 @@ class FakeGoTransport:
         if extra is not None:
             body["usage"] = extra
         return httpx.Response(200, json=body)
+
+
+class FakeRateGate:
+    """Records provider pacing acquisitions; optionally reports an outage."""
+
+    def __init__(self, *, unavailable: bool = False):
+        self.provider_names: list[str] = []
+        self.keys: list[str] = []
+        self.unavailable = unavailable
+
+    def acquire(self, provider, market=None, timeout_s=60.0):
+        from app.services.company_exposure.pacing import PacingUnavailable, RateTicket
+
+        if self.unavailable:
+            raise PacingUnavailable("distributed_pacing_unavailable")
+        key = f"{provider}:{(market or 'shared').lower()}"
+        self.provider_names.append(provider)
+        self.keys.append(key)
+        return RateTicket(provider=provider, key=key, waited_seconds=0.0)

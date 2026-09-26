@@ -48,6 +48,10 @@ end
 """
 
 
+class RateLimiterUnavailable(RuntimeError):
+    """Strict callers refuse to proceed without the distributed limiter."""
+
+
 class RedisRateLimiter:
     """
     Distributed rate limiter using Redis atomic operations.
@@ -165,6 +169,8 @@ class RedisRateLimiter:
         key: str,
         min_interval_s: float,
         timeout_s: float = 120.0,
+        *,
+        strict: bool = False,
     ) -> float:
         """
         Block until rate limit allows the call. Returns actual time waited.
@@ -180,9 +186,16 @@ class RedisRateLimiter:
 
         Raises:
             RateLimitTimeoutError: If wait would exceed timeout_s
+            RateLimiterUnavailable: If ``strict`` and Redis is unavailable.
+                Strict callers (company-exposure research) must share the
+                distributed budget with every other caller of the same key
+                rather than pace themselves with a process-local limiter.
         """
         # Try Redis first
         wait_time = self._try_redis(key, min_interval_s)
+
+        if wait_time is None and strict:
+            raise RateLimiterUnavailable(f"distributed rate limiter unavailable for '{key}'")
 
         if wait_time is None:
             # Redis unavailable — use fallback
