@@ -126,6 +126,25 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""  # For web search (primary)
     serper_api_key: str = ""  # For web search (fallback)
 
+    # Company exposure research (docs/runbooks/company-exposure-map.md).
+    # Disabled by default; a credential alone never enables spending.
+    exposure_research_mode: str = "disabled"  # disabled | shadow | live
+    exposure_paid_search_enabled: bool = False
+    exposure_search_provider: str = "none"
+    exposure_llm_billing_mode: str = "subscription"
+    # Operator-approved OpenCode Go routes; both off until explicitly enabled.
+    exposure_llm_text_route_enabled: bool = False
+    exposure_llm_vision_route_enabled: bool = False
+    # Local allocation ceilings; no guessed default. Unset blocks dispatch.
+    exposure_llm_daily_request_limit: int | None = None
+    exposure_llm_daily_token_limit: int | None = None
+    exposure_allocation_timezone: str = "UTC"
+    exposure_document_store: str = "data/exposure-evidence"
+    exposure_storage_max_bytes: int = 5 * 1024 * 1024 * 1024
+    exposure_storage_min_free_bytes: int = 1024 * 1024 * 1024
+    # Identifying User-Agent required by SEC fair-access policy.
+    exposure_sec_user_agent: str = ""
+
     # Runtime profile
     feature_themes: bool = True
     feature_chatbot: bool = True
@@ -600,6 +619,25 @@ class Settings(BaseSettings):
     mcp_server_name: str = "stockscreen-market-copilot"
     mcp_watchlist_writes_enabled: bool = False
     mcp_http_enabled: bool = True
+
+    @field_validator(
+        "exposure_llm_daily_request_limit",
+        "exposure_llm_daily_token_limit",
+        mode="before",
+    )
+    @classmethod
+    def blank_exposure_limit_is_unset(cls, v):
+        # Compose passes "" for unset limits; unset means "not configured".
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("exposure_research_mode")
+    @classmethod
+    def validate_exposure_research_mode(cls, v: str) -> str:
+        if v not in {"disabled", "shadow", "live"}:
+            raise ValueError("exposure_research_mode must be disabled, shadow or live")
+        return v
 
     @field_validator('cache_warm_hour')
     @classmethod

@@ -95,5 +95,18 @@ for RAW_MARKET in "${MARKET_ARRAY[@]}"; do
         -n "userscans-${MARKET_LOWER}@%h" &
 done
 
+# Company exposure research: opt-in dedicated worker. It never consumes the
+# price-fetch queues; provider pacing is shared through RateBudgetPolicy keys.
+if [[ "${EXPOSURE_WORKER_ENABLED:-false}" == "true" ]]; then
+    echo "  Starting exposure-research worker"
+    ./venv/bin/celery -A app.celery_app worker \
+        --loglevel=info \
+        --pool="$POOL" \
+        --concurrency=1 \
+        --prefetch-multiplier=1 \
+        -Q exposure_research \
+        -n exposure-research@%h &
+fi
+
 echo "Workers started. Use 'pkill -f celery' to stop."
 wait

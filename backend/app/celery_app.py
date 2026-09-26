@@ -84,6 +84,7 @@ celery_app = Celery(
         'app.tasks.industry_tasks',  # Tracked IBD industry reference loading
         'app.tasks.theme_discovery_tasks',  # Theme discovery pipeline tasks
         'app.tasks.economic_taxonomy_tasks',  # Global Economic Taxonomy runtime
+        'app.tasks.company_exposure_tasks',  # Company exposure research (own queue)
         'app.tasks.live_attachment_tasks',
         'app.tasks.theme_intelligence_tasks',
         'app.tasks.universe_tasks',  # Stock universe management tasks
@@ -414,6 +415,14 @@ for _economic_taxonomy_task in (
     'app.tasks.economic_taxonomy_tasks.calculate_economic_theme_metrics',
 ):
     celery_app.conf.task_routes[_economic_taxonomy_task] = {'queue': 'celery'}
+
+# Company exposure research runs only on its dedicated worker. It never
+# shares the price-fetch/data_fetch workers; provider pacing is still shared
+# through RateBudgetPolicy keys inside the tasks.
+for _company_exposure_task in (
+    'app.tasks.company_exposure_tasks.process_exposure_work',
+):
+    celery_app.conf.task_routes[_company_exposure_task] = {'queue': 'exposure_research'}
 
 # User scans: same default-to-shared pattern; API layer sets the queue explicitly.
 celery_app.conf.task_routes['app.tasks.scan_tasks.run_bulk_scan'] = {

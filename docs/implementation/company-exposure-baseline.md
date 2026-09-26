@@ -51,3 +51,8 @@ CIK data: no model, service or test references a CIK. Task 09 supplies it from S
 ## Deployment credentials
 
 Not available in this execution environment and not required for offline tests: OpenCode Go key, SEC identifying User-Agent declaration, EDINET key, Tavily key. Live probes (Task 27) are unexecuted until an operator supplies them.
+
+## Recorded deviations
+
+- **Compose layout (Task 04).** Plan Appendix F.1 places the research worker in `docker-compose.yml` and adds a read-only evidence mount to the `backend` service there. A new bind mount in the base file would make Docker create a root-owned `./data/exposure-evidence` on every deployment, including those that never enable research. The worker, its resource limits and the backend's read-only mount therefore live in the opt-in overlay `docker-compose.exposure.yml` (worker still behind the `exposure-research` profile). Behaviour, queue, limits and narrow environment are as specified.
+- **Migration numbering.** `main` added `20260925_0057` after the plan baseline; company-exposure migrations start at `20260925_0058` (see `company-exposure-migrations.json`).

@@ -173,6 +173,7 @@ The Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans` remains the sched
 - `celery` queue: General compute tasks (4 workers local; Docker concurrency follows the deployed worker topology)
 - `data_fetch` queue: API calls (1 worker, serialized to respect rate limits)
 - All external API tasks route to `data_fetch` to prevent rate limit violations
+- **Exception — company exposure research:** its tasks route only to the dedicated `exposure_research` queue and opt-in `celery-exposure-research` worker (`docker-compose.exposure.yml`, or `EXPOSURE_WORKER_ENABLED=true` in `start_celery.sh`), so long LLM/document stages never occupy price-fetch workers. Every research HTTP attempt still acquires the shared `RateBudgetPolicy` provider keys (e.g. `sec_edgar`); queue isolation grants no extra upstream rate. Research is disabled by default (`EXPOSURE_RESEARCH_MODE=disabled`).
 
 **Per-Market Scan Queues**:
 - Manual user scans (`run_bulk_scan`) route to market-specific queues: `user_scans_us`, `user_scans_hk`, `user_scans_jp`, `user_scans_tw` (with `user_scans_shared` as fallback when no market is set)

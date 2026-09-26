@@ -206,3 +206,53 @@ def seal_row(db, row):
     row.sealed_at = FIXED_NOW
     db.flush()
     return row
+
+
+class FakeGoTransport:
+    """httpx transport replaying queued Go responses; records every request."""
+
+    def __init__(self):
+        import httpx
+
+        self._queue: list = []
+        self.requests: list = []
+        self.transport = httpx.MockTransport(self._handle)
+
+    def queue_status(self, status: int, headers: dict | None = None):
+        self._queue.append(("status", status, headers or {}))
+
+    def queue_json(self, content: dict, *, usage: dict | None = None):
+        self._queue.append(("json", content, usage))
+
+    def queue_exception(self, error: Exception):
+        self._queue.append(("raise", error, None))
+
+    def _handle(self, request):
+        import json
+
+        import httpx
+
+        self.requests.append(
+            type(
+                "Recorded",
+                (),
+                {"url": str(request.url), "json": json.loads(request.content)},
+            )()
+        )
+        if not self._queue:
+            raise AssertionError("unexpected provider call")
+        kind, value, extra = self._queue.pop(0)
+        if kind == "raise":
+            raise value
+        if kind == "status":
+            return httpx.Response(value, headers=extra)
+        body = {
+            "id": f"resp-{len(self.requests)}",
+            "model": "kimi-k2.6",
+            "choices": [
+                {"finish_reason": "stop", "message": {"content": json.dumps(value)}}
+            ],
+        }
+        if extra is not None:
+            body["usage"] = extra
+        return httpx.Response(200, json=body)

@@ -35,8 +35,16 @@ def classify_image_failure(code: str) -> str:
     return code
 
 
+DISPATCH_PHASES = frozenset({"pre_dispatch", "dispatched", "uncertain"})
+
+
 class PreparationFailure(RuntimeError):
-    """A preparation error safe to persist without a provider response or secret."""
+    """A preparation error safe to persist without a provider response or secret.
+
+    ``dispatch_phase`` optionally records whether the request can have
+    reached the provider: ``pre_dispatch`` (no request bytes sent),
+    ``dispatched`` (a response was received) or ``uncertain``.
+    """
 
     def __init__(
         self,
@@ -45,6 +53,7 @@ class PreparationFailure(RuntimeError):
         retryable: bool | None = None,
         http_status: int | None = None,
         retry_after_seconds: float | None = None,
+        dispatch_phase: str | None = None,
     ) -> None:
         if not isinstance(code, str) or _SAFE_CODE.fullmatch(code) is None:
             raise ValueError("invalid_preparation_failure_code")
@@ -62,6 +71,9 @@ class PreparationFailure(RuntimeError):
         ):
             raise ValueError("invalid_retry_after")
 
+        if dispatch_phase is not None and dispatch_phase not in DISPATCH_PHASES:
+            raise ValueError("invalid_dispatch_phase")
+
         policy_retryable = retryable_failure(code)
         if retryable is not None and (
             not isinstance(retryable, bool) or retryable is not policy_retryable
@@ -74,4 +86,5 @@ class PreparationFailure(RuntimeError):
         self.retry_after_seconds = (
             float(retry_after_seconds) if retry_after_seconds is not None else None
         )
+        self.dispatch_phase = dispatch_phase
         super().__init__(code)
