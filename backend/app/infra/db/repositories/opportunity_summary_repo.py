@@ -38,6 +38,38 @@ _SURVIVOR_TRUE_TEXT = "true"
 _SURVIVOR_TRUE_SQLITE = "1"
 
 
+def survivor_predicate(details) -> ColumnElement:
+    """The one survivor test, for any ``details_json``/``details`` column.
+
+    Single definition on purpose. ``for_feature_run`` (counted) and
+    ``for_scan``/``_aggregate`` (grouped) read the same projection through
+    different shapes, and before this they decided the survivor flag with
+    different SQL: the grouped path used ``as_boolean().is_(True)``, the counted
+    path a text comparison. Identical data then classified differently depending
+    on which path read it -- on PostgreSQL the cast also accepts ``'t'``,
+    ``'yes'`` and ``'on'``, which the text comparison rejected, and it raises on
+    a value like ``'2'`` while the text comparison does not.
+
+    Cast-free by requirement: this expression is also the one migration
+    ``20260926_0058`` indexes, and ``CREATE INDEX`` evaluates it against every
+    row of every historical run. A cast that can raise would fail the startup
+    migration on a single bad value.
+
+    ``IN`` matching ``lower(...)`` needs both members because the two backends
+    spell JSON ``true`` differently: PostgreSQL keeps the boolean and ``->>``
+    renders the text ``'true'``; SQLite stores it as the integer ``1``, so its
+    ``->>`` yields ``'1'``. ``'1'`` never occurs in the Postgres text form, so
+    the extra member is inert there.
+
+    Values outside the list -- ``'t'``, ``'yes'``, ``'on'``, ``'2'`` -- are not
+    survivors. That is the deliberate reading: only the two canonical spellings
+    of the flag count, and no input can make this raise.
+    """
+    return func.lower(json_text(details, (CORRECTION_SURVIVOR_KEY,))).in_(
+        [_SURVIVOR_TRUE_TEXT, _SURVIVOR_TRUE_SQLITE]
+    )
+
+
 def counted_opportunity_predicates() -> tuple[ColumnElement, ColumnElement]:
     """The two predicates ``ix_sfd_run_action_state_survivor`` was built for.
 
@@ -71,9 +103,7 @@ def counted_opportunity_predicates() -> tuple[ColumnElement, ColumnElement]:
     details = StockFeatureDaily.details_json
     return (
         cast(json_text(details, (ACTION_STATE_KEY,)), String),
-        func.lower(json_text(details, (CORRECTION_SURVIVOR_KEY,))).in_(
-            [_SURVIVOR_TRUE_TEXT, _SURVIVOR_TRUE_SQLITE]
-        ),
+        survivor_predicate(details),
     )
 
 
@@ -207,12 +237,12 @@ class SqlOpportunityStateSummaryRepository:
         are the same in both.
         """
         action_state = details["action_state"].as_string()
-        # The survivor test stays in SQL, as it was upstream. Deciding it in
-        # Python instead makes ``JSON_EXTRACT(...) IS 1`` collapse to
-        # ``bool(...)`` on SQLite, where the string "false" and the integer 2
-        # are both truthy -- so identical data would count differently
-        # depending on the backend.
-        survivor = details["correction_survivor"].as_boolean().is_(True)
+        # The survivor test goes through the shared definition, so the grouped
+        # path cannot classify a row differently from the counted one. It stays
+        # in SQL -- deciding it in Python collapses ``JSON_EXTRACT(...) IS 1`` to
+        # ``bool(...)`` on SQLite, where the string "false" and the integer 2 are
+        # both truthy, so identical data would count differently by backend.
+        survivor = survivor_predicate(details)
         buckets = (
             self._session.query(
                 survivor.label("survivor"),

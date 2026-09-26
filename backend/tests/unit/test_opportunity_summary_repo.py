@@ -10,6 +10,7 @@ from app.domain.scanning.opportunity_state import ActionState
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.repositories.opportunity_summary_repo import (
     SqlOpportunityStateSummaryRepository,
+    survivor_predicate,
 )
 from app.models.scan_result import Scan, ScanResult
 
@@ -143,35 +144,46 @@ def test_survivor_with_unknown_state_counts_in_survivor_count():
     assert sum(summary.survivor_action_state_counts.values()) == 0
 
 
-def test_survivor_test_matches_sql_semantics_on_non_boolean_json():
-    """The survivor test stays in SQL, so SQLite and PostgreSQL agree.
+def test_survivor_predicate_is_shared_and_cast_free():
+    """One survivor test decides every path, and it cannot raise.
 
-    ``correction_survivor`` is written as a real JSON boolean by the scanner,
-    but the column is untyped JSON and older rows can hold ``"false"`` or
-    ``2``. Deciding the flag with Python truthiness instead of
-    ``JSON_EXTRACT(...) IS 1`` makes those rows survivors, so the same data
-    counts differently on SQLite than on PostgreSQL.
+    The regression this pins: the counted path used ``lower(...) IN
+    ('true','1')`` while the grouped path used ``as_boolean().is_(True)``, so
+    the same row classified differently depending on which path read it. On
+    PostgreSQL the cast also accepts ``'t'``, ``'yes'`` and ``'on'``, and it
+    raises on ``'2'`` while the text comparison does not.
+
+    Both paths are compared on identical data rather than against a hand-written
+    number, so the comparison cannot pass by restating one of them.
     """
     rows = [
         ("REAL-TRUE", {"correction_survivor": True, "action_state": "watch"}),
         ("REAL-FALSE", {"correction_survivor": False, "action_state": "watch"}),
-        ("STR-FALSE", {"correction_survivor": "false", "action_state": "watch"}),
         ("STR-TRUE", {"correction_survivor": "true", "action_state": "watch"}),
+        ("STR-FALSE", {"correction_survivor": "false", "action_state": "watch"}),
+        ("INT-1", {"correction_survivor": 1, "action_state": "watch"}),
         ("INT-2", {"correction_survivor": 2, "action_state": "watch"}),
     ]
     with _session_with(rows) as session:
         summary = SqlOpportunityStateSummaryRepository(session).for_scan("scan-extra")
-
-        # The same flag decided in SQL, as the pre-change code did it.
         details = ScanResult.details
-        survivor_expr = details["correction_survivor"].as_boolean()
-        sql_count = session.query(
-            func.coalesce(
-                func.sum(case((survivor_expr.is_(True), 1), else_=0)), 0
+        grouped_count = (
+            session.query(
+                func.coalesce(func.sum(case((survivor_predicate(details), 1), else_=0)), 0)
             )
-        ).select_from(ScanResult).filter(ScanResult.scan_id == "scan-extra").scalar()
+            .select_from(ScanResult)
+            .filter(ScanResult.scan_id == "scan-extra")
+            .scalar()
+        )
 
-    assert summary.survivor_count == sql_count == 1
+    # ``true``, the string ``"true"`` and ``1`` are the canonical spellings;
+    # ``false`` and ``2`` are not. Same answer through the shared predicate.
+    assert summary.survivor_count == grouped_count == 3
+
+    # It is cast-free: the expression must not raise for any stored value, which
+    # is what lets migration 20260926_0058 index it against every historical row.
+    assert "CAST" not in str(survivor_predicate(details)).upper()
+    assert "BOOLEAN" not in str(survivor_predicate(details)).upper()
 
 
 # ── Feature-store path: counted, not grouped ──────────────────────────────
