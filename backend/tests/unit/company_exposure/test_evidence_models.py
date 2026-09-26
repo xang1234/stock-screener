@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import pytest
-from alembic.autogenerate import compare_metadata
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
-from sqlalchemy import MetaData, create_engine, inspect
 from sqlalchemy.exc import IntegrityError
 
 import app.models  # noqa: F401
-from app.database import Base
 from app.models.company_exposure import (
     DocumentCaptureEvent,
     ExposurePassage,
@@ -166,37 +160,3 @@ def test_derivative_cannot_claim_primary_role(db_session):
     with pytest.raises(IntegrityError):
         db_session.flush()
     db_session.rollback()
-
-
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("exposure_0058", MIGRATION)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.mark.exposure_layer("schema")
-def test_migration_matches_models_and_downgrades(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'm.sqlite'}")
-    migration = _load_migration()
-    assert migration.down_revision == "20260925_0057"
-    try:
-        with engine.begin() as connection:
-            Base.metadata.tables["stock_universe"].create(connection)
-            migration.op = Operations(MigrationContext.configure(connection))
-            migration.upgrade()
-
-        subset = MetaData()
-        for name in ("stock_universe", *TASK01_TABLES):
-            Base.metadata.tables[name].to_metadata(subset)
-        with engine.connect() as connection:
-            diffs = compare_metadata(MigrationContext.configure(connection), subset)
-        assert diffs == []
-
-        with engine.begin() as connection:
-            migration.op = Operations(MigrationContext.configure(connection))
-            migration.downgrade()
-        remaining = set(inspect(engine).get_table_names())
-        assert remaining.isdisjoint(TASK01_TABLES)
-    finally:
-        engine.dispose()

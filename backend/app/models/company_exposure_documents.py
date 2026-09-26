@@ -233,7 +233,15 @@ class PassageDerivative(Base):
     evidence_role = Column(
         String(48), nullable=False, default="derivative_not_independent_source"
     )
-    provider_attempt_id = Column(Uuid(as_uuid=True), nullable=True)
+    provider_attempt_id = Column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "company_exposure_provider_attempts.id",
+            ondelete="RESTRICT",
+            name="fk_cx_derivative_attempt",
+        ),
+        nullable=True,
+    )
     created_at = created_at()
 
     __table_args__ = (

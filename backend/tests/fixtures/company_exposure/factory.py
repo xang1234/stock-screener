@@ -106,3 +106,14 @@ def make_revision(db, document, content: bytes, *, published_at=None, period=Non
     db.add(row)
     db.flush()
     return row
+
+
+def make_theme(db, label: str = "theme", *, created_by: str = "test:factory"):
+    """Persist a stable Economic Theme identity (UUID only; no revision)."""
+
+    from app.models.economic_taxonomy import EconomicTheme
+
+    row = EconomicTheme(id=fixed_uuid(f"theme:{label}"), created_by=created_by)
+    db.add(row)
+    db.flush()
+    return row

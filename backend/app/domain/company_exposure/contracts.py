@@ -316,7 +316,7 @@ class SearchResult:
     coverage: tuple[CoverageItem, ...] = ()
 
     @classmethod
-    def disabled(cls, reason: str) -> "SearchResult":
+    def disabled(cls, reason: str) -> SearchResult:
         return cls(
             coverage=(
                 CoverageItem(
@@ -333,11 +333,11 @@ class TaskOutcome:
     detail: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def skipped(cls, reason: str) -> "TaskOutcome":
+    def skipped(cls, reason: str) -> TaskOutcome:
         return cls(status="skipped", reason=reason)
 
     @classmethod
-    def completed(cls, **detail: Any) -> "TaskOutcome":
+    def completed(cls, **detail: Any) -> TaskOutcome:
         return cls(status="completed", detail=detail)
 
 

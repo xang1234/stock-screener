@@ -118,7 +118,7 @@ def test_manifest_descriptions_are_verbatim_from_accepted_spec(contract_manifest
     spec = SPEC.read_text("utf-8")
     table = {
         match.group(1): match.group(2).strip()
-        for match in re.finditer(r"^\| ([EIR]\d\d) \| ([^|]+) \|\s*$", spec, re.M)
+        for match in re.finditer(r"^\| ([EIR]\d\d) \| ([^|]+) \|\s*$", spec, re.MULTILINE)
     }
     assert {key: row["description"] for key, row in contract_manifest.items()} == table
 

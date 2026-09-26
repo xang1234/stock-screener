@@ -143,13 +143,13 @@ def _protect_company_exposure_history(session, _flush_context, _instances):
 __all__ = (
     "APPEND_ONLY_EXPOSURE_MODELS",
     "SEALABLE_EXPOSURE_MODELS",
+    "SEAL_ONCE_FUNCTION_SQL",
+    "TRIGGER_FUNCTION_SQL",
     "ImmutableRuntimePayload",
     "append_only",
     "append_only_trigger_sql",
     "created_at",
     "seal_once_trigger_sql",
     "sealable",
-    "SEAL_ONCE_FUNCTION_SQL",
-    "TRIGGER_FUNCTION_SQL",
     "uuid_pk",
 )

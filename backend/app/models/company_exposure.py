@@ -25,3 +25,20 @@ from app.models.company_exposure_identity import (
     IssuerSecurityLinkRevision,
     LegacyIssuerAttestationBridge,
 )
+from app.models.company_exposure_work import (
+    ExposureResearchRequest,
+    ExposureRuntimePolicyRevision,
+    ResearchArtifact,
+    ResearchCandidate,
+    ResearchCoverageItem,
+    ResearchEvent,
+    ResearchInputManifest,
+    ResearchProviderAttempt,
+    ResearchProviderResult,
+    ResearchReservation,
+    ResearchReservationEvent,
+    ResearchResourcePool,
+    ResearchRootBudget,
+    ResearchWorkItem,
+    ResearchWorkLease,
+)

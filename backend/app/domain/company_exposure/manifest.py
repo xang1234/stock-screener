@@ -9,9 +9,9 @@ validates a collected/executed test inventory against required
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping
 
 CASE_IDS = frozenset(
     {f"E{i:02}" for i in range(1, 16)}

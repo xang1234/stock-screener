@@ -8,6 +8,15 @@
       "parent": "20260925_0057",
       "sha256": "167c2f8f47a1a81b4fb55abf4b99aea24138cea128dc28742dc5902a37026e76",
       "note": "main added 20260925_0057 (avg dollar volume indexes) after the plan baseline; allocated after it."
+    },
+    {
+      "task": "02",
+      "slug": "exposure_research_resources",
+      "filename": "20260925_0059_exposure_research_resources.py",
+      "revision": "20260925_0059",
+      "parent": "20260925_0058",
+      "sha256": "8c750436b5721ee786853fe05d74feae93abc5e881c48fc18532388f6cd85d76",
+      "note": "Also adds fk_cx_derivative_attempt from passage derivatives to provider attempts."
     }
   ]
 }
