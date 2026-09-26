@@ -4,7 +4,7 @@ Tests carry ``@pytest.mark.case("R02")``, ``@pytest.mark.exposure_layer("unit")`
 and optionally ``@pytest.mark.exposure_slice("S1")``. The plugin validates
 tags at collection (unknown case IDs or layers fail collection) and, when
 ``--exposure-case-report PATH`` is given, writes the collected node IDs and
-their outcomes for ``scripts/run_company_exposure_case_gate.py``.
+their outcomes for ``scripts/run_required_company_exposure_postgres.py``.
 
 It never chooses which application code runs.
 """

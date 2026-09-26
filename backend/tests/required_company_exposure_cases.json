@@ -1,0 +1,259 @@
+{
+  "description": "Reviewed required case/layer and invariant manifest for company-exposure slices. Collection cannot shrink it; every collected test for a required pair must pass on PostgreSQL.",
+  "slices": {
+    "S1": {
+      "title": "US-only verify-only shadow research",
+      "paths": [
+        "tests/unit/company_exposure",
+        "tests/integration/company_exposure",
+        "tests/unit/theme_evaluation/test_kimi_client_dispatch_phase.py"
+      ],
+      "required": [
+        {
+          "case": "E01",
+          "layer": "unit"
+        },
+        {
+          "case": "E02",
+          "layer": "unit"
+        },
+        {
+          "case": "E03",
+          "layer": "unit"
+        },
+        {
+          "case": "E04",
+          "layer": "unit"
+        },
+        {
+          "case": "E05",
+          "layer": "unit"
+        },
+        {
+          "case": "E06",
+          "layer": "unit"
+        },
+        {
+          "case": "E10",
+          "layer": "unit"
+        },
+        {
+          "case": "E12",
+          "layer": "unit"
+        },
+        {
+          "case": "E13",
+          "layer": "unit"
+        },
+        {
+          "case": "E14",
+          "layer": "unit"
+        },
+        {
+          "case": "E15",
+          "layer": "unit"
+        },
+        {
+          "case": "I01",
+          "layer": "unit"
+        },
+        {
+          "case": "I02",
+          "layer": "unit"
+        },
+        {
+          "case": "I03",
+          "layer": "unit"
+        },
+        {
+          "case": "I05",
+          "layer": "unit"
+        },
+        {
+          "case": "I06",
+          "layer": "unit"
+        },
+        {
+          "case": "I09",
+          "layer": "unit"
+        },
+        {
+          "case": "R01",
+          "layer": "unit"
+        },
+        {
+          "case": "R02",
+          "layer": "unit"
+        },
+        {
+          "case": "R03",
+          "layer": "unit"
+        },
+        {
+          "case": "R04",
+          "layer": "unit"
+        },
+        {
+          "case": "R05",
+          "layer": "unit"
+        },
+        {
+          "case": "R12",
+          "layer": "unit"
+        },
+        {
+          "case": "R14",
+          "layer": "unit"
+        },
+        {
+          "case": "R15",
+          "layer": "unit"
+        },
+        {
+          "case": "E06",
+          "layer": "schema"
+        },
+        {
+          "case": "E10",
+          "layer": "schema"
+        },
+        {
+          "case": "E12",
+          "layer": "schema"
+        },
+        {
+          "case": "E15",
+          "layer": "schema"
+        },
+        {
+          "case": "I05",
+          "layer": "schema"
+        },
+        {
+          "case": "I11",
+          "layer": "schema"
+        },
+        {
+          "case": "R05",
+          "layer": "schema"
+        },
+        {
+          "case": "E12",
+          "layer": "postgres"
+        },
+        {
+          "case": "E15",
+          "layer": "postgres"
+        },
+        {
+          "case": "I02",
+          "layer": "postgres"
+        },
+        {
+          "case": "I10",
+          "layer": "postgres"
+        },
+        {
+          "case": "R02",
+          "layer": "postgres"
+        },
+        {
+          "case": "R03",
+          "layer": "postgres"
+        },
+        {
+          "case": "R04",
+          "layer": "postgres"
+        },
+        {
+          "case": "R05",
+          "layer": "postgres"
+        },
+        {
+          "case": "R12",
+          "layer": "postgres"
+        },
+        {
+          "case": "R13",
+          "layer": "api"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "resource_reservation_contention",
+          "nodeid": "tests/integration/company_exposure/test_resource_reservations_postgres.py::test_concurrent_dispatches_share_the_last_daily_unit"
+        },
+        {
+          "name": "work_lease_contention",
+          "nodeid": "tests/integration/company_exposure/test_work_resources_postgres.py::test_skip_locked_allows_only_one_claimant"
+        },
+        {
+          "name": "root_budget_contention",
+          "nodeid": "tests/integration/company_exposure/test_work_resources_postgres.py::test_two_workers_contending_for_last_unit_get_one_reservation"
+        },
+        {
+          "name": "reservation_history_immutable",
+          "nodeid": "tests/integration/company_exposure/test_work_resources_postgres.py::test_reservation_history_cannot_be_rewritten_by_sql"
+        },
+        {
+          "name": "issuer_registry_acceptance_race",
+          "nodeid": "tests/integration/company_exposure/test_issuer_links_postgres.py::test_concurrent_registry_acceptance_creates_one_link"
+        },
+        {
+          "name": "assessment_revision_cas",
+          "nodeid": "tests/integration/company_exposure/test_assessment_conflicts_postgres.py::test_concurrent_assessments_serialize_and_keep_both_results"
+        },
+        {
+          "name": "provider_free_expiry_holds",
+          "nodeid": "tests/integration/company_exposure/test_assessment_conflicts_postgres.py::test_expiry_holds_are_recorded_without_research"
+        },
+        {
+          "name": "sealed_claim_immutability",
+          "nodeid": "tests/integration/company_exposure/test_assessment_schema_postgres.py::test_sealed_claim_revision_rejects_raw_sql_and_late_children"
+        },
+        {
+          "name": "selection_scope",
+          "nodeid": "tests/integration/company_exposure/test_assessment_schema_postgres.py::test_selection_cannot_cross_issuer_or_theme_scope"
+        },
+        {
+          "name": "storage_reservation_race",
+          "nodeid": "tests/integration/company_exposure/test_document_retention_postgres.py::test_storage_last_capacity_is_reserved_once"
+        },
+        {
+          "name": "evidence_revision_integrity",
+          "nodeid": "tests/integration/company_exposure/test_evidence_schema_postgres.py::test_passage_must_match_its_revision_content_hash"
+        },
+        {
+          "name": "migration_chain_parity",
+          "nodeid": "tests/unit/company_exposure/test_migrations.py::test_chain_matches_models_and_downgrades"
+        },
+        {
+          "name": "queue_isolation",
+          "nodeid": "tests/unit/company_exposure/test_worker_contract.py::test_existing_workers_never_consume_the_research_queue"
+        },
+        {
+          "name": "disabled_by_default",
+          "nodeid": "tests/unit/company_exposure/test_worker_contract.py::test_task_claims_no_work_while_research_is_disabled"
+        }
+      ],
+      "companion_reports": {
+        "frontend": "cd frontend && npx vitest run src/api/companyExposures.test.js src/features/companyExposure"
+      },
+      "excluded_future_scope": [
+        "E07",
+        "E08",
+        "E09",
+        "E11",
+        "I04",
+        "I07",
+        "I08",
+        "R06",
+        "R07",
+        "R08",
+        "R09",
+        "R10",
+        "R11"
+      ]
+    }
+  }
+}

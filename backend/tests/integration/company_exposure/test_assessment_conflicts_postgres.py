@@ -119,6 +119,7 @@ def test_concurrent_assessments_serialize_and_keep_both_results():
     check.close()
 
 
+@pytest.mark.case("R12")
 def test_expiry_holds_are_recorded_without_research():
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     _seed(factory)
