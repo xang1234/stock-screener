@@ -1,0 +1,7 @@
+{"fields": ["cik", "name", "ticker", "exchange"],
+ "data": [
+  [1234567, "Example Test Systems Corp (SYNTHETIC)", "EXMP", "Nasdaq"],
+  [7654321, "Twin Ticker Holdings A (SYNTHETIC)", "TWIN", "NYSE"],
+  [7654322, "Twin Ticker Holdings B (SYNTHETIC)", "TWIN", "NYSE"],
+  [2222222, "Class Share Co (SYNTHETIC)", "CLS-B", "NYSE"]
+ ]}

@@ -1,0 +1,9 @@
+{"cik": "0001234567", "name": "Example Test Systems Corp (SYNTHETIC)",
+ "tickers": ["EXMP"], "exchanges": ["Nasdaq"],
+ "filings": {"recent": {
+   "accessionNumber": ["0001234567-26-000011", "0001234567-25-000042", "0001234567-25-000007", "0001234567-24-000009"],
+   "filingDate": ["2026-03-02", "2025-11-05", "2025-02-14", "2024-02-15"],
+   "reportDate": ["2025-12-31", "2025-09-30", "2024-12-31", "2023-12-31"],
+   "form": ["10-K/A", "10-Q", "10-K", "10-K"],
+   "primaryDocument": ["exmp-20251231a.htm", "exmp-20250930.htm", "exmp-20241231.htm", "exmp-20231231.htm"]
+ }}}
