@@ -40,8 +40,20 @@ PDF_EXTRACTOR = "pdf-pypdf-6.19.0-v1"
 _PDF_SCRIPT = Path(__file__).with_name("pdf_extract.py")
 
 _DROP_TAGS = (
-    "script", "style", "noscript", "iframe", "object", "embed", "form",
-    "template", "svg", "canvas", "button", "input", "select", "textarea",
+    "script",
+    "style",
+    "noscript",
+    "iframe",
+    "object",
+    "embed",
+    "form",
+    "template",
+    "svg",
+    "canvas",
+    "button",
+    "input",
+    "select",
+    "textarea",
 )
 _HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
 _TEXT_BLOCKS = {"p", "li", "blockquote", "pre", "dd", "dt", "figcaption"}
@@ -54,9 +66,12 @@ _UNIT_PATTERN = re.compile(
 _PERIOD_PATTERN = re.compile(
     r"\b(?:FY|Q[1-4]\s*)?(?:19|20)\d{2}(?:/\d{2})?\b|(?:19|20)\d{2}年(?:度)?|民國\s*\d{2,3}年"
 )
-_FOOTNOTE_PATTERN = re.compile(r"^\s*(?:\(\d{1,2}\)|\[\d{1,2}\]|\*{1,3}|†|‡|注[\d０-９]?|Note\s+\d)")
+_FOOTNOTE_PATTERN = re.compile(
+    r"^\s*(?:\(\d{1,2}\)|\[\d{1,2}\]|\*{1,3}|†|‡|注[\d０-９]?|Note\s+\d)"
+)
 _PDF_HEADING = re.compile(
-    r"^(?:item\s+\d+[a-z]?\.|part\s+[ivx]+|第[一二三四五六七八九十\d]+[章節节部])", re.IGNORECASE
+    r"^(?:item\s+\d+[a-z]?\.|part\s+[ivx]+|第[一二三四五六七八九十\d]+[章節节部])",
+    re.IGNORECASE,
 )
 _SPEAKER = re.compile(r"^(?P<speaker>[A-Z][^:\n]{1,78}):\s")
 
@@ -85,7 +100,9 @@ class QuestionSet:
 
     @property
     def hash(self) -> str:
-        return content_hash({"terms": list(self.terms), "required": list(self.required_any)})
+        return content_hash(
+            {"terms": list(self.terms), "required": list(self.required_any)}
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +225,9 @@ def _html_blocks(data: bytes) -> list[dict]:
             if isinstance(child, NavigableString):
                 text = _clean(str(child))
                 if text and node is root:
-                    blocks.append({"kind": "paragraph", "text": text, "section": section()})
+                    blocks.append(
+                        {"kind": "paragraph", "text": text, "section": section()}
+                    )
                 continue
             if not isinstance(child, Tag):
                 continue
@@ -220,20 +239,30 @@ def _html_blocks(data: bytes) -> list[dict]:
                     while path and path[-1][0] >= level:
                         path.pop()
                     path.append((level, title))
-                    blocks.append({"kind": "heading", "text": title, "section": section()})
+                    blocks.append(
+                        {"kind": "heading", "text": title, "section": section()}
+                    )
                 continue
             if name == "table":
                 payload = _table_payload(child)
                 if payload["rows"] or payload["header"]:
-                    blocks.append({"kind": "table", "table": payload, "section": section()})
+                    blocks.append(
+                        {"kind": "table", "table": payload, "section": section()}
+                    )
                 continue
             if name in _TEXT_BLOCKS:
                 text = _clean(child.get_text(" "))
                 if text:
-                    if blocks and blocks[-1]["kind"] == "table" and _FOOTNOTE_PATTERN.match(text):
+                    if (
+                        blocks
+                        and blocks[-1]["kind"] == "table"
+                        and _FOOTNOTE_PATTERN.match(text)
+                    ):
                         blocks[-1]["table"]["footnotes"].append(text)
                         continue
-                    blocks.append({"kind": "paragraph", "text": text, "section": section()})
+                    blocks.append(
+                        {"kind": "paragraph", "text": text, "section": section()}
+                    )
                 continue
             has_block_children = child.find(
                 list(_HEADINGS) + ["table", *_TEXT_BLOCKS, "div", "section", "article"]
@@ -243,7 +272,9 @@ def _html_blocks(data: bytes) -> list[dict]:
             else:
                 text = _clean(child.get_text(" "))
                 if text:
-                    blocks.append({"kind": "paragraph", "text": text, "section": section()})
+                    blocks.append(
+                        {"kind": "paragraph", "text": text, "section": section()}
+                    )
 
     visit(root)
     return blocks
@@ -259,7 +290,11 @@ def _run_pdf_extractor(data: bytes, limits: PreparationLimits) -> dict:
 
     try:
         completed = subprocess.run(
-            [sys.executable, str(_PDF_SCRIPT), json.dumps({"max_pages": limits.max_pages})],
+            [
+                sys.executable,
+                str(_PDF_SCRIPT),
+                json.dumps({"max_pages": limits.max_pages}),
+            ],
             input=data,
             capture_output=True,
             timeout=limits.pdf_timeout_seconds,
@@ -279,34 +314,44 @@ def _run_pdf_extractor(data: bytes, limits: PreparationLimits) -> dict:
     return result
 
 
+def _pdf_paragraph(
+    buffer: list[str], section: tuple[str, ...], page: dict
+) -> dict | None:
+    text = _clean("\n".join(buffer))
+    if not text:
+        return None
+    return {
+        "kind": "paragraph",
+        "text": text,
+        "section": section,
+        "page_index": page["index"],
+        "page_label": page["label"],
+        "structure_verified": not _looks_tabular(text),
+    }
+
+
 def _pdf_blocks(result: dict, max_chars: int) -> list[dict]:
     blocks: list[dict] = []
     section: tuple[str, ...] = ()
     for page in result["pages"]:
         buffer: list[str] = []
-
-        def flush():
-            text = _clean("\n".join(buffer))
-            if text:
-                blocks.append(
-                    {
-                        "kind": "paragraph",
-                        "text": text,
-                        "section": section,
-                        "page_index": page["index"],
-                        "page_label": page["label"],
-                        "structure_verified": not _looks_tabular(text),
-                    }
-                )
-            buffer.clear()
-
         for line in page["text"].splitlines():
             stripped = line.strip()
-            if not stripped:
-                flush()
-                continue
-            if _PDF_HEADING.match(stripped) and len(stripped) <= 120:
-                flush()
+            starts_heading = (
+                bool(stripped)
+                and bool(_PDF_HEADING.match(stripped))
+                and len(stripped) <= 120
+            )
+            overflow = (
+                bool(stripped)
+                and sum(len(item) for item in buffer) + len(stripped) > max_chars
+            )
+            if not stripped or starts_heading or overflow:
+                block = _pdf_paragraph(buffer, section, page)
+                if block is not None:
+                    blocks.append(block)
+                buffer = []
+            if starts_heading:
                 section = (stripped,)
                 blocks.append(
                     {
@@ -317,11 +362,11 @@ def _pdf_blocks(result: dict, max_chars: int) -> list[dict]:
                         "page_label": page["label"],
                     }
                 )
-                continue
-            if sum(len(item) for item in buffer) + len(stripped) > max_chars:
-                flush()
-            buffer.append(stripped)
-        flush()
+            elif stripped:
+                buffer.append(stripped)
+        block = _pdf_paragraph(buffer, section, page)
+        if block is not None:
+            blocks.append(block)
     return blocks
 
 
@@ -332,12 +377,16 @@ def _looks_tabular(text: str) -> bool:
 
 
 class ExposureEvidencePreparer:
-    def __init__(self, session: Session, store, *, limits: PreparationLimits | None = None):
+    def __init__(
+        self, session: Session, store, *, limits: PreparationLimits | None = None
+    ):
         self.session = session
         self.store = store
         self.limits = limits or PreparationLimits()
 
-    def prepare(self, revision: ExposureDocumentRevision, questions=None, limits=None) -> PreparedEvidence:
+    def prepare(
+        self, revision: ExposureDocumentRevision, questions=None, limits=None
+    ) -> PreparedEvidence:
         del questions
         limits = limits or self.limits
         data = self.store.read(revision.blob_key)
@@ -362,7 +411,11 @@ class ExposureEvidencePreparer:
             else:
                 raw_blocks = _html_blocks(data)
             extractor = HTML_EXTRACTOR
-            coverage = {"page_count": None, "processed_pages": None, "omitted_ranges": []}
+            coverage = {
+                "page_count": None,
+                "processed_pages": None,
+                "omitted_ranges": [],
+            }
         else:
             raise PreparationFailed("unsupported_media_type")
 
@@ -370,7 +423,9 @@ class ExposureEvidencePreparer:
         pieces: list[str] = []
         cursor = 0
         for ordinal, raw in enumerate(raw_blocks):
-            text = raw["text"] if raw["kind"] != "table" else _render_table(raw["table"])
+            text = (
+                raw["text"] if raw["kind"] != "table" else _render_table(raw["table"])
+            )
             if cursor:
                 pieces.append("\n\n")
                 cursor += 2
