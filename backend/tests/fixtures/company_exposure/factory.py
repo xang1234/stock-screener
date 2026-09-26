@@ -275,3 +275,52 @@ class FakeRateGate:
         self.provider_names.append(provider)
         self.keys.append(key)
         return RateTicket(provider=provider, key=key, waited_seconds=0.0)
+
+
+def make_text_pdf(pages: list[str]) -> bytes:
+    """Build a minimal, valid text PDF (Helvetica) with one string per page.
+
+    Synthetic test input only; never counted as a company disclosure.
+    """
+
+    def escape(text: str) -> str:
+        return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    objects: list[bytes] = []
+    page_ids = [3 + 2 * index for index in range(len(pages))]
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    kids = " ".join(f"{pid} 0 R" for pid in page_ids)
+    objects.append(f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode())
+    font_id = 3 + 2 * len(pages)
+    for index, text in enumerate(pages):
+        content_id = page_ids[index] + 1
+        objects.append(
+            (
+                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                f"/Resources << /Font << /F1 {font_id} 0 R >> >> "
+                f"/Contents {content_id} 0 R >>"
+            ).encode()
+        )
+        lines = text.split("\n")
+        stream_lines = ["BT", "/F1 11 Tf", "72 720 Td", "14 TL"]
+        for line in lines:
+            stream_lines.append(f"({escape(line)}) Tj T*")
+        stream_lines.append("ET")
+        stream = "\n".join(stream_lines).encode("latin-1")
+        objects.append(
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream"
+        )
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    output = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(output)
+    output += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for offset in offsets:
+        output += f"{offset:010d} 00000 n \n".encode()
+    output += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    ).encode()
+    return bytes(output)

@@ -1,0 +1,7 @@
+# Document-processing dependencies for company-exposure research only.
+# The research worker image installs the hash-locked copy
+# (requirements-exposure-documents.lock, build arg
+# INSTALL_EXPOSURE_DOCUMENTS=true); the test environment installs this pin.
+# The default server image does not include them.
+# No rasterizer (pypdfium2) or OCR yet: page images belong to Task 08.
+pypdf==6.19.0
