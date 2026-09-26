@@ -14,6 +14,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.config import require_admin
@@ -89,7 +90,15 @@ def request_research(
     principal = _require_bound_admin(principal)
     if body.kind == "discover":
         raise _typed(status.HTTP_501_NOT_IMPLEMENTED, "discovery_not_installed")
-    security = db.get(StockUniverse, body.security_id)
+    if body.security_id is not None:
+        security = db.get(StockUniverse, body.security_id)
+    else:
+        security = db.execute(
+            select(StockUniverse).where(
+                StockUniverse.symbol == body.symbol.upper(),
+                StockUniverse.market.in_(INSTALLED_MARKETS),
+            )
+        ).scalar_one_or_none()
     if security is None:
         raise _typed(status.HTTP_404_NOT_FOUND, "security_not_found")
     if security.market not in INSTALLED_MARKETS:

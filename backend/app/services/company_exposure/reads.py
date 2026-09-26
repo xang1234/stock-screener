@@ -80,14 +80,8 @@ class ResearchJobReader:
             key=lambda i: (_STAGE_ORDER.get(i.stage, len(_STAGE_ORDER)), i.stage),
         )
         state = events[-1].state if events else None
-        paused = next(
-            (
-                e.detail
-                for e in reversed(events)
-                if e.detail and e.detail.get("condition")
-            ),
-            None,
-        )
+        latest = events[-1].detail if events else None
+        paused = latest if latest and latest.get("condition") else None
         revision_id = self._revision_id(events)
         return {
             "view_kind": OPERATIONAL_VIEW,

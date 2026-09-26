@@ -193,3 +193,23 @@ async def test_request_bounds_are_validated(api, subject):
     ):
         response = await api["call"]("POST", PATH, headers=ADMIN_HEADERS, json=body)
         assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_request_by_us_symbol_resolves_the_listing(api, db_session, subject):
+    body = _body(subject)
+    body.pop("security_id")
+    response = await api["call"](
+        "POST", PATH, headers=ADMIN_HEADERS, json={**body, "symbol": "exmp"}
+    )
+    assert response.status_code == 202
+    request = db_session.execute(select(ExposureResearchRequest)).scalar_one()
+    assert request.security_id == subject["security"].id
+    both = await api["call"](
+        "POST", PATH, headers=ADMIN_HEADERS, json={**_body(subject), "symbol": "EXMP"}
+    )
+    assert both.status_code == 422
+    unknown = await api["call"](
+        "POST", PATH, headers=ADMIN_HEADERS, json={**body, "symbol": "NOPE"}
+    )
+    assert unknown.json()["detail"]["code"] == "security_not_found"

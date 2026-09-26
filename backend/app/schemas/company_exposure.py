@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 
 class ResearchRequestBody(BaseModel):
@@ -15,13 +15,22 @@ class ResearchRequestBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["verify", "refresh", "discover"] = "verify"
-    security_id: int = Field(gt=0)
+    security_id: int | None = Field(default=None, gt=0)
+    symbol: str | None = Field(
+        default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$"
+    )
     economic_theme_id: UUID
     idempotency_key: str = Field(
         min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$"
     )
     supplied_links: list[AnyHttpUrl] = Field(default_factory=list, max_length=5)
     supplied_cik: str | None = Field(default=None, pattern=r"^\d{1,10}$")
+
+    @model_validator(mode="after")
+    def _one_listing(self) -> ResearchRequestBody:
+        if (self.security_id is None) == (self.symbol is None):
+            raise ValueError("exactly one of security_id or symbol is required")
+        return self
 
 
 class IssuerLinkProposalView(BaseModel):
