@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.services.company_exposure.freshness import HoldRegistry
+from app.services.company_exposure.holds import HoldRegistry
 from tests.fixtures.company_exposure.factory import verified_claim
 
 PARTICIPATION_DATE = datetime(2024, 3, 1, tzinfo=timezone.utc)
@@ -44,9 +44,7 @@ def test_late_old_capture_cannot_restore_ended_exposure(ended_dossier):
         assert participation.action == "carried_forward"
         assert participation.ended
         assert result.claim("exposure_end").conclusion == "supported"
-        ref = dossier.service.persist_assessment(
-            result, expected_prior_revision_id=result.prior_revision_id
-        )
+        ref = dossier.service.persist_assessment(result)
         # No new participation revision: the obsolete exposure is not restored.
         assert (
             ref.claim_revision_ids.get(

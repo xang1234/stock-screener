@@ -14,14 +14,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.config import require_admin
 from app.database import get_db
+from app.domain.company_exposure.contracts import RESEARCH_STAGES
 from app.domain.economic_taxonomy.contracts import AdminPrincipal
-from app.models.economic_taxonomy import EconomicTheme
-from app.models.stock_universe import StockUniverse
 from app.schemas.company_exposure import (
     IssuerLinkProposalView,
     ResearchJobResponse,
@@ -30,22 +28,24 @@ from app.schemas.company_exposure import (
     ShadowPreviewResponse,
 )
 from app.services.company_exposure.config import ExposureRuntimeConfig, load_config
-from app.services.company_exposure.issuer_identity import (
-    IssuerIdentityAdapter,
-    LinkProposal,
-)
 from app.services.company_exposure.reads import PreviewUnavailable, ResearchJobReader
-from app.services.company_exposure.research import (
-    STAGES,
-    ExposureResearchCoordinator,
+from app.services.company_exposure.research_requests import (
     ResearchRequestInput,
+    ResearchRequests,
     ResearchUnavailable,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-INSTALLED_MARKETS = frozenset({"US"})
 REVIEW_ROLE = "taxonomy:review"
+_REFUSAL_STATUS = {
+    "research_disabled": status.HTTP_409_CONFLICT,
+    "live_mode_not_installed": status.HTTP_409_CONFLICT,
+    "discovery_not_installed": status.HTTP_501_NOT_IMPLEMENTED,
+    "security_not_found": status.HTTP_404_NOT_FOUND,
+    "economic_theme_not_found": status.HTTP_404_NOT_FOUND,
+    "market_not_installed": status.HTTP_422_UNPROCESSABLE_ENTITY,
+}
 
 
 def get_exposure_config() -> ExposureRuntimeConfig:
@@ -68,7 +68,7 @@ def _dispatch_research() -> str:
     try:
         from app.tasks.company_exposure_tasks import process_exposure_work
 
-        process_exposure_work.apply_async(kwargs={"max_steps": len(STAGES)})
+        process_exposure_work.apply_async(kwargs={"max_steps": len(RESEARCH_STAGES)})
         return "queued"
     except Exception:  # broker unavailable: the queued job is retried later
         logger.warning("exposure research dispatch deferred", exc_info=True)
@@ -88,81 +88,40 @@ def request_research(
     config: Annotated[ExposureRuntimeConfig, Depends(get_exposure_config)],
 ):
     principal = _require_bound_admin(principal)
-    if body.kind == "discover":
-        raise _typed(status.HTTP_501_NOT_IMPLEMENTED, "discovery_not_installed")
-    if body.security_id is not None:
-        security = db.get(StockUniverse, body.security_id)
-    else:
-        security = db.execute(
-            select(StockUniverse).where(
-                StockUniverse.symbol == body.symbol.upper(),
-                StockUniverse.market.in_(INSTALLED_MARKETS),
-            )
-        ).scalar_one_or_none()
-    if security is None:
-        raise _typed(status.HTTP_404_NOT_FOUND, "security_not_found")
-    if security.market not in INSTALLED_MARKETS:
-        raise _typed(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "market_not_installed",
-            market=security.market,
-        )
-    if db.get(EconomicTheme, body.economic_theme_id) is None:
-        raise _typed(status.HTTP_404_NOT_FOUND, "economic_theme_not_found")
-
-    coordinator = ExposureResearchCoordinator(db, config)
     try:
-        ref = coordinator.request(
+        ref = ResearchRequests(db, config).request(
             ResearchRequestInput(
                 economic_theme_id=body.economic_theme_id,
                 kind=body.kind,
-                security_id=security.id,
-                market=security.market,
+                security_id=body.security_id,
+                symbol=body.symbol,
                 supplied_links=tuple(str(link) for link in body.supplied_links),
+                supplied_cik=body.supplied_cik,
             ),
             principal.subject,
             idempotency_key=body.idempotency_key,
         )
     except ResearchUnavailable as exc:
         db.rollback()
-        raise _typed(status.HTTP_409_CONFLICT, exc.code) from None
-
-    proposal = None
-    if ref.created and body.supplied_cik:
-        identity = IssuerIdentityAdapter(db)
-        if not identity.resolve_security(security.id).resolved:
-            # An administrator-supplied CIK is a reviewable proposal, never a
-            # trusted identifier.
-            proposed = identity.propose_link(
-                LinkProposal(
-                    security_id=security.id,
-                    issuer_id=None,
-                    identifiers=(("US", "cik", body.supplied_cik),),
-                    evidence={
-                        "reference": "administrator-supplied CIK",
-                        "job_id": str(ref.id),
-                    },
-                    requested_by=principal.subject,
-                    reason="administrator-supplied CIK with research request",
-                )
-            )
-            proposal = IssuerLinkProposalView(
-                state=proposed.state,
-                link_revision_id=None
-                if proposed.link_revision_id is None
-                else str(proposed.link_revision_id),
-                reason=proposed.reason,
-            )
+        raise _typed(_REFUSAL_STATUS[exc.code], exc.code, **exc.detail) from None
     db.commit()
-    dispatch = _dispatch_research() if ref.created else "not_needed"
     if not ref.created:
         response.status_code = status.HTTP_200_OK
+    proposal = ref.issuer_link_proposal
     return ResearchRequestResponse(
         job_id=str(ref.id),
         created=ref.created,
         state=ref.state,
-        dispatch=dispatch,
-        issuer_link_proposal=proposal,
+        dispatch=_dispatch_research() if ref.created else "not_needed",
+        issuer_link_proposal=None
+        if proposal is None
+        else IssuerLinkProposalView(
+            state=proposal.state,
+            link_revision_id=None
+            if proposal.link_revision_id is None
+            else str(proposal.link_revision_id),
+            reason=proposal.reason,
+        ),
     )
 
 

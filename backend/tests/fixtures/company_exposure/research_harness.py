@@ -14,7 +14,7 @@ from app.infra.db.repositories.company_exposure_work_repo import (
 from app.services.company_exposure.acquisition import DocumentAcquisitionRegistry
 from app.services.company_exposure.claims import ClaimVerifier
 from app.services.company_exposure.config import ExposureRuntimeConfig
-from app.services.company_exposure.markets.us import USDocumentAdapter
+from app.services.company_exposure.markets.us import USDocumentAdapter, USIssuerResolver
 from app.services.company_exposure.network import PublicDocumentTransport
 from app.services.company_exposure.providers import (
     SubscriptionArtifactRunner,
@@ -22,9 +22,13 @@ from app.services.company_exposure.providers import (
     default_client_factory,
 )
 from app.services.company_exposure.research import (
-    ExposureResearchCoordinator,
-    ResearchRequestInput,
+    MarketRoute,
+    ResearchStageRunner,
     ThemeContext,
+)
+from app.services.company_exposure.research_requests import (
+    ResearchRequestInput,
+    ResearchRequests,
 )
 from app.services.company_exposure.resources import ResearchResources
 from app.services.company_exposure.storage import OriginalStore
@@ -116,12 +120,18 @@ class Harness:
                 client_factory=default_client_factory(self.go.transport),
             ),
         )
-        self.coordinator = ExposureResearchCoordinator(
+        us_adapter = USDocumentAdapter(
+            self.db, acquisition, user_agent=config.sec_user_agent
+        )
+        self.requests = ResearchRequests(self.db, config, clock=self.clock.now)
+        self.runner = ResearchStageRunner(
             self.db,
             config,
-            us_adapter=USDocumentAdapter(
-                self.db, acquisition, user_agent=config.sec_user_agent
-            ),
+            markets={
+                "US": MarketRoute(
+                    us_adapter, USIssuerResolver(self.db, us_adapter).resolve_cik
+                )
+            },
             verifier=ClaimVerifier(runner),
             store=self.store,
             theme_loader=lambda _s, theme_id: ThemeContext(
@@ -143,7 +153,7 @@ class Harness:
         )
 
     def request(self, key="verify-1", kind="verify"):
-        return self.coordinator.request(
+        return self.requests.request(
             ResearchRequestInput(
                 economic_theme_id=self.theme.id, kind=kind, security_id=self.security.id
             ),
@@ -155,7 +165,7 @@ class Harness:
         item = self.repo.claim_next(worker_id="test-worker")
         assert item is not None, "no runnable work"
         self.db.commit()
-        return self.coordinator.run_step(item.id, item.lease_token)
+        return self.runner.run_step(item.id, item.lease_token)
 
     def run_all(self, limit=6):
         results = []
@@ -164,5 +174,5 @@ class Harness:
             if item is None:
                 break
             self.db.commit()
-            results.append(self.coordinator.run_step(item.id, item.lease_token))
+            results.append(self.runner.run_step(item.id, item.lease_token))
         return results

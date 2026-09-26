@@ -62,7 +62,7 @@ def _seed(factory):
     )
     service = ExposureAssessmentService(session, clock=FixedClock().now)
     result = service.assess(AssessmentAttemptInput(scope=scope, claims=(base,)))
-    ref = service.persist_assessment(result, expected_prior_revision_id=None)
+    ref = service.persist_assessment(result)
     session.commit()
     session.close()
     return scope, passages, ref
@@ -90,7 +90,7 @@ def test_concurrent_assessments_serialize_and_keep_both_results():
             assert result.prior_revision_id == base.id
             session.commit()
             barrier.wait(timeout=10)
-            ref = service.persist_assessment(result, expected_prior_revision_id=base.id)
+            ref = service.persist_assessment(result)
             session.commit()
             return ref
         finally:

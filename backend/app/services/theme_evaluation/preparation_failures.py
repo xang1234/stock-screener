@@ -88,3 +88,12 @@ class PreparationFailure(RuntimeError):
         )
         self.dispatch_phase = dispatch_phase
         super().__init__(code)
+
+    def in_phase(self, phase: str) -> PreparationFailure:
+        """Record ``phase`` unless a more specific phase was already set."""
+
+        if phase not in DISPATCH_PHASES:
+            raise ValueError("invalid_dispatch_phase")
+        if self.dispatch_phase is None:
+            self.dispatch_phase = phase
+        return self

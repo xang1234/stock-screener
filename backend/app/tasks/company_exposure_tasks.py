@@ -27,7 +27,7 @@ def _as_dict(outcome: TaskOutcome) -> dict:
 
 
 @celery_app.task(name=TASK_PREFIX + "process_exposure_work", ignore_result=False)
-def process_exposure_work(max_steps: int = 1, *, coordinator_factory=None) -> dict:
+def process_exposure_work(max_steps: int = 1, *, runner_factory=None) -> dict:
     """Advance at most ``max_steps`` leased verify/refresh stages.
 
     Each claim is committed before the stage runs, so no row lock spans
@@ -40,18 +40,18 @@ def process_exposure_work(max_steps: int = 1, *, coordinator_factory=None) -> di
         CompanyExposureWorkRepository,
     )
     from app.services.company_exposure.config import load_config
-    from app.services.company_exposure.research import build_coordinator
+    from app.services.company_exposure.research import build_runner
 
     config = load_config()
     if config.research_mode == ResearchMode.DISABLED:
         return _as_dict(TaskOutcome.skipped("research_disabled"))
-    factory = coordinator_factory or build_coordinator
+    factory = runner_factory or build_runner
     worker_id = f"exposure-worker:{uuid4()}"
     session = SessionLocal()
     steps: list[dict] = []
     try:
-        coordinator = factory(session, config)
-        repo = CompanyExposureWorkRepository(session, clock=coordinator.clock)
+        runner = factory(session, config)
+        repo = CompanyExposureWorkRepository(session, clock=runner.clock)
         for _ in range(max(1, int(max_steps))):
             item = repo.claim_next(worker_id=worker_id)
             if item is None:
@@ -60,7 +60,7 @@ def process_exposure_work(max_steps: int = 1, *, coordinator_factory=None) -> di
             work_id, lease_token = item.id, item.lease_token
             session.commit()
             try:
-                result = coordinator.run_step(work_id, lease_token)
+                result = runner.run_step(work_id, lease_token)
             except Exception:
                 # The lease expires and the stage is retried; nothing is lost.
                 session.rollback()

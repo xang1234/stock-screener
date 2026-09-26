@@ -105,34 +105,35 @@ class ExposureRuntimeConfig:
         }
 
 
-def load_config(settings=None) -> ExposureRuntimeConfig:
-    if settings is None:
-        from app.config import settings as app_settings
+def load_config(
+    exposure=None, *, subscription_key: str | None = None
+) -> ExposureRuntimeConfig:
+    """Runtime configuration from ``EXPOSURE_*`` settings.
 
-        settings = app_settings
+    Only the presence of the subscription key is recorded, never its value.
+    """
+
+    if exposure is None:
+        from app.config.exposure_settings import ExposureSettings
+
+        exposure = ExposureSettings()
+    if subscription_key is None:
+        from app.config import settings
+
+        subscription_key = settings.opencode_go_api_key
     return ExposureRuntimeConfig(
-        research_mode=getattr(settings, "exposure_research_mode", "disabled"),
-        paid_search_enabled=bool(getattr(settings, "exposure_paid_search_enabled", False)),
-        search_provider=getattr(settings, "exposure_search_provider", "none"),
-        llm_billing_mode=getattr(settings, "exposure_llm_billing_mode", "subscription"),
-        text_route_enabled=bool(getattr(settings, "exposure_llm_text_route_enabled", False)),
-        vision_route_enabled=bool(
-            getattr(settings, "exposure_llm_vision_route_enabled", False)
-        ),
-        daily_request_limit=getattr(settings, "exposure_llm_daily_request_limit", None),
-        daily_token_limit=getattr(settings, "exposure_llm_daily_token_limit", None),
-        allocation_timezone=getattr(settings, "exposure_allocation_timezone", "UTC"),
-        subscription_key_present=bool(
-            (getattr(settings, "opencode_go_api_key", "") or "").strip()
-        ),
-        document_store=getattr(settings, "exposure_document_store", "data/exposure-evidence"),
-        storage_max_bytes=getattr(
-            settings, "exposure_storage_max_bytes", ResearchLimits().storage_max_bytes
-        ),
-        storage_min_free_bytes=getattr(
-            settings,
-            "exposure_storage_min_free_bytes",
-            ResearchLimits().storage_min_free_bytes,
-        ),
-        sec_user_agent=getattr(settings, "exposure_sec_user_agent", "") or "",
+        research_mode=exposure.research_mode,
+        paid_search_enabled=exposure.paid_search_enabled,
+        search_provider=exposure.search_provider,
+        llm_billing_mode=exposure.llm_billing_mode,
+        text_route_enabled=exposure.llm_text_route_enabled,
+        vision_route_enabled=exposure.llm_vision_route_enabled,
+        daily_request_limit=exposure.llm_daily_request_limit,
+        daily_token_limit=exposure.llm_daily_token_limit,
+        allocation_timezone=exposure.allocation_timezone,
+        subscription_key_present=bool((subscription_key or "").strip()),
+        document_store=exposure.document_store,
+        storage_max_bytes=exposure.storage_max_bytes,
+        storage_min_free_bytes=exposure.storage_min_free_bytes,
+        sec_user_agent=exposure.sec_user_agent,
     )

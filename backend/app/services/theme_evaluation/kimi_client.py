@@ -138,22 +138,18 @@ class OpenCodeGoKimi:
                         else "model_http_error"
                     )
                     raise PreparationFailure(
-                        code,
-                        http_status=status,
-                        retry_after_seconds=retry_after,
-                        dispatch_phase="dispatched",
+                        code, http_status=status, retry_after_seconds=retry_after
                     )
                 content_length = response.headers.get("content-length")
                 if content_length is not None:
                     try:
-                        if int(content_length) > _MAX_PROVIDER_RESPONSE_BYTES:
-                            raise PreparationFailure(
-                                "model_response_too_large", dispatch_phase="uncertain"
-                            )
+                        declared = int(content_length)
                     except ValueError:
+                        raise PreparationFailure("model_response_invalid") from None
+                    if declared > _MAX_PROVIDER_RESPONSE_BYTES:
                         raise PreparationFailure(
-                            "model_response_invalid", dispatch_phase="dispatched"
-                        ) from None
+                            "model_response_too_large", dispatch_phase="uncertain"
+                        )
                 raw = bytearray()
                 for chunk in response.iter_bytes():
                     raw.extend(chunk)
@@ -161,8 +157,9 @@ class OpenCodeGoKimi:
                         raise PreparationFailure(
                             "model_response_too_large", dispatch_phase="uncertain"
                         )
-        except PreparationFailure:
-            raise
+        except PreparationFailure as exc:
+            # A response was received; only a size abort is less certain.
+            raise exc.in_phase("dispatched")
         except httpx.TimeoutException as exc:
             raise PreparationFailure(
                 "model_timeout", dispatch_phase=_transport_phase(exc)
@@ -172,48 +169,46 @@ class OpenCodeGoKimi:
                 "model_connection_failed", dispatch_phase=_transport_phase(exc)
             ) from None
 
-        response_hash = hashlib.sha256(bytes(raw)).hexdigest()
         try:
-            envelope = json.loads(raw)
-        except (TypeError, ValueError):
-            raise PreparationFailure(
-                "model_json_invalid", dispatch_phase="dispatched"
-            ) from None
+            return _parse_response(bytes(raw), self.model, provider_request_id)
+        except PreparationFailure as exc:
+            raise exc.in_phase("dispatched")
 
-        try:
-            choice = envelope["choices"][0]
-            if choice.get("finish_reason") != "stop":
-                raise PreparationFailure(
-                    "model_response_incomplete", dispatch_phase="dispatched"
-                )
-            content = choice["message"]["content"]
-        except PreparationFailure:
-            raise
-        except (KeyError, IndexError, TypeError):
-            raise PreparationFailure(
-                "model_response_invalid", dispatch_phase="dispatched"
-            ) from None
 
-        try:
-            result = json.loads(content)
-        except (TypeError, ValueError):
-            raise PreparationFailure(
-                "model_json_invalid", dispatch_phase="dispatched"
-            ) from None
-        if not isinstance(result, dict):
-            raise PreparationFailure("model_response_invalid", dispatch_phase="dispatched")
-        envelope_id = envelope.get("id") if isinstance(envelope, dict) else None
-        return KimiJSONResponse(
-            data=result,
-            provider_request_id=(
-                envelope_id if isinstance(envelope_id, str) and envelope_id else None
-            )
-            or provider_request_id,
-            reported_usage=_reported_usage(envelope),
-            response_hash=response_hash,
-            finish_reason=str(choice.get("finish_reason")),
-            model=str(envelope.get("model") or self.model),
+def _parse_response(
+    raw: bytes, requested_model: str, header_request_id: str | None
+) -> "KimiJSONResponse":
+    """Validate the chat envelope and its JSON content."""
+
+    try:
+        envelope = json.loads(raw)
+    except (TypeError, ValueError):
+        raise PreparationFailure("model_json_invalid") from None
+    try:
+        choice = envelope["choices"][0]
+        if choice.get("finish_reason") != "stop":
+            raise PreparationFailure("model_response_incomplete")
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        raise PreparationFailure("model_response_invalid") from None
+    try:
+        result = json.loads(content)
+    except (TypeError, ValueError):
+        raise PreparationFailure("model_json_invalid") from None
+    if not isinstance(result, dict):
+        raise PreparationFailure("model_response_invalid")
+    envelope_id = envelope.get("id")
+    return KimiJSONResponse(
+        data=result,
+        provider_request_id=(
+            envelope_id if isinstance(envelope_id, str) and envelope_id else None
         )
+        or header_request_id,
+        reported_usage=_reported_usage(envelope),
+        response_hash=hashlib.sha256(raw).hexdigest(),
+        finish_reason=str(choice.get("finish_reason")),
+        model=str(envelope.get("model") or requested_model),
+    )
 
 
 @dataclass(frozen=True, slots=True)

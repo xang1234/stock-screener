@@ -44,7 +44,9 @@ class DiscoveryResult:
 class MarketDocumentAdapter(Protocol):
     market: str
 
-    def discover(self, issuer, query: DocumentQuery, limits: AcquisitionLimits) -> DiscoveryResult: ...
+    def discover(
+        self, issuer, query: DocumentQuery, limits: AcquisitionLimits, budget
+    ) -> DiscoveryResult: ...
 
     def resolve_target(self, raw_metadata: dict) -> DocumentTarget: ...
 

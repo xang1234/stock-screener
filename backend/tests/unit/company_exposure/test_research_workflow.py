@@ -16,7 +16,8 @@ from app.services.company_exposure.issuer_identity import (
     IssuerIdentityAdapter,
     LinkProposal,
 )
-from app.services.company_exposure.research import ResearchUnavailable
+from app.services.company_exposure.reads import ResearchJobReader
+from app.services.company_exposure.research_requests import ResearchUnavailable
 from app.tasks import company_exposure_tasks
 from tests.fixtures.company_exposure.factory import make_theme
 from tests.fixtures.company_exposure.research_harness import (
@@ -66,7 +67,7 @@ def test_offline_us_verify_resolves_cik_then_assesses(harness, db_session):
     assert results[0].detail["acceptance_policy"] == "official_registry_single_listing"
     # The older 10-K is not served: coverage is partial, not an exposure change.
     assert results[-1].state == "partial"
-    assert results[-1].detail["claims"] == 1 and results[-1].detail["shadow"] is True
+    assert results[-1].detail["claims"] == 1
     assert len(harness.go.requests) == 1
     assert set(harness.rate.provider_names) == {"sec_edgar"}
 
@@ -76,7 +77,7 @@ def test_offline_us_verify_resolves_cik_then_assesses(harness, db_session):
     assert revision.request_id == ref.id
     claim = db_session.execute(select(ExposureClaimRevision)).scalar_one()
     assert (claim.support_basis, claim.conclusion) == ("primary_explicit", "supported")
-    assert harness.coordinator.status(ref.id)["state"] == "partial"
+    assert ResearchJobReader(harness.db).read(ref.id)["state"] == "partial"
 
 
 def test_identical_refresh_reuses_artifact_without_new_spend(harness, db_session):
@@ -115,7 +116,7 @@ def test_ambiguous_cik_pauses_for_review_then_resumes_after_admin_link(
     assert (paused.status, paused.state) == ("paused", "review_required")
     assert paused.detail["condition"] == "multiple_ciks"
     assert (
-        harness.coordinator.status(ref.id)["stages"][0]["pause_reason"]
+        ResearchJobReader(harness.db).read(ref.id)["stages"][0]["pause_reason"]
         == "review_required"
     )
     assert harness.repo.claim_next(worker_id="w") is None
@@ -132,7 +133,7 @@ def test_ambiguous_cik_pauses_for_review_then_resumes_after_admin_link(
         )
     )
     identity.apply_link(proposal.link_revision_id, ADMIN, proposal.proposal_hash)
-    harness.coordinator.resume(ref.id)
+    harness.requests.resume(ref.id)
     db_session.commit()
     resumed = harness.step()
     assert (resumed.stage, resumed.status) == ("resolve_issuer", "completed")
@@ -176,7 +177,7 @@ def test_stale_lease_cannot_run_a_step(harness):
     item = harness.repo.claim_next(worker_id="w")
     harness.db.commit()
     with pytest.raises(WorkLeaseError):
-        harness.coordinator.run_step(item.id, item.id)
+        harness.runner.run_step(item.id, item.id)
 
 
 def test_worker_task_runs_leased_stages(harness, monkeypatch):
@@ -185,10 +186,10 @@ def test_worker_task_runs_leased_stages(harness, monkeypatch):
     harness.request()
     harness.db.commit()
     monkeypatch.setattr(
-        "app.services.company_exposure.config.load_config", lambda settings=None: SHADOW
+        "app.services.company_exposure.config.load_config", lambda *_a, **_k: SHADOW
     )
     outcome = company_exposure_tasks.process_exposure_work.run(
-        max_steps=5, coordinator_factory=lambda _session, _config: harness.coordinator
+        max_steps=5, runner_factory=lambda _session, _config: harness.runner
     )
     assert outcome["status"] == "completed"
     assert [s["stage"] for s in outcome["steps"]] == [

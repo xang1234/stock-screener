@@ -26,6 +26,7 @@ from app.domain.company_exposure.contracts import (
     ResearchLimits,
     ReservationState,
     ResourceUnit,
+    as_utc,
 )
 from app.models.company_exposure_work import (
     ExposureResearchRequest,
@@ -74,13 +75,6 @@ class ReservationTransitionError(RuntimeError):
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _aware(value: datetime | None) -> datetime | None:
-    # SQLite returns naive values for timezone-aware columns.
-    if value is not None and value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
 
 
 def default_root_budgets(limits: ResearchLimits) -> dict[str, int]:
@@ -240,7 +234,9 @@ class CompanyExposureWorkRepository:
                 self.session.flush()
                 return item
         except IntegrityError:
-            return self.session.execute(select(ResearchWorkItem).where(*key)).scalar_one()
+            return self.session.execute(
+                select(ResearchWorkItem).where(*key)
+            ).scalar_one()
 
     def claim_next(self, *, worker_id: str) -> ResearchWorkItem | None:
         now = self.clock()
@@ -284,7 +280,7 @@ class CompanyExposureWorkRepository:
             item is None
             or item.status != "leased"
             or item.lease_token != lease_token
-            or _aware(item.lease_expires_at) <= self.clock()
+            or as_utc(item.lease_expires_at) <= self.clock()
         ):
             raise WorkLeaseError("lease_not_held")
         return item
@@ -479,7 +475,10 @@ class ReservationLedger:
         available = int(pool.capacity) - int(pool.reserved_amount)
         if amount > available:
             return ReserveOutcome(
-                False, reason="capacity_exhausted", requested=amount, available=available
+                False,
+                reason="capacity_exhausted",
+                requested=amount,
+                available=available,
             )
         budget = None
         if root_request_id is not None and root_budget_key is not None:
@@ -615,9 +614,13 @@ class ReservationLedger:
             raise ReservationTransitionError("dispatched_release_requires_pre_dispatch")
 
         if new_state == ReservationState.RELEASED:
-            pool.reserved_amount = max(0, int(pool.reserved_amount) - int(reservation.amount))
+            pool.reserved_amount = max(
+                0, int(pool.reserved_amount) - int(reservation.amount)
+            )
             if budget is not None:
-                root_amount = int(self.events(reservation_id)[0].detail.get("root_amount", 0))
+                root_amount = int(
+                    self.events(reservation_id)[0].detail.get("root_amount", 0)
+                )
                 budget.used_amount = max(0, int(budget.used_amount) - root_amount)
         elif new_state == ReservationState.RECONCILED and actual_amount is not None:
             if actual_amount < 0:
@@ -672,7 +675,9 @@ class ReservationLedger:
         self.session.flush()
         return ReserveOutcome(True, requested=amount)
 
-    def close_period(self, *, pool_key: str, unit: ResourceUnit | str, period: str) -> list[UUID]:
+    def close_period(
+        self, *, pool_key: str, unit: ResourceUnit | str, period: str
+    ) -> list[UUID]:
         """Expire every still-uncertain reservation of a closed period.
 
         Uncertain reservations stay charged; they never carry forward.

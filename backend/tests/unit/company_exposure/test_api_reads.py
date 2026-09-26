@@ -81,7 +81,7 @@ async def test_job_status_is_operational_not_accepted(call, completed_shadow_job
     )
     body = response.json()
     assert (body["view_kind"], body["accepted"]) == ("research_progress", False)
-    assert body["state"] == "partial"
+    assert (body["state"], body["settled"]) == ("partial", True)
     assert body["assessment_revision_id"] == revision_id
     assert [s["stage"] for s in body["stages"]] == [
         "resolve_issuer",

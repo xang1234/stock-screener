@@ -13,6 +13,7 @@ export const shadowCompletedJob = {
   requested_by: 'test:admin',
   created_at: '2026-09-26T12:00:00+00:00',
   state: 'partial',
+  settled: true,
   condition: null,
   assessment_revision_id: '33333333-3333-4333-8333-333333333333',
   stages: [

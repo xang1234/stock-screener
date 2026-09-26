@@ -151,6 +151,27 @@ class ResearchJobState(StrEnum):
     CANCELLED = "cancelled"
 
 
+# Leased verify/refresh stages, in execution order.
+RESEARCH_STAGES = ("resolve_issuer", "acquire", "verify")
+
+# States in which a job makes no further progress without an operator.
+SETTLED_JOB_STATES = frozenset(
+    {
+        ResearchJobState.READY_FOR_PUBLICATION,
+        ResearchJobState.PUBLISHED,
+        ResearchJobState.PARTIAL,
+        ResearchJobState.HELD,
+        ResearchJobState.PAUSED_ALLOWANCE,
+        ResearchJobState.PAUSED_SEARCH_BUDGET,
+        ResearchJobState.PAUSED_STORAGE,
+        ResearchJobState.UNAVAILABLE_CAPABILITY,
+        ResearchJobState.REVIEW_REQUIRED,
+        ResearchJobState.TERMINAL_FAILURE,
+        ResearchJobState.CANCELLED,
+    }
+)
+
+
 TERMINAL_JOB_STATES = frozenset(
     {
         ResearchJobState.READY_FOR_PUBLICATION,
@@ -307,6 +328,33 @@ class CoverageItem:
         _require_text(self.route, "route")
         object.__setattr__(self, "outcome", CoverageOutcome(self.outcome))
 
+    @property
+    def complete(self) -> bool:
+        return self.outcome == CoverageOutcome.COMPLETE_FOR_REQUESTED_SCOPE
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-safe form used in job events and dossier revisions."""
+
+        return json.loads(
+            canonical_json(
+                {
+                    "route": self.route,
+                    "outcome": self.outcome.value,
+                    "reason": self.reason,
+                    "detail": self.detail,
+                }
+            )
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CoverageItem:
+        return cls(
+            data["route"],
+            CoverageOutcome(data["outcome"]),
+            data.get("reason"),
+            data.get("detail") or {},
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SearchResult:
@@ -396,6 +444,13 @@ def bytes_hash(data: bytes) -> str:
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
+
+def as_utc(value: datetime | None) -> datetime | None:
+    """Attach UTC to naive values (SQLite drops the zone of aware columns)."""
+
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 @dataclass(frozen=True, slots=True)

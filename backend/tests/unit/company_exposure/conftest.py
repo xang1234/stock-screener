@@ -74,9 +74,7 @@ class DossierEnv:
 
     def persist(self, attempt):
         result = self.service.assess(attempt)
-        ref = self.service.persist_assessment(
-            result, expected_prior_revision_id=result.prior_revision_id
-        )
+        ref = self.service.persist_assessment(result)
         return result, ref
 
 

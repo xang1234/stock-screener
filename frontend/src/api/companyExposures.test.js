@@ -51,10 +51,9 @@ describe('company exposure research client', () => {
     expect(researchPreviewKey('j1', 'r1')).toEqual(['companyExposure', 'researchPreview', 'j1', 'r1']);
   });
 
-  it('stops polling once a job is settled or paused', () => {
-    expect(isResearchJobSettled({ state: 'researching' })).toBe(false);
-    expect(isResearchJobSettled({ state: 'partial' })).toBe(true);
-    expect(isResearchJobSettled({ state: 'review_required' })).toBe(true);
+  it('stops polling only when the server reports the job settled', () => {
+    expect(isResearchJobSettled({ state: 'researching', settled: false })).toBe(false);
+    expect(isResearchJobSettled({ state: 'review_required', settled: true })).toBe(true);
     expect(isResearchJobSettled(undefined)).toBe(false);
   });
 });

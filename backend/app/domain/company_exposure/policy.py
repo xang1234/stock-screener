@@ -10,7 +10,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from app.domain.company_exposure.contracts import ClaimKind, ResearchMode
+from app.domain.company_exposure.contracts import (
+    PRIMARY_SUPPORT_BASES,
+    ClaimKind,
+    Conclusion,
+    FreshnessState,
+    ResearchMode,
+    SupportBasis,
+)
 
 # Spec §11.1 freshness windows for automatic use.
 STABLE_ROLE_FRESHNESS_DAYS = 450
@@ -84,6 +91,33 @@ def is_fresh(deadline: datetime | None, at: datetime) -> bool:
     """A claim is current strictly before its deadline."""
 
     return deadline is not None and at < deadline
+
+
+def freshness_state(
+    claim_kind: ClaimKind | str, fresh_until: datetime | None, at: datetime
+) -> FreshnessState:
+    """Freshness of a stored claim at ``at`` (materiality has no timer)."""
+
+    if ClaimKind(claim_kind) == ClaimKind.MATERIALITY:
+        return FreshnessState.CURRENT
+    if fresh_until is None:
+        return FreshnessState.UNDATED
+    return FreshnessState.CURRENT if is_fresh(fresh_until, at) else FreshnessState.STALE
+
+
+def is_primary_support(
+    basis: SupportBasis | str,
+    conclusion: Conclusion | str,
+    *,
+    allow_disputed: bool = False,
+) -> bool:
+    """Primary-source support. Selection may keep a disputed claim in
+    place; automatic use (``allow_disputed=False``) never accepts one."""
+
+    accepted = {Conclusion.SUPPORTED}
+    if allow_disputed:
+        accepted.add(Conclusion.DISPUTED)
+    return basis in PRIMARY_SUPPORT_BASES and conclusion in accepted
 
 
 def within_synthesis_bound(primary_leaf_ids, explicit_links) -> bool:

@@ -7,12 +7,9 @@ from sqlalchemy import func, select
 
 from app.domain.company_exposure.contracts import FreshnessState
 from app.models.company_exposure import ExposureClaimRevision, ResearchProviderAttempt
-from app.services.company_exposure.freshness import (
-    ExposureSafety,
-    HoldRegistry,
-    claim_freshness,
-    refresh_due_holds,
-)
+from app.services.company_exposure.freshness import claim_freshness, refresh_due_holds
+from app.services.company_exposure.holds import HoldRegistry
+from app.services.company_exposure.safety import ExposureSafety
 from tests.fixtures.company_exposure.factory import verified_claim
 
 ROLE_DATE = datetime(2025, 8, 1, tzinfo=timezone.utc)
@@ -105,7 +102,7 @@ def test_disputed_hold_blocks_only_its_claim(dossier):
     _, ref = dossier.persist(dossier.attempt(role, other))
     held_id, free_id = ref.claim_revision_ids.values()
     registry = HoldRegistry(dossier.db)
-    hold = registry.apply(
+    hold, _ = registry.apply(
         "claim",
         dossier.db.get(ExposureClaimRevision, held_id).claim_id,
         "disputed",

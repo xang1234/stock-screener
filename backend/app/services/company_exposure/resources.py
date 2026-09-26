@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -22,6 +22,7 @@ from app.domain.company_exposure.contracts import (
     DispatchPhase,
     ReservationState,
     ResourceUnit,
+    as_utc,
     utc_now,
 )
 from app.infra.db.repositories.company_exposure_work_repo import (
@@ -170,16 +171,25 @@ class ResearchResources:
     # -- reserve / dispatch / finish --------------------------------------
 
     def reserve(self, dispatch: DispatchRequest) -> ReservationTicket:
-        if (dispatch.route, dispatch.model) != (SUBSCRIPTION_PROVIDER, SUBSCRIPTION_MODEL):
-            return ReservationTicket(False, "unavailable_capability", "route_not_approved")
+        if (dispatch.route, dispatch.model) != (
+            SUBSCRIPTION_PROVIDER,
+            SUBSCRIPTION_MODEL,
+        ):
+            return ReservationTicket(
+                False, "unavailable_capability", "route_not_approved"
+            )
         if not self.config.route_approved(dispatch.capability):
-            return ReservationTicket(False, "unavailable_capability", "route_not_approved")
+            return ReservationTicket(
+                False, "unavailable_capability", "route_not_approved"
+            )
         if not self.config.subscription_key_present:
             return ReservationTicket(
                 False, "unavailable_capability", "subscription_credentials_missing"
             )
         if self.config.daily_request_limit is None:
-            return ReservationTicket(False, "paused_allowance", "allocation_not_configured")
+            return ReservationTicket(
+                False, "paused_allowance", "allocation_not_configured"
+            )
         if dispatch.max_output_tokens <= 0 or dispatch.estimated_input_tokens < 0:
             raise ValueError("invalid_token_bounds")
 
@@ -218,18 +228,23 @@ class ResearchResources:
                     dispatch_phase=DispatchPhase.PRE_DISPATCH,
                     detail={"reason": token_outcome.reason},
                 )
-                return ReservationTicket(False, "paused_allowance", token_outcome.reason)
+                return ReservationTicket(
+                    False, "paused_allowance", token_outcome.reason
+                )
             token_reservation_id = token_outcome.reservation_id
 
-        number = int(
-            self.session.execute(
-                select(func.max(ResearchProviderAttempt.attempt_number)).where(
-                    ResearchProviderAttempt.logical_operation_key
-                    == dispatch.logical_operation_key
-                )
-            ).scalar_one()
-            or 0
-        ) + 1
+        number = (
+            int(
+                self.session.execute(
+                    select(func.max(ResearchProviderAttempt.attempt_number)).where(
+                        ResearchProviderAttempt.logical_operation_key
+                        == dispatch.logical_operation_key
+                    )
+                ).scalar_one()
+                or 0
+            )
+            + 1
+        )
         attempt = ResearchProviderAttempt(
             logical_operation_key=dispatch.logical_operation_key,
             attempt_number=number,
@@ -322,7 +337,10 @@ class ResearchResources:
             return
         # A response was received: the request counts; tokens only if reported.
         self.ledger.transition(
-            ticket.id, ReservationState.RECONCILED, dispatch_phase=phase, actual_amount=1
+            ticket.id,
+            ReservationState.RECONCILED,
+            dispatch_phase=phase,
+            actual_amount=1,
         )
         if ticket.token_reservation_id is not None:
             self.ledger.transition(
@@ -338,7 +356,10 @@ class ResearchResources:
         phases = [e.dispatch_phase for e in events if e.dispatch_phase]
         reservation = self.session.get(ResearchReservation, reservation_id)
         tokens = None
-        if reservation.unit == ResourceUnit.REPORTED_TOKENS.value and latest.actual_known:
+        if (
+            reservation.unit == ResourceUnit.REPORTED_TOKENS.value
+            and latest.actual_known
+        ):
             tokens = latest.actual_amount
         return ReservationUsage(
             state=latest.state,
@@ -351,7 +372,9 @@ class ResearchResources:
         expired: list[UUID] = []
         for unit in (ResourceUnit.REQUESTS, ResourceUnit.REPORTED_TOKENS):
             expired.extend(
-                self.ledger.close_period(pool_key=allocation_id, unit=unit, period=period)
+                self.ledger.close_period(
+                    pool_key=allocation_id, unit=unit, period=period
+                )
             )
         return PeriodCloseReport(period=period, expired_reservation_ids=tuple(expired))
 
@@ -368,9 +391,7 @@ class ResearchResources:
         reports = []
         seen = set()
         for pool in list(pools):
-            end = pool.period_end
-            if end.tzinfo is None:
-                end = end.replace(tzinfo=timezone.utc)
+            end = as_utc(pool.period_end)
             if end <= now and (pool.pool_key, pool.period) not in seen:
                 seen.add((pool.pool_key, pool.period))
                 reports.append(self.close_period(pool.pool_key, pool.period))

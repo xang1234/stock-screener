@@ -9,13 +9,18 @@ Generation-bound product reads arrive with the publication slice.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.domain.company_exposure.contracts import UNKNOWN_MATERIALITY_WORDING
+from app.domain.company_exposure.contracts import (
+    RESEARCH_STAGES,
+    SETTLED_JOB_STATES,
+    UNKNOWN_MATERIALITY_WORDING,
+    as_utc,
+)
 from app.models.company_exposure import (
     AssessmentClaimSelection,
     AssessmentRevision,
@@ -28,12 +33,11 @@ from app.models.company_exposure import (
     ResearchEvent,
     ResearchWorkItem,
 )
-from app.services.company_exposure.freshness import HoldRegistry
+from app.services.company_exposure.holds import HoldRegistry
 
 MAX_EXCERPT_CHARS = 600
 OPERATIONAL_VIEW = "research_progress"
 SHADOW_VIEW = "shadow_preview"
-_STAGE_ORDER = {"resolve_issuer": 0, "acquire": 1, "verify": 2}
 
 
 class PreviewUnavailable(LookupError):
@@ -44,11 +48,7 @@ class PreviewUnavailable(LookupError):
 
 
 def _iso(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.isoformat()
+    return None if value is None else as_utc(value).isoformat()
 
 
 def _str(value) -> str | None:
@@ -77,11 +77,10 @@ class ResearchJobReader:
             self.session.execute(
                 select(ResearchWorkItem).where(ResearchWorkItem.request_id == job_id)
             ).scalars(),
-            key=lambda i: (_STAGE_ORDER.get(i.stage, len(_STAGE_ORDER)), i.stage),
+            key=lambda i: RESEARCH_STAGES.index(i.stage),
         )
         state = events[-1].state if events else None
-        latest = events[-1].detail if events else None
-        paused = latest if latest and latest.get("condition") else None
+        condition = (events[-1].detail or {}).get("condition") if events else None
         revision_id = self._revision_id(events)
         return {
             "view_kind": OPERATIONAL_VIEW,
@@ -96,7 +95,8 @@ class ResearchJobReader:
             "requested_by": request.requester_principal,
             "created_at": _iso(request.created_at),
             "state": state,
-            "condition": None if paused is None else paused.get("condition"),
+            "settled": state in SETTLED_JOB_STATES,
+            "condition": condition,
             "assessment_revision_id": revision_id,
             "stages": [
                 {
@@ -176,15 +176,7 @@ class ResearchJobReader:
         claims = []
         for selection, claim_revision, claim in rows:
             evidence = self._evidence(claim_revision.id)
-            active = sorted(
-                {
-                    h.hold_kind
-                    for h in (
-                        *holds.active("claim", claim.id),
-                        *holds.active("claim_revision", claim_revision.id),
-                    )
-                }
-            )
+            active = sorted(holds.active_kinds_for_claim(claim.id, claim_revision.id))
             claims.append(
                 {
                     "claim_id": str(claim.id),

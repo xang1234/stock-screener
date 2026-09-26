@@ -130,11 +130,9 @@ def resolve_issuer(
     }
 
 
-def resume(session, *, job_id: UUID, apply: bool) -> dict:
-    from app.infra.db.repositories.company_exposure_work_repo import (
-        CompanyExposureWorkRepository,
-    )
+def resume(session, config, *, job_id: UUID, apply: bool) -> dict:
     from app.services.company_exposure.reads import ResearchJobReader
+    from app.services.company_exposure.research_requests import ResearchRequests
 
     job = ResearchJobReader(session).read(job_id)
     if job is None:
@@ -145,23 +143,14 @@ def resume(session, *, job_id: UUID, apply: bool) -> dict:
             "current_state": job["state"],
             "condition": job["condition"],
         }
-    CompanyExposureWorkRepository(session).resume(job_id)
+    ResearchRequests(session, config).resume(job_id)
     session.commit()
     return {"state": "queued", "previous_state": job["state"]}
 
 
 def inspect_holds(session) -> list[dict]:
-    from sqlalchemy import select
+    from app.services.company_exposure.holds import HoldRegistry
 
-    from app.models.company_exposure import ExposureUseHoldRevision
-
-    latest: dict[str, ExposureUseHoldRevision] = {}
-    for row in session.execute(select(ExposureUseHoldRevision)).scalars():
-        if (
-            row.stream_key not in latest
-            or row.revision_number > latest[row.stream_key].revision_number
-        ):
-            latest[row.stream_key] = row
     return [
         {
             "subject_kind": row.subject_kind,
@@ -170,8 +159,7 @@ def inspect_holds(session) -> list[dict]:
             "reason": row.reason,
             "since": row.created_at,
         }
-        for row in sorted(latest.values(), key=lambda r: r.stream_key)
-        if row.action == "apply"
+        for row in HoldRegistry(session).all_active()
     ]
 
 
@@ -190,6 +178,86 @@ def refresh_holds(session, *, apply: bool) -> dict:
     }
 
 
+def _admin_subject() -> str:
+    from app.config import settings
+
+    return (settings.admin_principal_id or "").strip()
+
+
+def _cmd_status(session, config, args):
+    return status(session, config), EXIT_OK
+
+
+def _cmd_job(session, config, args):
+    from app.services.company_exposure.reads import ResearchJobReader
+
+    payload = ResearchJobReader(session).read(args.job_id)
+    return (payload, EXIT_OK) if payload else ({"state": "not_found"}, EXIT_BLOCKED)
+
+
+def _cmd_resolve_issuer(session, config, args):
+    payload = resolve_issuer(
+        session,
+        security_id=args.security_id,
+        cik=args.cik,
+        apply=args.apply,
+        admin_subject=_admin_subject(),
+    )
+    return payload, EXIT_BLOCKED if payload["state"] == "blocked" else EXIT_OK
+
+
+def _cmd_resume(session, config, args):
+    payload = resume(session, config, job_id=args.job_id, apply=args.apply)
+    return payload, EXIT_BLOCKED if payload["state"] == "not_found" else EXIT_OK
+
+
+def _cmd_inspect_holds(session, config, args):
+    return inspect_holds(session), EXIT_OK
+
+
+def _cmd_refresh_holds(session, config, args):
+    return refresh_holds(session, apply=args.apply), EXIT_OK
+
+
+def _cik(value: str) -> str:
+    if not (value.isdigit() and len(value) <= 10):
+        raise argparse.ArgumentTypeError("must be 1-10 digits")
+    return value
+
+
+def _steps(value: str) -> int:
+    steps = int(value)
+    if not 1 <= steps <= 20:
+        raise argparse.ArgumentTypeError("must be between 1 and 20")
+    return steps
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Company exposure operator CLI")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("status").set_defaults(handler=_cmd_status)
+    job = sub.add_parser("job")
+    job.add_argument("job_id", type=UUID)
+    job.set_defaults(handler=_cmd_job)
+    resolve = sub.add_parser("resolve-issuer")
+    resolve.add_argument("--security-id", type=int, required=True)
+    resolve.add_argument("--cik", type=_cik, required=True)
+    resolve.add_argument("--apply", action="store_true")
+    resolve.set_defaults(handler=_cmd_resolve_issuer)
+    res = sub.add_parser("resume")
+    res.add_argument("job_id", type=UUID)
+    res.add_argument("--apply", action="store_true")
+    res.set_defaults(handler=_cmd_resume)
+    proc = sub.add_parser("process")
+    proc.add_argument("--max-steps", type=_steps, default=3)
+    proc.set_defaults(handler=None)
+    sub.add_parser("inspect-holds").set_defaults(handler=_cmd_inspect_holds)
+    refresh = sub.add_parser("refresh-holds")
+    refresh.add_argument("--apply", action="store_true")
+    refresh.set_defaults(handler=_cmd_refresh_holds)
+    return parser
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -197,90 +265,33 @@ def main(
     config_loader: Callable | None = None,
     worker: Callable | None = None,
 ) -> int:
-    parser = argparse.ArgumentParser(description="Company exposure operator CLI")
-    sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("status")
-    job = sub.add_parser("job")
-    job.add_argument("job_id", type=UUID)
-    resolve = sub.add_parser("resolve-issuer")
-    resolve.add_argument("--security-id", type=int, required=True)
-    resolve.add_argument("--cik", required=True)
-    resolve.add_argument("--apply", action="store_true")
-    res = sub.add_parser("resume")
-    res.add_argument("job_id", type=UUID)
-    res.add_argument("--apply", action="store_true")
-    proc = sub.add_parser("process")
-    proc.add_argument("--max-steps", type=int, default=3)
-    sub.add_parser("inspect-holds")
-    refresh = sub.add_parser("refresh-holds")
-    refresh.add_argument("--apply", action="store_true")
-    args = parser.parse_args(argv)
-
-    if args.command == "resolve-issuer" and not (
-        args.cik.isdigit() and len(args.cik) <= 10
-    ):
-        print("--cik must be 1-10 digits", file=sys.stderr)
-        return EXIT_USAGE
-    if args.command == "process" and not 1 <= args.max_steps <= 20:
-        print("--max-steps must be between 1 and 20", file=sys.stderr)
-        return EXIT_USAGE
-
-    if config_loader is None:
-        from app.services.company_exposure.config import load_config as config_loader
-    config = config_loader()
+    try:
+        args = _parser().parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_USAGE if exc.code else EXIT_OK
 
     if args.command == "process":
+        # The worker task loads its own configuration and session.
         if worker is None:
             from app.tasks.company_exposure_tasks import process_exposure_work
 
             worker = process_exposure_work.run
         outcome = worker(max_steps=args.max_steps)
         _print(outcome)
-        return (
-            EXIT_OK
-            if outcome.get("status") != "skipped" or outcome.get("reason") == "no_work"
-            else EXIT_BLOCKED
+        blocked = (
+            outcome.get("status") == "skipped" and outcome.get("reason") != "no_work"
         )
+        return EXIT_BLOCKED if blocked else EXIT_OK
 
+    if config_loader is None:
+        from app.services.company_exposure.config import load_config as config_loader
     session = (session_factory or _session_factory())()
     try:
-        if args.command == "status":
-            payload = status(session, config)
-            _print(payload)
-            return EXIT_OK
-        if args.command == "job":
-            from app.services.company_exposure.reads import ResearchJobReader
-
-            payload = ResearchJobReader(session).read(args.job_id)
-            _print(payload or {"state": "not_found"})
-            return EXIT_OK if payload else EXIT_BLOCKED
-        if args.command == "resolve-issuer":
-            from app.config import settings
-
-            payload = resolve_issuer(
-                session,
-                security_id=args.security_id,
-                cik=args.cik,
-                apply=args.apply,
-                admin_subject=(
-                    getattr(settings, "admin_principal_id", "") or ""
-                ).strip(),
-            )
-            _print(payload)
-            return EXIT_BLOCKED if payload["state"] == "blocked" else EXIT_OK
-        if args.command == "resume":
-            payload = resume(session, job_id=args.job_id, apply=args.apply)
-            _print(payload)
-            return EXIT_BLOCKED if payload["state"] == "not_found" else EXIT_OK
-        if args.command == "inspect-holds":
-            _print(inspect_holds(session))
-            return EXIT_OK
-        if args.command == "refresh-holds":
-            _print(refresh_holds(session, apply=args.apply))
-            return EXIT_OK
+        payload, code = args.handler(session, config_loader(), args)
     finally:
         session.close()
-    return EXIT_USAGE
+    _print(payload)
+    return code
 
 
 if __name__ == "__main__":

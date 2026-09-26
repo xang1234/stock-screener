@@ -1,40 +1,42 @@
-"""Bounded verify/refresh research for one issuer–theme pair (plan Task 17A).
+"""Leased verify/refresh stages for one issuer–theme pair (plan Task 17A).
 
-A request is an immutable envelope; progress is an append-only event stream
-and each stage is one leased work item with a finite unit of work:
+Each stage is one leased work item with a finite unit of work; progress is
+an append-only event stream:
 
 ``resolve_issuer``
-    Use the accepted issuer link. A US listing without one resolves its CIK
-    from SEC's official files and accepts it only through
+    Use the accepted issuer link. Without one, the market's official
+    registry route proposes a match that is accepted only through
     ``accept_registry_match``; an ambiguous result pauses the job as
-    ``review_required`` with the failed condition visible, and ``resume``
-    re-runs this stage after an administrator applies a link.
+    ``review_required`` with the failed condition visible.
 ``acquire``
-    Retained originals first, then the approved official enumerator (SEC for
-    US). Every gap is typed coverage; nothing here decides exposure truth.
+    The market's official enumerator, then retained originals. Every gap is
+    typed coverage; nothing here decides exposure truth.
 ``verify``
     Prepare passages, run one bounded claim-extraction call on the
     subscription route (cached per input), then append a dossier revision.
 
-The coordinator never calls a publication pointer, never mutates membership
-and never schedules discovery; ``discover`` requests are refused in this
-slice. Operational job state is not product state.
+The runner never calls a publication pointer, never mutates membership and
+never schedules discovery. Operational job state is not product state.
+Requests are accepted by ``research_requests.ResearchRequests``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.company_exposure.contracts import (
+    RESEARCH_STAGES,
     SERVICE_PRINCIPAL,
     CoverageItem,
     CoverageOutcome,
+    RegistryMatch,
     ResearchJobState,
     ResearchMode,
     content_hash,
@@ -49,7 +51,6 @@ from app.models.company_exposure import (
     ExposureDocumentRevision,
     ExposureResearchRequest,
     ResearchEvent,
-    ResearchWorkItem,
 )
 from app.models.stock_universe import StockUniverse
 from app.services.company_exposure.acquisition import JobBudgetRef
@@ -60,7 +61,9 @@ from app.services.company_exposure.assessments import (
 from app.services.company_exposure.claims import (
     RETRIEVAL_AID_KINDS,
     AssessmentScope,
+    ClaimReviewBatch,
     ClaimVerifier,
+    EvidenceItem,
     evidence_item_from_rows,
 )
 from app.services.company_exposure.config import ExposureRuntimeConfig
@@ -68,8 +71,11 @@ from app.services.company_exposure.issuer_identity import (
     IssuerIdentityAdapter,
     IssuerLinkRef,
 )
-from app.services.company_exposure.markets.base import AcquisitionLimits, DocumentQuery
-from app.services.company_exposure.markets.us import USDocumentAdapter, USIssuerResolver
+from app.services.company_exposure.markets.base import (
+    AcquisitionLimits,
+    DocumentQuery,
+    MarketDocumentAdapter,
+)
 from app.services.company_exposure.preparation import (
     ExposureEvidencePreparer,
     PreparationFailed,
@@ -77,10 +83,9 @@ from app.services.company_exposure.preparation import (
     persist_passages,
     select_passages,
 )
+from app.services.company_exposure.research_requests import enqueue_stage
 
-POLICY_BUNDLE = "exposure-verify-v1"
-STAGES = ("resolve_issuer", "acquire", "verify")
-VERIFY_KINDS = frozenset({"verify", "refresh"})
+ANNUAL_REPORTS = DocumentQuery(document_kinds=("annual_report",), max_documents=2)
 MAX_STAGE_ATTEMPTS = 4
 MAX_RETAINED_DOCUMENTS = 4
 MAX_PASSAGES = 24
@@ -94,28 +99,50 @@ _RETRYABLE_COVERAGE = frozenset(
 )
 
 
-class ResearchUnavailable(RuntimeError):
-    def __init__(self, code: str):
-        super().__init__(code)
-        self.code = code
+class StepStatus(StrEnum):
+    COMPLETED = "completed"
+    PAUSED = "paused"
+    RETRYABLE = "retryable"
+    FAILED = "failed"
+    LEASE_LOST = "lease_lost"
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchRequestInput:
-    economic_theme_id: UUID
-    kind: str = "verify"
-    security_id: int | None = None
-    issuer_id: UUID | None = None
-    market: str | None = None
-    supplied_links: tuple[str, ...] = ()
-    trigger_origin: str = "requested"
+class StageOutcome:
+    status: StepStatus
+    state: ResearchJobState
+    detail: dict
+    next_stage: str | None = None
+
+    @classmethod
+    def complete(cls, state: ResearchJobState, next_stage: str | None = None, **detail):
+        return cls(StepStatus.COMPLETED, state, detail, next_stage)
+
+    @classmethod
+    def pause(cls, state: ResearchJobState, condition: str, **detail):
+        return cls(StepStatus.PAUSED, state, {"condition": condition, **detail})
+
+    @classmethod
+    def retry(cls, condition: str, **detail):
+        return cls(
+            StepStatus.RETRYABLE,
+            ResearchJobState.RETRYABLE_FAILURE,
+            {"condition": condition, **detail},
+        )
+
+    @classmethod
+    def fail(cls, condition: str, **detail):
+        return cls(
+            StepStatus.FAILED,
+            ResearchJobState.TERMINAL_FAILURE,
+            {"condition": condition, **detail},
+        )
 
 
-@dataclass(frozen=True, slots=True)
-class ResearchRequestRef:
-    id: UUID
-    created: bool
-    state: str | None
+def _issuer_link_required(**detail) -> StageOutcome:
+    return StageOutcome.pause(
+        ResearchJobState.REVIEW_REQUIRED, "issuer_link_required", **detail
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +150,7 @@ class ResearchStepResult:
     work_id: UUID
     request_id: UUID
     stage: str
-    status: str  # completed | paused | retryable | failed
+    status: StepStatus
     state: str
     next_stage: str | None = None
     detail: dict = field(default_factory=dict)
@@ -138,11 +165,52 @@ class ThemeContext:
 
 
 @dataclass(frozen=True, slots=True)
-class _StageOutcome:
-    status: str
-    state: ResearchJobState
-    detail: dict
-    next_stage: str | None = None
+class MarketRoute:
+    """A market's official document enumerator and issuer registry."""
+
+    adapter: MarketDocumentAdapter
+    resolve_registry: Callable[[int, JobBudgetRef], RegistryMatch | CoverageItem]
+    query: DocumentQuery = ANNUAL_REPORTS
+
+
+@dataclass(frozen=True, slots=True)
+class _Issuer:
+    issuer_id: UUID
+    identifiers: dict
+    link_revision_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class _IssuerRef:
+    """What a market adapter needs to know about the issuer."""
+
+    identifiers: dict
+
+
+@dataclass(frozen=True, slots=True)
+class AcquiredEvidence:
+    """The acquire stage's result, carried to verify in its event detail."""
+
+    issuer_id: UUID
+    document_revision_ids: tuple[UUID, ...] = ()
+    coverage: tuple[CoverageItem, ...] = ()
+
+    def to_detail(self) -> dict:
+        return {
+            "issuer_id": str(self.issuer_id),
+            "document_revision_ids": [str(r) for r in self.document_revision_ids],
+            "coverage": [c.to_dict() for c in self.coverage],
+        }
+
+    @classmethod
+    def from_detail(cls, detail: dict) -> AcquiredEvidence:
+        return cls(
+            issuer_id=UUID(detail["issuer_id"]),
+            document_revision_ids=tuple(
+                UUID(r) for r in detail["document_revision_ids"]
+            ),
+            coverage=tuple(CoverageItem.from_dict(c) for c in detail["coverage"]),
+        )
 
 
 def load_theme_context(session: Session, theme_id: UUID) -> ThemeContext | None:
@@ -180,11 +248,10 @@ def load_theme_context(session: Session, theme_id: UUID) -> ThemeContext | None:
             ).scalars()
         )
     )
-    terms = tuple(dict.fromkeys((revision.display_name, *aliases)))
     return ThemeContext(
         theme_id=theme_id,
         label=revision.display_name,
-        terms=terms,
+        terms=tuple(dict.fromkeys((revision.display_name, *aliases))),
         fingerprint=content_hash(
             {
                 "name": revision.display_name,
@@ -196,38 +263,15 @@ def load_theme_context(session: Session, theme_id: UUID) -> ThemeContext | None:
     )
 
 
-def _coverage_dict(item: CoverageItem) -> dict:
-    return {
-        "route": item.route,
-        "outcome": item.outcome.value,
-        "reason": item.reason,
-        "detail": item.detail,
-    }
-
-
-def _coverage_item(data: dict) -> CoverageItem:
-    return CoverageItem(
-        data["route"],
-        CoverageOutcome(data["outcome"]),
-        data.get("reason"),
-        data.get("detail") or {},
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _IssuerView:
-    identifiers: dict
-
-
-class ExposureResearchCoordinator:
+class ResearchStageRunner:
     def __init__(
         self,
         session: Session,
         config: ExposureRuntimeConfig,
         *,
-        us_adapter: USDocumentAdapter | None = None,
-        verifier: ClaimVerifier | None = None,
-        store=None,
+        markets: Mapping[str, MarketRoute],
+        verifier: ClaimVerifier,
+        store,
         theme_loader: Callable[
             [Session, UUID], ThemeContext | None
         ] = load_theme_context,
@@ -236,253 +280,155 @@ class ExposureResearchCoordinator:
     ):
         self.session = session
         self.config = config
-        self.us_adapter = us_adapter
+        self.markets = markets
         self.verifier = verifier
-        self.store = store
+        self.preparer = ExposureEvidencePreparer(session, store)
         self.theme_loader = theme_loader
         self.clock = clock
         self.commit = commit or session.commit
         self.repo = CompanyExposureWorkRepository(session, clock=clock)
         self.identity = IssuerIdentityAdapter(session, clock=clock)
-
-    # ------------------------------------------------------------- requests
-    def request(
-        self, request: ResearchRequestInput, principal: str, idempotency_key: str
-    ) -> ResearchRequestRef:
-        if self.config.research_mode == ResearchMode.DISABLED:
-            raise ResearchUnavailable("research_disabled")
-        if self.config.research_mode == ResearchMode.LIVE:
-            # This build publishes nothing; only shadow research is installed.
-            raise ResearchUnavailable("live_mode_not_installed")
-        if request.kind not in VERIFY_KINDS:
-            raise ResearchUnavailable("discovery_not_installed")
-        if request.security_id is None and request.issuer_id is None:
-            raise ValueError("security_or_issuer_required")
-        market = request.market
-        if request.security_id is not None:
-            security = self.session.get(StockUniverse, request.security_id)
-            if security is None:
-                raise ValueError("unknown_security")
-            market = market or security.market
-        row, created = self.repo.create_request(
-            kind=request.kind,
-            requester_principal=principal,
-            idempotency_namespace=f"company-exposure:{principal}",
-            idempotency_key=idempotency_key,
-            economic_theme_id=request.economic_theme_id,
-            security_id=request.security_id,
-            issuer_id=request.issuer_id,
-            market=market,
-            supplied_links=list(request.supplied_links),
-            limits=self.config.limits,
-            trigger_origin=request.trigger_origin,
+        self._stages = dict(
+            zip(
+                RESEARCH_STAGES,
+                (self._resolve_issuer, self._acquire, self._verify),
+                strict=True,
+            )
         )
-        if created:
-            self._enqueue(row, STAGES[0])
-        return ResearchRequestRef(row.id, created, self.repo.latest_state(row.id))
-
-    def _enqueue(
-        self, request: ExposureResearchRequest, stage: str, *, attempt: int = 0
-    ) -> ResearchWorkItem:
-        return self.repo.enqueue(
-            request=request,
-            stage=stage,
-            input_hash=content_hash(
-                {"request": request.id, "stage": stage, "attempt": attempt}
-            ),
-            policy_bundle_version=POLICY_BUNDLE,
-            priority=0,
-        )
-
-    def status(self, request_id: UUID) -> dict | None:
-        request = self.session.get(ExposureResearchRequest, request_id)
-        if request is None:
-            return None
-        events = self.repo.events(request_id)
-        items = sorted(
-            self.session.execute(
-                select(ResearchWorkItem).where(
-                    ResearchWorkItem.request_id == request_id
-                )
-            ).scalars(),
-            key=lambda i: STAGES.index(i.stage) if i.stage in STAGES else len(STAGES),
-        )
-        return {
-            "id": str(request.id),
-            "kind": request.kind,
-            "security_id": request.security_id,
-            "issuer_id": None if request.issuer_id is None else str(request.issuer_id),
-            "economic_theme_id": str(request.economic_theme_id),
-            "market": request.market,
-            "state": events[-1].state if events else None,
-            "events": [
-                {"sequence": e.sequence, "state": e.state, "detail": e.detail}
-                for e in events
-            ],
-            "stages": [
-                {"stage": i.stage, "status": i.status, "pause_reason": i.pause_reason}
-                for i in items
-            ],
-        }
 
     # ---------------------------------------------------------------- steps
     def run_step(self, work_id: UUID, lease_token: UUID) -> ResearchStepResult:
         item = self.repo.heartbeat(work_id, lease_token)
         request = self.session.get(ExposureResearchRequest, item.request_id)
-        stage = item.stage
-        attempts = int(item.claim_count or 1)
+        stage, attempts = item.stage, int(item.claim_count or 1)
         # Release row locks before any pacing wait, network or provider call.
         self.commit()
-        if self.config.research_mode != ResearchMode.SHADOW:
-            outcome = _StageOutcome(
-                "paused",
-                ResearchJobState.UNAVAILABLE_CAPABILITY,
-                {
-                    "condition": "research_disabled"
-                    if self.config.research_mode == ResearchMode.DISABLED
-                    else "live_mode_not_installed"
-                },
-            )
+        if self.config.research_mode == ResearchMode.SHADOW:
+            outcome = self._stages[stage](request)
         else:
-            handler = {
-                "resolve_issuer": self._resolve_issuer,
-                "acquire": self._acquire,
-                "verify": self._verify,
-            }[stage]
-            outcome = handler(request)
-        if outcome.status == "retryable" and attempts >= MAX_STAGE_ATTEMPTS:
-            outcome = _StageOutcome(
-                "failed",
+            outcome = StageOutcome.pause(
+                ResearchJobState.UNAVAILABLE_CAPABILITY,
+                "research_disabled"
+                if self.config.research_mode == ResearchMode.DISABLED
+                else "live_mode_not_installed",
+            )
+        if outcome.status == StepStatus.RETRYABLE and attempts >= MAX_STAGE_ATTEMPTS:
+            outcome = StageOutcome(
+                StepStatus.FAILED,
                 ResearchJobState.TERMINAL_FAILURE,
                 {**outcome.detail, "attempts": attempts},
             )
-        return self._finish(item.id, lease_token, request, stage, outcome, attempts)
+        return self._finish(work_id, lease_token, request, stage, outcome, attempts)
 
-    def _finish(
-        self, work_id, lease_token, request, stage, outcome, attempts
-    ) -> ResearchStepResult:
+    def _finish(self, work_id, lease_token, request, stage, outcome, attempts):
         detail = {"stage": stage, **outcome.detail}
         try:
             self.repo.complete_step(
                 work_id,
                 lease_token,
-                status=outcome.status,
+                status=outcome.status.value,
                 retry_at=self.clock() + RETRY_BASE * (2 ** max(0, attempts - 1))
-                if outcome.status == "retryable"
+                if outcome.status == StepStatus.RETRYABLE
                 else None,
                 pause_reason=outcome.state.value
-                if outcome.status == "paused"
+                if outcome.status == StepStatus.PAUSED
                 else None,
             )
         except WorkLeaseError:
             # The lease expired during I/O: another worker owns the stage now.
             self.session.rollback()
             return ResearchStepResult(
-                work_id, request.id, stage, "lease_lost", "lease_lost"
+                work_id,
+                request.id,
+                stage,
+                StepStatus.LEASE_LOST,
+                StepStatus.LEASE_LOST.value,
             )
-        state = outcome.state
-        if outcome.status == "retryable":
-            state = ResearchJobState.RETRYABLE_FAILURE
-        self.repo.append_event(request.id, state, detail)
+        self.repo.append_event(request.id, outcome.state, detail)
         if outcome.next_stage is not None:
-            self._enqueue(request, outcome.next_stage)
+            enqueue_stage(self.repo, request, outcome.next_stage)
         self.commit()
         return ResearchStepResult(
             work_id,
             request.id,
             stage,
             outcome.status,
-            state.value,
+            outcome.state.value,
             outcome.next_stage,
             detail,
         )
 
-    def resume(self, request_id: UUID) -> None:
-        self.repo.resume(request_id)
-
-    # --------------------------------------------------------------- stages
-    def _budget(self, request) -> JobBudgetRef:
+    # ------------------------------------------------------------- helpers
+    @staticmethod
+    def _budget(request) -> JobBudgetRef:
         return JobBudgetRef(root_request_id=request.effective_root_id)
 
-    def _resolve_issuer(self, request) -> _StageOutcome:
+    def _issuer(self, request) -> _Issuer | None:
         if request.issuer_id is not None:
-            return _StageOutcome(
-                "completed",
-                ResearchJobState.RESEARCHING,
-                {"issuer_id": str(request.issuer_id), "source": "request"},
-                "acquire",
-            )
-        resolution = self.identity.resolve_security(request.security_id)
-        if resolution.resolved:
-            return _StageOutcome(
-                "completed",
-                ResearchJobState.RESEARCHING,
-                {
-                    "issuer_id": str(resolution.issuer_id),
-                    "link_revision_id": str(resolution.link_revision_id),
-                    "acceptance_policy": resolution.acceptance_policy,
-                    "source": "accepted_link",
-                },
-                "acquire",
-            )
-        if request.market != "US" or self.us_adapter is None:
-            return _StageOutcome(
-                "paused",
-                ResearchJobState.REVIEW_REQUIRED,
-                {"condition": "issuer_link_required", "market": request.market},
-            )
-        match = USIssuerResolver(self.session, self.us_adapter).resolve_cik(
-            request.security_id, self._budget(request)
-        )
-        self.commit()
-        if isinstance(match, CoverageItem):
-            return self._coverage_outcome(match)
-        ref = self.identity.accept_registry_match(match, SERVICE_PRINCIPAL)
-        if isinstance(ref, IssuerLinkRef):
-            return _StageOutcome(
-                "completed",
-                ResearchJobState.RESEARCHING,
-                {
-                    "issuer_id": str(ref.issuer_id),
-                    "link_revision_id": str(ref.link_revision_id),
-                    "acceptance_policy": ref.acceptance_policy,
-                    "source": "official_registry",
-                },
-                "acquire",
-            )
-        return _StageOutcome(
-            "paused",
-            ResearchJobState.REVIEW_REQUIRED,
-            {
-                "condition": ref.reason,
-                "link_revision_id": None
-                if ref.link_revision_id is None
-                else str(ref.link_revision_id),
-                "candidate_count": match.candidate_count,
-            },
-        )
-
-    def _coverage_outcome(self, item: CoverageItem) -> _StageOutcome:
-        detail = {"condition": item.reason, "coverage": [_coverage_dict(item)]}
-        if item.outcome in _RETRYABLE_COVERAGE:
-            return _StageOutcome(
-                "retryable", ResearchJobState.RETRYABLE_FAILURE, detail
-            )
-        if item.reason == "paused_storage":
-            return _StageOutcome("paused", ResearchJobState.PAUSED_STORAGE, detail)
-        return _StageOutcome("paused", ResearchJobState.UNAVAILABLE_CAPABILITY, detail)
-
-    def _issuer(self, request):
-        if request.issuer_id is not None:
-            return (
+            return _Issuer(
                 request.issuer_id,
                 self.identity.identifiers_for(request.issuer_id),
                 None,
             )
         resolution = self.identity.resolve_security(request.security_id)
-        return resolution.issuer_id, resolution.identifiers, resolution.link_revision_id
+        if not resolution.resolved:
+            return None
+        return _Issuer(
+            resolution.issuer_id, resolution.identifiers, resolution.link_revision_id
+        )
 
-    def _retained(self, issuer_id: UUID, limit: int) -> list[ExposureDocumentRevision]:
+    @staticmethod
+    def _coverage_outcome(item: CoverageItem) -> StageOutcome:
+        detail = {"coverage": [item.to_dict()]}
+        if item.outcome in _RETRYABLE_COVERAGE:
+            return StageOutcome.retry(item.reason, **detail)
+        state = (
+            ResearchJobState.PAUSED_STORAGE
+            if item.reason == "paused_storage"
+            else ResearchJobState.UNAVAILABLE_CAPABILITY
+        )
+        return StageOutcome.pause(state, item.reason, **detail)
+
+    # --------------------------------------------------------------- stages
+    def _resolve_issuer(self, request) -> StageOutcome:
+        issuer = self._issuer(request)
+        if issuer is not None:
+            return StageOutcome.complete(
+                ResearchJobState.RESEARCHING,
+                "acquire",
+                issuer_id=str(issuer.issuer_id),
+                link_revision_id=None
+                if issuer.link_revision_id is None
+                else str(issuer.link_revision_id),
+                source="request" if request.issuer_id else "accepted_link",
+            )
+        route = self.markets.get(request.market)
+        if route is None:
+            return _issuer_link_required(market=request.market)
+        match = route.resolve_registry(request.security_id, self._budget(request))
+        self.commit()
+        if isinstance(match, CoverageItem):
+            return self._coverage_outcome(match)
+        ref = self.identity.accept_registry_match(match, SERVICE_PRINCIPAL)
+        if isinstance(ref, IssuerLinkRef):
+            return StageOutcome.complete(
+                ResearchJobState.RESEARCHING,
+                "acquire",
+                issuer_id=str(ref.issuer_id),
+                link_revision_id=str(ref.link_revision_id),
+                acceptance_policy=ref.acceptance_policy,
+                source="official_registry",
+            )
+        return StageOutcome.pause(
+            ResearchJobState.REVIEW_REQUIRED,
+            ref.reason,
+            link_revision_id=None
+            if ref.link_revision_id is None
+            else str(ref.link_revision_id),
+            candidate_count=match.candidate_count,
+        )
+
+    def _retained(self, issuer_id: UUID) -> list[ExposureDocumentRevision]:
         rows = self.session.execute(
             select(ExposureDocumentRevision)
             .join(
@@ -501,38 +447,18 @@ class ExposureResearchCoordinator:
         latest: dict[UUID, ExposureDocumentRevision] = {}
         for row in rows:
             latest.setdefault(row.document_id, row)
-            if len(latest) >= limit:
+            if len(latest) >= MAX_RETAINED_DOCUMENTS:
                 break
         return list(latest.values())
 
-    def _acquire(self, request) -> _StageOutcome:
-        issuer_id, identifiers, _ = self._issuer(request)
-        if issuer_id is None:
-            return _StageOutcome(
-                "paused",
-                ResearchJobState.REVIEW_REQUIRED,
-                {"condition": "issuer_link_required"},
-            )
+    def _acquire(self, request) -> StageOutcome:
+        issuer = self._issuer(request)
+        if issuer is None:
+            return _issuer_link_required()
         coverage: list[CoverageItem] = []
         revision_ids: list[UUID] = []
-        if request.market == "US" and self.us_adapter is not None:
-            discovery = self.us_adapter.discover(
-                _IssuerView(identifiers),
-                DocumentQuery(document_kinds=("annual_report",), max_documents=2),
-                AcquisitionLimits(),
-                self._budget(request),
-            )
-            coverage.extend(discovery.coverage)
-            for target in discovery.targets:
-                capture = self.us_adapter.fetch(target, self._budget(request))
-                coverage.append(capture.coverage)
-                if capture.coverage.reason == "paused_storage":
-                    self.commit()
-                    return self._coverage_outcome(capture.coverage)
-                if capture.revision_id is not None:
-                    revision_ids.append(capture.revision_id)
-            self.commit()
-        else:
+        route = self.markets.get(request.market)
+        if route is None:
             coverage.append(
                 CoverageItem(
                     route=f"{(request.market or 'unknown').lower()}_official",
@@ -540,168 +466,153 @@ class ExposureResearchCoordinator:
                     reason="market_adapter_not_installed",
                 )
             )
-        for link in request.supplied_links or []:
-            coverage.append(
-                CoverageItem(
-                    route="supplied_link",
-                    outcome=CoverageOutcome.UNAVAILABLE_CAPABILITY,
-                    reason="supplied_link_route_not_installed",
-                    detail={"link": str(link)[:500]},
-                )
+        else:
+            budget = self._budget(request)
+            discovery = route.adapter.discover(
+                _IssuerRef(issuer.identifiers), route.query, AcquisitionLimits(), budget
             )
-        for revision in self._retained(issuer_id, MAX_RETAINED_DOCUMENTS):
-            if revision.id not in revision_ids:
-                revision_ids.append(revision.id)
-        return _StageOutcome(
-            "completed",
-            ResearchJobState.EVIDENCE_READY,
-            {
-                "issuer_id": str(issuer_id),
-                "document_revision_ids": [
-                    str(r) for r in revision_ids[:MAX_RETAINED_DOCUMENTS]
-                ],
-                "coverage": [_coverage_dict(c) for c in coverage],
-            },
-            "verify",
+            coverage.extend(discovery.coverage)
+            for target in discovery.targets:
+                capture = route.adapter.fetch(target, budget)
+                coverage.append(capture.coverage)
+                if capture.coverage.reason == "paused_storage":
+                    self.commit()
+                    return self._coverage_outcome(capture.coverage)
+                if capture.revision_id is not None:
+                    revision_ids.append(capture.revision_id)
+            self.commit()
+        coverage.extend(
+            CoverageItem(
+                route="supplied_link",
+                outcome=CoverageOutcome.UNAVAILABLE_CAPABILITY,
+                reason="supplied_link_route_not_installed",
+                detail={"link": str(link)[:500]},
+            )
+            for link in request.supplied_links or []
+        )
+        revision_ids += [
+            r.id for r in self._retained(issuer.issuer_id) if r.id not in revision_ids
+        ]
+        acquired = AcquiredEvidence(
+            issuer.issuer_id,
+            tuple(revision_ids[:MAX_RETAINED_DOCUMENTS]),
+            tuple(coverage),
+        )
+        return StageOutcome.complete(
+            ResearchJobState.EVIDENCE_READY, "verify", **acquired.to_detail()
         )
 
-    def _stage_detail(self, request_id: UUID, stage: str) -> dict:
-        events = self.session.execute(
+    def _acquired(self, request_id: UUID) -> AcquiredEvidence | None:
+        event = self.session.execute(
             select(ResearchEvent)
-            .where(ResearchEvent.request_id == request_id)
+            .where(
+                ResearchEvent.request_id == request_id,
+                ResearchEvent.state == ResearchJobState.EVIDENCE_READY.value,
+            )
             .order_by(ResearchEvent.sequence.desc())
-        ).scalars()
-        for event in events:
-            if (event.detail or {}).get(
-                "stage"
-            ) == stage and "coverage" in event.detail:
-                return event.detail
-        return {}
+            .limit(1)
+        ).scalar_one_or_none()
+        return None if event is None else AcquiredEvidence.from_detail(event.detail)
 
-    def _verify(self, request) -> _StageOutcome:
-        theme = self.theme_loader(self.session, request.economic_theme_id)
-        if theme is None:
-            return _StageOutcome(
-                "paused",
-                ResearchJobState.UNAVAILABLE_CAPABILITY,
-                {"condition": "theme_definition_unavailable"},
-            )
-        issuer_id, _, link_revision_id = self._issuer(request)
-        if issuer_id is None:
-            return _StageOutcome(
-                "paused",
-                ResearchJobState.REVIEW_REQUIRED,
-                {"condition": "issuer_link_required"},
-            )
-        acquired = self._stage_detail(request.id, "acquire")
-        coverage = [_coverage_item(c) for c in acquired.get("coverage", [])]
-        revision_ids = [UUID(r) for r in acquired.get("document_revision_ids", [])]
-        evidence = []
-        questions = QuestionSet(terms=theme.terms)
-        if revision_ids and self.store is None:
+    def _prepare(
+        self, revision_ids, questions: QuestionSet
+    ) -> tuple[list[EvidenceItem], list[CoverageItem]]:
+        evidence: list[EvidenceItem] = []
+        coverage: list[CoverageItem] = []
+
+        def partial(reason, revision_id, **detail):
             coverage.append(
                 CoverageItem(
                     "preparation",
-                    CoverageOutcome.NOT_CONFIGURED,
-                    "document_store_unavailable",
+                    CoverageOutcome.PARTIAL,
+                    reason,
+                    {"revision": str(revision_id), **detail},
                 )
             )
-            revision_ids = []
-        preparer = (
-            ExposureEvidencePreparer(self.session, self.store) if self.store else None
-        )
+
         for revision_id in revision_ids:
+            remaining = MAX_PASSAGES - len(evidence)
+            if remaining <= 0:
+                partial("passage_limit", revision_id)
+                continue
             revision = self.session.get(ExposureDocumentRevision, revision_id)
             document = self.session.get(ExposureDocument, revision.document_id)
             try:
-                prepared = preparer.prepare(revision, questions)
+                prepared = self.preparer.prepare(revision, questions)
             except PreparationFailed as exc:
-                coverage.append(
-                    CoverageItem(
-                        "preparation",
-                        CoverageOutcome.PARTIAL,
-                        exc.code,
-                        {"revision": str(revision_id)},
-                    )
-                )
-                continue
-            remaining = MAX_PASSAGES - len(evidence)
-            if remaining <= 0:
-                coverage.append(
-                    CoverageItem(
-                        "preparation",
-                        CoverageOutcome.PARTIAL,
-                        "passage_limit",
-                        {"revision": str(revision_id)},
-                    )
-                )
+                partial(exc.code, revision_id)
                 continue
             selection = select_passages(prepared, questions, limit=remaining)
             if selection.omitted_matches:
-                coverage.append(
-                    CoverageItem(
-                        "preparation",
-                        CoverageOutcome.PARTIAL,
-                        "passage_limit",
-                        {
-                            "revision": str(revision_id),
-                            "omitted": selection.omitted_matches,
-                        },
-                    )
-                )
+                partial("passage_limit", revision_id, omitted=selection.omitted_matches)
             for passage in persist_passages(self.session, prepared, selection):
                 evidence.append(
                     evidence_item_from_rows(
                         f"P{len(evidence) + 1}", passage, revision, document
                     )
                 )
-        self.commit()
+        return evidence, coverage
 
+    @staticmethod
+    def _batch_outcome(batch: ClaimReviewBatch) -> StageOutcome | None:
+        if batch.pause_reason:
+            state = (
+                ResearchJobState.UNAVAILABLE_CAPABILITY
+                if batch.pause_reason in _UNAVAILABLE_REASONS
+                else ResearchJobState.PAUSED_ALLOWANCE
+            )
+            return StageOutcome.pause(state, batch.pause_reason)
+        if batch.failure_code:
+            factory = StageOutcome.retry if batch.retryable else StageOutcome.fail
+            return factory(batch.failure_code)
+        return None
+
+    def _scope(self, request, issuer: _Issuer, theme: ThemeContext) -> AssessmentScope:
         security = (
             None
             if request.security_id is None
             else self.session.get(StockUniverse, request.security_id)
         )
-        scope = AssessmentScope(
-            issuer_id=issuer_id,
+        return AssessmentScope(
+            issuer_id=issuer.issuer_id,
             economic_theme_id=request.economic_theme_id,
             theme_fingerprint=theme.fingerprint,
             theme_label=theme.label,
             theme_terms=theme.terms,
             issuer_names=tuple(n for n in (getattr(security, "name", None),) if n),
             link_revision_ids=()
-            if link_revision_id is None
-            else (str(link_revision_id),),
+            if issuer.link_revision_id is None
+            else (str(issuer.link_revision_id),),
         )
+
+    def _verify(self, request) -> StageOutcome:
+        theme = self.theme_loader(self.session, request.economic_theme_id)
+        if theme is None:
+            return StageOutcome.pause(
+                ResearchJobState.UNAVAILABLE_CAPABILITY, "theme_definition_unavailable"
+            )
+        issuer = self._issuer(request)
+        if issuer is None:
+            return _issuer_link_required()
+        acquired = self._acquired(request.id) or AcquiredEvidence(issuer.issuer_id)
+        evidence, preparation_gaps = self._prepare(
+            acquired.document_revision_ids, QuestionSet(terms=theme.terms)
+        )
+        coverage = [*acquired.coverage, *preparation_gaps]
+        self.commit()
+
+        scope = self._scope(request, issuer, theme)
         claims, rejected, artifacts = (), (), ()
         if evidence:
-            if self.verifier is None:
-                return _StageOutcome(
-                    "paused",
-                    ResearchJobState.UNAVAILABLE_CAPABILITY,
-                    {"condition": "text_route_not_configured"},
-                )
             batch = self.verifier.verify_claims(
                 evidence,
                 scope,
                 root_request_id=request.effective_root_id,
                 request_id=request.id,
             )
-            if batch.pause_reason:
-                state = (
-                    ResearchJobState.UNAVAILABLE_CAPABILITY
-                    if batch.pause_reason in _UNAVAILABLE_REASONS
-                    else ResearchJobState.PAUSED_ALLOWANCE
-                )
-                return _StageOutcome("paused", state, {"condition": batch.pause_reason})
-            if batch.failure_code:
-                status = "retryable" if batch.retryable else "failed"
-                state = (
-                    ResearchJobState.RETRYABLE_FAILURE
-                    if batch.retryable
-                    else ResearchJobState.TERMINAL_FAILURE
-                )
-                return _StageOutcome(status, state, {"condition": batch.failure_code})
+            blocked = self._batch_outcome(batch)
+            if blocked is not None:
+                return blocked
             claims, rejected = batch.claims, batch.rejected
             artifacts = () if batch.artifact_id is None else (str(batch.artifact_id),)
         else:
@@ -718,7 +629,7 @@ class ExposureResearchCoordinator:
             AssessmentAttemptInput(
                 scope=scope,
                 claims=tuple(claims),
-                document_revision_ids=tuple(revision_ids),
+                document_revision_ids=acquired.document_revision_ids,
                 coverage=tuple(coverage),
                 unresolved_questions=tuple(f"rejected:{r}" for r in rejected),
                 model_attempt_refs=artifacts,
@@ -726,43 +637,35 @@ class ExposureResearchCoordinator:
                 assessed_at=self.clock(),
             )
         )
-        ref = service.persist_assessment(
-            result,
-            expected_prior_revision_id=result.prior_revision_id,
-            principal=SERVICE_PRINCIPAL,
-        )
+        ref = service.persist_assessment(result, principal=SERVICE_PRINCIPAL)
         self.commit()
-        gaps = [
-            c
-            for c in coverage
-            if c.outcome != CoverageOutcome.COMPLETE_FOR_REQUESTED_SCOPE
-        ]
-        return _StageOutcome(
-            "completed",
-            ResearchJobState.PARTIAL
-            if gaps
-            else ResearchJobState.READY_FOR_PUBLICATION,
-            {
-                "assessment_id": str(ref.assessment_id),
-                "assessment_revision_id": str(ref.id),
-                "revision_number": ref.revision_number,
-                "unchanged": ref.unchanged,
-                "claims": len(claims),
-                "rejected": list(rejected),
-                "passages": len(evidence),
-                "coverage": [_coverage_dict(c) for c in coverage],
-                "shadow": self.config.research_mode == ResearchMode.SHADOW,
-            },
+        complete = all(c.complete for c in coverage)
+        return StageOutcome.complete(
+            ResearchJobState.READY_FOR_PUBLICATION
+            if complete
+            else ResearchJobState.PARTIAL,
+            assessment_id=str(ref.assessment_id),
+            assessment_revision_id=str(ref.id),
+            revision_number=ref.revision_number,
+            unchanged=ref.unchanged,
+            claims=len(claims),
+            rejected=list(rejected),
+            passages=len(evidence),
+            coverage=[c.to_dict() for c in coverage],
         )
 
 
-def build_coordinator(
+def build_runner(
     session: Session, config: ExposureRuntimeConfig
-) -> ExposureResearchCoordinator:
+) -> ResearchStageRunner:
     """Production wiring. Secrets are read from settings, never logged."""
 
     from app.config import settings
     from app.services.company_exposure.acquisition import DocumentAcquisitionRegistry
+    from app.services.company_exposure.markets.us import (
+        USDocumentAdapter,
+        USIssuerResolver,
+    )
     from app.services.company_exposure.network import PublicDocumentTransport
     from app.services.company_exposure.pacing import ResearchRateGate
     from app.services.company_exposure.providers import (
@@ -794,26 +697,31 @@ def build_coordinator(
         session,
         ResearchResources(session, config),
         SubscriptionProvider(
-            api_key=getattr(settings, "opencode_go_api_key", "") or "",
+            api_key=settings.opencode_go_api_key or "",
             client_factory=default_client_factory(),
         ),
     )
-    return ExposureResearchCoordinator(
+    return ResearchStageRunner(
         session,
         config,
-        us_adapter=us_adapter,
+        markets={
+            "US": MarketRoute(
+                us_adapter, USIssuerResolver(session, us_adapter).resolve_cik
+            )
+        },
         verifier=ClaimVerifier(runner),
         store=store,
     )
 
 
 __all__ = (
-    "ExposureResearchCoordinator",
-    "ResearchRequestInput",
-    "ResearchRequestRef",
+    "AcquiredEvidence",
+    "MarketRoute",
+    "ResearchStageRunner",
     "ResearchStepResult",
-    "ResearchUnavailable",
+    "StageOutcome",
+    "StepStatus",
     "ThemeContext",
-    "build_coordinator",
+    "build_runner",
     "load_theme_context",
 )

@@ -60,6 +60,7 @@ class ResearchJobResponse(BaseModel):
     requested_by: str
     created_at: str | None
     state: str | None
+    settled: bool
     condition: str | None
     assessment_revision_id: str | None
     stages: list[dict[str, Any]]

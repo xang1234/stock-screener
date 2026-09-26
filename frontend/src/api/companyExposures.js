@@ -15,17 +15,8 @@ export const researchPreviewKey = (jobId, revisionId) => [
   'companyExposure', 'researchPreview', jobId, revisionId,
 ];
 
-const TERMINAL_STATES = new Set([
-  'ready_for_publication', 'partial', 'terminal_failure', 'cancelled',
-]);
-const PAUSED_STATES = new Set([
-  'review_required', 'paused_allowance', 'paused_search_budget', 'paused_storage',
-  'unavailable_capability', 'held',
-]);
-
-export const isResearchJobSettled = (job) => Boolean(
-  job && (TERMINAL_STATES.has(job.state) || PAUSED_STATES.has(job.state)),
-);
+// The server decides when a job stops making progress on its own.
+export const isResearchJobSettled = (job) => Boolean(job?.settled);
 
 export const requestExposureResearch = async (adminKey, {
   kind = 'verify', symbol, securityId, economicThemeId, idempotencyKey, suppliedCik,

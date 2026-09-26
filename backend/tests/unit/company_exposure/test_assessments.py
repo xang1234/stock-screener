@@ -15,7 +15,7 @@ from app.models.company_exposure import (
     ExposureClaimRevision,
     MaterialityMeasure,
 )
-from app.services.company_exposure.freshness import HoldRegistry
+from app.services.company_exposure.holds import HoldRegistry
 from app.services.company_exposure.materiality import validate_measure
 from tests.fixtures.company_exposure.factory import verified_claim
 
@@ -74,9 +74,7 @@ def test_partial_refresh_preserves_role_date(dossier, partial_refresh):
     materiality = result.claim("materiality")
     assert (materiality.action, materiality.period) == ("replaced", "FY2025")
 
-    ref = dossier.service.persist_assessment(
-        result, expected_prior_revision_id=result.prior_revision_id
-    )
+    ref = dossier.service.persist_assessment(result)
     assert ref.revision_number == 2
     selections = (
         dossier.db.execute(
@@ -122,9 +120,7 @@ def test_redownload_does_not_reaffirm_business_evidence(dossier):
     assert (role.action, role.reason) == ("carried_forward", "same_substantive_date")
     assert role.supported_as_of == FY2024_DATE
     before = _claim_revisions(dossier.db)
-    ref = dossier.service.persist_assessment(
-        result, expected_prior_revision_id=result.prior_revision_id
-    )
+    ref = dossier.service.persist_assessment(result)
     assert ref.unchanged and ref.id == first.id
     assert _claim_revisions(dossier.db) == before
 
@@ -158,8 +154,8 @@ def test_identical_attempt_replays_existing_revision(dossier):
         "role", passage=dossier.passages["role"], supported_as_of=ROLE_DATE
     )
     result = dossier.service.assess(dossier.attempt(role))
-    first = dossier.service.persist_assessment(result, expected_prior_revision_id=None)
-    again = dossier.service.persist_assessment(result, expected_prior_revision_id=None)
+    first = dossier.service.persist_assessment(result)
+    again = dossier.service.persist_assessment(result)
     assert again.replayed and again.id == first.id
     assert (
         dossier.db.execute(
@@ -277,12 +273,8 @@ def test_concurrent_winner_is_rebuilt_not_overwritten(dossier):
     second = dossier.service.assess(dossier.attempt(customer))
     assert first.prior_revision_id == second.prior_revision_id == base.id
 
-    winner = dossier.service.persist_assessment(
-        first, expected_prior_revision_id=base.id
-    )
-    loser = dossier.service.persist_assessment(
-        second, expected_prior_revision_id=base.id
-    )
+    winner = dossier.service.persist_assessment(first)
+    loser = dossier.service.persist_assessment(second)
     assert (winner.revision_number, loser.revision_number) == (2, 3)
     assert loser.rebuilt
     kinds = {

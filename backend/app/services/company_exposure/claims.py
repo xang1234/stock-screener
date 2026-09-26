@@ -35,8 +35,10 @@ from app.domain.company_exposure.contracts import (
     EvidenceRole,
     ReportingScope,
     SupportBasis,
+    as_utc,
     content_hash,
 )
+from app.domain.company_exposure.policy import is_primary_support
 from app.services.company_exposure.materiality import (
     MaterialityMeasureResult,
     Operand,
@@ -200,10 +202,7 @@ class VerifiedClaim:
 
     @property
     def verified(self) -> bool:
-        return (
-            self.support_basis in {SupportBasis.PRIMARY_EXPLICIT, SupportBasis.PRIMARY_SYNTHESIS}
-            and self.conclusion == Conclusion.SUPPORTED
-        )
+        return is_primary_support(self.support_basis, self.conclusion)
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +253,9 @@ def _links_product_to_theme(quote: str, product_terms, theme_terms) -> bool:
     return False
 
 
-def _status_guard(status: CommercialStatus, quotes: list[str]) -> tuple[CommercialStatus, list[str]]:
+def _status_guard(
+    status: CommercialStatus, quotes: list[str]
+) -> tuple[CommercialStatus, list[str]]:
     if status not in _ACTIVE_STATUSES:
         return status, []
     holds = []
@@ -268,7 +269,9 @@ def _status_guard(status: CommercialStatus, quotes: list[str]) -> tuple[Commerci
     return status, []
 
 
-def _materiality(spec: dict | None, evidence: dict[str, EvidenceItem], scope: AssessmentScope):
+def _materiality(
+    spec: dict | None, evidence: dict[str, EvidenceItem], scope: AssessmentScope
+):
     if not spec:
         return None, []
     try:
@@ -341,7 +344,9 @@ def validate_candidate(
     """Deterministic post-validation of one model candidate."""
 
     kind = ClaimKind(raw["claim_kind"])
-    reporting_scope = ReportingScope(raw.get("reporting_scope") or "issuer_consolidated")
+    reporting_scope = ReportingScope(
+        raw.get("reporting_scope") or "issuer_consolidated"
+    )
     scope_label = raw.get("scope_label") or None
     if reporting_scope == ReportingScope.SEGMENT_OR_SUBSIDIARY and not scope_label:
         raise ValueError("segment_scope_requires_label")
@@ -364,7 +369,9 @@ def validate_candidate(
                 rejected.append(f"{citation.get('ref')}:quote_not_in_passage")
                 continue
             role = qualify_evidence(item)
-            cited.append(CitedEvidence(item.passage_id, _normalize(quote), role, direction))
+            cited.append(
+                CitedEvidence(item.passage_id, _normalize(quote), role, direction)
+            )
             if direction == "supporting":
                 if role == EvidenceRole.ORIGINAL_PRIMARY:
                     primary_quotes.append(quote)
@@ -373,7 +380,8 @@ def validate_candidate(
                     secondary = True
 
     conflicting_primary = any(
-        c.direction == "conflicting" and c.role == EvidenceRole.ORIGINAL_PRIMARY for c in cited
+        c.direction == "conflicting" and c.role == EvidenceRole.ORIGINAL_PRIMARY
+        for c in cited
     )
 
     synthesis = None
@@ -389,14 +397,23 @@ def validate_candidate(
                 continue
             role = qualify_evidence(item)
             premises.append(
-                Premise(premise["ref"], _normalize(quote), role == EvidenceRole.ORIGINAL_PRIMARY)
+                Premise(
+                    premise["ref"],
+                    _normalize(quote),
+                    role == EvidenceRole.ORIGINAL_PRIMARY,
+                )
             )
             cited.append(CitedEvidence(item.passage_id, _normalize(quote), role))
             if role == EvidenceRole.ORIGINAL_PRIMARY:
                 dates.append(item)
         for link in spec.get("links", []):
             links.append(
-                Link(link["source"], link["target"], link["relationship"], link.get("ref", ""))
+                Link(
+                    link["source"],
+                    link["target"],
+                    link["relationship"],
+                    link.get("ref", ""),
+                )
             )
         synthesis = validate_synthesis(
             premises,
@@ -420,7 +437,9 @@ def validate_candidate(
     elif secondary:
         basis = SupportBasis.SECONDARY_REPORTED
 
-    status, status_holds = _status_guard(status, primary_quotes or [c.quote for c in cited])
+    status, status_holds = _status_guard(
+        status, primary_quotes or [c.quote for c in cited]
+    )
     holds.extend(status_holds)
 
     materiality, _ = _materiality(raw.get("materiality"), evidence, scope)
@@ -428,7 +447,9 @@ def validate_candidate(
         materiality = unknown_materiality("no_materiality_disclosed")
 
     if basis in {SupportBasis.PRIMARY_EXPLICIT, SupportBasis.PRIMARY_SYNTHESIS}:
-        conclusion = Conclusion.DISPUTED if conflicting_primary else Conclusion.SUPPORTED
+        conclusion = (
+            Conclusion.DISPUTED if conflicting_primary else Conclusion.SUPPORTED
+        )
     else:
         conclusion = Conclusion.UNKNOWN
     if conflicting_primary:
@@ -440,7 +461,9 @@ def validate_candidate(
     publications = [item.published_at for item in dates if item.published_at]
     return VerifiedClaim(
         claim_kind=kind,
-        product_or_activity_key=str(raw.get("product_or_activity_key") or "general")[:200],
+        product_or_activity_key=str(raw.get("product_or_activity_key") or "general")[
+            :200
+        ],
         statement=_normalize(str(raw.get("statement", "")))[:2000],
         reporting_scope=reporting_scope,
         scope_label=scope_label,
@@ -459,23 +482,21 @@ def validate_candidate(
     )
 
 
-def _as_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
-
-
 def evidence_item_from_rows(ref: str, passage, revision, document) -> EvidenceItem:
     metadata = revision.document_metadata or {}
     context = passage.context or {}
-    published = _as_utc(revision.published_at)
-    effective = _as_utc(revision.effective_at)
-    if effective is None and revision.reporting_period and len(revision.reporting_period) == 10:
+    published = as_utc(revision.published_at)
+    effective = as_utc(revision.effective_at)
+    if (
+        effective is None
+        and revision.reporting_period
+        and len(revision.reporting_period) == 10
+    ):
         try:
             effective = datetime.combine(
-                datetime.fromisoformat(revision.reporting_period).date(), time.min, timezone.utc
+                datetime.fromisoformat(revision.reporting_period).date(),
+                time.min,
+                timezone.utc,
             )
         except ValueError:
             effective = None
@@ -490,7 +511,9 @@ def evidence_item_from_rows(ref: str, passage, revision, document) -> EvidenceIt
         third_party=bool(metadata.get("third_party", False)),
         attributed_to_issuer=bool(metadata.get("attributed_to_issuer", True)),
         published_at=published,
-        effective_at=None if effective is None or (published and effective > published) else effective,
+        effective_at=None
+        if effective is None or (published and effective > published)
+        else effective,
         reporting_period=revision.reporting_period,
         language=passage.language,
     )
@@ -520,7 +543,9 @@ class ClaimVerifier:
                 {
                     "ref": item.ref,
                     "source_kind": item.source_kind,
-                    "published": None if item.published_at is None else item.published_at.date().isoformat(),
+                    "published": None
+                    if item.published_at is None
+                    else item.published_at.date().isoformat(),
                     "text": item.text,
                 }
                 for item in evidence
@@ -528,8 +553,15 @@ class ClaimVerifier:
         }
         input_hash = content_hash(
             {
-                "scope": [str(scope.issuer_id), str(scope.economic_theme_id), scope.theme_fingerprint],
-                "passages": [[item.ref, str(item.passage_id), content_hash({"t": item.text})] for item in evidence],
+                "scope": [
+                    str(scope.issuer_id),
+                    str(scope.economic_theme_id),
+                    scope.theme_fingerprint,
+                ],
+                "passages": [
+                    [item.ref, str(item.passage_id), content_hash({"t": item.text})]
+                    for item in evidence
+                ],
                 "prompt": PROMPT_VERSION,
             }
         )
@@ -569,8 +601,11 @@ class ClaimVerifier:
                 input_hash=provider_input.input_hash,
             )
         return self.validate_payload(
-            result.payload, evidence, scope,
-            artifact_id=result.artifact_id, input_hash=provider_input.input_hash,
+            result.payload,
+            evidence,
+            scope,
+            artifact_id=result.artifact_id,
+            input_hash=provider_input.input_hash,
         )
 
     @staticmethod
