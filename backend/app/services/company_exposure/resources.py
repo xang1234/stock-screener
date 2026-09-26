@@ -10,9 +10,9 @@ end of its allocation period.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable
 from uuid import UUID
 
 from sqlalchemy import func, select

@@ -396,3 +396,46 @@ def bytes_hash(data: bytes) -> str:
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
+
+
+@dataclass(frozen=True, slots=True)
+class RegistryMatch:
+    """Result of looking up a listing in an official identifier registry.
+
+    US example: SEC ``company_tickers(_exchange).json`` gives candidate CIKs
+    for a ticker; the chosen CIK's submissions record must list the ticker.
+    """
+
+    security_id: int
+    market: str
+    scheme: str
+    value: str | None
+    candidate_count: int
+    ticker_confirmed: bool
+    matched_ticker: str
+    registry_capture_revision_id: UUID | None
+    official_record_capture_revision_id: UUID | None
+    entity_title: str | None = None
+    matched_exchange: str | None = None
+    resolver_policy_version: str = "registry-v1"
+    candidates: tuple[str, ...] = ()
+
+
+def normalized_identifier(market: str, scheme: str, value: str) -> tuple[str, str, str]:
+    """Typed identifier key; schemes never collide across markets.
+
+    >>> normalized_identifier("US", "cik", "123456")
+    ('US', 'cik', '0000123456')
+    """
+
+    _require_text(market, "market")
+    _require_text(scheme, "scheme")
+    _require_text(value, "value")
+    market = market.strip().upper()
+    scheme = scheme.strip().lower()
+    value = value.strip()
+    if scheme == "cik":
+        if not value.isdigit() or len(value) > 10:
+            raise ValueError("invalid_cik")
+        value = value.zfill(10)
+    return (market, scheme, value)

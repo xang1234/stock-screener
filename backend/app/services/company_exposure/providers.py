@@ -9,8 +9,8 @@ inside the transport: each permitted retry is a new accounted attempt.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 from uuid import UUID
 
 import httpx
@@ -28,8 +28,8 @@ from app.services.company_exposure.config import (
 from app.services.company_exposure.resources import (
     DispatchOutcome,
     DispatchRequest,
-    ReservationTicket,
     ResearchResources,
+    ReservationTicket,
 )
 from app.services.theme_evaluation.kimi_client import OpenCodeGoKimi
 from app.services.theme_evaluation.preparation_failures import PreparationFailure
