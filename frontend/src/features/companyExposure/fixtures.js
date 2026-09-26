@@ -1,0 +1,97 @@
+// Response fixtures matching the Task 21A schemas (research job + shadow preview).
+
+export const shadowCompletedJob = {
+  view_kind: 'research_progress',
+  accepted: false,
+  job_id: '11111111-1111-4111-8111-111111111111',
+  root_job_id: '11111111-1111-4111-8111-111111111111',
+  kind: 'verify',
+  security_id: 42,
+  issuer_id: null,
+  economic_theme_id: '22222222-2222-4222-8222-222222222222',
+  market: 'US',
+  requested_by: 'test:admin',
+  created_at: '2026-09-26T12:00:00+00:00',
+  state: 'partial',
+  condition: null,
+  assessment_revision_id: '33333333-3333-4333-8333-333333333333',
+  stages: [
+    { stage: 'resolve_issuer', status: 'completed', pause_reason: null, attempts: 1 },
+    { stage: 'acquire', status: 'completed', pause_reason: null, attempts: 1 },
+    { stage: 'verify', status: 'completed', pause_reason: null, attempts: 1 },
+  ],
+  events: [],
+};
+
+export const reviewRequiredJob = {
+  ...shadowCompletedJob,
+  state: 'review_required',
+  condition: 'multiple_ciks',
+  assessment_revision_id: null,
+  stages: [
+    { stage: 'resolve_issuer', status: 'paused', pause_reason: 'review_required', attempts: 1 },
+  ],
+};
+
+export const shadowPreview = {
+  view_kind: 'shadow_preview',
+  authoritative_membership: false,
+  job_id: shadowCompletedJob.job_id,
+  state: 'partial',
+  assessment_id: '44444444-4444-4444-8444-444444444444',
+  assessment_revision_id: shadowCompletedJob.assessment_revision_id,
+  revision_number: 1,
+  input_manifest_hash: 'a'.repeat(64),
+  assessed_at: '2026-09-26T12:00:00+00:00',
+  issuer_id: '55555555-5555-4555-8555-555555555555',
+  issuer_link_revision_ids: ['66666666-6666-4666-8666-666666666666'],
+  economic_theme_id: shadowCompletedJob.economic_theme_id,
+  theme_fingerprint: 'f'.repeat(64),
+  policies: { verification: 'verification-v1' },
+  coverage: [
+    { route: 'us_sec', outcome: 'complete_for_requested_scope', reason: 'captured', detail: {} },
+    { route: 'us_sec', outcome: 'no_matching_document', reason: 'http_status_404', detail: {} },
+  ],
+  unresolved_questions: [],
+  conflicts: [],
+  claims: [
+    {
+      claim_id: '77777777-7777-4777-8777-777777777777',
+      claim_revision_id: '88888888-8888-4888-8888-888888888888',
+      claim_kind: 'product_application',
+      product_or_activity_key: 'et-9000',
+      reporting_scope: 'issuer_consolidated',
+      scope_label: null,
+      statement: 'The ET-9000 supports HBM testing.',
+      role: null,
+      commercial_status: 'commercially_available',
+      support_basis: 'primary_explicit',
+      conclusion: 'supported',
+      freshness_state: 'current',
+      supported_as_of: '2025-12-31T00:00:00+00:00',
+      fresh_until: '2027-03-26T00:00:00+00:00',
+      reporting_period: '2025-12-31',
+      hold_reasons: [],
+      active_holds: [],
+      carried_forward: false,
+      selection_reason: 'first_support',
+      materiality: {
+        basis: 'unknown',
+        display: 'Not separately disclosed in reviewed evidence',
+        hold_reasons: [],
+      },
+      evidence: [
+        {
+          link_id: '99999999-9999-4999-8999-999999999999',
+          direction: 'supporting',
+          evidence_role: 'original_primary',
+          passage_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          document_revision_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          quote: 'The ET-9000 supports testing of high-bandwidth memory (HBM) devices.',
+          language: 'en',
+          locator: {},
+        },
+      ],
+    },
+  ],
+};
