@@ -47,7 +47,7 @@ from app.services.company_exposure.network import (
     sniff_media_type,
 )
 from app.services.company_exposure.pacing import PacingUnavailable, ResearchRateGate
-from app.services.company_exposure.storage import OriginalStore
+from app.services.company_exposure.storage import OriginalStore, storage_lock
 
 _GAP_OUTCOMES = {
     "http_status_404": CoverageOutcome.NO_MATCHING_DOCUMENT,
@@ -254,6 +254,7 @@ class DocumentAcquisitionRegistry:
             return self._gap(target, refusal, document=document, capture=capture)
 
         digest = bytes_hash(response.body)
+        storage_lock(self.session, exclusive=False)
         existing = self.session.execute(
             select(ExposureDocumentRevision).where(
                 ExposureDocumentRevision.document_id == document.id,
@@ -387,6 +388,7 @@ class DocumentAcquisitionRegistry:
                 ),
             )
         digest = bytes_hash(data)
+        storage_lock(self.session, exclusive=False)
         existing = self.session.execute(
             select(ExposureDocumentRevision).where(
                 ExposureDocumentRevision.document_id == document.id,

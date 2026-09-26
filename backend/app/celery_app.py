@@ -421,6 +421,8 @@ for _economic_taxonomy_task in (
 # through RateBudgetPolicy keys inside the tasks.
 for _company_exposure_task in (
     'app.tasks.company_exposure_tasks.process_exposure_work',
+    'app.tasks.company_exposure_tasks.refresh_exposure_holds',
+    'app.tasks.company_exposure_tasks.collect_exposure_evidence',
 ):
     celery_app.conf.task_routes[_company_exposure_task] = {'queue': 'exposure_research'}
 
@@ -575,6 +577,27 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
                 ),
             },
         } if settings.static_export_enabled else {}),
+
+        # Company exposure research (dedicated queue). Work dispatch no-ops
+        # unless research is in shadow mode and a stage is due; hold refresh,
+        # period close and evidence GC are provider-free and always run.
+        # Messages expire so nothing piles up where the worker isn't deployed.
+        'company-exposure-work': {
+            'task': 'app.tasks.company_exposure_tasks.process_exposure_work',
+            'schedule': crontab(minute='*/5'),
+            'options': {'queue': 'exposure_research', 'expires': 290},
+            'kwargs': {'max_steps': 3},
+        },
+        'company-exposure-holds': {
+            'task': 'app.tasks.company_exposure_tasks.refresh_exposure_holds',
+            'schedule': crontab(minute=23),
+            'options': {'queue': 'exposure_research', 'expires': 3500},
+        },
+        'company-exposure-evidence-gc': {
+            'task': 'app.tasks.company_exposure_tasks.collect_exposure_evidence',
+            'schedule': crontab(hour=3, minute=41),
+            'options': {'queue': 'exposure_research', 'expires': 3600},
+        },
 
         # Weekly cleanup of orphaned scans (cancelled, stale running/queued).
         # Runs Sunday at 1:45 AM ET, before weekly-full-refresh at 2:00 AM.

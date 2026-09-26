@@ -81,3 +81,67 @@ def process_exposure_work(max_steps: int = 1, *, runner_factory=None) -> dict:
     if not steps:
         return _as_dict(TaskOutcome.skipped("no_work"))
     return _as_dict(TaskOutcome.completed(steps=steps))
+
+
+@celery_app.task(name=TASK_PREFIX + "refresh_exposure_holds", ignore_result=False)
+def refresh_exposure_holds(*, session_factory=None, config=None) -> dict:
+    """Provider-free maintenance that runs in every research mode.
+
+    Records stale/undated holds for currently selected claims and closes
+    ended allocation periods, so uncertain reservations become
+    ``expired_uncertain``. It makes no network or model call.
+    """
+
+    from app.services.company_exposure.config import load_config
+    from app.services.company_exposure.freshness import refresh_due_holds
+    from app.services.company_exposure.resources import ResearchResources
+
+    config = config or load_config()
+    session = (session_factory or _session_factory())()
+    try:
+        holds = refresh_due_holds(session)
+        closed = ResearchResources(session, config).close_ended_periods()
+        session.commit()
+    finally:
+        session.close()
+    return _as_dict(
+        TaskOutcome.completed(
+            new_holds=len(holds.new_holds),
+            closed_periods=sorted({report.period for report in closed}),
+            expired_reservations=sum(len(r.expired_reservation_ids) for r in closed),
+        )
+    )
+
+
+@celery_app.task(name=TASK_PREFIX + "collect_exposure_evidence", ignore_result=False)
+def collect_exposure_evidence(*, session_factory=None, config=None) -> dict:
+    """Delete unreferenced originals past their grace period (tombstoned)."""
+
+    from app.services.company_exposure.config import load_config
+    from app.services.company_exposure.storage import OriginalStore
+
+    config = config or load_config()
+    session = (session_factory or _session_factory())()
+    try:
+        report = OriginalStore(
+            session,
+            config.document_store,
+            max_bytes=config.storage_max_bytes,
+            min_free_bytes=config.storage_min_free_bytes,
+        ).collect_unreferenced_blobs(dry_run=False)
+        session.commit()
+    finally:
+        session.close()
+    return _as_dict(
+        TaskOutcome.completed(
+            removed_blobs=len(report.unreferenced),
+            removed_temp_files=len(report.abandoned_temp),
+            reclaimed_bytes=report.reclaimed_bytes,
+        )
+    )
+
+
+def _session_factory():
+    from app.database import SessionLocal
+
+    return SessionLocal

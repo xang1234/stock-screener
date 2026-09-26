@@ -90,8 +90,9 @@ GET  /api/v1/company-exposures/research-jobs/{job_id}/preview   # view_kind=shad
 ```
 
 Repeating a request with the same idempotency key returns the same job. If
-the broker was unavailable (`dispatch: not_dispatched`), run
-`scripts/company_exposure.py process` to advance queued stages inline.
+the broker was unavailable (`dispatch: not_dispatched`), the
+`company-exposure-work` beat entry picks the queued stages up within five
+minutes; `scripts/company_exposure.py process` advances them inline.
 
 Stages: `resolve_issuer` → `acquire` → `verify`. Final states: `partial`
 (some coverage gap, e.g. an older filing not found) or
@@ -144,11 +145,29 @@ budgets.
   revision. Lifting a hold requires a reason and new cited support.
 - **Uncertain reservations**: a model request that may have executed (read
   timeout, mid-stream failure) stays charged as `uncertain`; it is never
-  refunded. Closing an allocation period marks it `expired_uncertain`; S1
-  schedules no period close, so it stays charged against its own day.
+  refunded. The hourly maintenance task closes every ended allocation
+  period, which marks it `expired_uncertain`; it stays charged against its
+  own day and the new period starts with the full allocation.
 - **Evidence retention**: originals are content-addressed under the store
-  (5 GiB cap, 1 GiB free-space floor). S1 never deletes an original: there
-  is no garbage collection or tombstone writer yet.
+  (5 GiB cap, 1 GiB free-space floor). A daily garbage collection deletes
+  originals that no document revision references once they are older than
+  30 days, and abandoned temp files older than 24 hours, writing a
+  tombstone for each removed original. A referenced original is never
+  deleted.
+
+### Scheduled maintenance
+
+Celery beat sends these to the `exposure_research` queue. Each message
+expires before the next run, so nothing piles up while the
+`celery-exposure-research` worker is not deployed.
+
+| Beat entry | Schedule | Task | Research mode |
+|---|---|---|---|
+| `company-exposure-work` | every 5 min | advance up to 3 queued stages | skipped with `research_disabled` |
+| `company-exposure-holds` | hourly | record `stale`/`undated` holds; close ended allocation periods | runs in every mode (provider-free) |
+| `company-exposure-evidence-gc` | daily 03:41 (beat timezone) | remove unreferenced originals and abandoned temp files | runs in every mode (provider-free) |
+
+The hold and GC tasks make no network or model call.
 
 ## 7. Stop conditions
 
@@ -163,7 +182,9 @@ a skipped or failing required PostgreSQL gate test
 - **Disable**: set `EXPOSURE_RESEARCH_MODE=disabled` (and optionally stop the
   `celery-exposure-research` service). New requests return
   `409 research_disabled`; queued stages pause with `research_disabled`.
-  Evidence, dossiers, holds and job history are retained. Source and Social
+  Hold refresh, period close and evidence GC keep running while the worker
+  runs, since they call no provider; stop the worker to stop them too.
+  Dossiers, holds, job history and every referenced original are retained. Source and Social
   behaviour are unaffected — S1 never writes membership.
 - **Rollback**: the S1 tables are additive. Because nothing in this slice is
   published or joined into live membership, an older binary can run beside
