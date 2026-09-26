@@ -108,6 +108,80 @@ def make_revision(db, document, content: bytes, *, published_at=None, period=Non
     return row
 
 
+def make_passage(db, revision, text: str, *, index: int = 0):
+    import hashlib
+
+    from app.models.company_exposure import ExposurePassage
+
+    locator = {"block": index}
+    row = ExposurePassage(
+        document_revision_id=revision.id,
+        revision_content_hash=revision.content_hash,
+        preparation_policy="structure-v1",
+        extractor_version="test",
+        locator=locator,
+        locator_hash=hashlib.sha256(repr(locator).encode()).hexdigest(),
+        original_text=text,
+        text_hash=hashlib.sha256(text.encode()).hexdigest(),
+        context={},
+        language="en",
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def verified_claim(
+    kind: str = "role",
+    *,
+    passage=None,
+    quote: str | None = None,
+    product_key: str = "hbm-test-equipment",
+    supported_as_of=None,
+    period: str | None = None,
+    status: str = "shipping_or_operating",
+    basis: str = "primary_explicit",
+    conclusion: str = "supported",
+    materiality=None,
+    statement: str | None = None,
+    evidence_role: str = "original_primary",
+):
+    """A typed ``VerifiedClaim`` as the claim verifier would return it."""
+
+    from app.domain.company_exposure.contracts import (
+        ClaimKind,
+        CommercialStatus,
+        Conclusion,
+        EvidenceRole,
+        ReportingScope,
+        SupportBasis,
+    )
+    from app.services.company_exposure.claims import CitedEvidence, VerifiedClaim
+
+    evidence = ()
+    if passage is not None:
+        evidence = (
+            CitedEvidence(
+                passage.id, quote or passage.original_text, EvidenceRole(evidence_role)
+            ),
+        )
+    return VerifiedClaim(
+        claim_kind=ClaimKind(kind),
+        product_or_activity_key=product_key,
+        statement=statement or f"{kind} {product_key}",
+        reporting_scope=ReportingScope.ISSUER_CONSOLIDATED,
+        scope_label=None,
+        commercial_status=CommercialStatus(status),
+        support_basis=SupportBasis(basis),
+        conclusion=Conclusion(conclusion),
+        evidence=evidence,
+        materiality=materiality,
+        supported_as_of=supported_as_of,
+        reporting_period=period,
+        source_publication_time=supported_as_of,
+    )
+
+
 def make_theme(db, label: str = "theme", *, created_by: str = "test:factory"):
     """Persist a stable Economic Theme identity (UUID only; no revision)."""
 
@@ -308,7 +382,11 @@ def make_text_pdf(pages: list[str]) -> bytes:
         stream_lines.append("ET")
         stream = "\n".join(stream_lines).encode("latin-1")
         objects.append(
-            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream"
+            b"<< /Length "
+            + str(len(stream)).encode()
+            + b" >>\nstream\n"
+            + stream
+            + b"\nendstream"
         )
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     output = bytearray(b"%PDF-1.4\n")
