@@ -243,3 +243,9 @@ def test_theme_context_reads_latest_sealed_definition(db_session):
     context = load_theme_context(db_session, theme.id)
     assert (context.label, context.terms) == ("AI Memory", ("AI Memory", "HBM"))
     assert len(context.fingerprint) == 64
+
+
+def test_live_mode_is_not_installed_in_this_slice(harness):
+    harness.build(replace(SHADOW, research_mode="live"))
+    with pytest.raises(ResearchUnavailable, match="live_mode_not_installed"):
+        harness.request()

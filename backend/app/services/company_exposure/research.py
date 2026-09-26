@@ -251,6 +251,9 @@ class ExposureResearchCoordinator:
     ) -> ResearchRequestRef:
         if self.config.research_mode == ResearchMode.DISABLED:
             raise ResearchUnavailable("research_disabled")
+        if self.config.research_mode == ResearchMode.LIVE:
+            # This build publishes nothing; only shadow research is installed.
+            raise ResearchUnavailable("live_mode_not_installed")
         if request.kind not in VERIFY_KINDS:
             raise ResearchUnavailable("discovery_not_installed")
         if request.security_id is None and request.issuer_id is None:
@@ -330,11 +333,15 @@ class ExposureResearchCoordinator:
         attempts = int(item.claim_count or 1)
         # Release row locks before any pacing wait, network or provider call.
         self.commit()
-        if self.config.research_mode == ResearchMode.DISABLED:
+        if self.config.research_mode != ResearchMode.SHADOW:
             outcome = _StageOutcome(
                 "paused",
                 ResearchJobState.UNAVAILABLE_CAPABILITY,
-                {"condition": "research_disabled"},
+                {
+                    "condition": "research_disabled"
+                    if self.config.research_mode == ResearchMode.DISABLED
+                    else "live_mode_not_installed"
+                },
             )
         else:
             handler = {
