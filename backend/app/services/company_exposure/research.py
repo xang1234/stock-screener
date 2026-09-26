@@ -296,11 +296,14 @@ class ExposureResearchCoordinator:
         if request is None:
             return None
         events = self.repo.events(request_id)
-        items = self.session.execute(
-            select(ResearchWorkItem)
-            .where(ResearchWorkItem.request_id == request_id)
-            .order_by(ResearchWorkItem.created_at)
-        ).scalars()
+        items = sorted(
+            self.session.execute(
+                select(ResearchWorkItem).where(
+                    ResearchWorkItem.request_id == request_id
+                )
+            ).scalars(),
+            key=lambda i: STAGES.index(i.stage) if i.stage in STAGES else len(STAGES),
+        )
         return {
             "id": str(request.id),
             "kind": request.kind,

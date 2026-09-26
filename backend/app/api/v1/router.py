@@ -73,6 +73,11 @@ if settings.feature_themes:
         prefix="/economic-taxonomy",
         tags=["economic-taxonomy"],
     )
+    _include(
+        "company_exposures",
+        prefix="/company-exposures",
+        tags=["company-exposures"],
+    )
 
 if settings.feature_tasks:
     _include("tasks", prefix="/tasks", tags=["tasks"])
