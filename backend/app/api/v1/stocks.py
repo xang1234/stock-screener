@@ -438,7 +438,7 @@ def search_stocks(
 
 
 @router.get("/{symbol}/info", response_model=StockInfo)
-async def get_stock_info(symbol: str = Depends(require_valid_symbol)):
+def get_stock_info(symbol: str = Depends(require_valid_symbol)):
     """
     Get basic stock information.
 
@@ -830,7 +830,7 @@ def get_stock_peers(
 
 
 @router.get("/{symbol}/history", response_model=list[StockPriceHistoryPoint])
-async def get_price_history(
+def get_price_history(
     symbol: str = Depends(require_valid_price_history_symbol),
     period: str = "6mo",
 ):
@@ -870,7 +870,7 @@ def _normalize_batch_symbols(symbols: list[str]) -> list[str]:
 
 
 @router.post("/history/batch", response_model=PriceHistoryBatchResponse)
-async def get_price_history_batch(payload: PriceHistoryBatchRequest):
+def get_price_history_batch(payload: PriceHistoryBatchRequest):
     """Return OHLCV history for many symbols in a single round-trip.
 
     Partial-success semantics: symbols with no cached data are reported in
@@ -909,7 +909,7 @@ async def get_price_history_batch(payload: PriceHistoryBatchRequest):
 
 
 @router.post("/fundamentals/batch", response_model=FundamentalsBatchResponse)
-async def get_stock_fundamentals_batch(payload: FundamentalsBatchRequest):
+def get_stock_fundamentals_batch(payload: FundamentalsBatchRequest):
     """Return cached fundamentals for many symbols in a single round-trip.
 
     Read-only batch (Redis pipeline with DB fallback — never an upstream
