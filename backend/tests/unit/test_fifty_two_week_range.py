@@ -8,8 +8,6 @@ run from 100 to 200, so the correct 52-week range is (200, 100).
 
 from __future__ import annotations
 
-import asyncio
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -115,7 +113,7 @@ def test_52_week_position_endpoint_uses_newest_252_bars(monkeypatch):
 
     monkeypatch.setattr(technical, "get_yfinance_service", lambda: _StubYFinance())
 
-    response = asyncio.run(technical.get_52w_position("test"))
+    response = technical.get_52w_position("test")
 
     assert response["high_52w"] == pytest.approx(RECENT_HIGH)
     assert response["low_52w"] == pytest.approx(RECENT_LOW)
