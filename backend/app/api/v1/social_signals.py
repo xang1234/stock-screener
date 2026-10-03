@@ -466,7 +466,17 @@ def _economic_associations(db, *, state, market):
     ids = [association.id for association, _, _ in rows]
     sources = db.scalars(select(EconomicSocialAssociationSource).where(
         EconomicSocialAssociationSource.association_id.in_(ids))).all() if ids else []
-    legacy_ids = {s.association_id: s.legacy_association_id for s in sources if s.legacy_association_id}
+    bridged = {s.association_id: s.legacy_association_id for s in sources
+               if s.source_kind == "legacy_association" and s.legacy_association_id}
+    # _decide_economic refuses a legacy id bridged to more than one economic
+    # association (e.g. after a remap), so only a unique bridge is decidable.
+    targets = {}
+    if bridged:
+        for source in db.scalars(select(EconomicSocialAssociationSource).where(
+                EconomicSocialAssociationSource.source_kind == "legacy_association",
+                EconomicSocialAssociationSource.legacy_association_id.in_(bridged.values()))):
+            targets.setdefault(source.legacy_association_id, set()).add(source.association_id)
+    legacy_ids = {aid: lid for aid, lid in bridged.items() if len(targets.get(lid, ())) == 1}
     work_ids = {}
     for source in sources:
         if source.social_work_id is not None:
