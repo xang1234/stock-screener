@@ -270,8 +270,6 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
     db_session.add_all(
         [
             *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:8]],
-            # The rest are one session behind (#478).
-            *[_price(symbol, 1, adjusted=100.0) for symbol in symbols[8:]],
             *_complete_rows("SPY", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -286,14 +284,17 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.8)
 
 
-def test_load_leaves_symbols_without_a_recent_price_out_of_coverage(db_session):
-    # S0-S8 current, S9 one session behind, D0-D2 last priced a month ago (delisted).
-    symbols = (*(f"S{index}" for index in range(10)), "D0", "D1", "D2")
+def test_load_leaves_dormant_symbols_out_of_coverage(db_session):
+    # 89 current, 1 one session behind, 3 dormant (history ends a month ago),
+    # 1 never priced (may be a failed fetch, so it still counts).
+    current = [f"S{index}" for index in range(89)]
+    dormant = ["D0", "D1", "D2"]
+    symbols = (*current, "BEHIND", *dormant, "NEVER")
     db_session.add_all(
         [
-            *[_price(f"S{index}", 0, adjusted=100.0) for index in range(9)],
-            _price("S9", 1, adjusted=100.0),
-            *[_price(symbol, 21, adjusted=100.0) for symbol in ("D0", "D1", "D2")],
+            *[_price(symbol, 0, adjusted=100.0) for symbol in current],
+            _price("BEHIND", 1, adjusted=100.0),
+            *[_price(symbol, 21, adjusted=100.0) for symbol in dormant],
             *_complete_rows("SPY", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -301,8 +302,30 @@ def test_load_leaves_symbols_without_a_recent_price_out_of_coverage(db_session):
 
     inputs = _loader(symbols).load(db_session, market="US", as_of_date=ANCHORS[0])
 
-    # 9 of 10 recently priced symbols, not 9 of 13.
-    assert inputs.current_price_coverage == pytest.approx(0.9)
+    # 89 of 91, not 89 of 94.
+    assert inputs.current_price_coverage == pytest.approx(89 / 91)
+
+
+def test_load_counts_dormant_symbols_beyond_the_share_cap(db_session):
+    # Half the universe stops a month ago: a stale bundle or an outage, not delistings.
+    current = [f"S{index}" for index in range(10)]
+    stale = [f"D{index}" for index in range(10)]
+    db_session.add_all(
+        [
+            *[_price(symbol, 0, adjusted=100.0) for symbol in current],
+            *[_price(symbol, 21, adjusted=100.0) for symbol in stale],
+            *_complete_rows("SPY", {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    with pytest.raises(MarketRsInputUnavailable) as exc_info:
+        _loader((*current, *stale)).load(db_session, market="US", as_of_date=ANCHORS[0])
+
+    diagnostics = exc_info.value.diagnostics
+    assert diagnostics["current_price_coverage"] == pytest.approx(0.5)
+    assert diagnostics["dormant_symbol_count"] == 10
+    assert diagnostics["dormant_excluded"] is False
 
 
 def test_load_allows_ca_current_price_coverage_matching_configured_policy(
@@ -314,8 +337,6 @@ def test_load_allows_ca_current_price_coverage_matching_configured_policy(
     db_session.add_all(
         [
             *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:15]],
-            # The rest are one session behind (#478).
-            *[_price(symbol, 1, adjusted=100.0) for symbol in symbols[15:]],
             *_complete_rows("^GSPTSE", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -351,8 +372,6 @@ def test_load_allows_static_asia_current_price_coverage_actuals(
     db_session.add_all(
         [
             *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:covered_count]],
-            # The rest are one session behind (#478).
-            *[_price(symbol, 1, adjusted=100.0) for symbol in symbols[covered_count:]],
             *_complete_rows(benchmark, {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -371,8 +390,6 @@ def test_load_allows_de_static_current_price_coverage_actual(db_session):
     db_session.add_all(
         [
             *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:90]],
-            # The rest are one session behind (#478).
-            *[_price(symbol, 1, adjusted=100.0) for symbol in symbols[90:]],
             *_complete_rows("^GDAXI", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -395,8 +412,6 @@ def test_load_uses_configured_market_specific_current_price_threshold(
     db_session.add_all(
         [
             *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:15]],
-            # The rest are one session behind (#478).
-            *[_price(symbol, 1, adjusted=100.0) for symbol in symbols[15:]],
             *_complete_rows("^GSPTSE", {offset: 100.0 for offset in ANCHORS}),
         ]
     )

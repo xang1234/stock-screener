@@ -380,6 +380,8 @@ class StaticDailyPriceRefreshService:
                 STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD: bootstrap_rate_limited,
             },
             readjusted_symbols=retry_readjusted_symbols,
+            as_of_date=as_of_date,
+            missing_session_frames=missing_session_frames,
         )
         refreshed += retry_stats["recovered"]
         failed -= retry_stats["recovered"]
@@ -838,6 +840,8 @@ class StaticDailyPriceRefreshService:
         market: str | None,
         rate_limited_symbols_by_period: dict[str, list[str]],
         readjusted_symbols: dict[str, set[date]] | None = None,
+        as_of_date: date | None = None,
+        missing_session_frames: dict[str, pd.DataFrame] | None = None,
     ) -> dict[str, Any]:
         skipped_payload: dict[str, Any] = {
             "attempted": 0,
@@ -902,6 +906,14 @@ class StaticDailyPriceRefreshService:
                     also_store_db=True,
                     market=market,
                 )
+                if as_of_date is not None and missing_session_frames is not None:
+                    for symbol, frame in recovered_payload.items():
+                        if not isinstance(frame, pd.DataFrame):
+                            continue
+                        if _has_session(frame, as_of_date):
+                            missing_session_frames.pop(symbol, None)
+                        else:
+                            missing_session_frames[symbol] = frame
         still_failed = attempted - recovered
         print(
             f"[static-daily prices:{normalized}] Rate-limited retry complete: "

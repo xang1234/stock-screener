@@ -1730,6 +1730,32 @@ def test_static_daily_price_fetch_keeps_frames_still_missing_the_session() -> No
     assert list(missing) == ["BEHIND"]
 
 
+def test_static_daily_price_rate_limit_retry_keeps_frames_missing_the_session() -> None:
+    as_of = date(2026, 6, 4)
+    stale = _price_frame([date(2026, 6, 3)], 1.0)
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            return {symbol: {"price_data": stale, "has_error": False} for symbol in symbols}
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=_FakeFetcher(),
+        sleep=lambda seconds: None,
+    )
+    missing: dict = {}
+
+    service._retry_rate_limited_failures(
+        market="IN",
+        rate_limited_symbols_by_period={STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD: ["TCS.NS"]},
+        as_of_date=as_of,
+        missing_session_frames=missing,
+    )
+
+    assert list(missing) == ["TCS.NS"]
+
+
 def _closing_quote(symbol: str, session_close_utc: datetime) -> dict:
     return {
         "symbol": symbol,

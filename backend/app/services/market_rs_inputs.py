@@ -30,6 +30,9 @@ from app.services.static_market_coverage_policy import (
 )
 
 EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
+# Dormant symbols leave the current price coverage denominator only while they
+# are at most this share of the universe (US: about 3% on 2026-10-02, #478).
+MAX_DORMANT_COVERAGE_SHARE = 0.05
 
 
 @dataclass(frozen=True)
@@ -204,19 +207,28 @@ class MarketRsInputLoader:
 
         context["benchmark_symbol"] = benchmark_symbol
         current_date = anchors[0]
-        # A symbol with no price on the current, previous or week-ago session
-        # (delisted, long halted, never priced) is not a missing current price;
+        # A dormant symbol's stored history ends before the week-ago session
+        # (delisted, long halted): it is not a missing current price, and
         # counting it cost US about 3 points of coverage on 2026-10-02 (#478).
-        # The week keeps a market-wide outage of a day or two in the count.
-        recent_dates = (
+        # A symbol with no rows at all may be a failed fetch, so it still counts.
+        recent_dates = {
             current_date,
             anchors[HORIZON_SESSIONS["1d"]],
             anchors[HORIZON_SESSIONS["1w"]],
-        )
+        }
+        dormant = {
+            symbol
+            for symbol in universe.symbols
+            if not any((symbol, recent) in prices for recent in recent_dates)
+            and any((symbol, anchor) in prices for anchor in anchor_dates)
+        }
+        # ponytail: a share cap, not a delisting feed. More dormant symbols than
+        # this looks like an outage or a stale price bundle, so none are excluded.
+        dormant_excluded = len(dormant) <= MAX_DORMANT_COVERAGE_SHARE * len(universe.symbols)
         coverage_symbols = [
             symbol
             for symbol in universe.symbols
-            if any((symbol, recent) in prices for recent in recent_dates)
+            if not (dormant_excluded and symbol in dormant)
         ]
         current_available = sum(
             (symbol, current_date) in prices for symbol in coverage_symbols
@@ -240,6 +252,8 @@ class MarketRsInputLoader:
                     "minimum_current_price_coverage": minimum_current_price_coverage,
                     "current_prices_available": current_available,
                     "coverage_symbol_count": len(coverage_symbols),
+                    "dormant_symbol_count": len(dormant),
+                    "dormant_excluded": dormant_excluded,
                     "expected_symbol_count": len(universe.symbols),
                 },
                 **context,
