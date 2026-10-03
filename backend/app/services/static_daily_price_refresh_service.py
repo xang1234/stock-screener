@@ -9,6 +9,11 @@ from typing import Any, Callable
 import pandas as pd
 
 from app.domain.markets.key_markets import key_market_price_symbols
+from app.domain.providers.data_plan import (
+    DATASET_PRICES,
+    PROVIDER_YAHOO_QUOTE,
+    provider_data_plan_registry,
+)
 from app.domain.providers.price_symbol_support import split_supported_price_symbols
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
@@ -53,6 +58,12 @@ STATIC_ADJUSTMENT_DRIFT_TOLERANCE = 1e-3
 STATIC_RATE_LIMITED_RETRY_MARKETS = frozenset({"IN"})
 STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS = 300
 STATIC_RATE_LIMITED_RETRY_BATCH_SIZE = 25
+
+# The per-batch Yahoo quote repair drops a whole 100-symbol batch when its
+# retries are rate-limited (three batches, 294 US symbols, on 2026-10-02, #478).
+# After the refresh, symbols still stored without the as-of session get one more
+# quote repair once Yahoo's 429 burst has cleared (about a minute).
+STATIC_SESSION_REPAIR_WAIT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -145,8 +156,10 @@ class StaticDailyPriceRefreshService:
             DEFAULT_BREADTH_HISTORY_PRICE_LOOKBACK_DAYS
         ),
         sleep: Callable[[float], None] | None = None,
+        fetch_quotes: Callable[[list[str]], list[dict[str, Any]]] | None = None,
     ) -> None:
         self._session_factory = session_factory
+        self._fetch_quotes = fetch_quotes
         self._price_cache = price_cache
         self._fetcher = fetcher
         self._batch_size_for_market = batch_size_for_market
@@ -338,6 +351,8 @@ class StaticDailyPriceRefreshService:
         # Symbol -> dates of its discarded, drift-triggering top-up frame; the
         # replacement must cover them too (e.g. the new as-of bar).
         readjusted_symbols: dict[str, set[date]] = {}
+        # Symbol -> its stored frame, while that frame lacks the as-of session.
+        missing_session_frames: dict[str, pd.DataFrame] = {}
         stale_refreshed, stale_failed, stale_rate_limited = self._fetch_and_store(
             stale_symbols,
             period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
@@ -345,6 +360,7 @@ class StaticDailyPriceRefreshService:
             market=market,
             as_of_date=as_of_date,
             readjusted_symbols=readjusted_symbols,
+            missing_session_frames=missing_session_frames,
         )
         bootstrap_refreshed, bootstrap_failed, bootstrap_rate_limited = self._fetch_and_store(
             bootstrap_symbols,
@@ -352,6 +368,7 @@ class StaticDailyPriceRefreshService:
             batch_size=batch_size,
             market=market,
             as_of_date=as_of_date,
+            missing_session_frames=missing_session_frames,
         )
         refreshed = stale_refreshed + bootstrap_refreshed
         failed = stale_failed + bootstrap_failed
@@ -383,9 +400,15 @@ class StaticDailyPriceRefreshService:
                 market=market,
                 as_of_date=as_of_date,
                 replacement_required_dates=readjusted_symbols,
+                missing_session_frames=missing_session_frames,
             )
             refreshed += readjusted_refreshed
             failed += readjusted_failed
+        session_repair = self._repair_missing_sessions(
+            market=market,
+            as_of_date=as_of_date,
+            frames=missing_session_frames,
+        )
 
         return {
             "status": "completed",
@@ -423,6 +446,7 @@ class StaticDailyPriceRefreshService:
             "yahoo_fetched_symbols": refreshed,
             "yahoo_failed_symbols": failed,
             "rate_limited_retry": retry_stats,
+            "latest_session_repair": session_repair,
         }
 
     def _rrg_history_coverage(
@@ -548,6 +572,7 @@ class StaticDailyPriceRefreshService:
         as_of_date: date | None = None,
         readjusted_symbols: dict[str, set[date]] | None = None,
         replacement_required_dates: dict[str, set[date]] | None = None,
+        missing_session_frames: dict[str, pd.DataFrame] | None = None,
     ) -> tuple[int, int, list[str]]:
         """Fetch and store ``symbols``.
 
@@ -561,7 +586,9 @@ class StaticDailyPriceRefreshService:
         ``replacement_required_dates``, each symbol's stored history is swapped
         for the fetched rows (see ``_replace_stored_history``): the store only
         updates a symbol's latest existing row, so old-scale history would
-        otherwise survive.
+        otherwise survive. With ``missing_session_frames`` and ``as_of_date``,
+        stored frames still lacking that session are kept there (and dropped
+        once a later pass stores the symbol with it).
         """
         refreshed_count = 0
         failed_count = 0
@@ -626,11 +653,16 @@ class StaticDailyPriceRefreshService:
                 repaired_count += sum(
                     1 for symbol in batch_to_store if batch_results[symbol].get("repaired_by")
                 )
-                missing_session_count += sum(
-                    1
-                    for frame in batch_to_store.values()
-                    if isinstance(frame, pd.DataFrame) and not _has_session(frame, as_of_date)
-                )
+                for symbol, frame in batch_to_store.items():
+                    if not isinstance(frame, pd.DataFrame):
+                        continue
+                    if _has_session(frame, as_of_date):
+                        if missing_session_frames is not None:
+                            missing_session_frames.pop(symbol, None)
+                        continue
+                    missing_session_count += 1
+                    if missing_session_frames is not None:
+                        missing_session_frames[symbol] = frame
                 session_note = (
                     f", {repaired_count:,} repaired, "
                     f"{missing_session_count:,} missing {as_of_date.isoformat()}"
@@ -642,6 +674,72 @@ class StaticDailyPriceRefreshService:
                 flush=True,
             )
         return refreshed_count, failed_count, rate_limited
+
+    def _repair_missing_sessions(
+        self,
+        *,
+        market: str | None,
+        as_of_date: date,
+        frames: dict[str, pd.DataFrame],
+    ) -> dict[str, Any]:
+        """Quote-repair frames the refresh stored without ``as_of_date``, once more.
+
+        Only for markets whose price plan uses Yahoo quote repair, after
+        ``STATIC_SESSION_REPAIR_WAIT_SECONDS``. Repaired frames are stored.
+        """
+        stats: dict[str, Any] = {"attempted": 0, "repaired": 0, "wait_seconds": 0}
+        if (
+            not frames
+            or market is None
+            or not provider_data_plan_registry.plan_for(market, DATASET_PRICES).allows(
+                PROVIDER_YAHOO_QUOTE
+            )
+        ):
+            return stats
+        from app.services.yahoo_quote_price_repair import (
+            fetch_yahoo_quotes,
+            repair_from_yahoo_quotes,
+        )
+
+        print(
+            f"[static-daily prices:{market}] {len(frames):,} symbols are still missing "
+            f"{as_of_date.isoformat()}; waiting {STATIC_SESSION_REPAIR_WAIT_SECONDS}s, "
+            "then repairing them from Yahoo quotes.",
+            flush=True,
+        )
+        self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
+        results = {symbol: {"price_data": frame} for symbol, frame in frames.items()}
+        rate_limiter = getattr(self._fetcher, "_rate_limiter", None)
+        repair_from_yahoo_quotes(
+            results,
+            expected_session=as_of_date,
+            market_tz=self._calendar_service.market_timezone(market),
+            fetch_quotes=self._fetch_quotes or fetch_yahoo_quotes,
+            wait=(
+                (lambda: rate_limiter.wait_for_market("yfinance:batch", market))
+                if rate_limiter is not None
+                else None
+            ),
+            sleep=self._sleep,
+        )
+        repaired = {
+            symbol: payload["price_data"]
+            for symbol, payload in results.items()
+            if payload.get("repaired_by")
+        }
+        if repaired:
+            self._price_cache.store_batch_in_cache(repaired, also_store_db=True, market=market)
+        stats.update(
+            attempted=len(frames),
+            repaired=len(repaired),
+            wait_seconds=STATIC_SESSION_REPAIR_WAIT_SECONDS,
+        )
+        print(
+            f"[static-daily prices:{market}] Latest-session repair complete: "
+            f"{len(repaired):,}/{len(frames):,} repaired.",
+            flush=True,
+        )
+        return stats
 
     def _adjustment_drift_symbols(self, frames: dict[str, Any]) -> set[str]:
         """Symbols whose fetched Adj Close disagrees with stored rows for the same dates."""

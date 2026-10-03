@@ -189,6 +189,8 @@ _COVERAGE_SHORT_RESULT = {
     "diagnostics": {
         "current_price_coverage": 0.8665,
         "minimum_current_price_coverage": 0.9,
+        "current_prices_available": 9101,
+        "expected_symbol_count": 10503,
     },
 }
 
@@ -213,7 +215,8 @@ class _PreviousSessionCalendar:
             _COVERAGE_SHORT_RESULT,
             (
                 "Static export market DE using previous-session as-of date 2026-07-31 "
-                "because current price coverage was below threshold for 2026-08-03."
+                "because current price coverage was below threshold for 2026-08-03 "
+                "(9,101 of 10,503 = 86.7%; 90.0% required)."
             ),
         ),
     ],

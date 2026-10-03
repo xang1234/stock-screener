@@ -204,11 +204,25 @@ class MarketRsInputLoader:
 
         context["benchmark_symbol"] = benchmark_symbol
         current_date = anchors[0]
+        # A symbol with no price on the current, previous or week-ago session
+        # (delisted, long halted, never priced) is not a missing current price;
+        # counting it cost US about 3 points of coverage on 2026-10-02 (#478).
+        # The week keeps a market-wide outage of a day or two in the count.
+        recent_dates = (
+            current_date,
+            anchors[HORIZON_SESSIONS["1d"]],
+            anchors[HORIZON_SESSIONS["1w"]],
+        )
+        coverage_symbols = [
+            symbol
+            for symbol in universe.symbols
+            if any((symbol, recent) in prices for recent in recent_dates)
+        ]
         current_available = sum(
-            (symbol, current_date) in prices for symbol in universe.symbols
+            (symbol, current_date) in prices for symbol in coverage_symbols
         )
         current_price_coverage = (
-            current_available / len(universe.symbols) if universe.symbols else 0.0
+            current_available / len(coverage_symbols) if coverage_symbols else 0.0
         )
         minimum_current_price_coverage = self._minimum_current_price_coverage(
             normalized
@@ -225,6 +239,7 @@ class MarketRsInputLoader:
                     "current_price_coverage": current_price_coverage,
                     "minimum_current_price_coverage": minimum_current_price_coverage,
                     "current_prices_available": current_available,
+                    "coverage_symbol_count": len(coverage_symbols),
                     "expected_symbol_count": len(universe.symbols),
                 },
                 **context,
