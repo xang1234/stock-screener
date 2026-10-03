@@ -426,6 +426,9 @@ def admin_associations(
 ):
     from app.infra.db.models.social_analysis import SocialThemeAssociation
     from app.models.theme import ThemeCluster
+    from app.services.economic_theme_read_service import EconomicThemeReader
+    if EconomicThemeReader(db).source_name == "economic":
+        return _economic_associations(db, state=state, market=market)
     query = select(SocialThemeAssociation, ThemeCluster).join(
         ThemeCluster, ThemeCluster.id == SocialThemeAssociation.theme_cluster_id
     )
@@ -442,6 +445,68 @@ def admin_associations(
             for row, theme in rows]
 
 
+def _economic_associations(db, *, state, market):
+    """Economic associations in the legacy list shape (#477).
+
+    Decisions are still addressed by legacy id and version, so a bridged row
+    carries both; a native row has neither and is not decidable here (#515).
+    """
+    from app.infra.db.models.social_analysis import (
+        EconomicSocialAssociationSource, SocialThemeAssociation,
+    )
+    from app.models.economic_taxonomy import EconomicThemeRevision
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+
+    rows = [
+        (association, revision, security)
+        for association, revision, security in EconomicSocialTaxonomyAdapter(db).latest_associations()
+        if (not state or revision.state == state) and (not market or security.market == market)
+    ]
+    ids = [association.id for association, _, _ in rows]
+    sources = db.scalars(select(EconomicSocialAssociationSource).where(
+        EconomicSocialAssociationSource.association_id.in_(ids))).all() if ids else []
+    bridged = {}
+    for source in sources:
+        if source.source_kind == "legacy_association" and source.legacy_association_id:
+            bridged.setdefault(source.association_id, set()).add(source.legacy_association_id)
+    # _decide_economic refuses a legacy id bridged to more than one economic
+    # association (e.g. after a remap), so only a unique bridge is decidable.
+    targets = {}
+    candidate_ids = {lid for lids in bridged.values() for lid in lids}
+    if candidate_ids:
+        for source in db.scalars(select(EconomicSocialAssociationSource).where(
+                EconomicSocialAssociationSource.source_kind == "legacy_association",
+                EconomicSocialAssociationSource.legacy_association_id.in_(candidate_ids))):
+            targets.setdefault(source.legacy_association_id, set()).add(source.association_id)
+    legacy_ids = {}
+    for aid, lids in bridged.items():
+        unique_ids = sorted(lid for lid in lids if len(targets.get(lid, ())) == 1)
+        if unique_ids:
+            legacy_ids[aid] = unique_ids[0]
+    work_ids = {}
+    for source in sources:
+        if source.social_work_id is not None:
+            work_ids.setdefault(source.association_id, set()).add(source.social_work_id)
+    legacy_versions = dict(db.execute(select(SocialThemeAssociation.id, SocialThemeAssociation.version).where(
+        SocialThemeAssociation.id.in_(legacy_ids.values()))).all()) if legacy_ids else {}
+    authority = db.get(TaxonomyAuthority, 1)
+    names = dict(db.execute(select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
+        EconomicThemeRevision.taxonomy_version_id == authority.processing_taxonomy_version_id)).all())
+    return [{"association_id": legacy_ids.get(association.id),
+             "economic_association_id": str(association.id),
+             "theme_id": str(association.economic_theme_id),
+             "theme_name": names.get(association.economic_theme_id),
+             "market": security.market, "canonical_symbol": security.symbol,
+             "state": revision.state,
+             "origin": "legacy_bridge" if association.id in legacy_ids else "economic",
+             "decision_owner": None,
+             "version": legacy_versions.get(legacy_ids.get(association.id)),
+             "economic_revision": revision.revision_number,
+             "evidence_work_ids": sorted(work_ids.get(association.id, ()))}
+            for association, revision, security in rows]
+
+
 @router.post("/admin/associations/{association_id}/decision",
              dependencies=[Depends(require_admin)])
 def decide_admin_association(
@@ -454,6 +519,7 @@ def decide_admin_association(
             SocialThemeProjectionService(db, admin_authorized=True).decide(
                 association_id, body.target, body.reason, ADMIN_ACTOR,
                 body.expected_version,
+                expected_economic_revision=body.expected_economic_revision,
             )
         return {"association_id": association_id, "status": body.target}
     except ValueError as exc:

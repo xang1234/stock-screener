@@ -306,6 +306,7 @@ class EconomicSocialTaxonomyAdapter:
         mirror_acknowledged: bool,
         admission_state: str = "live",
         evidence_packet_id: UUID | None = None,
+        expected_revision: int | None = None,
     ) -> EconomicSocialAssociationRevision:
         expected_epoch = self._current_epoch()
         with producer_write(
@@ -323,6 +324,7 @@ class EconomicSocialTaxonomyAdapter:
                 admission_state=admission_state,
                 evidence_packet_id=evidence_packet_id,
                 authority_epoch=authority.authority_epoch,
+                expected_revision=expected_revision,
             )
 
     def _revise(
@@ -337,6 +339,7 @@ class EconomicSocialTaxonomyAdapter:
         admission_state: str,
         evidence_packet_id: UUID | None,
         authority_epoch: int,
+        expected_revision: int | None = None,
     ) -> EconomicSocialAssociationRevision:
         if state not in {
             "proposed",
@@ -364,6 +367,14 @@ class EconomicSocialTaxonomyAdapter:
                     == existing_decision.id
                 )
             )
+        # Checked under the producer fence, so concurrent decisions on the
+        # same revision serialize and the later one sees the newer revision.
+        if expected_revision is not None and expected_revision != self.db.scalar(
+            select(func.max(EconomicSocialAssociationRevision.revision_number)).where(
+                EconomicSocialAssociationRevision.association_id == association_id
+            )
+        ):
+            raise ValueError("association_version_conflict")
         decision = self._create_decision(
             association_id,
             state=state,
@@ -1031,6 +1042,32 @@ class EconomicSocialTaxonomyAdapter:
             admission_state="live" if live else "review_only",
             live=live,
         )
+
+    def latest_associations(self):
+        """Every association as (association, latest revision, security), oldest first."""
+        latest = (
+            select(
+                EconomicSocialAssociationRevision.association_id,
+                func.max(EconomicSocialAssociationRevision.revision_number).label("number"),
+            )
+            .group_by(EconomicSocialAssociationRevision.association_id)
+            .subquery()
+        )
+        return self.db.execute(
+            select(
+                EconomicSocialAssociation,
+                EconomicSocialAssociationRevision,
+                StockUniverse,
+            )
+            .join(latest, latest.c.association_id == EconomicSocialAssociation.id)
+            .join(
+                EconomicSocialAssociationRevision,
+                (EconomicSocialAssociationRevision.association_id == latest.c.association_id)
+                & (EconomicSocialAssociationRevision.revision_number == latest.c.number),
+            )
+            .join(StockUniverse, StockUniverse.id == EconomicSocialAssociation.security_id)
+            .order_by(EconomicSocialAssociation.created_at, EconomicSocialAssociation.id)
+        ).all()
 
     def current_live_memberships(
         self, economic_theme_id: UUID

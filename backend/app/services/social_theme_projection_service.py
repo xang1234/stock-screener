@@ -718,7 +718,7 @@ class SocialThemeProjectionService:
         if target == "accepted":
             association.accepted_at = association.accepted_at or now
 
-    def decide(self, association_id, target, reason, actor, expected_version):
+    def decide(self, association_id, target, reason, actor, expected_version, *, expected_economic_revision=None):
         if self.admin_authorized is not True:
             raise PermissionError("admin_required")
         if target not in {"accepted", "rejected"} or not isinstance(reason, str) or not reason.strip() or not isinstance(actor, str) or not actor.strip():
@@ -731,6 +731,7 @@ class SocialThemeProjectionService:
                 reason.strip(),
                 actor.strip(),
                 expected_version,
+                expected_economic_revision,
             )
         expected_epoch = authority.authority_epoch if authority is not None else 1
         payload = {
@@ -774,7 +775,7 @@ class SocialThemeProjectionService:
                 payload=payload,
             )
 
-    def _decide_economic(self, association_id, target, reason, actor, expected_version):
+    def _decide_economic(self, association_id, target, reason, actor, expected_version, expected_economic_revision=None):
         """Revise the bridged global association once economic is authoritative.
 
         The legacy row is a compatibility mirror after cutover, so it changes
@@ -800,8 +801,13 @@ class SocialThemeProjectionService:
         if len(economic_ids) != 1:
             raise ValueError("economic_association_ambiguous")
         (economic_id,) = economic_ids
+        if expected_economic_revision is None:
+            # The economic state can move on without the legacy mirror changing,
+            # so the legacy version alone can't guard this decision.
+            raise ValueError("economic_revision_required")
         idempotency_key = (
-            f"legacy-admin:{association_id}:v{expected_version}:{target}:"
+            f"legacy-admin:{association_id}:v{expected_version}:"
+            f"r{expected_economic_revision}:{target}:"
             f"{_semantic_hash({'reason': reason, 'actor': actor})}"
         )
         return EconomicSocialTaxonomyAdapter(self.db).revise(
@@ -811,6 +817,7 @@ class SocialThemeProjectionService:
             actor=actor,
             reason=reason,
             mirror_acknowledged=False,
+            expected_revision=expected_economic_revision,
         )
 
     def effective_live_membership(self, theme_cluster_id):

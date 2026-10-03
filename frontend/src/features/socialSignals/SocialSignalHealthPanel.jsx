@@ -216,8 +216,11 @@ export default function SocialSignalHealthPanel() {
         <Alert severity="info" sx={{ my: 1 }}>
           Social-linked Theme merges are not available in this version; ordinary legacy Theme merges are unchanged.
         </Alert>
-        {(associations.data || []).map((row) => <Stack key={row.association_id} direction="row" gap={1} alignItems="center" flexWrap="wrap">
+        {(associations.data || []).map((row) => <Stack key={row.association_id ?? row.economic_association_id} direction="row" gap={1} alignItems="center" flexWrap="wrap">
           <Typography variant="body2">{row.theme_name} · {row.market}:{row.canonical_symbol} · {row.state}</Typography>
+          {row.association_id == null ? <Typography variant="caption" color="text.secondary">
+            Economic association without a legacy link; not decidable here yet.
+          </Typography> : <>
           <TextField size="small" label={`Decision reason ${row.association_id}`}
             value={reasons[row.association_id] || ''}
             onChange={(event) => setReasons((current) => ({ ...current, [row.association_id]: event.target.value }))} />
@@ -226,7 +229,9 @@ export default function SocialSignalHealthPanel() {
             disabled={!reasons[row.association_id]?.trim()}
             onClick={() => mutation.mutate(() => decideSocialAssociation(adminKey, row.association_id, {
               target, reason: reasons[row.association_id].trim(), expected_version: row.version,
+              ...(row.economic_revision != null && { expected_economic_revision: row.economic_revision }),
             }))}>{target}</Button>)}
+          </>}
         </Stack>)}
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle1" fontWeight={700}>Verified company identities</Typography>

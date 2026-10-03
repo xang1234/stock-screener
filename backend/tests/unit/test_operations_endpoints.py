@@ -133,6 +133,43 @@ async def test_social_signal_operations_endpoint_returns_redacted_health(client,
     assert "stderr" not in str(payload).lower() and "config_path" not in str(payload).lower()
 
 
+def test_social_signal_operations_counts_economic_associations_in_economic_mode(
+    db_session,
+):
+    from app.services.social_signal_operations_service import SocialSignalOperationsService
+    from app.services.social_source_admin_service import SocialSourceAdminService
+    from tests.unit.economic_taxonomy_reader_helpers import (
+        seed_generation,
+        seed_social_associations,
+    )
+
+    import json
+
+    from app.models.app_settings import AppSetting
+    from app.models.stock_universe import StockUniverse
+    from app.services.social_company_identity_service import KEY, POLICY
+
+    SocialSourceAdminService(db_session).ensure_seed_sources()
+    seed_social_associations(db_session, seed_generation(db_session))
+    # AMD is verified but no longer active; the count must still see it as known.
+    db_session.query(StockUniverse).filter_by(symbol="AMD").update({"is_active": False})
+    db_session.add(AppSetting(key=KEY, category="social", value=json.dumps({
+        "version": 1, "policy_version": POLICY,
+        "entries": [{"symbol": "AMD", "company_id": "amd", "verification_reference": "10-K",
+                     "verified_at": "2026-09-01T00:00:00+00:00"}],
+    })))
+    db_session.flush()
+
+    class Redis:
+        def ttl(self, key):
+            return -2
+
+    payload = SocialSignalOperationsService(redis_client=Redis()).snapshot(db_session)
+
+    # Only NVDA is proposed without a verified company; the legacy row is not counted.
+    assert payload["unknown_company_identity_count"] == 1
+
+
 def test_social_signal_operations_snapshot_uses_db_runtime_and_shared_ttls(db_session):
     from app.services.social_signal_operations_service import SocialSignalOperationsService
     from app.services.social_signal_runtime_gate import (

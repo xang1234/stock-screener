@@ -22,15 +22,17 @@ _TELEMETRY = "Audit 'Readers with no routing': matching telemetry serves legacy 
 _CONTENT = "Audit 'Readers with no routing': content listing annotates items with ThemeMention."
 _SOCIAL_PREPARATION = (
     "Audit 'Readers with no routing': every live Social run prepares baskets from legacy "
-    "theme tables before its economic-mode check; move it before retirement."
+    "theme tables before its economic-mode check; move it before retirement (#515)."
 )
 _SNAPSHOT_BUILDER = (
     "Audit 'Readers with no routing': the economic snapshot builder reads legacy "
     "ThemeDevelopmentTheme links; migrate them before retirement (#513)."
 )
 _PIPELINE_DIAGNOSTICS = "Audit 'Readers with no routing': pipeline diagnostics read legacy tables."
-_SOCIAL_OPERATIONS = "Audit 'Readers with no routing': Social operations snapshot counts legacy associations."
-_SOCIAL_ASSOCIATIONS = "Audit 'Readers with no routing': admin associations list serves legacy associations."
+_SOCIAL_ASSOCIATIONS = (
+    "Admin associations list: under economic authority it serves economic associations, "
+    "but reads the legacy version that decisions on bridged rows still take (#515)."
+)
 _ROLLBACK = (
     "Audit 'Rollback machinery (keep until retirement)': compatibility delivery "
     "maintains legacy projections."
@@ -110,17 +112,9 @@ ALLOWLIST: dict[str, tuple[str, set[str]]] = {
         _PIPELINE_DIAGNOSTICS,
         {"ThemeCluster", "ThemeMention", "ThemeMergeSuggestion"},
     ),
-    "GET /api/v1/operations/social-signals": (
-        _SOCIAL_OPERATIONS,
-        {"SocialThemeAssociation"},
-    ),
-    "GET /api/v1/social-signals/admin/health": (
-        _SOCIAL_OPERATIONS,
-        {"SocialThemeAssociation"},
-    ),
     "GET /api/v1/social-signals/admin/associations": (
         _SOCIAL_ASSOCIATIONS,
-        {"SocialThemeAssociation", "ThemeCluster"},
+        {"SocialThemeAssociation"},
     ),
     "task app.tasks.economic_taxonomy_tasks.deliver_taxonomy_outbox": (
         _ROLLBACK,
