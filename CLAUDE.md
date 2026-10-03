@@ -22,7 +22,7 @@ Stock screening platform implementing CANSLIM (William O'Neil) and Minervini met
 
 ## Environment & Conventions
 ### Environment & facts
-- Shell is zsh: quote variables and use arrays, since unquoted `$VAR` does not word-split. Avoid `source`/`nvm` and `rm -rf` (blocked by safety hooks); ask the user instead.
+- Shell is zsh: quote variables and use arrays, since unquoted `$VAR` does not word-split. Avoid `source`/`nvm` and `rm -rf` (blocked by safety hooks).
 - Do one feature per git worktree. Never `git checkout` a commit hash (it detaches HEAD); use `git switch` with a branch.
 - Schedules: the US cron runs in America/New_York, not UTC. CN/HK/JP market hours matter: don't trigger data runs while the market is open.
 - Before stating facts in READMEs, issues or PR comments (versions, schedules, behavior), verify them against the code or config and cite the file.
