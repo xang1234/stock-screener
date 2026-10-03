@@ -6,12 +6,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Stock screening platform implementing CANSLIM (William O'Neil) and Minervini methodologies, with theme discovery, AI chatbot, and market analysis. Full-stack application with FastAPI backend, React frontend, PostgreSQL, Redis caching, and Celery for background tasks.
 
+
+## PR Workflow 
+### Before pushing / opening a PR
+- Run the FULL local test suite, including workflow/CI tests (e.g. tests that check .github/workflows). Never push workflow YAML changes without running those tests locally.
+- Do not invent action version tags (e.g. setup-uv@v10). Check that the tag exists with `gh api repos/<owner>/<repo>/git/refs/tags/<tag>` first.
+- Before pushing, self-review the diff for the bug classes reviewers keep finding here: swallowed exceptions or overly broad `except`, race conditions on first claim or lease, circuit breakers or state that can never reset, platform-specific exceptions (Windows ValueError), and missing imports. 
+
+## PR Review Workflow
+### Addressing PR review comments
+- For each bot or human thread: verify the finding, write a test that fails on the current code when applicable, fix it, then reply on the thread with the REAL commit SHA (never a placeholder).
+- After fixing a round, look for sibling cases of the same bug elsewhere in the diff before pushing, so the next review round doesn't flag the gap.
+- After pushing, request re-review (`@codex review`) and use ScheduleWakeup to poll CI and reviews. If gh returns a transient 401 or connection error, retry once before reporting failure.
+
+
+## Environment & Conventions
+### Environment & facts
+- Shell is zsh: quote variables and use arrays, since unquoted `$VAR` does not word-split. Avoid `source`/`nvm` and `rm -rf` (blocked by safety hooks).
+- Do one feature per git worktree. Never `git checkout` a commit hash (it detaches HEAD); use `git switch` with a branch.
+- Schedules: the US cron runs in America/New_York, not UTC. CN/HK/JP market hours matter: don't trigger data runs while the market is open.
+- Before stating facts in READMEs, issues or PR comments (versions, schedules, behavior), verify them against the code or config and cite the file.
+
+  
 ## Development Commands
 
 ### Backend
 ```bash
 cd backend
-source venv/bin/activate
+. venv/bin/activate
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -56,7 +78,7 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 
 **Docker files:**
 - `docker-compose.yml` - Base config (local dev)
-- `docker-compose.prod.yml` - Production overlay (resource limits, health checks, logging)
+- `docker-compose.prod.yml` - Production overlay (re limits, health checks, logging)
 - `docker-compose.https.yml` - HTTPS overlay (Caddy with Let's Encrypt)
 - `.env.docker.example` - Docker environment template
 - `Caddyfile` - Caddy TLS configuration
@@ -68,7 +90,7 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 #### Backend (pytest)
 ```bash
 cd backend
-source venv/bin/activate
+. venv/bin/activate
 
 # Run all tests
 pytest
@@ -133,7 +155,7 @@ make golden-update # Regenerate golden snapshots
 Utility scripts are in `backend/scripts/`:
 ```bash
 cd backend
-source venv/bin/activate
+. venv/bin/activate
 
 python scripts/inspect_redis.py            # Inspect Redis cache keys
 python scripts/cache_diagnostic.py         # Trace cache flow (DB → Redis)
@@ -343,3 +365,4 @@ test(canslim): add unit tests for EPS calculation
 ```
 
 **Scopes** (optional): `api`, `scanner`, `chatbot`, `frontend`, `celery`, `db`, `cache`, `themes`, `signals`
+
