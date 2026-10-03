@@ -33,7 +33,7 @@ Stock screening platform implementing CANSLIM (William O'Neil) and Minervini met
 ### Backend
 ```bash
 cd backend
-source venv/bin/activate
+. venv/bin/activate
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -78,7 +78,7 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 
 **Docker files:**
 - `docker-compose.yml` - Base config (local dev)
-- `docker-compose.prod.yml` - Production overlay (resource limits, health checks, logging)
+- `docker-compose.prod.yml` - Production overlay (re limits, health checks, logging)
 - `docker-compose.https.yml` - HTTPS overlay (Caddy with Let's Encrypt)
 - `.env.docker.example` - Docker environment template
 - `Caddyfile` - Caddy TLS configuration
@@ -90,7 +90,7 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 #### Backend (pytest)
 ```bash
 cd backend
-source venv/bin/activate
+. venv/bin/activate
 
 # Run all tests
 pytest
@@ -155,7 +155,7 @@ make golden-update # Regenerate golden snapshots
 Utility scripts are in `backend/scripts/`:
 ```bash
 cd backend
-source venv/bin/activate
+. venv/bin/activate
 
 python scripts/inspect_redis.py            # Inspect Redis cache keys
 python scripts/cache_diagnostic.py         # Trace cache flow (DB → Redis)
