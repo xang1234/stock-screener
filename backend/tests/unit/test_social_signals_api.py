@@ -1076,6 +1076,77 @@ async def test_admin_associations_hide_the_legacy_id_when_its_bridge_is_ambiguou
 
 
 @pytest.mark.asyncio
+async def test_admin_associations_keep_a_unique_bridge_beside_an_ambiguous_one(
+    db_session, monkeypatch
+):
+    from datetime import datetime, timezone
+
+    from app.api.v1 import config
+    from app.infra.db.models.social_analysis import (
+        EconomicSocialAssociation,
+        EconomicSocialAssociationRevision,
+        EconomicSocialAssociationSource,
+        SocialThemeAssociation,
+    )
+    from app.models.theme import ThemeCluster
+    from app.services import server_auth
+    from tests.unit.economic_taxonomy_reader_helpers import (
+        seed_generation,
+        seed_social_associations,
+    )
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    seeded = seed_generation(db_session)
+    rows = seed_social_associations(db_session, seeded)
+    now = datetime(2026, 9, 21, tzinfo=timezone.utc)
+    other_theme = ThemeCluster(
+        name="HBM", display_name="HBM", canonical_key="hbm",
+        pipeline="technical", aliases=[], lifecycle_state="candidate", is_active=True,
+    )
+    db_session.add(other_theme)
+    db_session.flush()
+    second_legacy = SocialThemeAssociation(
+        theme_cluster_id=other_theme.id, market="US", canonical_symbol="MU",
+        state="proposed", origin="social", decision_owner="system",
+        evidence_work_ids=[], policy_version="policy-v1", version=1,
+        first_seen_at=now, updated_at=now,
+    )
+    remapped = EconomicSocialAssociation(
+        economic_theme_id=seeded["semiconductors"].id, security_id=rows["MU"].security_id
+    )
+    db_session.add_all([second_legacy, remapped])
+    db_session.flush()
+    # MU (AI Memory) keeps its unique bridge and gains a second one, which a
+    # remap also points at another economic association: that one is ambiguous.
+    db_session.add_all([
+        EconomicSocialAssociationRevision(
+            association_id=remapped.id, revision_number=1, state="proposed", live=False,
+            admission_state="live", mirror_state="not_required", reconciliation_hash="remap",
+        ),
+        EconomicSocialAssociationSource(
+            association_id=rows["MU"].id, source_kind="legacy_association",
+            source_key=f"legacy:{second_legacy.id}", legacy_association_id=second_legacy.id,
+        ),
+        EconomicSocialAssociationSource(
+            association_id=remapped.id, source_kind="legacy_association",
+            source_key=f"legacy:{second_legacy.id}:remap", legacy_association_id=second_legacy.id,
+        ),
+    ])
+    db_session.commit()
+
+    listed = await _request(
+        db_session, "GET", "/api/v1/social-signals/admin/associations",
+        headers={"X-Admin-Key": "admin-secret"},
+    )
+
+    by_theme = {row["theme_name"]: row for row in listed.json() if row["canonical_symbol"] == "MU"}
+    assert by_theme["AI Memory"]["association_id"] == rows["legacy"].id
+    assert by_theme["AI Memory"]["version"] == 3
+    assert by_theme["Semiconductors"]["association_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_association_decision_requires_live_mode_reason_and_current_version(
     db_session, social_runtime, monkeypatch
 ):
