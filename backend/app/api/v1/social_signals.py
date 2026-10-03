@@ -426,6 +426,9 @@ def admin_associations(
 ):
     from app.infra.db.models.social_analysis import SocialThemeAssociation
     from app.models.theme import ThemeCluster
+    from app.services.economic_theme_read_service import EconomicThemeReader
+    if EconomicThemeReader(db).source_name == "economic":
+        return _economic_associations(db, state=state, market=market)
     query = select(SocialThemeAssociation, ThemeCluster).join(
         ThemeCluster, ThemeCluster.id == SocialThemeAssociation.theme_cluster_id
     )
@@ -440,6 +443,50 @@ def admin_associations(
              "origin": row.origin, "decision_owner": row.decision_owner,
              "version": row.version, "evidence_work_ids": row.evidence_work_ids}
             for row, theme in rows]
+
+
+def _economic_associations(db, *, state, market):
+    """Economic associations in the legacy list shape (#477).
+
+    Decisions are still addressed by legacy id and version, so a bridged row
+    carries both; a native row has neither and is not decidable here (#515).
+    """
+    from app.infra.db.models.social_analysis import (
+        EconomicSocialAssociationSource, SocialThemeAssociation,
+    )
+    from app.models.economic_taxonomy import EconomicThemeRevision
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+
+    rows = [
+        (association, revision, security)
+        for association, revision, security in EconomicSocialTaxonomyAdapter(db).latest_associations()
+        if (not state or revision.state == state) and (not market or security.market == market)
+    ]
+    ids = [association.id for association, _, _ in rows]
+    sources = db.scalars(select(EconomicSocialAssociationSource).where(
+        EconomicSocialAssociationSource.association_id.in_(ids))).all() if ids else []
+    legacy_ids = {s.association_id: s.legacy_association_id for s in sources if s.legacy_association_id}
+    work_ids = {}
+    for source in sources:
+        if source.social_work_id is not None:
+            work_ids.setdefault(source.association_id, set()).add(source.social_work_id)
+    legacy_versions = dict(db.execute(select(SocialThemeAssociation.id, SocialThemeAssociation.version).where(
+        SocialThemeAssociation.id.in_(legacy_ids.values()))).all()) if legacy_ids else {}
+    authority = db.get(TaxonomyAuthority, 1)
+    names = dict(db.execute(select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
+        EconomicThemeRevision.taxonomy_version_id == authority.processing_taxonomy_version_id)).all())
+    return [{"association_id": legacy_ids.get(association.id),
+             "economic_association_id": str(association.id),
+             "theme_id": str(association.economic_theme_id),
+             "theme_name": names.get(association.economic_theme_id),
+             "market": security.market, "canonical_symbol": security.symbol,
+             "state": revision.state,
+             "origin": "legacy_bridge" if association.id in legacy_ids else "economic",
+             "decision_owner": None,
+             "version": legacy_versions.get(legacy_ids.get(association.id)),
+             "evidence_work_ids": sorted(work_ids.get(association.id, ()))}
+            for association, revision, security in rows]
 
 
 @router.post("/admin/associations/{association_id}/decision",

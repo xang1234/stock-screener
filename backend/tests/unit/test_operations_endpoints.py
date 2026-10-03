@@ -133,6 +133,29 @@ async def test_social_signal_operations_endpoint_returns_redacted_health(client,
     assert "stderr" not in str(payload).lower() and "config_path" not in str(payload).lower()
 
 
+def test_social_signal_operations_counts_economic_associations_in_economic_mode(
+    db_session,
+):
+    from app.services.social_signal_operations_service import SocialSignalOperationsService
+    from app.services.social_source_admin_service import SocialSourceAdminService
+    from tests.unit.economic_taxonomy_reader_helpers import (
+        seed_generation,
+        seed_social_associations,
+    )
+
+    SocialSourceAdminService(db_session).ensure_seed_sources()
+    seed_social_associations(db_session, seed_generation(db_session))
+
+    class Redis:
+        def ttl(self, key):
+            return -2
+
+    payload = SocialSignalOperationsService(redis_client=Redis()).snapshot(db_session)
+
+    # NVDA and AMD are proposed with no verified company; the one legacy row is not counted.
+    assert payload["unknown_company_identity_count"] == 2
+
+
 def test_social_signal_operations_snapshot_uses_db_runtime_and_shared_ttls(db_session):
     from app.services.social_signal_operations_service import SocialSignalOperationsService
     from app.services.social_signal_runtime_gate import (

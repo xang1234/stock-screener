@@ -1032,6 +1032,32 @@ class EconomicSocialTaxonomyAdapter:
             live=live,
         )
 
+    def latest_associations(self):
+        """Every association as (association, latest revision, security), oldest first."""
+        latest = (
+            select(
+                EconomicSocialAssociationRevision.association_id,
+                func.max(EconomicSocialAssociationRevision.revision_number).label("number"),
+            )
+            .group_by(EconomicSocialAssociationRevision.association_id)
+            .subquery()
+        )
+        return self.db.execute(
+            select(
+                EconomicSocialAssociation,
+                EconomicSocialAssociationRevision,
+                StockUniverse,
+            )
+            .join(latest, latest.c.association_id == EconomicSocialAssociation.id)
+            .join(
+                EconomicSocialAssociationRevision,
+                (EconomicSocialAssociationRevision.association_id == latest.c.association_id)
+                & (EconomicSocialAssociationRevision.revision_number == latest.c.number),
+            )
+            .join(StockUniverse, StockUniverse.id == EconomicSocialAssociation.security_id)
+            .order_by(EconomicSocialAssociation.created_at, EconomicSocialAssociation.id)
+        ).all()
+
     def current_live_memberships(
         self, economic_theme_id: UUID
     ) -> tuple[EconomicSocialMembership, ...]:

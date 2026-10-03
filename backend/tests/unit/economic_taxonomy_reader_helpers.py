@@ -298,3 +298,68 @@ def seed_generation(db, *, display_name="AI Memory", set_serving=True):
         "bundle": bundle,
         "generation": generation,
     }
+
+
+def seed_social_associations(db, seeded):
+    """Economic Social associations over ``seed_generation`` themes:
+    MU accepted and bridged to a legacy row, NVDA and AMD proposed and native."""
+    from app.infra.db.models.social_analysis import (
+        EconomicSocialAssociation,
+        EconomicSocialAssociationRevision,
+        EconomicSocialAssociationSource,
+        SocialThemeAssociation,
+    )
+    from app.models.stock_universe import StockUniverse
+    from app.models.theme import ThemeCluster
+
+    securities = {
+        symbol: StockUniverse(symbol=symbol, name=symbol, market="US")
+        for symbol in ("MU", "NVDA", "AMD")
+    }
+    legacy_theme = ThemeCluster(
+        name="Memory", display_name="Memory", canonical_key="memory",
+        pipeline="technical", aliases=[], lifecycle_state="candidate", is_active=True,
+    )
+    db.add_all([*securities.values(), legacy_theme])
+    db.flush()
+    legacy = SocialThemeAssociation(
+        theme_cluster_id=legacy_theme.id, market="US", canonical_symbol="MU",
+        state="proposed", origin="social", decision_owner="system",
+        evidence_work_ids=[], policy_version="policy-v1", version=3,
+        first_seen_at=NOW, updated_at=NOW,
+    )
+    db.add(legacy)
+    db.flush()
+    rows = {}
+    for symbol, theme, state in (
+        ("MU", seeded["memory"], "accepted"),
+        ("NVDA", seeded["semiconductors"], "proposed"),
+        ("AMD", seeded["semiconductors"], "proposed"),
+    ):
+        association = EconomicSocialAssociation(
+            economic_theme_id=theme.id, security_id=securities[symbol].id
+        )
+        db.add(association)
+        db.flush()
+        db.add(
+            EconomicSocialAssociationRevision(
+                association_id=association.id,
+                revision_number=1,
+                state=state,
+                live=state == "accepted",
+                admission_state="live",
+                mirror_state="not_required",
+                reconciliation_hash=f"hash-{symbol}",
+            )
+        )
+        rows[symbol] = association
+    db.add(
+        EconomicSocialAssociationSource(
+            association_id=rows["MU"].id,
+            source_kind="legacy_association",
+            source_key=f"legacy:{legacy.id}",
+            legacy_association_id=legacy.id,
+        )
+    )
+    db.flush()
+    return {"legacy": legacy, **rows}

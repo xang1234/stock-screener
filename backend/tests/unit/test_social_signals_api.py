@@ -984,6 +984,47 @@ async def test_validation_preview_includes_staged_association_proposals(
 
 
 @pytest.mark.asyncio
+async def test_admin_associations_list_economic_associations_in_economic_mode(
+    db_session, monkeypatch
+):
+    from app.api.v1 import config
+    from app.services import server_auth
+    from tests.unit.economic_taxonomy_reader_helpers import (
+        seed_generation,
+        seed_social_associations,
+    )
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    headers = {"X-Admin-Key": "admin-secret"}
+    seeded = seed_generation(db_session)
+    rows = seed_social_associations(db_session, seeded)
+    db_session.commit()
+
+    listed = await _request(
+        db_session, "GET", "/api/v1/social-signals/admin/associations", headers=headers
+    )
+    proposed = await _request(
+        db_session, "GET", "/api/v1/social-signals/admin/associations",
+        headers=headers, params={"state": "proposed"},
+    )
+
+    assert listed.status_code == 200
+    by_symbol = {row["canonical_symbol"]: row for row in listed.json()}
+    assert set(by_symbol) == {"MU", "NVDA", "AMD"}
+    # Bridged: decided through the legacy id and version the decision API takes.
+    assert by_symbol["MU"]["association_id"] == rows["legacy"].id
+    assert by_symbol["MU"]["version"] == 3
+    assert by_symbol["MU"]["state"] == "accepted"
+    assert by_symbol["MU"]["theme_name"] == "AI Memory"
+    # Native: no legacy row, so not decidable through this API.
+    assert by_symbol["NVDA"]["association_id"] is None
+    assert by_symbol["NVDA"]["economic_association_id"] == str(rows["NVDA"].id)
+    assert by_symbol["NVDA"]["theme_name"] == "Semiconductors"
+    assert {row["canonical_symbol"] for row in proposed.json()} == {"NVDA", "AMD"}
+
+
+@pytest.mark.asyncio
 async def test_association_decision_requires_live_mode_reason_and_current_version(
     db_session, social_runtime, monkeypatch
 ):

@@ -127,6 +127,18 @@ describe('SocialSignalHealthPanel', () => {
     ));
   });
 
+  it('offers no decision for an economic association without a legacy link', async () => {
+    api.getSocialAssociations.mockResolvedValue([{
+      association_id: null, economic_association_id: 'a1b2', theme_name: 'Semiconductors',
+      market: 'US', canonical_symbol: 'AMD', state: 'proposed', version: null,
+    }]);
+    renderPanel();
+    await unlock();
+    expect(await screen.findByText(/Semiconductors · US:AMD · proposed/)).toBeInTheDocument();
+    expect(screen.getByText(/not decidable here/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept AMD' })).not.toBeInTheDocument();
+  });
+
   it('reloads the identity draft after an optimistic version conflict', async () => {
     api.getSocialCompanyIdentities
       .mockResolvedValueOnce({
