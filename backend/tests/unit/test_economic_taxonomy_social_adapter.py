@@ -473,6 +473,34 @@ def test_admin_decision_after_cutover_rejects_a_stale_economic_revision(db_sessi
         )
 
 
+def test_admin_decision_repeated_before_mirror_delivery_is_not_a_retry(db_session):
+    seed_generation(db_session)
+    theme, security = _global_pair(db_session)
+    legacy = _legacy_association(db_session, name="AI Memory", state="accepted")
+    projected = EconomicSocialTaxonomyAdapter(db_session).project_legacy_associations(
+        economic_theme_id=theme.id,
+        security_id=security.id,
+        legacy_association_ids=(legacy.id,),
+    )
+    db_session.commit()
+    service = SocialThemeProjectionService(db_session, admin_authorized=True)
+
+    def decide(target, reason):
+        return service.decide(
+            legacy.id, target, reason, "admin", legacy.version,
+            expected_economic_revision=_latest_revision(db_session, projected.association_id),
+        )
+
+    # The legacy version stays put until delivery, so only the economic
+    # revision tells the third decision apart from the first.
+    first = decide("rejected", "X")
+    decide("accepted", "Y")
+    third = decide("rejected", "X")
+
+    assert third.id != first.id
+    assert third.state == "rejected"
+
+
 def test_admin_decision_after_cutover_requires_economic_bridge(db_session):
     seed_generation(db_session)
     legacy = _legacy_association(db_session, name="Unmapped", state="accepted")

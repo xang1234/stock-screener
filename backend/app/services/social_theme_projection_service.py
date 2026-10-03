@@ -806,7 +806,8 @@ class SocialThemeProjectionService:
             # so the legacy version alone can't guard this decision.
             raise ValueError("economic_revision_required")
         idempotency_key = (
-            f"legacy-admin:{association_id}:v{expected_version}:{target}:"
+            f"legacy-admin:{association_id}:v{expected_version}:"
+            f"r{expected_economic_revision}:{target}:"
             f"{_semantic_hash({'reason': reason, 'actor': actor})}"
         )
         return EconomicSocialTaxonomyAdapter(self.db).revise(
