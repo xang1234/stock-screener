@@ -376,6 +376,16 @@ def test_social_rejection_retracts_and_reacceptance_restores_legacy_mirror(
     assert db_session.query(SocialThemeAssociation).count() == 1
 
 
+def _latest_revision(db, association_id):
+    return max(
+        db.scalars(
+            select(EconomicSocialAssociationRevision.revision_number).where(
+                EconomicSocialAssociationRevision.association_id == association_id
+            )
+        )
+    )
+
+
 def test_admin_decision_after_cutover_revises_economic_association(db_session):
     seed_generation(db_session)
     theme, security = _global_pair(db_session)
@@ -389,7 +399,8 @@ def test_admin_decision_after_cutover_revises_economic_association(db_session):
     service = SocialThemeProjectionService(db_session, admin_authorized=True)
 
     rejected = service.decide(
-        legacy.id, "rejected", "reviewed evidence", "admin", legacy.version
+        legacy.id, "rejected", "reviewed evidence", "admin", legacy.version,
+        expected_economic_revision=_latest_revision(db_session, projected.association_id),
     )
     db_session.commit()
 
@@ -405,10 +416,14 @@ def test_admin_decision_after_cutover_revises_economic_association(db_session):
     db_session.refresh(legacy)
     assert legacy.state == "rejected"
     with pytest.raises(ValueError, match="association_version_conflict"):
-        service.decide(legacy.id, "accepted", "stale", "admin", legacy.version - 1)
+        service.decide(
+            legacy.id, "accepted", "stale", "admin", legacy.version - 1,
+            expected_economic_revision=_latest_revision(db_session, projected.association_id),
+        )
 
     accepted = service.decide(
-        legacy.id, "accepted", "reinstated", "admin", legacy.version
+        legacy.id, "accepted", "reinstated", "admin", legacy.version,
+        expected_economic_revision=_latest_revision(db_session, projected.association_id),
     )
     db_session.commit()
     assert accepted.state == "pending_legacy_mirror"
@@ -420,8 +435,6 @@ def test_admin_decision_after_cutover_revises_economic_association(db_session):
 
 
 def test_admin_decision_after_cutover_rejects_a_stale_economic_revision(db_session):
-    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
-
     seed_generation(db_session)
     theme, security = _global_pair(db_session)
     legacy = _legacy_association(db_session, name="AI Memory", state="accepted")
@@ -442,12 +455,22 @@ def test_admin_decision_after_cutover_rejects_a_stale_economic_revision(db_sessi
             legacy.id, "rejected", "reviewed evidence", "admin", legacy.version,
             expected_economic_revision=current + 1,
         )
+    # Without a token the legacy version alone would let a stale decision through.
+    with pytest.raises(ValueError, match="economic_revision_required"):
+        service.decide(legacy.id, "rejected", "reviewed evidence", "admin", legacy.version)
     rejected = service.decide(
         legacy.id, "rejected", "reviewed evidence", "admin", legacy.version,
         expected_economic_revision=current,
     )
 
     assert rejected.state == "rejected"
+    # The check runs inside revise(), under the producer fence the append takes.
+    with pytest.raises(ValueError, match="association_version_conflict"):
+        EconomicSocialTaxonomyAdapter(db_session).revise(
+            projected.association_id, state="accepted", idempotency_key="later",
+            actor="admin", reason="stale", mirror_acknowledged=False,
+            expected_revision=current,
+        )
 
 
 def test_admin_decision_after_cutover_requires_economic_bridge(db_session):

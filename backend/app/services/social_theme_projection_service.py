@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 
 from app.domain.social_signals.records import (
     EffectiveThemeMembership,
@@ -20,7 +20,6 @@ from app.domain.social_signals.records import (
     validate_utc_timestamp,
 )
 from app.infra.db.models.social_analysis import (
-    EconomicSocialAssociationRevision,
     EconomicSocialAssociationSource,
     SocialExtractionWork,
     SocialRunWork,
@@ -802,11 +801,10 @@ class SocialThemeProjectionService:
         if len(economic_ids) != 1:
             raise ValueError("economic_association_ambiguous")
         (economic_id,) = economic_ids
-        if expected_economic_revision is not None and expected_economic_revision != self.db.scalar(
-            select(func.max(EconomicSocialAssociationRevision.revision_number)).where(
-                EconomicSocialAssociationRevision.association_id == economic_id)):
-            # The economic state moved on without the legacy mirror changing.
-            raise ValueError("association_version_conflict")
+        if expected_economic_revision is None:
+            # The economic state can move on without the legacy mirror changing,
+            # so the legacy version alone can't guard this decision.
+            raise ValueError("economic_revision_required")
         idempotency_key = (
             f"legacy-admin:{association_id}:v{expected_version}:{target}:"
             f"{_semantic_hash({'reason': reason, 'actor': actor})}"
@@ -818,6 +816,7 @@ class SocialThemeProjectionService:
             actor=actor,
             reason=reason,
             mirror_acknowledged=False,
+            expected_revision=expected_economic_revision,
         )
 
     def effective_live_membership(self, theme_cluster_id):
