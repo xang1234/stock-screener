@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain.relative_strength import HORIZON_SESSIONS
@@ -211,16 +212,36 @@ class MarketRsInputLoader:
         # (delisted, long halted): it is not a missing current price, and
         # counting it cost US about 3 points of coverage on 2026-10-02 (#478).
         # A symbol with no rows at all may be a failed fetch, so it still counts.
-        recent_dates = {
-            current_date,
-            anchors[HORIZON_SESSIONS["1d"]],
-            anchors[HORIZON_SESSIONS["1w"]],
-        }
-        dormant = {
+        week_ago = anchors[HORIZON_SESSIONS["1w"]]
+        recent_dates = {current_date, anchors[HORIZON_SESSIONS["1d"]], week_ago}
+        candidates = [
             symbol
             for symbol in universe.symbols
             if not any((symbol, recent) in prices for recent in recent_dates)
             and any((symbol, anchor) in prices for anchor in anchor_dates)
+        ]
+        # The anchors are sampled dates: confirm each candidate's latest valid
+        # price is older than a week, so a short halt or gap still counts.
+        latest_by_symbol = (
+            dict(
+                db.query(StockPrice.symbol, func.max(StockPrice.date))
+                .filter(
+                    StockPrice.symbol.in_(candidates),
+                    StockPrice.date <= current_date,
+                    StockPrice.adj_close.isnot(None),
+                    StockPrice.adj_close > 0,
+                )
+                .group_by(StockPrice.symbol)
+                .all()
+            )
+            if candidates
+            else {}
+        )
+        dormant = {
+            symbol
+            for symbol in candidates
+            if latest_by_symbol.get(symbol) is not None
+            and latest_by_symbol[symbol] < week_ago
         }
         # ponytail: a share cap, not a delisting feed. More dormant symbols than
         # this looks like an outage or a stale price bundle, so none are excluded.

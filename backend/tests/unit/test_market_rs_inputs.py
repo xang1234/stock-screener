@@ -286,15 +286,18 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
 
 def test_load_leaves_dormant_symbols_out_of_coverage(db_session):
     # 89 current, 1 one session behind, 3 dormant (history ends a month ago),
-    # 1 never priced (may be a failed fetch, so it still counts).
+    # 1 never priced (may be a failed fetch, so it still counts), and 1 priced
+    # three sessions ago, between the sampled anchors (a short gap still counts).
     current = [f"S{index}" for index in range(89)]
     dormant = ["D0", "D1", "D2"]
-    symbols = (*current, "BEHIND", *dormant, "NEVER")
+    symbols = (*current, "BEHIND", *dormant, "NEVER", "GAP")
     db_session.add_all(
         [
             *[_price(symbol, 0, adjusted=100.0) for symbol in current],
             _price("BEHIND", 1, adjusted=100.0),
             *[_price(symbol, 21, adjusted=100.0) for symbol in dormant],
+            _price("GAP", 21, adjusted=100.0),
+            StockPrice(symbol="GAP", date=date(2026, 4, 7), adj_close=100.0, close=100.0),
             *_complete_rows("SPY", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -302,8 +305,8 @@ def test_load_leaves_dormant_symbols_out_of_coverage(db_session):
 
     inputs = _loader(symbols).load(db_session, market="US", as_of_date=ANCHORS[0])
 
-    # 89 of 91, not 89 of 94.
-    assert inputs.current_price_coverage == pytest.approx(89 / 91)
+    # 89 of 92 (BEHIND, NEVER and GAP missing), not 89 of 95.
+    assert inputs.current_price_coverage == pytest.approx(89 / 92)
 
 
 def test_load_counts_dormant_symbols_beyond_the_share_cap(db_session):
