@@ -229,6 +229,7 @@ export default function SocialSignalHealthPanel() {
             disabled={!reasons[row.association_id]?.trim()}
             onClick={() => mutation.mutate(() => decideSocialAssociation(adminKey, row.association_id, {
               target, reason: reasons[row.association_id].trim(), expected_version: row.version,
+              ...(row.economic_revision != null && { expected_economic_revision: row.economic_revision }),
             }))}>{target}</Button>)}
           </>}
         </Stack>)}

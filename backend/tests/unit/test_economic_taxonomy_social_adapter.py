@@ -419,6 +419,37 @@ def test_admin_decision_after_cutover_revises_economic_association(db_session):
     assert legacy.state == "accepted"
 
 
+def test_admin_decision_after_cutover_rejects_a_stale_economic_revision(db_session):
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+
+    seed_generation(db_session)
+    theme, security = _global_pair(db_session)
+    legacy = _legacy_association(db_session, name="AI Memory", state="accepted")
+    projected = EconomicSocialTaxonomyAdapter(db_session).project_legacy_associations(
+        economic_theme_id=theme.id,
+        security_id=security.id,
+        legacy_association_ids=(legacy.id,),
+    )
+    db_session.commit()
+    current = db_session.get(
+        EconomicSocialAssociationRevision, projected.association_revision_id
+    ).revision_number
+    service = SocialThemeProjectionService(db_session, admin_authorized=True)
+
+    # The legacy version still matches, but the economic state has moved on.
+    with pytest.raises(ValueError, match="association_version_conflict"):
+        service.decide(
+            legacy.id, "rejected", "reviewed evidence", "admin", legacy.version,
+            expected_economic_revision=current + 1,
+        )
+    rejected = service.decide(
+        legacy.id, "rejected", "reviewed evidence", "admin", legacy.version,
+        expected_economic_revision=current,
+    )
+
+    assert rejected.state == "rejected"
+
+
 def test_admin_decision_after_cutover_requires_economic_bridge(db_session):
     seed_generation(db_session)
     legacy = _legacy_association(db_session, name="Unmapped", state="accepted")

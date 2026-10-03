@@ -53,15 +53,14 @@ def _unknown_identity_count(db):
     if EconomicThemeReader(db).source_name == "economic":
         from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
         from app.services.social_company_identity_service import SocialCompanyIdentityService
-        from app.services.social_ticker_resolver import SocialTickerResolver
 
-        identity = SocialCompanyIdentityService(db).read()
-        resolver = SocialTickerResolver(db, verified_company_ids=identity.verified_company_ids)
+        # The joined security directly, not re-resolved: a deactivated security
+        # keeps its association and its verified identity.
+        verified = SocialCompanyIdentityService(db).read().verified_company_ids
         return sum(
             1
             for _, revision, security in EconomicSocialTaxonomyAdapter(db).latest_associations()
-            if revision.state == "proposed"
-            and resolver.resolve(security.symbol, security.market).company_id is None
+            if revision.state == "proposed" and security.symbol not in verified
         )
     return db.scalar(select(func.count()).select_from(
         SocialThemeAssociation

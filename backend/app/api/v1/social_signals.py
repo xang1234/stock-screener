@@ -485,6 +485,7 @@ def _economic_associations(db, *, state, market):
              "origin": "legacy_bridge" if association.id in legacy_ids else "economic",
              "decision_owner": None,
              "version": legacy_versions.get(legacy_ids.get(association.id)),
+             "economic_revision": revision.revision_number,
              "evidence_work_ids": sorted(work_ids.get(association.id, ()))}
             for association, revision, security in rows]
 
@@ -501,6 +502,7 @@ def decide_admin_association(
             SocialThemeProjectionService(db, admin_authorized=True).decide(
                 association_id, body.target, body.reason, ADMIN_ACTOR,
                 body.expected_version,
+                expected_economic_revision=body.expected_economic_revision,
             )
         return {"association_id": association_id, "status": body.target}
     except ValueError as exc:

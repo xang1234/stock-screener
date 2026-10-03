@@ -143,8 +143,22 @@ def test_social_signal_operations_counts_economic_associations_in_economic_mode(
         seed_social_associations,
     )
 
+    import json
+
+    from app.models.app_settings import AppSetting
+    from app.models.stock_universe import StockUniverse
+    from app.services.social_company_identity_service import KEY, POLICY
+
     SocialSourceAdminService(db_session).ensure_seed_sources()
     seed_social_associations(db_session, seed_generation(db_session))
+    # AMD is verified but no longer active; the count must still see it as known.
+    db_session.query(StockUniverse).filter_by(symbol="AMD").update({"is_active": False})
+    db_session.add(AppSetting(key=KEY, category="social", value=json.dumps({
+        "version": 1, "policy_version": POLICY,
+        "entries": [{"symbol": "AMD", "company_id": "amd", "verification_reference": "10-K",
+                     "verified_at": "2026-09-01T00:00:00+00:00"}],
+    })))
+    db_session.flush()
 
     class Redis:
         def ttl(self, key):
@@ -152,8 +166,8 @@ def test_social_signal_operations_counts_economic_associations_in_economic_mode(
 
     payload = SocialSignalOperationsService(redis_client=Redis()).snapshot(db_session)
 
-    # NVDA and AMD are proposed with no verified company; the one legacy row is not counted.
-    assert payload["unknown_company_identity_count"] == 2
+    # Only NVDA is proposed without a verified company; the legacy row is not counted.
+    assert payload["unknown_company_identity_count"] == 1
 
 
 def test_social_signal_operations_snapshot_uses_db_runtime_and_shared_ttls(db_session):

@@ -1017,6 +1017,7 @@ async def test_admin_associations_list_economic_associations_in_economic_mode(
     assert by_symbol["MU"]["version"] == 3
     assert by_symbol["MU"]["state"] == "accepted"
     assert by_symbol["MU"]["theme_name"] == "AI Memory"
+    assert by_symbol["MU"]["economic_revision"] == 1  # checked on decision
     # Native: no legacy row, so not decidable through this API.
     assert by_symbol["NVDA"]["association_id"] is None
     assert by_symbol["NVDA"]["economic_association_id"] == str(rows["NVDA"].id)

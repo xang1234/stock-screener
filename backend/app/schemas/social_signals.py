@@ -141,6 +141,8 @@ class SocialAssociationDecisionRequest(BaseModel):
     target: Literal["accepted", "rejected"]
     reason: str = Field(min_length=1, max_length=500)
     expected_version: int = Field(ge=1)
+    # Under economic authority: the economic revision the decision was made on.
+    expected_economic_revision: int | None = Field(default=None, ge=1)
 
 
 class SocialCompanyIdentityUpdate(BaseModel):

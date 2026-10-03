@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.domain.social_signals.records import (
     EffectiveThemeMembership,
@@ -20,6 +20,7 @@ from app.domain.social_signals.records import (
     validate_utc_timestamp,
 )
 from app.infra.db.models.social_analysis import (
+    EconomicSocialAssociationRevision,
     EconomicSocialAssociationSource,
     SocialExtractionWork,
     SocialRunWork,
@@ -718,7 +719,7 @@ class SocialThemeProjectionService:
         if target == "accepted":
             association.accepted_at = association.accepted_at or now
 
-    def decide(self, association_id, target, reason, actor, expected_version):
+    def decide(self, association_id, target, reason, actor, expected_version, *, expected_economic_revision=None):
         if self.admin_authorized is not True:
             raise PermissionError("admin_required")
         if target not in {"accepted", "rejected"} or not isinstance(reason, str) or not reason.strip() or not isinstance(actor, str) or not actor.strip():
@@ -731,6 +732,7 @@ class SocialThemeProjectionService:
                 reason.strip(),
                 actor.strip(),
                 expected_version,
+                expected_economic_revision,
             )
         expected_epoch = authority.authority_epoch if authority is not None else 1
         payload = {
@@ -774,7 +776,7 @@ class SocialThemeProjectionService:
                 payload=payload,
             )
 
-    def _decide_economic(self, association_id, target, reason, actor, expected_version):
+    def _decide_economic(self, association_id, target, reason, actor, expected_version, expected_economic_revision=None):
         """Revise the bridged global association once economic is authoritative.
 
         The legacy row is a compatibility mirror after cutover, so it changes
@@ -800,6 +802,11 @@ class SocialThemeProjectionService:
         if len(economic_ids) != 1:
             raise ValueError("economic_association_ambiguous")
         (economic_id,) = economic_ids
+        if expected_economic_revision is not None and expected_economic_revision != self.db.scalar(
+            select(func.max(EconomicSocialAssociationRevision.revision_number)).where(
+                EconomicSocialAssociationRevision.association_id == economic_id)):
+            # The economic state moved on without the legacy mirror changing.
+            raise ValueError("association_version_conflict")
         idempotency_key = (
             f"legacy-admin:{association_id}:v{expected_version}:{target}:"
             f"{_semantic_hash({'reason': reason, 'actor': actor})}"
