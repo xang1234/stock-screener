@@ -1,22 +1,36 @@
-"""Startup budget contract for the backend health check.
+"""Startup contract for the backend health check.
 
 The backend runs its Alembic migrations inside the application ``lifespan``, blocking,
 before uvicorn accepts HTTP traffic (``app.infra.db.migrations.migrate_database_to_head``
-called from ``app.main``). Compose gives it a fixed health-check budget:
+called from ``app.main``). Compose gives it a fixed start-up grace:
 
-    start_period + interval * retries
+    start_period
 
-Every dependent that declares ``condition: service_healthy`` aborts with
+Probe failures during that grace are not counted towards ``retries``. The grace does not
+run to its end unconditionally, though: if a probe succeeds before it is spent, the
+container counts as started and every later consecutive failure is counted, including
+inside the remaining grace. Once ``retries`` consecutive failures have been counted, the
+container is reported unhealthy.
+
+``depends_on: condition: service_healthy`` gates the *start* of the containers declaring
+it. While the backend is starting they are held back; if it never becomes healthy, their
+start is abandoned and nothing retries it:
 
     dependency failed to start: container <backend> is unhealthy
 
-the moment the backend crosses that budget. A migration that legitimately outlives the
-budget therefore takes the whole worker tier down, and nothing retries it afterwards.
+A migration that legitimately outlives the grace therefore keeps the whole worker tier from
+starting.
+
+``start_period + interval * retries`` is deliberately not used here, in prose or in an
+assertion. Docker does not define the unhealthy deadline as that sum -- probe scheduling
+also depends on ``start_interval`` and on when prior checks complete -- and the sum
+measures the window *after* the grace rather than the grace, so it can accept a migration
+that does not fit inside ``start_period``.
 
 Revision ``20260926_0058`` (an index over a 216 MB table) needed 519 s inside the
-lifespan while the budget was 120 s -- eight Celery containers failed to start on two
-consecutive nights. These tests pin the budget and the ordering the worker tier relies on,
-so the grace cannot silently shrink again.
+lifespan while the grace was 30 s -- eight Celery containers failed to start on two
+consecutive nights. These tests pin the grace and the ordering the worker tier relies on,
+so it cannot silently shrink again.
 """
 
 from __future__ import annotations
@@ -60,9 +74,10 @@ def _duration_seconds(value: object) -> int:
 def test_backend_start_period_covers_a_long_migration():
     """A running migration must never be reported as an unhealthy backend.
 
-    ``start_period`` is the whole grace: while it runs, a failing probe does not count
-    towards ``retries``, so a migration that fits inside it is never reported unhealthy.
-    That is the property to assert.
+    ``start_period`` is the grace a bootstrapping container gets for free: probe failures
+    during it are not counted towards ``retries``. A migration that fits inside the grace
+    and succeeds on a probe afterwards is therefore never reported unhealthy, which is the
+    property to assert.
 
     ``start_period + interval * retries`` deliberately is *not* asserted anywhere. Docker
     does not define the unhealthy deadline that way -- probe scheduling also depends on
