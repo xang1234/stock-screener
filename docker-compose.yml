@@ -186,9 +186,18 @@ services:
       # The backend migrates inside its lifespan before it serves HTTP. A revision that
       # builds an index on a large table can run for minutes; while it does, /readyz is
       # not up and the container is momentarily unhealthy. The worker tier waits on
-      # `service_healthy`, so a short grace aborts the deploy with
-      # "dependency failed to start: container <backend> is unhealthy" and leaves the
-      # Celery containers down. Keep this above the longest expected migration.
+      # `service_healthy`, so a short grace blocks the start of the Celery containers with
+      # "dependency failed to start: container <backend> is unhealthy". It blocks their
+      # start -- containers already running are not stopped. Keep this above the longest
+      # expected migration.
+      #
+      # Raising this alone is not the whole picture, and this value is not always the
+      # limit reached first: Docker ends the wait on its own. If /readyz never succeeds,
+      # failures are counted once the grace is spent and the backend is reported unhealthy
+      # at start_period + interval * retries (900 + 30 * 3 = 990 s here); the
+      # service_healthy dependency wait then fails before an orchestration timeout of 1200.
+      # An orchestrator's "time to healthy" setting must therefore cover the expected time
+      # to healthy. See docs/ENVIRONMENT.md, "Container orchestration".
       start_period: 900s
     stop_grace_period: 30s
     restart: unless-stopped
