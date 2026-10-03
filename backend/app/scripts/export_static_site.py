@@ -455,6 +455,24 @@ def _resolve_static_rs_benchmark_anchors(*, market: str, as_of_date: date) -> An
     return last_resolution
 
 
+def _describe_current_price_coverage(diagnostics: Any) -> str:
+    """`` (9,412 of 10,503 = 89.6%; 90.0% required)``, or "" without the numbers.
+
+    The bundle published later can show more coverage than Market RS saw (#478).
+    """
+    if not isinstance(diagnostics, dict):
+        return ""
+    coverage = diagnostics.get("current_price_coverage")
+    minimum = diagnostics.get("minimum_current_price_coverage")
+    available = diagnostics.get("current_prices_available")
+    # Symbols priced on the current or previous session (#478); older
+    # payloads only carry the whole universe.
+    counted = diagnostics.get("coverage_symbol_count", diagnostics.get("expected_symbol_count"))
+    if None in (coverage, minimum, available, counted):
+        return ""
+    return f" ({available:,} of {counted:,} = {coverage:.1%}; {minimum:.1%} required)"
+
+
 def _describe_benchmark_candidates(resolution: Any) -> str:
     statuses = getattr(resolution, "candidate_statuses", ()) or ()
     return ", ".join(
@@ -862,7 +880,8 @@ def _run_daily_refresh(
                     warnings.append(
                         f"Static export market {selected_market} using previous-session "
                         f"as-of date {rewound_as_of.isoformat()} because current price "
-                        f"coverage was below threshold for {market_as_of.isoformat()}."
+                        f"coverage was below threshold for {market_as_of.isoformat()}"
+                        f"{_describe_current_price_coverage(market_rs_result.get('diagnostics'))}."
                     )
             if rewound_as_of is not None:
                 as_of_by_market[selected_market] = rewound_as_of

@@ -284,6 +284,53 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.8)
 
 
+def test_load_leaves_dormant_symbols_out_of_coverage(db_session):
+    # 89 current, 1 one session behind, 3 dormant (history ends a month ago),
+    # 1 never priced (may be a failed fetch, so it still counts), and 1 priced
+    # three sessions ago, between the sampled anchors (a short gap still counts).
+    current = [f"S{index}" for index in range(89)]
+    dormant = ["D0", "D1", "D2"]
+    symbols = (*current, "BEHIND", *dormant, "NEVER", "GAP")
+    db_session.add_all(
+        [
+            *[_price(symbol, 0, adjusted=100.0) for symbol in current],
+            _price("BEHIND", 1, adjusted=100.0),
+            *[_price(symbol, 21, adjusted=100.0) for symbol in dormant],
+            _price("GAP", 21, adjusted=100.0),
+            StockPrice(symbol="GAP", date=date(2026, 4, 7), adj_close=100.0, close=100.0),
+            *_complete_rows("SPY", {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    inputs = _loader(symbols).load(db_session, market="US", as_of_date=ANCHORS[0])
+
+    # 89 of 92 (BEHIND, NEVER and GAP missing), not 89 of 95.
+    assert inputs.current_price_coverage == pytest.approx(89 / 92)
+
+
+def test_load_counts_dormant_symbols_beyond_the_share_cap(db_session):
+    # Half the universe stops a month ago: a stale bundle or an outage, not delistings.
+    current = [f"S{index}" for index in range(10)]
+    stale = [f"D{index}" for index in range(10)]
+    db_session.add_all(
+        [
+            *[_price(symbol, 0, adjusted=100.0) for symbol in current],
+            *[_price(symbol, 21, adjusted=100.0) for symbol in stale],
+            *_complete_rows("SPY", {offset: 100.0 for offset in ANCHORS}),
+        ]
+    )
+    db_session.commit()
+
+    with pytest.raises(MarketRsInputUnavailable) as exc_info:
+        _loader((*current, *stale)).load(db_session, market="US", as_of_date=ANCHORS[0])
+
+    diagnostics = exc_info.value.diagnostics
+    assert diagnostics["current_price_coverage"] == pytest.approx(0.5)
+    assert diagnostics["dormant_symbol_count"] == 10
+    assert diagnostics["dormant_excluded"] is False
+
+
 def test_load_allows_ca_current_price_coverage_matching_configured_policy(
     db_session,
     monkeypatch: pytest.MonkeyPatch,

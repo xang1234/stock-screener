@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain.relative_strength import HORIZON_SESSIONS
@@ -30,6 +31,9 @@ from app.services.static_market_coverage_policy import (
 )
 
 EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
+# Dormant symbols leave the current price coverage denominator only while they
+# are at most this share of the universe (US: about 3% on 2026-10-02, #478).
+MAX_DORMANT_COVERAGE_SHARE = 0.05
 
 
 @dataclass(frozen=True)
@@ -204,11 +208,54 @@ class MarketRsInputLoader:
 
         context["benchmark_symbol"] = benchmark_symbol
         current_date = anchors[0]
+        # A dormant symbol's stored history ends before the week-ago session
+        # (delisted, long halted): it is not a missing current price, and
+        # counting it cost US about 3 points of coverage on 2026-10-02 (#478).
+        # A symbol with no rows at all may be a failed fetch, so it still counts.
+        week_ago = anchors[HORIZON_SESSIONS["1w"]]
+        recent_dates = {current_date, anchors[HORIZON_SESSIONS["1d"]], week_ago}
+        candidates = [
+            symbol
+            for symbol in universe.symbols
+            if not any((symbol, recent) in prices for recent in recent_dates)
+            and any((symbol, anchor) in prices for anchor in anchor_dates)
+        ]
+        # The anchors are sampled dates: confirm each candidate's latest valid
+        # price is older than a week, so a short halt or gap still counts.
+        latest_by_symbol = (
+            dict(
+                db.query(StockPrice.symbol, func.max(StockPrice.date))
+                .filter(
+                    StockPrice.symbol.in_(candidates),
+                    StockPrice.date <= current_date,
+                    StockPrice.adj_close.isnot(None),
+                    StockPrice.adj_close > 0,
+                )
+                .group_by(StockPrice.symbol)
+                .all()
+            )
+            if candidates
+            else {}
+        )
+        dormant = {
+            symbol
+            for symbol in candidates
+            if latest_by_symbol.get(symbol) is not None
+            and latest_by_symbol[symbol] < week_ago
+        }
+        # ponytail: a share cap, not a delisting feed. More dormant symbols than
+        # this looks like an outage or a stale price bundle, so none are excluded.
+        dormant_excluded = len(dormant) <= MAX_DORMANT_COVERAGE_SHARE * len(universe.symbols)
+        coverage_symbols = [
+            symbol
+            for symbol in universe.symbols
+            if not (dormant_excluded and symbol in dormant)
+        ]
         current_available = sum(
-            (symbol, current_date) in prices for symbol in universe.symbols
+            (symbol, current_date) in prices for symbol in coverage_symbols
         )
         current_price_coverage = (
-            current_available / len(universe.symbols) if universe.symbols else 0.0
+            current_available / len(coverage_symbols) if coverage_symbols else 0.0
         )
         minimum_current_price_coverage = self._minimum_current_price_coverage(
             normalized
@@ -225,6 +272,9 @@ class MarketRsInputLoader:
                     "current_price_coverage": current_price_coverage,
                     "minimum_current_price_coverage": minimum_current_price_coverage,
                     "current_prices_available": current_available,
+                    "coverage_symbol_count": len(coverage_symbols),
+                    "dormant_symbol_count": len(dormant),
+                    "dormant_excluded": dormant_excluded,
                     "expected_symbol_count": len(universe.symbols),
                 },
                 **context,

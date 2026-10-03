@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -16,6 +17,7 @@ from app.services.static_daily_price_refresh_service import (
     STATIC_DAILY_PRICE_REFRESH_PERIOD,
     STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
     STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS,
+    STATIC_SESSION_REPAIR_WAIT_SECONDS,
     StaticDailyPriceRefreshService,
     static_daily_price_refresh_batch_size,
 )
@@ -1694,3 +1696,129 @@ def test_static_daily_price_batch_line_counts_repaired_and_missing_sessions(caps
         "Batch 1/1 complete: 3/3 processed, 3 refreshed, 0 failed, "
         "1 repaired, 1 missing 2026-06-04."
     ) in capsys.readouterr().out
+
+
+def test_static_daily_price_fetch_keeps_frames_still_missing_the_session() -> None:
+    as_of = date(2026, 6, 4)
+    current = _top_up_frame(1.0)
+    stale = _price_frame([date(2026, 6, 3)], 1.0)
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            return {
+                "FULL": {"price_data": current, "has_error": False},
+                "BEHIND": {"price_data": stale, "has_error": False},
+            }
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=_FakeFetcher(),
+    )
+    # A later pass that stored FULL with the session drops it from the map.
+    missing = {"FULL": stale}
+
+    service._fetch_and_store(
+        ["FULL", "BEHIND"],
+        period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
+        batch_size=25,
+        market="US",
+        as_of_date=as_of,
+        missing_session_frames=missing,
+    )
+
+    assert list(missing) == ["BEHIND"]
+
+
+def test_static_daily_price_rate_limit_retry_keeps_frames_missing_the_session() -> None:
+    as_of = date(2026, 6, 4)
+    stale = _price_frame([date(2026, 6, 3)], 1.0)
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            return {symbol: {"price_data": stale, "has_error": False} for symbol in symbols}
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=_FakeFetcher(),
+        sleep=lambda seconds: None,
+    )
+    missing: dict = {}
+
+    service._retry_rate_limited_failures(
+        market="IN",
+        rate_limited_symbols_by_period={STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD: ["TCS.NS"]},
+        as_of_date=as_of,
+        missing_session_frames=missing,
+    )
+
+    assert list(missing) == ["TCS.NS"]
+
+
+def _closing_quote(symbol: str, session_close_utc: datetime) -> dict:
+    return {
+        "symbol": symbol,
+        "marketState": "CLOSED",
+        "regularMarketTime": int(session_close_utc.timestamp()),
+        "regularMarketOpen": 1.0,
+        "regularMarketDayHigh": 1.2,
+        "regularMarketDayLow": 0.9,
+        "regularMarketPrice": 1.1,
+        "regularMarketVolume": 500,
+    }
+
+
+def test_static_daily_price_repairs_missing_sessions_from_quotes_after_a_wait() -> None:
+    as_of = date(2026, 6, 4)
+    stored: list[dict] = []
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(
+            store_batch_in_cache=lambda frames, **kwargs: stored.append(dict(frames))
+        ),
+        fetcher=SimpleNamespace(),
+        sleep=sleeps.append,
+        # 16:00 ET close of the as-of session.
+        fetch_quotes=lambda symbols: [
+            _closing_quote(symbol, datetime(2026, 6, 4, 20, 0, tzinfo=timezone.utc))
+            for symbol in symbols
+        ],
+    )
+
+    stats = service._repair_missing_sessions(
+        market="US",
+        as_of_date=as_of,
+        frames={"BEHIND": _price_frame([date(2026, 6, 3)], 1.0)},
+    )
+
+    assert sleeps == [STATIC_SESSION_REPAIR_WAIT_SECONDS]
+    assert stats == {
+        "attempted": 1,
+        "repaired": 1,
+        "wait_seconds": STATIC_SESSION_REPAIR_WAIT_SECONDS,
+    }
+    [frames] = stored
+    assert frames["BEHIND"].index[-1].date() == as_of
+    assert float(frames["BEHIND"]["Close"].iloc[-1]) == 1.1
+
+
+def test_static_daily_price_skips_session_repair_without_a_quote_plan() -> None:
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=SimpleNamespace(),
+        sleep=sleeps.append,
+        fetch_quotes=lambda symbols: pytest.fail("HK prices have no quote repair"),
+    )
+
+    stats = service._repair_missing_sessions(
+        market="HK",
+        as_of_date=date(2026, 6, 4),
+        frames={"0700.HK": _price_frame([date(2026, 6, 3)], 1.0)},
+    )
+
+    assert sleeps == []
+    assert stats == {"attempted": 0, "repaired": 0, "wait_seconds": 0}
