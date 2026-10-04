@@ -368,6 +368,7 @@ def _publish_us_seeded_cache_fallback(
 
     seed_run = None
     seed_provenance: dict[str, Any] = {}
+    backfill_provenance: dict[str, Any] = {}
     # ponytail: majority cutoff. Finviz failed (an HTTP error, or pages that stop
     # carrying screener rows) when it covers under half the active universe, so
     # most rows would come from the prior seed and it must be recent enough.
@@ -387,6 +388,24 @@ def _publish_us_seeded_cache_fallback(
         if seed_problem:
             return {**blocked_snapshot_stats, "warnings": [*warnings, seed_problem]}
         blocked_snapshot_stats = {**blocked_snapshot_stats, "warnings": warnings}
+    else:
+        # Finviz covered most symbols; the rest come from the cache the prior
+        # seed hydrated, so that seed must be recent too. The bundle keeps its
+        # own date (mostly fresh); the seed is recorded under backfill_* keys.
+        _, prior, seed_problem = _prior_seed(
+            db,
+            provider_snapshot_service=provider_snapshot_service,
+            snapshot_key=snapshot_key,
+        )
+        if seed_problem:
+            return {
+                **blocked_snapshot_stats,
+                "warnings": [*(blocked_snapshot_stats.get("warnings") or []), seed_problem],
+            }
+        backfill_provenance = {
+            "backfill_seed_source_revision": prior["seed_source_revision"],
+            "backfill_seed_as_of_date": prior["seed_as_of_date"],
+        }
 
     backfilled_symbols: list[str] = []
     seed_backfilled = 0
@@ -411,6 +430,7 @@ def _publish_us_seeded_cache_fallback(
         # cache below, labelled as cache rows.
         missing_rows = [row for row in missing_rows if row.symbol not in rows_by_symbol]
 
+    cache_failure = None
     try:
         seeded_payloads = (
             get_fundamentals_cache().get_many([row.symbol for row in missing_rows])
@@ -422,7 +442,11 @@ def _publish_us_seeded_cache_fallback(
             f"[publish] US seeded cache fallback unavailable: {exc}",
             flush=True,
         )
-        return blocked_snapshot_stats
+        if seed_run is None:
+            return blocked_snapshot_stats
+        # The validated seed rows still stand; the coverage gate decides.
+        cache_failure = f"Seeded cache backfill failed: {type(exc).__name__}: {exc}"
+        seeded_payloads = {}
 
     for universe_row in missing_rows:
         payload = dict(seeded_payloads.get(universe_row.symbol) or {})
@@ -461,8 +485,11 @@ def _publish_us_seeded_cache_fallback(
         "missing_active_symbols": len(missing_active),
         "backfilled_active_symbols": len(backfilled_symbols),
         **seed_provenance,
+        **backfill_provenance,
     }
     warnings = list(blocked_snapshot_stats.get("warnings") or [])
+    if cache_failure:
+        warnings.append(cache_failure)
     if seed_provenance:
         cache_backfilled = len(backfilled_symbols) - seed_backfilled
         warnings.append(

@@ -195,7 +195,8 @@ def test_build_weekly_reference_bundle_us_publishes_seeded_cache_fallback(
     monkeypatch,
     tmp_path,
 ):
-    published_at = datetime(2026, 4, 4, 12, 10, 0)
+    # The cache backfill needs the prior seed within the max age (#520).
+    published_at = datetime.utcnow() - timedelta(days=1)
     active_rows = [
         SimpleNamespace(
             symbol="AAPL",
@@ -322,6 +323,7 @@ def test_build_weekly_reference_bundle_us_publishes_seeded_cache_fallback(
                 "published_at": published_at,
                 "created_at": published_at,
                 "source_revision": "fundamentals_v1_us:20260404121100-seeded-fallback",
+                "coverage_stats_json": None,
             },
         )(),
         hydrate_published_snapshot=lambda db, snapshot_key, progress_callback=None: {
@@ -2120,5 +2122,88 @@ def test_build_weekly_reference_bundle_us_backfills_seed_misses_from_the_cache(
     assert any(
         "Republished 2 US active symbols from the prior weekly reference seed" in w
         and "backfilled 1 the seed lacked from the seeded cache" in w
+        for w in publish_calls[0]["warnings"]
+    )
+
+
+def test_build_weekly_reference_bundle_us_publishes_seed_rows_when_cache_backfill_fails(
+    monkeypatch, tmp_path
+):
+    """#520: a broken cache must not discard the validated seed rows; the coverage
+    gate decides whether the seed alone is enough."""
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        active_symbols=("AAPL", "MSFT", "NEWCO"),
+        seed_lacks=("NEWCO",),
+    )
+
+    def broken_get_many(symbols):
+        raise ConnectionError("cache unavailable")
+
+    monkeypatch.setattr(
+        build_script, "get_fundamentals_cache", lambda: SimpleNamespace(get_many=broken_get_many)
+    )
+
+    assert build_script.main() == 0
+
+    rows = [row["symbol"] for row in publish_calls[0]["rows"]]
+    assert rows == ["AAPL", "MSFT"]
+    assert publish_calls[0]["coverage_stats"]["missing_active_symbols"] == 1
+
+
+@pytest.mark.parametrize(("age_days", "published"), [(7, True), (9, False)])
+def test_build_weekly_reference_bundle_us_partial_backfill_requires_a_recent_seed(
+    monkeypatch, tmp_path, age_days, published
+):
+    """#520: Finviz covering most symbols still only backfills the rest from a seed
+    within the max age, and the bundle keeps its own date."""
+    seed = _seed_run(age_days=age_days)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        soft_block=True,
+        active_symbols=("AAPL", "MSFT", "NVDA"),
+        finviz_rows=("AAPL", "MSFT"),
+    )
+
+    if not published:
+        with pytest.raises(RuntimeError, match="max age 8 day"):
+            build_script.main()
+        assert publish_calls == []
+        return
+
+    assert build_script.main() == 0
+    coverage = publish_calls[0]["coverage_stats"]
+    assert "seed_as_of_date" not in coverage  # mostly fresh: not backdated
+    assert coverage["backfill_seed_as_of_date"] == seed.published_at.date().isoformat()
+    assert coverage["backfill_seed_source_revision"] == seed.source_revision
+    rows = {row["symbol"]: row for row in publish_calls[0]["rows"]}
+    assert rows["NVDA"]["raw_payload"] == {"source": "seeded_weekly_reference_cache"}
+
+
+def test_build_weekly_reference_bundle_us_warns_when_cache_backfill_fails(monkeypatch, tmp_path):
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        active_symbols=("AAPL", "MSFT", "NEWCO"),
+        seed_lacks=("NEWCO",),
+    )
+
+    def broken_get_many(symbols):
+        raise ConnectionError("cache unavailable")
+
+    monkeypatch.setattr(
+        build_script, "get_fundamentals_cache", lambda: SimpleNamespace(get_many=broken_get_many)
+    )
+
+    assert build_script.main() == 0
+    assert any(
+        "Seeded cache backfill failed: ConnectionError: cache unavailable" in w
         for w in publish_calls[0]["warnings"]
     )
