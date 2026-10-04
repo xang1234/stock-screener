@@ -6,7 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from app.main import app
 from app.api.v1.scans import _resolve_scan_guard_market
@@ -228,7 +228,7 @@ async def test_create_scan_returns_completed_and_queues_bootstrap_publish(client
     assert fake_use_case.received_cmd.universe_market is None
     # The snapshot rebuild runs on the general queue, not in the request.
     mock_publish.assert_not_called()
-    mock_enqueue.assert_called_once_with(args=["scan-123"], retry=False)
+    mock_enqueue.assert_called_once_with(args=["scan-123"], retry=False, connection=ANY)
 
 
 @pytest.mark.asyncio

@@ -305,16 +305,33 @@ def publish_scan_bootstrap_snapshots(scan_id: str):
     return {"scan_id": scan_id, "status": "published_scan_bootstrap"}
 
 
+_BOOTSTRAP_ENQUEUE_TRANSPORT_OPTIONS = {
+    "socket_connect_timeout": 1.0,
+    "socket_timeout": 1.0,
+    "max_retries": 0,  # one connect attempt, no kombu reconnect loop
+}
+
+
 def queue_scan_bootstrap_publish(scan_id: str) -> None:
     """Queue the bootstrap rebuild for a request handler instead of building it inline.
 
     A failed enqueue only delays the snapshot: the scan page treats an absent or
     stale bootstrap as missing and reads the regular scan endpoints, so the
-    request still succeeds. ``retry=False`` makes a broker outage fail fast;
-    Celery's default publish retries can block an unreachable host for minutes.
+    request still succeeds.
+
+    The send uses its own short-timeout broker connection so an outage fails
+    within about a second: with no socket timeouts, connecting to an
+    unreachable host waits for the OS TCP timeout (~75 s measured), and kombu
+    also retries the connect. The app-wide transport options, which workers
+    use, are left alone.
     """
     try:
-        publish_scan_bootstrap_snapshots.apply_async(args=[scan_id], retry=False)
+        with celery_app.connection_for_write(
+            transport_options=_BOOTSTRAP_ENQUEUE_TRANSPORT_OPTIONS
+        ) as connection:
+            publish_scan_bootstrap_snapshots.apply_async(
+                args=[scan_id], retry=False, connection=connection
+            )
     except Exception:
         logger.warning("Could not queue scan bootstrap publish for %s", scan_id, exc_info=True)
 
