@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
-from app.database import is_corruption_error
+from app.database import is_corruption_error, safe_rollback
 from app.domain.analytics.scope import market_scope_tag
 from app.domain.common.query import PageSpec, SortOrder, SortSpec
 from app.domain.scanning.filter_expression_model import QuerySpec
@@ -181,16 +181,19 @@ class UISnapshotService:
                 variant_key=self._scan_variant_key(scan_id),
                 source_revision=scan_id,
                 payload=payload,
+                retry_on_conflict=True,  # cancel request and cancelled worker can race
             )
             latest_scan_id = self._resolve_scan_source_revision(db, None, market)
             try:
                 self._publish_scan_latest(
                     db, latest_scan_id, market, payload=payload if latest_scan_id == scan_id else None
                 )
-            except Exception:
+            except Exception as exc:
+                if is_corruption_error(exc):
+                    raise  # let _run_with_storage_recovery reset the snapshot tables
                 # The scan variant is already committed; report this variant's failure
                 # under its own key instead of failing (and mislabelling) the whole call.
-                db.rollback()
+                safe_rollback(db)
                 logger.exception(
                     "UI snapshot publish failed",
                     extra={
@@ -214,9 +217,10 @@ class UISnapshotService:
     ) -> SnapshotResult:
         """Publish ``latest[:market]``, never moving it back to an older scan.
 
-        The payload is built before the write; ``_publish`` re-resolves the
-        latest scan under the pointer lock and skips the write if a newer scan
-        completed in the meantime (its own publish then owns the pointer).
+        The payload is built before the write; ``_publish`` takes the variant's
+        advisory lock (which also covers its first publish), re-resolves the
+        latest scan, and skips the write if a newer scan completed in the
+        meantime (its own publish then owns the pointer).
         """
         if payload is None:
             # Build for the resolved scan, so payload and source revision agree
@@ -482,23 +486,40 @@ class UISnapshotService:
         source_revision: str,
         payload: dict[str, Any],
         still_current: Callable[[Session], bool] | None = None,
+        retry_on_conflict: bool = False,
     ) -> SnapshotResult:
-        kwargs = dict(
-            db=db,
-            view_key=view_key,
-            variant_key=variant_key,
-            source_revision=source_revision,
-            payload=payload,
-            still_current=still_current,
-        )
+        kwargs = {
+            "db": db,
+            "view_key": view_key,
+            "variant_key": variant_key,
+            "source_revision": source_revision,
+            "payload": payload,
+            "still_current": still_current,
+        }
+        if not retry_on_conflict:
+            return self._publish_once(**kwargs)
         try:
             return self._publish_once(**kwargs)
         except IntegrityError:
-            # A concurrent first publish of this variant inserted the same snapshot
-            # or pointer row (there was no pointer row to lock yet). Retry once: the
-            # rows now exist, so this takes the update path under the pointer lock.
+            # Two unguarded writers inserted the same snapshot or pointer row (e.g.
+            # the cancel request and the cancelled worker publishing one scan).
+            # Retry once: the rows now exist, so this takes the update path. Opt-in,
+            # because the rollback also ends any lock or check the caller holds.
             db.rollback()
             return self._publish_once(**kwargs)
+
+    @staticmethod
+    def _lock_variant(db: Session, view_key: str, variant_key: str) -> None:
+        """Serialize writers of one snapshot variant until the transaction ends.
+
+        An advisory lock works before the variant's pointer row exists, which a
+        row lock cannot. SQLite serializes writers itself, so it needs none.
+        """
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                {"key": f"ui_snapshot:{view_key}:{variant_key}"},
+            )
 
     def _publish_once(
         self,
@@ -512,25 +533,23 @@ class UISnapshotService:
     ) -> SnapshotResult:
         payload = json_safe(payload)
         if still_current is not None:
-            # Serialize writers of this variant, then re-check under the lock: a
-            # build that finished after a newer one must not move the pointer back.
-            # ``of=`` locks only the pointer row: its snapshot relationship loads
-            # through an outer join, and PostgreSQL rejects FOR UPDATE on the
-            # nullable side of one.
-            (
-                db.query(UIViewSnapshotPointer)
-                .filter(
-                    UIViewSnapshotPointer.view_key == view_key,
-                    UIViewSnapshotPointer.variant_key == variant_key,
-                )
-                .with_for_update(of=UIViewSnapshotPointer)
-                .first()
-            )
+            # Serialize writers of this variant (including its first publish), then
+            # re-check under the lock: an outdated build never writes, so the
+            # pointer never moves back to an older source.
+            self._lock_variant(db, view_key, variant_key)
             if not still_current(db):
                 current = self._get_current(db, view_key=view_key, variant_key=variant_key)
+                db.rollback()
                 if current is not None:
-                    db.rollback()
                     return current
+                # Nothing published yet; report this build as unpublished and stale.
+                return SnapshotResult(
+                    snapshot_revision="",
+                    source_revision=source_revision,
+                    published_at=datetime.now(UTC),
+                    is_stale=True,
+                    payload=payload,
+                )
         current = self._get_current(db, view_key=view_key, variant_key=variant_key)
         row = (
             db.query(UIViewSnapshot)

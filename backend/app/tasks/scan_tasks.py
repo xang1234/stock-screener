@@ -300,7 +300,7 @@ def publish_scan_bootstrap_snapshots(scan_id: str):
 
     Request handlers queue this instead of building snapshots inline. "latest"
     is resolved when the task runs, and the publish re-checks it under the
-    pointer lock, so a slow task never moves "latest" back to an older scan.
+    variant's advisory lock, so a slow task never moves "latest" back to an older scan.
     """
     from ..services.ui_snapshot_service import safe_publish_scan_bootstrap
 

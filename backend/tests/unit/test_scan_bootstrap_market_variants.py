@@ -163,6 +163,56 @@ def test_latest_matches_the_history_list_order(service_and_session):
     assert service.get_scan_bootstrap(market="US").is_stale is False
 
 
+def test_outdated_first_publish_writes_nothing(service_and_session):
+    """No pointer yet and a newer scan exists: the build must not create one."""
+    service, session_factory = service_and_session
+    _add_scan(session_factory, "us-1", "US", 9)
+    _add_scan(session_factory, "us-2", "US", 10)
+
+    with session_factory() as db:
+        result = service._publish_scan_latest(db, "us-1", "US", payload={"scan": "us-1"})
+
+    assert result.is_stale is True and result.snapshot_revision == ""
+    assert service.get_scan_bootstrap(market="US") is None
+
+
+def test_conflict_retry_is_opt_in(service_and_session, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    service, session_factory = service_and_session
+    attempts = []
+
+    def conflicting_once(**kwargs):
+        attempts.append(kwargs["variant_key"])
+        if len(attempts) == 1:
+            raise IntegrityError("insert", {}, Exception("duplicate key"))
+        return "published"
+
+    monkeypatch.setattr(service, "_publish_once", conflicting_once)
+    args = {"view_key": "scan_bootstrap", "variant_key": "scan:x", "source_revision": "x", "payload": {}}
+
+    with session_factory() as db, pytest.raises(IntegrityError):
+        service._publish(db=db, **args)  # default: callers that hold their own locks
+    attempts.clear()
+    with session_factory() as db:
+        assert service._publish(db=db, retry_on_conflict=True, **args) == "published"
+    assert attempts == ["scan:x", "scan:x"]
+
+
+def test_corrupt_storage_during_latest_step_is_not_swallowed(service_and_session, monkeypatch):
+    service, session_factory = service_and_session
+    _add_scan(session_factory, "us-1", "US", 9)
+
+    def corrupt(*args, **kwargs):
+        raise RuntimeError("database disk image is malformed")
+
+    monkeypatch.setattr(service, "_publish_scan_latest", corrupt)
+    monkeypatch.setattr(service, "_run_with_storage_recovery", lambda fn: fn(session_factory()))
+
+    with pytest.raises(RuntimeError, match="malformed"):
+        service.publish_scan_bootstraps_for("us-1")
+
+
 def test_slow_outdated_latest_build_does_not_repoint(service_and_session, monkeypatch):
     """Task A builds latest for us-1; meanwhile us-2 completes and task B publishes it.
     A must not move the pointer back to us-1 when it finally writes."""

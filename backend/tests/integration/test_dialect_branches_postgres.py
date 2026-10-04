@@ -337,10 +337,11 @@ def isolated_scan_bootstrap():
         cleanup()
 
 
-def test_scan_latest_publish_takes_the_pointer_lock(isolated_scan_bootstrap, lock_timeout):
-    """The guarded latest publish must run on PostgreSQL (SQLite drops FOR UPDATE)
-    and must wait for a concurrent holder of the pointer row lock."""
-    from app.models.ui_view_snapshot import UIViewSnapshotPointer
+def test_scan_latest_publish_takes_the_variant_lock(isolated_scan_bootstrap, lock_timeout):
+    """The guarded latest publish must run on PostgreSQL (SQLite has no locks to
+    test) and must re-check only after a concurrent holder of the variant's
+    advisory lock releases it."""
+    from app.services.ui_snapshot_service import UISnapshotService
 
     service, add_scan, factory = isolated_scan_bootstrap
     add_scan("zt-1", 9)
@@ -354,8 +355,8 @@ def test_scan_latest_publish_takes_the_pointer_lock(isolated_scan_bootstrap, loc
     events: list[str] = []
     errors: list[BaseException] = []
     # Record each "which scan is latest" resolution: the guard's re-check must
-    # run only after the pointer lock is free. (The later pointer UPDATE would
-    # block on the holder anyway, so finishing order alone proves nothing.)
+    # run only after the variant lock is free. Without the lock the publish never
+    # waits, so the holder's wait for a waiter times out and the test fails.
     resolve = service._resolve_scan_source_revision
 
     def recording_resolve(db, scan_id, market=None):
@@ -367,9 +368,7 @@ def test_scan_latest_publish_takes_the_pointer_lock(isolated_scan_bootstrap, loc
     def hold_pointer_lock():
         try:
             with factory() as db:
-                db.query(UIViewSnapshotPointer).filter(
-                    UIViewSnapshotPointer.variant_key == "latest:ZT"
-                ).with_for_update(of=UIViewSnapshotPointer).one()
+                UISnapshotService._lock_variant(db, "scan_bootstrap", "latest:ZT")
                 holder_locked.set()
                 _wait_for_lock_waiter()
                 events.append("holder released")
@@ -420,7 +419,7 @@ def test_concurrent_first_publish_of_a_variant_retries_instead_of_failing(isolat
             with _factory() as db:
                 service._publish(
                     db=db, view_key="scan_bootstrap", variant_key="scan:zt-1",
-                    source_revision="zt-1", payload={"writer": value},
+                    source_revision="zt-1", payload={"writer": value}, retry_on_conflict=True,
                 )
         except BaseException as exc:
             errors.append(exc)
@@ -436,6 +435,56 @@ def test_concurrent_first_publish_of_a_variant_retries_instead_of_failing(isolat
     assert not any(thread.is_alive() for thread in threads)
     assert errors == []
     assert service.get_scan_bootstrap("zt-1").payload == {"writer": "B"}  # B retried and updated
+
+
+def test_first_latest_publish_is_not_overwritten_by_an_older_build(isolated_scan_bootstrap, lock_timeout):
+    """No pointer exists yet. A (zt-1, still the latest) passes its check; then zt-2
+    completes and B publishes it. B must wait for A, and zt-2 must end up latest
+    (without the variant lock, B commits first and A then repoints back to zt-1)."""
+    service, add_scan, _factory = isolated_scan_bootstrap
+    add_scan("zt-1", 9)
+    a_checked = threading.Event()
+    errors: list[BaseException] = []
+    resolve = service._resolve_scan_source_revision
+    resolves_by_a = []
+
+    def pausing_resolve(db, scan_id, market=None):
+        result = resolve(db, scan_id, market)
+        if threading.current_thread().name == "A":
+            resolves_by_a.append(result)
+            if len(resolves_by_a) == 2:  # A's re-check under the lock just passed
+                a_checked.set()
+                _wait_for_lock_waiter()  # hold the lock until B queues behind it
+        return result
+
+    service._resolve_scan_source_revision = pausing_resolve
+
+    def run_a():
+        try:
+            service.publish_scan_bootstrap(market="ZT")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def run_b():
+        try:
+            if not a_checked.wait(30):
+                raise TimeoutError("A never reached its re-check")
+            add_scan("zt-2", 10)
+            service.publish_scan_bootstrap(market="ZT")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=fn, name=name, daemon=True) for fn, name in ((run_a, "A"), (run_b, "B"))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    assert resolves_by_a == ["zt-1", "zt-1"]
+    current = service.get_scan_bootstrap(market="ZT")
+    assert current.source_revision == "zt-2" and current.is_stale is False
 
 
 def test_social_analysis_transaction_requires_the_seeded_registry():
