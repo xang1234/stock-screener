@@ -3031,3 +3031,81 @@ def test_finviz_requests_send_a_current_browser_user_agent():
     user_agent = util.headers["User-Agent"]
     assert "Chrome/81" not in user_agent
     assert quote.headers is util.headers
+
+
+@pytest.mark.parametrize(
+    "reused_source", ["prior_weekly_reference_seed", "seeded_weekly_reference_cache"]
+)
+def test_hydrate_keeps_the_finviz_timestamp_of_rows_republished_from_a_prior_bundle(reused_source):
+    """#520: rows reused when Finviz failed must not look freshly observed downstream."""
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    for symbol in ("AAPL", "MSFT"):
+        db.add(
+            StockUniverse(
+                symbol=symbol,
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            )
+        )
+    published_at = datetime(2026, 10, 3, 16, 15)
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20261003161500-seeded-fallback",
+        created_at=published_at,
+        published_at=published_at,
+    )
+    db.add(run)
+    db.flush()
+    db.add_all(
+        [
+            ProviderSnapshotRow(
+                run_id=run.id,
+                symbol="AAPL",
+                exchange="NASDAQ",
+                row_hash="aapl",
+                normalized_payload_json=json.dumps({"symbol": "AAPL", "market_cap": 1000}),
+                raw_payload_json=json.dumps({"overview": {"Ticker": "AAPL"}}),
+            ),
+            ProviderSnapshotRow(
+                run_id=run.id,
+                symbol="MSFT",
+                exchange="NASDAQ",
+                row_hash="msft",
+                normalized_payload_json=json.dumps(
+                    {
+                        "symbol": "MSFT",
+                        "market_cap": 2000,
+                        "finviz_snapshot_at": "2026-09-26T17:14:27",
+                        "finviz_snapshot_revision": "fundamentals_v1:20260926171427",
+                    }
+                ),
+                raw_payload_json=json.dumps({"source": reused_source}),
+            ),
+        ]
+    )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    service.fundamentals_cache = _StubFundamentalsCache()
+    service.price_cache = _StubPriceCache()
+    service.technical_calc = _StubTechnicalCalc()
+
+    service.hydrate_published_snapshot(db, allow_yahoo_hydration=False)
+
+    stored = service.fundamentals_cache.stored
+    assert stored["AAPL"]["finviz_snapshot_at"] == published_at.isoformat()
+    assert stored["AAPL"]["finviz_snapshot_revision"] == run.source_revision
+    assert stored["MSFT"]["finviz_snapshot_at"] == "2026-09-26T17:14:27"
+    assert stored["MSFT"]["finviz_snapshot_revision"] == "fundamentals_v1:20260926171427"
+    db.close()

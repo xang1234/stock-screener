@@ -24,7 +24,11 @@ from app.services.official_market_universe_source_service import (
     OfficialMarketUniverseSourceService,
 )
 from app.services.official_universe_dispatch import ingest_official_market_snapshot
-from app.services.provider_snapshot_service import ProviderSnapshotService
+from app.services.provider_snapshot_service import (
+    PRIOR_SEED_ROW_SOURCE,
+    SEEDED_CACHE_ROW_SOURCE,
+    ProviderSnapshotService,
+)
 from app.wiring.bootstrap import (
     get_fundamentals_cache,
     get_hybrid_fundamentals_service,
@@ -396,7 +400,7 @@ def _publish_us_seeded_cache_fallback(
             rows_by_symbol[universe_row.symbol] = {
                 **_snapshot_row_payload(seed_row),
                 "raw_payload": {
-                    "source": "prior_weekly_reference_seed",
+                    "source": PRIOR_SEED_ROW_SOURCE,
                     "seed_source_revision": seed_run.source_revision,
                 },
             }
@@ -435,7 +439,7 @@ def _publish_us_seeded_cache_fallback(
             symbol=universe_row.symbol,
             exchange=universe_row.exchange,
             normalized_payload=payload,
-            raw_payload={"source": "seeded_weekly_reference_cache"},
+            raw_payload={"source": SEEDED_CACHE_ROW_SOURCE},
         )
         rows_by_symbol[universe_row.symbol] = fallback_row
         backfilled_symbols.append(universe_row.symbol)

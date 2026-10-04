@@ -74,6 +74,19 @@ WEEKLY_REFERENCE_SNAPSHOT_KEYS: dict[str, str] = {
 WEEKLY_REFERENCE_MARKET_BY_SNAPSHOT_KEY: dict[str, str] = {
     snapshot_key: market for market, snapshot_key in WEEKLY_REFERENCE_SNAPSHOT_KEYS.items()
 }
+# raw_payload "source" of snapshot rows the US weekly build republished from the
+# prior bundle instead of fetching from Finviz (build_weekly_reference_bundle).
+PRIOR_SEED_ROW_SOURCE = "prior_weekly_reference_seed"
+SEEDED_CACHE_ROW_SOURCE = "seeded_weekly_reference_cache"
+_REUSED_ROW_SOURCES = frozenset({PRIOR_SEED_ROW_SOURCE, SEEDED_CACHE_ROW_SOURCE})
+
+
+def _is_reused_snapshot_row(raw_payload_json: str | None) -> bool:
+    try:
+        raw = json.loads(raw_payload_json) if raw_payload_json else None
+    except (TypeError, ValueError):
+        return False
+    return isinstance(raw, dict) and raw.get("source") in _REUSED_ROW_SOURCES
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:
@@ -1467,10 +1480,14 @@ class ProviderSnapshotService:
                 else:
                     missing_prices += 1
 
-                snapshot_payload["finviz_snapshot_revision"] = run.source_revision
-                snapshot_payload["finviz_snapshot_at"] = (
-                    run.published_at.isoformat() if run.published_at else run.created_at.isoformat()
-                )
+                # A row republished from the prior bundle keeps whatever Finviz
+                # observation it carries; stamping this run would pass it off
+                # as freshly fetched.
+                if not _is_reused_snapshot_row(row.raw_payload_json):
+                    snapshot_payload["finviz_snapshot_revision"] = run.source_revision
+                    snapshot_payload["finviz_snapshot_at"] = (
+                        run.published_at.isoformat() if run.published_at else run.created_at.isoformat()
+                    )
                 merged_payload = self.fundamentals_cache._merge_fundamentals(
                     snapshot_payload,
                     existing_data.get(row.symbol) or {},
