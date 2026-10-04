@@ -108,6 +108,9 @@ jobs:
     name: ${{ matrix.name }}
     needs: [private-boundary]
     runs-on: ubuntu-latest
+    # Each job takes ~2-5 min; a test blocked on a PostgreSQL lock waits forever,
+    # so fail it here instead of at GitHub's 6-hour default.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
