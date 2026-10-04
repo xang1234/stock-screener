@@ -533,8 +533,16 @@ class DailyPriceBundleService:
         market: str,
         warm_redis_symbols: int | None = None,
         allow_stale: bool = False,
+        reimport: bool = False,
         github_sync_service: GitHubReleaseSyncService | None = None,
     ) -> dict[str, Any]:
+        """Import the latest daily bundle unless its revision is already imported.
+
+        The import state is written in the same transaction as the rows, so a
+        matching revision means a completed import and is skipped even when
+        the bundle is stale. ``reimport`` bypasses only that skip, to repair
+        missing or invalid local rows; manifest and bundle validation still run.
+        """
         normalized_market = str(market or "").strip().upper()
         if normalized_market not in self.DAILY_PRICE_SUPPORTED_MARKETS:
             return {
@@ -553,11 +561,12 @@ class DailyPriceBundleService:
             release_tag=settings.github_daily_price_release_tag or self.DAILY_PRICE_RELEASE_TAG,
             manifest_asset_name=self.latest_manifest_name_for_market(normalized_market),
             source_mode=settings.market_data_source_mode,
-            current_revision=import_state.get("source_revision"),
+            current_revision=None if reimport else import_state.get("source_revision"),
             expected_manifest_schema=self.DAILY_PRICE_MANIFEST_SCHEMA_VERSION,
             required_manifest_keys=REQUIRED_DAILY_PRICE_MANIFEST_KEYS,
             stale_validator=self._validate_manifest_freshness,
             allow_stale=allow_stale,
+            reuse_completed_stale_revision=True,
             github_token=settings.github_data_token,
             request_timeout_seconds=settings.github_data_timeout_seconds,
             output_dir=download_dir,

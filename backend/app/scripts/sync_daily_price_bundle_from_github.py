@@ -32,6 +32,11 @@ def main() -> int:
         action="store_true",
         help="Import a stale GitHub bundle as a baseline before refreshing daily prices.",
     )
+    parser.add_argument(
+        "--reimport",
+        action="store_true",
+        help="Download and import the latest bundle even if its revision was already imported (repair).",
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -43,6 +48,7 @@ def main() -> int:
             market=args.market,
             warm_redis_symbols=args.warm_redis_symbols,
             allow_stale=args.allow_stale,
+            reimport=args.reimport,
         )
 
     print("Daily GitHub price sync result:")

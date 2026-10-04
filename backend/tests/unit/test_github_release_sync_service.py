@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
 import requests
 
 from app.services.github_release_sync_service import (
@@ -62,7 +63,7 @@ class _FakeSession:
         self.calls: list[str] = []
         self.stream_by_url: dict[str, bool] = {}
 
-    def get(self, url, headers=None, timeout=None, stream=False):  # noqa: ANN001 - requests-compatible stub
+    def get(self, url, headers=None, timeout=None, stream=False):
         _ = headers
         _ = timeout
         self.calls.append(url)
@@ -235,13 +236,18 @@ def test_fetch_latest_bundle_rejects_stale_manifest(tmp_path):
     assert "expected session" in result["reason"]
 
 
-def test_fetch_latest_bundle_can_bootstrap_from_stale_manifest(tmp_path):
+_STALE_BUNDLE_URL = "https://example.com/bundle.json.gz"
+_STALE_REVISION = "daily_prices_us:20260418120000"
+
+
+def _fetch_stale_daily_bundle(tmp_path, **overrides):
+    """Fetch a stale daily manifest (revision ``_STALE_REVISION``); returns (result, session)."""
     bundle_bytes = b"daily-price-bundle"
     manifest = {
         "schema_version": "daily-price-manifest-v1",
         "market": "US",
         "as_of_date": "2026-04-17",
-        "source_revision": "daily_prices_us:20260418120000",
+        "source_revision": _STALE_REVISION,
         "bundle_asset_name": "daily-price-us-20260417.json.gz",
         "sha256": hashlib.sha256(bundle_bytes).hexdigest(),
         "bar_period": "2y",
@@ -258,7 +264,7 @@ def test_fetch_latest_bundle_can_bootstrap_from_stale_manifest(tmp_path):
                         },
                         {
                             "name": "daily-price-us-20260417.json.gz",
-                            "browser_download_url": "https://example.com/bundle.json.gz",
+                            "browser_download_url": _STALE_BUNDLE_URL,
                         },
                     ]
                 }
@@ -266,38 +272,60 @@ def test_fetch_latest_bundle_can_bootstrap_from_stale_manifest(tmp_path):
             "https://example.com/manifest.json": _FakeResponse(
                 content=json.dumps(manifest).encode("utf-8")
             ),
-            "https://example.com/bundle.json.gz": _FakeResponse(content=bundle_bytes),
+            _STALE_BUNDLE_URL: _FakeResponse(content=bundle_bytes),
         }
     )
-    service = GitHubReleaseSyncService(session=session)
-
-    result = service.fetch_latest_bundle(
-        repository_full_name="xang1234/stock-screener",
-        release_tag="daily-price-data",
-        manifest_asset_name="daily-price-latest-us.json",
-        current_revision="daily_prices_us:20260418120000",
-        expected_manifest_schema="daily-price-manifest-v1",
-        required_manifest_keys=(
-            "market",
-            "as_of_date",
-            "source_revision",
-            "bundle_asset_name",
-            "sha256",
-            "bar_period",
-            "symbol_count",
-        ),
-        stale_validator=lambda parsed_manifest: (
-            parsed_manifest["as_of_date"] != "2026-04-18",
+    kwargs = {
+        "repository_full_name": "xang1234/stock-screener",
+        "release_tag": "daily-price-data",
+        "manifest_asset_name": "daily-price-latest-us.json",
+        "expected_manifest_schema": "daily-price-manifest-v1",
+        "stale_validator": lambda parsed: (
+            parsed["as_of_date"] != "2026-04-18",
             "bundle is behind the expected session",
         ),
-        allow_stale=True,
-        output_dir=tmp_path,
+        "allow_stale": True,
+        "output_dir": tmp_path,
+        **overrides,
+    }
+    return GitHubReleaseSyncService(session=session).fetch_latest_bundle(**kwargs), session
+
+
+@pytest.mark.parametrize(
+    ("current_revision", "allow_stale", "expected_status", "downloads_bundle"),
+    [
+        pytest.param(_STALE_REVISION, True, "up_to_date", False, id="completed-revision-reused"),
+        pytest.param("daily_prices_us:20260417120000", True, "success", True, id="changed-revision"),
+        pytest.param(None, True, "success", True, id="first-bootstrap"),
+        pytest.param(_STALE_REVISION, False, "stale", False, id="stale-forbidden"),
+    ],
+)
+def test_fetch_latest_bundle_reuses_completed_stale_revision_when_opted_in(
+    tmp_path, current_revision, allow_stale, expected_status, downloads_bundle
+):
+    result, session = _fetch_stale_daily_bundle(
+        tmp_path,
+        current_revision=current_revision,
+        allow_stale=allow_stale,
+        reuse_completed_stale_revision=True,
     )
+
+    assert result["status"] == expected_status
+    assert result["stale_reason"] == "bundle is behind the expected session"
+    assert result["source_revision"] == _STALE_REVISION
+    assert (_STALE_BUNDLE_URL in session.calls) is downloads_bundle
+
+
+def test_fetch_latest_bundle_can_bootstrap_from_stale_manifest(tmp_path):
+    """Without the opt-in, a stale current revision still downloads (the
+    weekly-reference and IBD callers' contract)."""
+    result, session = _fetch_stale_daily_bundle(tmp_path, current_revision=_STALE_REVISION)
 
     assert result["status"] == "success"
     assert result["stale_reason"] == "bundle is behind the expected session"
     assert result["bundle_asset_name"] == "daily-price-us-20260417.json.gz"
-    assert (tmp_path / "daily-price-us-20260417.json.gz").read_bytes() == bundle_bytes
+    assert _STALE_BUNDLE_URL in session.calls
+    assert (tmp_path / "daily-price-us-20260417.json.gz").read_bytes() == b"daily-price-bundle"
 
 
 def test_fetch_latest_bundle_streams_bundle_download(tmp_path):
