@@ -59,11 +59,20 @@ class TestSqlUnitOfWork:
         import app.infra.db.uow as uow_module
 
         sessions = []
+        closed = []
         base = sessionmaker(bind=engine)
 
         def factory():
-            sessions.append(base())
-            return sessions[-1]
+            session = base()
+            sessions.append(session)
+            close = session.close
+
+            def tracked_close():
+                closed.append(session)
+                return close()
+
+            monkeypatch.setattr(session, "close", tracked_close)
+            return session
 
         class Broken:
             def __init__(self, session):
@@ -78,6 +87,7 @@ class TestSqlUnitOfWork:
             except RuntimeError:
                 pass
         assert len(sessions) == 1 and not sessions[0].in_transaction()
+        assert closed == [sessions[0]]
 
         with uow:  # a fresh, top-level entry, not a nested one
             assert uow.session is sessions[1]
