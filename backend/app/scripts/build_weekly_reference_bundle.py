@@ -24,6 +24,7 @@ from app.services.official_market_universe_source_service import (
     OfficialMarketUniverseSourceService,
 )
 from app.services.official_universe_dispatch import ingest_official_market_snapshot
+from app.services.finviz_screener_slices import FinvizReadError
 from app.services.provider_snapshot_service import (
     PRIOR_SEED_ROW_SOURCE,
     SEEDED_CACHE_ROW_SOURCE,
@@ -551,9 +552,8 @@ def _build_us_bundle(
             market=market,
             publish=True,
             progress_callback=_print_progress,
-            show_finviz_progress=True,
         )
-    except requests.RequestException as exc:
+    except (requests.RequestException, FinvizReadError) as exc:
         # create_snapshot_run rolled back its run; the seed fallback below decides.
         print(f"[publish] Finviz snapshot fetch failed: {exc}", flush=True)
         snapshot_stats = {

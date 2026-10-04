@@ -12,7 +12,6 @@ import shutil
 import tempfile
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,8 +19,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pandas as pd
 from collections.abc import Mapping
 from finvizfinance.constants import NUMBER_COL
-from finvizfinance.util import number_covert, progress_bar, web_scrap
+from finvizfinance.util import number_covert, web_scrap
 from . import finviz_user_agent  # noqa: F401  (Finviz 403s finvizfinance's own User-Agent)
+from .finviz_screener_slices import read_screener
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -278,40 +278,25 @@ class ProviderSnapshotService:
             return value
         return str(value).strip()
 
-    def _fetch_category_dataframe(
-        self,
-        category: str,
-        exchange: str,
-        *,
-        show_progress: bool = False,
-    ) -> pd.DataFrame:
+    def _fetch_category_dataframe(self, category: str, exchange: str) -> pd.DataFrame:
         screener_cls = self._load_screener_class(category)
         screener = screener_cls()
         screener.set_filter(filters_dict={"Exchange": exchange})
-        screener.request_params["o"] = "ticker"
+        base_params = dict(screener.request_params)
 
-        soup = web_scrap(screener.url, screener.request_params)
-        page_count = self._finviz_page_count(soup)
-        if page_count == 0:
-            return pd.DataFrame()
+        def fetch_page(filters: str, order: str, first_row: int) -> Any:
+            params = {**base_params, "f": filters, "o": order}
+            if first_row > 1:
+                params["r"] = first_row
+            return web_scrap(screener.url, params)
 
-        df = self._parse_finviz_screener_table(soup)
-        for page_index in range(1, page_count):
-            sleep(1)
-            if show_progress:
-                progress_bar(page_index, page_count)
-            screener.request_params["r"] = page_index * screener.size + 1
-            soup = web_scrap(screener.url, screener.request_params)
-            page_df = self._parse_finviz_screener_table(soup)
-            df = pd.concat([df, page_df], ignore_index=True)
-        return df
-
-    @staticmethod
-    def _finviz_page_count(soup: Any) -> int:
-        page_select = soup.find(id="pageSelect")
-        if page_select is None:
-            return 0
-        return len(page_select.find_all("option"))
+        rows = read_screener(
+            base_params["f"],
+            fetch_page,
+            parse_rows=lambda soup: self._parse_finviz_screener_table(soup).to_dict("records"),
+            row_key=lambda row: row.get("Ticker"),
+        )
+        return pd.DataFrame(rows)
 
     @staticmethod
     def _extract_finviz_ticker(cell: Any) -> str:
@@ -392,7 +377,6 @@ class ProviderSnapshotService:
         exchange_filter: Optional[str] = None,
         *,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-        show_finviz_progress: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         exchanges = [exchange_filter.upper()] if exchange_filter else list(self.EXCHANGES)
         merged_rows: Dict[str, Dict[str, Any]] = {}
@@ -404,7 +388,6 @@ class ProviderSnapshotService:
                 df = self._fetch_category_dataframe(
                     category,
                     exchange,
-                    show_progress=show_finviz_progress,
                 )
                 if df is None or df.empty:
                     logger.warning("Finviz %s snapshot returned no rows for %s", category, exchange)
@@ -1282,7 +1265,6 @@ class ProviderSnapshotService:
         exchange_filter: Optional[str] = None,
         publish: bool = False,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-        show_finviz_progress: bool = False,
     ) -> Dict[str, Any]:
         """Create a preview or publish snapshot run and optionally publish it."""
         source_revision = f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
@@ -1299,7 +1281,6 @@ class ProviderSnapshotService:
             merged_rows = self._build_snapshot_rows(
                 exchange_filter=exchange_filter,
                 progress_callback=progress_callback,
-                show_finviz_progress=show_finviz_progress,
             )
         except Exception:
             # Finviz can refuse mid-build (e.g. HTTP 403); drop the half-built run

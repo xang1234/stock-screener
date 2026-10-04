@@ -3109,3 +3109,40 @@ def test_hydrate_keeps_the_finviz_timestamp_of_rows_republished_from_a_prior_bun
     assert stored["MSFT"]["finviz_snapshot_at"] == "2026-09-26T17:14:27"
     assert stored["MSFT"]["finviz_snapshot_revision"] == "fundamentals_v1:20260926171427"
     db.close()
+
+
+def test_fetch_category_dataframe_keeps_the_category_view_and_slices_by_filter(monkeypatch):
+    """Requests go through the 1,000-row-cap reader with the category's own view."""
+    service = _make_provider_snapshot_service()
+
+    class Valuation:
+        url = "https://finviz.com/screener.ashx"
+
+        def __init__(self):
+            self.request_params = {"v": 121}
+
+        def set_filter(self, filters_dict):
+            self.request_params["f"] = "exch_amex"
+
+    seen = []
+    html = """
+    <html><body><div>#1 / 1 Total</div>
+      <table class="screener_table">
+        <tr><th>No.</th><th>Ticker</th><th>Company</th></tr>
+        <tr><td>1</td><td data-boxover-ticker="A"><a class="tab-link">A</a></td><td>Agilent</td></tr>
+      </table>
+    </body></html>
+    """
+
+    def fake_web_scrap(url, params=None):
+        seen.append(dict(params or {}))
+        return BeautifulSoup(html, "lxml")
+
+    monkeypatch.setattr(service, "_load_screener_class", lambda category: Valuation)
+    monkeypatch.setattr(provider_snapshot_module, "web_scrap", fake_web_scrap, raising=False)
+    monkeypatch.setattr("app.services.finviz_screener_slices.time.sleep", lambda seconds: None)
+
+    df = service._fetch_category_dataframe("valuation", "AMEX")
+
+    assert list(df["Ticker"]) == ["A"]
+    assert seen == [{"v": 121, "f": "exch_amex", "o": "ticker"}]
