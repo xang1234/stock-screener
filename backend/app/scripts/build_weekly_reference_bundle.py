@@ -389,6 +389,7 @@ def _publish_us_seeded_cache_fallback(
         blocked_snapshot_stats = {**blocked_snapshot_stats, "warnings": warnings}
 
     backfilled_symbols: list[str] = []
+    seed_backfilled = 0
     if seed_run is not None:
         # Fill from the validated seed's own rows, so the recorded seed revision
         # and data date describe exactly what is republished.
@@ -405,7 +406,10 @@ def _publish_us_seeded_cache_fallback(
                 },
             }
             backfilled_symbols.append(universe_row.symbol)
-        missing_rows = []
+        seed_backfilled = len(backfilled_symbols)
+        # Symbols the seed lacks (e.g. new listings) can still come from the
+        # cache below, labelled as cache rows.
+        missing_rows = [row for row in missing_rows if row.symbol not in rows_by_symbol]
 
     try:
         seeded_payloads = (
@@ -460,10 +464,16 @@ def _publish_us_seeded_cache_fallback(
     }
     warnings = list(blocked_snapshot_stats.get("warnings") or [])
     if seed_provenance:
+        cache_backfilled = len(backfilled_symbols) - seed_backfilled
         warnings.append(
-            f"Republished {len(backfilled_symbols)} US active symbols from the prior weekly "
+            f"Republished {seed_backfilled} US active symbols from the prior weekly "
             f"reference seed {seed_provenance['seed_source_revision']} "
             f"(data as of {seed_provenance['seed_as_of_date']}) because the Finviz snapshot failed"
+            + (
+                f"; backfilled {cache_backfilled} the seed lacked from the seeded cache"
+                if cache_backfilled
+                else ""
+            )
         )
     else:
         warnings.append(

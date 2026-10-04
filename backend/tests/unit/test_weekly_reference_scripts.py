@@ -1846,6 +1846,7 @@ def _run_us_build_with_finviz_error(
     soft_block=False,
     active_symbols=("AAPL", "MSFT"),
     finviz_rows=(),
+    seed_lacks=(),
 ):
     """Drive the US build with create_snapshot_run raising ``error`` (default: Finviz 403).
 
@@ -1909,6 +1910,7 @@ def _run_us_build_with_finviz_error(
         rows_by_run[seed_run.id] = [
             snapshot_row(s, {"symbol": s, "market_cap": 2.0}, {"overview": {"Ticker": s}})
             for s in active_symbols
+            if s not in seed_lacks
         ]
     monkeypatch.setattr(build_script, "_run_rows", lambda db, run_id: rows_by_run.get(run_id, []))
     provider_snapshot_service = SimpleNamespace(
@@ -2092,3 +2094,31 @@ def test_build_weekly_reference_bundle_us_treats_a_mostly_empty_finviz_snapshot_
         "source": "prior_weekly_reference_seed",
         "seed_source_revision": seed.source_revision,
     }
+
+
+def test_build_weekly_reference_bundle_us_backfills_seed_misses_from_the_cache(
+    monkeypatch, tmp_path
+):
+    """#520: a symbol the reused seed lacks (e.g. a new listing) still gets a cache
+    row, labelled as such, instead of being dropped from the fallback."""
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        active_symbols=("AAPL", "MSFT", "NEWCO"),
+        seed_lacks=("NEWCO",),
+    )
+
+    assert build_script.main() == 0
+
+    rows = {row["symbol"]: row for row in publish_calls[0]["rows"]}
+    assert sorted(rows) == ["AAPL", "MSFT", "NEWCO"]
+    assert rows["AAPL"]["raw_payload"]["source"] == "prior_weekly_reference_seed"
+    assert rows["NEWCO"]["raw_payload"] == {"source": "seeded_weekly_reference_cache"}
+    assert publish_calls[0]["coverage_stats"]["missing_active_symbols"] == 0
+    assert any(
+        "Republished 2 US active symbols from the prior weekly reference seed" in w
+        and "backfilled 1 the seed lacked from the seeded cache" in w
+        for w in publish_calls[0]["warnings"]
+    )
