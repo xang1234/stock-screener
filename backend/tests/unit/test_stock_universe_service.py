@@ -1188,6 +1188,30 @@ def test_populate_universe_keeps_snapshot_when_finviz_has_bad_rows(monkeypatch):
     db.close()
 
 
+def test_populate_universe_returns_empty_stats_when_finviz_refuses(monkeypatch):
+    """#520: a Finviz 403 on every exchange must not raise here; the weekly US build
+    relies on reaching its seed fallback after this refresh (run 37135846250 logged
+    three 403 warnings and an all-zero refresh, then failed only in the snapshot)."""
+    import requests
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(StockUniverse(symbol="AAPL", exchange="NASDAQ", is_active=True))
+    db.commit()
+    service = StockUniverseService()
+
+    def refuse(exchange):
+        raise requests.HTTPError("403 Client Error: Forbidden for url: https://finviz.com/screener.ashx")
+
+    monkeypatch.setattr(service, "_fetch_finviz_exchange_rows", refuse)
+
+    stats = service.populate_universe(db)
+
+    assert stats == {"added": 0, "updated": 0, "deactivated": 0, "total": 0}
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one().is_active
+    db.close()
+
+
 def test_fetch_from_finviz_prefers_ticker_metadata_over_logo_text(monkeypatch):
     service = StockUniverseService()
     html = """
