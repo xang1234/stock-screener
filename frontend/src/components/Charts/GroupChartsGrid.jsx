@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   AlertTitle,
@@ -20,12 +20,89 @@ import {
 } from '../../api/priceHistory';
 
 const MAX_SYMBOLS = 40;
+// Card header (~33px) plus grid gap (8px), rounded up: one row is chart height + this.
+const CARD_CHROME_PX = 48;
+
+const SCROLLABLE = /(auto|scroll|overlay)/;
+
+/** Nearest scrolling ancestor (the group dialog's content), else the viewport. */
+function scrollParent(element) {
+  for (let node = element?.parentElement; node; node = node.parentElement) {
+    if (SCROLLABLE.test(getComputedStyle(node).overflowY)) return node;
+  }
+  return null;
+}
+
+/**
+ * Track which cells have come within `rootMargin` of the scroll area, using one
+ * shared IntersectionObserver. Revealed cells stay revealed, so a mounted chart
+ * is never rebuilt by scrolling away and back. Without IntersectionObserver
+ * every cell counts as revealed (the old eager behaviour).
+ */
+function useRevealOnScroll(rootMargin) {
+  const supported = typeof IntersectionObserver !== 'undefined';
+  const [revealed, setRevealed] = useState(() => new Set());
+  const observerRef = useRef(null);
+  const keyByElement = useRef(new Map());
+  const refCallbacks = useRef(new Map());
+
+  useEffect(() => {
+    if (!supported) return undefined;
+    const elements = keyByElement.current;
+    let active = true;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!active) return;
+        const shown = entries.filter((entry) => entry.isIntersecting);
+        if (shown.length === 0) return;
+        shown.forEach((entry) => observer.unobserve(entry.target));
+        setRevealed((previous) => {
+          const next = new Set(previous);
+          shown.forEach((entry) => next.add(elements.get(entry.target)));
+          return next;
+        });
+      },
+      { root: scrollParent(elements.keys().next().value), rootMargin },
+    );
+    observerRef.current = observer;
+    elements.forEach((_, element) => observer.observe(element));
+    return () => {
+      active = false;
+      observer.disconnect();
+      observerRef.current = null;
+    };
+  }, [supported, rootMargin]);
+
+  // One stable ref callback per key, so re-renders do not re-observe cells.
+  const cellRef = useCallback((key) => {
+    if (!refCallbacks.current.has(key)) {
+      let current = null;
+      refCallbacks.current.set(key, (element) => {
+        if (current) {
+          keyByElement.current.delete(current);
+          observerRef.current?.unobserve(current);
+        }
+        current = element;
+        if (element) {
+          keyByElement.current.set(element, key);
+          observerRef.current?.observe(element);
+        }
+      });
+    }
+    return refCallbacks.current.get(key);
+  }, []);
+
+  const isRevealed = useCallback((key) => !supported || revealed.has(key), [supported, revealed]);
+  return { cellRef, isRevealed };
+}
 
 /**
  * Grid of mini candlestick charts for a group of constituent symbols.
  *
  * One batch network call fetches all OHLCV payloads, and each cell hands its
  * slice to a `compact` CandlestickChart so no per-symbol request fires.
+ * Charts are built only once their cell nears the visible area (about one row
+ * beyond it); until then the cell keeps its label and reserved height.
  *
  * @param {Object} props
  * @param {string[]} props.symbols - Constituent ticker symbols
@@ -100,8 +177,6 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
     );
   }
 
-  const dataMap = batch?.data || {};
-  const missingSet = new Set(batch?.missing || []);
   const truncated = normalizedSymbols.length > truncatedSymbols.length;
 
   return (
@@ -111,14 +186,34 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
           Showing first {truncatedSymbols.length} of {normalizedSymbols.length} stocks.
         </Typography>
       )}
+      {/* Keyed by identity: a new group or period gets fresh observations. */}
+      <GroupChartCells
+        key={`${period}|${truncatedSymbols.join(',')}`}
+        symbols={truncatedSymbols}
+        batch={batch}
+        period={period}
+        height={height}
+        dataUpdatedAt={dataUpdatedAt}
+        isDarkMode={isDarkMode}
+      />
+    </Box>
+  );
+}
+
+function GroupChartCells({ symbols, batch, period, height, dataUpdatedAt, isDarkMode }) {
+  const { cellRef, isRevealed } = useRevealOnScroll(`${height + CARD_CHROME_PX}px 0px`);
+  const dataMap = batch?.data || {};
+  const missingSet = new Set(batch?.missing || []);
+
+  return (
       <GroupChartsLayout data-testid="group-charts-grid" gap={1}>
-        {truncatedSymbols.map((sym) => {
+        {symbols.map((sym) => {
           const priceData = dataMap[sym];
           const isMissing = missingSet.has(sym) || !priceData || priceData.length === 0;
           const lastClose = priceData && priceData.length > 0 ? priceData[priceData.length - 1].close : null;
 
           return (
-            <GroupChartCell key={sym}>
+            <GroupChartCell key={sym} ref={cellRef(sym)} data-testid="group-chart-cell">
               <Card
                 variant="outlined"
                 sx={{
@@ -161,7 +256,7 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
                       No price data
                     </Typography>
                   </Box>
-                ) : (
+                ) : isRevealed(sym) ? (
                   <CandlestickChart
                     symbol={sym}
                     period={period}
@@ -170,13 +265,25 @@ function GroupChartsGrid({ symbols = [], period = '6mo', height = 200 }) {
                     dataUpdatedAtOverride={dataUpdatedAt || null}
                     compact
                   />
+                ) : (
+                  <Box
+                    sx={{
+                      height,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      Chart loads when scrolled into view
+                    </Typography>
+                  </Box>
                 )}
               </Card>
             </GroupChartCell>
           );
         })}
       </GroupChartsLayout>
-    </Box>
   );
 }
 
