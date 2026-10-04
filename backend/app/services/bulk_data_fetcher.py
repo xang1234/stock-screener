@@ -930,6 +930,12 @@ class BulkDataFetcher:
     ) -> Dict[str, Dict]:
         """Retry transient batch failures using degraded sub-batches.
 
+        Each retry re-requests only the symbols still failing retryably;
+        earlier successes and terminal no-price-data results are kept. The
+        failure rate that decides whether to retry is measured over the
+        symbols requested in that attempt, so retained successes cannot hide
+        a provider outage that persists for the remainder.
+
         Inter-attempt wait schedule comes from ``RateBudgetPolicy`` when a
         ``market`` is supplied — IN gets longer backoffs than US — and falls
         back to the legacy ``PRICE_BATCH_RETRY_BACKOFF_SECONDS`` tuple for
@@ -945,39 +951,49 @@ class BulkDataFetcher:
         )
         if not fetch_symbols:
             return permanent_failures
-        last_results: Dict[str, Dict] = {
-            **permanent_failures,
-            **{
-                symbol: self._build_error_result(symbol, "Batch not attempted")
-                for symbol in fetch_symbols
-            },
-        }
+        results: Dict[str, Dict] = dict(permanent_failures)
+        pending = list(fetch_symbols)
 
         for attempt in range(len(backoff_schedule) + 1):
             fetch_results: Dict[str, Dict] = {}
-            for chunk_start in range(0, len(fetch_symbols), current_batch_size):
-                chunk_symbols = fetch_symbols[chunk_start:chunk_start + current_batch_size]
+            for chunk_start in range(0, len(pending), current_batch_size):
+                chunk_symbols = pending[chunk_start:chunk_start + current_batch_size]
                 fetch_results.update(self.fetch_batch_prices(chunk_symbols, period=period))
 
-            attempt_results = {**permanent_failures, **fetch_results}
-            last_results = attempt_results
+            attempt_results = {
+                symbol: fetch_results.get(symbol)
+                or self._build_error_result(symbol, "Symbol missing from results")
+                for symbol in pending
+            }
+            results.update(attempt_results)
+            pending = [
+                symbol
+                for symbol, data in attempt_results.items()
+                if data.get("has_error")
+                and is_retryable_price_failure(
+                    kind=data.get("error_kind"), error=data.get("error")
+                )
+            ]
             failure_metric = self._price_failure_metric(attempt_results)
             failure_rate = failure_metric.transient_failure_rate
             if (
-                failure_metric.provider_signal_count == 0
+                not pending
+                or failure_metric.provider_signal_count == 0
                 or failure_rate <= 0.20
                 or attempt == len(backoff_schedule)
             ):
-                return attempt_results
+                return results
 
             current_batch_size = max(self.MIN_PRICE_BATCH_SIZE, current_batch_size // 2)
             wait_seconds = backoff_schedule[attempt]
             logger.warning(
                 "Transient Yahoo batch failure rate %.1f%% for %d symbols (market=%s); "
-                "retrying with batch size %d after %ds (attempt %d/%d)",
+                "retrying %d of %d with batch size %d after %ds (attempt %d/%d)",
                 failure_rate * 100,
-                len(symbols),
+                len(attempt_results),
                 market or "shared",
+                len(pending),
+                len(symbols),
                 current_batch_size,
                 wait_seconds,
                 attempt + 1,
@@ -985,7 +1001,7 @@ class BulkDataFetcher:
             )
             time.sleep(wait_seconds)
 
-        return last_results
+        return results
 
     def fetch_batch_with_cache_check(
         self,

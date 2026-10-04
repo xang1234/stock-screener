@@ -234,6 +234,142 @@ def test_fetch_price_batch_with_retries_does_not_retry_permanent_no_data(monkeyp
     assert set(results) == set(symbols)
 
 
+def _rate_limited_result(symbol: str) -> dict:
+    return {
+        "symbol": symbol,
+        "price_data": None,
+        "info": None,
+        "fundamentals": None,
+        "has_error": True,
+        "error": "429 rate limited",
+    }
+
+
+def _scripted_fetch(calls: list[list[str]], failing_by_call: list[set[str]]):
+    """Fake ``fetch_batch_prices``: call N fails the symbols in failing_by_call[N]."""
+
+    def fake_fetch_batch_prices(batch_symbols, period="2y"):
+        call_index = min(len(calls), len(failing_by_call) - 1)
+        calls.append(list(batch_symbols))
+        failing = failing_by_call[call_index]
+        return {
+            symbol: _rate_limited_result(symbol) if symbol in failing else _success_result(symbol)
+            for symbol in batch_symbols
+        }
+
+    return fake_fetch_batch_prices
+
+
+def test_fetch_price_batch_with_retries_refetches_only_failed_symbols(monkeypatch):
+    """#493: 150 symbols, 40 transient failures, then recovery = 190 symbol attempts."""
+    fetcher = BulkDataFetcher()
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    symbols = [f"SYM{i}" for i in range(150)]
+    failed_first = set(symbols[:40])
+    monkeypatch.setattr(
+        fetcher, "fetch_batch_prices", _scripted_fetch(calls, [failed_first, set()])
+    )
+    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", sleeps.append)
+
+    results = fetcher._fetch_price_batch_with_retries(
+        symbols, period="2y", initial_batch_size=150
+    )
+
+    assert sum(len(batch) for batch in calls) == 190
+    assert calls == [symbols, symbols[:40]]
+    assert sleeps == [30]
+    assert set(results) == set(symbols)
+    assert all(results[symbol]["has_error"] is False for symbol in symbols)
+
+
+def test_fetch_price_batch_with_retries_keeps_successes_when_retries_exhaust(monkeypatch):
+    fetcher = BulkDataFetcher()
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    symbols = [f"SYM{i}" for i in range(150)]
+    always_failing = set(symbols[:40])
+    monkeypatch.setattr(fetcher, "fetch_batch_prices", _scripted_fetch(calls, [always_failing]))
+    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", sleeps.append)
+
+    results = fetcher._fetch_price_batch_with_retries(
+        symbols, period="2y", initial_batch_size=150
+    )
+
+    assert sleeps == [30, 60, 120]
+    retried = {symbol for batch in calls[1:] for symbol in batch}
+    assert retried == always_failing
+    assert set(results) == set(symbols)
+    assert all(results[symbol]["has_error"] is False for symbol in symbols[40:])
+    assert all(results[symbol]["has_error"] is True for symbol in always_failing)
+
+
+def test_fetch_price_batch_with_retries_rates_only_retried_symbols(monkeypatch):
+    """10 of 40 retried symbols still failing is 25%: retry again, even though
+    it is under 7% of the full batch, so retained successes cannot mask an outage."""
+    fetcher = BulkDataFetcher()
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    symbols = [f"SYM{i}" for i in range(150)]
+    monkeypatch.setattr(
+        fetcher,
+        "fetch_batch_prices",
+        _scripted_fetch(calls, [set(symbols[:40]), set(symbols[:10]), set()]),
+    )
+    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", sleeps.append)
+
+    results = fetcher._fetch_price_batch_with_retries(
+        symbols, period="2y", initial_batch_size=150
+    )
+
+    assert calls == [symbols, symbols[:40], symbols[:10]]
+    assert sleeps == [30, 60]
+    assert all(results[symbol]["has_error"] is False for symbol in symbols)
+
+
+def test_fetch_price_batch_with_retries_skips_terminal_and_reports_missing(monkeypatch):
+    """No-price-data results are terminal; a symbol the provider omits is
+    still reported, and retried as a transient failure."""
+    fetcher = BulkDataFetcher()
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    symbols = [f"SYM{i}" for i in range(30)]
+    delisted, omitted = "SYM0", "SYM1"
+    rate_limited = set(symbols[2:10])
+
+    def fake_fetch_batch_prices(batch_symbols, period="2y"):
+        calls.append(list(batch_symbols))
+        results = {}
+        for symbol in batch_symbols:
+            if symbol == delisted:
+                results[symbol] = {
+                    **_rate_limited_result(symbol),
+                    "error": "YFPricesMissingError('possibly delisted; no price data found')",
+                    "error_kind": "no_price_data",
+                }
+            elif symbol == omitted:
+                continue
+            elif len(calls) == 1 and symbol in rate_limited:
+                results[symbol] = _rate_limited_result(symbol)
+            else:
+                results[symbol] = _success_result(symbol)
+        return results
+
+    monkeypatch.setattr(fetcher, "fetch_batch_prices", fake_fetch_batch_prices)
+    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", sleeps.append)
+
+    results = fetcher._fetch_price_batch_with_retries(
+        symbols, period="2y", initial_batch_size=50
+    )
+
+    assert delisted not in {symbol for batch in calls[1:] for symbol in batch}
+    assert omitted in calls[1]
+    assert set(results) == set(symbols)
+    assert results[delisted]["error_kind"] == "no_price_data"
+    assert results[omitted]["has_error"] is True
+    assert all(results[symbol]["has_error"] is False for symbol in rate_limited)
+
+
 def test_fetch_batch_prices_tags_yfinance_missing_price_errors(monkeypatch):
     import app.services.bulk_data_fetcher as module
 
