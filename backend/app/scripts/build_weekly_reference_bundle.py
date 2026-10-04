@@ -6,11 +6,14 @@ import argparse
 import json
 import math
 import time
-from datetime import datetime
+from datetime import date, datetime
 import os
 from pathlib import Path
 from typing import Any
 
+import requests
+
+from app.config import settings
 from app.database import SessionLocal
 from app.domain.providers.price_symbol_support import is_bse_scrip_code_yahoo_symbol
 from app.services.asx_official_universe_source import is_au_securitisation_listing
@@ -262,6 +265,42 @@ def _snapshot_row_payload(row: ProviderSnapshotRow) -> dict[str, Any]:
     }
 
 
+def _prior_seed_provenance(
+    db,
+    *,
+    provider_snapshot_service,
+    snapshot_key: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Provenance of the imported prior bundle, or why it cannot stand in for this week.
+
+    Its data must be within ``github_weekly_reference_max_age_days``, the age past
+    which consumers already treat a weekly bundle as stale.
+    """
+    seed_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
+    if seed_run is None:
+        return {}, "No prior weekly reference seed is loaded to reuse."
+    try:
+        seed_coverage = json.loads(seed_run.coverage_stats_json or "{}")
+    except (TypeError, ValueError):
+        seed_coverage = {}
+    # A seed that itself reused an older seed is as old as that seed's data.
+    seed_as_of = seed_coverage.get("seed_as_of_date") or (
+        (seed_run.published_at or seed_run.created_at).date().isoformat()
+    )
+    age_days = (date.today() - date.fromisoformat(seed_as_of)).days
+    max_age_days = max(int(settings.github_weekly_reference_max_age_days or 0), 0)
+    if max_age_days and age_days > max_age_days:
+        return {}, (
+            f"Prior weekly reference seed {seed_run.source_revision} is {age_days} day(s) old "
+            f"(as of {seed_as_of}); max age {max_age_days} day(s)."
+        )
+    return {
+        "finviz_snapshot_failed": True,
+        "seed_source_revision": seed_run.source_revision,
+        "seed_as_of_date": seed_as_of,
+    }, None
+
+
 def _publish_us_seeded_cache_fallback(
     db,
     *,
@@ -271,7 +310,20 @@ def _publish_us_seeded_cache_fallback(
     blocked_snapshot_stats: dict[str, Any],
 ) -> dict[str, Any]:
     blocked_run_id = blocked_snapshot_stats.get("run_id")
-    if not blocked_run_id:
+    seed_provenance: dict[str, Any] = {}
+    if blocked_snapshot_stats.get("finviz_snapshot_failed"):
+        # Finviz failed outright: every row will come from the prior seed.
+        seed_provenance, seed_problem = _prior_seed_provenance(
+            db,
+            provider_snapshot_service=provider_snapshot_service,
+            snapshot_key=snapshot_key,
+        )
+        if seed_problem:
+            return {
+                **blocked_snapshot_stats,
+                "warnings": [*(blocked_snapshot_stats.get("warnings") or []), seed_problem],
+            }
+    elif not blocked_run_id:
         return blocked_snapshot_stats
 
     active_rows = (
@@ -288,6 +340,8 @@ def _publish_us_seeded_cache_fallback(
         db.query(ProviderSnapshotRow)
         .filter(ProviderSnapshotRow.run_id == blocked_run_id)
         .all()
+        if blocked_run_id
+        else []
     )
     rows_by_symbol = {
         row.symbol: _snapshot_row_payload(row)
@@ -346,15 +400,23 @@ def _publish_us_seeded_cache_fallback(
         "covered_active_symbols": len(active_symbols.intersection(rows_by_symbol)),
         "missing_active_symbols": len(missing_active),
         "backfilled_active_symbols": len(backfilled_symbols),
+        **seed_provenance,
     }
     warnings = list(blocked_snapshot_stats.get("warnings") or [])
-    warnings.append(
-        "Backfilled "
-        f"{len(backfilled_symbols)} US active symbols from seeded weekly reference cache "
-        "because the current Finviz snapshot omitted them: "
-        f"{', '.join(sorted(backfilled_symbols)[:25])}"
-        + ("..." if len(backfilled_symbols) > 25 else "")
-    )
+    if seed_provenance:
+        warnings.append(
+            f"Republished {len(backfilled_symbols)} US active symbols from the prior weekly "
+            f"reference seed {seed_provenance['seed_source_revision']} "
+            f"(data as of {seed_provenance['seed_as_of_date']}) because the Finviz snapshot failed"
+        )
+    else:
+        warnings.append(
+            "Backfilled "
+            f"{len(backfilled_symbols)} US active symbols from seeded weekly reference cache "
+            "because the current Finviz snapshot omitted them: "
+            f"{', '.join(sorted(backfilled_symbols)[:25])}"
+            + ("..." if len(backfilled_symbols) > 25 else "")
+        )
     source_revision = (
         f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-seeded-fallback"
     )
@@ -388,15 +450,25 @@ def _build_us_bundle(
     print(f"Universe refresh complete: {universe_stats}", flush=True)
 
     print("Starting published fundamentals snapshot build from Finviz...", flush=True)
-    snapshot_stats = provider_snapshot_service.create_snapshot_run(
-        db,
-        run_mode="publish",
-        snapshot_key=snapshot_key,
-        market=market,
-        publish=True,
-        progress_callback=_print_progress,
-        show_finviz_progress=True,
-    )
+    try:
+        snapshot_stats = provider_snapshot_service.create_snapshot_run(
+            db,
+            run_mode="publish",
+            snapshot_key=snapshot_key,
+            market=market,
+            publish=True,
+            progress_callback=_print_progress,
+            show_finviz_progress=True,
+        )
+    except requests.RequestException as exc:
+        # create_snapshot_run rolled back its run; the seed fallback below decides.
+        print(f"[publish] Finviz snapshot fetch failed: {exc}", flush=True)
+        snapshot_stats = {
+            "run_id": None,
+            "finviz_snapshot_failed": True,
+            "published": False,
+            "warnings": [f"Finviz snapshot fetch failed: {type(exc).__name__}: {exc}"],
+        }
     summary = {
         "output_dir": output_dir,
         "universe_refresh": universe_stats,

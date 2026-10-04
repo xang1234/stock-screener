@@ -2947,3 +2947,78 @@ def test_export_weekly_reference_bundle_omits_excluded_symbols(tmp_path):
     assert [row["symbol"] for row in payload["universe"]] == ["AAPL"]
     assert [row["symbol"] for row in payload["snapshot"]["rows"]] == ["AAPL"]
     db.close()
+
+
+def test_create_snapshot_run_rolls_back_its_run_when_finviz_fetch_fails(monkeypatch):
+    """#520: a Finviz HTTP error must not leave a half-built run in the session."""
+    import requests
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+
+    def refuse(exchange_filter=None, **kwargs):
+        raise requests.HTTPError("403 Client Error: Forbidden")
+
+    monkeypatch.setattr(service, "_build_snapshot_rows", refuse)
+
+    with pytest.raises(requests.HTTPError):
+        service.create_snapshot_run(db, run_mode="publish", publish=True)
+
+    assert db.query(ProviderSnapshotRun).count() == 0
+    db.close()
+
+
+def test_export_weekly_reference_bundle_dates_reused_seed_by_its_data(tmp_path):
+    """#520: a bundle rebuilt from a prior seed must not claim this week's date."""
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20261003161500-seeded-fallback",
+        coverage_stats_json=json.dumps({"seed_as_of_date": "2026-09-26"}),
+        symbols_total=1,
+        symbols_published=1,
+        created_at=datetime(2026, 10, 3, 16, 15),
+        published_at=datetime(2026, 10, 3, 16, 15),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotRow(
+            run_id=run.id,
+            symbol="AAPL",
+            exchange="NASDAQ",
+            row_hash="AAPL-hash",
+            normalized_payload_json=json.dumps({"symbol": "AAPL"}),
+            raw_payload_json=None,
+        )
+    )
+    db.add(ProviderSnapshotPointer(snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS, run_id=run.id))
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    service.fundamentals_cache = _StubFundamentalsCache(cached={})
+    bundle_path = tmp_path / "weekly-reference.json.gz"
+    manifest_path = tmp_path / "weekly-reference-latest.json"
+    result = service.export_weekly_reference_bundle(
+        db,
+        output_path=bundle_path,
+        bundle_asset_name=bundle_path.name,
+        latest_manifest_path=manifest_path,
+    )
+
+    assert result["as_of_date"] == "2026-09-26"
+    assert json.loads(manifest_path.read_text())["as_of_date"] == "2026-09-26"
+    db.close()

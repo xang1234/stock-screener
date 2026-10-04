@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -1817,3 +1817,158 @@ def test_load_ibd_industry_groups_script_uses_csv_path(monkeypatch, tmp_path, ca
     assert load_ibd_script.main() == 0
     assert load_calls == [str(csv_path)]
     assert "IBD industry group load complete:" in capsys.readouterr().out
+
+
+def _us_rows(*symbols: str) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(
+            symbol=symbol,
+            market="US",
+            exchange="NASDAQ",
+            name=f"{symbol} Inc.",
+            sector="Technology",
+            industry="Software",
+            market_cap=1_000_000_000,
+            currency="USD",
+            timezone="America/New_York",
+            local_code=symbol,
+        )
+        for symbol in symbols
+    ]
+
+
+def _run_us_build_with_finviz_error(monkeypatch, tmp_path, *, seed_run, error=None):
+    """Drive the US build with create_snapshot_run raising ``error`` (default: Finviz 403)."""
+    import requests
+
+    fake_db = MagicMock()
+    fake_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = _us_rows(
+        "AAPL", "MSFT"
+    )
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(build_script.settings, "github_weekly_reference_max_age_days", 8)
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(
+            get_many=lambda symbols: {symbol: {"symbol": symbol, "market_cap": 1.0} for symbol in symbols}
+        ),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(populate_universe=lambda db: {"total": 0}),
+    )
+
+    def refuse(db, **kwargs):
+        raise error or requests.HTTPError(
+            "403 Client Error: Forbidden for url: https://finviz.com/screener.ashx"
+        )
+
+    publish_calls: list[dict[str, object]] = []
+    export_calls: list[dict[str, object]] = []
+    published_run = SimpleNamespace(
+        published_at=datetime.utcnow(),
+        created_at=datetime.utcnow(),
+        source_revision="fundamentals_v1_us:20261003161500-seeded-fallback",
+    )
+    provider_snapshot_service = SimpleNamespace(
+        create_snapshot_run=refuse,
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": f"hash-{kwargs['symbol'].lower()}",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: publish_calls.append(kwargs)
+        or {
+            "published": True,
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+        },
+        # The seed until this build publishes; then the new run.
+        get_published_run=lambda db, snapshot_key: published_run if publish_calls else seed_run,
+        hydrate_published_snapshot=lambda db, snapshot_key, progress_callback=None: {"hydrated": 2},
+        export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
+        or {"bundle_path": str(kwargs["output_path"])},
+    )
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["build_weekly_reference_bundle", "--market", "US", "--output-dir", str(tmp_path)],
+    )
+    return publish_calls, export_calls
+
+
+def _seed_run(*, age_days: int, coverage: dict | None = None) -> SimpleNamespace:
+    published_at = datetime.utcnow() - timedelta(days=age_days)
+    return SimpleNamespace(
+        published_at=published_at,
+        created_at=published_at,
+        source_revision="fundamentals_v1_us:20260926171427",
+        coverage_stats_json=json.dumps(coverage) if coverage is not None else None,
+    )
+
+
+def test_build_weekly_reference_bundle_us_reuses_recent_seed_when_finviz_refuses(
+    monkeypatch, tmp_path
+):
+    """#520: Finviz HTTP 403 with a recent seed publishes the seed, labelled as such."""
+    seed = _seed_run(age_days=7)
+    publish_calls, export_calls = _run_us_build_with_finviz_error(monkeypatch, tmp_path, seed_run=seed)
+
+    assert build_script.main() == 0
+
+    publish_kwargs = publish_calls[0]
+    assert [row["symbol"] for row in publish_kwargs["rows"]] == ["AAPL", "MSFT"]
+    assert all(
+        row["raw_payload"] == {"source": "seeded_weekly_reference_cache"}
+        for row in publish_kwargs["rows"]
+    )
+    coverage = publish_kwargs["coverage_stats"]
+    assert coverage["finviz_snapshot_failed"] is True
+    assert coverage["seed_source_revision"] == seed.source_revision
+    assert coverage["seed_as_of_date"] == seed.published_at.date().isoformat()
+    assert coverage["backfilled_active_symbols"] == 2
+    assert publish_kwargs["source_revision"].endswith("-seeded-fallback")
+    assert any("Finviz snapshot fetch failed: HTTPError: 403" in w for w in publish_kwargs["warnings"])
+    assert export_calls, "Bundle export should run after the seed is republished"
+
+
+@pytest.mark.parametrize(
+    ("seed_run", "reason"),
+    [
+        (None, "No prior weekly reference seed"),
+        (_seed_run(age_days=9), "max age 8 day(s)"),
+        # A seed that itself reused an older seed carries that older data date.
+        (_seed_run(age_days=1, coverage={"seed_as_of_date": "2000-01-01"}), "as of 2000-01-01"),
+    ],
+)
+def test_build_weekly_reference_bundle_us_fails_without_a_usable_seed_when_finviz_refuses(
+    monkeypatch, tmp_path, seed_run, reason
+):
+    publish_calls, export_calls = _run_us_build_with_finviz_error(
+        monkeypatch, tmp_path, seed_run=seed_run
+    )
+
+    with pytest.raises(RuntimeError, match="did not publish") as excinfo:
+        build_script.main()
+
+    assert "Finviz snapshot fetch failed" in str(excinfo.value)
+    assert reason in str(excinfo.value)
+    assert publish_calls == []
+    assert export_calls == []
+
+
+def test_build_weekly_reference_bundle_us_does_not_swallow_non_provider_errors(
+    monkeypatch, tmp_path
+):
+    _run_us_build_with_finviz_error(
+        monkeypatch, tmp_path, seed_run=_seed_run(age_days=1), error=KeyError("Ticker")
+    )
+
+    with pytest.raises(KeyError):
+        build_script.main()

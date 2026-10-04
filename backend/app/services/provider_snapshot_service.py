@@ -1281,11 +1281,17 @@ class ProviderSnapshotService:
         db.add(run)
         db.flush()
 
-        merged_rows = self._build_snapshot_rows(
-            exchange_filter=exchange_filter,
-            progress_callback=progress_callback,
-            show_finviz_progress=show_finviz_progress,
-        )
+        try:
+            merged_rows = self._build_snapshot_rows(
+                exchange_filter=exchange_filter,
+                progress_callback=progress_callback,
+                show_finviz_progress=show_finviz_progress,
+            )
+        except Exception:
+            # Finviz can refuse mid-build (e.g. HTTP 403); drop the half-built run
+            # so the caller's session is clean for a fallback publish.
+            db.rollback()
+            raise
         normalized_market = (
             str(market or self.market_for_snapshot_key(snapshot_key)).strip().upper()
         )
@@ -1761,7 +1767,9 @@ class ProviderSnapshotService:
             "schema_version": self.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
             "market": bundle_market,
             "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "as_of_date": (
+            # A run republished from a prior seed is as old as that seed's data.
+            "as_of_date": (coverage or {}).get("seed_as_of_date")
+            or (
                 (run.published_at or run.created_at).date().isoformat()
                 if (run.published_at or run.created_at) is not None
                 else None
