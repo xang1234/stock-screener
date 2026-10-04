@@ -15,6 +15,96 @@ from app.infra.db.uow import SqlUnitOfWork
 
 
 class TestSqlUnitOfWork:
+    def test_nested_use_shares_the_session_and_closes_it_once(self, engine):
+        """A use case given an entered UoW re-enters it (``with uow:``). It must not
+        swap in a second session and orphan the first one mid-transaction: that
+        session stays idle in transaction until garbage collection and blocked the
+        PostgreSQL integration sweep's TRUNCATE."""
+        sessions = []
+        base = sessionmaker(bind=engine)
+
+        def factory():
+            sessions.append(base())
+            return sessions[-1]
+
+        uow = SqlUnitOfWork(factory)
+        with uow:
+            outer = uow.session
+            uow.scans.list_recent(limit=1)  # begins the outer transaction
+            with uow:
+                assert uow.session is outer
+                uow.scans.list_recent(limit=1)
+            assert uow.session is outer
+            assert outer.in_transaction()  # the inner exit leaves it open
+
+        assert sessions == [outer]
+        assert not outer.in_transaction()
+
+    def test_nested_failure_rolls_back_but_keeps_the_outer_session(self, engine):
+        uow = SqlUnitOfWork(sessionmaker(bind=engine))
+        with uow:
+            outer = uow.session
+            try:
+                with uow:
+                    uow.scans.list_recent(limit=1)
+                    raise RuntimeError("use case failed")
+            except RuntimeError:
+                pass
+            assert uow.session is outer
+            assert not outer.in_transaction()  # rolled back, still usable
+            uow.scans.list_recent(limit=1)
+        assert not outer.in_transaction()
+
+    def test_failed_enter_closes_its_session_and_allows_a_fresh_entry(self, engine, monkeypatch):
+        import app.infra.db.uow as uow_module
+
+        sessions = []
+        closed = []
+        base = sessionmaker(bind=engine)
+
+        def factory():
+            session = base()
+            sessions.append(session)
+            close = session.close
+
+            def tracked_close():
+                closed.append(session)
+                return close()
+
+            monkeypatch.setattr(session, "close", tracked_close)
+            return session
+
+        class Broken:
+            def __init__(self, session):
+                raise RuntimeError("repository setup failed")
+
+        uow = SqlUnitOfWork(factory)
+        with monkeypatch.context() as patch:
+            patch.setattr(uow_module, "SqlScanResultRepository", Broken)
+            try:
+                with uow:
+                    pass
+            except RuntimeError:
+                pass
+        assert len(sessions) == 1 and not sessions[0].in_transaction()
+        assert closed == [sessions[0]]
+
+        with uow:  # a fresh, top-level entry, not a nested one
+            assert uow.session is sessions[1]
+        assert len(sessions) == 2
+
+    def test_outermost_exit_closes_even_when_rollback_fails(self, engine, monkeypatch):
+        uow = SqlUnitOfWork(sessionmaker(bind=engine))
+        closed = []
+        try:
+            with uow:
+                monkeypatch.setattr(uow.session, "rollback", lambda: (_ for _ in ()).throw(OSError("dead connection")))
+                monkeypatch.setattr(uow.session, "close", lambda: closed.append(True))
+                raise RuntimeError("use case failed")
+        except OSError:
+            pass
+        assert closed == [True]
+
     def test_repos_share_session(self, engine):
         factory = sessionmaker(bind=engine)
         uow = SqlUnitOfWork(factory)
