@@ -94,6 +94,12 @@ def _resolve_scan_guard_market(universe_def: Any) -> str | None:
     return None
 
 
+def _queue_scan_bootstrap_publish(scan_id: str) -> None:
+    from ...tasks.scan_tasks import queue_scan_bootstrap_publish
+
+    queue_scan_bootstrap_publish(scan_id)
+
+
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
 def get_scan_bootstrap(
     scan_id: str | None = Query(None, description="Optional explicit scan bootstrap variant"),
@@ -202,10 +208,7 @@ def create_scan(
         raise HTTPException(status_code=500, detail="Failed to queue scan task")
 
     if result.status == "completed":
-        from ...services.ui_snapshot_service import safe_publish_scan_bootstrap
-
-        safe_publish_scan_bootstrap(result.scan_id)
-        safe_publish_scan_bootstrap()
+        _queue_scan_bootstrap_publish(result.scan_id)
 
     return ScanCreateResponse(
         scan_id=result.scan_id,
@@ -356,10 +359,7 @@ def cancel_scan(
             uow.scans.update_status(scan_id, "cancelled")
             uow.commit()
 
-        from ...services.ui_snapshot_service import safe_publish_scan_bootstrap
-
-        safe_publish_scan_bootstrap(scan_id)
-        safe_publish_scan_bootstrap()
+        _queue_scan_bootstrap_publish(scan_id)
         logger.info(f"Marked scan {scan_id} as cancelled")
         return {
             "message": f"Scan {scan_id} cancelled successfully",

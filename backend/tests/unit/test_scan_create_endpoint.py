@@ -6,7 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from app.main import app
 from app.api.v1.scans import _resolve_scan_guard_market
@@ -156,7 +156,35 @@ def test_http_create_scan_factory_has_no_request_bound_parameters():
 
 
 @pytest.mark.asyncio
-async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
+async def test_create_scan_completed_still_returns_when_bootstrap_enqueue_fails(client):
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-123", status="completed", total_stocks=10, is_duplicate=False, feature_run_id=17
+        )
+    )
+    app.dependency_overrides[get_uow] = lambda: _FakeUoW()
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with (
+            patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
+            patch(
+                "app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.apply_async",
+                side_effect=ConnectionError("broker down"),
+            ),
+        ):
+            response = await client.post("/api/v1/scans", json={"universe": "all"})
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    # Regular result endpoints serve the scan; the bootstrap catches up later.
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    mock_publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_completed_and_queues_bootstrap_publish(client):
     fake_uow = _FakeUoW()
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
@@ -171,7 +199,10 @@ async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
     app.dependency_overrides[get_uow] = lambda: fake_uow
     app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
     try:
-        with patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish:
+        with (
+            patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
+            patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.apply_async") as mock_enqueue,
+        ):
             response = await client.post(
                 "/api/v1/scans",
                 json={"universe": "all"},
@@ -195,9 +226,9 @@ async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
     assert fake_use_case.received_uow is fake_uow
     assert fake_use_case.received_cmd.universe_type == "all"
     assert fake_use_case.received_cmd.universe_market is None
-    assert mock_publish.call_count == 2
-    assert mock_publish.call_args_list[0].args == ("scan-123",)
-    assert mock_publish.call_args_list[1].args == ()
+    # The snapshot rebuild runs on the general queue, not in the request.
+    mock_publish.assert_not_called()
+    mock_enqueue.assert_called_once_with(args=["scan-123"], retry=False, connection=ANY)
 
 
 @pytest.mark.asyncio

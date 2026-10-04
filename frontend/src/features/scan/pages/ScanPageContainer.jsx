@@ -202,7 +202,8 @@ function ScanPage() {
     (snapshot, requestedScanId = null) => {
       const payload = snapshot?.payload ?? {};
       queryClient.setQueryData(['universeStats'], payload.universe_stats ?? null);
-      queryClient.setQueryData(['scanHistory'], payload.recent_scans ?? { scans: [] });
+      // recent_scans spans every market, so it cannot seed the per-market
+      // ['scanHistory', market] list; that list fetches its own scans.
 
       const selectedScanId =
         payload.selected_scan?.scan_id ??

@@ -26,7 +26,6 @@ from app.services.market_activity_service import (
     RUNTIME_ACTIVITY_CATEGORY,
 )
 from app.services.runtime_activity_contract import progress_mode
-from app.services.ui_snapshot_service import safe_publish_scan_bootstrap
 from app.tasks.market_queues import (
     SHARED_DATA_FETCH_QUEUE,
     SHARED_USER_SCANS_QUEUE,
@@ -863,8 +862,9 @@ class OperationsJobService:
                 return "blocked", f"Cannot cancel scan with status '{scan.status}'"
             uow.scans.update_status(scan_id, "cancelled")
             uow.commit()
-        safe_publish_scan_bootstrap(scan_id)
-        safe_publish_scan_bootstrap()
+        from app.tasks.scan_tasks import queue_scan_bootstrap_publish
+
+        queue_scan_bootstrap_publish(scan_id)
         return "accepted", f"Scan {scan_id} cancelled successfully"
 
     def cancel_job(self, db: Session, task_id: str) -> dict[str, Any]:

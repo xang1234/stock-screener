@@ -410,3 +410,47 @@ class TestPostScanPipeline:
         _run_post_scan_pipeline("scan-001")
 
         mock_db.close.assert_called_once()
+
+
+def test_publish_scan_bootstrap_snapshots_rebuilds_scan_and_latest_variants():
+    from app.tasks.scan_tasks import publish_scan_bootstrap_snapshots
+
+    with patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish:
+        publish_scan_bootstrap_snapshots.run("scan-009")
+
+    assert mock_publish.call_args_list == [call("scan-009"), call()]
+
+
+def test_queue_scan_bootstrap_publish_uses_a_short_timeout_connection():
+    """A broker outage must fail within ~1 s, not the OS TCP connect timeout."""
+    from app.celery_app import celery_app
+    from app.tasks import scan_tasks
+
+    with (
+        patch.object(scan_tasks.celery_app, "connection_for_write") as connection_for_write,
+        patch.object(scan_tasks.publish_scan_bootstrap_snapshots, "apply_async") as apply_async,
+    ):
+        scan_tasks.queue_scan_bootstrap_publish("scan-010")
+
+    options = connection_for_write.call_args.kwargs["transport_options"]
+    assert options["socket_connect_timeout"] <= 1.0
+    assert options["socket_timeout"] <= 1.0
+    assert options["max_retries"] == 0
+    connection = connection_for_write.return_value.__enter__.return_value
+    apply_async.assert_called_once_with(args=["scan-010"], retry=False, connection=connection)
+    # Workers keep the app-wide transport options.
+    assert not celery_app.conf.broker_transport_options.get("socket_timeout")
+
+
+def test_queue_scan_bootstrap_publish_logs_and_returns_when_the_broker_is_down():
+    from app.tasks import scan_tasks
+
+    with (
+        patch.object(scan_tasks.celery_app, "connection_for_write") as connection_for_write,
+        patch.object(scan_tasks.logger, "warning") as warning,
+    ):
+        connection_for_write.return_value.__enter__.side_effect = ConnectionError("down")
+        scan_tasks.queue_scan_bootstrap_publish("scan-011")
+
+    warning.assert_called_once()
+    assert warning.call_args.kwargs.get("exc_info") is True

@@ -6,7 +6,7 @@ import base64
 from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from app.services.operations_job_service import OperationsJobService, _JobRecord
 from app.services.runtime_activity_contract import progress_mode
@@ -583,6 +583,26 @@ def test_cancel_job_uses_scan_cancel_strategy_for_running_scan():
     assert result["status"] == "accepted"
     assert result["cancel_strategy"] == "scan_cancel"
     assert result["message"] == "cancelled:scan-001"
+
+
+def test_cancel_scan_queues_bootstrap_publish_instead_of_building_inline():
+    scans = MagicMock()
+    scans.get_by_scan_id.return_value = SimpleNamespace(status="running")
+    uow = MagicMock()
+    uow.__enter__.return_value = uow
+    uow.scans = scans
+
+    with (
+        patch("app.infra.db.uow.SqlUnitOfWork", return_value=uow),
+        patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
+        patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.apply_async") as mock_enqueue,
+    ):
+        status, _ = OperationsJobService()._cancel_scan(MagicMock(), "scan-001")
+
+    assert status == "accepted"
+    scans.update_status.assert_called_once_with("scan-001", "cancelled")
+    mock_publish.assert_not_called()
+    mock_enqueue.assert_called_once_with(args=["scan-001"], retry=False, connection=ANY)
 
 
 def test_cancel_job_force_releases_market_lease_for_stale_market_job():
