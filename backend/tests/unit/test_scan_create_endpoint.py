@@ -168,7 +168,7 @@ async def test_create_scan_completed_still_returns_when_bootstrap_enqueue_fails(
         with (
             patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
             patch(
-                "app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.delay",
+                "app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.apply_async",
                 side_effect=ConnectionError("broker down"),
             ),
         ):
@@ -201,7 +201,7 @@ async def test_create_scan_returns_completed_and_queues_bootstrap_publish(client
     try:
         with (
             patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
-            patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.delay") as mock_enqueue,
+            patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.apply_async") as mock_enqueue,
         ):
             response = await client.post(
                 "/api/v1/scans",
@@ -228,7 +228,7 @@ async def test_create_scan_returns_completed_and_queues_bootstrap_publish(client
     assert fake_use_case.received_cmd.universe_market is None
     # The snapshot rebuild runs on the general queue, not in the request.
     mock_publish.assert_not_called()
-    mock_enqueue.assert_called_once_with("scan-123")
+    mock_enqueue.assert_called_once_with(args=["scan-123"], retry=False)
 
 
 @pytest.mark.asyncio

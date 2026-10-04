@@ -382,7 +382,7 @@ class TestCancelScan:
         try:
             with (
                 patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
-                patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.delay") as mock_enqueue,
+                patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.apply_async") as mock_enqueue,
             ):
                 resp = await client.post("/api/v1/scans/scan-001/cancel")
         finally:
@@ -390,7 +390,7 @@ class TestCancelScan:
 
         assert resp.status_code == 200
         mock_publish.assert_not_called()
-        mock_enqueue.assert_called_once_with("scan-001")
+        mock_enqueue.assert_called_once_with(args=["scan-001"], retry=False)
 
     async def test_cancel_queued_scan(self, client):
         scan_repo = FakeScanRepository()

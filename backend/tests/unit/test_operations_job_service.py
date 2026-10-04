@@ -595,14 +595,14 @@ def test_cancel_scan_queues_bootstrap_publish_instead_of_building_inline():
     with (
         patch("app.infra.db.uow.SqlUnitOfWork", return_value=uow),
         patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
-        patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.delay") as mock_enqueue,
+        patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.apply_async") as mock_enqueue,
     ):
         status, _ = OperationsJobService()._cancel_scan(MagicMock(), "scan-001")
 
     assert status == "accepted"
     scans.update_status.assert_called_once_with("scan-001", "cancelled")
     mock_publish.assert_not_called()
-    mock_enqueue.assert_called_once_with("scan-001")
+    mock_enqueue.assert_called_once_with(args=["scan-001"], retry=False)
 
 
 def test_cancel_job_force_releases_market_lease_for_stale_market_job():

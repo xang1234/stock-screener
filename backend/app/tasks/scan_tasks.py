@@ -294,7 +294,9 @@ def publish_scan_bootstrap_snapshots(scan_id: str):
     """Rebuild a scan's bootstrap snapshot and the "latest" one on the general queue.
 
     Request handlers queue this instead of building snapshots inline. "latest"
-    is resolved when the task runs, so a delayed task cannot select an older scan.
+    is resolved when the task runs, not when it was queued. Publishing has no
+    ordering guard yet: a slow build can still repoint "latest" at an older scan
+    after a faster one, which readers see as a stale snapshot (#492 follow-up).
     """
     from ..services.ui_snapshot_service import safe_publish_scan_bootstrap
 
@@ -306,11 +308,13 @@ def publish_scan_bootstrap_snapshots(scan_id: str):
 def queue_scan_bootstrap_publish(scan_id: str) -> None:
     """Queue the bootstrap rebuild for a request handler instead of building it inline.
 
-    A failed enqueue only delays the snapshot: readers already fall back to the
-    regular scan endpoints while it is absent or stale, so the request still succeeds.
+    A failed enqueue only delays the snapshot: the scan page treats an absent or
+    stale bootstrap as missing and reads the regular scan endpoints, so the
+    request still succeeds. ``retry=False`` makes a broker outage fail fast;
+    Celery's default publish retries can block an unreachable host for minutes.
     """
     try:
-        publish_scan_bootstrap_snapshots.delay(scan_id)
+        publish_scan_bootstrap_snapshots.apply_async(args=[scan_id], retry=False)
     except Exception:
         logger.warning("Could not queue scan bootstrap publish for %s", scan_id, exc_info=True)
 
