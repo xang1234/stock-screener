@@ -289,6 +289,32 @@ def finalize_scan_artifacts(scan_id: str):
     return {"scan_id": scan_id, "status": "queued_post_scan_finalization"}
 
 
+@celery_app.task(name='app.tasks.scan_tasks.publish_scan_bootstrap_snapshots', queue='celery')
+def publish_scan_bootstrap_snapshots(scan_id: str):
+    """Rebuild a scan's bootstrap snapshot and the "latest" one on the general queue.
+
+    Request handlers queue this instead of building snapshots inline. "latest"
+    is resolved when the task runs, so a delayed task cannot select an older scan.
+    """
+    from ..services.ui_snapshot_service import safe_publish_scan_bootstrap
+
+    safe_publish_scan_bootstrap(scan_id)
+    safe_publish_scan_bootstrap()
+    return {"scan_id": scan_id, "status": "published_scan_bootstrap"}
+
+
+def queue_scan_bootstrap_publish(scan_id: str) -> None:
+    """Queue the bootstrap rebuild for a request handler instead of building it inline.
+
+    A failed enqueue only delays the snapshot: readers already fall back to the
+    regular scan endpoints while it is absent or stale, so the request still succeeds.
+    """
+    try:
+        publish_scan_bootstrap_snapshots.delay(scan_id)
+    except Exception:
+        logger.warning("Could not queue scan bootstrap publish for %s", scan_id, exc_info=True)
+
+
 @celery_app.task(name='app.tasks.scan_tasks.test_celery')
 def test_celery():
     """

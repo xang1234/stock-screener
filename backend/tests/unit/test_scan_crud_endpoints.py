@@ -371,6 +371,27 @@ class TestCancelScan:
         finally:
             app.dependency_overrides.pop(get_uow, None)
 
+    async def test_cancel_queues_bootstrap_publish_off_the_request(self, client):
+        from unittest.mock import patch
+
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["scan-001"] = _make_scan(
+            "scan-001", status="running", started_at=datetime(2024, 1, 1),
+        )
+        app.dependency_overrides[get_uow] = lambda: _FakeUoW(scans=scan_repo)
+        try:
+            with (
+                patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
+                patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.delay") as mock_enqueue,
+            ):
+                resp = await client.post("/api/v1/scans/scan-001/cancel")
+        finally:
+            app.dependency_overrides.pop(get_uow, None)
+
+        assert resp.status_code == 200
+        mock_publish.assert_not_called()
+        mock_enqueue.assert_called_once_with("scan-001")
+
     async def test_cancel_queued_scan(self, client):
         scan_repo = FakeScanRepository()
         scan_repo.scans["scan-002"] = _make_scan(

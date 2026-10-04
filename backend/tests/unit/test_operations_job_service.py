@@ -585,6 +585,26 @@ def test_cancel_job_uses_scan_cancel_strategy_for_running_scan():
     assert result["message"] == "cancelled:scan-001"
 
 
+def test_cancel_scan_queues_bootstrap_publish_instead_of_building_inline():
+    scans = MagicMock()
+    scans.get_by_scan_id.return_value = SimpleNamespace(status="running")
+    uow = MagicMock()
+    uow.__enter__.return_value = uow
+    uow.scans = scans
+
+    with (
+        patch("app.infra.db.uow.SqlUnitOfWork", return_value=uow),
+        patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish,
+        patch("app.tasks.scan_tasks.publish_scan_bootstrap_snapshots.delay") as mock_enqueue,
+    ):
+        status, _ = OperationsJobService()._cancel_scan(MagicMock(), "scan-001")
+
+    assert status == "accepted"
+    scans.update_status.assert_called_once_with("scan-001", "cancelled")
+    mock_publish.assert_not_called()
+    mock_enqueue.assert_called_once_with("scan-001")
+
+
 def test_cancel_job_force_releases_market_lease_for_stale_market_job():
     service = OperationsJobService()
     service._record_cancel_action = lambda *args, **kwargs: None

@@ -203,7 +203,7 @@ describe('ScanPage', () => {
       ratings: ['Buy'],
     });
 
-    renderWithProviders(<ScanPage />);
+    const { queryClient } = renderWithProviders(<ScanPage />);
 
     await waitFor(() => {
       expect(scanApi.getScanBootstrap).toHaveBeenCalledTimes(1);
@@ -213,6 +213,9 @@ describe('ScanPage', () => {
       expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
     });
     expect(screen.getByText('Filters')).toBeInTheDocument();
+    // History is read per market (['scanHistory', market]); the global
+    // bootstrap list must not be cached (and persisted) under an unread key.
+    expect(queryClient.getQueryCache().find({ queryKey: ['scanHistory'], exact: true })).toBeUndefined();
   });
 
   it('sanitizes a capable survivor query before showing results from a legacy scan', async () => {

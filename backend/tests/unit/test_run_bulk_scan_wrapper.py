@@ -410,3 +410,12 @@ class TestPostScanPipeline:
         _run_post_scan_pipeline("scan-001")
 
         mock_db.close.assert_called_once()
+
+
+def test_publish_scan_bootstrap_snapshots_rebuilds_scan_and_latest_variants():
+    from app.tasks.scan_tasks import publish_scan_bootstrap_snapshots
+
+    with patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish:
+        publish_scan_bootstrap_snapshots.run("scan-009")
+
+    assert mock_publish.call_args_list == [call("scan-009"), call()]
