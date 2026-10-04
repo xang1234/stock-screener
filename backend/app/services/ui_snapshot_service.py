@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
@@ -182,9 +183,23 @@ class UISnapshotService:
                 payload=payload,
             )
             latest_scan_id = self._resolve_scan_source_revision(db, None, market)
-            self._publish_scan_latest(
-                db, latest_scan_id, market, payload=payload if latest_scan_id == scan_id else None
-            )
+            try:
+                self._publish_scan_latest(
+                    db, latest_scan_id, market, payload=payload if latest_scan_id == scan_id else None
+                )
+            except Exception:
+                # The scan variant is already committed; report this variant's failure
+                # under its own key instead of failing (and mislabelling) the whole call.
+                db.rollback()
+                logger.exception(
+                    "UI snapshot publish failed",
+                    extra={
+                        "action": "publish_scan_bootstrap",
+                        "view_key": SCAN_VIEW_KEY,
+                        "variant_key": self._scan_variant_key(None, market),
+                        "source_revision": latest_scan_id,
+                    },
+                )
             return explicit
 
         return self._run_with_storage_recovery(publish)
@@ -204,7 +219,10 @@ class UISnapshotService:
         completed in the meantime (its own publish then owns the pointer).
         """
         if payload is None:
-            payload = self._build_scan_payload(None, market)
+            # Build for the resolved scan, so payload and source revision agree
+            # even if another scan finishes while this builds.
+            resolved = None if source_revision == "none" else source_revision
+            payload = self._build_scan_payload(resolved, market)
         return self._publish(
             db=db,
             view_key=SCAN_VIEW_KEY,
@@ -465,17 +483,47 @@ class UISnapshotService:
         payload: dict[str, Any],
         still_current: Callable[[Session], bool] | None = None,
     ) -> SnapshotResult:
+        kwargs = dict(
+            db=db,
+            view_key=view_key,
+            variant_key=variant_key,
+            source_revision=source_revision,
+            payload=payload,
+            still_current=still_current,
+        )
+        try:
+            return self._publish_once(**kwargs)
+        except IntegrityError:
+            # A concurrent first publish of this variant inserted the same snapshot
+            # or pointer row (there was no pointer row to lock yet). Retry once: the
+            # rows now exist, so this takes the update path under the pointer lock.
+            db.rollback()
+            return self._publish_once(**kwargs)
+
+    def _publish_once(
+        self,
+        *,
+        db: Session,
+        view_key: str,
+        variant_key: str,
+        source_revision: str,
+        payload: dict[str, Any],
+        still_current: Callable[[Session], bool] | None = None,
+    ) -> SnapshotResult:
         payload = json_safe(payload)
         if still_current is not None:
             # Serialize writers of this variant, then re-check under the lock: a
             # build that finished after a newer one must not move the pointer back.
+            # ``of=`` locks only the pointer row: its snapshot relationship loads
+            # through an outer join, and PostgreSQL rejects FOR UPDATE on the
+            # nullable side of one.
             (
                 db.query(UIViewSnapshotPointer)
                 .filter(
                     UIViewSnapshotPointer.view_key == view_key,
                     UIViewSnapshotPointer.variant_key == variant_key,
                 )
-                .with_for_update()
+                .with_for_update(of=UIViewSnapshotPointer)
                 .first()
             )
             if not still_current(db):
@@ -559,7 +607,9 @@ class UISnapshotService:
         if market:
             # Same scoping as GET /scans?market= (list_recent): the scan's universe market.
             query = query.filter(Scan.universe_market == market)
-        latest = query.order_by(Scan.completed_at.desc(), Scan.started_at.desc()).first()
+        # Same order as list_recent, so "latest" is the first finished scan in the
+        # history list, which is also the scan the scan page auto-loads.
+        latest = query.order_by(Scan.started_at.desc(), Scan.id.desc()).first()
         return latest[0] if latest else "none"
 
     def _resolve_breadth_source_revision(self, db: Session, market: str = "US") -> str:

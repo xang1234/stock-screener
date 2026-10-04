@@ -203,10 +203,6 @@ function ScanPage() {
       const payload = snapshot?.payload ?? {};
       const payloadMarket = payload.market ?? null;
       const isLatestVariant = requestedScanId == null;
-      if (isLatestVariant && payloadMarket && payloadMarket !== globalMarketRef.current) {
-        // A late latest-variant response for a market the user has left.
-        return;
-      }
       queryClient.setQueryData(['universeStats'], payload.universe_stats ?? null);
       if (isLatestVariant && payloadMarket) {
         // The market-scoped latest list is exactly GET /scans?limit=20&market=.

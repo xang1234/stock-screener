@@ -203,19 +203,6 @@ describe('ScanPage', () => {
       expect(scanApi.getScans).not.toHaveBeenCalled();
     });
 
-    it('ignores a latest snapshot for a market other than the selected one', async () => {
-      marketState.selectedMarket = 'US';
-      scanApi.getScanBootstrap.mockResolvedValue(marketBootstrap('HK'));
-
-      const { queryClient } = renderWithProviders(<ScanPage />);
-
-      await waitFor(() => {
-        expect(scanApi.getScans).toHaveBeenCalledWith(expect.objectContaining({ market: 'US' }));
-      });
-      expect(screen.queryByText(/Results:\s*1 stocks/i)).not.toBeInTheDocument();
-      expect(queryClient.getQueryData(['scanHistory', 'HK'])).toBeUndefined();
-    });
-
     it('does not seed history from an explicit scan snapshot', async () => {
       marketState.selectedMarket = 'US';
       const liveHistory = { scans: [{ scan_id: 'us-old', status: 'completed' }, { scan_id: 'us-new', status: 'queued' }] };

@@ -106,8 +106,29 @@ def test_publish_for_older_scan_rebuilds_market_latest_separately(service_and_se
 
     service.publish_scan_bootstraps_for("us-1")  # e.g. an old scan republished after cancel
 
-    assert builds == [("us-1", "US"), (None, "US")]
+    # The market latest is rebuilt for the resolved latest scan, not re-resolved.
+    assert builds == [("us-1", "US"), ("us-2", "US")]
     assert service.get_scan_bootstrap(market="US").source_revision == "us-2"
+
+
+def test_failed_market_latest_is_logged_as_that_variant_and_keeps_the_scan_variant(
+    service_and_session, monkeypatch, caplog
+):
+    service, session_factory = service_and_session
+    _add_scan(session_factory, "us-1", "US", 9)
+
+    def broken_latest(*args, **kwargs):
+        raise RuntimeError("latest publish failed")
+
+    monkeypatch.setattr(service, "_publish_scan_latest", broken_latest)
+
+    with caplog.at_level("ERROR"):
+        result = service.publish_scan_bootstraps_for("us-1")
+
+    assert result.source_revision == "us-1"
+    assert service.get_scan_bootstrap("us-1").is_stale is False
+    failures = [r for r in caplog.records if r.getMessage() == "UI snapshot publish failed"]
+    assert [r.variant_key for r in failures] == ["latest:US"]
 
 
 def test_scan_without_market_publishes_the_global_latest(service_and_session):
@@ -119,6 +140,27 @@ def test_scan_without_market_publishes_the_global_latest(service_and_session):
     latest = service.get_scan_bootstrap()
     assert latest is not None and latest.source_revision == "all-1"
     assert latest.payload["market"] is None
+
+
+def test_latest_matches_the_history_list_order(service_and_session):
+    """'Latest' is the first finished scan in GET /scans order (started_at), which
+    the scan page also auto-loads; resolution and payload must agree on it."""
+    service, session_factory = service_and_session
+    with session_factory() as db:
+        for scan_id, started, completed in (("us-a", 9, 12), ("us-b", 10, 11)):
+            db.add(Scan(
+                scan_id=scan_id, status="completed", universe="market:US", universe_type="market",
+                universe_key="market:US", universe_market="US", total_stocks=1, passed_stocks=1,
+                started_at=datetime(2026, 9, 30, started), completed_at=datetime(2026, 9, 30, completed),
+            ))
+        db.commit()
+
+    snapshot = service.publish_scan_bootstrap(market="US")
+
+    assert [s["scan_id"] for s in snapshot.payload["recent_scans"]["scans"]] == ["us-b", "us-a"]
+    assert snapshot.source_revision == "us-b"
+    assert snapshot.payload["selected_scan"]["scan_id"] == "us-b"
+    assert service.get_scan_bootstrap(market="US").is_stale is False
 
 
 def test_slow_outdated_latest_build_does_not_repoint(service_and_session, monkeypatch):
