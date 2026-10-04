@@ -94,6 +94,20 @@ def _resolve_scan_guard_market(universe_def: Any) -> str | None:
     return None
 
 
+def _normalize_list_market(market: str | None) -> str | None:
+    """Validate an optional universe-market filter shared by scan list and bootstrap."""
+    if market is None:
+        return None
+    normalized = market.strip().upper()
+    if normalized not in _market_catalog.supported_market_codes():
+        supported = ", ".join(_market_catalog.supported_market_codes())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
+        )
+    return normalized
+
+
 def _queue_scan_bootstrap_publish(scan_id: str) -> None:
     from ...tasks.scan_tasks import queue_scan_bootstrap_publish
 
@@ -103,10 +117,11 @@ def _queue_scan_bootstrap_publish(scan_id: str) -> None:
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
 def get_scan_bootstrap(
     scan_id: str | None = Query(None, description="Optional explicit scan bootstrap variant"),
+    market: str | None = Query(None, description="Latest variant for one universe market (e.g. US, HK)"),
     snapshot_service: Any = Depends(get_ui_snapshot_service),
 ):
     """Return the published scan bootstrap snapshot if available."""
-    snapshot = snapshot_service.get_scan_bootstrap(scan_id)
+    snapshot = snapshot_service.get_scan_bootstrap(scan_id, market=_normalize_list_market(market))
     if snapshot is None:
         raise HTTPException(status_code=404, detail="No published scan bootstrap snapshot is available")
     return UISnapshotEnvelope(**snapshot.to_dict())
@@ -119,15 +134,7 @@ def list_scans(
     uow: Any = Depends(get_uow),
 ):
     """Get list of all scans ordered by most recent first."""
-    normalized_market: str | None = None
-    if market is not None:
-        normalized_market = market.strip().upper()
-        if normalized_market not in _market_catalog.supported_market_codes():
-            supported = ", ".join(_market_catalog.supported_market_codes())
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
-            )
+    normalized_market = _normalize_list_market(market)
     try:
         with uow:
             scans = uow.scans.list_recent(limit=limit, market=normalized_market)

@@ -1,6 +1,7 @@
 import apiClient from './client';
 import {
   getAllFilteredSymbols,
+  getScanBootstrap,
   getScanResults,
   getSetupDetails,
   getSingleResult,
@@ -25,6 +26,20 @@ const deferred = () => {
 describe('scan api helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('requests the scan bootstrap by scan id, else by market, else unscoped', async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+
+    await getScanBootstrap('scan-1', 'HK');
+    await getScanBootstrap(null, 'HK');
+    await getScanBootstrap();
+
+    expect(apiClient.get.mock.calls).toEqual([
+      ['/v1/scans/bootstrap', { params: { scan_id: 'scan-1' } }],
+      ['/v1/scans/bootstrap', { params: { market: 'HK' } }],
+      ['/v1/scans/bootstrap', { params: undefined }],
+    ]);
   });
 
   it('defaults /results to table detail level', async () => {

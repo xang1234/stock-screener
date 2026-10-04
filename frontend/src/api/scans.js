@@ -66,10 +66,14 @@ export const getScanStatus = async (scanId) => {
  * @param {string|null} scanId - Optional explicit scan id variant
  * @returns {Promise<Object>} Snapshot envelope
  */
-export const getScanBootstrap = async (scanId = null) => {
-  const response = await apiClient.get('/v1/scans/bootstrap', {
-    params: scanId ? { scan_id: scanId } : undefined,
-  });
+export const getScanBootstrap = async (scanId = null, market = null) => {
+  let params;
+  if (scanId) {
+    params = { scan_id: scanId };
+  } else if (market) {
+    params = { market };
+  }
+  const response = await apiClient.get('/v1/scans/bootstrap', { params });
   return response.data;
 };
 

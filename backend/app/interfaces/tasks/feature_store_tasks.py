@@ -444,9 +444,9 @@ def _repair_current_us_group_metadata(
 
         published_scan_ids = []
         for scan_id in [*feature_scan_ids, *legacy_scan_ids]:
+            # Publishes the scan's variant and its market's latest variant.
             safe_publish_scan_bootstrap(scan_id)
             published_scan_ids.append(scan_id)
-        safe_publish_scan_bootstrap()
 
         return {
             "market": "US",
@@ -543,8 +543,7 @@ def _create_auto_scan_for_published_run(
         finally:
             db.close()
 
-    safe_publish_scan_bootstrap(scan_id)
-    safe_publish_scan_bootstrap()
+    safe_publish_scan_bootstrap(scan_id)  # also its market's latest variant
     return scan_id
 
 

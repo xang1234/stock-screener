@@ -201,9 +201,23 @@ function ScanPage() {
   const applyScanBootstrapSnapshot = useCallback(
     (snapshot, requestedScanId = null) => {
       const payload = snapshot?.payload ?? {};
+      const payloadMarket = payload.market ?? null;
+      const isLatestVariant = requestedScanId == null;
+      if (isLatestVariant && payloadMarket && payloadMarket !== globalMarketRef.current) {
+        // A late latest-variant response for a market the user has left.
+        return;
+      }
       queryClient.setQueryData(['universeStats'], payload.universe_stats ?? null);
-      // recent_scans spans every market, so it cannot seed the per-market
-      // ['scanHistory', market] list; that list fetches its own scans.
+      if (isLatestVariant && payloadMarket) {
+        // The market-scoped latest list is exactly GET /scans?limit=20&market=.
+        // Dating it by its publish time keeps the normal staleness refetch.
+        // Explicit scan variants never go stale, so their lists are not used.
+        queryClient.setQueryData(
+          ['scanHistory', payloadMarket],
+          payload.recent_scans ?? { scans: [] },
+          { updatedAt: Date.parse(snapshot.published_at) || Date.now() }
+        );
+      }
 
       const selectedScanId =
         payload.selected_scan?.scan_id ??
@@ -287,8 +301,10 @@ function ScanPage() {
   });
 
   const scanBootstrapQuery = useQuery({
-    queryKey: ['scanBootstrap', 'latest'],
-    queryFn: () => getScanBootstrap(),
+    // Market-scoped so the first load selects and seeds the selected market's
+    // scans, never another market's newest scan.
+    queryKey: ['scanBootstrap', 'latest', globalMarket ?? null],
+    queryFn: () => getScanBootstrap(null, globalMarket ?? null),
     enabled: snapshotEnabled && !currentScanId && !initialBootstrapSettled,
     retry: false,
     staleTime: 60_000,

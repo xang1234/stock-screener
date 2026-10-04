@@ -95,6 +95,34 @@ class TestRunBulkScanViaUseCase:
 
         mock_finalize.delay.assert_called_once_with("scan-001")
 
+    @patch(f"{_WRAPPER_PATH}.queue_scan_bootstrap_publish")
+    @patch(f"{_WRAPPER_PATH}.finalize_scan_artifacts")
+    @patch(f"{_WRAPPER_PATH}.settings")
+    def test_cancelled_scan_republishes_bootstrap_after_the_worker_stops(
+        self, mock_settings, mock_finalize, mock_queue_publish
+    ):
+        # The cancel request published while chunks could still be written; the
+        # explicit scan variant never goes stale, so republish once the worker exits.
+        mock_settings.scan_usecase_chunk_size = 25
+        mock_settings.scan_compute_processes = 0
+        mock_use_case = MagicMock()
+        mock_use_case.execute.return_value = _FakeResult(status="cancelled")
+        task_instance = MagicMock()
+        task_instance.request.id = "task-id"
+
+        with (
+            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
+            patch("app.infra.db.uow.SqlUnitOfWork"),
+            patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
+            patch("app.infra.tasks.cancellation.DbCancellationToken"),
+        ):
+            from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
+            _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
+
+        mock_queue_publish.assert_called_once_with("scan-001")
+        mock_finalize.delay.assert_not_called()
+
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
     @patch(f"{_WRAPPER_PATH}.finalize_scan_artifacts")
     @patch(f"{_WRAPPER_PATH}.settings")
@@ -412,13 +440,15 @@ class TestPostScanPipeline:
         mock_db.close.assert_called_once()
 
 
-def test_publish_scan_bootstrap_snapshots_rebuilds_scan_and_latest_variants():
+def test_publish_scan_bootstrap_snapshots_rebuilds_scan_and_market_latest_once():
     from app.tasks.scan_tasks import publish_scan_bootstrap_snapshots
 
     with patch("app.services.ui_snapshot_service.safe_publish_scan_bootstrap") as mock_publish:
         publish_scan_bootstrap_snapshots.run("scan-009")
 
-    assert mock_publish.call_args_list == [call("scan-009"), call()]
+    # One call covers the scan variant and its market's latest variant; no
+    # separate all-markets "latest" rebuild.
+    assert mock_publish.call_args_list == [call("scan-009")]
 
 
 def test_queue_scan_bootstrap_publish_uses_a_short_timeout_connection():

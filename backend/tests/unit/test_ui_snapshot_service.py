@@ -390,7 +390,12 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
         def to_dict(self):
             return fake_snapshot
 
-    monkeypatch.setattr(service, "publish_scan_bootstrap", lambda scan_id=None: _FakeSnapshot())
+    published_scan_markets = []
+    monkeypatch.setattr(
+        service,
+        "publish_scan_bootstrap",
+        lambda scan_id=None, market=None: published_scan_markets.append(market) or _FakeSnapshot(),
+    )
     published_breadth_markets = []
     monkeypatch.setattr(
         service,
@@ -404,6 +409,9 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
     published = service.publish_all()
 
     assert published["scan_latest"] == fake_snapshot
+    assert published["scan_latest_us"] == fake_snapshot
+    assert published["scan_latest_hk"] == fake_snapshot
+    assert published_scan_markets == [None, *market_registry.supported_market_codes()]
     assert published["breadth"] == fake_snapshot
     assert published["breadth_us"] == fake_snapshot
     assert published["breadth_hk"] == fake_snapshot
