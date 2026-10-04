@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -50,6 +51,23 @@ class _TriggerSignal:
     close_above_ema21: bool
     recency_bars: int
     score: float
+
+
+class _TriggerRow(NamedTuple):
+    """Per-trigger values gathered from the vectorized window pass."""
+
+    idx: int
+    is_nr7: bool
+    is_inside: bool
+    high: float
+    low: float
+    close: float
+    range_points: float
+    range_min: float
+    range_rank: int
+    volume: float
+    volume_mean: float
+    ema21: float
 
 
 class NR7InsideDayDetector(PatternDetector):
@@ -194,7 +212,9 @@ def _top_trigger_signals(frame: pd.DataFrame) -> list[_TriggerSignal]:
     Window statistics (7-bar range minimum and rank, prior-20-bar volume mean)
     are computed for all bars at once; scoring and ordering then run only over
     the bars that are triggers, and signal objects are built only for the
-    selected ones. Results match the original per-bar loop exactly.
+    selected ones. Results match the original per-bar loop exactly for the
+    float64/integer columns the price pipeline produces; a float32 Volume
+    column is averaged in float64 here (the loop summed it in float32).
     """
     bar_count = len(frame)
     if bar_count < _NR7_LOOKBACK_BARS:
@@ -204,10 +224,10 @@ def _top_trigger_signals(frame: pd.DataFrame) -> list[_TriggerSignal]:
     close = frame["Close"].to_numpy(dtype=float)
     volume = frame["Volume"].to_numpy(dtype=float)
     ema21 = frame["Close"].ewm(span=21, adjust=False).mean().to_numpy(dtype=float)
-    ranges = high - low
 
     first = _NR7_LOOKBACK_BARS - 1
     with np.errstate(invalid="ignore"):
+        ranges = high - low  # inf - inf -> NaN, silently, as pandas did
         # Missing (NaN compares False) and inverted ranges are never triggers.
         idx = np.flatnonzero(ranges[first:] >= 0.0) + first
     windows = sliding_window_view(ranges, _NR7_LOOKBACK_BARS)[idx - first]
@@ -225,7 +245,9 @@ def _top_trigger_signals(frame: pd.DataFrame) -> list[_TriggerSignal]:
     range_rank = (windows <= (trigger_ranges + 1e-9)[:, None]).sum(axis=1)
     volume_mean = _prior_volume_means(volume, idx)
 
-    rows = list(
+    # .tolist() yields native Python bool/int/float, as the loop's float()/int() did.
+    rows = map(
+        _TriggerRow._make,
         zip(
             idx.tolist(),
             is_nr7.tolist(),
@@ -239,16 +261,16 @@ def _top_trigger_signals(frame: pd.DataFrame) -> list[_TriggerSignal]:
             volume[idx].tolist(),
             volume_mean.tolist(),
             ema21[idx].tolist(),
-        )
+        ),
     )
     ranked = []
     for row in rows:
-        i, nr7, inside, trigger_high, _, trigger_close, range_points, _, _, trigger_volume, mean, ema = row
-        subtype = _trigger_subtype(trigger_is_nr7=nr7, trigger_is_inside_day=inside)
-        range_pct = (range_points / max(abs(trigger_high), 1e-9)) * 100.0
-        ratio = 1.0 if mean <= 0.0 or math.isnan(mean) else trigger_volume / mean
-        above = False if math.isnan(ema) else trigger_close >= ema
-        recency = (bar_count - 1) - i
+        subtype = _trigger_subtype(trigger_is_nr7=row.is_nr7, trigger_is_inside_day=row.is_inside)
+        range_pct = (row.range_points / max(abs(row.high), 1e-9)) * 100.0
+        mean = row.volume_mean
+        ratio = 1.0 if mean <= 0.0 or math.isnan(mean) else row.volume / mean
+        above = False if math.isnan(row.ema21) else row.close >= row.ema21
+        recency = (bar_count - 1) - row.idx
         score = _signal_score(
             trigger_subtype=subtype,
             trigger_range_pct=range_pct,
@@ -256,43 +278,40 @@ def _top_trigger_signals(frame: pd.DataFrame) -> list[_TriggerSignal]:
             close_above_ema21=above,
             recency_bars=recency,
         )
-        sort_key = (-score, recency, subtype != "nr7_inside_day", -i)
+        sort_key = (-score, recency, subtype != "nr7_inside_day", -row.idx)
         ranked.append((sort_key, row, subtype, range_pct, ratio, above, recency, score))
     ranked.sort(key=lambda entry: entry[0])
 
-    signals = []
-    for _, row, subtype, range_pct, ratio, above, recency, score in ranked[:_MAX_TRIGGER_CANDIDATES]:
-        i, nr7, inside, trigger_high, trigger_low, _, range_points, minimum, rank, trigger_volume, mean, ema = row
-        signals.append(
-            _TriggerSignal(
-                idx=i,
-                trigger_subtype=subtype,
-                trigger_is_nr7=nr7,
-                trigger_is_inside_day=inside,
-                trigger_high=trigger_high,
-                trigger_low=trigger_low,
-                trigger_range_points=range_points,
-                trigger_range_pct=range_pct,
-                range_min_7d_points=minimum,
-                range_rank_7d=rank,
-                trigger_volume=trigger_volume,
-                volume_mean_20d=mean,
-                volume_ratio_20d=ratio,
-                ema21_trigger=None if math.isnan(ema) else ema,
-                close_above_ema21=above,
-                recency_bars=recency,
-                score=score,
-            )
+    return [
+        _TriggerSignal(
+            idx=row.idx,
+            trigger_subtype=subtype,
+            trigger_is_nr7=row.is_nr7,
+            trigger_is_inside_day=row.is_inside,
+            trigger_high=row.high,
+            trigger_low=row.low,
+            trigger_range_points=row.range_points,
+            trigger_range_pct=range_pct,
+            range_min_7d_points=row.range_min,
+            range_rank_7d=row.range_rank,
+            trigger_volume=row.volume,
+            volume_mean_20d=row.volume_mean,
+            volume_ratio_20d=ratio,
+            ema21_trigger=None if math.isnan(row.ema21) else row.ema21,
+            close_above_ema21=above,
+            recency_bars=recency,
+            score=score,
         )
-    return signals
+        for _, row, subtype, range_pct, ratio, above, recency, score in ranked[:_MAX_TRIGGER_CANDIDATES]
+    ]
 
 
 def _prior_volume_means(volume: np.ndarray, idx: np.ndarray) -> np.ndarray:
     """Mean of up to 20 volumes before each index, NaN skipped, NaN if none.
 
-    Mirrors ``Series.iloc[max(0, i - 20):i].mean()`` bit for bit: NaN filled
-    with 0, summed per contiguous row (numpy's pairwise sum, as pandas uses),
-    divided by the non-NaN count.
+    Mirrors ``Series.iloc[max(0, i - 20):i].mean()`` bit for bit on float64
+    input: NaN filled with 0, summed per contiguous row (numpy's pairwise sum,
+    as pandas uses), divided by the non-NaN count.
     """
     missing = np.isnan(volume)
     filled = np.where(missing, 0.0, volume)

@@ -8,6 +8,7 @@ field must be identical; floats are compared exactly (NaN equal to NaN).
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -21,7 +22,22 @@ from app.analysis.patterns.nr7_inside_day import (
     _trigger_subtype,
     _TriggerSignal,
 )
-from tests.performance.test_setup_engine_performance import _make_price_data
+
+
+def _make_price_data(num_days: int) -> pd.DataFrame:
+    """Same shape as the Setup Engine perf fixture, with a private RNG (no global reseed)."""
+    rng = np.random.RandomState(42)
+    close = np.maximum(50.0 + np.cumsum(rng.randn(num_days) * 0.5 + 0.05), 1.0)
+    return pd.DataFrame(
+        {
+            "Open": close * (1 - rng.uniform(0, 0.02, num_days)),
+            "High": close * (1 + rng.uniform(0, 0.03, num_days)),
+            "Low": close * (1 - rng.uniform(0, 0.03, num_days)),
+            "Close": close,
+            "Volume": rng.randint(100_000, 5_000_000, size=num_days).astype(float),
+        },
+        index=pd.bdate_range(end=pd.Timestamp("2025-12-19"), periods=num_days),
+    )
 
 
 def _reference_top_signals(frame: pd.DataFrame) -> list[_TriggerSignal]:
@@ -204,6 +220,28 @@ def test_missing_and_inverted_ranges_are_skipped():
     high[10] = np.nan
     low[15] = high[15] + 0.1  # negative range
     _assert_parity(_frame(high, low))
+
+
+def test_infinite_bounds_do_not_warn():
+    # inf - inf is NaN (never a trigger); the old pandas subtraction was silent.
+    high = 10 + np.abs(np.sin(np.arange(20)))
+    low = high - 0.5
+    high[8] = low[8] = np.inf
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _assert_parity(_frame(high, low))
+
+
+def test_float32_volume_is_averaged_in_float64():
+    # Documented divergence: pandas would sum a float32 column in float32; the
+    # vectorized path upcasts first, so it equals the float64 result instead.
+    # The price pipeline stores volume as float64/int, where parity is exact.
+    frame = _make_price_data(120)
+    as_float32 = frame.assign(Volume=frame["Volume"].astype("float32") * np.float32(1.0001))
+    as_float64 = as_float32.assign(Volume=as_float32["Volume"].astype("float64"))
+    assert _comparable(_top_trigger_signals(as_float32)) == _comparable(
+        _reference_top_signals(as_float64)
+    )
 
 
 def test_no_signal_frame():
