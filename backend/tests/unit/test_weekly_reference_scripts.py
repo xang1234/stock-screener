@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -195,7 +195,8 @@ def test_build_weekly_reference_bundle_us_publishes_seeded_cache_fallback(
     monkeypatch,
     tmp_path,
 ):
-    published_at = datetime(2026, 4, 4, 12, 10, 0)
+    # The cache backfill needs the prior seed within the max age (#520).
+    published_at = datetime.utcnow() - timedelta(days=1)
     active_rows = [
         SimpleNamespace(
             symbol="AAPL",
@@ -322,6 +323,7 @@ def test_build_weekly_reference_bundle_us_publishes_seeded_cache_fallback(
                 "published_at": published_at,
                 "created_at": published_at,
                 "source_revision": "fundamentals_v1_us:20260404121100-seeded-fallback",
+                "coverage_stats_json": None,
             },
         )(),
         hydrate_published_snapshot=lambda db, snapshot_key, progress_callback=None: {
@@ -1817,3 +1819,391 @@ def test_load_ibd_industry_groups_script_uses_csv_path(monkeypatch, tmp_path, ca
     assert load_ibd_script.main() == 0
     assert load_calls == [str(csv_path)]
     assert "IBD industry group load complete:" in capsys.readouterr().out
+
+
+def _us_rows(*symbols: str) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(
+            symbol=symbol,
+            market="US",
+            exchange="NASDAQ",
+            name=f"{symbol} Inc.",
+            sector="Technology",
+            industry="Software",
+            market_cap=1_000_000_000,
+            currency="USD",
+            timezone="America/New_York",
+            local_code=symbol,
+        )
+        for symbol in symbols
+    ]
+
+
+def _run_us_build_with_finviz_error(
+    monkeypatch,
+    tmp_path,
+    *,
+    seed_run,
+    error=None,
+    soft_block=False,
+    active_symbols=("AAPL", "MSFT"),
+    finviz_rows=(),
+    seed_lacks=(),
+):
+    """Drive the US build with create_snapshot_run raising ``error`` (default: Finviz 403).
+
+    ``soft_block`` instead returns a blocked run holding only ``finviz_rows``,
+    as when Finviz serves pages without a screener table.
+    """
+    import requests
+
+    fake_db = MagicMock()
+    fake_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = _us_rows(
+        *active_symbols
+    )
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(build_script.settings, "github_weekly_reference_max_age_days", 8)
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(
+            get_many=lambda symbols: {symbol: {"symbol": symbol, "market_cap": 1.0} for symbol in symbols}
+        ),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_stock_universe_service",
+        lambda: SimpleNamespace(populate_universe=lambda db: {"total": 0}),
+    )
+
+    def refuse(db, **kwargs):
+        if soft_block:
+            return {
+                "run_id": 42,
+                "published": False,
+                "warnings": ["Active snapshot coverage 0.00% below minimum 98.00%"],
+            }
+        raise error or requests.HTTPError(
+            "403 Client Error: Forbidden for url: https://finviz.com/screener.ashx"
+        )
+
+    publish_calls: list[dict[str, object]] = []
+    export_calls: list[dict[str, object]] = []
+    published_run = SimpleNamespace(
+        published_at=datetime.utcnow(),
+        created_at=datetime.utcnow(),
+        source_revision="fundamentals_v1_us:20261003161500-seeded-fallback",
+    )
+    def snapshot_row(symbol, payload, raw):
+        return SimpleNamespace(
+            symbol=symbol,
+            exchange="NASDAQ",
+            row_hash=f"hash-{symbol.lower()}",
+            normalized_payload_json=json.dumps(payload),
+            raw_payload_json=json.dumps(raw),
+        )
+
+    rows_by_run = {
+        42: [snapshot_row(s, {"symbol": s}, {"overview": {"Ticker": s}}) for s in finviz_rows],
+    }
+    if seed_run is not None and getattr(seed_run, "id", None) is not None:
+        rows_by_run[seed_run.id] = [
+            snapshot_row(s, {"symbol": s, "market_cap": 2.0}, {"overview": {"Ticker": s}})
+            for s in active_symbols
+            if s not in seed_lacks
+        ]
+    monkeypatch.setattr(build_script, "_run_rows", lambda db, run_id: rows_by_run.get(run_id, []))
+    provider_snapshot_service = SimpleNamespace(
+        create_snapshot_run=refuse,
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": f"hash-{kwargs['symbol'].lower()}",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: publish_calls.append(kwargs)
+        or {
+            "published": True,
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+        },
+        # The seed until this build publishes; then the new run.
+        get_published_run=lambda db, snapshot_key: published_run if publish_calls else seed_run,
+        hydrate_published_snapshot=lambda db, snapshot_key, progress_callback=None: {"hydrated": 2},
+        export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
+        or {"bundle_path": str(kwargs["output_path"])},
+    )
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["build_weekly_reference_bundle", "--market", "US", "--output-dir", str(tmp_path)],
+    )
+    return publish_calls, export_calls
+
+
+def _seed_run(*, age_days: int, coverage: dict | None = None) -> SimpleNamespace:
+    published_at = datetime.utcnow() - timedelta(days=age_days)
+    return SimpleNamespace(
+        id=7,
+        published_at=published_at,
+        created_at=published_at,
+        source_revision="fundamentals_v1_us:20260926171427",
+        coverage_stats_json=json.dumps(coverage) if coverage is not None else None,
+    )
+
+
+def test_build_weekly_reference_bundle_us_reuses_recent_seed_when_finviz_refuses(
+    monkeypatch, tmp_path
+):
+    """#520: Finviz HTTP 403 with a recent seed publishes the seed, labelled as such."""
+    seed = _seed_run(age_days=7)
+    publish_calls, export_calls = _run_us_build_with_finviz_error(monkeypatch, tmp_path, seed_run=seed)
+
+    assert build_script.main() == 0
+
+    publish_kwargs = publish_calls[0]
+    assert [row["symbol"] for row in publish_kwargs["rows"]] == ["AAPL", "MSFT"]
+    # Rows come from the validated seed run (market_cap 2.0), not the shared
+    # cache (market_cap 1.0), so the recorded provenance describes them.
+    assert all(row["normalized_payload"]["market_cap"] == 2.0 for row in publish_kwargs["rows"])
+    assert all(
+        row["raw_payload"]
+        == {"source": "prior_weekly_reference_seed", "seed_source_revision": seed.source_revision}
+        for row in publish_kwargs["rows"]
+    )
+    coverage = publish_kwargs["coverage_stats"]
+    assert coverage["finviz_snapshot_failed"] is True
+    assert coverage["seed_source_revision"] == seed.source_revision
+    assert coverage["seed_as_of_date"] == seed.published_at.date().isoformat()
+    assert coverage["backfilled_active_symbols"] == 2
+    assert publish_kwargs["source_revision"].endswith("-seeded-fallback")
+    assert any("Finviz snapshot fetch failed: HTTPError: 403" in w for w in publish_kwargs["warnings"])
+    assert export_calls, "Bundle export should run after the seed is republished"
+
+
+@pytest.mark.parametrize(
+    ("seed_run", "reason"),
+    [
+        (None, "No prior weekly reference seed"),
+        (_seed_run(age_days=9), "max age 8 day(s)"),
+        # A seed that itself reused an older seed carries that older data date.
+        (_seed_run(age_days=1, coverage={"seed_as_of_date": "2000-01-01"}), "as of 2000-01-01"),
+        (_seed_run(age_days=1, coverage={"seed_as_of_date": "last week"}), "no usable data date"),
+        (
+            SimpleNamespace(
+                published_at=None,
+                created_at=None,
+                source_revision="fundamentals_v1_us:20260926171427",
+                coverage_stats_json="null",
+            ),
+            "no usable data date",
+        ),
+    ],
+)
+def test_build_weekly_reference_bundle_us_fails_without_a_usable_seed_when_finviz_refuses(
+    monkeypatch, tmp_path, seed_run, reason
+):
+    publish_calls, export_calls = _run_us_build_with_finviz_error(
+        monkeypatch, tmp_path, seed_run=seed_run
+    )
+
+    with pytest.raises(RuntimeError, match="did not publish") as excinfo:
+        build_script.main()
+
+    assert "Finviz snapshot fetch failed" in str(excinfo.value)
+    assert reason in str(excinfo.value)
+    assert publish_calls == []
+    assert export_calls == []
+
+
+def test_build_weekly_reference_bundle_us_does_not_swallow_non_provider_errors(
+    monkeypatch, tmp_path
+):
+    _run_us_build_with_finviz_error(
+        monkeypatch, tmp_path, seed_run=_seed_run(age_days=1), error=KeyError("Ticker")
+    )
+
+    with pytest.raises(KeyError):
+        build_script.main()
+
+
+def test_build_weekly_reference_bundle_us_records_seed_reuse_in_step_summary(
+    monkeypatch, tmp_path, capsys
+):
+    """#520: a green run built from the prior seed says so in the summary and log."""
+    seed = _seed_run(age_days=7)
+    _run_us_build_with_finviz_error(monkeypatch, tmp_path, seed_run=seed)
+    summary_path = tmp_path / "github-step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+    assert build_script.main() == 0
+
+    as_of = seed.published_at.date().isoformat()
+    assert (
+        f"| Data source | prior seed {seed.source_revision} (data as of {as_of}); "
+        "Finviz snapshot failed |"
+    ) in summary_path.read_text(encoding="utf-8")
+    assert "::warning title=Weekly reference US reused prior seed::" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("age_days", "published"), [(7, True), (9, False)])
+def test_build_weekly_reference_bundle_us_treats_an_empty_finviz_snapshot_as_failed(
+    monkeypatch, tmp_path, age_days, published
+):
+    """#520: a Finviz page with no screener rows gets the same seed-age policy as a 403."""
+    seed = _seed_run(age_days=age_days)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch, tmp_path, seed_run=seed, soft_block=True
+    )
+
+    if not published:
+        with pytest.raises(RuntimeError, match="max age 8 day"):
+            build_script.main()
+        assert publish_calls == []
+        return
+
+    assert build_script.main() == 0
+    coverage = publish_calls[0]["coverage_stats"]
+    assert coverage["finviz_snapshot_failed"] is True
+    assert coverage["seed_as_of_date"] == seed.published_at.date().isoformat()
+
+
+def test_build_weekly_reference_bundle_us_treats_a_mostly_empty_finviz_snapshot_as_failed(
+    monkeypatch, tmp_path
+):
+    """#520: Finviz serving page one and then challenge pages is a failure, not a backfill."""
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        soft_block=True,
+        active_symbols=("AAPL", "AMZN", "MSFT", "NVDA"),
+        finviz_rows=("AAPL",),
+    )
+
+    assert build_script.main() == 0
+
+    publish_kwargs = publish_calls[0]
+    assert publish_kwargs["coverage_stats"]["seed_as_of_date"] == seed.published_at.date().isoformat()
+    assert any("rows for only 1 of 4 active US symbols" in w for w in publish_kwargs["warnings"])
+    rows = {row["symbol"]: row for row in publish_kwargs["rows"]}
+    assert rows["AAPL"]["raw_payload"] == {"overview": {"Ticker": "AAPL"}}
+    assert rows["MSFT"]["raw_payload"] == {
+        "source": "prior_weekly_reference_seed",
+        "seed_source_revision": seed.source_revision,
+    }
+
+
+def test_build_weekly_reference_bundle_us_backfills_seed_misses_from_the_cache(
+    monkeypatch, tmp_path
+):
+    """#520: a symbol the reused seed lacks (e.g. a new listing) still gets a cache
+    row, labelled as such, instead of being dropped from the fallback."""
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        active_symbols=("AAPL", "MSFT", "NEWCO"),
+        seed_lacks=("NEWCO",),
+    )
+
+    assert build_script.main() == 0
+
+    rows = {row["symbol"]: row for row in publish_calls[0]["rows"]}
+    assert sorted(rows) == ["AAPL", "MSFT", "NEWCO"]
+    assert rows["AAPL"]["raw_payload"]["source"] == "prior_weekly_reference_seed"
+    assert rows["NEWCO"]["raw_payload"] == {"source": "seeded_weekly_reference_cache"}
+    assert publish_calls[0]["coverage_stats"]["missing_active_symbols"] == 0
+    assert any(
+        "Republished 2 US active symbols from the prior weekly reference seed" in w
+        and "backfilled 1 the seed lacked from the seeded cache" in w
+        for w in publish_calls[0]["warnings"]
+    )
+
+
+def test_build_weekly_reference_bundle_us_publishes_seed_rows_when_cache_backfill_fails(
+    monkeypatch, tmp_path
+):
+    """#520: a broken cache must not discard the validated seed rows; the coverage
+    gate decides whether the seed alone is enough."""
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        active_symbols=("AAPL", "MSFT", "NEWCO"),
+        seed_lacks=("NEWCO",),
+    )
+
+    def broken_get_many(symbols):
+        raise ConnectionError("cache unavailable")
+
+    monkeypatch.setattr(
+        build_script, "get_fundamentals_cache", lambda: SimpleNamespace(get_many=broken_get_many)
+    )
+
+    assert build_script.main() == 0
+
+    rows = [row["symbol"] for row in publish_calls[0]["rows"]]
+    assert rows == ["AAPL", "MSFT"]
+    assert publish_calls[0]["coverage_stats"]["missing_active_symbols"] == 1
+
+
+@pytest.mark.parametrize(("age_days", "published"), [(7, True), (9, False)])
+def test_build_weekly_reference_bundle_us_partial_backfill_requires_a_recent_seed(
+    monkeypatch, tmp_path, age_days, published
+):
+    """#520: Finviz covering most symbols still only backfills the rest from a seed
+    within the max age, and the bundle keeps its own date."""
+    seed = _seed_run(age_days=age_days)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        soft_block=True,
+        active_symbols=("AAPL", "MSFT", "NVDA"),
+        finviz_rows=("AAPL", "MSFT"),
+    )
+
+    if not published:
+        with pytest.raises(RuntimeError, match="max age 8 day"):
+            build_script.main()
+        assert publish_calls == []
+        return
+
+    assert build_script.main() == 0
+    coverage = publish_calls[0]["coverage_stats"]
+    assert "seed_as_of_date" not in coverage  # mostly fresh: not backdated
+    assert coverage["backfill_seed_as_of_date"] == seed.published_at.date().isoformat()
+    assert coverage["backfill_seed_source_revision"] == seed.source_revision
+    rows = {row["symbol"]: row for row in publish_calls[0]["rows"]}
+    assert rows["NVDA"]["raw_payload"] == {"source": "seeded_weekly_reference_cache"}
+
+
+def test_build_weekly_reference_bundle_us_warns_when_cache_backfill_fails(monkeypatch, tmp_path):
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        active_symbols=("AAPL", "MSFT", "NEWCO"),
+        seed_lacks=("NEWCO",),
+    )
+
+    def broken_get_many(symbols):
+        raise ConnectionError("cache unavailable")
+
+    monkeypatch.setattr(
+        build_script, "get_fundamentals_cache", lambda: SimpleNamespace(get_many=broken_get_many)
+    )
+
+    assert build_script.main() == 0
+    assert any(
+        "Seeded cache backfill failed: ConnectionError: cache unavailable" in w
+        for w in publish_calls[0]["warnings"]
+    )

@@ -6,11 +6,14 @@ import argparse
 import json
 import math
 import time
-from datetime import datetime
+from datetime import date, datetime
 import os
 from pathlib import Path
 from typing import Any
 
+import requests
+
+from app.config import settings
 from app.database import SessionLocal
 from app.domain.providers.price_symbol_support import is_bse_scrip_code_yahoo_symbol
 from app.services.asx_official_universe_source import is_au_securitisation_listing
@@ -21,7 +24,11 @@ from app.services.official_market_universe_source_service import (
     OfficialMarketUniverseSourceService,
 )
 from app.services.official_universe_dispatch import ingest_official_market_snapshot
-from app.services.provider_snapshot_service import ProviderSnapshotService
+from app.services.provider_snapshot_service import (
+    PRIOR_SEED_ROW_SOURCE,
+    SEEDED_CACHE_ROW_SOURCE,
+    ProviderSnapshotService,
+)
 from app.wiring.bootstrap import (
     get_fundamentals_cache,
     get_hybrid_fundamentals_service,
@@ -85,9 +92,24 @@ def _print_progress(event: dict[str, object]) -> None:
         )
 
 
+def _seed_source_note(coverage: dict[str, Any]) -> str | None:
+    """How a snapshot rebuilt from the prior seed describes its data source."""
+    if not coverage.get("seed_source_revision"):
+        return None
+    return (
+        f"prior seed {coverage['seed_source_revision']} "
+        f"(data as of {coverage.get('seed_as_of_date')}); Finviz snapshot failed"
+    )
+
+
 def _print_snapshot_publish_summary(snapshot_stats: dict[str, Any]) -> None:
     thresholds = snapshot_stats.get("coverage_thresholds") or {}
     coverage = snapshot_stats.get("coverage") or {}
+    seed_note = _seed_source_note(coverage)
+    if seed_note:
+        # A GitHub annotation, so a green run built from old data stands out.
+        market = thresholds.get("market") or snapshot_stats.get("market") or "US"
+        print(f"::warning title=Weekly reference {market} reused prior seed::{seed_note}", flush=True)
     if not thresholds or not coverage:
         return
     print(
@@ -223,6 +245,9 @@ def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
         f"| Failed fetch/store symbols | {fundamentals_stats.get('failed', 0)} |",
         f"| Bundle rows exported | {export_stats.get('rows', 0)} |",
     ]
+    seed_note = _seed_source_note(coverage)
+    if seed_note:
+        lines.append(f"| Data source | {seed_note} |")
     if provider_error_counts:
         lines.extend(
             [
@@ -262,6 +287,53 @@ def _snapshot_row_payload(row: ProviderSnapshotRow) -> dict[str, Any]:
     }
 
 
+def _run_rows(db, run_id: int) -> list[ProviderSnapshotRow]:
+    return db.query(ProviderSnapshotRow).filter(ProviderSnapshotRow.run_id == run_id).all()
+
+
+def _prior_seed(
+    db,
+    *,
+    provider_snapshot_service,
+    snapshot_key: str,
+) -> tuple[Any, dict[str, Any], str | None]:
+    """The imported prior bundle's run and provenance, or why it cannot stand in for this week.
+
+    Its data must be within ``github_weekly_reference_max_age_days``, the age past
+    which consumers already treat a weekly bundle as stale.
+    """
+    seed_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
+    if seed_run is None:
+        return None, {}, "No prior weekly reference seed is loaded to reuse."
+    try:
+        seed_coverage = json.loads(seed_run.coverage_stats_json or "{}")
+    except (TypeError, ValueError):
+        seed_coverage = {}
+    if not isinstance(seed_coverage, dict):
+        seed_coverage = {}
+    # A seed that itself reused an older seed is as old as that seed's data.
+    try:
+        seed_as_of = date.fromisoformat(
+            seed_coverage.get("seed_as_of_date")
+            or (seed_run.published_at or seed_run.created_at).date().isoformat()
+        ).isoformat()
+    except (AttributeError, TypeError, ValueError):
+        return None, {}, f"Prior weekly reference seed {seed_run.source_revision} has no usable data date."
+    # Compared in UTC, the session timezone in CI and Docker.
+    age_days = (datetime.utcnow().date() - date.fromisoformat(seed_as_of)).days
+    max_age_days = max(int(settings.github_weekly_reference_max_age_days or 0), 0)
+    if max_age_days and age_days > max_age_days:
+        return None, {}, (
+            f"Prior weekly reference seed {seed_run.source_revision} is {age_days} day(s) old "
+            f"(as of {seed_as_of}); max age {max_age_days} day(s)."
+        )
+    return seed_run, {
+        "finviz_snapshot_failed": True,
+        "seed_source_revision": seed_run.source_revision,
+        "seed_as_of_date": seed_as_of,
+    }, None
+
+
 def _publish_us_seeded_cache_fallback(
     db,
     *,
@@ -271,7 +343,7 @@ def _publish_us_seeded_cache_fallback(
     blocked_snapshot_stats: dict[str, Any],
 ) -> dict[str, Any]:
     blocked_run_id = blocked_snapshot_stats.get("run_id")
-    if not blocked_run_id:
+    if not blocked_run_id and not blocked_snapshot_stats.get("finviz_snapshot_failed"):
         return blocked_snapshot_stats
 
     active_rows = (
@@ -284,11 +356,7 @@ def _publish_us_seeded_cache_fallback(
         .all()
     )
     active_symbols = {row.symbol for row in active_rows}
-    current_rows = (
-        db.query(ProviderSnapshotRow)
-        .filter(ProviderSnapshotRow.run_id == blocked_run_id)
-        .all()
-    )
+    current_rows = _run_rows(db, blocked_run_id) if blocked_run_id else []
     rows_by_symbol = {
         row.symbol: _snapshot_row_payload(row)
         for row in current_rows
@@ -298,18 +366,88 @@ def _publish_us_seeded_cache_fallback(
     if not missing_rows:
         return blocked_snapshot_stats
 
+    seed_run = None
+    seed_provenance: dict[str, Any] = {}
+    backfill_provenance: dict[str, Any] = {}
+    # ponytail: majority cutoff. Finviz failed (an HTTP error, or pages that stop
+    # carrying screener rows) when it covers under half the active universe, so
+    # most rows would come from the prior seed and it must be recent enough.
+    # A normal partial week (e.g. 95% from Finviz) stays a dated-today backfill.
+    if len(rows_by_symbol) * 2 < len(active_symbols):
+        warnings = list(blocked_snapshot_stats.get("warnings") or [])
+        if not blocked_snapshot_stats.get("finviz_snapshot_failed"):
+            warnings.append(
+                f"Finviz snapshot returned rows for only {len(rows_by_symbol)} of "
+                f"{len(active_symbols)} active US symbols"
+            )
+        seed_run, seed_provenance, seed_problem = _prior_seed(
+            db,
+            provider_snapshot_service=provider_snapshot_service,
+            snapshot_key=snapshot_key,
+        )
+        if seed_problem:
+            return {**blocked_snapshot_stats, "warnings": [*warnings, seed_problem]}
+        blocked_snapshot_stats = {**blocked_snapshot_stats, "warnings": warnings}
+    else:
+        # Finviz covered most symbols; the rest come from the cache the prior
+        # seed hydrated, so that seed must be recent too. The bundle keeps its
+        # own date (mostly fresh); the seed is recorded under backfill_* keys.
+        _, prior, seed_problem = _prior_seed(
+            db,
+            provider_snapshot_service=provider_snapshot_service,
+            snapshot_key=snapshot_key,
+        )
+        if seed_problem:
+            return {
+                **blocked_snapshot_stats,
+                "warnings": [*(blocked_snapshot_stats.get("warnings") or []), seed_problem],
+            }
+        backfill_provenance = {
+            "backfill_seed_source_revision": prior["seed_source_revision"],
+            "backfill_seed_as_of_date": prior["seed_as_of_date"],
+        }
+
+    backfilled_symbols: list[str] = []
+    seed_backfilled = 0
+    if seed_run is not None:
+        # Fill from the validated seed's own rows, so the recorded seed revision
+        # and data date describe exactly what is republished.
+        seed_rows = {row.symbol: row for row in _run_rows(db, seed_run.id)}
+        for universe_row in missing_rows:
+            seed_row = seed_rows.get(universe_row.symbol)
+            if seed_row is None:
+                continue
+            rows_by_symbol[universe_row.symbol] = {
+                **_snapshot_row_payload(seed_row),
+                "raw_payload": {
+                    "source": PRIOR_SEED_ROW_SOURCE,
+                    "seed_source_revision": seed_run.source_revision,
+                },
+            }
+            backfilled_symbols.append(universe_row.symbol)
+        seed_backfilled = len(backfilled_symbols)
+        # Symbols the seed lacks (e.g. new listings) can still come from the
+        # cache below, labelled as cache rows.
+        missing_rows = [row for row in missing_rows if row.symbol not in rows_by_symbol]
+
+    cache_failure = None
     try:
-        seeded_payloads = get_fundamentals_cache().get_many(
-            [row.symbol for row in missing_rows]
+        seeded_payloads = (
+            get_fundamentals_cache().get_many([row.symbol for row in missing_rows])
+            if missing_rows
+            else {}
         )
     except Exception as exc:
         print(
             f"[publish] US seeded cache fallback unavailable: {exc}",
             flush=True,
         )
-        return blocked_snapshot_stats
+        if seed_run is None:
+            return blocked_snapshot_stats
+        # The validated seed rows still stand; the coverage gate decides.
+        cache_failure = f"Seeded cache backfill failed: {type(exc).__name__}: {exc}"
+        seeded_payloads = {}
 
-    backfilled_symbols: list[str] = []
     for universe_row in missing_rows:
         payload = dict(seeded_payloads.get(universe_row.symbol) or {})
         if not payload:
@@ -329,7 +467,7 @@ def _publish_us_seeded_cache_fallback(
             symbol=universe_row.symbol,
             exchange=universe_row.exchange,
             normalized_payload=payload,
-            raw_payload={"source": "seeded_weekly_reference_cache"},
+            raw_payload={"source": SEEDED_CACHE_ROW_SOURCE},
         )
         rows_by_symbol[universe_row.symbol] = fallback_row
         backfilled_symbols.append(universe_row.symbol)
@@ -346,15 +484,32 @@ def _publish_us_seeded_cache_fallback(
         "covered_active_symbols": len(active_symbols.intersection(rows_by_symbol)),
         "missing_active_symbols": len(missing_active),
         "backfilled_active_symbols": len(backfilled_symbols),
+        **seed_provenance,
+        **backfill_provenance,
     }
     warnings = list(blocked_snapshot_stats.get("warnings") or [])
-    warnings.append(
-        "Backfilled "
-        f"{len(backfilled_symbols)} US active symbols from seeded weekly reference cache "
-        "because the current Finviz snapshot omitted them: "
-        f"{', '.join(sorted(backfilled_symbols)[:25])}"
-        + ("..." if len(backfilled_symbols) > 25 else "")
-    )
+    if cache_failure:
+        warnings.append(cache_failure)
+    if seed_provenance:
+        cache_backfilled = len(backfilled_symbols) - seed_backfilled
+        warnings.append(
+            f"Republished {seed_backfilled} US active symbols from the prior weekly "
+            f"reference seed {seed_provenance['seed_source_revision']} "
+            f"(data as of {seed_provenance['seed_as_of_date']}) because the Finviz snapshot failed"
+            + (
+                f"; backfilled {cache_backfilled} the seed lacked from the seeded cache"
+                if cache_backfilled
+                else ""
+            )
+        )
+    else:
+        warnings.append(
+            "Backfilled "
+            f"{len(backfilled_symbols)} US active symbols from seeded weekly reference cache "
+            "because the current Finviz snapshot omitted them: "
+            f"{', '.join(sorted(backfilled_symbols)[:25])}"
+            + ("..." if len(backfilled_symbols) > 25 else "")
+        )
     source_revision = (
         f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-seeded-fallback"
     )
@@ -388,15 +543,25 @@ def _build_us_bundle(
     print(f"Universe refresh complete: {universe_stats}", flush=True)
 
     print("Starting published fundamentals snapshot build from Finviz...", flush=True)
-    snapshot_stats = provider_snapshot_service.create_snapshot_run(
-        db,
-        run_mode="publish",
-        snapshot_key=snapshot_key,
-        market=market,
-        publish=True,
-        progress_callback=_print_progress,
-        show_finviz_progress=True,
-    )
+    try:
+        snapshot_stats = provider_snapshot_service.create_snapshot_run(
+            db,
+            run_mode="publish",
+            snapshot_key=snapshot_key,
+            market=market,
+            publish=True,
+            progress_callback=_print_progress,
+            show_finviz_progress=True,
+        )
+    except requests.RequestException as exc:
+        # create_snapshot_run rolled back its run; the seed fallback below decides.
+        print(f"[publish] Finviz snapshot fetch failed: {exc}", flush=True)
+        snapshot_stats = {
+            "run_id": None,
+            "finviz_snapshot_failed": True,
+            "published": False,
+            "warnings": [f"Finviz snapshot fetch failed: {type(exc).__name__}: {exc}"],
+        }
     summary = {
         "output_dir": output_dir,
         "universe_refresh": universe_stats,

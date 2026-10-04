@@ -21,6 +21,7 @@ import pandas as pd
 from collections.abc import Mapping
 from finvizfinance.constants import NUMBER_COL
 from finvizfinance.util import number_covert, progress_bar, web_scrap
+from . import finviz_user_agent  # noqa: F401  (Finviz 403s finvizfinance's own User-Agent)
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -73,6 +74,19 @@ WEEKLY_REFERENCE_SNAPSHOT_KEYS: dict[str, str] = {
 WEEKLY_REFERENCE_MARKET_BY_SNAPSHOT_KEY: dict[str, str] = {
     snapshot_key: market for market, snapshot_key in WEEKLY_REFERENCE_SNAPSHOT_KEYS.items()
 }
+# raw_payload "source" of snapshot rows the US weekly build republished from the
+# prior bundle instead of fetching from Finviz (build_weekly_reference_bundle).
+PRIOR_SEED_ROW_SOURCE = "prior_weekly_reference_seed"
+SEEDED_CACHE_ROW_SOURCE = "seeded_weekly_reference_cache"
+_REUSED_ROW_SOURCES = frozenset({PRIOR_SEED_ROW_SOURCE, SEEDED_CACHE_ROW_SOURCE})
+
+
+def _is_reused_snapshot_row(raw_payload_json: str | None) -> bool:
+    try:
+        raw = json.loads(raw_payload_json) if raw_payload_json else None
+    except (TypeError, ValueError):
+        return False
+    return isinstance(raw, dict) and raw.get("source") in _REUSED_ROW_SOURCES
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:
@@ -1281,11 +1295,17 @@ class ProviderSnapshotService:
         db.add(run)
         db.flush()
 
-        merged_rows = self._build_snapshot_rows(
-            exchange_filter=exchange_filter,
-            progress_callback=progress_callback,
-            show_finviz_progress=show_finviz_progress,
-        )
+        try:
+            merged_rows = self._build_snapshot_rows(
+                exchange_filter=exchange_filter,
+                progress_callback=progress_callback,
+                show_finviz_progress=show_finviz_progress,
+            )
+        except Exception:
+            # Finviz can refuse mid-build (e.g. HTTP 403); drop the half-built run
+            # so the caller's session is clean for a fallback publish.
+            db.rollback()
+            raise
         normalized_market = (
             str(market or self.market_for_snapshot_key(snapshot_key)).strip().upper()
         )
@@ -1460,10 +1480,14 @@ class ProviderSnapshotService:
                 else:
                     missing_prices += 1
 
-                snapshot_payload["finviz_snapshot_revision"] = run.source_revision
-                snapshot_payload["finviz_snapshot_at"] = (
-                    run.published_at.isoformat() if run.published_at else run.created_at.isoformat()
-                )
+                # A row republished from the prior bundle keeps whatever Finviz
+                # observation it carries; stamping this run would pass it off
+                # as freshly fetched.
+                if not _is_reused_snapshot_row(row.raw_payload_json):
+                    snapshot_payload["finviz_snapshot_revision"] = run.source_revision
+                    snapshot_payload["finviz_snapshot_at"] = (
+                        run.published_at.isoformat() if run.published_at else run.created_at.isoformat()
+                    )
                 merged_payload = self.fundamentals_cache._merge_fundamentals(
                     snapshot_payload,
                     existing_data.get(row.symbol) or {},
@@ -1761,7 +1785,9 @@ class ProviderSnapshotService:
             "schema_version": self.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
             "market": bundle_market,
             "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "as_of_date": (
+            # A run republished from a prior seed is as old as that seed's data.
+            "as_of_date": (coverage or {}).get("seed_as_of_date")
+            or (
                 (run.published_at or run.created_at).date().isoformat()
                 if (run.published_at or run.created_at) is not None
                 else None

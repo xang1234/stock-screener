@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Dict, List, Optional
 from finvizfinance.quote import finvizfinance
+from . import finviz_user_agent  # noqa: F401  (Finviz 403s finvizfinance's own User-Agent)
 
 from .finviz_parser import FinvizParser
 from .finviz_validator import FinvizValidator

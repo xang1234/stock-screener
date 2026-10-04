@@ -2947,3 +2947,165 @@ def test_export_weekly_reference_bundle_omits_excluded_symbols(tmp_path):
     assert [row["symbol"] for row in payload["universe"]] == ["AAPL"]
     assert [row["symbol"] for row in payload["snapshot"]["rows"]] == ["AAPL"]
     db.close()
+
+
+def test_create_snapshot_run_rolls_back_its_run_when_finviz_fetch_fails(monkeypatch):
+    """#520: a Finviz HTTP error must not leave a half-built run in the session."""
+    import requests
+
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+
+    def refuse(exchange_filter=None, **kwargs):
+        raise requests.HTTPError("403 Client Error: Forbidden")
+
+    monkeypatch.setattr(service, "_build_snapshot_rows", refuse)
+
+    with pytest.raises(requests.HTTPError):
+        service.create_snapshot_run(db, run_mode="publish", publish=True)
+
+    assert db.query(ProviderSnapshotRun).count() == 0
+    db.close()
+
+
+def test_export_weekly_reference_bundle_dates_reused_seed_by_its_data(tmp_path):
+    """#520: a bundle rebuilt from a prior seed must not claim this week's date."""
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20261003161500-seeded-fallback",
+        coverage_stats_json=json.dumps({"seed_as_of_date": "2026-09-26"}),
+        symbols_total=1,
+        symbols_published=1,
+        created_at=datetime(2026, 10, 3, 16, 15),
+        published_at=datetime(2026, 10, 3, 16, 15),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotRow(
+            run_id=run.id,
+            symbol="AAPL",
+            exchange="NASDAQ",
+            row_hash="AAPL-hash",
+            normalized_payload_json=json.dumps({"symbol": "AAPL"}),
+            raw_payload_json=None,
+        )
+    )
+    db.add(ProviderSnapshotPointer(snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS, run_id=run.id))
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    service.fundamentals_cache = _StubFundamentalsCache(cached={})
+    bundle_path = tmp_path / "weekly-reference.json.gz"
+    manifest_path = tmp_path / "weekly-reference-latest.json"
+    result = service.export_weekly_reference_bundle(
+        db,
+        output_path=bundle_path,
+        bundle_asset_name=bundle_path.name,
+        latest_manifest_path=manifest_path,
+    )
+
+    assert result["as_of_date"] == "2026-09-26"
+    assert json.loads(manifest_path.read_text())["as_of_date"] == "2026-09-26"
+    db.close()
+
+
+def test_finviz_requests_send_a_current_browser_user_agent():
+    """#520: Finviz answers finvizfinance's built-in Chrome/81 User-Agent with HTTP 403."""
+    from finvizfinance import quote, util
+
+    user_agent = util.headers["User-Agent"]
+    assert "Chrome/81" not in user_agent
+    assert quote.headers is util.headers
+
+
+@pytest.mark.parametrize(
+    "reused_source", ["prior_weekly_reference_seed", "seeded_weekly_reference_cache"]
+)
+def test_hydrate_keeps_the_finviz_timestamp_of_rows_republished_from_a_prior_bundle(reused_source):
+    """#520: rows reused when Finviz failed must not look freshly observed downstream."""
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    for symbol in ("AAPL", "MSFT"):
+        db.add(
+            StockUniverse(
+                symbol=symbol,
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            )
+        )
+    published_at = datetime(2026, 10, 3, 16, 15)
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20261003161500-seeded-fallback",
+        created_at=published_at,
+        published_at=published_at,
+    )
+    db.add(run)
+    db.flush()
+    db.add_all(
+        [
+            ProviderSnapshotRow(
+                run_id=run.id,
+                symbol="AAPL",
+                exchange="NASDAQ",
+                row_hash="aapl",
+                normalized_payload_json=json.dumps({"symbol": "AAPL", "market_cap": 1000}),
+                raw_payload_json=json.dumps({"overview": {"Ticker": "AAPL"}}),
+            ),
+            ProviderSnapshotRow(
+                run_id=run.id,
+                symbol="MSFT",
+                exchange="NASDAQ",
+                row_hash="msft",
+                normalized_payload_json=json.dumps(
+                    {
+                        "symbol": "MSFT",
+                        "market_cap": 2000,
+                        "finviz_snapshot_at": "2026-09-26T17:14:27",
+                        "finviz_snapshot_revision": "fundamentals_v1:20260926171427",
+                    }
+                ),
+                raw_payload_json=json.dumps({"source": reused_source}),
+            ),
+        ]
+    )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    service.fundamentals_cache = _StubFundamentalsCache()
+    service.price_cache = _StubPriceCache()
+    service.technical_calc = _StubTechnicalCalc()
+
+    service.hydrate_published_snapshot(db, allow_yahoo_hydration=False)
+
+    stored = service.fundamentals_cache.stored
+    assert stored["AAPL"]["finviz_snapshot_at"] == published_at.isoformat()
+    assert stored["AAPL"]["finviz_snapshot_revision"] == run.source_revision
+    assert stored["MSFT"]["finviz_snapshot_at"] == "2026-09-26T17:14:27"
+    assert stored["MSFT"]["finviz_snapshot_revision"] == "fundamentals_v1:20260926171427"
+    db.close()
