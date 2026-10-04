@@ -1683,8 +1683,8 @@ def test_repair_current_us_group_metadata_updates_latest_published_run_and_repub
     assert stats["feature_run"]["updated_rows"] == 1
     assert nvda.details_json["ibd_industry_group"] == "Semiconductors"
     assert nvda.details_json["ibd_group_rank"] == 1
-    assert mock_publish.call_args_list[0].args == ("scan-us-1",)
-    assert mock_publish.call_args_list[1].args == ()
+    # One call per scan covers its variant and its market's latest variant.
+    assert [c.args for c in mock_publish.call_args_list] == [("scan-us-1",)]
 
     engine.dispose()
 

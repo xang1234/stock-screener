@@ -7,13 +7,15 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from threading import Lock
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
-from app.database import is_corruption_error
+from app.database import is_corruption_error, safe_rollback
 from app.domain.analytics.scope import market_scope_tag
 from app.domain.common.query import PageSpec, SortOrder, SortSpec
 from app.domain.scanning.filter_expression_model import QuerySpec
@@ -135,29 +137,105 @@ class UISnapshotService:
             "themes": settings.feature_themes,
         }
 
-    def get_scan_bootstrap(self, scan_id: str | None = None) -> SnapshotResult | None:
+    def get_scan_bootstrap(
+        self, scan_id: str | None = None, market: str | None = None
+    ) -> SnapshotResult | None:
+        """Explicit scan variant, else the latest variant for ``market`` (all markets if None)."""
         self._ensure_schema()
-        variant_key = self._scan_variant_key(scan_id)
+        variant_key = self._scan_variant_key(scan_id, market)
         return self._run_with_storage_recovery(
             lambda db: self._get_snapshot(
                 db=db,
                 view_key=SCAN_VIEW_KEY,
                 variant_key=variant_key,
-                source_revision=self._resolve_scan_source_revision(db, scan_id),
+                source_revision=self._resolve_scan_source_revision(db, scan_id, market),
             )
         )
 
-    def publish_scan_bootstrap(self, scan_id: str | None = None) -> SnapshotResult:
+    def publish_scan_bootstrap(
+        self, scan_id: str | None = None, market: str | None = None
+    ) -> SnapshotResult:
         self._ensure_schema()
-        variant_key = self._scan_variant_key(scan_id)
+        if scan_id:
+            return self.publish_scan_bootstraps_for(scan_id)
         return self._run_with_storage_recovery(
-            lambda db: self._publish(
+            lambda db: self._publish_scan_latest(
+                db, self._resolve_scan_source_revision(db, None, market), market
+            )
+        )
+
+    def publish_scan_bootstraps_for(self, scan_id: str) -> SnapshotResult:
+        """Publish a scan's own variant and its market's latest variant.
+
+        Both are scoped to the scan's market. When the scan is that market's
+        latest, one payload is built and stored under both variants.
+        """
+        self._ensure_schema()
+
+        def publish(db: Session) -> SnapshotResult:
+            market = db.query(Scan.universe_market).filter(Scan.scan_id == scan_id).scalar()
+            payload = self._build_scan_payload(scan_id, market)
+            explicit = self._publish(
                 db=db,
                 view_key=SCAN_VIEW_KEY,
-                variant_key=variant_key,
-                source_revision=self._resolve_scan_source_revision(db, scan_id),
-                payload=self._build_scan_payload(scan_id),
+                variant_key=self._scan_variant_key(scan_id),
+                source_revision=scan_id,
+                payload=payload,
+                retry_on_conflict=True,  # cancel request and cancelled worker can race
             )
+            latest_scan_id = self._resolve_scan_source_revision(db, None, market)
+            try:
+                self._publish_scan_latest(
+                    db, latest_scan_id, market, payload=payload if latest_scan_id == scan_id else None
+                )
+            except Exception as exc:
+                if is_corruption_error(exc):
+                    raise  # let _run_with_storage_recovery reset the snapshot tables
+                # The scan variant is already committed; report this variant's failure
+                # under its own key instead of failing (and mislabelling) the whole call.
+                safe_rollback(db)
+                logger.exception(
+                    "UI snapshot publish failed",
+                    extra={
+                        "action": "publish_scan_bootstrap",
+                        "view_key": SCAN_VIEW_KEY,
+                        "variant_key": self._scan_variant_key(None, market),
+                        "source_revision": latest_scan_id,
+                    },
+                )
+            return explicit
+
+        return self._run_with_storage_recovery(publish)
+
+    def _publish_scan_latest(
+        self,
+        db: Session,
+        source_revision: str,
+        market: str | None,
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> SnapshotResult:
+        """Publish ``latest[:market]``, never moving it back to an older scan.
+
+        The payload is built before the write; ``_publish`` takes the variant's
+        advisory lock (which also covers its first publish), re-resolves the
+        latest scan, and skips the write if a newer scan completed in the
+        meantime (its own publish then owns the pointer).
+        """
+        if payload is None:
+            # Build for the resolved scan, so payload and source revision agree
+            # even if another scan finishes while this builds.
+            resolved = None if source_revision == "none" else source_revision
+            payload = self._build_scan_payload(resolved, market)
+        return self._publish(
+            db=db,
+            view_key=SCAN_VIEW_KEY,
+            variant_key=self._scan_variant_key(None, market),
+            source_revision=source_revision,
+            payload=payload,
+            still_current=lambda locked_db: (
+                self._resolve_scan_source_revision(locked_db, None, market) == source_revision
+            ),
         )
 
     def _normalize_breadth_market(self, market: str | None) -> str:
@@ -290,6 +368,10 @@ class UISnapshotService:
         }
         published = {
             "scan_latest": self.publish_scan_bootstrap().to_dict(),
+            **{
+                f"scan_latest_{market.lower()}": self.publish_scan_bootstrap(market=market).to_dict()
+                for market in SUPPORTED_MARKETS
+            },
             "breadth": breadth_snapshots["US"],
             **{f"breadth_{market.lower()}": snapshot for market, snapshot in breadth_snapshots.items()},
         }
@@ -403,8 +485,71 @@ class UISnapshotService:
         variant_key: str,
         source_revision: str,
         payload: dict[str, Any],
+        still_current: Callable[[Session], bool] | None = None,
+        retry_on_conflict: bool = False,
+    ) -> SnapshotResult:
+        kwargs = {
+            "db": db,
+            "view_key": view_key,
+            "variant_key": variant_key,
+            "source_revision": source_revision,
+            "payload": payload,
+            "still_current": still_current,
+        }
+        if not retry_on_conflict:
+            return self._publish_once(**kwargs)
+        try:
+            return self._publish_once(**kwargs)
+        except IntegrityError:
+            # Two unguarded writers inserted the same snapshot or pointer row (e.g.
+            # the cancel request and the cancelled worker publishing one scan).
+            # Retry once: the rows now exist, so this takes the update path. Opt-in,
+            # because the rollback also ends any lock or check the caller holds.
+            db.rollback()
+            return self._publish_once(**kwargs)
+
+    @staticmethod
+    def _lock_variant(db: Session, view_key: str, variant_key: str) -> None:
+        """Serialize writers of one snapshot variant until the transaction ends.
+
+        An advisory lock works before the variant's pointer row exists, which a
+        row lock cannot. SQLite serializes writers itself, so it needs none.
+        """
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                {"key": f"ui_snapshot:{view_key}:{variant_key}"},
+            )
+
+    def _publish_once(
+        self,
+        *,
+        db: Session,
+        view_key: str,
+        variant_key: str,
+        source_revision: str,
+        payload: dict[str, Any],
+        still_current: Callable[[Session], bool] | None = None,
     ) -> SnapshotResult:
         payload = json_safe(payload)
+        if still_current is not None:
+            # Serialize writers of this variant (including its first publish), then
+            # re-check under the lock: an outdated build never writes, so the
+            # pointer never moves back to an older source.
+            self._lock_variant(db, view_key, variant_key)
+            if not still_current(db):
+                current = self._get_current(db, view_key=view_key, variant_key=variant_key)
+                db.rollback()
+                if current is not None:
+                    return current
+                # Nothing published yet; report this build as unpublished and stale.
+                return SnapshotResult(
+                    snapshot_revision="",
+                    source_revision=source_revision,
+                    published_at=datetime.now(UTC),
+                    is_stale=True,
+                    payload=payload,
+                )
         current = self._get_current(db, view_key=view_key, variant_key=variant_key)
         row = (
             db.query(UIViewSnapshot)
@@ -472,15 +617,18 @@ class UISnapshotService:
         query.delete(synchronize_session=False)
         db.flush()
 
-    def _resolve_scan_source_revision(self, db: Session, scan_id: str | None) -> str:
+    def _resolve_scan_source_revision(
+        self, db: Session, scan_id: str | None, market: str | None = None
+    ) -> str:
         if scan_id:
             return scan_id
-        latest = (
-            db.query(Scan.scan_id)
-            .filter(Scan.status.in_(("completed", "cancelled")))
-            .order_by(Scan.completed_at.desc(), Scan.started_at.desc())
-            .first()
-        )
+        query = db.query(Scan.scan_id).filter(Scan.status.in_(("completed", "cancelled")))
+        if market:
+            # Same scoping as GET /scans?market= (list_recent): the scan's universe market.
+            query = query.filter(Scan.universe_market == market)
+        # Same order as list_recent, so "latest" is the first finished scan in the
+        # history list, which is also the scan the scan page auto-loads.
+        latest = query.order_by(Scan.started_at.desc(), Scan.id.desc()).first()
         return latest[0] if latest else "none"
 
     def _resolve_breadth_source_revision(self, db: Session, market: str = "US") -> str:
@@ -541,11 +689,12 @@ class UISnapshotService:
         ]
         return "|".join(parts)
 
-    def _build_scan_payload(self, scan_id: str | None) -> dict[str, Any]:
+    def _build_scan_payload(self, scan_id: str | None, market: str | None = None) -> dict[str, Any]:
+        """Bootstrap payload; ``recent_scans`` matches ``GET /scans?limit=20&market=``."""
         filter_use_case = GetFilterOptionsUseCase()
         results_use_case = GetScanResultsUseCase()
         with SqlUnitOfWork(self._session_factory) as uow:
-            scans = uow.scans.list_recent(limit=20)
+            scans = uow.scans.list_recent(limit=20, market=market)
             scan_items = [
                 ScanListItem(
                     scan_id=scan.scan_id,
@@ -570,6 +719,9 @@ class UISnapshotService:
                 None,
             )
             payload: dict[str, Any] = {
+                # Market the scan list and latest selection are scoped to (None: all
+                # markets). Universe stats stay global.
+                "market": market,
                 "universe_stats": get_stock_universe_service().get_stats(uow.session),
                 "recent_scans": recent_scans,
                 "selected_scan": None,
@@ -951,8 +1103,10 @@ class UISnapshotService:
             logger.info("UI snapshot builder backfilling %s theme metrics for pipeline=%s", themes_without_metrics, pipeline)
             ThemeDiscoveryService(db, pipeline=pipeline).update_all_theme_metrics()
 
-    def _scan_variant_key(self, scan_id: str | None) -> str:
-        return f"scan:{scan_id}" if scan_id else "latest"
+    def _scan_variant_key(self, scan_id: str | None, market: str | None = None) -> str:
+        if scan_id:
+            return f"scan:{scan_id}"
+        return f"latest:{market}" if market else "latest"
 
     def _themes_variant_key(self, pipeline: str, theme_view: str) -> str:
         return f"{pipeline}:{theme_view}"

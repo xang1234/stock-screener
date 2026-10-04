@@ -83,7 +83,7 @@ class SqlScanRepository(ScanRepository):
             query = query.filter(Scan.universe_market == market.upper())
         return (
             query
-            .order_by(Scan.started_at.desc())
+            .order_by(Scan.started_at.desc(), Scan.id.desc())  # id: deterministic ties
             .limit(limit)
             .all()
         )

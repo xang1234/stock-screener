@@ -106,7 +106,7 @@ class _SnapshotService:
     def __init__(self, gate: _Gate) -> None:
         self.gate = gate
 
-    def get_scan_bootstrap(self, scan_id):
+    def get_scan_bootstrap(self, scan_id, market=None):
         self.gate.block()
 
 

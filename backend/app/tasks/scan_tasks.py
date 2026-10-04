@@ -161,8 +161,8 @@ def _run_post_scan_pipeline(scan_id: str, *, warm_chart_cache: bool = True) -> N
         try:
             from ..services.ui_snapshot_service import safe_publish_scan_bootstrap
 
+            # Publishes the scan's variant and its market's latest variant.
             safe_publish_scan_bootstrap(scan_id)
-            safe_publish_scan_bootstrap()
         except Exception as e:
             logger.warning("Scan snapshot publish failed: %s", e)
         if warm_chart_cache:
@@ -258,6 +258,11 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
         except Exception:
             logger.warning("Falling back to inline post-scan finalization for %s", scan_id, exc_info=True)
             _run_post_scan_pipeline(scan_id)
+    elif result.status == "cancelled":
+        # The cancel request published while this worker could still be writing
+        # a chunk, and an explicit scan variant never goes stale; republish now
+        # that no more results will be written.
+        queue_scan_bootstrap_publish(scan_id)
 
     return {
         "scan_id": result.scan_id,
@@ -291,17 +296,15 @@ def finalize_scan_artifacts(scan_id: str):
 
 @celery_app.task(name='app.tasks.scan_tasks.publish_scan_bootstrap_snapshots', queue='celery')
 def publish_scan_bootstrap_snapshots(scan_id: str):
-    """Rebuild a scan's bootstrap snapshot and the "latest" one on the general queue.
+    """Rebuild a scan's bootstrap snapshot and its market's "latest" one on the general queue.
 
     Request handlers queue this instead of building snapshots inline. "latest"
-    is resolved when the task runs, not when it was queued. Publishing has no
-    ordering guard yet: a slow build can still repoint "latest" at an older scan
-    after a faster one, which readers see as a stale snapshot (#492 follow-up).
+    is resolved when the task runs, and the publish re-checks it under the
+    variant's advisory lock, so a slow task never moves "latest" back to an older scan.
     """
     from ..services.ui_snapshot_service import safe_publish_scan_bootstrap
 
     safe_publish_scan_bootstrap(scan_id)
-    safe_publish_scan_bootstrap()
     return {"scan_id": scan_id, "status": "published_scan_bootstrap"}
 
 

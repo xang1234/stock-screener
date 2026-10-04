@@ -30,6 +30,18 @@ vi.mock('../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
 }));
 
+// null by default, like the context without a provider; tests set a market.
+const marketState = vi.hoisted(() => ({ selectedMarket: null }));
+vi.mock('../contexts/MarketContext', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useMarket: () => ({
+    selectedMarket: marketState.selectedMarket,
+    setSelectedMarket: () => {},
+    selectableMarkets: [],
+    marketLabel: (code) => code,
+  }),
+}));
+
 vi.mock('../hooks/useRuntimeActivity', () => ({
   useRuntimeActivity: (...args) => useRuntimeActivityMock(...args),
 }));
@@ -82,6 +94,7 @@ beforeEach(() => {
   runtimeState.universeOptions = null;
   runtimeState.features = {};
   filterPresetsState.presets = [];
+  marketState.selectedMarket = null;
   useRuntimeActivityMock.mockReset();
   useRuntimeActivityMock.mockReturnValue({
     data: {
@@ -146,6 +159,70 @@ describe('ScanPage', () => {
     });
     await waitFor(() => {
       expect(screen.getByRole('checkbox', { name: /vcp/i })).not.toBeChecked();
+    });
+  });
+
+  describe('market-scoped scan bootstrap', () => {
+    const marketBootstrap = (market, { scanId = `${market}-scan`, recentScans } = {}) => ({
+      is_stale: false,
+      published_at: new Date().toISOString(),
+      payload: {
+        market,
+        universe_stats: { active: 1 },
+        recent_scans: recentScans ?? { scans: [{ scan_id: scanId, status: 'completed' }] },
+        selected_scan: { scan_id: scanId, status: 'completed' },
+        selected_scan_status: { status: 'completed' },
+        filter_options: { ibd_industries: [], gics_sectors: [], ratings: [] },
+        results_page: {
+          scan_id: scanId,
+          total: 1,
+          results: [{ symbol: 'NVDA', company_name: 'NVIDIA', composite_score: 98, current_price: 900 }],
+        },
+      },
+    });
+
+    beforeEach(() => {
+      runtimeState.runtimeReady = true;
+      runtimeState.uiSnapshots = { scan: true };
+    });
+
+    it('requests the selected market and seeds its scan history from the snapshot', async () => {
+      marketState.selectedMarket = 'HK';
+      scanApi.getScanBootstrap.mockResolvedValue(marketBootstrap('HK'));
+
+      const { queryClient } = renderWithProviders(<ScanPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
+      });
+      expect(scanApi.getScanBootstrap).toHaveBeenCalledWith(null, 'HK');
+      expect(queryClient.getQueryData(['scanHistory', 'HK'])).toEqual({
+        scans: [{ scan_id: 'HK-scan', status: 'completed' }],
+      });
+      // A freshly published list is used as is: no duplicate history request.
+      expect(scanApi.getScans).not.toHaveBeenCalled();
+    });
+
+    it('does not seed history from an explicit scan snapshot', async () => {
+      marketState.selectedMarket = 'US';
+      const liveHistory = { scans: [{ scan_id: 'us-old', status: 'completed' }, { scan_id: 'us-new', status: 'queued' }] };
+      scanApi.getScans.mockResolvedValue(liveHistory);
+      scanApi.getScanBootstrap.mockImplementation(async (scanId) => (
+        scanId
+          // Explicit variants never go stale, so their lists can be old.
+          ? marketBootstrap('US', { scanId, recentScans: { scans: [{ scan_id: 'us-old', status: 'completed' }] } })
+          : { ...marketBootstrap('US'), is_stale: true }
+      ));
+
+      const { queryClient } = renderWithProviders(<ScanPage />);
+
+      await waitFor(() => {
+        expect(scanApi.getScanBootstrap).toHaveBeenCalledWith('us-old');
+      });
+      await waitFor(() => {
+        expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
+      });
+      expect(queryClient.getQueryData(['scanHistory', 'US'])).toEqual(liveHistory);
     });
   });
 

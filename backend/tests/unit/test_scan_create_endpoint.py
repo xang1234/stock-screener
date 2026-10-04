@@ -1014,3 +1014,43 @@ async def test_create_scan_returns_409_for_index_when_mapped_market_refresh_is_a
     assert payload["detail"]["market"] == market
     assert payload["detail"]["active_stages"] == ["prices"]
     assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.asyncio
+async def test_scan_bootstrap_passes_normalized_market_to_snapshot_service(client):
+    from app.wiring.bootstrap import get_ui_snapshot_service
+
+    snapshot = SimpleNamespace(
+        to_dict=lambda: {
+            "snapshot_revision": "1",
+            "source_revision": "hk-2",
+            "published_at": "2026-09-30T12:00:00Z",
+            "is_stale": False,
+            "payload": {"market": "HK"},
+        }
+    )
+    service = MagicMock()
+    service.get_scan_bootstrap.return_value = snapshot
+    app.dependency_overrides[get_ui_snapshot_service] = lambda: service
+    try:
+        response = await client.get("/api/v1/scans/bootstrap", params={"market": " hk "})
+    finally:
+        app.dependency_overrides.pop(get_ui_snapshot_service, None)
+
+    assert response.status_code == 200
+    service.get_scan_bootstrap.assert_called_once_with(None, market="HK")
+
+
+@pytest.mark.asyncio
+async def test_scan_bootstrap_rejects_unsupported_market(client):
+    from app.wiring.bootstrap import get_ui_snapshot_service
+
+    service = MagicMock()
+    app.dependency_overrides[get_ui_snapshot_service] = lambda: service
+    try:
+        response = await client.get("/api/v1/scans/bootstrap", params={"market": "ZZ"})
+    finally:
+        app.dependency_overrides.pop(get_ui_snapshot_service, None)
+
+    assert response.status_code == 400
+    service.get_scan_bootstrap.assert_not_called()
