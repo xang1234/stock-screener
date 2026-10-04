@@ -75,6 +75,7 @@ PERIOD_DAYS: Dict[str, int] = {
     "5y": 1825,  # 5 years
     "2y": 730,   # 2 years
     "1y": 365,   # 1 year
+    "7d": 7,     # live delta top-up
     "max": 3650  # 10 years for max
 }
 DEFAULT_PERIOD_DAYS = 730  # Unknown periods read as 2y for backward compat
@@ -503,6 +504,7 @@ class PriceCacheService:
         period: str,
         *,
         minimum_rows: int = 50,
+        raise_on_error: bool = False,
     ) -> Dict[str, tuple[Optional[pd.DataFrame], Optional[date]]]:
         """
         Bulk fetch from database for multiple symbols.
@@ -514,6 +516,9 @@ class PriceCacheService:
             symbols: List of stock symbols to fetch
             period: Time period ("1y", "2y", "5y", "max")
             minimum_rows: Fewest structurally valid rows required per symbol
+            raise_on_error: Raise a query failure instead of reporting every
+                symbol as missing (read paths fall back; write paths must not
+                mistake an outage for an empty history)
 
         Returns:
             Dict mapping symbol to (DataFrame, last_date) or (None, None)
@@ -585,6 +590,8 @@ class PriceCacheService:
             return results
 
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.error(f"Error in bulk database query: {e}", exc_info=True)
             return {symbol: (None, None) for symbol in symbols}
 
@@ -1761,6 +1768,7 @@ class PriceCacheService:
         also_store_db: bool = True,
         market: str | None = None,
         period: str | None = None,
+        from_database: bool = False,
     ) -> int:
         """
         Store multiple symbols' price data in cache using Redis pipeline.
@@ -1776,6 +1784,8 @@ class PriceCacheService:
             period: Period the frames were fetched with. Pass it when it can be
                 shorter than 2y, so ``get_many`` does not serve them to longer
                 requests.
+            from_database: The frames are committed rows read back for ``period``,
+                so they vouch for that whole window (up to 5y), not just 2y.
 
         Returns:
             Number of symbols successfully cached (0 when the DB write failed)
@@ -1826,7 +1836,9 @@ class PriceCacheService:
                             cutoff_date = pd.Timestamp(cutoff_datetime, tz=data.index.tz)
                         else:
                             cutoff_date = pd.Timestamp(cutoff_datetime)
-                        recent_data = self._mark_coverage(data[data.index >= cutoff_date], period)
+                        recent_data = self._mark_coverage(
+                            data[data.index >= cutoff_date], period, from_database=from_database
+                        )
                         if recent_data.empty:
                             continue
 
@@ -1864,28 +1876,99 @@ class PriceCacheService:
                 # Fall back to individual writes
                 for symbol, data in batch_data.items():
                     if data is not None and not data.empty:
-                        self._store_recent_in_redis(symbol, data, market=market, period=period)
+                        self._store_recent_in_redis(
+                            symbol, data, market=market, period=period, from_database=from_database
+                        )
 
         return stored
 
-    def store_refreshed_batch(self, batch_data: Dict[str, pd.DataFrame]) -> int:
-        """Store a stale-intraday refresh under every key namespace readers use.
+    def store_refreshed_batch(
+        self,
+        batch_data: Dict[str, pd.DataFrame],
+        *,
+        period: str | None = None,
+        market_by_symbol: Dict[str, str | None] | None = None,
+    ) -> int:
+        """Store a price refresh under every key namespace readers use.
 
         Writers split symbols between the US key (callers that omit the market)
         and the symbol's own market key, and a stale partial bar may sit under
         either. Overwrite both so neither keeps serving it; write the DB once,
         first (a failure raises before Redis is touched).
+
+        A top-up fetched for less than 2y (``period``, e.g. the 7d delta; an
+        unknown period counts as short) holds too few bars for readers, so
+        caching it would replace the full history with a frame every read
+        rejects. Cache the committed 5y database history (the Redis window)
+        for those symbols instead. A symbol the database returns nothing for
+        keeps its fetched frame, stamped with the short period it covers; a
+        failed re-read writes nothing, leaving readers to fall back to the
+        database rows just committed.
         """
         if not batch_data:
             return 0
         self._store_batch_in_database(batch_data)
-        stored = self.store_batch_in_cache(batch_data, also_store_db=False)
+        if period is None or PERIOD_DAYS.get(period, 0) >= DEFAULT_PERIOD_DAYS:
+            return self._cache_in_reader_namespaces(batch_data, period, market_by_symbol)
+
+        normalized = normalize_price_batch(batch_data)
+        unreplaced = self._unreplaced_rejected_rows(batch_data, normalized)
+        # Normalized, so a fetch with no usable rows (a suspended stock's NaN
+        # bars) stored nothing and gets no fetch metadata vouching for it.
+        fetched = {s: frame for s, frame in normalized.items() if s not in unreplaced}
+        if not fetched:
+            return 0
+        # ponytail: re-reads the committed window rather than merging into the
+        # Redis frame; that also picks up the persistence policy's corrections.
+        try:
+            history = self._get_many_from_database(
+                list(fetched), "5y", minimum_rows=1, raise_on_error=True
+            )
+        except Exception as exc:
+            logger.error(
+                "Committed %d refreshed symbols but could not re-read their history; "
+                "leaving their Redis frames for the database fallback: %s",
+                len(fetched),
+                exc,
+                exc_info=True,
+            )
+            return 0
+        full = {s: history[s][0] for s in fetched if history.get(s, (None, None))[0] is not None}
+        short = {s: frame for s, frame in fetched.items() if s not in full}
+        stored = 0
+        if full:
+            stored += self._cache_in_reader_namespaces(
+                full, "5y", market_by_symbol, from_database=True
+            )
+        if short:
+            stored += self._cache_in_reader_namespaces(short, period, market_by_symbol)
+        return stored
+
+    def _cache_in_reader_namespaces(
+        self,
+        frames: Dict[str, pd.DataFrame],
+        period: str | None,
+        market_by_symbol: Dict[str, str | None] | None,
+        *,
+        from_database: bool = False,
+    ) -> int:
+        """Cache committed frames under the US key and each non-US symbol's own key."""
+        stored = self.store_batch_in_cache(
+            frames, also_store_db=False, period=period, from_database=from_database
+        )
         non_us: Dict[str, Dict[str, pd.DataFrame]] = {}
-        for symbol, calendar_market in self._calendar_markets(list(batch_data)).items():
+        calendar_markets = self._calendar_markets(list(frames), market_by_symbol=market_by_symbol)
+        for symbol, calendar_market in calendar_markets.items():
             if calendar_market != "US":
-                non_us.setdefault(calendar_market, {})[symbol] = batch_data[symbol]
+                non_us.setdefault(calendar_market, {})[symbol] = frames[symbol]
         for calendar_market, group in non_us.items():
-            self.store_batch_in_cache(group, also_store_db=False, market=calendar_market)
+            self.store_batch_in_cache(
+                group,
+                also_store_db=False,
+                market=calendar_market,
+                period=period,
+                from_database=from_database,
+            )
         return stored
 
     def _store_batch_in_database(self, batch_data: Dict[str, pd.DataFrame]) -> None:

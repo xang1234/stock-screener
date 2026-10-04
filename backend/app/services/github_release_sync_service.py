@@ -346,11 +346,18 @@ class GitHubReleaseSyncService:
         required_manifest_keys: Iterable[str] = (),
         stale_validator: Callable[[dict[str, Any]], Any] | None = None,
         allow_stale: bool = False,
+        reuse_completed_stale_revision: bool = False,
         github_token: str | None = None,
         request_timeout_seconds: int = 60,
         output_dir: str | Path | None = None,
     ) -> dict[str, Any]:
-        """Download the latest bundle referenced by ``manifest_asset_name``."""
+        """Download the latest bundle referenced by ``manifest_asset_name``.
+
+        By default a stale manifest is downloaded even when its revision
+        equals ``current_revision``. Set ``reuse_completed_stale_revision``
+        when ``current_revision`` records a completed import, so an allowed
+        stale revision that was already imported returns ``up_to_date``.
+        """
         if str(source_mode or "").strip().lower() == "live_only":
             return self._result("live_only")
 
@@ -461,7 +468,7 @@ class GitHubReleaseSyncService:
                     )
 
         if (
-            not manifest_is_stale
+            (not manifest_is_stale or reuse_completed_stale_revision)
             and current_revision
             and source_revision
             and current_revision == source_revision

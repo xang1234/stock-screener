@@ -16,7 +16,7 @@ from redis.exceptions import ResponseError as RedisResponseError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.services.cache.redis_codec import encode_frame
+from app.services.cache.redis_codec import decode_frame, encode_frame
 from app.database import Base
 from app.models.stock import StockPrice
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
@@ -620,6 +620,154 @@ def test_refreshed_batch_overwrites_both_key_namespaces(session_factory, monkeyp
     assert db_writes == [{"0700.HK", "AAPL"}]
 
 
+# ── A short live top-up keeps the full cached history (#493) ───────────
+
+
+def _bars(end, periods: int, close: float = 1.0) -> pd.DataFrame:
+    days = pd.bdate_range(end=end, periods=periods)
+    return pd.DataFrame(
+        {"Open": close, "High": close, "Low": close, "Close": close, "Adj Close": close, "Volume": 1},
+        index=days,
+    )
+
+
+def _store_bars(session_factory, symbol: str, frame: pd.DataFrame) -> None:
+    db = session_factory()
+    for day, row in frame.iterrows():
+        db.add(StockPrice(
+            symbol=symbol, date=day.date(), open=row["Open"], high=row["High"], low=row["Low"],
+            close=row["Close"], adj_close=row["Adj Close"], volume=int(row["Volume"]),
+        ))
+    db.commit()
+    db.close()
+
+
+_HISTORY_BARS = 600  # more than 2y, so a 2y re-read would visibly truncate
+
+
+def _top_up_after_history(session_factory, symbols):
+    """~2.3y of stored bars ending a few days ago, then a top-up overlapping two of them."""
+    today = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=1)[0]
+    history_end = today - pd.offsets.BDay(3)
+    for symbol in symbols:
+        _store_bars(session_factory, symbol, _bars(history_end, _HISTORY_BARS))
+    return _bars(today, 5, close=2.0)
+
+
+# "5d" is not in PERIOD_DAYS: an unknown short period must not pass as 2y.
+@pytest.mark.parametrize("period", ["7d", "5d"])
+def test_short_top_up_caches_full_history_in_reader_namespaces(session_factory, period):
+    redis = _DictRedis()
+    service = _service(session_factory, _FrozenCalendar(_utc(2026, 7, 3, 10, 0)), redis)
+    top_up = _top_up_after_history(session_factory, ("AAPL", "0700.HK"))
+
+    service.store_refreshed_batch({"AAPL": top_up, "0700.HK": top_up}, period=period)
+
+    for key in ("price:US:AAPL:recent", "price:US:0700.HK:recent", "price:HK:0700.HK:recent"):
+        frame = decode_frame(redis.values[key])
+        assert len(frame) == _HISTORY_BARS + 3, key  # stored + 5 fetched - 2 overlapping
+        assert frame.index.is_unique and frame.index.is_monotonic_increasing
+        assert frame.index[-1] == top_up.index[-1]
+        assert service._covers_period(frame, "5y")
+    for key in ("price:US:AAPL:fetch_meta", "price:HK:0700.HK:fetch_meta"):
+        assert key in redis.values
+
+
+def test_get_many_after_short_top_up_hits_redis_without_refill(session_factory, monkeypatch):
+    import app.services.price_cache_service as module
+
+    monkeypatch.setattr(module, "get_bulk_redis_client", lambda: None)
+    redis = _DictRedis()
+    service = _service(session_factory, _FrozenCalendar(_utc(2026, 7, 3, 10, 0)), redis)
+    top_up = _top_up_after_history(session_factory, ("AAPL", "0700.HK"))
+    service.store_refreshed_batch({"AAPL": top_up, "0700.HK": top_up}, period="7d")
+
+    # Freshness has its own tests; this checks namespace, coverage and length.
+    monkeypatch.setattr(service, "_get_expected_data_date", lambda market: top_up.index[-1].date())
+    monkeypatch.setattr(service, "_is_fetch_metadata_stale", lambda *args, **kwargs: False)
+
+    def no_refill(*args, **kwargs):
+        raise AssertionError("served from Redis; no DB refill or provider fetch")
+
+    monkeypatch.setattr(service, "_resolve_bulk_fallback", no_refill)
+
+    # 5y readers (VolumeBreakthrough, 5y charts) get the whole frame; 2y
+    # readers get it trimmed to their window.
+    for period, min_bars in (("2y", 500), ("5y", _HISTORY_BARS + 3)):
+        for symbols, market in ((["AAPL"], None), (["0700.HK"], "HK"), (["0700.HK"], None)):
+            frame = service.get_many(symbols, period=period, market=market)[symbols[0]]
+            assert frame is not None, (period, symbols, market)
+            assert len(frame) >= min_bars and frame.index[-1] == top_up.index[-1]
+
+
+def test_short_top_up_for_new_listing_caches_only_its_real_bars(session_factory):
+    """The re-read returns just the committed bars; none are invented, so
+    readers still find too little history for a full window."""
+    redis = _DictRedis()
+    service = _service(session_factory, _FrozenCalendar(_utc(2026, 7, 3, 10, 0)), redis)
+    top_up = _bars(pd.Timestamp.today().normalize(), 5)
+
+    service.store_refreshed_batch({"AAPL": top_up}, period="7d")
+
+    frame = decode_frame(redis.values["price:US:AAPL:recent"])
+    assert list(frame.index) == list(top_up.index)
+
+
+def test_short_top_up_symbol_missing_from_reread_keeps_a_short_claim(session_factory, monkeypatch):
+    redis = _DictRedis()
+    service = _service(session_factory, _FrozenCalendar(_utc(2026, 7, 3, 10, 0)), redis)
+    top_up = _top_up_after_history(session_factory, ("AAPL",))
+    monkeypatch.setattr(
+        service, "_get_many_from_database", lambda symbols, *a, **k: {s: (None, None) for s in symbols}
+    )
+
+    service.store_refreshed_batch({"AAPL": top_up}, period="7d")
+
+    frame = decode_frame(redis.values["price:US:AAPL:recent"])
+    assert len(frame) == 5
+    assert not service._covers_period(frame, "2y")
+    assert "price:US:AAPL:fetch_meta" in redis.values
+
+
+def test_short_top_up_reread_failure_leaves_redis_untouched(session_factory, monkeypatch):
+    """The rows are committed; a failed re-read must not replace good cached
+    history with the short frame. Readers fall back to the database."""
+    old = {"price:US:AAPL:recent": "old-frame", "price:US:AAPL:fetch_meta": "old-meta"}
+    redis = _DictRedis(old)
+    service = _service(session_factory, _FrozenCalendar(_utc(2026, 7, 3, 10, 0)), redis)
+    monkeypatch.setattr(service, "_store_batch_in_database", lambda batch: None)
+
+    class _FailingQuerySession:
+        """Opens fine, fails mid-query: the case the helper used to swallow."""
+
+        def query(self, *args, **kwargs):
+            raise RuntimeError("database unavailable")
+
+        def close(self):
+            pass
+
+    service._session_factory = _FailingQuerySession
+
+    stored = service.store_refreshed_batch({"AAPL": _bars(pd.Timestamp.today(), 5)}, period="7d")
+
+    assert stored == 0
+    assert redis.values == old
+
+
+def test_short_top_up_without_usable_rows_writes_nothing(session_factory):
+    """A suspended stock returns NaN prices: nothing was stored, so nothing is vouched for."""
+    redis = _DictRedis()
+    service = _service(session_factory, _FrozenCalendar(_utc(2026, 7, 3, 10, 0)), redis)
+    top_up = _top_up_after_history(session_factory, ("AAPL",))
+    for column in ("Open", "High", "Low", "Close", "Adj Close"):
+        top_up[column] = float("nan")
+    top_up["Volume"] = 0
+
+    service.store_refreshed_batch({"AAPL": top_up}, period="7d")
+
+    assert redis.values == {}
+
+
 # ── After-close stale scan covers every market ─────────────────────────
 
 
@@ -698,13 +846,16 @@ def _incremental_fetch(service, frame):
 _PRICE_WRITERS = {
     "batch": lambda service, frame: service.store_batch_in_cache({"AAPL": frame}),
     "refreshed_batch": lambda service, frame: service.store_refreshed_batch({"AAPL": frame}),
+    "refreshed_batch_7d": lambda service, frame: service.store_refreshed_batch(
+        {"AAPL": frame}, period="7d"
+    ),
     "single": lambda service, frame: service.store_in_cache("AAPL", frame),
     "full_fetch": _full_fetch,
     "incremental_fetch": _incremental_fetch,
 }
 
 
-_BATCH_WRITERS = {"batch", "refreshed_batch"}
+_BATCH_WRITERS = {"batch", "refreshed_batch", "refreshed_batch_7d"}
 
 
 @pytest.mark.parametrize("name", _PRICE_WRITERS)

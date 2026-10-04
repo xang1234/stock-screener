@@ -41,7 +41,7 @@ def _success(symbols):
 
 
 class _NoopPriceCache:
-    def store_batch_in_cache(self, *_args, **_kwargs):
+    def store_refreshed_batch(self, *_args, **_kwargs):
         pass
 
 
@@ -129,8 +129,8 @@ def test_runner_fetches_and_persists_bounded_batches():
     timeline = []
 
     class PriceCache:
-        def store_batch_in_cache(self, price_data, *, also_store_db):
-            timeline.append(("store", tuple(price_data), also_store_db))
+        def store_refreshed_batch(self, price_data, *, period, market_by_symbol):
+            timeline.append(("store", tuple(price_data), period))
 
     def fetch(_fetcher, symbols, **_kwargs):
         timeline.append(("fetch", tuple(symbols)))
@@ -146,9 +146,9 @@ def test_runner_fetches_and_persists_bounded_batches():
 
     assert timeline == [
         ("fetch", ("AAPL", "MSFT")),
-        ("store", ("AAPL", "MSFT"), True),
+        ("store", ("AAPL", "MSFT"), "2y"),
         ("fetch", ("NVDA",)),
-        ("store", ("NVDA",), True),
+        ("store", ("NVDA",), "2y"),
     ]
     assert result.refreshed == 3
     assert result.failed == 0
@@ -203,8 +203,7 @@ def test_runner_reschedules_current_and_remaining_symbols_after_store_failure():
     class PriceCache:
         stores = 0
 
-        def store_batch_in_cache(self, _price_data, *, also_store_db):
-            assert also_store_db is True
+        def store_refreshed_batch(self, _price_data, *, period, market_by_symbol):
             self.stores += 1
             if self.stores == 2:
                 raise RuntimeError("redis unavailable")
@@ -239,7 +238,7 @@ def test_runner_reschedules_current_and_remaining_symbols_after_store_failure():
 
 def test_runner_propagates_soft_time_limit_from_storage():
     class PriceCache:
-        def store_batch_in_cache(self, *_args, **_kwargs):
+        def store_refreshed_batch(self, *_args, **_kwargs):
             raise SoftTimeLimitExceeded()
 
     with pytest.raises(SoftTimeLimitExceeded) as raised:
@@ -261,7 +260,7 @@ def test_runner_propagates_transient_database_storage_failure():
     )
 
     class PriceCache:
-        def store_batch_in_cache(self, *_args, **_kwargs):
+        def store_refreshed_batch(self, *_args, **_kwargs):
             raise transient_error
 
     with pytest.raises(OperationalError) as raised:
