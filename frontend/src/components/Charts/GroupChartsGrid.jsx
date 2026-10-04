@@ -53,12 +53,20 @@ function useRevealOnScroll(rootMargin) {
     const observer = new IntersectionObserver(
       (entries) => {
         if (!active) return;
-        const shown = entries.filter((entry) => entry.isIntersecting);
+        // An entry queued before its element was released has no key: skip it.
+        const shown = entries.filter(
+          (entry) => entry.isIntersecting && elements.has(entry.target),
+        );
         if (shown.length === 0) return;
         shown.forEach((entry) => observer.unobserve(entry.target));
         setRevealed((previous) => {
+          const added = shown
+            .map((entry) => elements.get(entry.target))
+            .filter((key) => !previous.has(key));
+          // Re-reports (e.g. a rebuilt observer) change nothing: skip the re-render.
+          if (added.length === 0) return previous;
           const next = new Set(previous);
-          shown.forEach((entry) => next.add(elements.get(entry.target)));
+          added.forEach((key) => next.add(key));
           return next;
         });
       },

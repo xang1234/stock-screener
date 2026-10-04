@@ -95,6 +95,16 @@ async function openGroupCharts(page) {
   await expect.poll(() => chartInstances(page)).toBeGreaterThan(0);
 }
 
+// Cells overlapping the dialog content's visible box (the scroll root).
+const visibleCells = (page) =>
+  page.locator('.MuiDialogContent-root').evaluate((root) => {
+    const box = root.getBoundingClientRect();
+    return [...root.querySelectorAll('[data-testid="group-chart-cell"]')].filter((cell) => {
+      const rect = cell.getBoundingClientRect();
+      return rect.bottom > box.top && rect.top < box.bottom;
+    }).length;
+  });
+
 const scrollDialog = (page, to) =>
   page.locator('.MuiDialogContent-root').evaluate((el, target) => {
     el.scrollTop = target === 'bottom' ? el.scrollHeight : 0;
@@ -109,8 +119,11 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
 
     await openGroupCharts(page);
     const initial = await chartInstances(page);
-    // Desktop shows ~2 rows of 2 charts, mobile ~3 single charts; plus one prewarm row.
+    // Bounded well below 40, and more than the visible cells: the prewarm row
+    // below exists only if the observer is rooted at the dialog's scroller
+    // (rooted at the viewport, the dialog clips it and nothing is prewarmed).
     expect(initial).toBeLessThanOrEqual(viewport.width > 900 ? 10 : 6);
+    expect(initial).toBeGreaterThan(await visibleCells(page));
 
     await scrollDialog(page, 'bottom');
     await expect(
@@ -134,6 +147,15 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     await page.getByRole('tab', { name: 'Charts (40)' }).click();
     await expect.poll(() => chartInstances(page)).toBeGreaterThan(0);
     expect(await chartInstances(page)).toBeLessThanOrEqual(initial);
+
+    // Keyboard scrolling from the focused tab reaches and builds the last chart.
+    await expect(page.getByRole('tab', { name: 'Charts (40)' })).toBeFocused();
+    const lastChart = page.getByTestId('group-chart-cell').last().locator('.tv-lightweight-charts');
+    // Mobile is one column of 40 rows (~14 pages); stop once the last chart exists.
+    for (let i = 0; i < 30 && (await lastChart.count()) === 0; i += 1) {
+      await page.keyboard.press('PageDown');
+    }
+    await expect(lastChart).toHaveCount(1);
 
     expect(batchRequests).toEqual([40]);
     expect(unexpected).toEqual([]);

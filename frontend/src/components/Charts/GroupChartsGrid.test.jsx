@@ -150,34 +150,66 @@ describe('GroupChartsGrid', () => {
       expect(chartLifecycle.unmounts).toEqual([]);
     });
 
-    it('disconnects the observer and ignores late callbacks on unmount', async () => {
+    it('disconnects the observer and tears charts down on unmount', async () => {
       const { unmount } = renderGrid({ symbols: SYMBOLS_40 });
       await waitFor(() => expect(cells()).toHaveLength(40));
       const observer = latestObserver();
-      const lateCells = cells().slice(0, 3);
-      observer.reveal(lateCells.slice(0, 1));
+      observer.reveal(cells().slice(0, 1));
 
       unmount();
 
       expect(observer.disconnected).toBe(true);
       expect(chartLifecycle.unmounts).toEqual(['S00']);
-      observer.reveal(lateCells);
-      expect(chartLifecycle.mounts).toEqual(['S00']);
     });
 
-    it('starts fresh observations when the group changes', async () => {
-      const { rerender } = renderGrid({ symbols: SYMBOLS_40 });
+    it('ignores a late callback from a replaced observer', async () => {
+      // A height change rebuilds the observer (as StrictMode's effect re-run
+      // does in dev); entries the old one already queued must not reveal.
+      const { rerender } = renderGrid({ symbols: SYMBOLS_40, height: 200 });
       await waitFor(() => expect(cells()).toHaveLength(40));
-      const first = latestObserver();
-      first.reveal(cells().slice(0, 2));
+      const replaced = latestObserver();
 
-      rerender(<GroupChartsGrid symbols={['NVDA', 'AAPL']} />);
+      rerender(<GroupChartsGrid symbols={SYMBOLS_40} height={240} />);
+      expect(replaced.disconnected).toBe(true);
+      replaced.reveal(cells().slice(0, 3));
+
+      expect(charts()).toHaveLength(0);
+      expect(latestObserver().options.rootMargin).toBe('288px 0px');
+    });
+
+    it('roots the observer at the nearest scrolling ancestor', async () => {
+      renderWithProviders(
+        <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+          <div>
+            <GroupChartsGrid symbols={['NVDA', 'AAPL']} />
+          </div>
+        </div>,
+      );
       await waitFor(() => expect(cells()).toHaveLength(2));
 
-      expect(first.disconnected).toBe(true);
-      expect(latestObserver()).not.toBe(first);
+      expect(latestObserver().options.root).toBe(screen.getByTestId('scroller'));
+    });
+
+    it('starts fresh observations for a group whose data is already cached', async () => {
+      // A -> B -> A: A's batch is cached, so no loading state remounts the
+      // cells; only the identity key keeps B's revealed charts from carrying over.
+      const groupB = ['S00', 'S01'];
+      const { rerender } = renderGrid({ symbols: SYMBOLS_40 });
+      await waitFor(() => expect(cells()).toHaveLength(40));
+
+      rerender(<GroupChartsGrid symbols={groupB} />);
+      await waitFor(() => expect(cells()).toHaveLength(2));
+      const observerB = latestObserver();
+      observerB.reveal(cells().slice(0, 1));
+      expect(charts().map((el) => el.dataset.symbol)).toEqual(['S00']);
+
+      rerender(<GroupChartsGrid symbols={SYMBOLS_40} />);
+      expect(cells()).toHaveLength(40);
+
+      expect(observerB.disconnected).toBe(true);
+      expect(latestObserver()).not.toBe(observerB);
       expect(charts()).toHaveLength(0);
-      expect(latestObserver().observed.size).toBe(2);
+      expect(latestObserver().observed.size).toBe(40);
     });
 
     it('still shows missing-data cards without a chart', async () => {
