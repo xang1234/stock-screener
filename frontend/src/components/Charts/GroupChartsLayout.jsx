@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import { Box } from '@mui/material';
 
 const TWO_COLUMN_TEMPLATE = 'repeat(2, minmax(0, 1fr))';
@@ -29,8 +30,8 @@ function GroupChartsLayout({ children, gap = 1, sx, ...props }) {
   );
 }
 
-export function GroupChartCell({ sx, ...props }) {
-  return <Box {...props} sx={mergeSx({ minWidth: 0 }, sx)} />;
-}
+export const GroupChartCell = forwardRef(function GroupChartCell({ sx, ...props }, ref) {
+  return <Box ref={ref} {...props} sx={mergeSx({ minWidth: 0 }, sx)} />;
+});
 
 export default GroupChartsLayout;

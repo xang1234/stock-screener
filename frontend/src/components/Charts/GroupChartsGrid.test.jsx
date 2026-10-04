@@ -1,15 +1,26 @@
-import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, screen, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
+import { fetchPriceHistoryBatch } from '../../api/priceHistory';
 import GroupChartsGrid from './GroupChartsGrid';
 
+// Chart mounts/unmounts, to check construction rather than DOM visibility.
+const chartLifecycle = vi.hoisted(() => ({ mounts: [], unmounts: [] }));
+
 vi.mock('./CandlestickChart', () => ({
-  default: ({ symbol, priceData }) => (
-    <div data-testid="group-candlestick-chart" data-symbol={symbol}>
-      {symbol}:{priceData?.length || 0}
-    </div>
-  ),
+  default: function MockCandlestickChart({ symbol, priceData }) {
+    useEffect(() => {
+      chartLifecycle.mounts.push(symbol);
+      return () => chartLifecycle.unmounts.push(symbol);
+    }, [symbol]);
+    return (
+      <div data-testid="group-candlestick-chart" data-symbol={symbol}>
+        {symbol}:{priceData?.length || 0}
+      </div>
+    );
+  },
 }));
 
 vi.mock('../../api/priceHistory', () => ({
@@ -28,21 +39,66 @@ vi.mock('../../api/priceHistory', () => ({
   PRICE_HISTORY_STALE_TIME: 300000,
 }));
 
-const renderGrid = (props = {}) => {
-  return renderWithProviders(
-    <GroupChartsGrid
-      symbols={['NVDA', 'AAPL', 'MSFT', 'META']}
-      {...props}
-    />,
-  );
-};
+class MockIntersectionObserver {
+  static instances = [];
+
+  constructor(callback, options) {
+    this.callback = callback;
+    this.options = options;
+    this.observed = new Set();
+    this.disconnected = false;
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  observe(element) {
+    this.observed.add(element);
+  }
+
+  unobserve(element) {
+    this.observed.delete(element);
+  }
+
+  disconnect() {
+    this.disconnected = true;
+    this.observed.clear();
+  }
+
+  // Deliver an intersection for the given cells, as the browser would.
+  reveal(elements) {
+    act(() => {
+      this.callback(elements.map((target) => ({ target, isIntersecting: true })));
+    });
+  }
+}
+
+const SYMBOLS_40 = Array.from({ length: 40 }, (_, i) => `S${String(i).padStart(2, '0')}`);
+
+const cells = () => screen.getAllByTestId('group-chart-cell');
+const charts = () => screen.queryAllByTestId('group-candlestick-chart');
+const latestObserver = () => MockIntersectionObserver.instances.at(-1);
+
+const renderGrid = (props = {}) =>
+  renderWithProviders(<GroupChartsGrid symbols={['NVDA', 'AAPL', 'MSFT', 'META']} {...props} />);
 
 describe('GroupChartsGrid', () => {
+  beforeEach(() => {
+    chartLifecycle.mounts.length = 0;
+    chartLifecycle.unmounts.length = 0;
+    MockIntersectionObserver.instances = [];
+    fetchPriceHistoryBatch.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('lays out chart cards as two columns on desktop widths', async () => {
+    // Without IntersectionObserver every capped chart renders (fallback).
+    vi.stubGlobal('IntersectionObserver', undefined);
     renderGrid();
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('group-candlestick-chart')).toHaveLength(4);
+      expect(charts()).toHaveLength(4);
     });
 
     const chartGrid = screen.getByTestId('group-charts-grid');
@@ -52,5 +108,121 @@ describe('GroupChartsGrid', () => {
     const generatedCss = document.head.textContent.replace(/\s/g, '');
     expect(generatedCss).toContain('grid-template-columns:1fr');
     expect(generatedCss).toContain('grid-template-columns:repeat(2,minmax(0,1fr))');
+  });
+
+  describe('with IntersectionObserver', () => {
+    beforeEach(() => {
+      vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    });
+
+    it('creates charts only for cells near the visible area', async () => {
+      renderGrid({ symbols: SYMBOLS_40, height: 200 });
+      await waitFor(() => expect(cells()).toHaveLength(40));
+
+      // Labels and reserved height are present before any chart exists.
+      expect(charts()).toHaveLength(0);
+      expect(screen.getByText('S39')).toBeInTheDocument();
+      expect(MockIntersectionObserver.instances).toHaveLength(1);
+      const observer = latestObserver();
+      // About one row (chart + card header + gap) above and below.
+      expect(observer.options.rootMargin).toBe('248px 0px');
+      expect(observer.observed.size).toBe(40);
+
+      observer.reveal(cells().slice(0, 4));
+      expect(charts().map((el) => el.dataset.symbol)).toEqual(['S00', 'S01', 'S02', 'S03']);
+
+      observer.reveal(cells().slice(4, 6));
+      expect(charts()).toHaveLength(6);
+      expect(observer.observed.size).toBe(34);
+      expect(fetchPriceHistoryBatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps revealed charts mounted when scrolled away and back', async () => {
+      renderGrid({ symbols: SYMBOLS_40 });
+      await waitFor(() => expect(cells()).toHaveLength(40));
+      const observer = latestObserver();
+
+      observer.reveal(cells().slice(0, 2));
+      // Scrolling back re-reports the same cells; nothing is rebuilt.
+      observer.reveal(cells().slice(0, 2));
+
+      expect(chartLifecycle.mounts).toEqual(['S00', 'S01']);
+      expect(chartLifecycle.unmounts).toEqual([]);
+    });
+
+    it('disconnects the observer and tears charts down on unmount', async () => {
+      const { unmount } = renderGrid({ symbols: SYMBOLS_40 });
+      await waitFor(() => expect(cells()).toHaveLength(40));
+      const observer = latestObserver();
+      observer.reveal(cells().slice(0, 1));
+
+      unmount();
+
+      expect(observer.disconnected).toBe(true);
+      expect(chartLifecycle.unmounts).toEqual(['S00']);
+    });
+
+    it('ignores a late callback from a replaced observer', async () => {
+      // A height change rebuilds the observer (as StrictMode's effect re-run
+      // does in dev); entries the old one already queued must not reveal.
+      const { rerender } = renderGrid({ symbols: SYMBOLS_40, height: 200 });
+      await waitFor(() => expect(cells()).toHaveLength(40));
+      const replaced = latestObserver();
+
+      rerender(<GroupChartsGrid symbols={SYMBOLS_40} height={240} />);
+      expect(replaced.disconnected).toBe(true);
+      replaced.reveal(cells().slice(0, 3));
+
+      expect(charts()).toHaveLength(0);
+      expect(latestObserver().options.rootMargin).toBe('288px 0px');
+    });
+
+    it('roots the observer at the nearest scrolling ancestor', async () => {
+      renderWithProviders(
+        <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+          <div>
+            <GroupChartsGrid symbols={['NVDA', 'AAPL']} />
+          </div>
+        </div>,
+      );
+      await waitFor(() => expect(cells()).toHaveLength(2));
+
+      expect(latestObserver().options.root).toBe(screen.getByTestId('scroller'));
+    });
+
+    it('starts fresh observations for a group whose data is already cached', async () => {
+      // A -> B -> A: A's batch is cached, so no loading state remounts the
+      // cells; only the identity key keeps B's revealed charts from carrying over.
+      const groupB = ['S00', 'S01'];
+      const { rerender } = renderGrid({ symbols: SYMBOLS_40 });
+      await waitFor(() => expect(cells()).toHaveLength(40));
+
+      rerender(<GroupChartsGrid symbols={groupB} />);
+      await waitFor(() => expect(cells()).toHaveLength(2));
+      const observerB = latestObserver();
+      observerB.reveal(cells().slice(0, 1));
+      expect(charts().map((el) => el.dataset.symbol)).toEqual(['S00']);
+
+      rerender(<GroupChartsGrid symbols={SYMBOLS_40} />);
+      expect(cells()).toHaveLength(40);
+
+      expect(observerB.disconnected).toBe(true);
+      expect(latestObserver()).not.toBe(observerB);
+      expect(charts()).toHaveLength(0);
+      expect(latestObserver().observed.size).toBe(40);
+    });
+
+    it('still shows missing-data cards without a chart', async () => {
+      fetchPriceHistoryBatch.mockImplementationOnce(async () => ({
+        data: { NVDA: [{ date: '2026-06-26', open: 1, high: 2, low: 0.5, close: 1.5, volume: 1 }] },
+        missing: ['AAPL'],
+      }));
+      renderGrid({ symbols: ['NVDA', 'AAPL'] });
+      await waitFor(() => expect(cells()).toHaveLength(2));
+
+      expect(screen.getByText('No price data')).toBeInTheDocument();
+      latestObserver().reveal(cells());
+      expect(charts().map((el) => el.dataset.symbol)).toEqual(['NVDA']);
+    });
   });
 });
