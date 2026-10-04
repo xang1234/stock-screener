@@ -1893,17 +1893,24 @@ def _run_us_build_with_finviz_error(
         created_at=datetime.utcnow(),
         source_revision="fundamentals_v1_us:20261003161500-seeded-fallback",
     )
-    if soft_block:
-        fake_db.query.return_value.filter.return_value.all.return_value = [
-            SimpleNamespace(
-                symbol=symbol,
-                exchange="NASDAQ",
-                row_hash=f"hash-{symbol.lower()}",
-                normalized_payload_json=json.dumps({"symbol": symbol}),
-                raw_payload_json=json.dumps({"overview": {"Ticker": symbol}}),
-            )
-            for symbol in finviz_rows
+    def snapshot_row(symbol, payload, raw):
+        return SimpleNamespace(
+            symbol=symbol,
+            exchange="NASDAQ",
+            row_hash=f"hash-{symbol.lower()}",
+            normalized_payload_json=json.dumps(payload),
+            raw_payload_json=json.dumps(raw),
+        )
+
+    rows_by_run = {
+        42: [snapshot_row(s, {"symbol": s}, {"overview": {"Ticker": s}}) for s in finviz_rows],
+    }
+    if seed_run is not None and getattr(seed_run, "id", None) is not None:
+        rows_by_run[seed_run.id] = [
+            snapshot_row(s, {"symbol": s, "market_cap": 2.0}, {"overview": {"Ticker": s}})
+            for s in active_symbols
         ]
+    monkeypatch.setattr(build_script, "_run_rows", lambda db, run_id: rows_by_run.get(run_id, []))
     provider_snapshot_service = SimpleNamespace(
         create_snapshot_run=refuse,
         build_market_snapshot_row=lambda **kwargs: {
@@ -1936,6 +1943,7 @@ def _run_us_build_with_finviz_error(
 def _seed_run(*, age_days: int, coverage: dict | None = None) -> SimpleNamespace:
     published_at = datetime.utcnow() - timedelta(days=age_days)
     return SimpleNamespace(
+        id=7,
         published_at=published_at,
         created_at=published_at,
         source_revision="fundamentals_v1_us:20260926171427",
@@ -1954,8 +1962,12 @@ def test_build_weekly_reference_bundle_us_reuses_recent_seed_when_finviz_refuses
 
     publish_kwargs = publish_calls[0]
     assert [row["symbol"] for row in publish_kwargs["rows"]] == ["AAPL", "MSFT"]
+    # Rows come from the validated seed run (market_cap 2.0), not the shared
+    # cache (market_cap 1.0), so the recorded provenance describes them.
+    assert all(row["normalized_payload"]["market_cap"] == 2.0 for row in publish_kwargs["rows"])
     assert all(
-        row["raw_payload"] == {"source": "seeded_weekly_reference_cache"}
+        row["raw_payload"]
+        == {"source": "prior_weekly_reference_seed", "seed_source_revision": seed.source_revision}
         for row in publish_kwargs["rows"]
     )
     coverage = publish_kwargs["coverage_stats"]
@@ -2076,4 +2088,7 @@ def test_build_weekly_reference_bundle_us_treats_a_mostly_empty_finviz_snapshot_
     assert any("rows for only 1 of 4 active US symbols" in w for w in publish_kwargs["warnings"])
     rows = {row["symbol"]: row for row in publish_kwargs["rows"]}
     assert rows["AAPL"]["raw_payload"] == {"overview": {"Ticker": "AAPL"}}
-    assert rows["MSFT"]["raw_payload"] == {"source": "seeded_weekly_reference_cache"}
+    assert rows["MSFT"]["raw_payload"] == {
+        "source": "prior_weekly_reference_seed",
+        "seed_source_revision": seed.source_revision,
+    }
