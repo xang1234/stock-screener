@@ -7,9 +7,12 @@ Expected input orientation:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 from app.analysis.patterns.config import SetupEngineParameters
 from app.analysis.patterns.detectors.base import (
@@ -21,6 +24,7 @@ from app.analysis.patterns.models import PatternCandidateModel
 from app.analysis.patterns.normalization import normalize_detector_input_ohlcv
 
 _NR7_LOOKBACK_BARS = 7
+_VOLUME_LOOKBACK_BARS = 20
 _MAX_TRIGGER_CANDIDATES = 5
 _RECENT_TRIGGER_BARS = 20
 _TRIGGER_RANGE_REFERENCE_PCT = 4.0
@@ -79,100 +83,7 @@ class NR7InsideDayDetector(PatternDetector):
             )
 
         frame = normalized.frame
-        high = frame["High"]
-        low = frame["Low"]
-        close = frame["Close"]
-        volume = frame["Volume"]
-        ranges = high - low
-        ema21 = close.ewm(span=21, adjust=False).mean()
-
-        signals: list[_TriggerSignal] = []
-        for idx in range(_NR7_LOOKBACK_BARS - 1, len(frame)):
-            trigger_range_points = float(ranges.iat[idx])
-            if pd.isna(trigger_range_points) or trigger_range_points < 0.0:
-                continue
-
-            range_window = ranges.iloc[
-                idx - _NR7_LOOKBACK_BARS + 1 : idx + 1
-            ]
-            if range_window.empty:
-                continue
-            range_min_7d_points = float(range_window.min())
-            trigger_is_nr7 = bool(
-                trigger_range_points <= range_min_7d_points + 1e-9
-            )
-
-            prev_idx = idx - 1
-            trigger_is_inside_day = bool(
-                prev_idx >= 0
-                and float(high.iat[idx]) < float(high.iat[prev_idx])
-                and float(low.iat[idx]) > float(low.iat[prev_idx])
-            )
-            if not (trigger_is_nr7 or trigger_is_inside_day):
-                continue
-
-            trigger_subtype = _trigger_subtype(
-                trigger_is_nr7=trigger_is_nr7,
-                trigger_is_inside_day=trigger_is_inside_day,
-            )
-            trigger_high = float(high.iat[idx])
-            trigger_low = float(low.iat[idx])
-            trigger_range_pct = (
-                (trigger_range_points / max(abs(trigger_high), 1e-9)) * 100.0
-            )
-            range_rank_7d = int(
-                (range_window <= (trigger_range_points + 1e-9)).sum()
-            )
-            trigger_volume = float(volume.iat[idx])
-            prior_volume_window = volume.iloc[max(0, idx - 20) : idx]
-            volume_mean_20d = (
-                float(prior_volume_window.mean())
-                if not prior_volume_window.empty
-                else float("nan")
-            )
-            if volume_mean_20d <= 0.0 or pd.isna(volume_mean_20d):
-                volume_ratio_20d = 1.0
-            else:
-                volume_ratio_20d = trigger_volume / volume_mean_20d
-
-            ema21_trigger_raw = float(ema21.iat[idx])
-            if pd.isna(ema21_trigger_raw):
-                ema21_trigger = None
-                close_above_ema21 = False
-            else:
-                ema21_trigger = ema21_trigger_raw
-                close_above_ema21 = bool(float(close.iat[idx]) >= ema21_trigger)
-
-            recency_bars = (len(frame) - 1) - idx
-            score = _signal_score(
-                trigger_subtype=trigger_subtype,
-                trigger_range_pct=trigger_range_pct,
-                volume_ratio_20d=volume_ratio_20d,
-                close_above_ema21=close_above_ema21,
-                recency_bars=recency_bars,
-            )
-            signals.append(
-                _TriggerSignal(
-                    idx=idx,
-                    trigger_subtype=trigger_subtype,
-                    trigger_is_nr7=trigger_is_nr7,
-                    trigger_is_inside_day=trigger_is_inside_day,
-                    trigger_high=trigger_high,
-                    trigger_low=trigger_low,
-                    trigger_range_points=trigger_range_points,
-                    trigger_range_pct=trigger_range_pct,
-                    range_min_7d_points=range_min_7d_points,
-                    range_rank_7d=range_rank_7d,
-                    trigger_volume=trigger_volume,
-                    volume_mean_20d=volume_mean_20d,
-                    volume_ratio_20d=volume_ratio_20d,
-                    ema21_trigger=ema21_trigger,
-                    close_above_ema21=close_above_ema21,
-                    recency_bars=recency_bars,
-                    score=score,
-                )
-            )
-
+        signals = _top_trigger_signals(frame)
         if not signals:
             return PatternDetectorResult.no_detection(
                 self.name,
@@ -180,18 +91,9 @@ class NR7InsideDayDetector(PatternDetector):
                 warnings=normalized.warnings,
             )
 
-        signals.sort(
-            key=lambda signal: (
-                -signal.score,
-                signal.recency_bars,
-                signal.trigger_subtype != "nr7_inside_day",
-                -signal.idx,
-            )
-        )
-
-        last_close = float(close.iat[-1])
+        last_close = float(frame["Close"].iat[-1])
         candidates: list[PatternCandidateModel] = []
-        for rank, signal in enumerate(signals[:_MAX_TRIGGER_CANDIDATES], start=1):
+        for rank, signal in enumerate(signals, start=1):
             recency_component = max(
                 0.0, 1.0 - (signal.recency_bars / _RECENT_TRIGGER_BARS)
             )
@@ -284,6 +186,130 @@ class NR7InsideDayDetector(PatternDetector):
             ),
             warnings=normalized.warnings,
         )
+
+
+def _top_trigger_signals(frame: pd.DataFrame) -> list[_TriggerSignal]:
+    """Best-ranked NR7/inside-day triggers, at most ``_MAX_TRIGGER_CANDIDATES``.
+
+    Window statistics (7-bar range minimum and rank, prior-20-bar volume mean)
+    are computed for all bars at once; scoring and ordering then run only over
+    the bars that are triggers, and signal objects are built only for the
+    selected ones. Results match the original per-bar loop exactly.
+    """
+    bar_count = len(frame)
+    if bar_count < _NR7_LOOKBACK_BARS:
+        return []
+    high = frame["High"].to_numpy(dtype=float)
+    low = frame["Low"].to_numpy(dtype=float)
+    close = frame["Close"].to_numpy(dtype=float)
+    volume = frame["Volume"].to_numpy(dtype=float)
+    ema21 = frame["Close"].ewm(span=21, adjust=False).mean().to_numpy(dtype=float)
+    ranges = high - low
+
+    first = _NR7_LOOKBACK_BARS - 1
+    with np.errstate(invalid="ignore"):
+        # Missing (NaN compares False) and inverted ranges are never triggers.
+        idx = np.flatnonzero(ranges[first:] >= 0.0) + first
+    windows = sliding_window_view(ranges, _NR7_LOOKBACK_BARS)[idx - first]
+    trigger_ranges = ranges[idx]
+    # nanmin like pandas' min(); each window holds its own non-NaN trigger.
+    range_min = np.nanmin(windows, axis=1) if idx.size else trigger_ranges
+    with np.errstate(invalid="ignore"):
+        is_nr7 = trigger_ranges <= range_min + 1e-9
+        is_inside = (high[idx] < high[idx - 1]) & (low[idx] > low[idx - 1])
+    hit = is_nr7 | is_inside
+    if not hit.any():
+        return []
+    idx, windows, trigger_ranges, range_min = idx[hit], windows[hit], trigger_ranges[hit], range_min[hit]
+    is_nr7, is_inside = is_nr7[hit], is_inside[hit]
+    range_rank = (windows <= (trigger_ranges + 1e-9)[:, None]).sum(axis=1)
+    volume_mean = _prior_volume_means(volume, idx)
+
+    rows = list(
+        zip(
+            idx.tolist(),
+            is_nr7.tolist(),
+            is_inside.tolist(),
+            high[idx].tolist(),
+            low[idx].tolist(),
+            close[idx].tolist(),
+            trigger_ranges.tolist(),
+            range_min.tolist(),
+            range_rank.tolist(),
+            volume[idx].tolist(),
+            volume_mean.tolist(),
+            ema21[idx].tolist(),
+        )
+    )
+    ranked = []
+    for row in rows:
+        i, nr7, inside, trigger_high, _, trigger_close, range_points, _, _, trigger_volume, mean, ema = row
+        subtype = _trigger_subtype(trigger_is_nr7=nr7, trigger_is_inside_day=inside)
+        range_pct = (range_points / max(abs(trigger_high), 1e-9)) * 100.0
+        ratio = 1.0 if mean <= 0.0 or math.isnan(mean) else trigger_volume / mean
+        above = False if math.isnan(ema) else trigger_close >= ema
+        recency = (bar_count - 1) - i
+        score = _signal_score(
+            trigger_subtype=subtype,
+            trigger_range_pct=range_pct,
+            volume_ratio_20d=ratio,
+            close_above_ema21=above,
+            recency_bars=recency,
+        )
+        sort_key = (-score, recency, subtype != "nr7_inside_day", -i)
+        ranked.append((sort_key, row, subtype, range_pct, ratio, above, recency, score))
+    ranked.sort(key=lambda entry: entry[0])
+
+    signals = []
+    for _, row, subtype, range_pct, ratio, above, recency, score in ranked[:_MAX_TRIGGER_CANDIDATES]:
+        i, nr7, inside, trigger_high, trigger_low, _, range_points, minimum, rank, trigger_volume, mean, ema = row
+        signals.append(
+            _TriggerSignal(
+                idx=i,
+                trigger_subtype=subtype,
+                trigger_is_nr7=nr7,
+                trigger_is_inside_day=inside,
+                trigger_high=trigger_high,
+                trigger_low=trigger_low,
+                trigger_range_points=range_points,
+                trigger_range_pct=range_pct,
+                range_min_7d_points=minimum,
+                range_rank_7d=rank,
+                trigger_volume=trigger_volume,
+                volume_mean_20d=mean,
+                volume_ratio_20d=ratio,
+                ema21_trigger=None if math.isnan(ema) else ema,
+                close_above_ema21=above,
+                recency_bars=recency,
+                score=score,
+            )
+        )
+    return signals
+
+
+def _prior_volume_means(volume: np.ndarray, idx: np.ndarray) -> np.ndarray:
+    """Mean of up to 20 volumes before each index, NaN skipped, NaN if none.
+
+    Mirrors ``Series.iloc[max(0, i - 20):i].mean()`` bit for bit: NaN filled
+    with 0, summed per contiguous row (numpy's pairwise sum, as pandas uses),
+    divided by the non-NaN count.
+    """
+    missing = np.isnan(volume)
+    filled = np.where(missing, 0.0, volume)
+    sums = np.empty(idx.size)
+    counts = np.empty(idx.size)
+    full = idx >= _VOLUME_LOOKBACK_BARS
+    if full.any():
+        starts = idx[full] - _VOLUME_LOOKBACK_BARS
+        # Fancy indexing copies each window into a C-contiguous row.
+        sums[full] = sliding_window_view(filled, _VOLUME_LOOKBACK_BARS)[starts].sum(axis=1)
+        counts[full] = sliding_window_view(~missing, _VOLUME_LOOKBACK_BARS)[starts].sum(axis=1)
+    for position in np.flatnonzero(~full):  # at most 14 early bars
+        end = idx[position]
+        sums[position] = filled[:end].sum()
+        counts[position] = (~missing[:end]).sum()
+    with np.errstate(invalid="ignore"):
+        return sums / counts  # 0 / 0 -> NaN, as pandas returns for all-NaN
 
 
 def _trigger_subtype(*, trigger_is_nr7: bool, trigger_is_inside_day: bool) -> str:
