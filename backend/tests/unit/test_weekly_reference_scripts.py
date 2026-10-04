@@ -1838,18 +1838,25 @@ def _us_rows(*symbols: str) -> list[SimpleNamespace]:
 
 
 def _run_us_build_with_finviz_error(
-    monkeypatch, tmp_path, *, seed_run, error=None, soft_block=False
+    monkeypatch,
+    tmp_path,
+    *,
+    seed_run,
+    error=None,
+    soft_block=False,
+    active_symbols=("AAPL", "MSFT"),
+    finviz_rows=(),
 ):
     """Drive the US build with create_snapshot_run raising ``error`` (default: Finviz 403).
 
-    ``soft_block`` instead returns a blocked run with no rows, as when Finviz
-    serves a page without a screener table.
+    ``soft_block`` instead returns a blocked run holding only ``finviz_rows``,
+    as when Finviz serves pages without a screener table.
     """
     import requests
 
     fake_db = MagicMock()
     fake_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = _us_rows(
-        "AAPL", "MSFT"
+        *active_symbols
     )
     monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
@@ -1887,8 +1894,16 @@ def _run_us_build_with_finviz_error(
         source_revision="fundamentals_v1_us:20261003161500-seeded-fallback",
     )
     if soft_block:
-        # The blocked run holds no Finviz rows.
-        fake_db.query.return_value.filter.return_value.all.return_value = []
+        fake_db.query.return_value.filter.return_value.all.return_value = [
+            SimpleNamespace(
+                symbol=symbol,
+                exchange="NASDAQ",
+                row_hash=f"hash-{symbol.lower()}",
+                normalized_payload_json=json.dumps({"symbol": symbol}),
+                raw_payload_json=json.dumps({"overview": {"Ticker": symbol}}),
+            )
+            for symbol in finviz_rows
+        ]
     provider_snapshot_service = SimpleNamespace(
         create_snapshot_run=refuse,
         build_market_snapshot_row=lambda **kwargs: {
@@ -2038,3 +2053,27 @@ def test_build_weekly_reference_bundle_us_treats_an_empty_finviz_snapshot_as_fai
     coverage = publish_calls[0]["coverage_stats"]
     assert coverage["finviz_snapshot_failed"] is True
     assert coverage["seed_as_of_date"] == seed.published_at.date().isoformat()
+
+
+def test_build_weekly_reference_bundle_us_treats_a_mostly_empty_finviz_snapshot_as_failed(
+    monkeypatch, tmp_path
+):
+    """#520: Finviz serving page one and then challenge pages is a failure, not a backfill."""
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        soft_block=True,
+        active_symbols=("AAPL", "AMZN", "MSFT", "NVDA"),
+        finviz_rows=("AAPL",),
+    )
+
+    assert build_script.main() == 0
+
+    publish_kwargs = publish_calls[0]
+    assert publish_kwargs["coverage_stats"]["seed_as_of_date"] == seed.published_at.date().isoformat()
+    assert any("rows for only 1 of 4 active US symbols" in w for w in publish_kwargs["warnings"])
+    rows = {row["symbol"]: row for row in publish_kwargs["rows"]}
+    assert rows["AAPL"]["raw_payload"] == {"overview": {"Ticker": "AAPL"}}
+    assert rows["MSFT"]["raw_payload"] == {"source": "seeded_weekly_reference_cache"}

@@ -311,7 +311,7 @@ def _prior_seed_provenance(
         ).isoformat()
     except (AttributeError, TypeError, ValueError):
         return {}, f"Prior weekly reference seed {seed_run.source_revision} has no usable data date."
-    # Snapshot timestamps are naive UTC.
+    # Compared in UTC, the session timezone in CI and Docker.
     age_days = (datetime.utcnow().date() - date.fromisoformat(seed_as_of)).days
     max_age_days = max(int(settings.github_weekly_reference_max_age_days or 0), 0)
     if max_age_days and age_days > max_age_days:
@@ -365,12 +365,17 @@ def _publish_us_seeded_cache_fallback(
         return blocked_snapshot_stats
 
     seed_provenance: dict[str, Any] = {}
-    if not rows_by_symbol:
-        # Finviz failed outright (an HTTP error, or pages with no screener rows):
-        # every row will come from the prior seed, so it must be recent enough.
+    # ponytail: majority cutoff. Finviz failed (an HTTP error, or pages that stop
+    # carrying screener rows) when it covers under half the active universe, so
+    # most rows would come from the prior seed and it must be recent enough.
+    # A normal partial week (e.g. 95% from Finviz) stays a dated-today backfill.
+    if len(rows_by_symbol) * 2 < len(active_symbols):
         warnings = list(blocked_snapshot_stats.get("warnings") or [])
         if not blocked_snapshot_stats.get("finviz_snapshot_failed"):
-            warnings.append("Finviz snapshot returned no rows for active US symbols")
+            warnings.append(
+                f"Finviz snapshot returned rows for only {len(rows_by_symbol)} of "
+                f"{len(active_symbols)} active US symbols"
+            )
         seed_provenance, seed_problem = _prior_seed_provenance(
             db,
             provider_snapshot_service=provider_snapshot_service,
