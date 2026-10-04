@@ -88,9 +88,24 @@ def _print_progress(event: dict[str, object]) -> None:
         )
 
 
+def _seed_source_note(coverage: dict[str, Any]) -> str | None:
+    """How a snapshot rebuilt from the prior seed describes its data source."""
+    if not coverage.get("seed_source_revision"):
+        return None
+    return (
+        f"prior seed {coverage['seed_source_revision']} "
+        f"(data as of {coverage.get('seed_as_of_date')}); Finviz snapshot failed"
+    )
+
+
 def _print_snapshot_publish_summary(snapshot_stats: dict[str, Any]) -> None:
     thresholds = snapshot_stats.get("coverage_thresholds") or {}
     coverage = snapshot_stats.get("coverage") or {}
+    seed_note = _seed_source_note(coverage)
+    if seed_note:
+        # A GitHub annotation, so a green run built from old data stands out.
+        market = thresholds.get("market") or snapshot_stats.get("market") or "US"
+        print(f"::warning title=Weekly reference {market} reused prior seed::{seed_note}", flush=True)
     if not thresholds or not coverage:
         return
     print(
@@ -226,6 +241,9 @@ def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
         f"| Failed fetch/store symbols | {fundamentals_stats.get('failed', 0)} |",
         f"| Bundle rows exported | {export_stats.get('rows', 0)} |",
     ]
+    seed_note = _seed_source_note(coverage)
+    if seed_note:
+        lines.append(f"| Data source | {seed_note} |")
     if provider_error_counts:
         lines.extend(
             [
@@ -283,11 +301,18 @@ def _prior_seed_provenance(
         seed_coverage = json.loads(seed_run.coverage_stats_json or "{}")
     except (TypeError, ValueError):
         seed_coverage = {}
+    if not isinstance(seed_coverage, dict):
+        seed_coverage = {}
     # A seed that itself reused an older seed is as old as that seed's data.
-    seed_as_of = seed_coverage.get("seed_as_of_date") or (
-        (seed_run.published_at or seed_run.created_at).date().isoformat()
-    )
-    age_days = (date.today() - date.fromisoformat(seed_as_of)).days
+    try:
+        seed_as_of = date.fromisoformat(
+            seed_coverage.get("seed_as_of_date")
+            or (seed_run.published_at or seed_run.created_at).date().isoformat()
+        ).isoformat()
+    except (AttributeError, TypeError, ValueError):
+        return {}, f"Prior weekly reference seed {seed_run.source_revision} has no usable data date."
+    # Snapshot timestamps are naive UTC.
+    age_days = (datetime.utcnow().date() - date.fromisoformat(seed_as_of)).days
     max_age_days = max(int(settings.github_weekly_reference_max_age_days or 0), 0)
     if max_age_days and age_days > max_age_days:
         return {}, (
@@ -310,20 +335,7 @@ def _publish_us_seeded_cache_fallback(
     blocked_snapshot_stats: dict[str, Any],
 ) -> dict[str, Any]:
     blocked_run_id = blocked_snapshot_stats.get("run_id")
-    seed_provenance: dict[str, Any] = {}
-    if blocked_snapshot_stats.get("finviz_snapshot_failed"):
-        # Finviz failed outright: every row will come from the prior seed.
-        seed_provenance, seed_problem = _prior_seed_provenance(
-            db,
-            provider_snapshot_service=provider_snapshot_service,
-            snapshot_key=snapshot_key,
-        )
-        if seed_problem:
-            return {
-                **blocked_snapshot_stats,
-                "warnings": [*(blocked_snapshot_stats.get("warnings") or []), seed_problem],
-            }
-    elif not blocked_run_id:
+    if not blocked_run_id and not blocked_snapshot_stats.get("finviz_snapshot_failed"):
         return blocked_snapshot_stats
 
     active_rows = (
@@ -351,6 +363,22 @@ def _publish_us_seeded_cache_fallback(
     missing_rows = [row for row in active_rows if row.symbol not in rows_by_symbol]
     if not missing_rows:
         return blocked_snapshot_stats
+
+    seed_provenance: dict[str, Any] = {}
+    if not rows_by_symbol:
+        # Finviz failed outright (an HTTP error, or pages with no screener rows):
+        # every row will come from the prior seed, so it must be recent enough.
+        warnings = list(blocked_snapshot_stats.get("warnings") or [])
+        if not blocked_snapshot_stats.get("finviz_snapshot_failed"):
+            warnings.append("Finviz snapshot returned no rows for active US symbols")
+        seed_provenance, seed_problem = _prior_seed_provenance(
+            db,
+            provider_snapshot_service=provider_snapshot_service,
+            snapshot_key=snapshot_key,
+        )
+        if seed_problem:
+            return {**blocked_snapshot_stats, "warnings": [*warnings, seed_problem]}
+        blocked_snapshot_stats = {**blocked_snapshot_stats, "warnings": warnings}
 
     try:
         seeded_payloads = get_fundamentals_cache().get_many(

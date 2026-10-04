@@ -16,6 +16,7 @@ from uuid import uuid4
 import pandas as pd
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.util import web_scrap
+from . import finviz_user_agent  # noqa: F401  (Finviz 403s finvizfinance's own User-Agent)
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_
 from datetime import datetime, timedelta, timezone

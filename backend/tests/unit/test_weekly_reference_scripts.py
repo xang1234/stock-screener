@@ -1837,8 +1837,14 @@ def _us_rows(*symbols: str) -> list[SimpleNamespace]:
     ]
 
 
-def _run_us_build_with_finviz_error(monkeypatch, tmp_path, *, seed_run, error=None):
-    """Drive the US build with create_snapshot_run raising ``error`` (default: Finviz 403)."""
+def _run_us_build_with_finviz_error(
+    monkeypatch, tmp_path, *, seed_run, error=None, soft_block=False
+):
+    """Drive the US build with create_snapshot_run raising ``error`` (default: Finviz 403).
+
+    ``soft_block`` instead returns a blocked run with no rows, as when Finviz
+    serves a page without a screener table.
+    """
     import requests
 
     fake_db = MagicMock()
@@ -1863,6 +1869,12 @@ def _run_us_build_with_finviz_error(monkeypatch, tmp_path, *, seed_run, error=No
     )
 
     def refuse(db, **kwargs):
+        if soft_block:
+            return {
+                "run_id": 42,
+                "published": False,
+                "warnings": ["Active snapshot coverage 0.00% below minimum 98.00%"],
+            }
         raise error or requests.HTTPError(
             "403 Client Error: Forbidden for url: https://finviz.com/screener.ashx"
         )
@@ -1874,6 +1886,9 @@ def _run_us_build_with_finviz_error(monkeypatch, tmp_path, *, seed_run, error=No
         created_at=datetime.utcnow(),
         source_revision="fundamentals_v1_us:20261003161500-seeded-fallback",
     )
+    if soft_block:
+        # The blocked run holds no Finviz rows.
+        fake_db.query.return_value.filter.return_value.all.return_value = []
     provider_snapshot_service = SimpleNamespace(
         create_snapshot_run=refuse,
         build_market_snapshot_row=lambda **kwargs: {
@@ -1945,6 +1960,16 @@ def test_build_weekly_reference_bundle_us_reuses_recent_seed_when_finviz_refuses
         (_seed_run(age_days=9), "max age 8 day(s)"),
         # A seed that itself reused an older seed carries that older data date.
         (_seed_run(age_days=1, coverage={"seed_as_of_date": "2000-01-01"}), "as of 2000-01-01"),
+        (_seed_run(age_days=1, coverage={"seed_as_of_date": "last week"}), "no usable data date"),
+        (
+            SimpleNamespace(
+                published_at=None,
+                created_at=None,
+                source_revision="fundamentals_v1_us:20260926171427",
+                coverage_stats_json="null",
+            ),
+            "no usable data date",
+        ),
     ],
 )
 def test_build_weekly_reference_bundle_us_fails_without_a_usable_seed_when_finviz_refuses(
@@ -1972,3 +1997,44 @@ def test_build_weekly_reference_bundle_us_does_not_swallow_non_provider_errors(
 
     with pytest.raises(KeyError):
         build_script.main()
+
+
+def test_build_weekly_reference_bundle_us_records_seed_reuse_in_step_summary(
+    monkeypatch, tmp_path, capsys
+):
+    """#520: a green run built from the prior seed says so in the summary and log."""
+    seed = _seed_run(age_days=7)
+    _run_us_build_with_finviz_error(monkeypatch, tmp_path, seed_run=seed)
+    summary_path = tmp_path / "github-step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+    assert build_script.main() == 0
+
+    as_of = seed.published_at.date().isoformat()
+    assert (
+        f"| Data source | prior seed {seed.source_revision} (data as of {as_of}); "
+        "Finviz snapshot failed |"
+    ) in summary_path.read_text(encoding="utf-8")
+    assert "::warning title=Weekly reference US reused prior seed::" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("age_days", "published"), [(7, True), (9, False)])
+def test_build_weekly_reference_bundle_us_treats_an_empty_finviz_snapshot_as_failed(
+    monkeypatch, tmp_path, age_days, published
+):
+    """#520: a Finviz page with no screener rows gets the same seed-age policy as a 403."""
+    seed = _seed_run(age_days=age_days)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch, tmp_path, seed_run=seed, soft_block=True
+    )
+
+    if not published:
+        with pytest.raises(RuntimeError, match="max age 8 day"):
+            build_script.main()
+        assert publish_calls == []
+        return
+
+    assert build_script.main() == 0
+    coverage = publish_calls[0]["coverage_stats"]
+    assert coverage["finviz_snapshot_failed"] is True
+    assert coverage["seed_as_of_date"] == seed.published_at.date().isoformat()

@@ -21,6 +21,7 @@ import pandas as pd
 from collections.abc import Mapping
 from finvizfinance.constants import NUMBER_COL
 from finvizfinance.util import number_covert, progress_bar, web_scrap
+from . import finviz_user_agent  # noqa: F401  (Finviz 403s finvizfinance's own User-Agent)
 from sqlalchemy.orm import Session
 
 from ..config import settings

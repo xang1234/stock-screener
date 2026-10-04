@@ -3022,3 +3022,12 @@ def test_export_weekly_reference_bundle_dates_reused_seed_by_its_data(tmp_path):
     assert result["as_of_date"] == "2026-09-26"
     assert json.loads(manifest_path.read_text())["as_of_date"] == "2026-09-26"
     db.close()
+
+
+def test_finviz_requests_send_a_current_browser_user_agent():
+    """#520: Finviz answers finvizfinance's built-in Chrome/81 User-Agent with HTTP 403."""
+    from finvizfinance import quote, util
+
+    user_agent = util.headers["User-Agent"]
+    assert "Chrome/81" not in user_agent
+    assert quote.headers is util.headers
