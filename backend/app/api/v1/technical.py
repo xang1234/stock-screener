@@ -50,7 +50,7 @@ def convert_numpy_types(obj):
 
 
 @router.get("/{symbol}/minervini")
-async def scan_minervini(
+def scan_minervini(
     symbol: str,
     include_vcp: bool = Query(True, description="Include VCP pattern detection"),
 ):
@@ -176,7 +176,7 @@ def _legacy_live_rs_rating(symbol: str, *, market: str) -> dict:
 
 
 @router.get("/{symbol}/stage")
-async def get_stage_analysis(symbol: str):
+def get_stage_analysis(symbol: str):
     """
     Get Weinstein Stage Analysis for a stock.
 
@@ -230,7 +230,7 @@ async def get_stage_analysis(symbol: str):
 
 
 @router.get("/{symbol}/ma-analysis")
-async def get_ma_analysis(symbol: str):
+def get_ma_analysis(symbol: str):
     """
     Get Moving Average alignment analysis.
 
@@ -281,7 +281,7 @@ async def get_ma_analysis(symbol: str):
 
 
 @router.get("/{symbol}/vcp")
-async def detect_vcp(symbol: str):
+def detect_vcp(symbol: str):
     """
     Detect Volatility Contraction Pattern (VCP).
 
@@ -316,7 +316,7 @@ async def detect_vcp(symbol: str):
 
 
 @router.get("/{symbol}/52-week-position")
-async def get_52w_position(symbol: str):
+def get_52w_position(symbol: str):
     """
     Get stock position relative to 52-week range.
 

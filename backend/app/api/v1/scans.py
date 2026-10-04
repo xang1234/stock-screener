@@ -95,7 +95,7 @@ def _resolve_scan_guard_market(universe_def: Any) -> str | None:
 
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
-async def get_scan_bootstrap(
+def get_scan_bootstrap(
     scan_id: str | None = Query(None, description="Optional explicit scan bootstrap variant"),
     snapshot_service: Any = Depends(get_ui_snapshot_service),
 ):
@@ -223,7 +223,7 @@ def create_scan(
 
 
 @router.post("/refresh-cache", response_model=SmartRefreshResponse)
-async def refresh_scan_cache(request: ScanCacheRefreshRequest):
+def refresh_scan_cache(request: ScanCacheRefreshRequest):
     """Queue a manual market data refresh from the scan workflow."""
     from .cache import _queue_manual_smart_refresh
 
