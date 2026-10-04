@@ -22,12 +22,13 @@ MappingResult = Mapping[str, Mapping[str, Any]]
 
 
 class PriceBatchCache(Protocol):
-    def store_batch_in_cache(
+    def store_refreshed_batch(
         self,
         price_data: Mapping[str, Any],
         *,
-        also_store_db: bool,
-    ) -> None: ...
+        period: str,
+        market_by_symbol: dict[str, str],
+    ) -> int: ...
 
 
 class PriceBatchFetcher(Protocol):
@@ -448,9 +449,13 @@ class PriceRefreshBatchExecutor:
                 progress_callback=progress_callback,
             ):
                 if batch.price_data_by_symbol:
-                    price_cache.store_batch_in_cache(
+                    price_cache.store_refreshed_batch(
                         dict(batch.price_data_by_symbol),
-                        also_store_db=True,
+                        period=batch.job.period,
+                        market_by_symbol={
+                            symbol: market_for_symbol(symbol)
+                            for symbol in batch.price_data_by_symbol
+                        },
                     )
                 self._track_symbol_failures(
                     price_cache,

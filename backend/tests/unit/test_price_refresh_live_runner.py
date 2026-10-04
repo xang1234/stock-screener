@@ -37,7 +37,7 @@ def test_live_price_refresh_runner_raises_interruption_with_partial_summary():
         }
 
     class _FakePriceCache:
-        def store_batch_in_cache(self, *_args, **_kwargs):
+        def store_refreshed_batch(self, *_args, **_kwargs):
             pass
 
     class _FakeReporter:

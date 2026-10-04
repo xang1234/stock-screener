@@ -286,8 +286,8 @@ def test_batch_executor_persists_tracks_and_accumulates_in_one_canonical_path():
     timeline = []
 
     class PriceCache:
-        def store_batch_in_cache(self, price_data, *, also_store_db):
-            timeline.append(("store", tuple(price_data), also_store_db))
+        def store_refreshed_batch(self, price_data, *, period, market_by_symbol):
+            timeline.append(("store", tuple(price_data), period, market_by_symbol))
 
     executor = executor_type(
         fetch_with_backoff=lambda _fetcher, symbols, **_kwargs: {
@@ -317,13 +317,15 @@ def test_batch_executor_persists_tracks_and_accumulates_in_one_canonical_path():
         total=2,
         batch_size=1,
         market="US",
-        market_for_symbol=lambda _symbol: "US",
+        market_for_symbol=lambda symbol: "HK" if symbol == "MSFT" else "US",
     )
 
+    # The job period and canonical market reach the cache, so a short delta
+    # keeps full histories under the keys each market's readers use (#493).
     assert timeline == [
-        ("store", ("AAPL",), True),
+        ("store", ("AAPL",), "7d", {"AAPL": "US"}),
         ("track", ("AAPL",), ()),
-        ("store", ("MSFT",), True),
+        ("store", ("MSFT",), "7d", {"MSFT": "HK"}),
         ("track", ("MSFT",), ()),
     ]
     assert summary.refreshed == 2
@@ -340,8 +342,7 @@ def test_batch_executor_reports_partial_summary_and_unresolved_symbols():
     class PriceCache:
         stores = 0
 
-        def store_batch_in_cache(self, _price_data, *, also_store_db):
-            assert also_store_db is True
+        def store_refreshed_batch(self, _price_data, *, period, market_by_symbol):
             self.stores += 1
             if self.stores == 2:
                 raise RuntimeError("storage unavailable")
