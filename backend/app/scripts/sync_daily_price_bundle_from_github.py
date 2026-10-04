@@ -35,7 +35,10 @@ def main() -> int:
     parser.add_argument(
         "--reimport",
         action="store_true",
-        help="Download and import the latest bundle even if its revision was already imported (repair).",
+        help=(
+            "Download and import the latest bundle even if its revision was already "
+            "imported (repair). A stale bundle still needs --allow-stale."
+        ),
     )
     args = parser.parse_args()
 

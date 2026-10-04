@@ -962,7 +962,11 @@ class BulkDataFetcher:
 
             attempt_results = {
                 symbol: fetch_results.get(symbol)
-                or self._build_error_result(symbol, "Symbol missing from results")
+                or self._build_error_result(
+                    symbol,
+                    "Symbol missing from results",
+                    error_kind=PriceFetchFailureKind.TRANSIENT.value,
+                )
                 for symbol in pending
             }
             results.update(attempt_results)

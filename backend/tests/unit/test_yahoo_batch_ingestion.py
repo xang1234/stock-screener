@@ -327,6 +327,34 @@ def test_fetch_price_batch_with_retries_rates_only_retried_symbols(monkeypatch):
     assert all(results[symbol]["has_error"] is False for symbol in symbols)
 
 
+def test_fetch_price_batch_with_retries_retries_symbols_the_provider_omitted(monkeypatch):
+    """Omissions alone (no rate-limit errors in the batch) still drive a retry."""
+    fetcher = BulkDataFetcher()
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    symbols = [f"SYM{i}" for i in range(30)]
+    omitted = set(symbols[:10])
+
+    def fake_fetch_batch_prices(batch_symbols, period="2y"):
+        calls.append(list(batch_symbols))
+        return {
+            symbol: _success_result(symbol)
+            for symbol in batch_symbols
+            if len(calls) > 1 or symbol not in omitted
+        }
+
+    monkeypatch.setattr(fetcher, "fetch_batch_prices", fake_fetch_batch_prices)
+    monkeypatch.setattr("app.services.bulk_data_fetcher.time.sleep", sleeps.append)
+
+    results = fetcher._fetch_price_batch_with_retries(
+        symbols, period="2y", initial_batch_size=50
+    )
+
+    assert calls == [symbols, symbols[:10]]
+    assert sleeps == [30]
+    assert all(results[symbol]["has_error"] is False for symbol in symbols)
+
+
 def test_fetch_price_batch_with_retries_skips_terminal_and_reports_missing(monkeypatch):
     """No-price-data results are terminal; a symbol the provider omits is
     still reported, and retried as a transient failure."""
