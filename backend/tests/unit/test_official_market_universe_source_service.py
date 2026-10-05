@@ -2782,4 +2782,53 @@ def test_fetch_jp_snapshot_reports_both_failures_when_the_file_moved(monkeypatch
         service.fetch_jp_snapshot()
 
     assert "404" in str(exc.value)
-    assert "no data_j spreadsheet link" in str(exc.value)
+    assert "no working data_j spreadsheet link" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "page_html",
+    [
+        b"<a href='/markets/x-att/data_j.xlsx'>Excel</a>",
+        b'<a href = "/markets/x-att/data_j.xlsx?20261001">Excel</a>',
+        # A leftover legacy link listed first must not win over the xlsx.
+        b'<a href="/markets/old-att/data_j.xls">old</a> <a href="/markets/x-att/data_j.xlsx">new</a>',
+    ],
+)
+def test_jp_listing_link_discovery_tolerates_markup_variants(monkeypatch, page_html):
+    service = OfficialMarketUniverseSourceService()
+    _jp_http(monkeypatch, service, {_JPX_PAGE: _fetched(_JPX_PAGE, page_html)})
+
+    url = service._discover_jp_listing_url()
+
+    assert url.startswith("https://www.jpx.co.jp/markets/x-att/data_j.xlsx")
+
+
+def test_fetch_jp_snapshot_retries_the_configured_url_when_the_discovered_link_fails(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    configured = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx"
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.settings.jp_universe_source_url",
+        configured,
+    )
+    page = b'<a href="/markets/not-yet-uploaded-att/data_j.xlsx">Excel</a>'
+    calls = _jp_http(monkeypatch, service, {
+        _JPX_PAGE: _fetched(_JPX_PAGE, page),
+        "https://www.jpx.co.jp/markets/not-yet-uploaded-att/data_j.xlsx": requests.ConnectionError("reset"),
+        configured: _fetched(configured, _fixture_bytes("jp_data_j_fixture.xlsx")),
+    })
+
+    snapshot = service.fetch_jp_snapshot()
+
+    assert calls[-1] == configured
+    assert snapshot.source_metadata["source_urls"] == [configured]
+
+
+def test_parse_jp_rows_names_non_excel_content():
+    with pytest.raises(ValueError, match="not an Excel workbook"):
+        OfficialMarketUniverseSourceService().parse_jp_rows(b"<html>maintenance</html>")
+
+
+def test_coerce_date_treats_missing_datetimes_as_missing():
+    coerce = OfficialMarketUniverseSourceService._coerce_date
+    assert coerce(pd.NaT) is None
+    assert coerce(float("nan")) is None

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 import app.scripts.build_weekly_reference_bundle as build_script
 import app.scripts.import_weekly_reference_bundle as import_script
@@ -1280,12 +1281,18 @@ def test_build_weekly_reference_bundle_deadline_blocks_when_partial_disabled(
     assert publish_kwargs["coverage_stats"]["snapshot_symbols"] == 3
 
 
-def _patch_cn_dependencies(monkeypatch, *, raise_universe: bool, hybrid_failures: int = 0):
+def _patch_cn_dependencies(
+    monkeypatch,
+    *,
+    raise_universe: bool,
+    hybrid_failures: int = 0,
+    universe_error: Exception | None = None,
+):
     """Wire the supporting Asia-bundle services for stale-universe fallback tests."""
 
     def fetch(market):
         if raise_universe:
-            raise RuntimeError("AKShare CN spot disconnected")
+            raise universe_error or RuntimeError("AKShare CN spot disconnected")
         return SimpleNamespace(
             market=market,
             source_name="cn_official",
@@ -2262,13 +2269,26 @@ def _jp_snapshot_service(publish_calls, *, seed_published_at, seed_coverage=None
     )
 
 
-def _run_jp_stale_universe(monkeypatch, tmp_path, *, seed_published_at, seeded_count=None, flags=None):
+def _run_jp_stale_universe(
+    monkeypatch,
+    tmp_path,
+    *,
+    seed_published_at,
+    seeded_count=None,
+    flags=None,
+    seed_coverage=None,
+    universe_error=None,
+):
     active_rows = [_make_universe_row("7203.T", market="JP"), _make_universe_row("1301.T", market="JP")]
     fake_db = _make_cn_db_mock(active_rows, seeded_count=seeded_count)
     monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    _patch_cn_dependencies(monkeypatch, raise_universe=True)
+    _patch_cn_dependencies(
+        monkeypatch,
+        raise_universe=True,
+        universe_error=universe_error or requests.ConnectionError("JPX listing unreachable"),
+    )
     monkeypatch.setattr(
         build_script,
         "get_fundamentals_cache",
@@ -2278,7 +2298,9 @@ def _run_jp_stale_universe(monkeypatch, tmp_path, *, seed_published_at, seeded_c
     monkeypatch.setattr(
         build_script,
         "get_provider_snapshot_service",
-        lambda: _jp_snapshot_service(publish_calls, seed_published_at=seed_published_at),
+        lambda: _jp_snapshot_service(
+            publish_calls, seed_published_at=seed_published_at, seed_coverage=seed_coverage
+        ),
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -2299,28 +2321,74 @@ def test_stale_universe_flag_reuses_a_recent_seed_and_records_its_age(monkeypatc
     assert coverage["stale_universe"] is True
     assert coverage["universe_seed_source_revision"] == "fundamentals_v1_jp:seed"
     assert coverage["universe_seed_as_of_date"] == seed_at.date().isoformat()
-    assert "AKShare CN spot disconnected" in coverage["universe_error"]
+    assert "JPX listing unreachable" in coverage["universe_error"]
     # Only the universe is reused; the coverage gate still applies.
     assert kwargs["force_publish"] is False
     assert any(seed_at.date().isoformat() in warning for warning in kwargs["warnings"])
 
 
 def test_stale_universe_refuses_a_seed_past_the_max_age(monkeypatch, tmp_path):
-    with pytest.raises(RuntimeError, match=r"AKShare CN spot disconnected.*max age 8 day"):
+    with pytest.raises(RuntimeError, match=r"JPX listing unreachable.*max age 8 day"):
         _run_jp_stale_universe(
             monkeypatch, tmp_path, seed_published_at=datetime.utcnow() - timedelta(days=20)
         )
 
 
 def test_stale_universe_fails_clearly_without_a_seed(monkeypatch, tmp_path):
-    with pytest.raises(RuntimeError, match=r"AKShare CN spot disconnected.*no prior-week universe"):
+    with pytest.raises(RuntimeError, match=r"JPX listing unreachable.*no prior-week universe"):
         _run_jp_stale_universe(
             monkeypatch, tmp_path, seed_published_at=datetime.utcnow(), seeded_count=0
         )
 
 
 def test_official_source_failure_still_fails_without_a_fallback_flag(monkeypatch, tmp_path):
-    with pytest.raises(RuntimeError, match="AKShare CN spot disconnected"):
+    with pytest.raises(requests.ConnectionError, match="JPX listing unreachable"):
         _run_jp_stale_universe(
             monkeypatch, tmp_path, seed_published_at=datetime.utcnow(), flags=[]
+        )
+
+
+def test_stale_universe_dates_a_reused_universe_by_its_original_data(monkeypatch, tmp_path):
+    # Published two days ago, but it reused a universe from three weeks ago.
+    old_universe = (datetime.utcnow() - timedelta(days=21)).date().isoformat()
+    with pytest.raises(RuntimeError, match="max age 8 day"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            seed_coverage={"stale_universe": True, "universe_seed_as_of_date": old_universe},
+        )
+
+
+def test_stale_universe_refuses_an_undated_reused_universe(monkeypatch, tmp_path):
+    # Bundles written before #521 recorded stale_universe without a date.
+    with pytest.raises(RuntimeError, match="reused an undated universe"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            seed_coverage={"stale_universe": True},
+        )
+
+
+def test_stale_universe_only_covers_source_outages(monkeypatch, tmp_path):
+    # A parser or schema defect must fail the job, not hide behind last week.
+    with pytest.raises(ValueError, match="multiple snapshot dates"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            universe_error=ValueError("JP official universe parse saw multiple snapshot dates"),
+        )
+
+
+def test_partial_publish_fallback_also_refuses_an_old_seed(monkeypatch, tmp_path):
+    # Deliberate change in #521: CN/TW reuse the universe under the same age rule.
+    with pytest.raises(RuntimeError, match="max age 8 day"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=20),
+            flags=["--allow-partial-publish"],
+            universe_error=RuntimeError("AKShare CN spot disconnected"),
         )

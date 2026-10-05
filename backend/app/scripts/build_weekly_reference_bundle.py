@@ -315,6 +315,15 @@ def _prior_seed(
         seed_coverage = {}
     if not isinstance(seed_coverage, dict):
         seed_coverage = {}
+    if (
+        as_of_key == "universe_seed_as_of_date"
+        and seed_coverage.get("stale_universe")
+        and not seed_coverage.get(as_of_key)
+    ):
+        # Bundles from before #521 reused a universe without dating it.
+        return None, {}, (
+            f"Prior weekly reference seed {seed_run.source_revision} reused an undated universe."
+        )
     # A seed that itself reused an older seed is as old as that seed's data.
     try:
         seed_as_of = date.fromisoformat(
@@ -757,7 +766,11 @@ def _build_asia_bundle(
         )
         print(f"Universe refresh complete: {universe_stats}", flush=True)
     except Exception as exc:
-        if not (allow_partial_publish or allow_stale_universe):
+        # --allow-stale-universe covers source outages only; a parser or
+        # ingest defect must fail the job. --allow-partial-publish keeps its
+        # broader historical scope.
+        source_outage = isinstance(exc, requests.RequestException)
+        if not (allow_partial_publish or (allow_stale_universe and source_outage)):
             raise
         # The shared official ingestion dispatch may have raised mid-transaction
         # (after bulk_save_objects but before commit), leaving the session in

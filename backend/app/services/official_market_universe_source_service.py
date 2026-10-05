@@ -162,7 +162,9 @@ _JP_ALLOWED_MARKET_SECTIONS = frozenset(
         "グロース（内国株式）",
     }
 )
-_JP_LISTING_LINK_RE = re.compile(r'href="([^"]*data_j\.xlsx?)"', re.IGNORECASE)
+_JP_LISTING_LINK_RE = re.compile(
+    r"""href\s*=\s*["']([^"']*data_j\.xlsx?(?:\?[^"']*)?)["']""", re.IGNORECASE
+)
 _TW_UPDATED_AT_RE = re.compile(r"Date\s+Stock\s+Updated:\s*(\d{4}/\d{2}/\d{2})", re.IGNORECASE)
 _TW_CODE_NAME_RE = re.compile(r"^([0-9A-Z]{3,6}[A-Z]?)\s+(.+?)$")
 _HTTP_GET_MAX_ATTEMPTS = 3
@@ -283,24 +285,37 @@ class OfficialMarketUniverseSourceService:
         except requests.RequestException as exc:
             logger.warning("JPX listing page %s unavailable: %s", page_url, exc)
             return None
-        match = _JP_LISTING_LINK_RE.search(page.content.decode("utf-8", errors="replace"))
-        return urljoin(page_url, match.group(1)) if match else None
+        links = _JP_LISTING_LINK_RE.findall(page.content.decode("utf-8", errors="replace"))
+        if not links:
+            return None
+        # Prefer the xlsx when a leftover legacy .xls link is also listed.
+        links.sort(key=lambda link: not link.split("?", 1)[0].lower().endswith(".xlsx"))
+        return urljoin(page_url, links[0])
 
     def fetch_jp_snapshot(self) -> OfficialMarketUniverseSnapshot:
         discovered_url = self._discover_jp_listing_url()
-        source_url = discovered_url or settings.jp_universe_source_url
-        try:
-            fetched = self._http_get(source_url)
-        except requests.HTTPError as exc:
-            if discovered_url:
-                raise
-            raise requests.HTTPError(
-                f"{exc}; the JPX listing page {settings.jp_universe_listing_page_url} "
-                "offered no data_j spreadsheet link to fall back on",
-                response=exc.response,
-            ) from exc
-        frame = self._read_excel_bytes(fetched.content, engine=self._excel_engine(fetched.content))
-        rows, snapshot_date = self._parse_jp_frame(frame)
+        configured_url = settings.jp_universe_source_url
+        fetched = None
+        if discovered_url:
+            try:
+                fetched = self._http_get(discovered_url)
+            except requests.RequestException as exc:
+                if discovered_url == configured_url:
+                    raise
+                # The page may link a file JPX has not uploaded yet.
+                logger.warning("JPX listing link %s failed (%s); trying %s", discovered_url, exc, configured_url)
+                discovered_url = None
+        if fetched is None:
+            try:
+                fetched = self._http_get(configured_url)
+            except requests.HTTPError as exc:
+                raise requests.HTTPError(
+                    f"{exc}; the JPX listing page {settings.jp_universe_listing_page_url} "
+                    "offered no working data_j spreadsheet link to fall back on",
+                    response=exc.response,
+                ) from exc
+        source_url = discovered_url or configured_url
+        rows, snapshot_date = self._parse_jp_frame(self._read_jp_listing(fetched.content))
         snapshot_as_of = snapshot_date.isoformat()
         source_metadata = {
             "source_urls": [source_url],
@@ -2210,8 +2225,16 @@ class OfficialMarketUniverseSourceService:
             raise ValueError("HK official universe parse returned no equity rows")
         return rows
 
+    def _read_jp_listing(self, content: bytes) -> pd.DataFrame:
+        engine = self._excel_engine(content)
+        if engine is None:
+            raise ValueError(
+                f"JP listing download is not an Excel workbook (starts with {content[:16]!r})"
+            )
+        return self._read_excel_bytes(content, engine=engine)
+
     def parse_jp_rows(self, content: bytes) -> OfficialMarketUniverseSnapshot:
-        frame = self._read_excel_bytes(content, engine=self._excel_engine(content))
+        frame = self._read_jp_listing(content)
         rows, snapshot_date = self._parse_jp_frame(frame)
         return OfficialMarketUniverseSnapshot(
             market="JP",
@@ -2556,6 +2579,11 @@ class OfficialMarketUniverseSourceService:
     def _coerce_date(value: Any) -> date | None:
         if value is None or value == "":
             return None
+        try:
+            if pd.isna(value):  # NaN, None-like and NaT (a datetime subclass)
+                return None
+        except (TypeError, ValueError):
+            pass
         if isinstance(value, datetime):
             return value.date()
         if isinstance(value, date):
