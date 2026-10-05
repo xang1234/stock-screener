@@ -554,6 +554,22 @@ def _build_us_bundle(
     snapshot_key = ProviderSnapshotService.snapshot_key_for_market(market)
 
     print("Starting stock universe refresh from Finviz...", flush=True)
+    # The universe imported from the prior bundle has no reconciliation run in
+    # this fresh database, so without a baseline the refresh could never
+    # deactivate symbols Finviz has dropped; they would stay active every week
+    # and erode snapshot coverage. Removals still pass the Finviz safety gates.
+    baseline = stock_universe_service.seed_reconciliation_baseline_from_active_rows(
+        db,
+        market=market,
+        source_name="finviz",
+        snapshot_id=f"weekly-reference-seed:{datetime.utcnow():%Y%m%d%H%M%S}",
+    )
+    if baseline:
+        print(
+            f"Seeded Finviz reconciliation baseline: {baseline['baseline_rows']} active rows "
+            f"({baseline['snapshot_id']})",
+            flush=True,
+        )
     universe_stats = stock_universe_service.populate_universe(db)
     print(f"Universe refresh complete: {universe_stats}", flush=True)
 
