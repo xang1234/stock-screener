@@ -101,6 +101,8 @@ function ScanControlBar({
   scanWarnings = [],
   customSymbols = [],
   onClearCustomSymbols,
+  lastPublishedAvailable = false,
+  onUseLastPublished,
 }) {
   const controlsDisabled = createScanPending || scanStatus === 'running';
   const universeMarkets = universeSelections?.markets ?? [];
@@ -118,6 +120,15 @@ function ScanControlBar({
     || Boolean(selectedMarketOption?.disabled)
     || Boolean(selectedScopeOption?.disabled)
     || Boolean(refreshConflict);
+  // A last-published read never computes, so the refresh conflict (and the
+  // options it disables) does not block it; an unusable selection still does.
+  const lastPublishedDisabled =
+    createScanPending
+    || (!hasCustomSymbols && !universeMarket)
+    || (needsScope && !universeScope)
+    || (!refreshConflict && (
+      Boolean(selectedMarketOption?.disabled) || Boolean(selectedScopeOption?.disabled)
+    ));
   const createScanErrorMessage = typeof createScanError === 'string'
     ? createScanError
     : createScanError?.message;
@@ -309,6 +320,21 @@ function ScanControlBar({
               Scan
             </Button>
           )
+        )}
+
+        {lastPublishedAvailable && onUseLastPublished && (
+          <Tooltip title="Load a completed scan from the last published snapshot instead of computing one now.">
+            <span style={{ display: 'inline-flex' }}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={onUseLastPublished}
+                disabled={lastPublishedDisabled}
+              >
+                Use last published data
+              </Button>
+            </span>
+          </Tooltip>
         )}
 
         {currentScanId && statusData && (

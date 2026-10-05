@@ -17,6 +17,7 @@ import apiClient from './client';
  * @param {Object} params.criteria - Scan criteria
  * @param {Array<string>} params.screeners - Screeners to run: ['minervini', 'canslim', 'ipo', 'custom', 'volume_breakthrough', 'setup_engine']
  * @param {string} params.composite_method - How to combine scores: 'weighted_average', 'maximum', 'minimum'
+ * @param {string} [params.data_mode] - 'last_published' answers only from the last published snapshot (never computes); omit for current data
  * @returns {Promise<Object>} Scan creation response with scan_id
  */
 export const createScan = async ({
@@ -25,7 +26,8 @@ export const createScan = async ({
   universe_def = undefined,
   criteria = {},
   screeners = ['minervini'],
-  composite_method = 'weighted_average'
+  composite_method = 'weighted_average',
+  data_mode = undefined,
 }) => {
   const response = await apiClient.post('/v1/scans', {
     universe,
@@ -34,6 +36,7 @@ export const createScan = async ({
     criteria,
     screeners,
     composite_method,
+    ...(data_mode ? { data_mode } : {}),
   });
   return response.data;
 };

@@ -985,4 +985,124 @@ describe('ScanPage', () => {
 
     expect(await screen.findByText('Error: Refresh blocked for HK.')).toBeInTheDocument();
   });
+
+  describe('last-published data (#492)', () => {
+    const US_PRICE_REFRESH = {
+      data: {
+        bootstrap: {},
+        summary: { active_market_count: 1, active_markets: ['US'], status: 'active' },
+        markets: [
+          {
+            market: 'US',
+            stage_key: 'prices',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            lifecycle: 'daily_refresh',
+            progress_mode: 'determinate',
+            percent: 30,
+            current: 300,
+            total: 1000,
+            message: 'Refreshing prices',
+          },
+        ],
+      },
+    };
+    const OLD_SOURCE = {
+      data_mode: 'last_published',
+      as_of_date: '2026-10-01',
+      expected_session: '2026-10-02',
+      is_current: false,
+      feature_run_id: 9,
+    };
+    const NVDA_PAGE = {
+      total: 1,
+      results: [{ symbol: 'NVDA', company_name: 'NVIDIA', composite_score: 98, current_price: 900, stage: 2 }],
+    };
+
+    beforeEach(() => {
+      runtimeState.runtimeReady = true;
+      runtimeState.scanDefaults = { ...DEFAULT_SCAN_DEFAULTS, universe: 'market:us' };
+    });
+
+    it('offers last-published data while a refresh blocks scanning and shows its age', async () => {
+      useRuntimeActivityMock.mockReturnValue(US_PRICE_REFRESH);
+      scanApi.createScan.mockResolvedValueOnce({
+        scan_id: 'snap-1',
+        status: 'completed',
+        total_stocks: 1,
+        published_source: OLD_SOURCE,
+      });
+      scanApi.getScanStatus.mockResolvedValue({ status: 'completed', published_source: OLD_SOURCE });
+      scanApi.queryScanResults.mockResolvedValue(NVDA_PAGE);
+
+      renderWithProviders(<ScanPage />);
+
+      expect(await screen.findByRole('button', { name: 'Scan' })).toBeDisabled();
+      fireEvent.click(await screen.findByRole('button', { name: 'Use last published data' }));
+
+      await waitFor(() => expect(scanApi.createScan).toHaveBeenCalledTimes(1));
+      expect(scanApi.createScan.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ data_mode: 'last_published' }),
+      );
+      expect(
+        await screen.findByText(
+          'Last published data as of 2026-10-01, older than the latest completed session (2026-10-02).',
+        ),
+      ).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument());
+    });
+
+    it('offers last-published data when the backend reports another active scan', async () => {
+      scanApi.createScan.mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: { detail: { code: 'scan_already_active', message: 'Another scan is already queued or running.' } },
+        },
+      });
+
+      renderWithProviders(<ScanPage />);
+
+      expect(screen.queryByRole('button', { name: 'Use last published data' })).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByRole('button', { name: 'Scan' }));
+
+      expect(await screen.findByRole('button', { name: 'Use last published data' })).toBeEnabled();
+    });
+
+    it('shows the source of a reloaded snapshot scan from history', async () => {
+      scanApi.getScans.mockResolvedValue({
+        scans: [{ scan_id: 'snap-old', status: 'completed', published_source: OLD_SOURCE }],
+      });
+      scanApi.queryScanResults.mockResolvedValue(NVDA_PAGE);
+
+      renderWithProviders(<ScanPage />);
+
+      expect(
+        await screen.findByText(/^Last published data as of 2026-10-01/),
+      ).toBeInTheDocument();
+    });
+
+    it('keeps the previous completed results visible while a new scan runs', async () => {
+      scanApi.getScans.mockResolvedValue({
+        scans: [{ scan_id: 'scan-done', status: 'completed' }],
+      });
+      scanApi.queryScanResults.mockResolvedValue(NVDA_PAGE);
+      scanApi.createScan.mockResolvedValueOnce({ scan_id: 'scan-new', status: 'queued', total_stocks: 500 });
+      scanApi.getScanStatus.mockImplementation(async (scanId) => (
+        scanId === 'scan-new'
+          ? { scan_id: 'scan-new', status: 'running', progress: 10, total_stocks: 500, completed_stocks: 50 }
+          : { status: 'completed' }
+      ));
+
+      renderWithProviders(<ScanPage />);
+
+      await waitFor(() => expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Scan' }));
+
+      expect(
+        await screen.findByText('Showing your previous results until the new scan finishes.'),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
+      expect(scanApi.queryScanResults).not.toHaveBeenCalledWith('scan-new', expect.anything(), expect.anything());
+    });
+  });
 });
