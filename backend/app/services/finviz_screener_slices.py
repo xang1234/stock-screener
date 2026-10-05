@@ -3,8 +3,9 @@
 Since early October 2026 Finviz answers anonymous screener requests past row
 1,000 (``r > 1000``) with HTTP 403, whatever the sort order, so NYSE (~5,000
 rows) and NASDAQ (~4,700) can no longer be paged in one query. A slice of up to
-2,000 rows is read from both ends (ticker ascending, then descending); a bigger
-one is split by the next filter dimension, recursively. On 2026-10-05 sectors
+1,980 rows is read from both ends (ticker ascending, then descending, with a
+page of overlap); a bigger one is split by the next filter dimension,
+recursively. On 2026-10-05 sectors
 partitioned each exchange exactly, fund type partitioned Financial, price
 partitioned ETFs and average volume partitioned NYSE ETFs under $50. Any read
 that cannot account for every row raises FinvizReadError rather than return a
@@ -20,6 +21,9 @@ from typing import Any
 
 FINVIZ_ROW_CAP = 1000
 FINVIZ_PAGE_SIZE = 20
+# Largest slice read from both ends with a page of overlap between the passes;
+# the overlap absorbs a listing inserted between them.
+TWO_ENDED_MAX_ROWS = 2 * FINVIZ_ROW_CAP - FINVIZ_PAGE_SIZE
 
 SPLIT_DIMENSIONS: tuple[tuple[str, ...], ...] = (
     tuple(
@@ -119,11 +123,11 @@ def read_screener(
             # Not a screener answer (e.g. an HTTP-200 challenge page): reading it as
             # empty would drop the slice from an otherwise complete read.
             raise FinvizIncompleteRead(f"Finviz page for {filters!r} shows no row total")
-        if total > 2 * FINVIZ_ROW_CAP:
+        if total > TWO_ENDED_MAX_ROWS:
             if not remaining:
                 raise FinvizSliceTooLarge(
                     f"Finviz slice {filters!r} has {total} rows; no filter left to split it "
-                    f"below {2 * FINVIZ_ROW_CAP}"
+                    f"below {TWO_ENDED_MAX_ROWS}"
                 )
             children = sum(visit(f"{filters},{value}", remaining[1:]) for value in remaining[0])
             if children < total:

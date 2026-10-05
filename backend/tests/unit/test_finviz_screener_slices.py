@@ -201,3 +201,16 @@ def test_screener_total_reads_both_markers(text, expected):
     from bs4 import BeautifulSoup
 
     assert slices.screener_total(BeautifulSoup(f"<div>{text}</div>", "lxml")) == expected
+
+
+def test_a_slice_too_big_for_an_overlapping_two_ended_read_is_split():
+    """At 2,000 rows each direction returns exactly 1,000, leaving no overlap page to
+    absorb a listing inserted between the passes; split instead."""
+    rows = [_row(f"T{i:04d}") for i in range(1000)] + [
+        _row(f"F{i:04d}", sector="financial") for i in range(1000)
+    ]
+    fake = _FakeFinviz(rows)
+
+    assert len(_read(fake)) == 2000
+    assert any(",sec_" in filters for filters, _, _ in fake.requests)
+    assert all(order == "ticker" for _, order, _ in fake.requests)  # each half fits one pass
