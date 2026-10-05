@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -121,6 +122,35 @@ PROVIDER_ENV_VARS = {
     "opencode-go": "OPENCODE_GO_API_KEY",
     "ollama": "OLLAMA_API_KEY",
 }
+
+# Ollama destination shared by every reader: the service, the admin settings readers
+# and the model list. One definition, so a change to the host cannot leave the UI and
+# the workers pointing at different servers.
+OLLAMA_API_BASE_DEFAULT = "https://ollama.com"
+
+# The persisted row an admin writes through ``POST /config/ollama``.
+OLLAMA_API_BASE_SETTING_KEY = "ollama_api_base"
+
+
+def resolve_ollama_api_base(saved: Optional[str]) -> str:
+    """Resolve the Ollama destination from an explicit precedence order.
+
+    The order is the same one ``LLMService`` uses, and it is deliberately not a
+    first-truthy chain:
+
+    1. the admin's persisted selection, read from ``ollama_api_base``;
+    2. ``OLLAMA_API_BASE`` in the process environment;
+    3. :data:`OLLAMA_API_BASE_DEFAULT`.
+
+    The environment sits **behind** the saved row because the container
+    environment cannot express an admin's runtime choice: a redeploy resets it,
+    while the row survives. Reading it first is what made an endpoint report the
+    cloud host while the workers were already sending extraction to a local daemon.
+
+    ``saved`` is passed in rather than read here so each caller keeps its own
+    session. An unreadable value must fall through, never raise.
+    """
+    return saved or os.environ.get("OLLAMA_API_BASE") or OLLAMA_API_BASE_DEFAULT
 
 
 AVAILABLE_MODELS = [

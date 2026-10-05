@@ -32,8 +32,10 @@ from ...schemas.config import (
 from ...services.llm.config import (
     AVAILABLE_MODELS,
     DEFAULT_MODEL_BY_USE_CASE,
+    OLLAMA_API_BASE_SETTING_KEY,
     get_model_by_id,
     is_model_supported_for_use_case,
+    resolve_ollama_api_base,
 )
 from ...services.theme_extraction_service import ThemeExtractionService
 
@@ -311,12 +313,16 @@ async def get_llm_config(
             DEFAULT_MODEL_BY_USE_CASE["merge"],
         )
         merge_model_id = DEFAULT_MODEL_BY_USE_CASE["merge"]
-    ollama_api_base = get_setting(db, "ollama_api_base", "http://localhost:11434")
-
-    # Also check environment variable override
-    env_ollama_base = os.environ.get("OLLAMA_API_BASE")
-    if env_ollama_base:
-        ollama_api_base = env_ollama_base
+    # The admin's saved selection wins; the environment is only a fallback. Reading
+    # the environment first reported a host the workers do not use after any redeploy
+    # reset it, while the saved row still pointed at the daemon.
+    #
+    # The default passed to ``get_setting`` is deliberately None, not the cloud host:
+    # a truthy default here would be indistinguishable from a saved row carrying it,
+    # and would short-circuit the environment below -- the very bug being fixed.
+    ollama_api_base = resolve_ollama_api_base(
+        get_setting(db, OLLAMA_API_BASE_SETTING_KEY)
+    )
 
     # Get model info
     extraction_model_info = get_model_by_id(extraction_model_id)
@@ -432,10 +438,11 @@ async def get_ollama_models(
     Returns:
         List of models installed in Ollama
     """
-    ollama_api_base = get_setting(db, "ollama_api_base", "http://localhost:11434")
-    env_ollama_base = os.environ.get("OLLAMA_API_BASE")
-    if env_ollama_base:
-        ollama_api_base = env_ollama_base
+    # Same precedence as GET /config/llm and LLMService: the saved row first. The
+    # default is None for the reason given there.
+    ollama_api_base = resolve_ollama_api_base(
+        get_setting(db, OLLAMA_API_BASE_SETTING_KEY)
+    )
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
