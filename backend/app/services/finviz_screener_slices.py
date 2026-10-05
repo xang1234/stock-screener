@@ -25,33 +25,43 @@ FINVIZ_PAGE_SIZE = 20
 # the overlap absorbs a listing inserted between them.
 TWO_ENDED_MAX_ROWS = 2 * FINVIZ_ROW_CAP - FINVIZ_PAGE_SIZE
 
-SPLIT_DIMENSIONS: tuple[tuple[str, ...], ...] = (
-    tuple(
-        f"sec_{sector}"
-        for sector in (
-            "basicmaterials",
-            "communicationservices",
-            "consumercyclical",
-            "consumerdefensive",
-            "energy",
-            "financial",
-            "healthcare",
-            "industrials",
-            "realestate",
-            "technology",
-            "utilities",
-        )
+# Each dimension: (filters that partition the parent, catcher filters). Finviz's
+# u/o presets both exclude their boundary (a NASDAQ ETF at exactly $100 matched
+# neither 50to100 nor o100 on 2026-10-05), so when a split comes up short the
+# catchers, bands that surely contain the boundary value, are read as well.
+SPLIT_DIMENSIONS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        tuple(
+            f"sec_{sector}"
+            for sector in (
+                "basicmaterials",
+                "communicationservices",
+                "consumercyclical",
+                "consumerdefensive",
+                "energy",
+                "financial",
+                "healthcare",
+                "industrials",
+                "realestate",
+                "technology",
+                "utilities",
+            )
+        ),
+        (),
     ),
     # Financial is mostly funds: NYSE 3,465 = 372 stocks + 2,803 ETFs + 290 CEFs.
     (
-        "ind_stocksonly",
-        "ind_exchangetradedfund",
-        "ind_closedendfunddebt",
-        "ind_closedendfundequity",
-        "ind_closedendfundforeign",
+        (
+            "ind_stocksonly",
+            "ind_exchangetradedfund",
+            "ind_closedendfunddebt",
+            "ind_closedendfundequity",
+            "ind_closedendfundforeign",
+        ),
+        (),
     ),
-    ("sh_price_u50", "sh_price_o50"),
-    ("sh_avgvol_u100", "sh_avgvol_o100"),
+    (("sh_price_u50", "sh_price_o50"), ("sh_price_u100",)),  # catches exactly $50
+    (("sh_avgvol_u100", "sh_avgvol_o100"), ("sh_avgvol_u500",)),  # catches exactly 100K
 )
 
 # A result page shows "#1 / N Total"; an empty one shows "0 Total". A page with
@@ -91,7 +101,7 @@ def read_screener(
     row_key: Callable[[dict[str, Any]], str],
     total_of: Callable[[Any], int | None] = screener_total,
     pause: Callable[[], Any] = lambda: time.sleep(1),
-    dimensions: Sequence[Sequence[str]] = SPLIT_DIMENSIONS,
+    dimensions: Sequence[tuple[Sequence[str], Sequence[str]]] = SPLIT_DIMENSIONS,
 ) -> list[dict[str, Any]]:
     """All rows matching ``base_filters``, one per ``row_key``.
 
@@ -115,7 +125,7 @@ def read_screener(
             next_row += FINVIZ_PAGE_SIZE
         return rows
 
-    def visit(filters: str, remaining: Sequence[Sequence[str]]) -> int:
+    def visit(filters: str, remaining: Sequence[tuple[Sequence[str], Sequence[str]]]) -> int:
         first_page = fetch(filters, "ticker", 1)
         first_rows = parse_rows(first_page)
         total = total_of(first_page)
@@ -129,7 +139,11 @@ def read_screener(
                     f"Finviz slice {filters!r} has {total} rows; no filter left to split it "
                     f"below {TWO_ENDED_MAX_ROWS}"
                 )
-            children = sum(visit(f"{filters},{value}", remaining[1:]) for value in remaining[0])
+            values, catchers = remaining[0]
+            children = sum(visit(f"{filters},{value}", remaining[1:]) for value in values)
+            if children < total:
+                # Overlapping rows are deduplicated; the final distinct check still guards.
+                children += sum(visit(f"{filters},{value}", remaining[1:]) for value in catchers)
             if children < total:
                 raise FinvizIncompleteRead(
                     f"Finviz split of {filters!r} covers {children} of {total} rows"

@@ -214,3 +214,25 @@ def test_a_slice_too_big_for_an_overlapping_two_ended_read_is_split():
     assert len(_read(fake)) == 2000
     assert any(",sec_" in filters for filters, _, _ in fake.requests)
     assert all(order == "ticker" for _, order, _ in fake.requests)  # each half fits one pass
+
+
+def test_a_row_exactly_on_a_numeric_boundary_is_caught():
+    """Finviz's u50/o50 both exclude $50.00 (a NASDAQ ETF at exactly $100 was missed by
+    50to100 + o100 on 2026-10-05); a catcher band must pick such a row up."""
+    rows = (
+        [
+            _row(f"L{i:04d}", sector="financial", fund="exchangetradedfund", price=20.0, avgvol=50.0 + 150 * (i % 2))
+            for i in range(1500)
+        ]
+        + [
+            _row(f"H{i:04d}", sector="financial", fund="exchangetradedfund", price=80.0, avgvol=50.0 + 150 * (i % 2))
+            for i in range(600)
+        ]
+        + [_row("EXACT", sector="financial", fund="exchangetradedfund", price=50.0)]
+    )
+    fake = _FakeFinviz(rows)
+
+    collected = {row["ticker"] for row in _read(fake)}
+
+    assert "EXACT" in collected and len(collected) == 2101
+    assert any(filters.endswith("sh_price_u100") for filters, _, _ in fake.requests)
