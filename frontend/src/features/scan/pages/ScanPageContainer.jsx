@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Alert, Box, CircularProgress, Container, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Container, Paper, Typography } from '@mui/material';
 import {
   cancelScan,
   createScan,
@@ -123,8 +123,11 @@ function ScanPage() {
   const currentScanIdRef = useRef(null);
   currentScanIdRef.current = currentScanId;
   // Bumped whenever the user picks a scan, so a create response that lands
-  // afterwards cannot replace their choice.
+  // afterwards cannot replace their choice. Auto-loading does not count.
   const scanSelectionRef = useRef(0);
+  // A scan whose create response arrived after the user moved on; offered
+  // via a notice so it never runs unseen.
+  const [lateCreatedScanId, setLateCreatedScanId] = useState(null);
   // published_source per scan, kept with the scan's identity: some scans
   // (custom symbols, other markets) never appear in the market's history.
   const [scanSources, setScanSources] = useState({});
@@ -385,7 +388,6 @@ function ScanPage() {
     async (scanId) => {
       if (!scanId) {
         currentScanIdRef.current = null;
-        scanSelectionRef.current += 1;
         setCurrentScanId(null);
         setBootstrappedScanId(null);
         setScanStatus(null);
@@ -400,7 +402,6 @@ function ScanPage() {
       // Set now, not on the next render, so a response for a scan the user
       // has since replaced is recognised as late.
       currentScanIdRef.current = scanId;
-      scanSelectionRef.current += 1;
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
       setScanStatus(knownStatus);
@@ -439,6 +440,12 @@ function ScanPage() {
     },
     [applyScanBootstrapSnapshot, queryClient, rememberScanSource, requestPage, snapshotEnabled]
   );
+
+  const handleUserLoadScan = useCallback((scanId) => {
+    scanSelectionRef.current += 1;
+    setLateCreatedScanId(null);
+    handleLoadScan(scanId);
+  }, [handleLoadScan]);
 
   const { data: universeStats, isLoading: statsLoading } = useQuery({
     queryKey: ['universeStats'],
@@ -492,14 +499,23 @@ function ScanPage() {
 
   const createScanMutation = useMutation({
     mutationFn: createScan,
-    onMutate: () => ({ selection: scanSelectionRef.current }),
+    onMutate: () => ({
+      selection: scanSelectionRef.current,
+      market: globalMarketRef.current,
+    }),
     onSuccess: (data, _variables, context) => {
       rememberScanSource(data.scan_id, data.published_source);
-      if (context?.selection !== scanSelectionRef.current) {
-        // The user picked another scan while this request was in flight.
+      if (
+        context?.selection !== scanSelectionRef.current
+        || context?.market !== globalMarketRef.current
+      ) {
+        // The user picked another scan or market while this was in flight.
+        setLateCreatedScanId(data.scan_id);
         refetchScans();
         return;
       }
+      // Set now so a late response for the previous scan is recognised.
+      currentScanIdRef.current = data.scan_id;
       setCurrentScanId(data.scan_id);
       setBootstrappedScanId(null);
       setScanStatus(data.status);
@@ -602,7 +618,43 @@ function ScanPage() {
   // Handlers passed to ScanControlBar / FilterPanel stay referentially stable
   // so those memoized children skip re-rendering on unrelated page updates
   // (status polls, result fetches, chart modal state).
-  const lastPublishedAvailable = canOfferLastPublished(refreshConflict, createScanError);
+  const scanRequest = useMemo(() => {
+    const universeDef = importedSymbols.length
+      ? { type: 'custom', symbols: importedSymbols }
+      : buildUniverseDef(universeMarket, universeScope, universeSelections);
+    if (!universeDef) {
+      return null;
+    }
+    const criteria = { include_vcp: includeVcp };
+    if (selectedScreeners.includes('custom')) {
+      criteria.custom_filters = customFilters;
+    }
+    return {
+      universe_def: universeDef,
+      screeners: selectedScreeners,
+      composite_method: compositeMethod,
+      criteria,
+    };
+  }, [
+    compositeMethod,
+    customFilters,
+    importedSymbols,
+    includeVcp,
+    selectedScreeners,
+    universeMarket,
+    universeScope,
+    universeSelections,
+  ]);
+  // A snapshot_unavailable answer only covers the request that got it; once
+  // the universe or criteria change, the user may try last-published again.
+  const failedRequestChanged = JSON.stringify({ ...createScanMutation.variables, data_mode: undefined })
+    !== JSON.stringify({ ...scanRequest, data_mode: undefined });
+  const lastPublishedAvailable = canOfferLastPublished(
+    refreshConflict,
+    createScanError?.detail?.code === 'snapshot_unavailable' && failedRequestChanged
+      ? null
+      : createScanError,
+  );
   const startScanRequest = createScanMutation.mutate;
   const submitScan = useCallback((dataMode) => {
     // Only a current-data scan waits for the refresh; a last-published
@@ -610,35 +662,14 @@ function ScanPage() {
     if (refreshConflict && dataMode !== 'last_published') {
       return;
     }
-    const universeDef = importedSymbols.length
-      ? { type: 'custom', symbols: importedSymbols }
-      : buildUniverseDef(universeMarket, universeScope, universeSelections);
-    if (!universeDef) {
+    if (!scanRequest) {
       return;
     }
-    const criteria = { include_vcp: includeVcp };
-    if (selectedScreeners.includes('custom')) {
-      criteria.custom_filters = customFilters;
-    }
     startScanRequest({
-      universe_def: universeDef,
-      screeners: selectedScreeners,
-      composite_method: compositeMethod,
-      criteria,
+      ...scanRequest,
       ...(dataMode ? { data_mode: dataMode } : {}),
     });
-  }, [
-    compositeMethod,
-    customFilters,
-    importedSymbols,
-    includeVcp,
-    refreshConflict,
-    selectedScreeners,
-    startScanRequest,
-    universeMarket,
-    universeScope,
-    universeSelections,
-  ]);
+  }, [refreshConflict, scanRequest, startScanRequest]);
   const handleStartScan = useCallback(() => submitScan(null), [submitScan]);
   const handleUseLastPublished = useCallback(() => submitScan('last_published'), [submitScan]);
 
@@ -818,7 +849,7 @@ function ScanPage() {
       <ScanControlBar
         currentScanId={currentScanId}
         scanHistory={scanHistory}
-        onLoadScan={handleLoadScan}
+        onLoadScan={handleUserLoadScan}
         universeMarket={universeMarket}
         universeScope={universeScope}
         onUniverseMarketChange={handleUniverseMarketChange}
@@ -853,6 +884,20 @@ function ScanPage() {
         onUseLastPublished={handleUseLastPublished}
       />
 
+      {lateCreatedScanId && (
+        <Alert
+          severity="info"
+          role="status"
+          sx={{ mb: 2 }}
+          action={(
+            <Button color="inherit" size="small" onClick={() => handleUserLoadScan(lateCreatedScanId)}>
+              Open scan
+            </Button>
+          )}
+        >
+          A scan you started was created while you were viewing another scan.
+        </Alert>
+      )}
       {showingPreviousResults && (
         <Alert severity="info" role="status" sx={{ mb: 2 }}>
           Showing your previous results until the new scan finishes.

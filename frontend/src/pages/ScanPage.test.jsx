@@ -96,6 +96,11 @@ beforeEach(() => {
   filterPresetsState.presets = [];
   marketState.selectedMarket = null;
   useRuntimeActivityMock.mockReset();
+  // clearAllMocks keeps queued *Once values; a test that times out before
+  // consuming them must not leak them into the next test.
+  scanApi.createScan.mockReset();
+  scanApi.getScans.mockReset();
+  scanApi.getScanStatus.mockReset();
   useRuntimeActivityMock.mockReturnValue({
     data: {
       bootstrap: {},
@@ -1037,8 +1042,8 @@ describe('ScanPage', () => {
 
       renderWithProviders(<ScanPage />);
 
-      expect(await screen.findByRole('button', { name: 'Scan' })).toBeDisabled();
-      fireEvent.click(await screen.findByRole('button', { name: 'Use last published data' }));
+      expect(await screen.findByText('Scan', { selector: 'button' }, { timeout: 3000 })).toBeDisabled();
+      fireEvent.click(await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 }));
 
       await waitFor(() => expect(scanApi.createScan).toHaveBeenCalledTimes(1));
       expect(scanApi.createScan.mock.calls[0][0]).toEqual(
@@ -1065,10 +1070,10 @@ describe('ScanPage', () => {
 
       renderWithProviders(<ScanPage />);
 
-      expect(screen.queryByRole('button', { name: 'Use last published data' })).not.toBeInTheDocument();
-      fireEvent.click(await screen.findByRole('button', { name: 'Scan' }));
+      expect(screen.queryByText('Use last published data', { selector: 'button' })).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByText('Scan', { selector: 'button' }, { timeout: 3000 }));
 
-      expect(await screen.findByRole('button', { name: 'Use last published data' })).toBeEnabled();
+      expect(await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 })).toBeEnabled();
     });
 
     it('shows the source of a reloaded snapshot scan from history', async () => {
@@ -1080,7 +1085,7 @@ describe('ScanPage', () => {
       renderWithProviders(<ScanPage />);
 
       expect(
-        await screen.findByText(/^Last published data as of 2026-10-01/),
+        await screen.findByText(/^Last published data as of 2026-10-01/, {}, { timeout: 3000 }),
       ).toBeInTheDocument();
     });
 
@@ -1100,13 +1105,13 @@ describe('ScanPage', () => {
 
       renderWithProviders(<ScanPage />);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Scan' }));
-      fireEvent.click(await screen.findByRole('button', { name: 'Use last published data' }));
-      expect(await screen.findByText(/^Last published data as of 2026-10-01/)).toBeInTheDocument();
+      fireEvent.click(await screen.findByText('Scan', { selector: 'button' }, { timeout: 3000 }));
+      fireEvent.click(await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 }));
+      expect(await screen.findByText(/^Last published data as of 2026-10-01/, {}, { timeout: 3000 })).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Scan' }));
+      fireEvent.click(screen.getByText('Scan', { selector: 'button' }));
       await waitFor(() => expect(scanApi.createScan).toHaveBeenCalledTimes(3));
-      await screen.findByText('Error: Another scan is already queued or running.');
+      await screen.findByText('Error: Another scan is already queued or running.', {}, { timeout: 3000 });
 
       expect(screen.getByText(/^Last published data as of 2026-10-01/)).toBeInTheDocument();
     });
@@ -1128,16 +1133,15 @@ describe('ScanPage', () => {
 
       renderWithProviders(<ScanPage />);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Use last published data' }));
+      fireEvent.click(await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 }));
 
       expect(
-        await screen.findByText('Error: The published snapshot is missing rows for some requested symbols.'),
+        await screen.findByText('Error: The published snapshot is missing rows for some requested symbols.', {}, { timeout: 3000 }),
       ).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Use last published data' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Use last published data', { selector: 'button' })).not.toBeInTheDocument();
     });
 
     it('ignores a scan creation response after the user picked another scan', async () => {
-      const user = userEvent.setup();
       scanApi.getScans.mockResolvedValue({
         scans: [
           { scan_id: 'scan-a', status: 'completed' },
@@ -1154,10 +1158,16 @@ describe('ScanPage', () => {
         () => expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument(),
         { timeout: 3000 },
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Scan' }));
-      await user.click(screen.getByRole('combobox', { name: 'Previous Scans' }));
-      const options = await screen.findAllByRole('option');
-      await user.click(options.at(-1));
+      // Text and selector queries: role queries over the results table are
+      // slow enough to time out under a loaded full-suite run.
+      fireEvent.click(screen.getByText('Scan', { selector: 'button' }));
+      fireEvent.mouseDown(screen.getByLabelText('Previous Scans'));
+      const scanB = await waitFor(() => {
+        const option = document.querySelector('[role="option"][data-value="scan-b"]');
+        expect(option).not.toBeNull();
+        return option;
+      });
+      fireEvent.click(scanB);
       await waitFor(() => expect(scanApi.getScanStatus).toHaveBeenCalledWith('scan-b'));
 
       await act(async () => {
@@ -1166,6 +1176,12 @@ describe('ScanPage', () => {
 
       expect(scanApi.getScanStatus).not.toHaveBeenCalledWith('scan-late');
       expect(screen.queryByText('Showing your previous results until the new scan finishes.')).not.toBeInTheDocument();
+
+      // The late scan stays reachable instead of running unseen.
+      expect(screen.getByText('A scan you started was created while you were viewing another scan.')).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Open scan', { selector: 'button' }));
+      await waitFor(() => expect(scanApi.getScanStatus).toHaveBeenCalledWith('scan-late'));
+      expect(screen.queryByText('A scan you started was created while you were viewing another scan.')).not.toBeInTheDocument();
     });
 
     it('drops the retained results when the global market changes', async () => {
@@ -1187,8 +1203,8 @@ describe('ScanPage', () => {
         () => expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument(),
         { timeout: 3000 },
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Scan' }));
-      await screen.findByText('Showing your previous results until the new scan finishes.');
+      fireEvent.click(screen.getByText('Scan', { selector: 'button' }));
+      await screen.findByText('Showing your previous results until the new scan finishes.', {}, { timeout: 3000 });
 
       marketState.selectedMarket = 'HK';
       rerender(<ScanPage />);
@@ -1197,6 +1213,73 @@ describe('ScanPage', () => {
         expect(screen.queryByText('Showing your previous results until the new scan finishes.')).not.toBeInTheDocument();
       });
       expect(screen.queryByText(/Results:\s*1 stocks/i)).not.toBeInTheDocument();
+    });
+
+    it('tracks a scan started before history auto-loads the latest one', async () => {
+      let resolveHistory;
+      scanApi.getScans.mockReturnValueOnce(new Promise((resolve) => { resolveHistory = resolve; }));
+      scanApi.queryScanResults.mockResolvedValue(NVDA_PAGE);
+      let resolveCreate;
+      scanApi.createScan.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+      scanApi.getScanStatus.mockImplementation(async (scanId) => (
+        scanId === 'scan-new'
+          ? { scan_id: 'scan-new', status: 'queued', progress: 0, total_stocks: 5, completed_stocks: 0 }
+          : { status: 'completed' }
+      ));
+
+      renderWithProviders(<ScanPage />);
+
+      fireEvent.click(await screen.findByText('Scan', { selector: 'button' }, { timeout: 3000 }));
+      await act(async () => {
+        resolveHistory({ scans: [{ scan_id: 'scan-done', status: 'completed' }] });
+      });
+      await waitFor(() => expect(scanApi.getScanStatus).toHaveBeenCalledWith('scan-done'));
+      await act(async () => {
+        resolveCreate({ scan_id: 'scan-new', status: 'queued', total_stocks: 5 });
+      });
+
+      await waitFor(() => expect(scanApi.getScanStatus).toHaveBeenCalledWith('scan-new'));
+      expect(screen.queryByText(/was created while you were viewing another scan/)).not.toBeInTheDocument();
+    });
+
+    it('offers last-published data again once the rejected request changes', async () => {
+      window.history.replaceState(null, '', '/scan?symbols=NVDA');
+      useRuntimeActivityMock.mockReturnValue(US_PRICE_REFRESH);
+      scanApi.createScan.mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: { detail: { code: 'snapshot_unavailable', reason: 'incomplete_coverage', message: 'Missing rows.' } },
+        },
+      });
+
+      renderWithProviders(<ScanPage />);
+
+      fireEvent.click(await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 }));
+      await screen.findByText('Error: Missing rows.', {}, { timeout: 3000 });
+      expect(screen.queryByText('Use last published data', { selector: 'button' })).not.toBeInTheDocument();
+
+      // Clearing the custom symbols makes it a market-wide request.
+      fireEvent.click(screen.getByTestId('CancelIcon'));
+
+      expect(await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 })).toBeEnabled();
+    });
+
+    it('does not select a scan created for the previous market', async () => {
+      marketState.selectedMarket = 'US';
+      let resolveCreate;
+      scanApi.createScan.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+
+      const { rerender } = renderWithProviders(<ScanPage />);
+
+      fireEvent.click(await screen.findByText('Scan', { selector: 'button' }, { timeout: 3000 }));
+      marketState.selectedMarket = 'HK';
+      rerender(<ScanPage />);
+      await act(async () => {
+        resolveCreate({ scan_id: 'us-late', status: 'queued', total_stocks: 5 });
+      });
+
+      expect(scanApi.getScanStatus).not.toHaveBeenCalledWith('us-late');
+      expect(screen.getByText('Open scan', { selector: 'button' })).toBeInTheDocument();
     });
 
     it('keeps the previous completed results visible while a new scan runs', async () => {
@@ -1217,10 +1300,10 @@ describe('ScanPage', () => {
         () => expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument(),
         { timeout: 3000 },
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Scan' }));
+      fireEvent.click(screen.getByText('Scan', { selector: 'button' }));
 
       expect(
-        await screen.findByText('Showing your previous results until the new scan finishes.'),
+        await screen.findByText('Showing your previous results until the new scan finishes.', {}, { timeout: 3000 }),
       ).toBeInTheDocument();
       expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
       expect(scanApi.queryScanResults).not.toHaveBeenCalledWith('scan-new', expect.anything(), expect.anything());
