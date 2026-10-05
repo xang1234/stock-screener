@@ -608,8 +608,12 @@ class StockUniverseService:
                             all_stocks.extend(stocks)
                         logger.info(f"Fetched {len(stocks)} stocks from {exchange}")
                     except Exception as e:
-                        logger.warning(f"Error fetching from {exchange}: {e}")
-                        continue
+                        # A partial universe would be reconciled as complete and the
+                        # missing exchange deactivated; keep the current universe.
+                        logger.warning(
+                            f"Error fetching from {exchange}: {e}; skipping the universe refresh"
+                        )
+                        return []
 
                 logger.info(f"Successfully fetched {len(all_stocks)} total stocks from all exchanges")
                 return all_stocks

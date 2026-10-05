@@ -126,10 +126,30 @@ def test_an_unreadable_total_on_a_full_page_fails_instead_of_truncating():
         )
 
 
-def test_rows_without_a_key_are_skipped():
+def test_a_slice_with_rows_that_have_no_key_fails():
+    """A row we cannot identify is a row we cannot account for."""
     fake = _FakeFinviz([_row("A001"), _row("")])
 
-    assert [row["ticker"] for row in _read(fake)] == ["A001"]
+    with pytest.raises(slices.FinvizIncompleteRead, match="1 of 2"):
+        _read(fake)
+
+
+def test_a_slice_whose_pages_repeat_a_ticker_fails():
+    """Ordering drift between page requests can repeat one ticker and skip another."""
+    rows = [_row(f"A{i:03d}") for i in range(40)]
+    fake = _FakeFinviz(rows)
+    fetch = fake.fetch_page
+
+    def drifting(filters, order, first_row):
+        page = fetch(filters, order, first_row)
+        if first_row == 21:  # second page repeats the first page's last ticker
+            page.rows = [rows[19], *page.rows[1:]]
+        return page
+
+    fake.fetch_page = drifting
+
+    with pytest.raises(slices.FinvizIncompleteRead, match="39 of 40"):
+        _read(fake)
 
 
 def test_reader_errors_are_finviz_read_errors():

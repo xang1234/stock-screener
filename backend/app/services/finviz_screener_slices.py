@@ -131,10 +131,13 @@ def read_screener(
         if total > FINVIZ_ROW_CAP:
             # One extra page of overlap absorbs a listing change during the read.
             rows += read_pages(filters, "-ticker", [], total - FINVIZ_ROW_CAP + FINVIZ_PAGE_SIZE)
-        for row in rows:
-            key = row_key(row)
-            if key:
-                rows_by_key[key] = row
+        slice_rows = {key: row for row in rows if (key := row_key(row))}
+        if len(slice_rows) < total:
+            # Short pages, keyless rows or ordering drift between page requests.
+            raise FinvizIncompleteRead(
+                f"Finviz read of {filters!r} found {len(slice_rows)} of {total} rows"
+            )
+        rows_by_key.update(slice_rows)
         return total
 
     visit(base_filters, dimensions)
