@@ -68,6 +68,9 @@ const DEFAULT_SCAN_QUERY_KEY = stableScanFilterQueryKey(DEFAULT_SCAN_QUERY);
 
 const ROW_HOVER_PREFETCH_DELAY_MS = 150;
 
+// Create-scan rejections that describe the submitted request, not the system.
+const REQUEST_SCOPED_ERROR_CODES = new Set(['snapshot_unavailable', 'market_data_stale']);
+
 // "No market auto-loaded yet" marker for the scan auto-load ref.
 const NO_MARKET_AUTOLOADED = Symbol('no-market-autoloaded');
 
@@ -645,13 +648,14 @@ function ScanPage() {
     universeScope,
     universeSelections,
   ]);
-  // A snapshot_unavailable answer only covers the request that got it; once
-  // the universe or criteria change, the user may try last-published again.
+  // These rejections were judged on the request's own symbols, so they stop
+  // applying once the universe or criteria change. scan_already_active is
+  // system state and keeps applying.
   const failedRequestChanged = JSON.stringify({ ...createScanMutation.variables, data_mode: undefined })
     !== JSON.stringify({ ...scanRequest, data_mode: undefined });
   const lastPublishedAvailable = canOfferLastPublished(
     refreshConflict,
-    createScanError?.detail?.code === 'snapshot_unavailable' && failedRequestChanged
+    REQUEST_SCOPED_ERROR_CODES.has(createScanError?.detail?.code) && failedRequestChanged
       ? null
       : createScanError,
   );

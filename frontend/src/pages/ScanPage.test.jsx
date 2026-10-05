@@ -1264,6 +1264,30 @@ describe('ScanPage', () => {
       expect(await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 })).toBeEnabled();
     });
 
+    it('scopes a stale-data rejection to the request that got it', async () => {
+      window.history.replaceState(null, '', '/scan?symbols=NVDA');
+      scanApi.createScan.mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: { detail: { code: 'market_data_stale', message: 'NVDA prices are stale.' } },
+        },
+      });
+
+      renderWithProviders(<ScanPage />);
+
+      fireEvent.click(await screen.findByText('Scan', { selector: 'button' }, { timeout: 3000 }));
+      expect(
+        await screen.findByText('Use last published data', { selector: 'button' }, { timeout: 3000 }),
+      ).toBeEnabled();
+
+      // A different universe was never found stale, so a normal scan is the answer.
+      fireEvent.click(screen.getByTestId('CancelIcon'));
+
+      await waitFor(() => {
+        expect(screen.queryByText('Use last published data', { selector: 'button' })).not.toBeInTheDocument();
+      });
+    });
+
     it('does not select a scan created for the previous market', async () => {
       marketState.selectedMarket = 'US';
       let resolveCreate;
