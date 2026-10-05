@@ -119,6 +119,7 @@ def test_build_snapshot_rows_extracts_canonical_ticker_from_finviz_markup(monkey
     service = _make_provider_snapshot_service()
     html = """
     <html><body>
+      <div>#1 / 1 Total</div>
       <select id="pageSelect"><option value="1">1</option></select>
       <table class="screener_table">
         <tr>

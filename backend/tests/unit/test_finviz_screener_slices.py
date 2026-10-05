@@ -155,3 +155,49 @@ def test_a_slice_whose_pages_repeat_a_ticker_fails():
 def test_reader_errors_are_finviz_read_errors():
     assert issubclass(slices.FinvizSliceTooLarge, slices.FinvizReadError)
     assert issubclass(slices.FinvizIncompleteRead, slices.FinvizReadError)
+
+
+def test_a_page_without_a_row_total_fails_even_when_empty():
+    """An HTTP-200 challenge or changed page has no table and no total; reading it as an
+    empty exchange would let the universe refresh drop that exchange."""
+    fake = _FakeFinviz([])
+
+    with pytest.raises(slices.FinvizIncompleteRead, match="no row total"):
+        slices.read_screener(
+            "exch_amex",
+            fake.fetch_page,
+            parse_rows=lambda page: page.rows,
+            row_key=lambda row: row["ticker"],
+            total_of=lambda page: None,
+            pause=lambda: None,
+        )
+
+
+def test_a_ticker_counted_in_two_split_slices_fails():
+    """A ticker reclassified mid-read can satisfy two child slices while another goes missing."""
+    rows = [_row(f"T{i:04d}") for i in range(1000)] + [
+        _row(f"F{i:04d}", sector="financial") for i in range(1100)
+    ]
+    fake = _FakeFinviz(rows)
+    fetch = fake.fetch_page
+
+    def reclassifying(filters, order, first_row):
+        page = fetch(filters, order, first_row)
+        if filters.endswith("sec_financial") and order == "ticker" and first_row == 1:
+            page.rows = [rows[0], *page.rows[1:]]  # T0000 shows up, F0000 does not
+        return page
+
+    fake.fetch_page = reclassifying
+
+    with pytest.raises(slices.FinvizIncompleteRead, match="2099 of 2100"):
+        _read(fake)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("Stats #1 / 5,029 Total Off", 5029), ("Stats 0 Total Off Set Alert", 0), ("Total Debt/Equity", None)],
+)
+def test_screener_total_reads_both_markers(text, expected):
+    from bs4 import BeautifulSoup
+
+    assert slices.screener_total(BeautifulSoup(f"<div>{text}</div>", "lxml")) == expected

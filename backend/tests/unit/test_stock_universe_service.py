@@ -1233,6 +1233,7 @@ def test_fetch_from_finviz_prefers_ticker_metadata_over_logo_text(monkeypatch):
     service = StockUniverseService()
     html = """
     <html><body>
+      <div>#1 / 1 Total</div>
       <select id="pageSelect"><option value="1">1</option></select>
       <table class="screener_table">
         <tr>

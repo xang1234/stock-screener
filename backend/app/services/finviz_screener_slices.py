@@ -50,7 +50,10 @@ SPLIT_DIMENSIONS: tuple[tuple[str, ...], ...] = (
     ("sh_avgvol_u100", "sh_avgvol_o100"),
 )
 
+# A result page shows "#1 / N Total"; an empty one shows "0 Total". A page with
+# neither (a challenge or redesigned page) is not a screener answer.
 _TOTAL_PATTERN = re.compile(r"#\s*1\s*/\s*([\d,]+)\s*Total")
+_EMPTY_TOTAL_PATTERN = re.compile(r"(?<![\w/,.])0\s+Total\b")
 
 FetchPage = Callable[[str, str, int], Any]
 
@@ -68,9 +71,12 @@ class FinvizIncompleteRead(FinvizReadError):
 
 
 def screener_total(soup: Any) -> int | None:
-    """Rows matching the page's filters (``#1 / N Total``), or None if absent."""
-    match = _TOTAL_PATTERN.search(soup.get_text(" "))
-    return int(match.group(1).replace(",", "")) if match else None
+    """Rows matching the page's filters, or None if the page shows no row total."""
+    text = soup.get_text(" ")
+    match = _TOTAL_PATTERN.search(text)
+    if match:
+        return int(match.group(1).replace(",", ""))
+    return 0 if _EMPTY_TOTAL_PATTERN.search(text) else None
 
 
 def read_screener(
@@ -110,10 +116,9 @@ def read_screener(
         first_rows = parse_rows(first_page)
         total = total_of(first_page)
         if total is None:
-            if len(first_rows) >= FINVIZ_PAGE_SIZE:
-                # A full page with no "#1 / N Total": paging blind could truncate silently.
-                raise FinvizIncompleteRead(f"Finviz page for {filters!r} shows no row total")
-            total = len(first_rows)  # empty or single-page result
+            # Not a screener answer (e.g. an HTTP-200 challenge page): reading it as
+            # empty would drop the slice from an otherwise complete read.
+            raise FinvizIncompleteRead(f"Finviz page for {filters!r} shows no row total")
         if total > 2 * FINVIZ_ROW_CAP:
             if not remaining:
                 raise FinvizSliceTooLarge(
@@ -140,5 +145,10 @@ def read_screener(
         rows_by_key.update(slice_rows)
         return total
 
-    visit(base_filters, dimensions)
+    total = visit(base_filters, dimensions)
+    if len(rows_by_key) < total:
+        # A ticker reclassified mid-read can fill two split slices while another is missed.
+        raise FinvizIncompleteRead(
+            f"Finviz read of {base_filters!r} found {len(rows_by_key)} of {total} rows"
+        )
     return list(rows_by_key.values())
