@@ -37,8 +37,12 @@ def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, t
     published_at = datetime(2026, 4, 4, 12, 10, 0)
     monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(build_script, "SessionLocal", _fake_session)
+    universe_calls: list[tuple] = []
     stock_universe_service = SimpleNamespace(
-        populate_universe=lambda db: {"added": 10},
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: universe_calls.append(
+            ("baseline", kwargs)
+        ) or {"snapshot_id": kwargs["snapshot_id"], "baseline_rows": 20},
+        populate_universe=lambda db: universe_calls.append(("populate",)) or {"added": 10},
     )
     provider_snapshot_service = SimpleNamespace(
         create_snapshot_run=lambda db, run_mode, publish, snapshot_key, market, **kwargs: (
@@ -126,6 +130,13 @@ def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, t
     assert export_calls[0]["market"] == "US"
     stdout = capsys.readouterr().out
     assert "Starting stock universe refresh from Finviz..." in stdout
+    # The imported seed universe becomes the Finviz reconciliation baseline
+    # before the refresh, so symbols Finviz dropped can be deactivated.
+    assert [call[0] for call in universe_calls] == ["baseline", "populate"]
+    assert universe_calls[0][1]["market"] == "US"
+    assert universe_calls[0][1]["source_name"] == "finviz"
+    assert universe_calls[0][1]["snapshot_id"].startswith("weekly-reference-seed:")
+    assert "Seeded Finviz reconciliation baseline: 20 active rows" in stdout
     assert "[snapshot] 1/12 (8.3%) NYSE overview rows=20" in stdout
     assert "[publish] market=US coverage=100.00% (min=98.00%) missing_ratio=0.00% (max=0.50%)" in stdout
     assert "Starting Yahoo hydration for US published snapshot..." in stdout
@@ -147,6 +158,7 @@ def test_build_weekly_reference_bundle_writes_summary_when_us_publish_is_blocked
     summary_path = tmp_path / "github-step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
     stock_universe_service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
         populate_universe=lambda db: {"added": 10},
     )
     provider_snapshot_service = SimpleNamespace(
@@ -267,7 +279,10 @@ def test_build_weekly_reference_bundle_us_publishes_seeded_cache_fallback(
     monkeypatch.setattr(
         build_script,
         "get_stock_universe_service",
-        lambda: SimpleNamespace(populate_universe=lambda db: {"added": 0, "updated": 2}),
+        lambda: SimpleNamespace(
+            seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
+            populate_universe=lambda db: {"added": 0, "updated": 2},
+        ),
     )
 
     publish_calls: list[dict[str, object]] = []
@@ -1884,7 +1899,10 @@ def _run_us_build_with_finviz_error(
     monkeypatch.setattr(
         build_script,
         "get_stock_universe_service",
-        lambda: SimpleNamespace(populate_universe=lambda db: {"total": 0}),
+        lambda: SimpleNamespace(
+            seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
+            populate_universe=lambda db: {"total": 0},
+        ),
     )
 
     def refuse(db, **kwargs):

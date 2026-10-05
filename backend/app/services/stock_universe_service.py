@@ -604,8 +604,15 @@ class StockUniverseService:
                         logger.info(f"Fetching stocks from {exchange}...")
 
                         stocks = self._fetch_finviz_exchange_rows(exchange)
-                        if stocks:
-                            all_stocks.extend(stocks)
+                        if not stocks:
+                            # No US exchange is ever empty; zero rows is an
+                            # incomplete read, and reconciling it would
+                            # deactivate the whole exchange.
+                            logger.warning(
+                                f"Finviz returned no rows for {exchange}; skipping the universe refresh"
+                            )
+                            return []
+                        all_stocks.extend(stocks)
                         logger.info(f"Fetched {len(stocks)} stocks from {exchange}")
                     except Exception as e:
                         # A partial universe would be reconciled as complete and the
@@ -1101,6 +1108,87 @@ class StockUniverseService:
             "removed_symbols_truncated": len(removed_symbols) > details_limit,
             "changed_symbols_truncated": len(changed_symbols) > details_limit,
         }
+
+    def seed_reconciliation_baseline_from_active_rows(
+        self,
+        db: Session,
+        *,
+        market: str,
+        source_name: str,
+        snapshot_id: str,
+    ) -> dict[str, Any] | None:
+        """Record the active rows as the source's reconciliation baseline, once.
+
+        A database seeded from a weekly reference bundle has active rows but
+        no reconciliation run, so the next source refresh sees no previous
+        snapshot and can never deactivate symbols the source has dropped.
+        This records those rows as that previous snapshot. The refresh then
+        deactivates through the usual safety gates. No-op when the source
+        already has a run or the market has no active rows.
+        """
+        normalized_market = market.strip().upper()
+        has_run = (
+            db.query(StockUniverseReconciliationRun.id)
+            .filter(
+                StockUniverseReconciliationRun.market == normalized_market,
+                StockUniverseReconciliationRun.source_name == source_name,
+            )
+            .first()
+        )
+        if has_run is not None:
+            return None
+        # Only rows this source owns: a CSV- or manually-added symbol the
+        # source never lists must not count as removed by it.
+        rows = (
+            db.query(StockUniverse)
+            .filter(
+                StockUniverse.market == normalized_market,
+                StockUniverse.source == source_name,
+                StockUniverse.active_filter(),
+            )
+            .all()
+        )
+        if not rows:
+            return None
+        payloads = []
+        for row in rows:
+            payload = self._legacy_reconciliation_row_payload(row)
+            # Imported rows may carry legacy exchange names (NASDAQ); source
+            # rows carry MICs (XNAS). Compare like with like.
+            resolution = mic_alias_registry.resolve(normalized_market, payload.get("exchange"))
+            if resolution is not None and resolution.mic != payload.get("exchange"):
+                payload["exchange"] = resolution.mic
+                payload.pop("content_hash", None)
+                payload["content_hash"] = self._sha256_text(self._stable_json(payload))
+            payloads.append(payload)
+        artifact = self._build_market_reconciliation_artifact(
+            market=normalized_market,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            previous_snapshot_id=None,
+            current_rows=payloads,
+            previous_rows=[],
+        )
+        artifact_json = self._stable_json(artifact)
+        counts = artifact["counts"]
+        db.add(
+            StockUniverseReconciliationRun(
+                market=normalized_market,
+                source_name=source_name,
+                snapshot_id=snapshot_id,
+                previous_snapshot_id=None,
+                total_current=int(counts["total_current"]),
+                total_previous=0,
+                added_count=int(counts["added"]),
+                removed_count=0,
+                changed_count=0,
+                unchanged_count=0,
+                artifact_hash=self._sha256_text(artifact_json),
+                artifact_json=artifact_json,
+            )
+        )
+        db.flush()
+        return {"snapshot_id": snapshot_id, "baseline_rows": len(payloads)}
 
     @staticmethod
     def _reconciliation_source_name(row: Any) -> str:

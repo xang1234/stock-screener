@@ -1229,6 +1229,19 @@ def test_fetch_from_finviz_returns_nothing_when_any_exchange_fails(monkeypatch):
     assert service.fetch_from_finviz() == []
 
 
+def test_fetch_from_finviz_returns_nothing_when_any_exchange_reads_empty(monkeypatch):
+    """An exchange that reads as zero rows is as incomplete as one that fails:
+    reconciled against a baseline, its whole listing would be deactivated."""
+    service = StockUniverseService()
+    monkeypatch.setattr(
+        service,
+        "_fetch_finviz_exchange_rows",
+        lambda exchange: [] if exchange == "AMEX" else [{"symbol": f"{exchange}1", "exchange": exchange}],
+    )
+
+    assert service.fetch_from_finviz() == []
+
+
 def test_fetch_from_finviz_prefers_ticker_metadata_over_logo_text(monkeypatch):
     service = StockUniverseService()
     html = """
@@ -2560,4 +2573,158 @@ def test_ingest_hk_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
 
     assert stats["total"] == 1
     assert row.name == "Tencent Holdings"
+    db.close()
+
+
+# ── Seeded reconciliation baseline (weekly US bundle) ───────────────────
+
+
+def _finviz_row(symbol, exchange="NASDAQ"):
+    return {
+        "symbol": symbol,
+        "name": symbol,
+        "exchange": exchange,
+        "sector": "Technology",
+        "industry": "Software",
+        "market_cap": 1_000_000_000.0,
+    }
+
+
+def _seed_active_us_rows(db, symbols):
+    # As imported from a prior weekly reference bundle: active rows, no
+    # reconciliation run.
+    for symbol in symbols:
+        db.add(StockUniverse(symbol=symbol, name=symbol, market="US", exchange="XNAS",
+                             is_active=True, status="active", source="finviz"))
+    db.flush()
+
+
+def test_seeded_baseline_lets_a_full_refresh_deactivate_delisted_symbols(monkeypatch):
+    db = _make_session()()
+    service = StockUniverseService()
+    _seed_active_us_rows(db, ["AAPL", "MSFT", "GONE"])
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MIN_COUNT_FULL", "0")
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MAX_REMOVED_PERCENT", "50")
+    monkeypatch.setattr(
+        service, "fetch_from_finviz", lambda exchange_filter=None: [_finviz_row("AAPL"), _finviz_row("MSFT")]
+    )
+
+    baseline = service.seed_reconciliation_baseline_from_active_rows(
+        db, market="US", source_name="finviz", snapshot_id="weekly-seed:rev-1"
+    )
+    stats = service.populate_universe(db)
+
+    assert baseline == {"snapshot_id": "weekly-seed:rev-1", "baseline_rows": 3}
+    assert stats["reconciliation"]["previous_snapshot_id"] == "weekly-seed:rev-1"
+    assert stats["deactivated"] == 1
+    gone = db.query(StockUniverse).filter(StockUniverse.symbol == "GONE").one()
+    assert gone.is_active is False
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one().is_active is True
+    db.close()
+
+
+def test_seeded_baseline_still_respects_the_removal_safety_gate(monkeypatch):
+    db = _make_session()()
+    service = StockUniverseService()
+    _seed_active_us_rows(db, ["AAPL", "MSFT", "GONE"])
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MIN_COUNT_FULL", "0")
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MAX_REMOVED_PERCENT", "10")
+    monkeypatch.setattr(
+        service, "fetch_from_finviz", lambda exchange_filter=None: [_finviz_row("AAPL"), _finviz_row("MSFT")]
+    )
+
+    service.seed_reconciliation_baseline_from_active_rows(
+        db, market="US", source_name="finviz", snapshot_id="weekly-seed:rev-1"
+    )
+    stats = service.populate_universe(db)
+
+    # One of three removed (33%) exceeds the 10% gate: nothing is deactivated.
+    assert stats["deactivated"] == 0
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "GONE").one().is_active is True
+    db.close()
+
+
+def test_seeded_baseline_is_skipped_when_a_source_run_already_exists(monkeypatch):
+    db = _make_session()()
+    service = StockUniverseService()
+    monkeypatch.setattr(service, "fetch_from_finviz", lambda exchange_filter=None: [_finviz_row("AAPL")])
+    service.populate_universe(db)
+
+    baseline = service.seed_reconciliation_baseline_from_active_rows(
+        db, market="US", source_name="finviz", snapshot_id="weekly-seed:rev-1"
+    )
+
+    assert baseline is None
+    assert db.query(StockUniverseReconciliationRun).count() == 1
+    db.close()
+
+
+def test_seeded_baseline_from_a_real_bundle_import_deactivates_and_records_events(monkeypatch):
+    from app.services.provider_snapshot_service import ProviderSnapshotService
+
+    db = _make_session()()
+    service = StockUniverseService()
+    # The bundle import writes legacy exchange names, not MICs.
+    ProviderSnapshotService._replace_market_universe_rows(
+        db,
+        market="US",
+        rows=[
+            {"symbol": symbol, "name": symbol, "market": "US", "exchange": "NASDAQ",
+             "is_active": True, "status": "active", "source": "finviz"}
+            for symbol in ("AAPL", "MSFT", "GONE")
+        ],
+    )
+    db.flush()
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MIN_COUNT_FULL", "0")
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MAX_REMOVED_PERCENT", "50")
+    monkeypatch.setattr(
+        service, "fetch_from_finviz", lambda exchange_filter=None: [_finviz_row("AAPL"), _finviz_row("MSFT")]
+    )
+
+    service.seed_reconciliation_baseline_from_active_rows(
+        db, market="US", source_name="finviz", snapshot_id="weekly-seed:rev-1"
+    )
+    stats = service.populate_universe(db)
+
+    baseline = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(StockUniverseReconciliationRun.snapshot_id == "weekly-seed:rev-1")
+        .one()
+    )
+    baseline_rows = json.loads(baseline.artifact_json)["snapshot_rows"]
+    # Compared like-for-like with the Finviz rows' MICs.
+    assert {row["exchange"] for row in baseline_rows} == {"XNAS"}
+    assert stats["deactivated"] == 1
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "GONE").one().is_active is False
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "GONE")
+        .order_by(StockUniverseStatusEvent.id.desc())
+        .first()
+    )
+    assert event.new_status == "inactive_missing_source"
+    db.close()
+
+
+def test_seeded_baseline_only_covers_rows_the_source_owns(monkeypatch):
+    db = _make_session()()
+    service = StockUniverseService()
+    _seed_active_us_rows(db, ["AAPL", "MSFT"])
+    db.add(StockUniverse(symbol="CSVONLY", name="CSV only", market="US", exchange="XNAS",
+                         is_active=True, status="active", source="manual"))
+    db.flush()
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MIN_COUNT_FULL", "0")
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MAX_REMOVED_PERCENT", "50")
+    monkeypatch.setattr(
+        service, "fetch_from_finviz", lambda exchange_filter=None: [_finviz_row("AAPL"), _finviz_row("MSFT")]
+    )
+
+    baseline = service.seed_reconciliation_baseline_from_active_rows(
+        db, market="US", source_name="finviz", snapshot_id="weekly-seed:rev-1"
+    )
+    stats = service.populate_universe(db)
+
+    assert baseline["baseline_rows"] == 2
+    assert stats["deactivated"] == 0
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "CSVONLY").one().is_active is True
     db.close()
