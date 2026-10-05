@@ -760,11 +760,15 @@ def _seed_official_reconciliation_baseline(db, stock_universe_service, snapshot)
     The workflow enables destructive apply for this job only, and removals
     still pass the Asia safety gates. Fallback seed CSVs (``*_manual_csv``)
     are partial lists, so they never become the comparison; nor does an IN
-    snapshot built from NSE alone while BSE is unreachable.
+    snapshot built from NSE alone while BSE is unreachable, or any snapshot
+    with a failed fetch part (e.g. a TMX letter bucket).
     """
     if snapshot.source_name.endswith("_manual_csv"):
         return
-    if (snapshot.source_metadata or {}).get("bse_unavailable"):
+    metadata = snapshot.source_metadata or {}
+    if metadata.get("bse_unavailable"):
+        return
+    if any((metadata.get("fetch_errors") or {}).values()):
         return
     market = snapshot.market.upper()
     baseline = stock_universe_service.seed_reconciliation_baseline_from_active_rows(

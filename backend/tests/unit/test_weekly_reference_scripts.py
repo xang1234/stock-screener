@@ -2494,3 +2494,19 @@ def test_official_baseline_is_not_seeded_from_an_nse_only_snapshot():
     build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
 
     assert calls == []
+
+
+def test_official_baseline_is_not_seeded_when_part_of_the_fetch_failed():
+    calls = []
+    service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
+    )
+    snapshot = SimpleNamespace(
+        market="CA",
+        source_name="tmx_official",
+        source_metadata={"fetch_errors": {"tsx": {"Q": "ReadTimeout"}, "tsxv": {}}},
+    )
+
+    build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
+
+    assert calls == []

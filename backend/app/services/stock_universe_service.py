@@ -1666,6 +1666,9 @@ class StockUniverseService:
         stays active forever and poisons price coverage.
         """
         market = context.market
+        # A KR manual CSV can be stale about a code's board; only KRX decides.
+        if market == "KR" and context.source_name != "krx_official":
+            return {"board_twins_deactivated": 0}
         twin_suffix = self._BOARD_TWIN_SUFFIXES[market]
         snapshot_by_twin: dict[str, str] = {}
         for row in context.canonical_rows:

@@ -2812,3 +2812,24 @@ def test_seeded_baseline_ignores_field_drift_in_the_anomaly_gate(monkeypatch):
     assert stats["reconciliation"]["counts"]["changed"] == 0
     assert db.query(StockUniverse).filter(StockUniverse.symbol == "0004.HK").one().is_active is False
     db.close()
+
+
+def test_kr_manual_csv_ingest_leaves_board_twins_alone():
+    # Only the official KRX snapshot is authoritative about a code's board.
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(StockUniverse(symbol="000250.KS", market="KR", exchange="XKRX",
+                         is_active=True, status=UNIVERSE_STATUS_ACTIVE))
+    db.commit()
+
+    stats = stock_universe_service.ingest_kr_snapshot_rows(
+        db,
+        rows=[{"symbol": "000250", "exchange": "KOSDAQ", "name": "Sam Chun Dang"}],
+        source_name="kr_manual_csv",
+        snapshot_id="kr-csv-20261003",
+    )
+    db.commit()
+
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "000250.KS").one().status == UNIVERSE_STATUS_ACTIVE
+    assert stats["board_twins_deactivated"] == 0
+    db.close()
