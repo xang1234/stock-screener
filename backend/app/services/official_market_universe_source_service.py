@@ -162,9 +162,7 @@ _JP_ALLOWED_MARKET_SECTIONS = frozenset(
         "グロース（内国株式）",
     }
 )
-_JP_LISTING_LINK_RE = re.compile(
-    r"""href\s*=\s*["']([^"']*data_j\.xlsx?(?:\?[^"']*)?)["']""", re.IGNORECASE
-)
+_JP_LISTING_FILE_RE = re.compile(r"data_j\.xlsx?$", re.IGNORECASE)
 _TW_UPDATED_AT_RE = re.compile(r"Date\s+Stock\s+Updated:\s*(\d{4}/\d{2}/\d{2})", re.IGNORECASE)
 _TW_CODE_NAME_RE = re.compile(r"^([0-9A-Z]{3,6}[A-Z]?)\s+(.+?)$")
 _HTTP_GET_MAX_ATTEMPTS = 3
@@ -285,12 +283,19 @@ class OfficialMarketUniverseSourceService:
         except requests.RequestException as exc:
             logger.warning("JPX listing page %s unavailable: %s", page_url, exc)
             return None
-        links = _JP_LISTING_LINK_RE.findall(page.content.decode("utf-8", errors="replace"))
+        # The HTML parser decodes entities (&amp;) in href values.
+        soup = BeautifulSoup(page.content, "html.parser")
+        links = [
+            anchor["href"].strip()
+            for anchor in soup.find_all(href=True)
+            if _JP_LISTING_FILE_RE.search(anchor["href"].strip().split("?", 1)[0])
+        ]
         if not links:
             return None
         # Prefer the xlsx when a leftover legacy .xls link is also listed.
         links.sort(key=lambda link: not link.split("?", 1)[0].lower().endswith(".xlsx"))
-        return urljoin(page_url, links[0])
+        # Resolve against the final page URL in case the listing page redirected.
+        return urljoin(page.url or page_url, links[0])
 
     def fetch_jp_snapshot(self) -> OfficialMarketUniverseSnapshot:
         discovered_url = self._discover_jp_listing_url()

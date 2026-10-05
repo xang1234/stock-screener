@@ -2832,3 +2832,14 @@ def test_coerce_date_treats_missing_datetimes_as_missing():
     coerce = OfficialMarketUniverseSourceService._coerce_date
     assert coerce(pd.NaT) is None
     assert coerce(float("nan")) is None
+
+
+def test_jp_listing_link_is_html_decoded_and_resolved_against_the_final_page_url(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    redirected = "https://www.jpx.co.jp/markets/moved/listing/01.html"
+    page = b'<a href="x-att/data_j.xlsx?a=1&amp;b=2">Excel</a>'
+    _jp_http(monkeypatch, service, {_JPX_PAGE: _fetched(redirected, page)})
+
+    url = service._discover_jp_listing_url()
+
+    assert url == "https://www.jpx.co.jp/markets/moved/listing/x-att/data_j.xlsx?a=1&b=2"

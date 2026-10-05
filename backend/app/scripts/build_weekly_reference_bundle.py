@@ -297,14 +297,15 @@ def _prior_seed(
     *,
     provider_snapshot_service,
     snapshot_key: str,
-    as_of_key: str = "seed_as_of_date",
+    as_of_keys: tuple[str, ...] = ("seed_as_of_date",),
 ) -> tuple[Any, dict[str, Any], str | None]:
     """The imported prior bundle's run and provenance, or why it cannot stand in for this week.
 
     Its data must be within ``github_weekly_reference_max_age_days``, the age past
-    which consumers already treat a weekly bundle as stale. ``as_of_key`` names
-    the coverage field holding the date of reused data, so a seed that itself
-    reused older data is dated by that data.
+    which consumers already treat a weekly bundle as stale. ``as_of_keys`` name
+    the coverage fields (first present wins) holding the date of the data, so a
+    seed is dated by its data, e.g. its official listing date, not by when it
+    was published.
     """
     seed_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     if seed_run is None:
@@ -315,10 +316,11 @@ def _prior_seed(
         seed_coverage = {}
     if not isinstance(seed_coverage, dict):
         seed_coverage = {}
+    data_as_of = next((seed_coverage[key] for key in as_of_keys if seed_coverage.get(key)), None)
     if (
-        as_of_key == "universe_seed_as_of_date"
+        "universe_as_of_date" in as_of_keys
         and seed_coverage.get("stale_universe")
-        and not seed_coverage.get(as_of_key)
+        and not data_as_of
     ):
         # Bundles from before #521 reused a universe without dating it.
         return None, {}, (
@@ -327,7 +329,7 @@ def _prior_seed(
     # A seed that itself reused an older seed is as old as that seed's data.
     try:
         seed_as_of = date.fromisoformat(
-            seed_coverage.get(as_of_key)
+            data_as_of
             or (seed_run.published_at or seed_run.created_at).date().isoformat()
         ).isoformat()
     except (AttributeError, TypeError, ValueError):
@@ -759,8 +761,10 @@ def _build_asia_bundle(
     stale_universe = False
     universe_error: str | None = None
     universe_seed: dict[str, Any] = {}
+    universe_as_of: str | None = None
     try:
         official_snapshot = official_source_service.fetch_market_snapshot(market)
+        universe_as_of = getattr(official_snapshot, "snapshot_as_of", None)
         universe_stats = ingest_official_market_snapshot(
             db, stock_universe_service, official_snapshot
         )
@@ -809,7 +813,8 @@ def _build_asia_bundle(
             db,
             provider_snapshot_service=provider_snapshot_service,
             snapshot_key=snapshot_key,
-            as_of_key="universe_seed_as_of_date",
+            # universe_seed_as_of_date: bundles from this change's first revision.
+            as_of_keys=("universe_as_of_date", "universe_seed_as_of_date"),
         )
         if seed_problem:
             raise RuntimeError(
@@ -817,6 +822,7 @@ def _build_asia_bundle(
             ) from exc
         stale_universe = True
         universe_error = str(exc)
+        universe_as_of = seed_provenance["seed_as_of_date"]
         universe_seed = {
             "universe_error": universe_error,
             "universe_seed_source_revision": seed_provenance["seed_source_revision"],
@@ -922,6 +928,9 @@ def _build_asia_bundle(
         "stale_universe": stale_universe,
         **universe_seed,
     }
+    if universe_as_of:
+        # The listings' own date, so the next week's fallback ages them correctly.
+        coverage_stats["universe_as_of_date"] = universe_as_of
     warnings: list[str] = []
     if stale_universe:
         warnings.append(

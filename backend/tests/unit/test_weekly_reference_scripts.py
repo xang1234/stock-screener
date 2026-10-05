@@ -2392,3 +2392,45 @@ def test_partial_publish_fallback_also_refuses_an_old_seed(monkeypatch, tmp_path
             flags=["--allow-partial-publish"],
             universe_error=RuntimeError("AKShare CN spot disconnected"),
         )
+
+
+def test_universe_age_is_the_official_listing_date_not_the_publish_date(monkeypatch, tmp_path):
+    # Published two days ago, but its listing file was twelve days old then.
+    listing_date = (datetime.utcnow() - timedelta(days=12)).date().isoformat()
+    with pytest.raises(RuntimeError, match="max age 8 day"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            seed_coverage={"universe_as_of_date": listing_date},
+        )
+
+
+def test_successful_universe_refresh_records_the_listing_date(monkeypatch, tmp_path):
+    active_rows = [_make_universe_row("7203.T", market="JP")]
+    fake_db = _make_cn_db_mock(active_rows)
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _patch_cn_dependencies(monkeypatch, raise_universe=False)
+    monkeypatch.setattr(
+        build_script, "ingest_official_market_snapshot", lambda db, service, snapshot: {"added": 0}
+    )
+    monkeypatch.setattr(
+        build_script, "get_fundamentals_cache", lambda: SimpleNamespace(get_many=lambda symbols: {})
+    )
+    publish_calls: list[dict] = []
+    monkeypatch.setattr(
+        build_script,
+        "get_provider_snapshot_service",
+        lambda: _jp_snapshot_service(publish_calls, seed_published_at=datetime.utcnow()),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["build_weekly_reference_bundle", "--market", "JP", "--output-dir", str(tmp_path)],
+    )
+
+    assert build_script.main() == 0
+
+    # _patch_cn_dependencies' snapshot is dated 2026-05-09.
+    assert publish_calls[0]["coverage_stats"]["universe_as_of_date"] == "2026-05-09"
