@@ -239,10 +239,19 @@ jobs:
             RESUME="--resume-partial-seed"
           fi
 
+          # JP's official listing (JPX data_j) has moved before; a one-week
+          # outage reuses last week's universe, recorded in the manifest. A
+          # seed past the weekly max age still fails the job (#521).
+          STALE=""
+          if [ "$MATRIX_MARKET" = "JP" ]; then
+            STALE="--allow-stale-universe"
+          fi
+
           echo "max_runtime_minutes=$RUNTIME" >> "$GITHUB_OUTPUT"
           echo "partial_flag=$PARTIAL" >> "$GITHUB_OUTPUT"
           echo "resume_flag=$RESUME" >> "$GITHUB_OUTPUT"
-          echo "Resolved build inputs for $MATRIX_MARKET: runtime=$RUNTIME partial='$PARTIAL' resume='$RESUME'"
+          echo "stale_universe_flag=$STALE" >> "$GITHUB_OUTPUT"
+          echo "Resolved build inputs for $MATRIX_MARKET: runtime=$RUNTIME partial='$PARTIAL' resume='$RESUME' stale_universe='$STALE'"
 
       - name: Build weekly reference bundle
         run: |
@@ -252,6 +261,7 @@ jobs:
             --output-dir /tmp/weekly-reference \
             --max-runtime-minutes "${{ steps.build_inputs.outputs.max_runtime_minutes }}" \
             ${{ steps.build_inputs.outputs.resume_flag }} \
+            ${{ steps.build_inputs.outputs.stale_universe_flag }} \
             ${{ steps.build_inputs.outputs.partial_flag }}
 
       - name: Upload weekly reference assets

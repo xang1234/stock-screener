@@ -19,10 +19,12 @@ import io
 import json
 import logging
 import math
+import numbers
 from pathlib import Path
 import re
 import time
 from typing import Any, Iterable
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
@@ -160,6 +162,7 @@ _JP_ALLOWED_MARKET_SECTIONS = frozenset(
         "グロース（内国株式）",
     }
 )
+_JP_LISTING_LINK_RE = re.compile(r'href="([^"]*data_j\.xlsx?)"', re.IGNORECASE)
 _TW_UPDATED_AT_RE = re.compile(r"Date\s+Stock\s+Updated:\s*(\d{4}/\d{2}/\d{2})", re.IGNORECASE)
 _TW_CODE_NAME_RE = re.compile(r"^([0-9A-Z]{3,6}[A-Z]?)\s+(.+?)$")
 _HTTP_GET_MAX_ATTEMPTS = 3
@@ -270,13 +273,38 @@ class OfficialMarketUniverseSourceService:
             rows=tuple(rows),
         )
 
+    def _discover_jp_listing_url(self) -> str | None:
+        """The data_j spreadsheet linked from the JPX listing page, if any."""
+        page_url = settings.jp_universe_listing_page_url
+        if not page_url:
+            return None
+        try:
+            page = self._http_get(page_url)
+        except requests.RequestException as exc:
+            logger.warning("JPX listing page %s unavailable: %s", page_url, exc)
+            return None
+        match = _JP_LISTING_LINK_RE.search(page.content.decode("utf-8", errors="replace"))
+        return urljoin(page_url, match.group(1)) if match else None
+
     def fetch_jp_snapshot(self) -> OfficialMarketUniverseSnapshot:
-        fetched = self._http_get(settings.jp_universe_source_url)
-        frame = self._read_excel_bytes(fetched.content, engine="xlrd")
+        discovered_url = self._discover_jp_listing_url()
+        source_url = discovered_url or settings.jp_universe_source_url
+        try:
+            fetched = self._http_get(source_url)
+        except requests.HTTPError as exc:
+            if discovered_url:
+                raise
+            raise requests.HTTPError(
+                f"{exc}; the JPX listing page {settings.jp_universe_listing_page_url} "
+                "offered no data_j spreadsheet link to fall back on",
+                response=exc.response,
+            ) from exc
+        frame = self._read_excel_bytes(fetched.content, engine=self._excel_engine(fetched.content))
         rows, snapshot_date = self._parse_jp_frame(frame)
         snapshot_as_of = snapshot_date.isoformat()
         source_metadata = {
-            "source_urls": [settings.jp_universe_source_url],
+            "source_urls": [source_url],
+            "discovered_from": settings.jp_universe_listing_page_url if discovered_url else None,
             "fetched_at": fetched.fetched_at,
             "http_last_modified": fetched.last_modified,
             "tls_verification_disabled": fetched.tls_verification_disabled,
@@ -2183,7 +2211,7 @@ class OfficialMarketUniverseSourceService:
         return rows
 
     def parse_jp_rows(self, content: bytes) -> OfficialMarketUniverseSnapshot:
-        frame = self._read_excel_bytes(content, engine="xlrd")
+        frame = self._read_excel_bytes(content, engine=self._excel_engine(content))
         rows, snapshot_date = self._parse_jp_frame(frame)
         return OfficialMarketUniverseSnapshot(
             market="JP",
@@ -2439,6 +2467,15 @@ class OfficialMarketUniverseSourceService:
         raise RuntimeError(f"Unreachable retry loop for official universe fetch {url}")
 
     @staticmethod
+    def _excel_engine(content: bytes) -> str | None:
+        """Pick the reader from the file signature, not the URL's extension."""
+        if content[:4] == b"PK\x03\x04":
+            return "openpyxl"  # .xlsx (zip container)
+        if content[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+            return "xlrd"  # legacy .xls (OLE2)
+        return None
+
+    @staticmethod
     def _read_excel_bytes(content: bytes, *, engine: str | None = None) -> pd.DataFrame:
         kwargs: dict[str, Any] = {}
         if engine:
@@ -2523,6 +2560,17 @@ class OfficialMarketUniverseSourceService:
             return value.date()
         if isinstance(value, date):
             return value
+        # Compact YYYYMMDD (JPX stores 20260930 as a number); pandas would read
+        # a bare integer as epoch nanoseconds and return 1970-01-01.
+        if isinstance(value, numbers.Real) and not isinstance(value, bool):
+            if not float(value).is_integer():
+                return None
+            value = str(int(value))
+        if isinstance(value, str) and re.fullmatch(r"\d{8}", value.strip()):
+            try:
+                return datetime.strptime(value.strip(), "%Y%m%d").date()
+            except ValueError:
+                return None
         parsed = pd.to_datetime(value, errors="coerce")
         if pd.isna(parsed):
             return None

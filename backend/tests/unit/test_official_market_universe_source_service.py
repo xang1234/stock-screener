@@ -2664,3 +2664,122 @@ def test_bundled_au_fallback_covers_broad_asx_universe():
 
     assert len(rows) >= 1500
     assert {"BHP.AX", "CBA.AX"} <= symbols
+
+
+# ── JPX listing source (#521) ───────────────────────────────────────────
+
+_JPX_PAGE = "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html"
+_JPX_OLD_XLS = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+
+
+def _fetched(url: str, content: bytes) -> _FetchedSource:
+    return _FetchedSource(
+        url=url,
+        content=content,
+        fetched_at="2026-10-05T01:00:00+00:00",
+        last_modified="Mon, 05 Oct 2026 00:00:30 GMT",
+        tls_verification_disabled=False,
+    )
+
+
+def _jp_http(monkeypatch, service, responses):
+    calls: list[str] = []
+
+    def http_get(url, allow_insecure_fallback=False, extra_headers=None):
+        calls.append(url)
+        response = responses.get(url)
+        if isinstance(response, Exception):
+            raise response
+        if response is None:
+            raise requests.HTTPError(f"404 Client Error: Not Found for url: {url}")
+        return response
+
+    monkeypatch.setattr(service, "_http_get", http_get)
+    return calls
+
+
+def test_parse_jp_rows_reads_the_xlsx_listing():
+    snapshot = OfficialMarketUniverseSourceService().parse_jp_rows(
+        _fixture_bytes("jp_data_j_fixture.xlsx")
+    )
+
+    assert snapshot.snapshot_as_of == "2026-03-31"
+    assert [row["symbol"] for row in snapshot.rows] == ["1301.T", "7203.T"]
+
+
+def test_parse_jp_frame_reads_compact_yyyymmdd_dates():
+    # The live JPX file stores 日付 as an integer such as 20260930.
+    frame = pd.DataFrame([{
+        "日付": 20260930,
+        "コード": 7203,
+        "銘柄名": "Toyota",
+        "市場・商品区分": "プライム（内国株式）",
+        "33業種区分": "輸送用機器",
+        "17業種区分": "自動車・輸送機",
+    }])
+
+    _rows, snapshot_date = OfficialMarketUniverseSourceService()._parse_jp_frame(frame)
+
+    assert snapshot_date == date(2026, 9, 30)
+
+
+def test_fetch_jp_snapshot_follows_the_listing_page_link(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    moved = "https://www.jpx.co.jp/markets/statistics-equities/misc/newfolder-att/data_j.xlsx"
+    page = b'<a href="/markets/statistics-equities/misc/newfolder-att/data_j.xlsx">Excel</a>'
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.settings.jp_universe_source_url",
+        _JPX_OLD_XLS,
+    )
+    calls = _jp_http(monkeypatch, service, {
+        _JPX_PAGE: _fetched(_JPX_PAGE, page),
+        moved: _fetched(moved, _fixture_bytes("jp_data_j_fixture.xlsx")),
+    })
+
+    snapshot = service.fetch_jp_snapshot()
+
+    assert calls == [_JPX_PAGE, moved]
+    assert snapshot.source_metadata["source_urls"] == [moved]
+    assert snapshot.source_metadata["discovered_from"] == _JPX_PAGE
+    assert [row["symbol"] for row in snapshot.rows] == ["1301.T", "7203.T"]
+
+
+@pytest.mark.parametrize(
+    "page_response",
+    [
+        _fetched(_JPX_PAGE, b"<html>no spreadsheet link</html>"),
+        requests.ConnectionError("listing page unreachable"),
+    ],
+)
+def test_fetch_jp_snapshot_falls_back_to_the_configured_url(monkeypatch, page_response):
+    service = OfficialMarketUniverseSourceService()
+    configured = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx"
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.settings.jp_universe_source_url",
+        configured,
+    )
+    _jp_http(monkeypatch, service, {
+        _JPX_PAGE: page_response,
+        configured: _fetched(configured, _fixture_bytes("jp_data_j_fixture.xls")),
+    })
+
+    snapshot = service.fetch_jp_snapshot()
+
+    assert snapshot.source_metadata["source_urls"] == [configured]
+    assert snapshot.source_metadata["discovered_from"] is None
+    assert len(snapshot.rows) == 2
+
+
+def test_fetch_jp_snapshot_reports_both_failures_when_the_file_moved(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.settings.jp_universe_source_url",
+        _JPX_OLD_XLS,
+    )
+    _jp_http(monkeypatch, service, {_JPX_PAGE: _fetched(_JPX_PAGE, b"<html></html>")})
+
+    with pytest.raises(requests.HTTPError) as exc:
+        service.fetch_jp_snapshot()
+
+    assert "404" in str(exc.value)
+    assert "no data_j spreadsheet link" in str(exc.value)
