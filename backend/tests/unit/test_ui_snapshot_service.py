@@ -246,6 +246,7 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
         "expected_dates": {"US": "2026-06-18"},
         "oldest_last_cached_dates": {"US": "2026-05-13"},
     }
+    source = {"data_mode": "last_published", "as_of_date": "2026-03-27", "feature_run_id": 4}
     unknown_warning = {
         "code": "future_warning",
         "message": "This warning type is not known by this server version.",
@@ -263,6 +264,7 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
                 total_stocks=100,
                 passed_stocks=42,
                 warnings=[warning, unknown_warning],
+                metadata_json={"published_source": source},
                 started_at=datetime(2026, 3, 29, 21, 45, 0),
                 completed_at=datetime(2026, 3, 29, 21, 45, 0),
             )
@@ -276,6 +278,9 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
     assert snapshot.payload["recent_scans"]["scans"][0]["warnings"] == [warning]
     assert snapshot.payload["selected_scan"]["warnings"] == [warning]
     assert snapshot.payload["selected_scan_status"]["warnings"] == [warning]
+    assert snapshot.payload["recent_scans"]["scans"][0]["published_source"] == source
+    assert snapshot.payload["selected_scan"]["published_source"] == source
+    assert snapshot.payload["selected_scan_status"]["published_source"] == source
 
 
 def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():

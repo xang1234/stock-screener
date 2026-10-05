@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Box, CircularProgress, Container, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Container, Paper, Typography } from '@mui/material';
 import {
   cancelScan,
   createScan,
@@ -49,6 +49,7 @@ import {
   stableScanFilterQueryKey,
 } from '../hooks/useScanFilterQueryState';
 import { useScanResultsController } from '../hooks/useScanResultsController';
+import { canOfferLastPublished, describePublishedSource } from '../publishedSource';
 import {
   buildUniverseDef,
   parseLegacyUniverseDefault,
@@ -66,6 +67,9 @@ const DEFAULT_SCAN_QUERY = createScanFilterQuery(DEFAULT_SCAN_EXPRESSION);
 const DEFAULT_SCAN_QUERY_KEY = stableScanFilterQueryKey(DEFAULT_SCAN_QUERY);
 
 const ROW_HOVER_PREFETCH_DELAY_MS = 150;
+
+// Create-scan rejections that describe the submitted request, not the system.
+const REQUEST_SCOPED_ERROR_CODES = new Set(['snapshot_unavailable', 'market_data_stale']);
 
 // "No market auto-loaded yet" marker for the scan auto-load ref.
 const NO_MARKET_AUTOLOADED = Symbol('no-market-autoloaded');
@@ -116,6 +120,35 @@ function ScanPage() {
 
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
+  // The last finished scan the user saw. While a newer scan is queued or
+  // running, its results stay on screen instead of an empty table.
+  const [lastFinishedScan, setLastFinishedScan] = useState(null);
+  const currentScanIdRef = useRef(null);
+  currentScanIdRef.current = currentScanId;
+  // Bumped whenever the user picks a scan, so a create response that lands
+  // afterwards cannot replace their choice. Auto-loading does not count.
+  const scanSelectionRef = useRef(0);
+  // A scan whose create response arrived after the user moved on; offered
+  // via a notice so it never runs unseen.
+  const [lateCreatedScanId, setLateCreatedScanId] = useState(null);
+  // published_source per scan, kept with the scan's identity: some scans
+  // (custom symbols, other markets) never appear in the market's history.
+  const [scanSources, setScanSources] = useState({});
+  const rememberScanSource = useCallback((scanId, source) => {
+    if (!scanId || !source) {
+      return;
+    }
+    setScanSources((previous) => (
+      previous[scanId] === source ? previous : { ...previous, [scanId]: source }
+    ));
+  }, []);
+  const scanPending = Boolean(currentScanId) && (scanStatus === 'queued' || scanStatus === 'running');
+  const showingPreviousResults = scanPending
+    && Boolean(lastFinishedScan)
+    && lastFinishedScan.scanId !== currentScanId;
+  const viewScanId = showingPreviousResults ? lastFinishedScan.scanId : currentScanId;
+  const viewScanStatus = showingPreviousResults ? lastFinishedScan.status : scanStatus;
+  const viewScanFinished = viewScanStatus === 'completed' || viewScanStatus === 'cancelled';
   const [initialBootstrapSettled, setInitialBootstrapSettled] = useState(false);
   const [bootstrappedScanId, setBootstrappedScanId] = useState(null);
   const [universeMarket, setUniverseMarket] = useState(INITIAL_UNIVERSE_SELECTION.market);
@@ -145,8 +178,8 @@ function ScanPage() {
     resultsError,
     refetchResults,
   } = useScanResultsController({
-    currentScanId,
-    scanStatus,
+    currentScanId: viewScanId,
+    scanStatus: viewScanStatus,
     initialFilters: DEFAULT_SCAN_FILTERS,
     initialExpression: DEFAULT_SCAN_EXPRESSION,
   });
@@ -198,6 +231,25 @@ function ScanPage() {
     }
   }, [universeMarket, universeScope, universeSelections]);
 
+  // Another market's results must never stand in for this market's scan.
+  const lastFinishedMarketRef = useRef(globalMarket);
+  useEffect(() => {
+    if (lastFinishedMarketRef.current !== globalMarket) {
+      lastFinishedMarketRef.current = globalMarket;
+      setLastFinishedScan(null);
+    }
+  }, [globalMarket]);
+
+  useEffect(() => {
+    if (currentScanId && (scanStatus === 'completed' || scanStatus === 'cancelled')) {
+      setLastFinishedScan((previous) => (
+        previous?.scanId === currentScanId && previous?.status === scanStatus
+          ? previous
+          : { scanId: currentScanId, status: scanStatus }
+      ));
+    }
+  }, [currentScanId, scanStatus]);
+
   const applyScanBootstrapSnapshot = useCallback(
     (snapshot, requestedScanId = null) => {
       const payload = snapshot?.payload ?? {};
@@ -237,6 +289,10 @@ function ScanPage() {
           }
         );
       }
+      rememberScanSource(
+        selectedScanId,
+        payload.selected_scan_status?.published_source ?? payload.selected_scan?.published_source,
+      );
       if (payload.selected_scan_status) {
         queryClient.setQueryData(['scanStatus', selectedScanId], payload.selected_scan_status);
       } else if (payload.selected_scan) {
@@ -246,7 +302,7 @@ function ScanPage() {
       setBootstrappedScanId(selectedScanId);
       setScanStatus(payload.selected_scan_status?.status ?? payload.selected_scan?.status ?? null);
     },
-    [queryClient]
+    [queryClient, rememberScanSource]
   );
 
   const {
@@ -334,9 +390,11 @@ function ScanPage() {
   const handleLoadScan = useCallback(
     async (scanId) => {
       if (!scanId) {
+        currentScanIdRef.current = null;
         setCurrentScanId(null);
         setBootstrappedScanId(null);
         setScanStatus(null);
+        setLastFinishedScan(null);
         requestPage(1);
         autoLoadedMarketRef.current = globalMarketRef.current;
         return;
@@ -344,6 +402,9 @@ function ScanPage() {
 
       const knownScan = scanHistoryRef.current.find((scan) => scan.scan_id === scanId);
       const knownStatus = knownScan?.status ?? null;
+      // Set now, not on the next render, so a response for a scan the user
+      // has since replaced is recognised as late.
+      currentScanIdRef.current = scanId;
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
       setScanStatus(knownStatus);
@@ -352,6 +413,10 @@ function ScanPage() {
       if (snapshotEnabled) {
         try {
           const snapshot = await getScanBootstrap(scanId);
+          // The user may have picked another scan while this one loaded.
+          if (currentScanIdRef.current !== scanId) {
+            return;
+          }
           if (!snapshot?.is_stale) {
             applyScanBootstrapSnapshot(snapshot, scanId);
             return;
@@ -364,14 +429,26 @@ function ScanPage() {
       try {
         const status = await getScanStatus(scanId);
         queryClient.setQueryData(['scanStatus', scanId], status);
+        rememberScanSource(scanId, status.published_source);
+        if (currentScanIdRef.current !== scanId) {
+          return;
+        }
         setScanStatus(status.status);
       } catch (error) {
         console.error('Error loading scan:', error);
-        setScanStatus(knownStatus);
+        if (currentScanIdRef.current === scanId) {
+          setScanStatus(knownStatus);
+        }
       }
     },
-    [applyScanBootstrapSnapshot, queryClient, requestPage, snapshotEnabled]
+    [applyScanBootstrapSnapshot, queryClient, rememberScanSource, requestPage, snapshotEnabled]
   );
+
+  const handleUserLoadScan = useCallback((scanId) => {
+    scanSelectionRef.current += 1;
+    setLateCreatedScanId(null);
+    handleLoadScan(scanId);
+  }, [handleLoadScan]);
 
   const { data: universeStats, isLoading: statsLoading } = useQuery({
     queryKey: ['universeStats'],
@@ -425,7 +502,23 @@ function ScanPage() {
 
   const createScanMutation = useMutation({
     mutationFn: createScan,
-    onSuccess: (data) => {
+    onMutate: () => ({
+      selection: scanSelectionRef.current,
+      market: globalMarketRef.current,
+    }),
+    onSuccess: (data, _variables, context) => {
+      rememberScanSource(data.scan_id, data.published_source);
+      if (
+        context?.selection !== scanSelectionRef.current
+        || context?.market !== globalMarketRef.current
+      ) {
+        // The user picked another scan or market while this was in flight.
+        setLateCreatedScanId(data.scan_id);
+        refetchScans();
+        return;
+      }
+      // Set now so a late response for the previous scan is recognised.
+      currentScanIdRef.current = data.scan_id;
       setCurrentScanId(data.scan_id);
       setBootstrappedScanId(null);
       setScanStatus(data.status);
@@ -471,38 +564,44 @@ function ScanPage() {
     }
     const previousStatus = scanStatus;
     setScanStatus(statusData.status);
+    rememberScanSource(currentScanId, statusData.published_source);
 
     if (previousStatus !== 'completed' && statusData.status === 'completed') {
       setTimeout(() => refetchResults(), 500);
     }
-  }, [refetchResults, scanStatus, statusData]);
+  }, [currentScanId, refetchResults, rememberScanSource, scanStatus, statusData]);
 
-  const currentHistoryScan = useMemo(
-    () => scanHistory?.scans?.find((scan) => scan.scan_id === currentScanId),
-    [currentScanId, scanHistory?.scans]
+  // Warnings and the source notice describe the scan whose rows are shown.
+  const viewHistoryScan = useMemo(
+    () => scanHistory?.scans?.find((scan) => scan.scan_id === viewScanId),
+    [scanHistory?.scans, viewScanId]
   );
   const scanWarnings = useMemo(() => {
-    if (!currentScanId) {
+    if (!viewScanId) {
       return [];
     }
-    if (Array.isArray(statusData?.warnings)) {
+    if (viewScanId === currentScanId && Array.isArray(statusData?.warnings)) {
       return statusData.warnings;
     }
-    if (createScanMutation.data?.scan_id === currentScanId) {
+    if (createScanMutation.data?.scan_id === viewScanId) {
       return normalizeScanWarnings(createScanMutation.data.warnings);
     }
-    return normalizeScanWarnings(currentHistoryScan?.warnings);
+    return normalizeScanWarnings(viewHistoryScan?.warnings);
   }, [
     createScanMutation.data,
-    currentHistoryScan?.warnings,
     currentScanId,
     statusData?.warnings,
+    viewHistoryScan?.warnings,
+    viewScanId,
   ]);
+  const publishedSourceNotice = describePublishedSource(
+    (viewScanId && scanSources[viewScanId]) ?? viewHistoryScan?.published_source ?? null
+  );
 
   const { data: filterOptionsData } = useQuery({
-    queryKey: ['filterOptions', currentScanId],
-    queryFn: () => getFilterOptions(currentScanId),
-    enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
+    queryKey: ['filterOptions', viewScanId],
+    queryFn: () => getFilterOptions(viewScanId),
+    enabled: Boolean(viewScanId) && viewScanFinished,
     staleTime: 60_000,
   });
   const normalizedFilterOptions = useMemo(
@@ -522,39 +621,61 @@ function ScanPage() {
   // Handlers passed to ScanControlBar / FilterPanel stay referentially stable
   // so those memoized children skip re-rendering on unrelated page updates
   // (status polls, result fetches, chart modal state).
-  const startScanRequest = createScanMutation.mutate;
-  const handleStartScan = useCallback(() => {
-    if (refreshConflict) {
-      return;
-    }
+  const scanRequest = useMemo(() => {
     const universeDef = importedSymbols.length
       ? { type: 'custom', symbols: importedSymbols }
       : buildUniverseDef(universeMarket, universeScope, universeSelections);
     if (!universeDef) {
-      return;
+      return null;
     }
     const criteria = { include_vcp: includeVcp };
     if (selectedScreeners.includes('custom')) {
       criteria.custom_filters = customFilters;
     }
-    startScanRequest({
+    return {
       universe_def: universeDef,
       screeners: selectedScreeners,
       composite_method: compositeMethod,
       criteria,
-    });
+    };
   }, [
     compositeMethod,
     customFilters,
     importedSymbols,
     includeVcp,
-    refreshConflict,
     selectedScreeners,
-    startScanRequest,
     universeMarket,
     universeScope,
     universeSelections,
   ]);
+  // These rejections were judged on the request's own symbols, so they stop
+  // applying once the universe or criteria change. scan_already_active is
+  // system state and keeps applying.
+  const failedRequestChanged = JSON.stringify({ ...createScanMutation.variables, data_mode: undefined })
+    !== JSON.stringify({ ...scanRequest, data_mode: undefined });
+  const lastPublishedAvailable = canOfferLastPublished(
+    refreshConflict,
+    REQUEST_SCOPED_ERROR_CODES.has(createScanError?.detail?.code) && failedRequestChanged
+      ? null
+      : createScanError,
+  );
+  const startScanRequest = createScanMutation.mutate;
+  const submitScan = useCallback((dataMode) => {
+    // Only a current-data scan waits for the refresh; a last-published
+    // read never computes.
+    if (refreshConflict && dataMode !== 'last_published') {
+      return;
+    }
+    if (!scanRequest) {
+      return;
+    }
+    startScanRequest({
+      ...scanRequest,
+      ...(dataMode ? { data_mode: dataMode } : {}),
+    });
+  }, [refreshConflict, scanRequest, startScanRequest]);
+  const handleStartScan = useCallback(() => submitScan(null), [submitScan]);
+  const handleUseLastPublished = useCallback(() => submitScan('last_published'), [submitScan]);
 
   const refreshScanCacheRequest = refreshScanCacheMutation.mutate;
   const handleRefreshStaleData = useCallback((market) => {
@@ -599,7 +720,7 @@ function ScanPage() {
   const handleExport = async () => {
     try {
       const blob = await exportScanResultsQuery(
-        currentScanId,
+        viewScanId,
         buildScanQueryRequest(displayedQuery.expression, {
           sortBy: displayedQuery.sortBy,
           sortOrder: displayedQuery.sortOrder,
@@ -618,6 +739,12 @@ function ScanPage() {
       alert('Failed to export results. Please try again.');
     }
   };
+
+  // The modal pages through the shown scan; close it if that scan changes
+  // (e.g. previous results hand over to the finished new scan).
+  useEffect(() => {
+    setChartModalOpen(false);
+  }, [viewScanId]);
 
   const handleOpenChart = useCallback((symbol) => {
     setSelectedSymbol(symbol);
@@ -663,7 +790,7 @@ function ScanPage() {
       return;
     }
     if (
-      bootstrappedScanId === currentScanId &&
+      bootstrappedScanId === viewScanId &&
       displayedQuery.page === 1 &&
       displayedQuery.perPage === 50 &&
       displayedQuery.sortBy === 'composite_score' &&
@@ -701,7 +828,7 @@ function ScanPage() {
     };
   }, [
     bootstrappedScanId,
-    currentScanId,
+    viewScanId,
     queryClient,
     displayedResultsData?.results,
     displayedQuery.page,
@@ -726,7 +853,7 @@ function ScanPage() {
       <ScanControlBar
         currentScanId={currentScanId}
         scanHistory={scanHistory}
-        onLoadScan={handleLoadScan}
+        onLoadScan={handleUserLoadScan}
         universeMarket={universeMarket}
         universeScope={universeScope}
         onUniverseMarketChange={handleUniverseMarketChange}
@@ -757,9 +884,36 @@ function ScanPage() {
         scanWarnings={scanWarnings}
         customSymbols={importedSymbols}
         onClearCustomSymbols={handleClearCustomSymbols}
+        lastPublishedAvailable={lastPublishedAvailable}
+        onUseLastPublished={handleUseLastPublished}
       />
 
-      {(scanStatus === 'completed' || scanStatus === 'cancelled') && (
+      {lateCreatedScanId && (
+        <Alert
+          severity="info"
+          role="status"
+          sx={{ mb: 2 }}
+          action={(
+            <Button color="inherit" size="small" onClick={() => handleUserLoadScan(lateCreatedScanId)}>
+              Open scan
+            </Button>
+          )}
+        >
+          A scan you started was created while you were viewing another scan.
+        </Alert>
+      )}
+      {showingPreviousResults && (
+        <Alert severity="info" role="status" sx={{ mb: 2 }}>
+          Showing your previous results until the new scan finishes.
+        </Alert>
+      )}
+      {viewScanFinished && publishedSourceNotice && (
+        <Alert severity={publishedSourceNotice.severity} role="status" sx={{ mb: 2 }}>
+          {publishedSourceNotice.text}
+        </Alert>
+      )}
+
+      {viewScanFinished && (
         <FilterPanel
           filters={filters}
           onFilterChange={editQuickFilter}
@@ -790,7 +944,7 @@ function ScanPage() {
         />
       )}
 
-      {(scanStatus === 'completed' || scanStatus === 'cancelled') && (
+      {viewScanFinished && (
         <ScanResultsSection
           resultsLoading={resultsLoading || opportunityStateCleanupPending}
           resultsData={displayedResultsData}
@@ -823,7 +977,7 @@ function ScanPage() {
         open={chartModalOpen}
         onClose={() => setChartModalOpen(false)}
         initialSymbol={selectedSymbol}
-        scanId={currentScanId}
+        scanId={viewScanId}
         filters={filters}
         expression={displayedQuery.expression}
         sortBy={displayedQuery.sortBy}
