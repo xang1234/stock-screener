@@ -57,12 +57,13 @@ def _publish(
     as_of: date = SESSION,
     rs_formula: str = BALANCED_RS_FORMULA_VERSION,
     pointer_key: str | None = None,
+    universe_hash: str = "whole-market",
 ) -> int:
     signature = build_scan_signature_payload(universe_type="market", **PROFILE)
     run = runs.start_run(
         as_of_date=as_of,
         run_type=RunType.DAILY_SNAPSHOT,
-        universe_hash="whole-market",
+        universe_hash=universe_hash,
         input_hash=hash_scan_signature(signature),
         config_json={
             **signature,
@@ -302,13 +303,15 @@ class TestLastPublishedMode:
 
         assert exc.value.to_dict()["reason"] == "criteria_not_equivalent"
 
-    def test_all_universe_without_exact_match_is_unavailable(self):
-        uow, _ = _world(["AAPL"])
+    def test_mixed_market_all_universe_is_unavailable(self):
+        uow, _ = _world(["AAPL", "0700.HK"], markets={"AAPL": "US", "0700.HK": "HK"})
 
-        with pytest.raises(SnapshotUnavailableError):
+        with pytest.raises(SnapshotUnavailableError) as exc:
             _use_case().execute(
                 uow, _cmd(universe_type="all", universe_def="all", data_mode="last_published")
             )
+
+        assert exc.value.to_dict()["reason"] == "mixed_market_universe"
 
     def test_idempotent_retry_returns_the_recorded_source(self):
         uow, _ = _world(["AAPL"])
@@ -443,3 +446,63 @@ class TestReviewFindings:
         )
 
         assert set(_persisted(uow, result.scan_id)) == {"AAPL"}
+
+
+class TestLastPublishedIgnoresExactShortcut:
+    """An exact signature match is not proof of a pinned, complete, canonical run."""
+
+    SYMBOLS = ["AAPL", "MSFT"]
+
+    def _market_cmd(self):
+        return _cmd(
+            universe_type="market", universe_def="market", universe_market="US",
+            data_mode="last_published",
+        )
+
+    def _exact_world(self, **exact_kwargs):
+        from app.domain.scanning.signature import hash_universe_symbols
+
+        uow, _ = _world(self.SYMBOLS, rows=[_row("AAPL", passes=True), _row("MSFT", passes=True)])
+        exact_rows = exact_kwargs.pop("rows", [_row("AAPL", passes=True), _row("MSFT", passes=True)])
+        exact_id = _publish(
+            uow.feature_runs, uow.feature_store, exact_rows,
+            universe_hash=hash_universe_symbols(self.SYMBOLS),
+            pointer_key="exact-only",
+            **exact_kwargs,
+        )
+        return uow, exact_id
+
+    def test_superseded_exact_run_is_not_served(self):
+        uow, exact_id = self._exact_world(as_of=date(2026, 9, 1))
+        pointer_id = uow.feature_runs.get_latest_published("latest_published_market:US").id
+
+        result = _use_case().execute(uow, self._market_cmd())
+
+        assert result.published_source["feature_run_id"] == pointer_id != exact_id
+
+    def test_legacy_rs_exact_run_is_not_served(self):
+        uow, _ = self._exact_world(rs_formula=LEGACY_RS_FORMULA_VERSION)
+        uow.feature_runs._pointers.pop("latest_published_market:US")
+
+        with pytest.raises(SnapshotUnavailableError) as exc:
+            _use_case().execute(uow, self._market_cmd())
+
+        assert exc.value.to_dict()["reason"] == "no_published_run"
+
+    def test_exact_run_missing_a_row_is_not_served(self):
+        uow, exact_id = self._exact_world(rows=[_row("AAPL", passes=True)])
+        uow.feature_runs.repoint_published(exact_id, "latest_published_market:US")
+
+        with pytest.raises(SnapshotUnavailableError) as exc:
+            _use_case().execute(uow, self._market_cmd())
+
+        assert exc.value.to_dict()["reason"] == "incomplete_coverage"
+
+    def test_single_market_all_universe_uses_the_market_publication(self):
+        uow, run_id = _world(self.SYMBOLS)
+
+        result = _use_case().execute(
+            uow, _cmd(universe_type="all", universe_def="all", data_mode="last_published")
+        )
+
+        assert result.published_source["feature_run_id"] == run_id

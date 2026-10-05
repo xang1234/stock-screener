@@ -1,6 +1,6 @@
 """Serve a scan from one pinned, published per-Market feature run (#492).
 
-A Market, exchange, index or custom-symbol scan may reuse a published
+A scan of any Universe type except TEST may reuse a published
 snapshot only when the answer provably matches what async compute would
 produce for the same resolved symbols:
 
@@ -39,7 +39,10 @@ logger = logging.getLogger(__name__)
 DATA_MODE_CURRENT = "current"
 DATA_MODE_LAST_PUBLISHED = "last_published"
 
+# ALL qualifies only when its symbols resolve to one Market, where async
+# compute also runs in single-market mode.
 PINNED_SNAPSHOT_UNIVERSE_TYPES = frozenset({
+    UniverseType.ALL.value,
     UniverseType.MARKET.value,
     UniverseType.EXCHANGE.value,
     UniverseType.INDEX.value,

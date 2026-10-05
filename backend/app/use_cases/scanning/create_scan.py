@@ -47,7 +47,6 @@ from app.domain.universe import UniverseType
 from app.use_cases.scanning.published_snapshot import (
     DATA_MODE_CURRENT,
     DATA_MODE_LAST_PUBLISHED,
-    PINNED_SNAPSHOT_UNIVERSE_TYPES,
     PinnedSnapshot,
     SnapshotIneligible,
     is_ok_snapshot_row,
@@ -548,7 +547,10 @@ class CreateScanUseCase:
             input_hash = hash_scan_signature(signature_payload)
             universe_hash = hash_universe_symbols(symbols)
 
-            if should_attempt_instant:
+            # Last-published mode never takes the exact shortcut: a hash match
+            # can be an older run than the Market's pointer, use legacy RS, or
+            # lack rows for some members. The pinned resolver checks all three.
+            if should_attempt_instant and not last_published:
                 try:
                     instant_match = uow.feature_runs.find_latest_published_exact(
                         input_hash=input_hash,
@@ -593,7 +595,7 @@ class CreateScanUseCase:
                 else:
                     ineligible = outcome
 
-            if last_published and instant_match is None and pinned is None:
+            if last_published and pinned is None:
                 raise SnapshotUnavailableError(
                     ineligible or SnapshotIneligible("unsupported_universe")
                 )
