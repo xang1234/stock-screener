@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.domain.scanning.errors import SingleActiveScanViolation
+from app.domain.scanning.errors import DuplicateIdempotencyKey, SingleActiveScanViolation
 from app.domain.scanning.ports import ScanRepository
 from app.models.scan_result import Scan
 
@@ -18,6 +18,11 @@ def _is_single_active_scan_integrity_error(exc: IntegrityError) -> bool:
         "uq_scans_single_active" in message
         or "UNIQUE constraint failed: index 'uq_scans_single_active'" in message
     )
+
+
+def _is_idempotency_key_integrity_error(exc: IntegrityError) -> bool:
+    message = str(getattr(exc, "orig", exc))
+    return "ix_scans_idempotency_key" in message or "scans.idempotency_key" in message
 
 
 class SqlScanRepository(ScanRepository):
@@ -35,6 +40,10 @@ class SqlScanRepository(ScanRepository):
             if _is_single_active_scan_integrity_error(exc):
                 raise SingleActiveScanViolation(
                     "A queued or running scan already exists."
+                ) from exc
+            if _is_idempotency_key_integrity_error(exc):
+                raise DuplicateIdempotencyKey(
+                    "A scan with this idempotency key already exists."
                 ) from exc
             raise
         return scan

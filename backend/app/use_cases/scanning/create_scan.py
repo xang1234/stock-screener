@@ -12,8 +12,10 @@ never on SQLAlchemy, Celery, or any other infrastructure.
 
 from __future__ import annotations
 
+import functools
 import logging
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Callable, Iterable, Protocol
@@ -24,7 +26,7 @@ from app.domain.scanning.custom_criteria_compiler import (
     CompiledCustomCriteria,
     compile_custom_criteria,
 )
-from app.domain.scanning.errors import SingleActiveScanViolation
+from app.domain.scanning.errors import DuplicateIdempotencyKey, SingleActiveScanViolation
 from app.domain.scanning.materialization import (
     config_has_opportunity_state_materialization,
     with_opportunity_state_materialization,
@@ -48,6 +50,7 @@ from app.use_cases.scanning.published_snapshot import (
     PINNED_SNAPSHOT_UNIVERSE_TYPES,
     PinnedSnapshot,
     SnapshotIneligible,
+    is_ok_snapshot_row,
     published_source_metadata,
     resolve_pinned_snapshot,
 )
@@ -286,12 +289,15 @@ class CreateScanUseCase:
         *,
         freshness_evaluator: FreshnessEvaluator | None = None,
         expected_session: Callable[[str], date] | None = None,
+        current_rs_run_id: Callable[[str], int | None] | None = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._freshness_evaluator = freshness_evaluator
-        # Market -> last completed trading session. Without it, current-mode
+        # Market -> last completed trading session, and Market -> the Market
+        # RS run async compute would read now. Without both, current-mode
         # pinned snapshots cannot prove currency and are never used.
         self._expected_session = expected_session
+        self._current_rs_run_id = current_rs_run_id
 
     def _session_for(self, market: str) -> date | None:
         if self._expected_session is None:
@@ -302,6 +308,13 @@ class CreateScanUseCase:
             logger.warning("Expected session lookup failed for %s", market, exc_info=True)
             return None
 
+    def _rs_run_id_for(self, market: str) -> int | None:
+        try:
+            return self._current_rs_run_id(market)
+        except Exception:
+            logger.warning("Current Market RS lookup failed for %s", market, exc_info=True)
+            return None
+
     def _attempt_pinned_snapshot(
         self,
         uow: UnitOfWork,
@@ -309,21 +322,30 @@ class CreateScanUseCase:
         symbols: list[str],
         *,
         require_current: bool,
+        session_for: Callable[[str], date | None],
     ) -> PinnedSnapshot | SnapshotIneligible:
-        if require_current and self._expected_session is None:
+        if require_current and (
+            self._expected_session is None or self._current_rs_run_id is None
+        ):
             # Currency is unprovable, so skip the lookup queries entirely.
             return SnapshotIneligible("snapshot_not_current")
+        # A savepoint keeps a failed lookup (statement timeout, lock error)
+        # from aborting the transaction the fallback scan is written in.
+        session = getattr(uow, "session", None)
+        savepoint = session.begin_nested() if session is not None else nullcontext()
         try:
-            return resolve_pinned_snapshot(
-                uow,
-                universe_type=cmd.universe_type,
-                screeners=cmd.screeners,
-                composite_method=cmd.composite_method,
-                criteria=cmd.criteria,
-                symbols=symbols,
-                session_for=self._session_for,
-                require_current=require_current,
-            )
+            with savepoint:
+                return resolve_pinned_snapshot(
+                    uow,
+                    universe_type=cmd.universe_type,
+                    screeners=cmd.screeners,
+                    composite_method=cmd.composite_method,
+                    criteria=cmd.criteria,
+                    symbols=symbols,
+                    session_for=session_for,
+                    require_current=require_current,
+                    rs_run_id_for=self._rs_run_id_for if self._current_rs_run_id else None,
+                )
         except Exception:
             logger.warning("Pinned snapshot lookup failed", exc_info=True)
             return SnapshotIneligible("lookup_failed")
@@ -423,7 +445,7 @@ class CreateScanUseCase:
             )
             return None
 
-        return run, results
+        return run, [(symbol, details) for symbol, details in results if is_ok_snapshot_row(details)]
 
     @staticmethod
     def _raise_active_scan_conflict(active_scan: object) -> None:
@@ -449,6 +471,9 @@ class CreateScanUseCase:
         if cmd.data_mode not in (DATA_MODE_CURRENT, DATA_MODE_LAST_PUBLISHED):
             raise ValidationError(f"Unsupported data_mode '{cmd.data_mode}'")
         last_published = cmd.data_mode == DATA_MODE_LAST_PUBLISHED
+        # One calendar answer per Market per request, so eligibility and the
+        # recorded ``is_current`` cannot disagree across the close.
+        session_for = functools.cache(self._session_for)
 
         with uow:
             # ── Idempotency check ────────────────────────────────────
@@ -561,7 +586,7 @@ class CreateScanUseCase:
 
             if instant_match is None and compile_outcome is None:
                 outcome = self._attempt_pinned_snapshot(
-                    uow, cmd, symbols, require_current=not last_published
+                    uow, cmd, symbols, require_current=not last_published, session_for=session_for
                 )
                 if isinstance(outcome, PinnedSnapshot):
                     pinned = outcome
@@ -592,7 +617,7 @@ class CreateScanUseCase:
             if instant_match is not None or pinned is not None:
                 source_run = instant_match if instant_match is not None else pinned.run
                 market = pinned.market if pinned is not None else cmd.universe_market
-                session = self._session_for(market) if market else None
+                session = session_for(market) if market else None
                 published_source = published_source_metadata(
                     source_run,
                     match="exact" if instant_match is not None else pinned.match,
@@ -600,7 +625,7 @@ class CreateScanUseCase:
                     market=market,
                     membership_hash=universe_hash,
                     membership_count=len(symbols),
-                    is_current=(source_run.as_of_date == session) if session else None,
+                    expected_session=session,
                 )
                 scan_metadata = {**(scan_metadata or {}), "published_source": published_source}
 
@@ -643,6 +668,21 @@ class CreateScanUseCase:
                 if active_scan is not None:
                     self._raise_active_scan_conflict(active_scan)
                 raise
+            except DuplicateIdempotencyKey:
+                # A concurrent request with the same key won the insert.
+                uow.rollback()
+                existing = uow.scans.get_by_idempotency_key(cmd.idempotency_key)
+                if existing is None:
+                    raise
+                return CreateScanResult(
+                    scan_id=existing.scan_id,
+                    status=existing.status,
+                    total_stocks=existing.total_stocks or 0,
+                    is_duplicate=True,
+                    feature_run_id=getattr(existing, "feature_run_id", None),
+                    warnings=_scan_warnings_from_payloads(getattr(existing, "warnings", None)),
+                    published_source=published_source_of(existing),
+                )
 
             if instant_match is not None:
                 uow.scans.update_status(

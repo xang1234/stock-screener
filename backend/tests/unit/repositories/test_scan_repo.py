@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.domain.scanning.errors import SingleActiveScanViolation
+from app.domain.scanning.errors import DuplicateIdempotencyKey, SingleActiveScanViolation
 from app.models.scan_result import Scan
 from app.infra.db.repositories.scan_repo import SqlScanRepository
 
@@ -78,7 +78,7 @@ class TestCreate:
     def test_unique_idempotency_key_constraint(self, repo: SqlScanRepository, session: Session):
         repo.create(scan_id=_make_scan_id(), status="completed", idempotency_key="key-dup")
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises(DuplicateIdempotencyKey):
             repo.create(scan_id=_make_scan_id(), status="completed", idempotency_key="key-dup")
 
     def test_partial_unique_active_status_constraint(self, repo: SqlScanRepository):
@@ -172,3 +172,4 @@ class TestUpdateStatus:
     def test_no_op_for_missing_scan(self, repo: SqlScanRepository):
         # Should not raise — silent no-op
         repo.update_status("nonexistent-id", "completed")
+

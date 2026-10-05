@@ -114,11 +114,12 @@ def _cmd(**overrides) -> CreateScanCommand:
     return CreateScanCommand(**values)
 
 
-def _use_case(dispatcher=None, *, session=SESSION, freshness=None):
+def _use_case(dispatcher=None, *, session=SESSION, freshness=None, rs_run_id=7):
     return CreateScanUseCase(
         dispatcher or FakeTaskDispatcher(),
         freshness_evaluator=freshness,
         expected_session=(lambda market: session) if session else None,
+        current_rs_run_id=lambda market: rs_run_id,
     )
 
 
@@ -327,3 +328,118 @@ class TestLastPublishedMode:
         with pytest.raises(ValidationError):
             _use_case().execute(uow, _cmd(data_mode="whenever"))
 
+
+
+class TestReviewFindings:
+    def test_compiled_gate_never_passes_insufficient_history_rows(self):
+        listing_only = _row("NEWCO", passes=False, price=50.0)
+        listing_only.details.update(
+            result_status="insufficient_history", scan_mode="listing_only", rating="Insufficient Data"
+        )
+        uow, _ = _world(["AAPL", "NEWCO"], rows=[_row("AAPL", passes=True), listing_only])
+        criteria = {"custom_filters": {"price_min": 20}, "min_score": 70}
+
+        result = _use_case().execute(
+            uow, _cmd(universe_type="custom", screeners=["custom"], criteria=criteria)
+        )
+
+        assert set(_persisted(uow, result.scan_id)) == {"AAPL"}
+        assert uow.scans.get_by_scan_id(result.scan_id).passed_stocks == 1
+
+    def test_current_mode_rejects_a_superseded_market_rs_run(self):
+        uow, _ = _world(["AAPL"])
+        dispatcher = FakeTaskDispatcher()
+
+        result = _use_case(dispatcher, rs_run_id=8).execute(uow, _cmd())
+
+        assert result.status == "queued"
+
+    def test_last_published_keeps_the_runs_own_rs(self):
+        uow, _ = _world(["AAPL"])
+
+        result = _use_case(rs_run_id=8).execute(uow, _cmd(data_mode="last_published"))
+
+        assert result.status == "completed"
+
+    def test_session_is_resolved_once_and_recorded(self):
+        calls = []
+
+        def session_for(market):
+            calls.append(market)
+            # A second call would land after the close and disagree.
+            return SESSION if len(calls) == 1 else date(2026, 10, 5)
+
+        uow, _ = _world(["AAPL"])
+        use_case = CreateScanUseCase(
+            FakeTaskDispatcher(), expected_session=session_for, current_rs_run_id=lambda m: 7
+        )
+
+        result = use_case.execute(uow, _cmd())
+
+        assert calls == ["US"]
+        assert result.published_source["is_current"] is True
+        assert result.published_source["expected_session"] == SESSION.isoformat()
+
+    def test_lookup_failure_falls_back_inside_a_savepoint(self):
+        class _Savepoint:
+            entered = exited_with = None
+
+            def __enter__(self):
+                type(self).entered = True
+
+            def __exit__(self, exc_type, *_):
+                type(self).exited_with = exc_type
+                return False
+
+        class _Session:
+            def begin_nested(self):
+                return _Savepoint()
+
+        uow, _ = _world(["AAPL"])
+        uow.session = _Session()
+
+        def boom(*_a, **_k):
+            raise RuntimeError("statement timeout")
+
+        uow.feature_runs.has_feature_rows_for = boom
+        dispatcher = FakeTaskDispatcher()
+
+        result = _use_case(dispatcher).execute(uow, _cmd())
+
+        assert result.status == "queued"
+        assert _Savepoint.entered and _Savepoint.exited_with is RuntimeError
+
+    def test_concurrent_duplicate_idempotency_key_returns_the_winner(self):
+        from app.domain.scanning.errors import DuplicateIdempotencyKey
+
+        uow, _ = _world(["AAPL"])
+        winner = uow.scans.create(scan_id="winner", status="completed", total_stocks=1)
+        lookups = iter([None, winner])
+        uow.scans.get_by_idempotency_key = lambda key: next(lookups)
+
+        def create(**_fields):
+            raise DuplicateIdempotencyKey("taken")
+
+        uow.scans.create = create
+
+        result = _use_case().execute(uow, _cmd(data_mode="last_published", idempotency_key="k"))
+
+        assert result.is_duplicate is True
+        assert result.scan_id == "winner"
+
+    def test_existing_market_compile_path_also_drops_insufficient_rows(self):
+        listing_only = _row("NEWCO", passes=False, price=50.0)
+        listing_only.details.update(result_status="insufficient_history", scan_mode="listing_only")
+        uow, _ = _world(
+            ["AAPL", "NEWCO"],
+            rows=[_row("AAPL", passes=True), listing_only],
+            pointer_key="latest_published",
+        )
+        criteria = {"custom_filters": {"price_min": 20}, "min_score": 70}
+
+        result = _use_case().execute(
+            uow,
+            _cmd(universe_type="all", universe_def="all", screeners=["custom"], criteria=criteria),
+        )
+
+        assert set(_persisted(uow, result.scan_id)) == {"AAPL"}

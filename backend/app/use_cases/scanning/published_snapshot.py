@@ -59,11 +59,25 @@ _REASON_MESSAGES = {
     "no_published_run": "No published snapshot exists for this market.",
     "snapshot_not_current": "The latest published snapshot is older than the last completed session.",
     "rs_not_canonical": "The published snapshot uses legacy RS, which cannot be reused for a subset.",
+    "rs_source_changed": "Market RS has been republished since this snapshot was built.",
     "incomplete_coverage": "The published snapshot is missing rows for some requested symbols.",
     "criteria_not_equivalent": "The scan criteria cannot be answered exactly from the published snapshot.",
     "unpinned_source_facts": "The criteria filter on market cap or dollar volume, which the snapshot does not store.",
     "lookup_failed": "The published snapshot could not be read.",
 }
+
+
+def is_ok_snapshot_row(details: dict) -> bool:
+    """Whether a stored row was fully scored (mirrors the snapshot's status).
+
+    Insufficient-history and listing-only rows still carry facts such as
+    ``current_price``, but async compute never passes them, so a compiled
+    hard gate must not either.
+    """
+    status = details.get("result_status")
+    if status is not None:
+        return status == "ok"
+    return "error" not in details and details.get("rating") != "Insufficient Data"
 
 
 @dataclass(frozen=True)
@@ -93,9 +107,14 @@ def published_source_metadata(
     market: str | None,
     membership_hash: str,
     membership_count: int,
-    is_current: bool | None,
+    expected_session: date | None,
 ) -> dict[str, Any]:
-    """Describe the pinned publication a completed snapshot scan came from."""
+    """Describe the pinned publication a completed snapshot scan came from.
+
+    ``is_current`` is true when the run was as of ``expected_session``, the
+    Market's last completed session when the scan was created; both are
+    recorded so later readers can judge the age themselves.
+    """
     config = run.config if isinstance(getattr(run, "config", None), dict) else {}
     published_at = getattr(run, "published_at", None)
     return {
@@ -105,7 +124,8 @@ def published_source_metadata(
         "market": market,
         "as_of_date": run.as_of_date.isoformat(),
         "published_at": published_at.isoformat() if published_at else None,
-        "is_current": is_current,
+        "expected_session": expected_session.isoformat() if expected_session else None,
+        "is_current": (run.as_of_date == expected_session) if expected_session else None,
         "membership_hash": membership_hash,
         "membership_count": membership_count,
         "rs_formula_version": config.get("rs_formula_version"),
@@ -123,12 +143,15 @@ def resolve_pinned_snapshot(
     symbols: list[str],
     session_for: Callable[[str], date | None],
     require_current: bool,
+    rs_run_id_for: Callable[[str], int | None] | None = None,
 ) -> PinnedSnapshot | SnapshotIneligible:
     """Return the pinned snapshot answer, or why there is none.
 
     ``require_current`` demands that the run is as of ``session_for(market)``
-    (the Market's last completed session); an unknown session makes the
-    request ineligible rather than guessing from wall-clock days.
+    (the Market's last completed session) and that its Market RS run is
+    the one async compute would read now (``rs_run_id_for(market)``); an
+    unknown session or RS run makes the request ineligible rather than
+    guessing.
     """
     if universe_type not in PINNED_SNAPSHOT_UNIVERSE_TYPES:
         return SnapshotIneligible("unsupported_universe")
@@ -161,6 +184,11 @@ def resolve_pinned_snapshot(
     formula = config.get("rs_formula_version")
     if not formula or formula == LEGACY_RS_FORMULA_VERSION or config.get("market_rs_run_id") is None:
         return SnapshotIneligible("rs_not_canonical", source)
+
+    if require_current and (
+        rs_run_id_for is None or rs_run_id_for(market) != config.get("market_rs_run_id")
+    ):
+        return SnapshotIneligible("rs_source_changed", source)
 
     if not uow.feature_runs.has_feature_rows_for(run.id, symbols):
         return SnapshotIneligible("incomplete_coverage", source)
@@ -197,5 +225,9 @@ def resolve_pinned_snapshot(
     if filter_fields & _UNPINNED_FILTER_FIELDS:
         return SnapshotIneligible("unpinned_source_facts", source)
 
-    rows = uow.feature_store.query_run_details(run.id, spec, symbols=symbols)
+    rows = [
+        (symbol, details)
+        for symbol, details in uow.feature_store.query_run_details(run.id, spec, symbols=symbols)
+        if is_ok_snapshot_row(details)
+    ]
     return PinnedSnapshot(run, market, "compiled", rows, len(rows))
