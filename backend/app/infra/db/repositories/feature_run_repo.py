@@ -241,6 +241,14 @@ class SqlFeatureRunRepository(FeatureRunRepository):
 
         return None
 
+    def has_feature_rows_for(self, run_id: int, symbols) -> bool:
+        normalized = sorted({
+            str(symbol).strip().upper()
+            for symbol in symbols
+            if str(symbol).strip()
+        })
+        return self._run_has_feature_rows_for(run_id, normalized)
+
     def _run_has_feature_rows_for(self, run_id: int, symbols: list[str]) -> bool:
         """Return True iff every symbol has a row in ``stock_feature_daily``.
 

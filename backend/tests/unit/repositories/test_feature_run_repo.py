@@ -615,3 +615,18 @@ class TestGetRun:
     def test_nonexistent_raises_not_found(self, repo: SqlFeatureRunRepository):
         with pytest.raises(EntityNotFoundError):
             repo.get_run(9999)
+
+
+class TestHasFeatureRowsFor:
+    def test_counts_actual_feature_rows_not_universe_membership(
+        self, repo: SqlFeatureRunRepository, session: Session
+    ):
+        run = TestFindLatestPublishedCovering()._publish(
+            repo, session,
+            symbols=["AAPL", "MSFT"],
+            as_of=date(2026, 2, 17),
+            feature_row_symbols=["AAPL"],
+        )
+
+        assert repo.has_feature_rows_for(run.id, ["aapl"]) is True
+        assert repo.has_feature_rows_for(run.id, ["AAPL", "MSFT"]) is False

@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Iterable, Protocol
+from datetime import date, datetime
+from typing import Callable, Iterable, Protocol
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
@@ -42,6 +42,15 @@ from app.domain.scanning.signature import (
     hash_universe_symbols,
 )
 from app.domain.universe import UniverseType
+from app.use_cases.scanning.published_snapshot import (
+    DATA_MODE_CURRENT,
+    DATA_MODE_LAST_PUBLISHED,
+    PINNED_SNAPSHOT_UNIVERSE_TYPES,
+    PinnedSnapshot,
+    SnapshotIneligible,
+    published_source_metadata,
+    resolve_pinned_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +174,11 @@ class CreateScanCommand:
     # live fetch. See scan_tasks._run_bulk_scan_via_use_case.
     trigger_source: str = "manual"
 
+    # ``current`` keeps freshness checks and compute admission;
+    # ``last_published`` answers only from a pinned published snapshot and
+    # never computes (see ``published_snapshot``).
+    data_mode: str = DATA_MODE_CURRENT
+
 
 # ── Result (output) ──────────────────────────────────────────────────────
 
@@ -179,6 +193,7 @@ class CreateScanResult:
     is_duplicate: bool
     feature_run_id: int | None = None
     warnings: tuple[FreshnessOmissionWarning, ...] = ()
+    published_source: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -236,6 +251,29 @@ class StaleMarketDataError(RuntimeError):
         return dict(self.detail)
 
 
+class SnapshotUnavailableError(RuntimeError):
+    """Raised when ``last_published`` mode has no qualifying publication."""
+
+    def __init__(self, ineligible: SnapshotIneligible) -> None:
+        super().__init__(ineligible.message)
+        self.ineligible = ineligible
+
+    def to_dict(self) -> dict:
+        return {
+            "code": "snapshot_unavailable",
+            "reason": self.ineligible.reason,
+            "message": self.ineligible.message,
+            "details": dict(self.ineligible.details),
+        }
+
+
+def published_source_of(scan: object) -> dict | None:
+    metadata = getattr(scan, "metadata_json", None)
+    if isinstance(metadata, dict) and isinstance(metadata.get("published_source"), dict):
+        return metadata["published_source"]
+    return None
+
+
 # ── Use Case ─────────────────────────────────────────────────────────────
 
 
@@ -247,9 +285,48 @@ class CreateScanUseCase:
         dispatcher: TaskDispatcher,
         *,
         freshness_evaluator: FreshnessEvaluator | None = None,
+        expected_session: Callable[[str], date] | None = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._freshness_evaluator = freshness_evaluator
+        # Market -> last completed trading session. Without it, current-mode
+        # pinned snapshots cannot prove currency and are never used.
+        self._expected_session = expected_session
+
+    def _session_for(self, market: str) -> date | None:
+        if self._expected_session is None:
+            return None
+        try:
+            return self._expected_session(market)
+        except Exception:
+            logger.warning("Expected session lookup failed for %s", market, exc_info=True)
+            return None
+
+    def _attempt_pinned_snapshot(
+        self,
+        uow: UnitOfWork,
+        cmd: CreateScanCommand,
+        symbols: list[str],
+        *,
+        require_current: bool,
+    ) -> PinnedSnapshot | SnapshotIneligible:
+        if require_current and self._expected_session is None:
+            # Currency is unprovable, so skip the lookup queries entirely.
+            return SnapshotIneligible("snapshot_not_current")
+        try:
+            return resolve_pinned_snapshot(
+                uow,
+                universe_type=cmd.universe_type,
+                screeners=cmd.screeners,
+                composite_method=cmd.composite_method,
+                criteria=cmd.criteria,
+                symbols=symbols,
+                session_for=self._session_for,
+                require_current=require_current,
+            )
+        except Exception:
+            logger.warning("Pinned snapshot lookup failed", exc_info=True)
+            return SnapshotIneligible("lookup_failed")
 
     def _attempt_compile_path(
         self,
@@ -365,7 +442,14 @@ class CreateScanUseCase:
 
         Opens a UoW context, persists the Scan, commits (so the Celery
         worker can read it), dispatches the task, then stores the task ID.
+        A scan answered from a published snapshot is inserted already
+        ``completed`` together with its rows, so it never occupies the
+        single-active slot and never dispatches compute.
         """
+        if cmd.data_mode not in (DATA_MODE_CURRENT, DATA_MODE_LAST_PUBLISHED):
+            raise ValidationError(f"Unsupported data_mode '{cmd.data_mode}'")
+        last_published = cmd.data_mode == DATA_MODE_LAST_PUBLISHED
+
         with uow:
             # ── Idempotency check ────────────────────────────────────
             if cmd.idempotency_key is not None:
@@ -380,11 +464,15 @@ class CreateScanUseCase:
                         warnings=_scan_warnings_from_payloads(
                             getattr(existing, "warnings", None)
                         ),
+                        published_source=published_source_of(existing),
                     )
 
-            active_scan = uow.scans.get_active_scan()
-            if active_scan is not None:
-                self._raise_active_scan_conflict(active_scan)
+            # Last-published reads never compute, so compute admission
+            # (the single active scan) does not apply to them.
+            if not last_published:
+                active_scan = uow.scans.get_active_scan()
+                if active_scan is not None:
+                    self._raise_active_scan_conflict(active_scan)
 
             # ── Resolve universe symbols ─────────────────────────────
             symbols = uow.universe.resolve_symbols(cmd.universe_def)
@@ -399,8 +487,10 @@ class CreateScanUseCase:
             #   - duplicate idempotent retries return the existing scan above
             #   - 'all'-universe scans get checked across every resolved market
             #   - unrelated market-wide symbol issues don't block narrow scans
+            # Last-published mode reads a pinned publication, not the price
+            # cache, so current-price freshness does not gate it.
             freshness_warnings: tuple[FreshnessOmissionWarning, ...] = ()
-            if self._freshness_evaluator is not None:
+            if self._freshness_evaluator is not None and not last_published:
                 decision = self._freshness_evaluator(
                     symbols,
                     policy=ScanFreshnessPolicy.for_universe_type(cmd.universe_type),
@@ -418,6 +508,8 @@ class CreateScanUseCase:
             feature_run_id = None
             instant_match = None
             compile_outcome: tuple[object, list[tuple[str, dict]]] | None = None
+            pinned: PinnedSnapshot | None = None
+            ineligible: SnapshotIneligible | None = None
             should_attempt_instant = cmd.universe_type in {
                 UniverseType.ALL.value,
                 UniverseType.MARKET.value,
@@ -459,26 +551,64 @@ class CreateScanUseCase:
             # Restricted to ALL / MARKET universes so the mixed-market vs
             # single-market policy that drives volume/market-cap unit
             # semantics is unambiguous: ALL is mixed-market, MARKET pins a
-            # single market explicitly. INDEX / CUSTOM / TEST universes
-            # have ``universe_market = None`` even when their resolved
-            # symbols all live in one market, so the compiler would treat
-            # them as mixed-market (USD columns) while async derives the
-            # mode from resolved symbols and may use native units. Defer
-            # those to async to avoid silent unit mismatches.
-            if instant_match is None and should_attempt_instant:
+            # single market explicitly. INDEX / CUSTOM / EXCHANGE universes
+            # go through the pinned-snapshot path below, which derives the
+            # Market from the resolved symbols instead. Last-published mode
+            # skips this path too: it joins current fundamentals for USD
+            # cap/volume, which a historical publication cannot vouch for.
+            if instant_match is None and should_attempt_instant and not last_published:
                 compile_outcome = self._attempt_compile_path(uow, cmd, symbols)
+
+            if instant_match is None and compile_outcome is None:
+                outcome = self._attempt_pinned_snapshot(
+                    uow, cmd, symbols, require_current=not last_published
+                )
+                if isinstance(outcome, PinnedSnapshot):
+                    pinned = outcome
+                else:
+                    ineligible = outcome
+
+            if last_published and instant_match is None and pinned is None:
+                raise SnapshotUnavailableError(
+                    ineligible or SnapshotIneligible("unsupported_universe")
+                )
 
             stored_criteria = dict(cmd.criteria or {})
             scan_metadata = None
             if instant_match is None:
-                if compile_outcome is None:
+                source_run = None
+                if compile_outcome is not None:
+                    source_run = compile_outcome[0]
+                elif pinned is not None:
+                    source_run = pinned.run
+                if source_run is None:
                     scan_metadata = with_opportunity_state_materialization({})
-                else:
-                    source_run, _results = compile_outcome
-                    if config_has_opportunity_state_materialization(
-                        getattr(source_run, "config", None)
-                    ):
-                        scan_metadata = with_opportunity_state_materialization({})
+                elif config_has_opportunity_state_materialization(
+                    getattr(source_run, "config", None)
+                ):
+                    scan_metadata = with_opportunity_state_materialization({})
+
+            published_source = None
+            if instant_match is not None or pinned is not None:
+                source_run = instant_match if instant_match is not None else pinned.run
+                market = pinned.market if pinned is not None else cmd.universe_market
+                session = self._session_for(market) if market else None
+                published_source = published_source_metadata(
+                    source_run,
+                    match="exact" if instant_match is not None else pinned.match,
+                    data_mode=cmd.data_mode,
+                    market=market,
+                    membership_hash=universe_hash,
+                    membership_count=len(symbols),
+                    is_current=(source_run.as_of_date == session) if session else None,
+                )
+                scan_metadata = {**(scan_metadata or {}), "published_source": published_source}
+
+            completed_instantly = (
+                instant_match is not None
+                or compile_outcome is not None
+                or pinned is not None
+            )
 
             # ── Create scan record ───────────────────────────────────
             scan_id = str(uuid.uuid4())
@@ -498,7 +628,9 @@ class CreateScanUseCase:
                     composite_method=cmd.composite_method,
                     total_stocks=len(symbols),
                     passed_stocks=0,
-                    status="queued",
+                    # Inserting a snapshot answer as ``queued`` would hit the
+                    # single-active index while another scan runs.
+                    status="completed" if completed_instantly else "queued",
                     trigger_source=cmd.trigger_source,
                     task_id=None,
                     idempotency_key=cmd.idempotency_key,
@@ -529,16 +661,19 @@ class CreateScanUseCase:
                     is_duplicate=False,
                     feature_run_id=feature_run_id,
                     warnings=freshness_warnings,
+                    published_source=published_source,
                 )
 
-            if compile_outcome is not None:
-                source_run, results = compile_outcome
+            if compile_outcome is not None or (pinned is not None and pinned.match == "compiled"):
+                source_run, results = (
+                    compile_outcome if compile_outcome is not None else (pinned.run, pinned.rows)
+                )
                 # Normalise stale-criteria score / rating / pass fields
                 # before persisting — the covering run was produced under
                 # different criteria, so its custom_score / composite_score
                 # / rating would mislead users sorting by them. See
                 # ``_normalize_compile_details`` for the rationale.
-                normalized_results = [
+                persisted = [
                     (
                         symbol,
                         _normalize_compile_details(
@@ -548,22 +683,32 @@ class CreateScanUseCase:
                     )
                     for symbol, details in results
                 ]
-                if normalized_results:
-                    uow.scan_results.persist_orchestrator_results(
-                        scan_id, normalized_results
-                    )
+                passed = len(persisted)
+            elif pinned is not None:
+                # Same screener profile: the run's own rows and scores are
+                # the answer for this subset.
+                source_run, persisted, passed = pinned.run, pinned.rows, pinned.passed
+            else:
+                persisted = None
+
+            if persisted is not None:
+                # The completed scan and its rows commit together; a failure
+                # rolls both back via the UoW.
+                if persisted:
+                    uow.scan_results.persist_orchestrator_results(scan_id, persisted)
                 uow.scans.update_status(
                     scan_id,
                     "completed",
                     total_stocks=len(symbols),
-                    passed_stocks=len(normalized_results),
+                    passed_stocks=passed,
                 )
                 uow.commit()
                 logger.info(
-                    "Scan %s completed instantly via compile path (run=%s, %d/%d passing)",
+                    "Scan %s completed instantly from feature run %s (%s, %d/%d passing)",
                     scan_id,
                     getattr(source_run, "id", None),
-                    len(results),
+                    "compiled" if compile_outcome is not None else pinned.match,
+                    passed,
                     len(symbols),
                 )
                 return CreateScanResult(
@@ -573,6 +718,7 @@ class CreateScanUseCase:
                     is_duplicate=False,
                     feature_run_id=None,
                     warnings=freshness_warnings,
+                    published_source=published_source,
                 )
 
             # Commit so the scan row is visible to the Celery worker.

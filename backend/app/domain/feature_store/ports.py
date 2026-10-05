@@ -162,6 +162,15 @@ class FeatureRunRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def has_feature_rows_for(self, run_id: int, symbols: Sequence[str]) -> bool:
+        """Return True iff every symbol has a feature row in run *run_id*.
+
+        Counts actual feature rows, not the run's universe membership: DQ
+        lets a run publish with some universe symbols missing rows.
+        """
+        ...
+
+    @abc.abstractmethod
     def get_run(self, run_id: int) -> FeatureRunDomain:
         """Return a run by PK.
 

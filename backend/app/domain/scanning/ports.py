@@ -262,6 +262,14 @@ class UniverseRepository(abc.ABC):
     def resolve_symbols(self, universe_def: object) -> list[str]:
         ...
 
+    @abc.abstractmethod
+    def resolve_markets(self, symbols: list[str]) -> dict[str, str]:
+        """Map each known symbol to its authoritative Market code.
+
+        Symbols without a universe row are absent from the result.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Infrastructure services

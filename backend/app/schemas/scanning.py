@@ -67,6 +67,13 @@ class ScanCreateRequest(BaseModel):
         description="Optional idempotency key. Repeated POSTs with the same key return the existing scan.",
     )
 
+    data_mode: Literal["current", "last_published"] = Field(
+        default="current",
+        description="current: require current data and compute when no fresh snapshot answers. "
+        "last_published: answer only from the last published snapshot (shown with its as-of date), "
+        "even while a refresh or another scan is running; never computes.",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Response models
@@ -137,6 +144,7 @@ class ScanCreateResponse(BaseModel):
     feature_run_id: Optional[int] = None
     warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
+    published_source: Optional[Dict[str, Any]] = None
 
 
 class ScanStatusResponse(BaseModel):
@@ -152,6 +160,7 @@ class ScanStatusResponse(BaseModel):
     eta_seconds: Optional[int] = None
     warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
+    published_source: Optional[Dict[str, Any]] = None
 
 
 class MatchedGroup(BaseModel):
@@ -528,6 +537,7 @@ class ScanListItem(BaseModel):
     completed_at: Optional[datetime] = None
     source: Optional[str] = None
     warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
+    published_source: Optional[Dict[str, Any]] = None
 
 
 class ScanListResponse(BaseModel):
