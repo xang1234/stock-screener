@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
+from app.domain.feature_store.models import FeatureRunDomain
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.uow import SqlUnitOfWork
@@ -475,9 +476,15 @@ class MarketCopilotService:
         )
 
     def _explain_symbol(self, args: ExplainSymbolArgs) -> ToolEnvelope:
+        """Build the explanation for one symbol from the run that applies to it.
+
+        The run is resolved market-first (see ``_latest_published_run_for_symbol``):
+        publication writes per-market pointers, so looking at the global pointer alone
+        reported "no published feature run" while a valid market run was published.
+        """
         explain_use_case = ExplainStockUseCase()
         with self._uow_scope() as uow:
-            latest_run = uow.feature_runs.get_latest_published()
+            latest_run = self._latest_published_run_for_symbol(uow, args.symbol)
             if latest_run is None:
                 return self._envelope(
                     "No published feature run is available for symbol explanation.",
@@ -1494,6 +1501,50 @@ class MarketCopilotService:
             .order_by(FeatureRun.as_of_date.desc(), FeatureRun.id.desc())
             .first()
         )
+
+    def _latest_published_run_for_symbol(
+        self,
+        uow: SqlUnitOfWork,
+        symbol: str,
+    ) -> FeatureRunDomain | None:
+        """Return the published run that applies to *symbol*, market first.
+
+        Publication now writes per-market pointers (``latest_published_market:US``)
+        and the global ``latest_published`` pointer is no longer maintained. Reading
+        only the global pointer therefore reported "no published feature run" while a
+        perfectly valid market run existed — exactly what ``find_candidates`` was
+        still showing. Mirrors ``api.v1.stocks._get_latest_feature_run_for_symbol``:
+        resolve the symbol's market, try its pointer, then fall back to the global
+        pointer so a legacy single-market install keeps working.
+
+        The market lookup is deliberately local rather than importing
+        ``api.v1._price_history.resolve_symbol_market``: that module exists to
+        share price-history helpers between two route modules and pulls in pandas,
+        so it is not a dependency the MCP layer should take. This module already
+        queries ``StockUniverse`` directly and imports it.
+
+        Deliberately does **not** create a global ``latest_published`` pointer as a
+        side effect: publication owns that key, and writing it here would mask a
+        genuinely missing publication.
+        """
+        market = (
+            uow.session.query(StockUniverse.market)
+            .filter(
+                StockUniverse.active_filter(),
+                StockUniverse.symbol == symbol.upper(),
+            )
+            .scalar()
+        )
+        normalized_market = str(market or "").strip().upper()
+
+        if normalized_market:
+            latest_run = uow.feature_runs.get_latest_published(
+                pointer_key=f"latest_published_market:{normalized_market}"
+            )
+            if latest_run is not None:
+                return latest_run
+
+        return uow.feature_runs.get_latest_published()
 
     def _latest_breadth(self, db: Session, as_of_date: date | None) -> MarketBreadth | None:
         # Market copilot is US-scoped today.
