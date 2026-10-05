@@ -1137,7 +1137,17 @@ class StockUniverseService:
         )
         if not rows:
             return None
-        payloads = [self._legacy_reconciliation_row_payload(row) for row in rows]
+        payloads = []
+        for row in rows:
+            payload = self._legacy_reconciliation_row_payload(row)
+            # Imported rows may carry legacy exchange names (NASDAQ); source
+            # rows carry MICs (XNAS). Compare like with like.
+            resolution = mic_alias_registry.resolve(normalized_market, payload.get("exchange"))
+            if resolution is not None and resolution.mic != payload.get("exchange"):
+                payload["exchange"] = resolution.mic
+                payload.pop("content_hash", None)
+                payload["content_hash"] = self._sha256_text(self._stable_json(payload))
+            payloads.append(payload)
         artifact = self._build_market_reconciliation_artifact(
             market=normalized_market,
             source_name=source_name,

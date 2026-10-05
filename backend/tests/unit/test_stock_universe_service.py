@@ -2644,3 +2644,50 @@ def test_seeded_baseline_is_skipped_when_a_source_run_already_exists(monkeypatch
     assert baseline is None
     assert db.query(StockUniverseReconciliationRun).count() == 1
     db.close()
+
+
+def test_seeded_baseline_from_a_real_bundle_import_deactivates_and_records_events(monkeypatch):
+    from app.services.provider_snapshot_service import ProviderSnapshotService
+
+    db = _make_session()()
+    service = StockUniverseService()
+    # The bundle import writes legacy exchange names, not MICs.
+    ProviderSnapshotService._replace_market_universe_rows(
+        db,
+        market="US",
+        rows=[
+            {"symbol": symbol, "name": symbol, "market": "US", "exchange": "NASDAQ",
+             "is_active": True, "status": "active", "source": "finviz"}
+            for symbol in ("AAPL", "MSFT", "GONE")
+        ],
+    )
+    db.flush()
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MIN_COUNT_FULL", "0")
+    monkeypatch.setenv("FINVIZ_RECONCILIATION_MAX_REMOVED_PERCENT", "50")
+    monkeypatch.setattr(
+        service, "fetch_from_finviz", lambda exchange_filter=None: [_finviz_row("AAPL"), _finviz_row("MSFT")]
+    )
+
+    service.seed_reconciliation_baseline_from_active_rows(
+        db, market="US", source_name="finviz", snapshot_id="weekly-seed:rev-1"
+    )
+    stats = service.populate_universe(db)
+
+    baseline = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(StockUniverseReconciliationRun.snapshot_id == "weekly-seed:rev-1")
+        .one()
+    )
+    baseline_rows = json.loads(baseline.artifact_json)["snapshot_rows"]
+    # Compared like-for-like with the Finviz rows' MICs.
+    assert {row["exchange"] for row in baseline_rows} == {"XNAS"}
+    assert stats["deactivated"] == 1
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "GONE").one().is_active is False
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "GONE")
+        .order_by(StockUniverseStatusEvent.id.desc())
+        .first()
+    )
+    assert event.new_status == "inactive_missing_source"
+    db.close()
