@@ -213,7 +213,6 @@ def test_a_slice_too_big_for_an_overlapping_two_ended_read_is_split():
 
     assert len(_read(fake)) == 2000
     assert any(",sec_" in filters for filters, _, _ in fake.requests)
-    assert all(order == "ticker" for _, order, _ in fake.requests)  # each half fits one pass
 
 
 def test_a_row_exactly_on_a_numeric_boundary_is_caught():
@@ -236,3 +235,23 @@ def test_a_row_exactly_on_a_numeric_boundary_is_caught():
 
     assert "EXACT" in collected and len(collected) == 2101
     assert any(filters.endswith("sh_price_u100") for filters, _, _ in fake.requests)
+
+
+def test_a_listing_added_mid_read_does_not_push_a_ticker_out_of_a_one_ended_read():
+    """A new ticker inserted before page 2 shifts the rows; stopping at the advertised
+    count would drop the original last ticker while the distinct count still matched."""
+    rows = [_row(f"A{i:03d}") for i in range(0, 80, 2)]  # 40 rows: A000 .. A078
+    fake = _FakeFinviz(rows)
+    fetch = fake.fetch_page
+
+    def listing_mid_read(filters, order, first_row):
+        if first_row == 21 and not any(row["ticker"] == "A039" for row in fake.rows):
+            # Sorts right after page 1 (A038): page 2 starts with it and A078 moves to row 41.
+            fake.rows = [*fake.rows, _row("A039")]
+        return fetch(filters, order, first_row)
+
+    fake.fetch_page = listing_mid_read
+
+    collected = {row["ticker"] for row in _read(fake)}
+
+    assert {row["ticker"] for row in rows} <= collected

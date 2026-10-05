@@ -2,14 +2,15 @@
 
 Since early October 2026 Finviz answers anonymous screener requests past row
 1,000 (``r > 1000``) with HTTP 403, whatever the sort order, so NYSE (~5,000
-rows) and NASDAQ (~4,700) can no longer be paged in one query. A slice of up to
-1,980 rows is read from both ends (ticker ascending, then descending, with a
-page of overlap); a bigger one is split by the next filter dimension,
-recursively. On 2026-10-05 sectors
-partitioned each exchange exactly, fund type partitioned Financial, price
-partitioned ETFs and average volume partitioned NYSE ETFs under $50. Any read
-that cannot account for every row raises FinvizReadError rather than return a
-partial list: the universe refresh would deactivate the missing symbols.
+rows) and NASDAQ (~4,700) can no longer be paged in one query. Each pass reads
+to its natural end (a short page), so a listing added mid-read cannot push a
+row past it. A slice of up to 980 rows is read ascending; up to 1,980, from both
+ends with a page of overlap; a bigger one is split by the next filter
+dimension, recursively. On 2026-10-05 sectors partitioned each exchange
+exactly, fund type partitioned Financial, price partitioned ETFs and average
+volume partitioned NYSE ETFs under $50. Any read that cannot account for every
+row raises FinvizReadError rather than return a partial list: the universe
+refresh would deactivate the missing symbols.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ FINVIZ_PAGE_SIZE = 20
 # Largest slice read from both ends with a page of overlap between the passes;
 # the overlap absorbs a listing inserted between them.
 TWO_ENDED_MAX_ROWS = 2 * FINVIZ_ROW_CAP - FINVIZ_PAGE_SIZE
+# Largest slice read from one end: its natural end stays a page inside the cap.
+ONE_ENDED_MAX_ROWS = FINVIZ_ROW_CAP - FINVIZ_PAGE_SIZE
 
 # Each dimension: (filters that partition the parent, catcher filters). Finviz's
 # u/o presets both exclude their boundary (a NASDAQ ETF at exactly $100 matched
@@ -115,12 +118,23 @@ def read_screener(
         pause()
         return fetch_page(filters, order, first_row)
 
-    def read_pages(filters: str, order: str, rows: list[dict[str, Any]], wanted: int) -> list[dict[str, Any]]:
+    def read_pages(
+        filters: str, order: str, rows: list[dict[str, Any]], limit: int
+    ) -> list[dict[str, Any]]:
+        """Page on until a short page (the natural end), ``limit`` rows or the cap.
+
+        Reading to the end rather than to the advertised count picks up rows a
+        listing added mid-read shifted onto a later page.
+        """
+        last_page_rows = len(rows) if rows else FINVIZ_PAGE_SIZE
         next_row = len(rows) + 1
-        while len(rows) < wanted and next_row <= FINVIZ_ROW_CAP:
+        while (
+            last_page_rows == FINVIZ_PAGE_SIZE
+            and len(rows) < limit
+            and next_row <= FINVIZ_ROW_CAP
+        ):
             page_rows = parse_rows(fetch(filters, order, next_row))
-            if not page_rows:
-                break
+            last_page_rows = len(page_rows)
             rows = rows + page_rows
             next_row += FINVIZ_PAGE_SIZE
         return rows
@@ -150,9 +164,11 @@ def read_screener(
                 )
             return total
 
-        rows = read_pages(filters, "ticker", first_rows, min(total, FINVIZ_ROW_CAP))
-        if total > FINVIZ_ROW_CAP:
-            # One extra page of overlap absorbs a listing change during the read.
+        # Read to the natural end; up to ONE_ENDED_MAX_ROWS that end stays inside the
+        # cap even if listings are added mid-read. Bigger slices are also read from
+        # the far end, with a page of overlap.
+        rows = read_pages(filters, "ticker", first_rows, FINVIZ_ROW_CAP)
+        if total > ONE_ENDED_MAX_ROWS:
             rows += read_pages(filters, "-ticker", [], total - FINVIZ_ROW_CAP + FINVIZ_PAGE_SIZE)
         slice_rows = {key: row for row in rows if (key := row_key(row))}
         if len(slice_rows) < total:
