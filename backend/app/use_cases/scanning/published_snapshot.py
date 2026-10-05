@@ -60,6 +60,7 @@ _REASON_MESSAGES = {
     "unresolved_symbols": "Some symbols have no known market listing.",
     "mixed_market_universe": "The symbols span more than one market; no single publication covers them.",
     "no_published_run": "No published snapshot exists for this market.",
+    "source_market_mismatch": "The market's snapshot pointer references another market's run.",
     "snapshot_not_current": "The latest published snapshot is older than the last completed session.",
     "rs_not_canonical": "The published snapshot uses legacy RS, which cannot be reused for a subset.",
     "rs_source_changed": "Market RS has been republished since this snapshot was built.",
@@ -175,6 +176,11 @@ def resolve_pinned_snapshot(
         return SnapshotIneligible("no_published_run", {"market": market})
     config = run.config if isinstance(run.config, dict) else {}
     source = {"market": market, "feature_run_id": run.id, "as_of_date": run.as_of_date.isoformat()}
+    universe = config.get("universe") if isinstance(config.get("universe"), dict) else {}
+    run_market = str(config.get("market") or universe.get("market") or "").strip().upper()
+    if run_market != market:
+        # Never trust the pointer key alone; publish APIs accept any key.
+        return SnapshotIneligible("source_market_mismatch", {**source, "run_market": run_market or None})
 
     if require_current:
         session = session_for(market)

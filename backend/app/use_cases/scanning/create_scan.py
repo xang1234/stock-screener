@@ -616,13 +616,18 @@ class CreateScanUseCase:
                     scan_metadata = with_opportunity_state_materialization({})
 
             published_source = None
-            if instant_match is not None or pinned is not None:
-                source_run = instant_match if instant_match is not None else pinned.run
+            if instant_match is not None or compile_outcome is not None or pinned is not None:
+                if instant_match is not None:
+                    source_run, match = instant_match, "exact"
+                elif compile_outcome is not None:
+                    source_run, match = compile_outcome[0], "compiled"
+                else:
+                    source_run, match = pinned.run, pinned.match
                 market = pinned.market if pinned is not None else cmd.universe_market
                 session = session_for(market) if market else None
                 published_source = published_source_metadata(
                     source_run,
-                    match="exact" if instant_match is not None else pinned.match,
+                    match=match,
                     data_mode=cmd.data_mode,
                     market=market,
                     membership_hash=universe_hash,

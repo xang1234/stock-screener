@@ -506,3 +506,25 @@ class TestLastPublishedIgnoresExactShortcut:
         )
 
         assert result.published_source["feature_run_id"] == run_id
+
+
+class TestCodexRound2:
+    def test_compile_path_records_its_source(self):
+        uow, run_id = _world(["AAPL", "NVDA"], pointer_key="latest_published")
+        criteria = {"custom_filters": {"price_min": 20}, "min_score": 70}
+
+        result = _use_case().execute(
+            uow,
+            _cmd(universe_type="all", universe_def="all", screeners=["custom"], criteria=criteria),
+        )
+
+        assert result.published_source["match"] == "compiled"
+        assert result.published_source["feature_run_id"] == run_id
+
+    def test_pointer_to_another_markets_run_is_rejected(self):
+        uow, run_id = _world(["AAPL"], market="HK", pointer_key="latest_published_market:US")
+
+        with pytest.raises(SnapshotUnavailableError) as exc:
+            _use_case().execute(uow, _cmd(data_mode="last_published"))
+
+        assert exc.value.to_dict()["reason"] == "source_market_mismatch"
