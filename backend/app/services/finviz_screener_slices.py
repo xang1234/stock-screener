@@ -167,7 +167,8 @@ def read_screener(
         # Read to the natural end; up to ONE_ENDED_MAX_ROWS that end stays inside the
         # cap even if listings are added mid-read. Bigger slices are also read from
         # the far end, with a page of overlap.
-        rows = read_pages(filters, "ticker", first_rows, FINVIZ_ROW_CAP)
+        # An empty first page is the whole slice; paging on would refetch page 1.
+        rows = read_pages(filters, "ticker", first_rows, FINVIZ_ROW_CAP) if first_rows else []
         if total > ONE_ENDED_MAX_ROWS:
             rows += read_pages(filters, "-ticker", [], total - FINVIZ_ROW_CAP + FINVIZ_PAGE_SIZE)
         slice_rows = {key: row for row in rows if (key := row_key(row))}

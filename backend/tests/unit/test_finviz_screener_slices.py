@@ -255,3 +255,10 @@ def test_a_listing_added_mid_read_does_not_push_a_ticker_out_of_a_one_ended_read
     collected = {row["ticker"] for row in _read(fake)}
 
     assert {row["ticker"] for row in rows} <= collected
+
+
+def test_an_empty_slice_costs_one_request():
+    fake = _FakeFinviz([])
+
+    assert _read(fake) == []
+    assert fake.requests == [("exch_nyse", "ticker", 1)]
