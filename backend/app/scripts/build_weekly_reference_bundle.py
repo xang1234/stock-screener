@@ -752,6 +752,33 @@ def _without_excluded_listings(market: str, rows: list[Any]) -> list[Any]:
     return kept
 
 
+def _seed_official_reconciliation_baseline(db, stock_universe_service, snapshot) -> None:
+    """Let this refresh deactivate listings the official source has dropped.
+
+    Same gap as the US build: the universe imported from the prior bundle has
+    no reconciliation run, so nothing missing from the source is ever retired.
+    The workflow enables destructive apply for this job only, and removals
+    still pass the Asia safety gates. Fallback seed CSVs (``*_manual_csv``)
+    are partial lists, so they never become the comparison.
+    """
+    if snapshot.source_name.endswith("_manual_csv"):
+        return
+    market = snapshot.market.upper()
+    baseline = stock_universe_service.seed_reconciliation_baseline_from_active_rows(
+        db,
+        market=market,
+        source_name=snapshot.source_name,
+        row_source=f"{market.lower()}_ingest",
+        snapshot_id=f"weekly-reference-seed:{datetime.utcnow():%Y%m%d%H%M%S}",
+    )
+    if baseline:
+        print(
+            f"Seeded {snapshot.source_name} reconciliation baseline: "
+            f"{baseline['baseline_rows']} active rows ({baseline['snapshot_id']})",
+            flush=True,
+        )
+
+
 def _build_asia_bundle(
     db,
     *,
@@ -781,6 +808,7 @@ def _build_asia_bundle(
     try:
         official_snapshot = official_source_service.fetch_market_snapshot(market)
         universe_as_of = getattr(official_snapshot, "snapshot_as_of", None)
+        _seed_official_reconciliation_baseline(db, stock_universe_service, official_snapshot)
         universe_stats = ingest_official_market_snapshot(
             db, stock_universe_service, official_snapshot
         )

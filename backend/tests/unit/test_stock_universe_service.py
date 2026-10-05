@@ -2728,3 +2728,59 @@ def test_seeded_baseline_only_covers_rows_the_source_owns(monkeypatch):
     assert stats["deactivated"] == 0
     assert db.query(StockUniverse).filter(StockUniverse.symbol == "CSVONLY").one().is_active is True
     db.close()
+
+
+def test_ingest_kr_snapshot_rows_deactivates_other_board_twins():
+    # 000250 lists on KOSDAQ; an old snapshot also carried it as 000250.KS.
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(StockUniverse(symbol="000250.KS", market="KR", exchange="XKRX",
+                         is_active=True, status=UNIVERSE_STATUS_ACTIVE))
+    db.commit()
+
+    stats = stock_universe_service.ingest_kr_snapshot_rows(
+        db,
+        rows=[{"symbol": "000250", "exchange": "KOSDAQ", "name": "Sam Chun Dang"}],
+        source_name="krx_official",
+        snapshot_id="krx-20261003",
+    )
+    db.commit()
+
+    status_by_symbol = {row.symbol: row.status for row in db.query(StockUniverse).all()}
+    assert status_by_symbol == {
+        "000250.KS": UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+        "000250.KQ": UNIVERSE_STATUS_ACTIVE,
+    }
+    assert stats["board_twins_deactivated"] == 1
+    db.close()
+
+
+def test_seeded_baseline_lets_an_official_refresh_deactivate_dropped_symbols(monkeypatch):
+    # Official-source rows are stored under the ingest row source (jp_ingest),
+    # not the snapshot's source name (jpx_official).
+    db = _make_session()()
+    service = StockUniverseService()
+    for symbol in ("130A.T", "1301.T", "0130.T"):
+        db.add(StockUniverse(symbol=symbol, name=symbol, market="JP", exchange="XTKS",
+                             is_active=True, status="active", source="jp_ingest"))
+    db.flush()
+    monkeypatch.setenv("ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MAX_REMOVED_PERCENT", "50")
+    monkeypatch.setenv("ASIA_RECONCILIATION_ANOMALY_PERCENT", "100")
+
+    baseline = service.seed_reconciliation_baseline_from_active_rows(
+        db, market="JP", source_name="jpx_official", row_source="jp_ingest",
+        snapshot_id="weekly-seed:rev-1",
+    )
+    stats = service.ingest_jp_snapshot_rows(
+        db,
+        rows=[{"symbol": "130A", "name": "Veritas"}, {"symbol": "1301", "name": "Kyokuyo"}],
+        source_name="jpx_official",
+        snapshot_id="jpx-data-j-2026-09-30",
+    )
+
+    assert baseline["baseline_rows"] == 3
+    assert stats["reconciliation"]["previous_snapshot_id"] == "weekly-seed:rev-1"
+    active = {row.symbol for row in db.query(StockUniverse).filter(StockUniverse.is_active.is_(True))}
+    assert active == {"130A.T", "1301.T"}
+    db.close()
