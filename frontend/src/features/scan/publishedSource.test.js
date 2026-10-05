@@ -13,6 +13,8 @@ describe('canOfferLastPublished', () => {
   it('does not offer it for other failures or a failed last-published request', () => {
     expect(canOfferLastPublished(null, null)).toBe(false);
     expect(canOfferLastPublished(null, { detail: { code: 'snapshot_unavailable' } })).toBe(false);
+    // Even while a refresh still blocks scanning, a failed snapshot read is final.
+    expect(canOfferLastPublished({ message: 'refreshing' }, { detail: { code: 'snapshot_unavailable' } })).toBe(false);
     expect(canOfferLastPublished(null, { message: 'boom', detail: null })).toBe(false);
   });
 });
@@ -31,7 +33,7 @@ describe('describePublishedSource', () => {
       is_current: false,
     })).toEqual({
       severity: 'warning',
-      text: 'Last published data as of 2026-10-01, older than the latest completed session (2026-10-02).',
+      text: 'Last published data as of 2026-10-01. When this scan was created, the latest completed session was 2026-10-02.',
     });
   });
 
@@ -42,7 +44,7 @@ describe('describePublishedSource', () => {
       is_current: true,
     })).toEqual({
       severity: 'info',
-      text: 'Served from the published snapshot as of 2026-10-02, the latest completed session.',
+      text: 'Served from the published snapshot as of 2026-10-02, the latest completed session when this scan was created.',
     });
   });
 });

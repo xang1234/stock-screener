@@ -124,6 +124,9 @@ function ScanControlBar({
   // options it disables) does not block it; an unusable selection still does.
   const lastPublishedDisabled =
     createScanPending
+    // Starting another scan now would stop tracking the user's own scan.
+    || scanStatus === 'running'
+    || scanStatus === 'queued'
     || (!hasCustomSymbols && !universeMarket)
     || (needsScope && !universeScope)
     || (!refreshConflict && (
@@ -323,8 +326,11 @@ function ScanControlBar({
         )}
 
         {lastPublishedAvailable && onUseLastPublished && (
-          <Tooltip title="Load a completed scan from the last published snapshot instead of computing one now.">
-            <span style={{ display: 'inline-flex' }}>
+          <Tooltip
+            title="Load a completed scan from the last published snapshot instead of computing one now."
+            describeChild
+          >
+            <span tabIndex={lastPublishedDisabled ? 0 : undefined} style={{ display: 'inline-flex' }}>
               <Button
                 variant="outlined"
                 size="small"
