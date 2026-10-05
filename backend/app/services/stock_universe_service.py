@@ -604,8 +604,15 @@ class StockUniverseService:
                         logger.info(f"Fetching stocks from {exchange}...")
 
                         stocks = self._fetch_finviz_exchange_rows(exchange)
-                        if stocks:
-                            all_stocks.extend(stocks)
+                        if not stocks:
+                            # No US exchange is ever empty; zero rows is an
+                            # incomplete read, and reconciling it would
+                            # deactivate the whole exchange.
+                            logger.warning(
+                                f"Finviz returned no rows for {exchange}; skipping the universe refresh"
+                            )
+                            return []
+                        all_stocks.extend(stocks)
                         logger.info(f"Fetched {len(stocks)} stocks from {exchange}")
                     except Exception as e:
                         # A partial universe would be reconciled as complete and the
@@ -1130,9 +1137,15 @@ class StockUniverseService:
         )
         if has_run is not None:
             return None
+        # Only rows this source owns: a CSV- or manually-added symbol the
+        # source never lists must not count as removed by it.
         rows = (
             db.query(StockUniverse)
-            .filter(StockUniverse.market == normalized_market, StockUniverse.active_filter())
+            .filter(
+                StockUniverse.market == normalized_market,
+                StockUniverse.source == source_name,
+                StockUniverse.active_filter(),
+            )
             .all()
         )
         if not rows:
