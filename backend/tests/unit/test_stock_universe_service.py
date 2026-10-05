@@ -1212,10 +1212,28 @@ def test_populate_universe_returns_empty_stats_when_finviz_refuses(monkeypatch):
     db.close()
 
 
+def test_fetch_from_finviz_returns_nothing_when_any_exchange_fails(monkeypatch):
+    """A partial universe would be reconciled as complete: losing AMEX alone is under
+    the 10% removal limit, so its symbols would be deactivated."""
+    from app.services.finviz_screener_slices import FinvizIncompleteRead
+
+    service = StockUniverseService()
+
+    def fetch(exchange):
+        if exchange == "AMEX":
+            raise FinvizIncompleteRead("Finviz split of 'exch_amex' covers 283 of 284 rows")
+        return [{"symbol": f"{exchange}1", "exchange": exchange}]
+
+    monkeypatch.setattr(service, "_fetch_finviz_exchange_rows", fetch)
+
+    assert service.fetch_from_finviz() == []
+
+
 def test_fetch_from_finviz_prefers_ticker_metadata_over_logo_text(monkeypatch):
     service = StockUniverseService()
     html = """
     <html><body>
+      <div>#1 / 1 Total</div>
       <select id="pageSelect"><option value="1">1</option></select>
       <table class="screener_table">
         <tr>

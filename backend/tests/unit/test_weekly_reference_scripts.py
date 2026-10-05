@@ -2207,3 +2207,24 @@ def test_build_weekly_reference_bundle_us_warns_when_cache_backfill_fails(monkey
         "Seeded cache backfill failed: ConnectionError: cache unavailable" in w
         for w in publish_calls[0]["warnings"]
     )
+
+
+def test_build_weekly_reference_bundle_us_reuses_the_seed_when_the_finviz_reader_fails(
+    monkeypatch, tmp_path
+):
+    """A slice Finviz can't serve completely is a provider failure: seed fallback."""
+    from app.services.finviz_screener_slices import FinvizSliceTooLarge
+
+    seed = _seed_run(age_days=7)
+    publish_calls, _ = _run_us_build_with_finviz_error(
+        monkeypatch,
+        tmp_path,
+        seed_run=seed,
+        error=FinvizSliceTooLarge("Finviz slice 'exch_nyse' has 2500 rows"),
+    )
+
+    assert build_script.main() == 0
+    assert publish_calls[0]["coverage_stats"]["finviz_snapshot_failed"] is True
+    assert any(
+        "Finviz snapshot fetch failed: FinvizSliceTooLarge" in w for w in publish_calls[0]["warnings"]
+    )

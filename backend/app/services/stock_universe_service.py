@@ -9,7 +9,6 @@ import hashlib
 import io
 import json
 import os
-from time import sleep
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -17,6 +16,7 @@ import pandas as pd
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.util import web_scrap
 from . import finviz_user_agent  # noqa: F401  (Finviz 403s finvizfinance's own User-Agent)
+from .finviz_screener_slices import read_screener
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_
 from datetime import datetime, timedelta, timezone
@@ -90,7 +90,6 @@ FINVIZ_EXCHANGE_FILTER_CODES = {
 # text, which duplicates the leading ticker letter after Finviz's logo markup.
 FINVIZ_SCREENER_URL = "https://finviz.com/screener.ashx"
 FINVIZ_OVERVIEW_PAGE = 111
-FINVIZ_SCREENER_PAGE_SIZE = 20
 
 
 class StockUniverseService:
@@ -609,8 +608,12 @@ class StockUniverseService:
                             all_stocks.extend(stocks)
                         logger.info(f"Fetched {len(stocks)} stocks from {exchange}")
                     except Exception as e:
-                        logger.warning(f"Error fetching from {exchange}: {e}")
-                        continue
+                        # A partial universe would be reconciled as complete and the
+                        # missing exchange deactivated; keep the current universe.
+                        logger.warning(
+                            f"Error fetching from {exchange}: {e}; skipping the universe refresh"
+                        )
+                        return []
 
                 logger.info(f"Successfully fetched {len(all_stocks)} total stocks from all exchanges")
                 return all_stocks
@@ -634,31 +637,18 @@ class StockUniverseService:
             return []
 
     def _fetch_finviz_exchange_rows(self, exchange: str) -> List[Dict[str, Any]]:
-        params: dict[str, Any] = {
-            "v": FINVIZ_OVERVIEW_PAGE,
-            "f": f"exch_{FINVIZ_EXCHANGE_FILTER_CODES[exchange]}",
-            "o": "ticker",
-        }
-        stocks: list[dict[str, Any]] = []
+        def fetch_page(filters: str, order: str, first_row: int) -> Any:
+            params: dict[str, Any] = {"v": FINVIZ_OVERVIEW_PAGE, "f": filters, "o": order}
+            if first_row > 1:
+                params["r"] = first_row
+            return web_scrap(FINVIZ_SCREENER_URL, params)
 
-        soup = web_scrap(FINVIZ_SCREENER_URL, params)
-        page_count = self._finviz_page_count(soup)
-        stocks.extend(self._parse_finviz_screener_soup(soup, exchange))
-
-        for page_index in range(1, page_count):
-            sleep(1)
-            params["r"] = page_index * FINVIZ_SCREENER_PAGE_SIZE + 1
-            soup = web_scrap(FINVIZ_SCREENER_URL, params)
-            stocks.extend(self._parse_finviz_screener_soup(soup, exchange))
-
-        return stocks
-
-    @staticmethod
-    def _finviz_page_count(soup: Any) -> int:
-        page_select = soup.find(id="pageSelect")
-        if page_select is None:
-            return 0
-        return len(page_select.find_all("option"))
+        return read_screener(
+            f"exch_{FINVIZ_EXCHANGE_FILTER_CODES[exchange]}",
+            fetch_page,
+            parse_rows=lambda soup: self._parse_finviz_screener_soup(soup, exchange),
+            row_key=lambda stock: stock.get("symbol"),
+        )
 
     def _parse_finviz_screener_soup(self, soup: Any, exchange: str) -> list[dict[str, Any]]:
         table = soup.find("table", class_="screener_table")
