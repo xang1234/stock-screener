@@ -657,9 +657,28 @@ class ThemeExtractionService:
         # fallbacks. Each request starts from the primary; fallbacks only activate
         # if the primary exhausts its retries for that single request.
         allow_fallbacks = True
+        # A reasoning model spends part of this budget on its preamble before the
+        # answer begins, so the same request needs a larger allowance than a
+        # plain completion. Measured on a 366-character claim-review prompt: the
+        # Ollama entry ran to 8,869 characters of reasoning, consumed exactly
+        # 2,000 completion tokens, and returned an empty answer -- which the
+        # claim review rejects as ``claim_review_invalid``.
+        #
+        # Every Ollama entry gets the larger allowance. The family is not one
+        # model: measured over the seventeen ids the cloud endpoint serves, four
+        # exhaust 2,000 tokens on the preamble alone and answer inside 4,000
+        # (``gpt-oss:20b``, ``deepseek-v4-pro:0813``, ``glm-5.3-flash``,
+        # ``kimi-k2.7-code``). Only one member of the family fails at 4,000 and
+        # one further needs 8,000 and 90 seconds, so keying the budget on the
+        # provider rather than on a per-model list keeps a newly admitted entry
+        # from silently reintroducing the empty answer. ``max_tokens`` is an
+        # allowance, not a charge: an entry that does not reason simply does not
+        # spend it.
         max_tokens = (
             self.HIGH_EXTRACTION_MAX_TOKENS
-            if LLMService._is_minimax_model(active_model) or LLMService._is_zai_model(active_model)
+            if LLMService._is_minimax_model(active_model)
+            or LLMService._is_zai_model(active_model)
+            or LLMService._is_ollama_model(active_model)
             else self.DEFAULT_EXTRACTION_MAX_TOKENS
         )
 
