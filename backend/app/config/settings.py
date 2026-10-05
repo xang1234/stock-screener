@@ -185,8 +185,12 @@ class Settings(BaseSettings):
     india_bse_gate_global_failure_min_symbols: int = 25
     india_bse_validation_days_back: int = 30
     india_bse_validation_failures_threshold: int = 3
+    # JPX moves and renames the listing attachment (data_j.xls became .xlsx in
+    # 2026-10), so the fetch first follows the data_j link on the listing page
+    # and uses this URL only when that page offers none.
+    jp_universe_listing_page_url: str = "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html"
     jp_universe_source_url: str = (
-        "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+        "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx"
     )
     tw_universe_allow_insecure_fallback: bool = False
     tw_universe_source_twse_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2"

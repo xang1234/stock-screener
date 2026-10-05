@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 import app.scripts.build_weekly_reference_bundle as build_script
 import app.scripts.import_weekly_reference_bundle as import_script
@@ -1280,12 +1281,18 @@ def test_build_weekly_reference_bundle_deadline_blocks_when_partial_disabled(
     assert publish_kwargs["coverage_stats"]["snapshot_symbols"] == 3
 
 
-def _patch_cn_dependencies(monkeypatch, *, raise_universe: bool, hybrid_failures: int = 0):
+def _patch_cn_dependencies(
+    monkeypatch,
+    *,
+    raise_universe: bool,
+    hybrid_failures: int = 0,
+    universe_error: Exception | None = None,
+):
     """Wire the supporting Asia-bundle services for stale-universe fallback tests."""
 
     def fetch(market):
         if raise_universe:
-            raise RuntimeError("AKShare CN spot disconnected")
+            raise universe_error or RuntimeError("AKShare CN spot disconnected")
         return SimpleNamespace(
             market=market,
             source_name="cn_official",
@@ -1346,7 +1353,8 @@ def test_build_asia_bundle_falls_back_to_seeded_universe_when_official_fetch_fai
     monkeypatch, tmp_path, capsys
 ):
     """When AKShare listing fails and partial publish is on, reuse seeded rows."""
-    published_at = datetime(2026, 5, 9, 12, 10, 0)
+    # Within github_weekly_reference_max_age_days: an older seed is refused.
+    published_at = datetime.utcnow() - timedelta(days=2)
     active_rows = [
         _make_universe_row("600000.SS"),
         _make_universe_row("000001.SZ"),
@@ -1402,6 +1410,7 @@ def test_build_asia_bundle_falls_back_to_seeded_universe_when_official_fetch_fai
                 "published_at": published_at,
                 "created_at": published_at,
                 "source_revision": "fundamentals_v1_cn:20260509121000",
+                "coverage_stats_json": "{}",
             },
         )(),
         export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
@@ -1437,7 +1446,7 @@ def test_build_asia_bundle_falls_back_to_seeded_universe_when_official_fetch_fai
 
     stdout = capsys.readouterr().out
     assert "[universe] CN official fetch failed" in stdout
-    assert "falling back to 2 seeded prior-week rows" in stdout
+    assert "falling back to 2 seeded rows from fundamentals_v1_cn:20260509121000" in stdout
 
 
 def test_in_bundle_drops_seeded_bse_scrip_codes_only_for_in():
@@ -2228,3 +2237,200 @@ def test_build_weekly_reference_bundle_us_reuses_the_seed_when_the_finviz_reader
     assert any(
         "Finviz snapshot fetch failed: FinvizSliceTooLarge" in w for w in publish_calls[0]["warnings"]
     )
+
+
+# ── Stale-universe fallback policy (#521) ───────────────────────────────
+
+
+def _jp_snapshot_service(publish_calls, *, seed_published_at, seed_coverage=None):
+    return SimpleNamespace(
+        build_market_snapshot_row=lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "exchange": kwargs["exchange"],
+            "row_hash": "row-hash",
+            "normalized_payload": kwargs["normalized_payload"],
+            "raw_payload": kwargs["raw_payload"],
+        },
+        publish_market_snapshot_run=lambda db, **kwargs: publish_calls.append(kwargs)
+        or {
+            "published": True,
+            "source_revision": "fundamentals_v1_jp:20261005",
+            "snapshot_key": kwargs["snapshot_key"],
+            "coverage": dict(kwargs["coverage_stats"]),
+            "warnings": list(kwargs["warnings"]),
+        },
+        get_published_run=lambda db, snapshot_key: SimpleNamespace(
+            published_at=seed_published_at,
+            created_at=seed_published_at,
+            source_revision="fundamentals_v1_jp:seed",
+            coverage_stats_json=json.dumps(seed_coverage or {}),
+        ),
+        export_weekly_reference_bundle=lambda db, **kwargs: {"bundle_path": str(kwargs["output_path"])},
+    )
+
+
+def _run_jp_stale_universe(
+    monkeypatch,
+    tmp_path,
+    *,
+    seed_published_at,
+    seeded_count=None,
+    flags=None,
+    seed_coverage=None,
+    universe_error=None,
+):
+    active_rows = [_make_universe_row("7203.T", market="JP"), _make_universe_row("1301.T", market="JP")]
+    fake_db = _make_cn_db_mock(active_rows, seeded_count=seeded_count)
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _patch_cn_dependencies(
+        monkeypatch,
+        raise_universe=True,
+        universe_error=universe_error or requests.ConnectionError("JPX listing unreachable"),
+    )
+    monkeypatch.setattr(
+        build_script,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_many=lambda symbols: {}),
+    )
+    publish_calls: list[dict] = []
+    monkeypatch.setattr(
+        build_script,
+        "get_provider_snapshot_service",
+        lambda: _jp_snapshot_service(
+            publish_calls, seed_published_at=seed_published_at, seed_coverage=seed_coverage
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["build_weekly_reference_bundle", "--market", "JP", "--output-dir", str(tmp_path),
+         *(flags if flags is not None else ["--allow-stale-universe"])],
+    )
+    return build_script.main(), publish_calls
+
+
+def test_stale_universe_flag_reuses_a_recent_seed_and_records_its_age(monkeypatch, tmp_path):
+    seed_at = datetime.utcnow() - timedelta(days=3)
+
+    exit_code, publish_calls = _run_jp_stale_universe(monkeypatch, tmp_path, seed_published_at=seed_at)
+
+    assert exit_code == 0
+    kwargs = publish_calls[0]
+    coverage = kwargs["coverage_stats"]
+    assert coverage["stale_universe"] is True
+    assert coverage["universe_seed_source_revision"] == "fundamentals_v1_jp:seed"
+    assert coverage["universe_seed_as_of_date"] == seed_at.date().isoformat()
+    assert "JPX listing unreachable" in coverage["universe_error"]
+    # Only the universe is reused; the coverage gate still applies.
+    assert kwargs["force_publish"] is False
+    assert any(seed_at.date().isoformat() in warning for warning in kwargs["warnings"])
+
+
+def test_stale_universe_refuses_a_seed_past_the_max_age(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match=r"JPX listing unreachable.*max age 8 day"):
+        _run_jp_stale_universe(
+            monkeypatch, tmp_path, seed_published_at=datetime.utcnow() - timedelta(days=20)
+        )
+
+
+def test_stale_universe_fails_clearly_without_a_seed(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match=r"JPX listing unreachable.*no prior-week universe"):
+        _run_jp_stale_universe(
+            monkeypatch, tmp_path, seed_published_at=datetime.utcnow(), seeded_count=0
+        )
+
+
+def test_official_source_failure_still_fails_without_a_fallback_flag(monkeypatch, tmp_path):
+    with pytest.raises(requests.ConnectionError, match="JPX listing unreachable"):
+        _run_jp_stale_universe(
+            monkeypatch, tmp_path, seed_published_at=datetime.utcnow(), flags=[]
+        )
+
+
+def test_stale_universe_dates_a_reused_universe_by_its_original_data(monkeypatch, tmp_path):
+    # Published two days ago, but it reused a universe from three weeks ago.
+    old_universe = (datetime.utcnow() - timedelta(days=21)).date().isoformat()
+    with pytest.raises(RuntimeError, match="max age 8 day"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            seed_coverage={"stale_universe": True, "universe_seed_as_of_date": old_universe},
+        )
+
+
+def test_stale_universe_refuses_an_undated_reused_universe(monkeypatch, tmp_path):
+    # Bundles written before #521 recorded stale_universe without a date.
+    with pytest.raises(RuntimeError, match="reused an undated universe"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            seed_coverage={"stale_universe": True},
+        )
+
+
+def test_stale_universe_only_covers_source_outages(monkeypatch, tmp_path):
+    # A parser or schema defect must fail the job, not hide behind last week.
+    with pytest.raises(ValueError, match="multiple snapshot dates"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            universe_error=ValueError("JP official universe parse saw multiple snapshot dates"),
+        )
+
+
+def test_partial_publish_fallback_also_refuses_an_old_seed(monkeypatch, tmp_path):
+    # Deliberate change in #521: CN/TW reuse the universe under the same age rule.
+    with pytest.raises(RuntimeError, match="max age 8 day"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=20),
+            flags=["--allow-partial-publish"],
+            universe_error=RuntimeError("AKShare CN spot disconnected"),
+        )
+
+
+def test_universe_age_is_the_official_listing_date_not_the_publish_date(monkeypatch, tmp_path):
+    # Published two days ago, but its listing file was twelve days old then.
+    listing_date = (datetime.utcnow() - timedelta(days=12)).date().isoformat()
+    with pytest.raises(RuntimeError, match="max age 8 day"):
+        _run_jp_stale_universe(
+            monkeypatch,
+            tmp_path,
+            seed_published_at=datetime.utcnow() - timedelta(days=2),
+            seed_coverage={"universe_as_of_date": listing_date},
+        )
+
+
+def test_successful_universe_refresh_records_the_listing_date(monkeypatch, tmp_path):
+    active_rows = [_make_universe_row("7203.T", market="JP")]
+    fake_db = _make_cn_db_mock(active_rows)
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    _patch_cn_dependencies(monkeypatch, raise_universe=False)
+    monkeypatch.setattr(
+        build_script, "ingest_official_market_snapshot", lambda db, service, snapshot: {"added": 0}
+    )
+    monkeypatch.setattr(
+        build_script, "get_fundamentals_cache", lambda: SimpleNamespace(get_many=lambda symbols: {})
+    )
+    publish_calls: list[dict] = []
+    monkeypatch.setattr(
+        build_script,
+        "get_provider_snapshot_service",
+        lambda: _jp_snapshot_service(publish_calls, seed_published_at=datetime.utcnow()),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["build_weekly_reference_bundle", "--market", "JP", "--output-dir", str(tmp_path)],
+    )
+
+    assert build_script.main() == 0
+
+    # _patch_cn_dependencies' snapshot is dated 2026-05-09.
+    assert publish_calls[0]["coverage_stats"]["universe_as_of_date"] == "2026-05-09"

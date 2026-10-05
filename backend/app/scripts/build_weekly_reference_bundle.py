@@ -297,11 +297,15 @@ def _prior_seed(
     *,
     provider_snapshot_service,
     snapshot_key: str,
+    as_of_keys: tuple[str, ...] = ("seed_as_of_date",),
 ) -> tuple[Any, dict[str, Any], str | None]:
     """The imported prior bundle's run and provenance, or why it cannot stand in for this week.
 
     Its data must be within ``github_weekly_reference_max_age_days``, the age past
-    which consumers already treat a weekly bundle as stale.
+    which consumers already treat a weekly bundle as stale. ``as_of_keys`` name
+    the coverage fields (first present wins) holding the date of the data, so a
+    seed is dated by its data, e.g. its official listing date, not by when it
+    was published.
     """
     seed_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     if seed_run is None:
@@ -312,10 +316,20 @@ def _prior_seed(
         seed_coverage = {}
     if not isinstance(seed_coverage, dict):
         seed_coverage = {}
+    data_as_of = next((seed_coverage[key] for key in as_of_keys if seed_coverage.get(key)), None)
+    if (
+        "universe_as_of_date" in as_of_keys
+        and seed_coverage.get("stale_universe")
+        and not data_as_of
+    ):
+        # Bundles from before #521 reused a universe without dating it.
+        return None, {}, (
+            f"Prior weekly reference seed {seed_run.source_revision} reused an undated universe."
+        )
     # A seed that itself reused an older seed is as old as that seed's data.
     try:
         seed_as_of = date.fromisoformat(
-            seed_coverage.get("seed_as_of_date")
+            data_as_of
             or (seed_run.published_at or seed_run.created_at).date().isoformat()
         ).isoformat()
     except (AttributeError, TypeError, ValueError):
@@ -735,6 +749,7 @@ def _build_asia_bundle(
     fetch_chunk_size: int = _DEFAULT_FETCH_CHUNK_SIZE,
     allow_partial_publish: bool = False,
     resume_partial_seed: bool = False,
+    allow_stale_universe: bool = False,
 ) -> dict[str, Any]:
     snapshot_key = ProviderSnapshotService.snapshot_key_for_market(market)
     official_source_service = OfficialMarketUniverseSourceService()
@@ -745,14 +760,21 @@ def _build_asia_bundle(
     print(f"Starting official universe refresh for {market}...", flush=True)
     stale_universe = False
     universe_error: str | None = None
+    universe_seed: dict[str, Any] = {}
+    universe_as_of: str | None = None
     try:
         official_snapshot = official_source_service.fetch_market_snapshot(market)
+        universe_as_of = getattr(official_snapshot, "snapshot_as_of", None)
         universe_stats = ingest_official_market_snapshot(
             db, stock_universe_service, official_snapshot
         )
         print(f"Universe refresh complete: {universe_stats}", flush=True)
     except Exception as exc:
-        if not allow_partial_publish:
+        # --allow-stale-universe covers source outages only; a parser or
+        # ingest defect must fail the job. --allow-partial-publish keeps its
+        # broader historical scope.
+        source_outage = isinstance(exc, requests.RequestException)
+        if not (allow_partial_publish or (allow_stale_universe and source_outage)):
             raise
         # The shared official ingestion dispatch may have raised mid-transaction
         # (after bulk_save_objects but before commit), leaving the session in
@@ -781,17 +803,48 @@ def _build_asia_bundle(
             .count()
         )
         if seeded_count == 0:
-            raise
+            raise RuntimeError(
+                f"Official {market} universe fetch failed ({exc}) and no prior-week "
+                "universe is loaded to fall back on."
+            ) from exc
+        # Reused listings must be recent enough to pass as this week's, and
+        # the bundle says how old they are.
+        _, seed_provenance, seed_problem = _prior_seed(
+            db,
+            provider_snapshot_service=provider_snapshot_service,
+            snapshot_key=snapshot_key,
+            # universe_seed_as_of_date: bundles from this change's first revision.
+            as_of_keys=("universe_as_of_date", "universe_seed_as_of_date"),
+        )
+        if seed_problem:
+            raise RuntimeError(
+                f"Official {market} universe fetch failed ({exc}); {seed_problem}"
+            ) from exc
         stale_universe = True
         universe_error = str(exc)
+        universe_as_of = seed_provenance["seed_as_of_date"]
+        universe_seed = {
+            "universe_error": universe_error,
+            "universe_seed_source_revision": seed_provenance["seed_source_revision"],
+            "universe_seed_as_of_date": seed_provenance["seed_as_of_date"],
+        }
         universe_stats = {
             "stale_universe": True,
             "error": universe_error,
             "fallback_rows": seeded_count,
+            **universe_seed,
         }
         print(
             f"[universe] {market} official fetch failed ({universe_error}); "
-            f"falling back to {seeded_count} seeded prior-week rows",
+            f"falling back to {seeded_count} seeded rows from "
+            f"{universe_seed['universe_seed_source_revision']} "
+            f"(as of {universe_seed['universe_seed_as_of_date']})",
+            flush=True,
+        )
+        # Surfaces as a run annotation so a reused universe is never silent.
+        print(
+            f"::warning title=Stale {market} universe::Official {market} universe fetch "
+            f"failed; reused the universe as of {universe_seed['universe_seed_as_of_date']}.",
             flush=True,
         )
 
@@ -873,12 +926,16 @@ def _build_asia_bundle(
         "skipped_due_to_deadline": len(skipped_symbols) if deadline_hit else 0,
         "partial_run": deadline_hit or stale_universe,
         "stale_universe": stale_universe,
+        **universe_seed,
     }
+    if universe_as_of:
+        # The listings' own date, so the next week's fallback ages them correctly.
+        coverage_stats["universe_as_of_date"] = universe_as_of
     warnings: list[str] = []
     if stale_universe:
         warnings.append(
             f"Official {market} universe fetch failed ({universe_error}); "
-            f"reused {len(symbols)} seeded prior-week rows."
+            f"reused {len(symbols)} seeded rows as of {universe_seed['universe_seed_as_of_date']}."
         )
     if fundamentals_stats.get("failed"):
         warnings.append(
@@ -1012,6 +1069,18 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--allow-stale-universe",
+        action="store_true",
+        help=(
+            "If the official market-universe fetch fails, reuse the imported "
+            "prior bundle's universe when it is within "
+            "github_weekly_reference_max_age_days. Unlike --allow-partial-publish "
+            "this neither tolerates a fundamentals deadline nor bypasses the "
+            "coverage gate; the manifest records stale_universe with the seed's "
+            "revision, data date and the source error."
+        ),
+    )
+    parser.add_argument(
         "--resume-partial-seed",
         action="store_true",
         help=(
@@ -1055,6 +1124,7 @@ def main() -> int:
                 fetch_chunk_size=max(1, int(args.fetch_chunk_size)),
                 allow_partial_publish=bool(args.allow_partial_publish),
                 resume_partial_seed=bool(args.resume_partial_seed),
+                allow_stale_universe=bool(args.allow_stale_universe),
             )
 
     _write_step_summary(market, summary)
