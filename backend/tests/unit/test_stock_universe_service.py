@@ -2784,3 +2784,31 @@ def test_seeded_baseline_lets_an_official_refresh_deactivate_dropped_symbols(mon
     active = {row.symbol for row in db.query(StockUniverse).filter(StockUniverse.is_active.is_(True))}
     assert active == {"130A.T", "1301.T"}
     db.close()
+
+
+def test_seeded_baseline_ignores_field_drift_in_the_anomaly_gate(monkeypatch):
+    # Bundle rows carry Yahoo sectors the HK source leaves blank; that drift
+    # must not count as "changed" and quarantine the removal.
+    db = _make_session()()
+    service = StockUniverseService()
+    for symbol in ("0001.HK", "0002.HK", "0003.HK", "0004.HK"):
+        db.add(StockUniverse(symbol=symbol, name=symbol, market="HK", exchange="XHKG",
+                             sector="Industrials", industry="Conglomerates",
+                             is_active=True, status="active", source="hk_ingest"))
+    db.flush()
+    monkeypatch.setenv("ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED", "true")
+
+    service.seed_reconciliation_baseline_from_active_rows(
+        db, market="HK", source_name="hkex_official", row_source="hk_ingest",
+        snapshot_id="weekly-seed:rev-1",
+    )
+    stats = service.ingest_hk_snapshot_rows(
+        db,
+        rows=[{"symbol": code, "name": code} for code in ("0001", "0002", "0003")],
+        source_name="hkex_official",
+        snapshot_id="hkex-2026-10-03",
+    )
+
+    assert stats["reconciliation"]["counts"]["changed"] == 0
+    assert db.query(StockUniverse).filter(StockUniverse.symbol == "0004.HK").one().is_active is False
+    db.close()

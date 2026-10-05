@@ -1022,6 +1022,7 @@ class StockUniverseService:
             previous_snapshot_id = previous_run.snapshot_id if previous_run is not None else None
 
         previous_rows: list[dict[str, Any]] = []
+        membership_only = False
         if previous_run is not None:
             if previous_run.artifact_json:
                 try:
@@ -1029,6 +1030,7 @@ class StockUniverseService:
                     raw_rows = parsed.get("snapshot_rows") if isinstance(parsed, dict) else []
                     if isinstance(raw_rows, list):
                         previous_rows = [row for row in raw_rows if isinstance(row, dict)]
+                    membership_only = isinstance(parsed, dict) and bool(parsed.get("membership_only"))
                 except Exception:
                     logger.warning(
                         "Unable to parse prior stock universe reconciliation artifact",
@@ -1040,6 +1042,13 @@ class StockUniverseService:
                     )
 
         current_rows = self._reconciliation_row_payloads(canonical_list)
+        if membership_only:
+            # A seeded baseline records which symbols were active, not the
+            # source's fields: bundle rows carry hydrated sectors and caps the
+            # source may leave blank, which would read as mass "changed" rows
+            # and trip the anomaly gate. Compare membership only.
+            current_by_symbol = {row["symbol"]: row for row in current_rows}
+            previous_rows = [current_by_symbol.get(row.get("symbol"), row) for row in previous_rows]
         artifact = self._build_market_reconciliation_artifact(
             market=market,
             source_name=normalized_source_name,
@@ -1173,6 +1182,7 @@ class StockUniverseService:
             current_rows=payloads,
             previous_rows=[],
         )
+        artifact["membership_only"] = True
         artifact_json = self._stable_json(artifact)
         counts = artifact["counts"]
         db.add(

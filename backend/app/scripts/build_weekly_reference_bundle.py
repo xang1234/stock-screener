@@ -759,9 +759,12 @@ def _seed_official_reconciliation_baseline(db, stock_universe_service, snapshot)
     no reconciliation run, so nothing missing from the source is ever retired.
     The workflow enables destructive apply for this job only, and removals
     still pass the Asia safety gates. Fallback seed CSVs (``*_manual_csv``)
-    are partial lists, so they never become the comparison.
+    are partial lists, so they never become the comparison; nor does an IN
+    snapshot built from NSE alone while BSE is unreachable.
     """
     if snapshot.source_name.endswith("_manual_csv"):
+        return
+    if (snapshot.source_metadata or {}).get("bse_unavailable"):
         return
     market = snapshot.market.upper()
     baseline = stock_universe_service.seed_reconciliation_baseline_from_active_rows(

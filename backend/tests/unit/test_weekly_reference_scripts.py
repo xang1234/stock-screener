@@ -2470,7 +2470,7 @@ def test_official_baseline_is_seeded_only_for_live_sources(source_name, expected
     service = SimpleNamespace(
         seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
     )
-    snapshot = SimpleNamespace(market="JP", source_name=source_name)
+    snapshot = SimpleNamespace(market="JP", source_name=source_name, source_metadata={})
 
     build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
 
@@ -2478,3 +2478,19 @@ def test_official_baseline_is_seeded_only_for_live_sources(source_name, expected
     if calls:
         assert calls[0]["source_name"] == "jpx_official"
         assert calls[0]["row_source"] == "jp_ingest"
+
+
+def test_official_baseline_is_not_seeded_from_an_nse_only_snapshot():
+    calls = []
+    service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
+    )
+    snapshot = SimpleNamespace(
+        market="IN",
+        source_name="in_reference_bundle",
+        source_metadata={"bse_unavailable": "HTTPError: 403"},
+    )
+
+    build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
+
+    assert calls == []
