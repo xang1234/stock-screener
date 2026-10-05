@@ -327,13 +327,29 @@ class FakeScanResultRepository(ScanResultRepository):
 class FakeUniverseRepository(UniverseRepository):
     """In-memory universe repository returning a configurable symbol list."""
 
-    def __init__(self, symbols: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        symbols: list[str] | None = None,
+        *,
+        markets: dict[str, str] | None = None,
+    ) -> None:
         self._symbols = symbols or []
+        # Default: every symbol is a US listing.
+        self._markets = markets
         self.resolve_calls: list[object] = []
 
     def resolve_symbols(self, universe_def: object) -> list[str]:
         self.resolve_calls.append(universe_def)
         return self._symbols
+
+    def resolve_markets(self, symbols: list[str]) -> dict[str, str]:
+        if self._markets is None:
+            return {str(s).upper(): "US" for s in symbols}
+        return {
+            str(s).upper(): self._markets[str(s).upper()]
+            for s in symbols
+            if str(s).upper() in self._markets
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -742,6 +758,10 @@ class FakeFeatureRunRepository(FeatureRunRepository):
                 return run
 
         return None
+
+    def has_feature_rows_for(self, run_id: int, symbols) -> bool:
+        covered = getattr(self, "_run_universes", {}).get(run_id, set())
+        return all(str(s).strip().upper() in covered for s in symbols if str(s).strip())
 
     def get_run(self, run_id) -> FeatureRunDomain:
         return self._get_or_raise(run_id)

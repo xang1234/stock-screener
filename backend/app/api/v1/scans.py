@@ -40,7 +40,12 @@ from ...wiring.bootstrap import (
     get_ui_snapshot_service,
 )
 from .scan_queries import router as scan_queries_router
-from ...use_cases.scanning.create_scan import ActiveScanConflictError, StaleMarketDataError
+from ...use_cases.scanning.create_scan import (
+    ActiveScanConflictError,
+    SnapshotUnavailableError,
+    StaleMarketDataError,
+    published_source_of,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -154,6 +159,7 @@ def list_scans(
                     warnings=normalize_scan_warnings_for_response(
                         getattr(scan, "warnings", None)
                     ),
+                    published_source=published_source_of(scan),
                 ))
 
         return ScanListResponse(scans=scan_items)
@@ -183,10 +189,13 @@ def create_scan(
         from ...services.universe_compat_metrics import record_legacy_universe_usage
 
         record_legacy_universe_usage(universe_resolution.legacy_value)
-    guard_market = _resolve_scan_guard_market(universe_def)
-    market_refresh_conflict = _get_market_refresh_conflict_detail(guard_market)
-    if market_refresh_conflict is not None:
-        raise HTTPException(status_code=409, detail=market_refresh_conflict)
+    # A last-published request only reads a pinned publication and never
+    # computes, so an active refresh does not block it.
+    if request.data_mode != "last_published":
+        guard_market = _resolve_scan_guard_market(universe_def)
+        market_refresh_conflict = _get_market_refresh_conflict_detail(guard_market)
+        if market_refresh_conflict is not None:
+            raise HTTPException(status_code=409, detail=market_refresh_conflict)
     universe_projection = universe_def.storage_projection()
     cmd = CreateScanCommand(
         universe_def=universe_def,
@@ -201,10 +210,13 @@ def create_scan(
         composite_method=request.composite_method,
         criteria=request.criteria,
         idempotency_key=request.idempotency_key,
+        data_mode=request.data_mode,
     )
     try:
         result = use_case.execute(uow, cmd)
     except ActiveScanConflictError as e:
+        raise HTTPException(status_code=409, detail=e.to_dict()) from e
+    except SnapshotUnavailableError as e:
         raise HTTPException(status_code=409, detail=e.to_dict()) from e
     except StaleMarketDataError as e:
         raise HTTPException(status_code=409, detail=e.to_dict()) from e
@@ -229,6 +241,7 @@ def create_scan(
         feature_run_id=result.feature_run_id,
         warnings=normalize_scan_warnings_for_response(result.warnings),
         universe_def=universe_def,
+        published_source=result.published_source,
     )
 
 
@@ -336,6 +349,7 @@ def get_scan_status(
                     getattr(scan, "warnings", None)
                 ),
                 universe_def=scan.get_universe_definition(),
+                published_source=published_source_of(scan),
             )
 
     except HTTPException:

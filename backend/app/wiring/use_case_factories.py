@@ -34,9 +34,18 @@ def get_create_scan_use_case() -> CreateScanUseCase:
     from app.services.market_data_freshness import evaluate_symbol_freshness
     from app.use_cases.scanning.create_scan import CreateScanUseCase
 
+    runtime = resolve_runtime_services()
     return CreateScanUseCase(
-        dispatcher=resolve_runtime_services().task_dispatcher(),
+        dispatcher=runtime.task_dispatcher(),
         freshness_evaluator=evaluate_symbol_freshness,
+        expected_session=runtime.market_calendar_service().last_completed_trading_day,
+        current_rs_run_id=lambda market: getattr(
+            runtime.market_rs_reader()
+            .get(market=market, symbols=(), as_of_date=None)
+            .source,
+            "run_id",
+            None,
+        ),
     )
 
 

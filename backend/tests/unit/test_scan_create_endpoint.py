@@ -20,8 +20,10 @@ from app.use_cases.scanning.create_scan import (
     ActiveScanConflict,
     ActiveScanConflictError,
     CreateScanResult,
+    SnapshotUnavailableError,
     StaleMarketDataError,
 )
+from app.use_cases.scanning.published_snapshot import SnapshotIneligible
 
 
 class _FakeUoW:
@@ -1054,3 +1056,97 @@ async def test_scan_bootstrap_rejects_unsupported_market(client):
 
     assert response.status_code == 400
     service.get_scan_bootstrap.assert_not_called()
+
+
+_ACTIVE_HK_REFRESH = {
+    "bootstrap": {},
+    "summary": {"active_market_count": 1, "active_markets": ["HK"], "status": "active"},
+    "markets": [
+        {
+            "market": "HK",
+            "lifecycle": "daily_refresh",
+            "stage_key": "prices",
+            "stage_label": "Price Refresh",
+            "status": "running",
+            "progress_mode": "determinate",
+            "percent": 40.0,
+            "current": 400,
+            "total": 1000,
+            "message": "Refreshing prices",
+            "task_name": "smart_refresh_cache",
+            "task_id": "task-hk",
+            "updated_at": "2026-04-18T00:00:00Z",
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_last_published_scan_is_not_blocked_by_active_refresh(client):
+    source = {"data_mode": "last_published", "as_of_date": "2026-10-01", "feature_run_id": 9}
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-hk",
+            status="completed",
+            total_stocks=50,
+            is_duplicate=False,
+            published_source=source,
+        )
+    )
+    app.dependency_overrides[get_uow] = lambda: _FakeUoW()
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value=_ACTIVE_HK_REFRESH,
+        ), patch("app.api.v1.scans._queue_scan_bootstrap_publish"):
+            response = await client.post(
+                "/api/v1/scans",
+                json={
+                    "universe_def": {"type": "market", "market": "HK"},
+                    "data_mode": "last_published",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    assert fake_use_case.received_cmd.data_mode == "last_published"
+    assert response.json()["published_source"] == source
+
+
+@pytest.mark.asyncio
+async def test_unavailable_last_published_snapshot_returns_structured_409(client):
+    class _Unavailable(_FakeCreateScanUseCase):
+        def execute(self, uow, cmd):
+            raise SnapshotUnavailableError(
+                SnapshotIneligible("incomplete_coverage", {"market": "US"})
+            )
+
+    app.dependency_overrides[get_uow] = lambda: _FakeUoW()
+    app.dependency_overrides[get_create_scan_use_case] = lambda: _Unavailable(None)
+    try:
+        response = await client.post(
+            "/api/v1/scans",
+            json={"universe": "all", "data_mode": "last_published"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "snapshot_unavailable"
+    assert detail["reason"] == "incomplete_coverage"
+    assert detail["details"] == {"market": "US"}
+
+
+@pytest.mark.asyncio
+async def test_create_scan_rejects_unknown_data_mode(client):
+    response = await client.post(
+        "/api/v1/scans",
+        json={"universe": "all", "data_mode": "stale_ok"},
+    )
+
+    assert response.status_code == 422
