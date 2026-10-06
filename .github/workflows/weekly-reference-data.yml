@@ -115,6 +115,9 @@ jobs:
     env:
       REDIS_ENABLED: "false"
       DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
+      # Retire listings the official source dropped (gated at 25% removed).
+      # The build seeds a baseline only from live sources, never a fallback CSV.
+      ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED: "true"
       SG_UNIVERSE_SOURCE_URL: ${{ matrix.market == 'SG' && 'https://api.sgx.com/securities/v1.1?excludetypes=bonds' || '' }}
       # Bursa Malaysia equities-listing JSON endpoint. The bundled CSV
       # fallback only ships the FBM KLCI 30 + a handful of Top 100 names

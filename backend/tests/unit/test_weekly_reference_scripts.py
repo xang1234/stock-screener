@@ -417,6 +417,7 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
     monkeypatch.setattr(build_script, "OfficialMarketUniverseSourceService", lambda: official_service)
 
     stock_universe_service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
         ingest_hk_snapshot_rows=lambda db, **kwargs: {"added": 1, "updated": 0, "deactivated": 0},
     )
     monkeypatch.setattr(build_script, "get_stock_universe_service", lambda: stock_universe_service)
@@ -585,6 +586,7 @@ def test_build_weekly_reference_bundle_runs_de_official_path(monkeypatch, tmp_pa
 
     ingest_calls: list[dict[str, object]] = []
     stock_universe_service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
         ingest_de_snapshot_rows=lambda db, **kwargs: ingest_calls.append(kwargs)
         or {"added": 1, "updated": 0, "deactivated": 0},
     )
@@ -729,6 +731,7 @@ def test_build_weekly_reference_bundle_runs_sg_official_path(monkeypatch, tmp_pa
 
     ingest_calls: list[dict[str, object]] = []
     stock_universe_service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
         ingest_sg_snapshot_rows=lambda db, **kwargs: ingest_calls.append(kwargs)
         or {"added": 1, "updated": 0, "deactivated": 0},
     )
@@ -880,6 +883,7 @@ def test_build_weekly_reference_bundle_runs_au_official_path(monkeypatch, tmp_pa
 
     ingest_calls: list[dict[str, object]] = []
     stock_universe_service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
         ingest_au_snapshot_rows=lambda db, **kwargs: ingest_calls.append(kwargs)
         or {"added": 1, "updated": 0, "deactivated": 0},
     )
@@ -1026,6 +1030,7 @@ def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
         build_script,
         "get_stock_universe_service",
         lambda: SimpleNamespace(
+            seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
             ingest_cn_snapshot_rows=lambda db, **kwargs: {"added": 3, "updated": 0, "deactivated": 0}
         ),
     )
@@ -1198,6 +1203,7 @@ def test_build_weekly_reference_bundle_deadline_blocks_when_partial_disabled(
         build_script,
         "get_stock_universe_service",
         lambda: SimpleNamespace(
+            seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
             ingest_cn_snapshot_rows=lambda db, **kwargs: {"added": 3, "updated": 0, "deactivated": 0}
         ),
     )
@@ -1326,6 +1332,7 @@ def _patch_cn_dependencies(
         build_script,
         "get_stock_universe_service",
         lambda: SimpleNamespace(
+            seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: None,
             ingest_cn_snapshot_rows=lambda db, **kwargs: {
                 "added": 0,
                 "updated": 0,
@@ -2452,3 +2459,71 @@ def test_successful_universe_refresh_records_the_listing_date(monkeypatch, tmp_p
 
     # _patch_cn_dependencies' snapshot is dated 2026-05-09.
     assert publish_calls[0]["coverage_stats"]["universe_as_of_date"] == "2026-05-09"
+
+
+@pytest.mark.parametrize(
+    ("source_name", "expected_calls"),
+    [("jpx_official", 1), ("de_manual_csv", 0)],
+)
+def test_official_baseline_is_seeded_only_for_live_sources(source_name, expected_calls):
+    calls = []
+    service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
+    )
+    snapshot = SimpleNamespace(market="JP", source_name=source_name, source_metadata={})
+
+    build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
+
+    assert len(calls) == expected_calls
+    if calls:
+        assert calls[0]["source_name"] == "jpx_official"
+        assert calls[0]["row_source"] == "jp_ingest"
+
+
+def test_official_baseline_is_not_seeded_from_an_nse_only_snapshot():
+    calls = []
+    service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
+    )
+    snapshot = SimpleNamespace(
+        market="IN",
+        source_name="in_reference_bundle",
+        source_metadata={"bse_unavailable": "HTTPError: 403"},
+    )
+
+    build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
+
+    assert calls == []
+
+
+def test_official_baseline_is_not_seeded_when_part_of_the_fetch_failed():
+    calls = []
+    service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
+    )
+    snapshot = SimpleNamespace(
+        market="CA",
+        source_name="tmx_official",
+        source_metadata={"fetch_errors": {"tsx": {"Q": "ReadTimeout"}, "tsxv": {}}},
+    )
+
+    build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
+
+    assert calls == []
+
+
+@pytest.mark.parametrize("key", ["validated_cn_baseline_breaches", "validated_krx_baseline_breaches"])
+def test_official_baseline_is_not_seeded_when_board_counts_breach(key):
+    calls = []
+    service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
+    )
+    snapshot = SimpleNamespace(
+        market="CN",
+        source_name="cn_akshare_eastmoney",
+        source_metadata={key: [{"exchange": "bse", "actual": 0}]},
+    )
+
+    build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
+
+    assert calls == []

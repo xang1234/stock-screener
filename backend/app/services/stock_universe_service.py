@@ -127,7 +127,8 @@ class StockUniverseService:
             before_reconciliation_hooks={
                 "CN": self._upsert_cn_stock_industry_from_pipeline_context,
                 "IN": self._deactivate_india_coverage_rejections,
-                "TW": self._deactivate_tw_board_twins,
+                "KR": self._deactivate_board_twins,
+                "TW": self._deactivate_board_twins,
             },
         )
         self._bulk_fetcher = None
@@ -1021,6 +1022,7 @@ class StockUniverseService:
             previous_snapshot_id = previous_run.snapshot_id if previous_run is not None else None
 
         previous_rows: list[dict[str, Any]] = []
+        membership_only = False
         if previous_run is not None:
             if previous_run.artifact_json:
                 try:
@@ -1028,6 +1030,7 @@ class StockUniverseService:
                     raw_rows = parsed.get("snapshot_rows") if isinstance(parsed, dict) else []
                     if isinstance(raw_rows, list):
                         previous_rows = [row for row in raw_rows if isinstance(row, dict)]
+                    membership_only = isinstance(parsed, dict) and bool(parsed.get("membership_only"))
                 except Exception:
                     logger.warning(
                         "Unable to parse prior stock universe reconciliation artifact",
@@ -1039,6 +1042,13 @@ class StockUniverseService:
                     )
 
         current_rows = self._reconciliation_row_payloads(canonical_list)
+        if membership_only:
+            # A seeded baseline records which symbols were active, not the
+            # source's fields: bundle rows carry hydrated sectors and caps the
+            # source may leave blank, which would read as mass "changed" rows
+            # and trip the anomaly gate. Compare membership only.
+            current_by_symbol = {row["symbol"]: row for row in current_rows}
+            previous_rows = [current_by_symbol.get(row.get("symbol"), row) for row in previous_rows]
         artifact = self._build_market_reconciliation_artifact(
             market=market,
             source_name=normalized_source_name,
@@ -1116,6 +1126,7 @@ class StockUniverseService:
         market: str,
         source_name: str,
         snapshot_id: str,
+        row_source: str | None = None,
     ) -> dict[str, Any] | None:
         """Record the active rows as the source's reconciliation baseline, once.
 
@@ -1124,7 +1135,9 @@ class StockUniverseService:
         snapshot and can never deactivate symbols the source has dropped.
         This records those rows as that previous snapshot. The refresh then
         deactivates through the usual safety gates. No-op when the source
-        already has a run or the market has no active rows.
+        already has a run or the market has no active rows. ``row_source`` is
+        the rows' ``source`` column when it differs from the run's source name
+        (official ingests store ``<market>_ingest``).
         """
         normalized_market = market.strip().upper()
         has_run = (
@@ -1143,7 +1156,7 @@ class StockUniverseService:
             db.query(StockUniverse)
             .filter(
                 StockUniverse.market == normalized_market,
-                StockUniverse.source == source_name,
+                StockUniverse.source == (row_source or source_name),
                 StockUniverse.active_filter(),
             )
             .all()
@@ -1169,6 +1182,7 @@ class StockUniverseService:
             current_rows=payloads,
             previous_rows=[],
         )
+        artifact["membership_only"] = True
         artifact_json = self._stable_json(artifact)
         counts = artifact["counts"]
         db.add(
@@ -1630,27 +1644,38 @@ class StockUniverseService:
             )
         return {"coverage_rejected": len(rows)}
 
-    def _deactivate_tw_board_twins(
+    _BOARD_TWIN_SUFFIXES = {
+        "TW": {".TW": ".TWO", ".TWO": ".TW"},
+        "KR": {".KS": ".KQ", ".KQ": ".KS"},
+    }
+
+    def _deactivate_board_twins(
         self,
         db: Session,
         context: UniverseBeforeReconciliationContext,
         *,
         now: datetime,
     ) -> dict[str, int]:
-        """Deactivate the other-board twin of every symbol in the TW snapshot.
+        """Deactivate the other-board twin of every symbol in the snapshot.
 
-        A TW local code lists on exactly one board (TWSE ``.TW`` or TPEx ``.TWO``).
-        The official snapshot is authoritative, so an active twin under the other
-        suffix is a stale row (board transfer, or a past mis-suffixed import).
-        Asia reconciliation never deactivates missing rows, so without this the
-        twin stays active forever and poisons price coverage.
+        A TW or KR local code lists on exactly one board (TWSE ``.TW`` or TPEx
+        ``.TWO``; KOSPI ``.KS`` or KOSDAQ ``.KQ``). The official snapshot is
+        authoritative, so an active twin under the other suffix is a stale row
+        (board transfer, or a past mis-suffixed import). Asia reconciliation
+        never deactivates missing rows by default, so without this the twin
+        stays active forever and poisons price coverage.
         """
+        market = context.market
+        # A KR manual CSV can be stale about a code's board; only KRX decides.
+        if market == "KR" and context.source_name != "krx_official":
+            return {"board_twins_deactivated": 0}
+        twin_suffix = self._BOARD_TWIN_SUFFIXES[market]
         snapshot_by_twin: dict[str, str] = {}
         for row in context.canonical_rows:
-            if row.symbol.endswith(".TWO"):
-                snapshot_by_twin[f"{row.symbol[:-4]}.TW"] = row.symbol
-            elif row.symbol.endswith(".TW"):
-                snapshot_by_twin[f"{row.symbol[:-3]}.TWO"] = row.symbol
+            code, _, suffix = row.symbol.rpartition(".")
+            other = twin_suffix.get(f".{suffix}")
+            if code and other:
+                snapshot_by_twin[f"{code}{other}"] = row.symbol
         # A code present under both suffixes in the snapshot itself is ambiguous;
         # leave both alone rather than guess.
         snapshot_symbols = {row.symbol for row in context.canonical_rows}
@@ -1663,7 +1688,7 @@ class StockUniverseService:
             for record in (
                 db.query(StockUniverse)
                 .filter(
-                    StockUniverse.market == "TW",
+                    StockUniverse.market == market,
                     StockUniverse.symbol.in_(twins[start:start + 500]),
                 )
                 .all()
@@ -1675,9 +1700,9 @@ class StockUniverseService:
                     db,
                     record,
                     new_status=UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
-                    trigger_source="tw_ingest_board_twin",
+                    trigger_source=f"{market.lower()}_ingest_board_twin",
                     reason=(
-                        f"Superseded by {replacement} in TW source snapshot "
+                        f"Superseded by {replacement} in {market} source snapshot "
                         f"{context.snapshot_id}"
                     ),
                     now=now,
@@ -1685,7 +1710,7 @@ class StockUniverseService:
                         "snapshot_id": context.snapshot_id,
                         "replacement_symbol": replacement,
                     },
-                    source="tw_ingest",
+                    source=f"{market.lower()}_ingest",
                 ):
                     deactivated += 1
         return {"board_twins_deactivated": deactivated}
