@@ -761,7 +761,9 @@ def _seed_official_reconciliation_baseline(db, stock_universe_service, snapshot)
     still pass the Asia safety gates. Fallback seed CSVs (``*_manual_csv``)
     are partial lists, so they never become the comparison; nor does an IN
     snapshot built from NSE alone while BSE is unreachable, or any snapshot
-    with a failed fetch part (e.g. a TMX letter bucket).
+    with a failed fetch part (e.g. a TMX letter bucket) or board counts
+    outside the validated KRX/CN baseline (e.g. a BaoStock CN fallback that
+    omits BJSE).
     """
     if snapshot.source_name.endswith("_manual_csv"):
         return
@@ -769,6 +771,8 @@ def _seed_official_reconciliation_baseline(db, stock_universe_service, snapshot)
     if metadata.get("bse_unavailable"):
         return
     if any((metadata.get("fetch_errors") or {}).values()):
+        return
+    if any(value for key, value in metadata.items() if key.endswith("_baseline_breaches")):
         return
     market = snapshot.market.upper()
     baseline = stock_universe_service.seed_reconciliation_baseline_from_active_rows(

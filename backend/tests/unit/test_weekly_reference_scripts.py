@@ -2510,3 +2510,20 @@ def test_official_baseline_is_not_seeded_when_part_of_the_fetch_failed():
     build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
 
     assert calls == []
+
+
+@pytest.mark.parametrize("key", ["validated_cn_baseline_breaches", "validated_krx_baseline_breaches"])
+def test_official_baseline_is_not_seeded_when_board_counts_breach(key):
+    calls = []
+    service = SimpleNamespace(
+        seed_reconciliation_baseline_from_active_rows=lambda db, **kwargs: calls.append(kwargs)
+    )
+    snapshot = SimpleNamespace(
+        market="CN",
+        source_name="cn_akshare_eastmoney",
+        source_metadata={key: [{"exchange": "bse", "actual": 0}]},
+    )
+
+    build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
+
+    assert calls == []
