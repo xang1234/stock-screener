@@ -90,6 +90,59 @@ Enables assistant web research fallback.
 | `FRONTEND_IMAGE` | `ghcr.io/you/stockscreenclaude-frontend` | GHCR image (release overlay) |
 | `APP_IMAGE_TAG` | `v1.2.3` | Release tag to deploy |
 
+### Container orchestration
+
+The backend runs its Alembic migrations inside the application lifespan, blocking, before
+uvicorn accepts HTTP. While `backend.healthcheck.start_period` runs, a failing probe does not
+count towards `retries`. The whole Celery tier declares `condition: service_healthy` on the
+backend, so a backend that stays unhealthy past that grace blocks the **start** of the worker
+tier; it does not stop workers that are already running.
+
+`start_period` is set well above the longest expected migration (`900s` in `docker-compose.yml`).
+**That value alone is not sufficient.** An orchestrator applies its own, independent wait:
+
+| Setting | Where | Value |
+|---------|-------|-------|
+| `backend.healthcheck.start_period` | `docker-compose.yml` | `900s` |
+| `deployWaitTimeout` | Arcane, project settings | `1200` |
+
+Two deadlines can end the wait, and **the health check is usually the earlier one**:
+
+```
+start_period + interval * retries   900 + 30 * 3 = 990 s   (never a successful probe)
+deployWaitTimeout                                        1200 s
+```
+
+So `deployWaitTimeout` must cover the expected time to healthy — it does not have to be
+reached, and it is not automatically the first limit. Setting it below the health-check
+deadline would cap the grace for no reason, which is why the two are ordered this way.
+
+Measured on a QNAP TS-473A, container start to first successful `/readyz`:
+
+```
+15:34:17   container created, uvicorn parent started 15:34:19
+15:34:43   migrations 20260925_0058 .. 20260926_0060, ~6 s total
+15:34:53   first /readyz 200          -> 36 s
+```
+
+Four probes failed before that, all inside the grace. The 36 s is not representative of a
+schema-changing revision: revision `20260926_0058` alone (an index over a 216 MB table) took
+**519 s** of migration time on this host, which is what `900s` is sized against. That figure
+is migration time from the Alembic log, not startup time — size the limits against the full
+interval from container start to the first successful `/readyz`.
+
+Before this change the grace was `30 s` and the wait `600`, so the deploy aborted after 93 s
+and could not recover.
+
+Docker Compose itself needs no such pairing **when `docker compose up` is run without
+`--wait`**. That option (`up --wait --wait-timeout N`) adds its own deadline for services to
+become running or healthy — configure it the same way when it is used. The table above matters
+whenever the stack is driven by an orchestrator such as Arcane, Portainer, or a CI deploy step;
+set the equivalent "time to healthy" limit there.
+
+If a migration is expected to outlive both limits, the durable fix is to run migrations as a
+dedicated step before the API starts, rather than extending the grace further.
+
 ## Twitter/X Ingestion
 
 | Variable | Default | Description |
