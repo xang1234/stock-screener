@@ -434,7 +434,20 @@ def _find_compatible_market_candidate(
 @dataclass(frozen=True)
 class _ArtifactRun:
     run_id: int
-    created_on: date | None
+    created_at: datetime | None
+
+    @property
+    def created_on(self) -> date | None:
+        return self.created_at.date() if self.created_at is not None else None
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def list_artifact_runs(
@@ -492,10 +505,14 @@ def list_artifact_runs(
             or run.get("head_repository_id") != repository_id
         ):
             continue
-        runs.append(
-            _ArtifactRun(run_id, _coerce_manifest_date(artifact.get("created_at")))
-        )
-    runs.sort(key=lambda run: run.created_on or date.min, reverse=True)
+        runs.append(_ArtifactRun(run_id, _parse_timestamp(artifact.get("created_at"))))
+    # Full upload time, not the date: a same-session rerun or RS rollback on
+    # the same day must sort first, because the first candidate of a session
+    # wins (later ones need a strictly newer session).
+    runs.sort(
+        key=lambda run: run.created_at.timestamp() if run.created_at else float("-inf"),
+        reverse=True,
+    )
     return runs
 
 

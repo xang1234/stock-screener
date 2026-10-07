@@ -346,7 +346,7 @@ def _no_current_artifact_exit_message(
     return (
         f"Static site export skipped for market {market_label}; "
         f"{detail}, diagnostics were uploaded, "
-        "and the combine job can use fallback artifacts."
+        "and the static-site publisher uses the newest valid fallback artifact."
     )
 
 
@@ -1583,7 +1583,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     f"Static site export skipped for market {args.market}; "
                     "no current artifact was produced, diagnostics were uploaded, "
-                    "and the combine job can use fallback artifacts."
+                    "and the static-site publisher uses the newest valid fallback artifact."
                 )
                 return STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
             raise
