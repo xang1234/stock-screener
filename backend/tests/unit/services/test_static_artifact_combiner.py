@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from app.domain.relative_strength import (
 from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
+    annotate_publication_lag,
 )
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
 from app.services.static_site_export_service import (
@@ -565,3 +567,92 @@ def test_valid_advertised_pages_and_charts_pass(tmp_path: Path) -> None:
     )
 
     _validate_assets(market_dir)
+
+
+def test_combined_manifest_lists_unavailable_markets_and_sources(tmp_path: Path) -> None:
+    current = write_market_artifact(
+        tmp_path / "current", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    output = tmp_path / "out"
+    (output / "markets" / "in").mkdir(parents=True)  # stale tree from an older bundle
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=output,
+        required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=False,
+    )
+
+    manifest = result.manifest
+    assert manifest["supported_markets"] == ["US", "HK"]
+    assert manifest["unavailable_markets"] == [
+        m for m in STATIC_SUPPORTED_MARKETS if m not in {"US", "HK"}
+    ]
+    assert manifest["markets"]["US"]["publication"] == {
+        "source": "current",
+        "session_date": "2026-04-10",
+    }
+    assert manifest["markets"]["HK"]["publication"]["source"] == "fallback"
+    assert not (output / "markets" / "in").exists()
+
+
+class _Calendar:
+    def __init__(self, last, sessions, broken=()):
+        self.last, self.sessions, self.broken = last, sessions, set(broken)
+
+    def last_completed_trading_day(self, market):
+        if market in self.broken:
+            raise RuntimeError("calendar coverage expired")
+        return self.last
+
+    def trading_days(self, market, start, end):
+        return [d for d in self.sessions if start <= d <= end]
+
+
+def test_publication_lag_marks_current_stale_and_unknown() -> None:
+    sessions = [date(2026, 4, 9), date(2026, 4, 10), date(2026, 4, 13)]
+    manifest = {
+        "markets": {
+            "US": {"publication": {"source": "current", "session_date": "2026-04-13"}},
+            "HK": {"publication": {"source": "fallback", "session_date": "2026-04-09"}},
+            "JP": {"publication": {"source": "fallback", "session_date": "2026-04-10"}},
+            "KR": {"publication": {"source": "fallback", "session_date": None}},
+        }
+    }
+
+    annotate_publication_lag(
+        manifest, _Calendar(date(2026, 4, 13), sessions, broken={"JP"})
+    )
+
+    assert manifest["markets"]["US"]["publication"] == {
+        "source": "current",
+        "session_date": "2026-04-13",
+        "session_lag": 0,
+        "state": "current",
+    }
+    assert manifest["markets"]["HK"]["publication"]["session_lag"] == 2
+    assert manifest["markets"]["HK"]["publication"]["state"] == "stale"
+    for market in ("JP", "KR"):
+        assert manifest["markets"][market]["publication"]["session_lag"] is None
+        assert manifest["markets"][market]["publication"]["state"] == "unknown"
+
+
+def test_publication_lag_counts_a_session_newer_than_the_close_as_current() -> None:
+    # A run during the session can serve today's partial bar; that is not
+    # behind the last completed session.
+    manifest = {
+        "markets": {
+            "US": {"publication": {"source": "current", "session_date": "2026-04-14"}}
+        }
+    }
+    sessions = [date(2026, 4, 13), date(2026, 4, 14)]
+
+    annotate_publication_lag(manifest, _Calendar(date(2026, 4, 13), sessions))
+
+    assert manifest["markets"]["US"]["publication"]["session_lag"] == 0
+    assert manifest["markets"]["US"]["publication"]["state"] == "current"

@@ -1847,12 +1847,30 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
 
     output_dir = tmp_path / "combined"
     _materialize_advertised_files(tmp_path)
-    result = StaticSiteExportService.combine_market_artifacts(artifacts_dir, output_dir)
+    sessions = [date(2026, 4, 3), date(2026, 4, 4)]
+    calendar = SimpleNamespace(
+        last_completed_trading_day=lambda _market: date(2026, 4, 4),
+        trading_days=lambda _market, start, end: [
+            d for d in sessions if start <= d <= end
+        ],
+    )
+    result = StaticSiteExportService.combine_market_artifacts(
+        artifacts_dir, output_dir, calendar=calendar
+    )
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     assert result.manifest == manifest
     assert manifest["default_market"] == "US"
     assert manifest["supported_markets"] == ["US", "HK"]
+    assert "JP" in manifest["unavailable_markets"]
+    assert manifest["markets"]["US"]["publication"] == {
+        "source": "current",
+        "session_date": "2026-04-04",
+        "session_lag": 0,
+        "state": "current",
+    }
+    assert manifest["markets"]["HK"]["publication"]["session_lag"] == 1
+    assert manifest["markets"]["HK"]["publication"]["state"] == "stale"
     assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["markets"]["HK"]["pages"]["scan"]["path"] == "markets/hk/scan/manifest.json"
     assert (output_dir / "markets" / "us" / "scan" / "manifest.json").exists()

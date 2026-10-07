@@ -11,6 +11,7 @@ from typing import Any
 from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
 from app.services.static_group_matrix import validate_group_matrix_asset
 from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
+from app.services.market_session_lag import market_session_lag
 from app.services.static_breadth_contributor_asset_validator import (
     StaticBreadthContributorAssetError,
     validate_static_breadth_contributor_asset,
@@ -125,6 +126,10 @@ class StaticArtifactCombiner:
         entries: dict[str, dict[str, Any]] = {}
         for market, artifact in selected.items():
             entries[market] = artifact["entry"]
+            entries[market]["publication"] = {
+                "source": artifact["source_label"],
+                "session_date": artifact["entry"].get("as_of_date"),
+            }
             warnings.extend(
                 str(item) for item in artifact["metadata"].get("warnings", [])
             )
@@ -642,6 +647,13 @@ class StaticArtifactCombiner:
             "as_of_date": default_entry["as_of_date"],
             "default_market": default_market,
             "supported_markets": ordered_markets,
+            # Markets with no usable artifact stay listed so the site can say
+            # so instead of silently dropping them; they advertise no data path.
+            "unavailable_markets": [
+                market
+                for market in self._supported_markets
+                if market not in market_entries
+            ],
             "features": dict(default_entry["features"]),
             "pages": dict(default_entry["pages"]),
             "assets": dict(default_entry["assets"]),
@@ -678,4 +690,33 @@ class StaticArtifactCombiner:
             output_dir,
             populate,
             clean=clean,
+        )
+
+
+def annotate_publication_lag(manifest: dict[str, Any], calendar: Any) -> None:
+    """Add session lag and state to each served market's publication block.
+
+    ``state`` is ``current`` at lag 0, ``stale`` above it, and ``unknown``
+    when the session date or the market calendar cannot decide. Freshness is
+    judged against the last completed session, so a run during a session that
+    serves today's partial bar counts as current.
+    """
+    for market, entry in (manifest.get("markets") or {}).items():
+        publication = entry.setdefault("publication", {})
+        try:
+            session = date.fromisoformat(str(publication.get("session_date"))[:10])
+            lag: int | None = max(
+                0,
+                market_session_lag(
+                    calendar,
+                    market=market,
+                    start_date=session,
+                    end_date=calendar.last_completed_trading_day(market),
+                ),
+            )
+        except Exception:  # noqa: BLE001 - unknown freshness must not block publication
+            lag = None
+        publication["session_lag"] = lag
+        publication["state"] = (
+            "unknown" if lag is None else "current" if lag == 0 else "stale"
         )
