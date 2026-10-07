@@ -9,6 +9,10 @@ from pathlib import Path
 # artifacts (static-options-US) and are validated by their own selectors.
 ROOT_LEVEL_ADVERTISED_PATHS = frozenset({"options/manifest.json"})
 
+# Assets that advertise a key other than ``path`` and are validated by their
+# own validator (breadth_contributors: index_path).
+ASSETS_WITHOUT_PATH = frozenset({"breadth_contributors"})
+
 
 class StaticAdvertisedPathError(ValueError):
     """An advertised page, asset or chart payload is missing or unsafe."""
@@ -71,11 +75,10 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
     }
     for section, descriptors in (("pages", pages), ("assets", assets)):
         for name, descriptor in descriptors.items():
-            # A page the browser loads needs a path; an asset may advertise
-            # another key (breadth_contributors uses index_path, checked by
-            # its own validator).
+            # Every descriptor the browser loads needs a path, except assets
+            # that advertise another key and have their own validator.
             if not isinstance(descriptor, dict) or (
-                section == "pages" and "path" not in descriptor
+                "path" not in descriptor and name not in ASSETS_WITHOUT_PATH
             ):
                 raise StaticAdvertisedPathError(
                     f"{section}.{name} descriptor must be an object with a path"

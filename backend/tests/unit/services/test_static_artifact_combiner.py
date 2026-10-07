@@ -768,6 +768,8 @@ def test_another_markets_path_is_rejected(tmp_path: Path) -> None:
         {"pages": {"scan": {"path": "  "}}},
         {"assets": {"groups_rrg": 3}},
         {"assets": {"groups_rrg": {"path": ""}}},
+        {"assets": {"charts": {}}},
+        {"assets": {"groups_matrix": {"limit": 1}}},
     ],
 )
 def test_malformed_descriptors_are_rejected(tmp_path: Path, changes) -> None:
