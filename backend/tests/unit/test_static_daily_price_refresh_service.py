@@ -1822,3 +1822,115 @@ def test_static_daily_price_skips_session_repair_without_a_quote_plan() -> None:
 
     assert sleeps == []
     assert stats == {"attempted": 0, "repaired": 0, "wait_seconds": 0}
+
+
+class _TickingFetcher:
+    """Fetcher whose every provider call advances a fake monotonic clock."""
+
+    def __init__(self, *, tick: float = 0.0, responses=None) -> None:
+        self.now = 0.0
+        self.tick = tick
+        self.calls: list[list[str]] = []
+        self._responses = responses
+
+    def clock(self) -> float:
+        return self.now
+
+    def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+        self.calls.append(list(symbols))
+        self.now += self.tick
+        if self._responses is not None:
+            return self._responses(len(self.calls), list(symbols))
+        return {
+            symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+            for symbol in symbols
+        }
+
+
+def test_static_daily_price_refresh_stops_before_the_deadline_with_durable_batches() -> None:
+    session_factory = _sqlite_session_factory()
+    _seed_in_universe(session_factory)
+    fetcher = _TickingFetcher(tick=10.0)
+    stored: list[list[str]] = []
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(
+            store_batch_in_cache=lambda payload, **_kwargs: stored.append(sorted(payload))
+        ),
+        fetcher=fetcher,
+        batch_size_for_market=lambda _market: 1,
+        sleep=sleeps.append,
+        deadline=25.0,
+        clock=fetcher.clock,
+    )
+
+    result = service.refresh(as_of_date=date(2026, 4, 2), market="IN")
+
+    # Batches start at t=0, 10 and 20; none starts at t=30, past the deadline.
+    assert fetcher.calls == [["RELIANCE.NS"], ["TCS.NS"], ["INFY.NS"]]
+    assert stored == [["RELIANCE.NS"], ["TCS.NS"], ["INFY.NS"]]
+    assert sleeps == []
+    assert result["status"] == "resumable"
+    assert result["reason"] == "price_stage_deadline"
+    assert result["market"] == "IN"
+    assert result["as_of_date"] == "2026-04-02"
+
+
+def test_static_daily_price_refresh_does_not_start_a_retry_wait_past_the_deadline() -> None:
+    session_factory = _sqlite_session_factory()
+    _seed_in_universe(session_factory)
+
+    def responses(call_number, symbols):
+        if call_number == 1:
+            return {
+                "TCS.NS": {
+                    "price_data": None,
+                    "has_error": True,
+                    "error": "Too Many Requests (429)",
+                }
+            }
+        return {
+            symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+            for symbol in symbols
+        }
+
+    fetcher = _TickingFetcher(responses=responses)
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+        fetcher=fetcher,
+        sleep=sleeps.append,
+        deadline=STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS - 1.0,
+        clock=fetcher.clock,
+    )
+
+    result = service.refresh(as_of_date=date(2026, 4, 2), market="IN")
+
+    assert len(fetcher.calls) == 2  # stale and bootstrap batches, no retry
+    assert sleeps == []
+    assert result["status"] == "resumable"
+
+
+def test_static_daily_price_session_repair_wait_respects_the_deadline() -> None:
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=SimpleNamespace(),
+        sleep=sleeps.append,
+        fetch_quotes=lambda symbols: pytest.fail("no repair past the deadline"),
+        deadline=STATIC_SESSION_REPAIR_WAIT_SECONDS - 1.0,
+        clock=lambda: 0.0,
+    )
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._repair_missing_sessions(
+            market="US",
+            as_of_date=date(2026, 6, 4),
+            frames={"BEHIND": _price_frame([date(2026, 6, 3)], 1.0)},
+        )
+    assert sleeps == []

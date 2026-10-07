@@ -72,6 +72,10 @@ STATIC_SESSION_REPAIR_WAIT_SECONDS = 60
 RS_ANCHOR_UNRESOLVED_SAMPLE_LIMIT = 20
 
 
+class PriceStageDeadlineReached(Exception):
+    """The price stage must stop so the run can checkpoint before its timeout."""
+
+
 @dataclass(frozen=True)
 class _StaticHistoryCoverageOutcome:
     incomplete_symbols: tuple[str, ...]
@@ -173,8 +177,20 @@ class StaticDailyPriceRefreshService:
         sleep: Callable[[float], None] | None = None,
         fetch_quotes: Callable[[list[str]], list[dict[str, Any]]] | None = None,
         rs_anchor_price_coverage: RsAnchorPriceCoverageService | None = None,
+        deadline: float | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
+        """``deadline`` is a ``clock()`` (default ``time.monotonic``) value after
+        which no provider batch or wait starts; ``refresh`` then returns
+        ``status: "resumable"`` with every finished batch already committed.
+        """
         self._session_factory = session_factory
+        self._deadline = deadline
+        if clock is None:
+            import time
+
+            clock = time.monotonic
+        self._clock = clock
         self._fetch_quotes = fetch_quotes
         self._price_cache = price_cache
         self._fetcher = fetcher
@@ -210,6 +226,39 @@ class StaticDailyPriceRefreshService:
         market: str | None = None,
         ensure_static_history: bool = False,
         rs_anchor_lookahead_sessions: int = RS_ANCHOR_LOOKAHEAD_SESSIONS,
+    ) -> dict[str, Any]:
+        try:
+            return self._refresh(
+                as_of_date=as_of_date,
+                market=market,
+                ensure_static_history=ensure_static_history,
+                rs_anchor_lookahead_sessions=rs_anchor_lookahead_sessions,
+            )
+        except PriceStageDeadlineReached:
+            print(
+                f"[static-daily prices] Price stage deadline reached for {market} "
+                f"{as_of_date}; stopping with every finished batch committed.",
+                flush=True,
+            )
+            return {
+                "status": "resumable",
+                "reason": "price_stage_deadline",
+                "market": market,
+                "as_of_date": as_of_date.isoformat(),
+            }
+
+    def _check_deadline(self, wait_seconds: float = 0.0) -> None:
+        """Raise if a fetch, or a ``wait_seconds`` wait, would start past the deadline."""
+        if self._deadline is not None and self._clock() + wait_seconds >= self._deadline:
+            raise PriceStageDeadlineReached
+
+    def _refresh(
+        self,
+        *,
+        as_of_date: date,
+        market: str | None,
+        ensure_static_history: bool,
+        rs_anchor_lookahead_sessions: int,
     ) -> dict[str, Any]:
         with self._session_factory() as db:
             query = (
@@ -692,6 +741,7 @@ class StaticDailyPriceRefreshService:
                     f"{STATIC_SESSION_REPAIR_WAIT_SECONDS}s.",
                     flush=True,
                 )
+                self._check_deadline(STATIC_SESSION_REPAIR_WAIT_SECONDS)
                 self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
                 self._fetch_and_store(
                     rate_limited,
@@ -809,6 +859,7 @@ class StaticDailyPriceRefreshService:
             _iter_chunks(symbols, batch_size),
             start=1,
         ):
+            self._check_deadline()
             processed_before = refreshed_count + failed_count
             print(
                 f"[static-daily prices] Batch {batch_index}/{total_group_batches}: "
@@ -902,6 +953,7 @@ class StaticDailyPriceRefreshService:
             )
         ):
             return stats
+        self._check_deadline(STATIC_SESSION_REPAIR_WAIT_SECONDS)
         from app.services.yahoo_quote_price_repair import (
             fetch_yahoo_quotes,
             repair_from_yahoo_quotes,
@@ -1077,10 +1129,12 @@ class StaticDailyPriceRefreshService:
             f"{STATIC_RATE_LIMITED_RETRY_BATCH_SIZE}.",
             flush=True,
         )
+        self._check_deadline(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
         self._sleep(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
 
         recovered = 0
         for period, unique_symbols in retry_groups:
+            self._check_deadline()
             retry_results = self._fetcher.fetch_prices_in_batches(
                 unique_symbols,
                 period=period,
