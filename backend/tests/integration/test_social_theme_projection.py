@@ -516,7 +516,11 @@ def test_social_mention_cannot_hide_failed_legacy_extraction(social_fixture):
     grant_eligibility(f.db, item_id, "technical", "legacy", source.id, NOW)
     f.db.add(ContentItemPipelineState(content_item_id=item_id, pipeline="technical", status="processed", attempt_count=1))
     f.db.commit()
-    result = ThemeExtractionService(f.db).identify_silent_failures(max_age_days=30)
+    # The service ages items against the real clock; the fixture is pinned to NOW.
+    days_since_fixture = (datetime.now(timezone.utc) - NOW).days
+    result = ThemeExtractionService(f.db).identify_silent_failures(
+        max_age_days=30 + days_since_fixture
+    )
     assert result["reset_count"] == 1
 
 

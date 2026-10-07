@@ -216,7 +216,7 @@ def test_static_market_validator_allows_missing_non_us_after_export_failure(
     assert result.allowed_missing_markets == {"SG"}
 
 
-def test_static_market_validator_rejects_failed_selected_market_fallback(
+def test_static_market_validator_publishes_fallback_after_export_failed(
     tmp_path: Path,
 ) -> None:
     current_dir = tmp_path / "current"
@@ -231,20 +231,20 @@ def test_static_market_validator_rejects_failed_selected_market_fallback(
         reason="export_failed",
     )
 
-    with pytest.raises(StaticMarketArtifactValidationError) as exc_info:
-        validate_market_artifacts(
-            current_dir=current_dir,
-            fallback_dir=fallback_dir,
-            selected_markets={"CN"},
-            expected_markets={"US", "CN"},
-        )
+    result = validate_market_artifacts(
+        current_dir=current_dir,
+        fallback_dir=fallback_dir,
+        selected_markets={"CN"},
+        expected_markets={"US", "CN"},
+    )
 
-    message = str(exc_info.value)
-    assert "CN" in message
-    assert "export_failed" in message
+    assert result.selected_fallback_markets == {"CN"}
+    assert result.selected_fallback_diagnostics == {
+        "CN": "status failed/export_failed"
+    }
 
 
-def test_static_market_validator_rejects_failed_selected_required_market_fallback(
+def test_static_market_validator_publishes_required_fallback_after_export_failed(
     tmp_path: Path,
 ) -> None:
     current_dir = tmp_path / "current"
@@ -258,17 +258,38 @@ def test_static_market_validator_rejects_failed_selected_required_market_fallbac
         reason="export_failed",
     )
 
-    with pytest.raises(StaticMarketArtifactValidationError) as exc_info:
+    result = validate_market_artifacts(
+        current_dir=current_dir,
+        fallback_dir=fallback_dir,
+        selected_markets={"US"},
+        expected_markets={"US"},
+    )
+
+    assert result.selected_fallback_markets == {"US"}
+
+
+def test_static_market_validator_still_rejects_fallback_when_current_artifact_exists(
+    tmp_path: Path,
+) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    _write_market_manifest(current_dir, "static-market-US", "US")
+    _write_market_manifest(fallback_dir, "static-market-CN", "CN")
+    _write_market_status(
+        current_dir,
+        "CN",
+        has_current_artifact=True,
+        status="published",
+        reason=None,
+    )
+
+    with pytest.raises(StaticMarketArtifactValidationError, match="CN"):
         validate_market_artifacts(
             current_dir=current_dir,
             fallback_dir=fallback_dir,
-            selected_markets={"US"},
-            expected_markets={"US"},
+            selected_markets={"CN"},
+            expected_markets={"US", "CN"},
         )
-
-    message = str(exc_info.value)
-    assert "US" in message
-    assert "export_failed" in message
 
 
 def test_static_market_validator_allows_missing_optional_market_but_not_us(

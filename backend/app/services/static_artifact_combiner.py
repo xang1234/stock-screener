@@ -11,6 +11,11 @@ from typing import Any
 from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
 from app.services.static_group_matrix import validate_group_matrix_asset
 from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
+from app.services.market_session_lag import market_session_lag
+from app.services.static_advertised_paths import (
+    StaticAdvertisedPathError,
+    validate_advertised_paths,
+)
 from app.services.static_breadth_contributor_asset_validator import (
     StaticBreadthContributorAssetError,
     validate_static_breadth_contributor_asset,
@@ -78,16 +83,19 @@ class StaticArtifactCombiner:
                 for market, formula in fallback_required_formula_by_market.items()
             }
         )
+        rejections: list[tuple[str, str]] = []
         current = self._discover(
             Path(artifacts_dir),
             source_label="current",
             required={},
+            rejections=rejections,
         )
         fallback = (
             self._discover(
                 Path(fallback_artifacts_dir),
                 source_label="fallback",
                 required={},
+                rejections=rejections,
             )
             if fallback_artifacts_dir is not None
             else {}
@@ -105,9 +113,13 @@ class StaticArtifactCombiner:
                 if market not in selected and market not in optional
             )
             if missing:
+                details = "; ".join(
+                    message for market, message in rejections if market in missing
+                )
                 raise NoPublishedStaticMarketArtifact(
                     "No published compatible static artifact is available for required "
-                    f"Markets: {', '.join(missing)}.",
+                    f"Markets: {', '.join(missing)}."
+                    + (f" Rejected: {details}." if details else ""),
                     markets=tuple(missing),
                 )
         elif not selected:
@@ -121,10 +133,17 @@ class StaticArtifactCombiner:
         )
 
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-        warnings: list[str] = []
+        warnings: list[str] = [
+            f"Ignored damaged static market artifact: {message}"
+            for _market, message in rejections
+        ]
         entries: dict[str, dict[str, Any]] = {}
         for market, artifact in selected.items():
             entries[market] = artifact["entry"]
+            entries[market]["publication"] = {
+                "source": artifact["source_label"],
+                "session_date": artifact["entry"].get("as_of_date"),
+            }
             warnings.extend(
                 str(item) for item in artifact["metadata"].get("warnings", [])
             )
@@ -314,6 +333,7 @@ class StaticArtifactCombiner:
         *,
         source_label: str,
         required: Mapping[str, str],
+        rejections: list[tuple[str, str]],
     ) -> dict[str, dict[str, Any]]:
         discovered: dict[str, dict[str, Any]] = {}
         paths = sorted(root.rglob(self._metadata_filename)) if root.exists() else []
@@ -322,20 +342,29 @@ class StaticArtifactCombiner:
                 root,
                 metadata_path,
             )
-            metadata = read_static_market_manifest(
-                metadata_path,
-                expected_schema_version=self._schema_version,
-                expected_market=expected_market,
-            )
+            try:
+                metadata = read_static_market_manifest(
+                    metadata_path,
+                    expected_schema_version=self._schema_version,
+                    expected_market=expected_market,
+                )
+            except (OSError, ValueError) as exc:
+                # An unreadable manifest is a damaged artifact; contract errors
+                # (wrong schema or market) stay fatal, as in the validator.
+                rejections.append(
+                    (expected_market or "", f"{metadata_path} is unreadable ({exc})")
+                )
+                continue
             market = str(metadata.get("market") or "").strip().upper()
             if market in discovered:
                 raise RuntimeError(f"Duplicate {source_label} artifact for {market}")
             market_dir = metadata_path.parent
             entry = metadata.get("entry")
             if not isinstance(entry, dict):
-                raise RuntimeError(
-                    f"{market} {source_label} metadata has no Market entry"
+                rejections.append(
+                    (market, f"{market} {source_label} metadata has no Market entry")
                 )
+                continue
             expected = required.get(market)
             if expected is not None:
                 entry = self._validate_formula(
@@ -345,12 +374,18 @@ class StaticArtifactCombiner:
                     market_dir=market_dir,
                     expected_formula=expected,
                 )
-            asset_warnings = self._validate_advertised_assets(
-                market=market,
-                source_label=source_label,
-                entry=entry,
-                market_dir=market_dir,
-            )
+            try:
+                asset_warnings = self._validate_advertised_assets(
+                    market=market,
+                    source_label=source_label,
+                    entry=entry,
+                    market_dir=market_dir,
+                )
+            except StaticArtifactFormulaError as exc:
+                # A damaged artifact counts as absent so a valid fallback can
+                # serve the market instead of aborting every market's publish.
+                rejections.append((market, str(exc)))
+                continue
             if asset_warnings:
                 metadata["warnings"] = [
                     *metadata.get("warnings", []),
@@ -369,6 +404,12 @@ class StaticArtifactCombiner:
     def _validate_advertised_assets(
         *, market: str, source_label: str, entry: dict, market_dir: Path
     ) -> list[str]:
+        try:
+            validate_advertised_paths(
+                market=market, entry=entry, market_dir=market_dir
+            )
+        except StaticAdvertisedPathError as exc:
+            raise StaticArtifactFormulaError(f"{market} {source_label} {exc}") from exc
         warnings: list[str] = []
         features = (
             entry.get("features") if isinstance(entry.get("features"), dict) else {}
@@ -579,6 +620,13 @@ class StaticArtifactCombiner:
             "as_of_date": default_entry["as_of_date"],
             "default_market": default_market,
             "supported_markets": ordered_markets,
+            # Markets with no usable artifact stay listed so the site can say
+            # so instead of silently dropping them; they advertise no data path.
+            "unavailable_markets": [
+                market
+                for market in self._supported_markets
+                if market not in market_entries
+            ],
             "features": dict(default_entry["features"]),
             "pages": dict(default_entry["pages"]),
             "assets": dict(default_entry["assets"]),
@@ -615,4 +663,33 @@ class StaticArtifactCombiner:
             output_dir,
             populate,
             clean=clean,
+        )
+
+
+def annotate_publication_lag(manifest: dict[str, Any], calendar: Any) -> None:
+    """Add session lag and state to each served market's publication block.
+
+    ``state`` is ``current`` at lag 0, ``stale`` above it, and ``unknown``
+    when the session date or the market calendar cannot decide. Freshness is
+    judged against the last completed session, so a run during a session that
+    serves today's partial bar counts as current.
+    """
+    for market, entry in (manifest.get("markets") or {}).items():
+        publication = entry.setdefault("publication", {})
+        try:
+            session = date.fromisoformat(str(publication.get("session_date"))[:10])
+            lag: int | None = max(
+                0,
+                market_session_lag(
+                    calendar,
+                    market=market,
+                    start_date=session,
+                    end_date=calendar.last_completed_trading_day(market),
+                ),
+            )
+        except Exception:  # noqa: BLE001 - unknown freshness must not block publication
+            lag = None
+        publication["session_lag"] = lag
+        publication["state"] = (
+            "unknown" if lag is None else "current" if lag == 0 else "stale"
         )

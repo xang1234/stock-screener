@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ from app.domain.relative_strength import (
 from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
+    annotate_publication_lag,
 )
+from app.services.static_options_section import StaticOptionsSection
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
 from app.services.static_site_export_service import (
     STATIC_DEFAULT_MARKET,
@@ -466,3 +469,429 @@ def test_combiner_rejects_revision_three_with_revision_two_source_marker(tmp_pat
             required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
             clean=True,
         )
+
+
+def _rewrite_entry(root: Path, market: str, **changes) -> Path:
+    path = root / f"static-market-{market}" / STATIC_MARKET_METADATA_FILENAME
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["entry"].update(changes)
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    return path.parent
+
+
+def _validate_assets(market_dir: Path) -> None:
+    entry = json.loads(
+        (market_dir / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+    )["entry"]
+    StaticArtifactCombiner._validate_advertised_assets(
+        market="US", source_label="fallback", entry=entry, market_dir=market_dir
+    )
+
+
+@pytest.mark.parametrize(
+    "pages, files, message",
+    [
+        ({"home": {"path": "markets/us/home.json"}}, {}, "absent.*home.json"),
+        (
+            {"home": {"path": "markets/us/home.json"}},
+            {"home.json": "{not json"},
+            "home.json.*parse",
+        ),
+        ({"home": {"path": "markets/us/../../escape.json"}}, {}, "escapes"),
+    ],
+)
+def test_advertised_page_paths_must_exist_inside_root_and_parse(
+    tmp_path: Path, pages, files, message
+) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(tmp_path, "US", pages=pages)
+    # The escape target exists, so only the containment check can reject it.
+    (tmp_path / "escape.json").write_text("{}", encoding="utf-8")
+    for name, text in files.items():
+        (market_dir / name).write_text(text, encoding="utf-8")
+
+    with pytest.raises(StaticArtifactFormulaError, match=message):
+        _validate_assets(market_dir)
+
+
+def test_chart_index_symbol_paths_must_stay_inside_root(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/../../x.json"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "x.json").write_text("{}", encoding="utf-8")
+    _rewrite_entry(
+        tmp_path, "US", assets={"charts": {"path": "markets/us/charts/index.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="escapes"):
+        _validate_assets(market_dir)
+
+
+def test_chart_index_symbol_payload_must_exist(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/charts/X.json"}]}),
+        encoding="utf-8",
+    )
+    _rewrite_entry(
+        tmp_path, "US", assets={"charts": {"path": "markets/us/charts/index.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="X.json"):
+        _validate_assets(market_dir)
+
+
+def test_valid_advertised_pages_and_charts_pass(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "home.json").write_text("{}", encoding="utf-8")
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "X.json").write_text("{}", encoding="utf-8")
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/charts/X.json"}]}),
+        encoding="utf-8",
+    )
+    _rewrite_entry(
+        tmp_path,
+        "US",
+        pages={
+            "home": {"path": "markets/us/home.json"},
+            "scan": {"path": "markets/us/scan/manifest.json"},
+        },
+        assets={"charts": {"path": "markets/us/charts/index.json"}},
+    )
+
+    _validate_assets(market_dir)
+
+
+def test_combined_manifest_lists_unavailable_markets_and_sources(tmp_path: Path) -> None:
+    current = write_market_artifact(
+        tmp_path / "current", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    output = tmp_path / "out"
+    (output / "markets" / "in").mkdir(parents=True)  # stale tree from an older bundle
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=output,
+        required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=False,
+    )
+
+    manifest = result.manifest
+    assert manifest["supported_markets"] == ["US", "HK"]
+    assert manifest["unavailable_markets"] == [
+        m for m in STATIC_SUPPORTED_MARKETS if m not in {"US", "HK"}
+    ]
+    assert manifest["markets"]["US"]["publication"] == {
+        "source": "current",
+        "session_date": "2026-04-10",
+    }
+    assert manifest["markets"]["HK"]["publication"]["source"] == "fallback"
+    assert not (output / "markets" / "in").exists()
+
+
+class _Calendar:
+    def __init__(self, last, sessions, broken=()):
+        self.last, self.sessions, self.broken = last, sessions, set(broken)
+
+    def last_completed_trading_day(self, market):
+        if market in self.broken:
+            raise RuntimeError("calendar coverage expired")
+        return self.last
+
+    def trading_days(self, market, start, end):
+        return [d for d in self.sessions if start <= d <= end]
+
+
+def test_publication_lag_marks_current_stale_and_unknown() -> None:
+    sessions = [date(2026, 4, 9), date(2026, 4, 10), date(2026, 4, 13)]
+    manifest = {
+        "markets": {
+            "US": {"publication": {"source": "current", "session_date": "2026-04-13"}},
+            "HK": {"publication": {"source": "fallback", "session_date": "2026-04-09"}},
+            "JP": {"publication": {"source": "fallback", "session_date": "2026-04-10"}},
+            "KR": {"publication": {"source": "fallback", "session_date": None}},
+        }
+    }
+
+    annotate_publication_lag(
+        manifest, _Calendar(date(2026, 4, 13), sessions, broken={"JP"})
+    )
+
+    assert manifest["markets"]["US"]["publication"] == {
+        "source": "current",
+        "session_date": "2026-04-13",
+        "session_lag": 0,
+        "state": "current",
+    }
+    assert manifest["markets"]["HK"]["publication"]["session_lag"] == 2
+    assert manifest["markets"]["HK"]["publication"]["state"] == "stale"
+    for market in ("JP", "KR"):
+        assert manifest["markets"][market]["publication"]["session_lag"] is None
+        assert manifest["markets"][market]["publication"]["state"] == "unknown"
+
+
+def test_publication_lag_counts_a_session_newer_than_the_close_as_current() -> None:
+    # A run during the session can serve today's partial bar; that is not
+    # behind the last completed session.
+    manifest = {
+        "markets": {
+            "US": {"publication": {"source": "current", "session_date": "2026-04-14"}}
+        }
+    }
+    sessions = [date(2026, 4, 13), date(2026, 4, 14)]
+
+    annotate_publication_lag(manifest, _Calendar(date(2026, 4, 13), sessions))
+
+    assert manifest["markets"]["US"]["publication"]["session_lag"] == 0
+    assert manifest["markets"]["US"]["publication"]["state"] == "current"
+
+
+def test_root_level_options_descriptor_is_not_validated_as_a_market_file(
+    tmp_path: Path,
+) -> None:
+    # The US export advertises the root-level options bundle, which ships as
+    # its own artifact (static-options-US), never inside the market artifact.
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    entry = json.loads(
+        (market_dir / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+    )["entry"]
+    StaticOptionsSection._advertise(entry)
+
+    StaticArtifactCombiner._validate_advertised_assets(
+        market="US", source_label="current", entry=entry, market_dir=market_dir
+    )
+
+
+def test_advertised_path_with_nul_byte_is_rejected_not_crashing(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(
+        tmp_path, "US", pages={"home": {"path": "markets/us/ho\x00me.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="path is invalid"):
+        _validate_assets(market_dir)
+
+
+def test_damaged_current_artifact_falls_back_instead_of_aborting(tmp_path: Path) -> None:
+    current = tmp_path / "current"
+    write_market_artifact(current, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    write_market_artifact(current, market="HK", formula=BALANCED_RS_FORMULA_VERSION)
+    _rewrite_entry(current, "HK", pages={"home": {"path": "markets/hk/home.json"}})
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=BALANCED_RS_FORMULA_VERSION
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=True,
+    )
+
+    assert result.manifest["markets"]["HK"]["publication"]["source"] == "fallback"
+    assert result.manifest["markets"]["US"]["publication"]["source"] == "current"
+    assert any("HK" in w and "home.json" in w for w in result.warnings)
+
+
+def test_damaged_required_current_without_fallback_names_the_defect(
+    tmp_path: Path,
+) -> None:
+    current = write_market_artifact(
+        tmp_path / "current", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    _rewrite_entry(current, "US", pages={"home": {"path": "markets/us/home.json"}})
+
+    with pytest.raises(NoPublishedStaticMarketArtifact, match="home.json"):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )
+
+
+def test_market_root_relative_paths_are_still_validated(tmp_path: Path) -> None:
+    # Older artifacts advertise paths relative to the market root.
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(tmp_path, "US", pages={"home": {"path": "home.json"}})
+
+    with pytest.raises(StaticArtifactFormulaError, match="absent.*home.json"):
+        _validate_assets(market_dir)
+
+
+def test_market_root_relative_chart_payloads_are_still_validated(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "charts/X.json"}]}),
+        encoding="utf-8",
+    )
+    _rewrite_entry(tmp_path, "US", assets={"charts": {"path": "charts/index.json"}})
+
+    with pytest.raises(StaticArtifactFormulaError, match="X.json"):
+        _validate_assets(market_dir)
+
+
+def test_another_markets_path_is_rejected(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(
+        tmp_path, "US", pages={"home": {"path": "markets/hk/home.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="another market"):
+        _validate_assets(market_dir)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"pages": {"scan": {}}},
+        {"pages": {"scan": "markets/us/scan/manifest.json"}},
+        {"pages": {"scan": {"path": "  "}}},
+        {"assets": {"groups_rrg": 3}},
+        {"assets": {"groups_rrg": {"path": ""}}},
+        {"assets": {"charts": {}}},
+        {"assets": {"groups_matrix": {"limit": 1}}},
+    ],
+)
+def test_malformed_descriptors_are_rejected(tmp_path: Path, changes) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(tmp_path, "US", **changes)
+
+    with pytest.raises(StaticArtifactFormulaError, match="descriptor|empty path"):
+        _validate_assets(market_dir)
+
+
+@pytest.mark.parametrize("changes", [{"pages": []}, {"assets": None}, {"pages": "x"}])
+def test_non_object_page_and_asset_sections_are_rejected(tmp_path: Path, changes) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(tmp_path, "US", **changes)
+
+    with pytest.raises(StaticArtifactFormulaError, match="must be an object"):
+        _validate_assets(market_dir)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda path: path.write_text("{truncated", encoding="utf-8"),
+        lambda path: path.write_text(
+            json.dumps(
+                {
+                    "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                    "market": "HK",
+                    "entry": [],
+                }
+            ),
+            encoding="utf-8",
+        ),
+    ],
+    ids=["truncated-manifest", "non-object-entry"],
+)
+def test_unreadable_current_manifest_falls_back(tmp_path: Path, damage) -> None:
+    current = tmp_path / "current"
+    write_market_artifact(current, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    write_market_artifact(current, market="HK", formula=BALANCED_RS_FORMULA_VERSION)
+    damage(current / "static-market-HK" / STATIC_MARKET_METADATA_FILENAME)
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=BALANCED_RS_FORMULA_VERSION
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=True,
+    )
+
+    assert result.manifest["markets"]["HK"]["publication"]["source"] == "fallback"
+    assert any("Ignored damaged" in w and "HK" in w for w in result.warnings)
+
+
+def test_asset_descriptor_without_path_is_left_to_its_own_validator(
+    tmp_path: Path,
+) -> None:
+    # breadth_contributors advertises index_path and has its own validator.
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(
+        tmp_path,
+        "US",
+        assets={"breadth_contributors": {"index_path": "markets/us/x/index.json"}},
+    )
+
+    warnings = StaticArtifactCombiner._validate_advertised_assets(
+        market="US",
+        source_label="fallback",
+        entry=json.loads(
+            (market_dir / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+        )["entry"],
+        market_dir=market_dir,
+    )
+
+    assert any("breadth contributor asset ignored" in w for w in warnings)
+
+
+@pytest.mark.parametrize("chunk_text", [None, "{truncated"])
+def test_scan_chunks_are_validated_without_a_formula_override(
+    tmp_path: Path, chunk_text
+) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    chunk = tmp_path / "static-market-US" / "scan" / "chunks" / "chunk-0001.json"
+    if chunk_text is None:
+        chunk.unlink()
+    else:
+        chunk.write_text(chunk_text, encoding="utf-8")
+
+    with pytest.raises(StaticArtifactFormulaError, match="chunk-0001.json"):
+        _validate_assets(tmp_path / "static-market-US")
+
+
+def test_malformed_chart_payload_is_rejected(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "X.json").write_text("{truncated", encoding="utf-8")
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/charts/X.json"}]}),
+        encoding="utf-8",
+    )
+    _rewrite_entry(
+        tmp_path, "US", assets={"charts": {"path": "markets/us/charts/index.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="X.json.*does not parse"):
+        _validate_assets(market_dir)
+
+
+@pytest.mark.parametrize("index", [{"symbols": 1}, [], {"symbols": [None]}])
+def test_malformed_chart_index_is_rejected_not_crashing(tmp_path: Path, index) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "index.json").write_text(json.dumps(index), encoding="utf-8")
+    _rewrite_entry(
+        tmp_path, "US", assets={"charts": {"path": "markets/us/charts/index.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="chart index"):
+        _validate_assets(market_dir)

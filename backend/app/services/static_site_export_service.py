@@ -35,9 +35,11 @@ from app.services.snapshot_date_coherence import (
     SnapshotSectionDates,
     build_snapshot_freshness,
 )
+from app.services.market_calendar_service import MarketCalendarService
 from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
+    annotate_publication_lag,
 )
 from app.services.static_breadth_contributor_exporter import (
     StaticBreadthContributorExporter,
@@ -344,6 +346,7 @@ class StaticSiteExportService:
         fallback_options_artifacts_dir: Path | None = None,
         cot_artifacts_dir: Path | None = None,
         fallback_cot_artifacts_dir: Path | None = None,
+        calendar: Any | None = None,
     ) -> StaticSiteExportResult:
         combined = StaticArtifactCombiner(
             schema_version=STATIC_SITE_SCHEMA_VERSION,
@@ -368,6 +371,10 @@ class StaticSiteExportService:
             clean=clean,
         )
         manifest = combined.manifest
+        annotate_publication_lag(
+            manifest,
+            calendar if calendar is not None else MarketCalendarService(),
+        )
         warnings = list(combined.warnings)
         options_result = StaticOptionsSection(
             enabled=(
