@@ -13,6 +13,7 @@ from app.services.static_artifact_combiner import (
     StaticArtifactFormulaError,
     annotate_publication_lag,
 )
+from app.services.static_options_section import StaticOptionsSection
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
 from app.services.static_site_export_service import (
     STATIC_DEFAULT_MARKET,
@@ -656,3 +657,71 @@ def test_publication_lag_counts_a_session_newer_than_the_close_as_current() -> N
 
     assert manifest["markets"]["US"]["publication"]["session_lag"] == 0
     assert manifest["markets"]["US"]["publication"]["state"] == "current"
+
+
+def test_root_level_options_descriptor_is_not_validated_as_a_market_file(
+    tmp_path: Path,
+) -> None:
+    # The US export advertises the root-level options bundle, which ships as
+    # its own artifact (static-options-US), never inside the market artifact.
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    entry = json.loads(
+        (market_dir / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+    )["entry"]
+    StaticOptionsSection._advertise(entry)
+
+    StaticArtifactCombiner._validate_advertised_assets(
+        market="US", source_label="current", entry=entry, market_dir=market_dir
+    )
+
+
+def test_advertised_path_with_nul_byte_is_rejected_not_crashing(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(
+        tmp_path, "US", pages={"home": {"path": "markets/us/ho\x00me.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="path is invalid"):
+        _validate_assets(market_dir)
+
+
+def test_damaged_current_artifact_falls_back_instead_of_aborting(tmp_path: Path) -> None:
+    current = tmp_path / "current"
+    write_market_artifact(current, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    write_market_artifact(current, market="HK", formula=BALANCED_RS_FORMULA_VERSION)
+    _rewrite_entry(current, "HK", pages={"home": {"path": "markets/hk/home.json"}})
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=BALANCED_RS_FORMULA_VERSION
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=True,
+    )
+
+    assert result.manifest["markets"]["HK"]["publication"]["source"] == "fallback"
+    assert result.manifest["markets"]["US"]["publication"]["source"] == "current"
+    assert any("HK" in w and "home.json" in w for w in result.warnings)
+
+
+def test_damaged_required_current_without_fallback_names_the_defect(
+    tmp_path: Path,
+) -> None:
+    current = write_market_artifact(
+        tmp_path / "current", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    _rewrite_entry(current, "US", pages={"home": {"path": "markets/us/home.json"}})
+
+    with pytest.raises(NoPublishedStaticMarketArtifact, match="home.json"):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )

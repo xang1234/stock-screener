@@ -79,16 +79,19 @@ class StaticArtifactCombiner:
                 for market, formula in fallback_required_formula_by_market.items()
             }
         )
+        rejections: list[tuple[str, str]] = []
         current = self._discover(
             Path(artifacts_dir),
             source_label="current",
             required={},
+            rejections=rejections,
         )
         fallback = (
             self._discover(
                 Path(fallback_artifacts_dir),
                 source_label="fallback",
                 required={},
+                rejections=rejections,
             )
             if fallback_artifacts_dir is not None
             else {}
@@ -106,9 +109,13 @@ class StaticArtifactCombiner:
                 if market not in selected and market not in optional
             )
             if missing:
+                details = "; ".join(
+                    message for market, message in rejections if market in missing
+                )
                 raise NoPublishedStaticMarketArtifact(
                     "No published compatible static artifact is available for required "
-                    f"Markets: {', '.join(missing)}.",
+                    f"Markets: {', '.join(missing)}."
+                    + (f" Rejected: {details}." if details else ""),
                     markets=tuple(missing),
                 )
         elif not selected:
@@ -122,7 +129,10 @@ class StaticArtifactCombiner:
         )
 
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-        warnings: list[str] = []
+        warnings: list[str] = [
+            f"Ignored damaged static market artifact: {message}"
+            for _market, message in rejections
+        ]
         entries: dict[str, dict[str, Any]] = {}
         for market, artifact in selected.items():
             entries[market] = artifact["entry"]
@@ -319,6 +329,7 @@ class StaticArtifactCombiner:
         *,
         source_label: str,
         required: Mapping[str, str],
+        rejections: list[tuple[str, str]],
     ) -> dict[str, dict[str, Any]]:
         discovered: dict[str, dict[str, Any]] = {}
         paths = sorted(root.rglob(self._metadata_filename)) if root.exists() else []
@@ -350,12 +361,18 @@ class StaticArtifactCombiner:
                     market_dir=market_dir,
                     expected_formula=expected,
                 )
-            asset_warnings = self._validate_advertised_assets(
-                market=market,
-                source_label=source_label,
-                entry=entry,
-                market_dir=market_dir,
-            )
+            try:
+                asset_warnings = self._validate_advertised_assets(
+                    market=market,
+                    source_label=source_label,
+                    entry=entry,
+                    market_dir=market_dir,
+                )
+            except StaticArtifactFormulaError as exc:
+                # A damaged artifact counts as absent so a valid fallback can
+                # serve the market instead of aborting every market's publish.
+                rejections.append((market, str(exc)))
+                continue
             if asset_warnings:
                 metadata["warnings"] = [
                     *metadata.get("warnings", []),
@@ -373,16 +390,29 @@ class StaticArtifactCombiner:
     @staticmethod
     def _resolve_advertised_path(
         *, market: str, source_label: str, market_dir: Path, advertised: object
-    ) -> Path:
+    ) -> Path | None:
+        """Resolve a market-owned ``markets/<m>/...`` path inside the artifact.
+
+        Returns ``None`` for root-level paths such as ``options/manifest.json``:
+        those sections ship as their own artifacts and are validated there.
+        """
         text = str(advertised or "").strip()
-        relative = Path(text)
+        if not text:
+            raise StaticArtifactFormulaError(
+                f"{market} {source_label} advertises an empty path"
+            )
         try:
-            relative = relative.relative_to(Path("markets") / market.lower())
+            relative = Path(text).relative_to(Path("markets") / market.lower())
         except ValueError:
-            pass  # older artifacts advertise paths relative to the market root
+            return None
         root = market_dir.resolve()
-        resolved = (root / relative).resolve()
-        if not text or not resolved.is_relative_to(root):
+        try:
+            resolved = (root / relative).resolve()
+        except (OSError, ValueError) as exc:
+            raise StaticArtifactFormulaError(
+                f"{market} {source_label} advertised path is invalid: {text!r} ({exc})"
+            ) from exc
+        if not resolved.is_relative_to(root):
             raise StaticArtifactFormulaError(
                 f"{market} {source_label} advertised path escapes its artifact: {text!r}"
             )
@@ -407,6 +437,8 @@ class StaticArtifactCombiner:
                 market_dir=market_dir,
                 advertised=descriptor["path"],
             )
+            if path is None:
+                continue
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
