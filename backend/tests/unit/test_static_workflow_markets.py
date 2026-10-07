@@ -233,17 +233,18 @@ def test_static_workflow_supports_independent_per_market_rs_rollback():
     assert "rs_formula_version:" not in content
     assert f"{BALANCED_RS_FORMULA_VERSION}" in content
     assert "legacy-linear-v1" in content
-    # The export applies overrides; the publisher applies them when selecting
-    # and combining artifacts.
+    # Only the export applies overrides.
     assert content.count(
         '--rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"'
     ) == 1
     publisher = (
         _PROJECT_ROOT / ".github/workflows/static-site-publish.yml"
     ).read_text(encoding="utf-8")
-    assert "rs_formula_overrides:" in publisher
-    assert '--fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"' in publisher
-    assert '--rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"' in publisher
+    # The publisher selects stored artifacts leniently; a rollback is an export
+    # run with the override, whose legacy artifact becomes the newest one.
+    assert not yaml.safe_load(publisher)[True]["workflow_dispatch"]  # no inputs
+    assert "RS_FORMULA_OVERRIDES" not in publisher
+    assert "rs-formula-overrides-json" not in publisher
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

@@ -4,12 +4,11 @@ name: Static Site Publish
 # market, found by name, so wake-ups may be lost, duplicated or coalesced and
 # the next run converges. Producers in static-site.yml wake it; no schedule.
 on:
+  # No inputs: a publish-time RS override could not stick (the next wake-up
+  # republishes the newest artifacts). An RS rollback is a static-site.yml
+  # export run with rs_formula_overrides; its legacy artifact becomes the
+  # newest one and is published like any other.
   workflow_dispatch:
-    inputs:
-      rs_formula_overrides:
-        description: 'Optional per-market RS rollback JSON, e.g. {"HK":"legacy-linear-v1"}; all others use balanced-horizon-percentile-v2'
-        type: string
-        default: '{}'
   # Build-only rehearsal for PRs that change the publisher; never deploys.
   pull_request:
     paths:
@@ -32,22 +31,23 @@ concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'static-site-publisher' || format('static-site-publisher-{0}', github.ref) }}
   cancel-in-progress: false
 
-# Granted per job: build runs PR code and third-party installs, so only deploy
-# can request an OIDC token.
+# Granted per job. build runs PR code and third-party installs, so it is
+# read-only: it can neither mint an OIDC token nor delete stored market
+# artifacts. Every write happens in the production-only deploy job.
 permissions: {}
 
 jobs:
   build:
     permissions:
-      actions: write
+      actions: read
       contents: read
-      pages: write
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
+    outputs:
+      pages_artifact_id: ${{ steps.upload-pages-artifact.outputs.artifact_id }}
     env:
       REDIS_ENABLED: "false"
       DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
-      RS_FORMULA_OVERRIDES: ${{ inputs.rs_formula_overrides || '{}' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -63,12 +63,6 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Configure Pages
-        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-        uses: actions/configure-pages@v6
-        with:
-          enablement: true
 
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
@@ -91,14 +85,12 @@ jobs:
             --current-dir /tmp/static-empty \
             --fallback-dir /tmp/static-market-artifacts \
             --fallback-options-dir /tmp/static-options \
-            --fallback-cot-dir /tmp/static-cot \
-            --fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
+            --fallback-cot-dir /tmp/static-cot
 
       # The selection holds stored last-good artifacts, not this run's exports,
       # so it is passed as the fallback input: an artifact that predates the
       # balanced RS rollout or the current breadth revision is accepted (or
-      # skipped) instead of failing every market's publish. Only an explicit
-      # rs_formula_overrides input constrains it.
+      # skipped) instead of failing every market's publish.
       - name: Validate market artifacts
         run: |
           mkdir -p /tmp/static-market-artifacts
@@ -118,8 +110,7 @@ jobs:
             --combine-artifacts-dir /tmp/static-empty \
             --fallback-artifacts-dir /tmp/static-market-artifacts \
             --fallback-options-artifacts-dir /tmp/static-options \
-            --fallback-cot-artifacts-dir /tmp/static-cot \
-            --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
+            --fallback-cot-artifacts-dir /tmp/static-cot
 
       # Reporting only (#484): never blocks the deploy. Stale or missing markets
       # surface as annotations and a table on the run summary.
@@ -153,15 +144,32 @@ jobs:
         with:
           path: frontend/dist
 
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+        with:
+          enablement: true
+
       - name: Prune duplicate Pages artifacts
-        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          KEEP_ARTIFACT_ID: ${{ steps.upload-pages-artifact.outputs.artifact_id }}
+          KEEP_ARTIFACT_ID: ${{ needs.build.outputs.pages_artifact_id }}
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import json
           import os
           import subprocess
@@ -213,17 +221,5 @@ jobs:
               print(f"Deleted duplicate github-pages artifact {artifact_id}.", flush=True)
           PY
 
-  deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
       - id: deployment
         uses: actions/deploy-pages@v5

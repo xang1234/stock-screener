@@ -1184,7 +1184,9 @@ def test_publisher_runs_only_on_dispatch_and_same_repo_prs() -> None:
     workflow = _publish_workflow()
     triggers = workflow[True]  # PyYAML parses the `on:` key as True
     assert set(triggers) == {"workflow_dispatch", "pull_request"}
-    assert "rs_formula_overrides" in triggers["workflow_dispatch"]["inputs"]
+    # No publish-time RS override: a stateless publish cannot keep one (a
+    # later wake-up would undo it). Rollbacks go through the export run.
+    assert not triggers["workflow_dispatch"]
     build_if = workflow["jobs"]["build"]["if"]
     assert "github.event.pull_request.head.repo.full_name == github.repository" in build_if
     # Any-branch dispatch is a build-only rehearsal; only deploy needs main.
@@ -1199,16 +1201,17 @@ PRODUCTION_RUN = (
 
 
 def test_publisher_scopes_token_permissions_per_job() -> None:
-    # The build job runs PR code and third-party installs: it must not be able
-    # to mint an OIDC token. Only deploy needs id-token.
+    # The build job runs PR code and third-party installs: read-only, so it
+    # can neither mint an OIDC token nor delete the stored market artifacts.
+    # Every write lives in the production-only deploy job.
     workflow = _publish_workflow()
     assert workflow["permissions"] == {}
     assert workflow["jobs"]["build"]["permissions"] == {
-        "actions": "write",
+        "actions": "read",
         "contents": "read",
-        "pages": "write",
     }
     assert workflow["jobs"]["deploy"]["permissions"] == {
+        "actions": "write",
         "pages": "write",
         "id-token": "write",
     }
@@ -1263,8 +1266,19 @@ def test_publisher_deploys_only_from_default_branch_dispatch() -> None:
     assert "default_branch" in deploy_if
     assert jobs["deploy"]["environment"]["name"] == "github-pages"
     assert PRODUCTION_RUN in deploy_if
-    for name in ("Configure Pages", "Prune duplicate Pages artifacts"):
-        assert PRODUCTION_RUN in _publish_step(name)["if"]
+    build_steps = {step.get("name") for step in jobs["build"]["steps"]}
+    deploy_steps = [step.get("name") or step.get("id") for step in jobs["deploy"]["steps"]]
+    assert deploy_steps == [
+        "Configure Pages",
+        "Prune duplicate Pages artifacts",
+        "deployment",
+    ]
+    assert not build_steps & {"Configure Pages", "Prune duplicate Pages artifacts"}
+    prune = jobs["deploy"]["steps"][1]
+    assert prune["env"]["KEEP_ARTIFACT_ID"] == "${{ needs.build.outputs.pages_artifact_id }}"
+    assert jobs["build"]["outputs"]["pages_artifact_id"] == (
+        "${{ steps.upload-pages-artifact.outputs.artifact_id }}"
+    )
 
 
 SITE_WORKFLOW = ROOT / ".github" / "workflows" / "static-site.yml"
@@ -1399,7 +1413,7 @@ def test_publisher_combine_arguments_accept_last_good_legacy_artifacts(
         _publish_step("Combine static data bundle")["run"], "app.scripts.export_static_site"
     )
     args = [
-        str(paths[arg]) if arg in paths else ("{}" if arg == "$RS_FORMULA_OVERRIDES" else arg)
+        str(paths[arg]) if arg in paths else arg
         for arg in args
     ]
     monkeypatch.setattr(sys, "argv", ["export_static_site.py", *args])
