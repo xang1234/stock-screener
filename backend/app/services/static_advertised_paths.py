@@ -66,8 +66,19 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
         id(pages.get("scan")): ("scan manifest", "chunks"),
         id(assets.get("charts")): ("chart index", "symbols"),
     }
+    for section, descriptors in (("pages", pages), ("assets", assets)):
+        for name, descriptor in descriptors.items():
+            # A page the browser loads needs a path; an asset may advertise
+            # another key (breadth_contributors uses index_path, checked by
+            # its own validator).
+            if not isinstance(descriptor, dict) or (
+                section == "pages" and "path" not in descriptor
+            ):
+                raise StaticAdvertisedPathError(
+                    f"{section}.{name} descriptor must be an object with a path"
+                )
     for descriptor in (*pages.values(), *assets.values()):
-        if not isinstance(descriptor, dict) or "path" not in descriptor:
+        if "path" not in descriptor:
             continue
         if str(descriptor["path"]).strip() in ROOT_LEVEL_ADVERTISED_PATHS:
             continue

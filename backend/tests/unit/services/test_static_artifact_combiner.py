@@ -760,6 +760,47 @@ def test_another_markets_path_is_rejected(tmp_path: Path) -> None:
         _validate_assets(market_dir)
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"pages": {"scan": {}}},
+        {"pages": {"scan": "markets/us/scan/manifest.json"}},
+        {"pages": {"scan": {"path": "  "}}},
+        {"assets": {"groups_rrg": 3}},
+        {"assets": {"groups_rrg": {"path": ""}}},
+    ],
+)
+def test_malformed_descriptors_are_rejected(tmp_path: Path, changes) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(tmp_path, "US", **changes)
+
+    with pytest.raises(StaticArtifactFormulaError, match="descriptor|empty path"):
+        _validate_assets(market_dir)
+
+
+def test_asset_descriptor_without_path_is_left_to_its_own_validator(
+    tmp_path: Path,
+) -> None:
+    # breadth_contributors advertises index_path and has its own validator.
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(
+        tmp_path,
+        "US",
+        assets={"breadth_contributors": {"index_path": "markets/us/x/index.json"}},
+    )
+
+    warnings = StaticArtifactCombiner._validate_advertised_assets(
+        market="US",
+        source_label="fallback",
+        entry=json.loads(
+            (market_dir / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+        )["entry"],
+        market_dir=market_dir,
+    )
+
+    assert any("breadth contributor asset ignored" in w for w in warnings)
+
+
 @pytest.mark.parametrize("chunk_text", [None, "{truncated"])
 def test_scan_chunks_are_validated_without_a_formula_override(
     tmp_path: Path, chunk_text
