@@ -39,8 +39,6 @@ concurrency:
 permissions:
   actions: write
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
   calendar-audit:
@@ -69,15 +67,14 @@ jobs:
 
   select-markets:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    needs: calendar-audit
     runs-on: ubuntu-latest
     outputs:
       markets: ${{ steps.pick.outputs.markets }}
     steps:
       # Resolve which markets this run builds. The schedule that fired
       # (github.event.schedule) selects the group; manual dispatch uses the
-      # market_group input. The combine job back-fills every market that is NOT
-      # built here from the last good artifact of a previous run, so a partial
+      # market_group input. Each built market wakes static-site-publish.yml,
+      # which publishes the newest artifact of every market, so a partial
       # group still publishes a complete site.
       - id: pick
         env:
@@ -186,13 +183,20 @@ jobs:
           path: /tmp/static-cot-build/cot
           if-no-files-found: error
 
+      - name: Wake static-site publisher
+        if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run static-site-publish.yml --repo "${{ github.repository }}" --ref "${{ github.event.repository.default_branch }}"
+
   build-market:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     needs: [select-markets, ensure_daily_price_release]
     runs-on: ubuntu-latest
-    # combine-and-build waits for the whole matrix, so one stuck market holds
-    # every other market's publish until GitHub's 6h job limit. Caps sit well
-    # above observed maxima (US ~210m, JP ~120m, others <= 85m); CN's is
+    # Each market publishes independently through static-site-publish.yml, but a
+    # stuck job still holds this run's concurrency slot (and its own market's
+    # refresh) until GitHub's 6h job limit. Caps sit well above observed maxima (US ~210m, JP ~120m, others <= 85m); CN's is
     # provisional until the shared BaoStock session shows its new baseline.
     timeout-minutes: ${{ matrix.market == 'US' && 300 || (matrix.market == 'CN' && 240 || 150) }}
     strategy:
@@ -654,6 +658,7 @@ jobs:
           exit 0
 
       - name: Upload market artifact
+        id: upload-market-artifact
         if: ${{ steps.export-market.outputs.has_artifact == 'true' && (steps.breadth-contributor-metadata.outputs.enabled != 'true' || steps.publish-breadth-contributor-metadata.outputs.metadata_state_published == 'true') }}
         uses: actions/upload-artifact@v7
         with:
@@ -738,211 +743,24 @@ jobs:
           echo "Unable to advance rolling RRG history; the market artifact was already uploaded." >&2
           exit 1
 
-  combine-and-build:
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+      # Runs after any later step failure so an uploaded market is never left
+      # waiting for the next export run.
+      - name: Wake static-site publisher
+        if: ${{ always() && steps.upload-market-artifact.outcome == 'success' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run static-site-publish.yml --repo "${{ github.repository }}" --ref "${{ github.event.repository.default_branch }}"
+
+  # Catch-all wake-up: covers a market that uploaded and was cancelled before
+  # its own wake step. Duplicate wake-ups coalesce in the publisher's
+  # concurrency group, and every publish is "newest artifact per market".
+  wake-publisher:
+    if: ${{ always() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     needs: [select-markets, build-cot, build-market]
     runs-on: ubuntu-latest
-    env:
-      REDIS_ENABLED: "false"
-      DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
-
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - uses: actions/configure-pages@v6
-        with:
-          enablement: true
-
-      - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
-
-      - name: Install frontend dependencies
-        run: cd frontend && npm ci
-
-      - name: Download current market artifacts
-        id: download-market-artifacts
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          pattern: static-market-*
-          path: /tmp/static-market-artifacts-current
-          merge-multiple: false
-
-      - name: Download current US options artifact
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: static-options-US
-          path: /tmp/static-options-current
-
-      - name: Download current global COT artifact
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: static-cot-global
-          path: /tmp/static-cot-current
-
-      - name: Download per-market fallback artifacts
-        continue-on-error: true
+      - name: Wake static-site publisher
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          CURRENT_RUN_ID: ${{ github.run_id }}
-          BRANCH_NAME: ${{ github.ref_name }}
-          RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
-        run: |
-          cd backend
-          python -m app.scripts.download_static_market_fallbacks \
-            --current-dir /tmp/static-market-artifacts-current \
-            --fallback-dir /tmp/static-market-artifacts-fallback \
-            --current-options-dir /tmp/static-options-current \
-            --fallback-options-dir /tmp/static-options-fallback \
-            --current-cot-dir /tmp/static-cot-current \
-            --fallback-cot-dir /tmp/static-cot-fallback \
-            --fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
-
-      - name: Validate market artifacts
-        env:
-          SELECTED_MARKETS: ${{ needs.select-markets.outputs.markets }}
-        run: |
-          mkdir -p /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback
-          cd backend
-          python -m app.scripts.validate_static_market_artifacts \
-            --current-dir /tmp/static-market-artifacts-current \
-            --fallback-dir /tmp/static-market-artifacts-fallback \
-            --current-options-dir /tmp/static-options-current \
-            --fallback-options-dir /tmp/static-options-fallback \
-            --current-cot-dir /tmp/static-cot-current \
-            --fallback-cot-dir /tmp/static-cot-fallback \
-            --selected-markets "${SELECTED_MARKETS}"
-
-      - name: Combine static data bundle
-        env:
-          RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
-        run: |
-          cd backend
-          python -m app.scripts.export_static_site \
-            --output-dir ../frontend/public/static-data \
-            --combine-artifacts-dir /tmp/static-market-artifacts-current \
-            --fallback-artifacts-dir /tmp/static-market-artifacts-fallback \
-            --options-artifacts-dir /tmp/static-options-current \
-            --fallback-options-artifacts-dir /tmp/static-options-fallback \
-            --cot-artifacts-dir /tmp/static-cot-current \
-            --fallback-cot-artifacts-dir /tmp/static-cot-fallback \
-            --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
-
-      # Reporting only (#484): never blocks the deploy. Stale or missing markets
-      # surface as annotations and a table on the run summary.
-      - name: Report market freshness
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SELECTED_MARKETS: ${{ needs.select-markets.outputs.markets }}
-        run: |
-          mkdir -p /tmp/daily-price-manifests
-          gh release download daily-price-data \
-            --repo "${{ github.repository }}" \
-            --pattern 'daily-price-latest-*.json' \
-            --dir /tmp/daily-price-manifests \
-            || echo "Daily price manifests unavailable; bundle freshness will be blank."
-          cd backend
-          python -m app.scripts.report_static_market_freshness \
-            --manifest ../frontend/public/static-data/manifest.json \
-            --artifacts-dir /tmp/static-market-artifacts-current \
-            --price-manifest-dir /tmp/daily-price-manifests \
-            --selected-markets "${SELECTED_MARKETS}"
-
-      - name: Build static frontend
-        env:
-          VITE_STATIC_SITE: "true"
-          VITE_BASE_PATH: /${{ github.event.repository.name }}/
-        run: cd frontend && npm run build
-
-      - name: Upload Pages artifact
-        id: upload-pages-artifact
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: frontend/dist
-
-      - name: Prune duplicate Pages artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          KEEP_ARTIFACT_ID: ${{ steps.upload-pages-artifact.outputs.artifact_id }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-
-          repo = os.environ["REPOSITORY"]
-          run_id = os.environ["RUN_ID"]
-          keep_artifact_id = int(os.environ["KEEP_ARTIFACT_ID"])
-
-          result = subprocess.run(
-              [
-                  "gh",
-                  "api",
-                  "--paginate",
-                  "--slurp",
-                  f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
-              ],
-              check=True,
-              capture_output=True,
-              text=True,
-          )
-          pages = json.loads(result.stdout)
-          payload = {
-              "artifacts": [
-                  artifact
-                  for page in pages
-                  for artifact in page.get("artifacts", [])
-              ]
-          }
-          duplicates = [
-              artifact["id"]
-              for artifact in payload.get("artifacts", [])
-              if artifact.get("name") == "github-pages" and artifact.get("id") != keep_artifact_id
-          ]
-
-          if not duplicates:
-              print("No duplicate github-pages artifacts found.", flush=True)
-              raise SystemExit(0)
-
-          print(
-              f"::warning::Pruning {len(duplicates)} duplicate github-pages artifact(s) "
-              f"from run {run_id}; keeping {keep_artifact_id}.",
-              flush=True,
-          )
-          for artifact_id in duplicates:
-              subprocess.run(
-                  ["gh", "api", "--method", "DELETE", f"repos/{repo}/actions/artifacts/{artifact_id}"],
-                  check=True,
-              )
-              print(f"Deleted duplicate github-pages artifact {artifact_id}.", flush=True)
-          PY
-
-  deploy:
-    if: ${{ always() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && needs.combine-and-build.result == 'success' }}
-    needs: combine-and-build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
+        run: gh workflow run static-site-publish.yml --repo "${{ github.repository }}" --ref "${{ github.event.repository.default_branch }}"

@@ -91,7 +91,7 @@ def test_static_workflow_uses_canonical_weekly_reference_sync_boundary():
     assert "retry_download" not in content
 
 
-def test_static_workflow_validates_calendar_manifests_before_selecting_markets():
+def test_static_workflow_reports_calendar_audit_without_gating_markets():
     content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
         encoding="utf-8"
     )
@@ -106,7 +106,9 @@ def test_static_workflow_validates_calendar_manifests_before_selecting_markets()
     assert "app.scripts.build_market_calendar_data --check" in audit_job
     assert "::warning::Market calendar generation drift detected" in audit_job
     assert "continue-on-error" not in audit_job
-    assert "needs: calendar-audit" in select_job
+    # #499: a failing audit is reported but no longer blocks every market's
+    # export; each export still refuses an invalid session for its own market.
+    assert "needs: calendar-audit" not in select_job
     assert "warning" not in select_job.lower()
 
 
@@ -231,9 +233,17 @@ def test_static_workflow_supports_independent_per_market_rs_rollback():
     assert "rs_formula_version:" not in content
     assert f"{BALANCED_RS_FORMULA_VERSION}" in content
     assert "legacy-linear-v1" in content
+    # The export applies overrides; the publisher applies them when selecting
+    # and combining artifacts.
     assert content.count(
         '--rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"'
-    ) == 2
+    ) == 1
+    publisher = (
+        _PROJECT_ROOT / ".github/workflows/static-site-publish.yml"
+    ).read_text(encoding="utf-8")
+    assert "rs_formula_overrides:" in publisher
+    assert '--fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"' in publisher
+    assert '--rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"' in publisher
 
 
 def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_failures():

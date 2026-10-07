@@ -18,6 +18,7 @@ from app.scripts.download_static_market_fallbacks import (
 )
 
 ROOT = Path(__file__).resolve().parents[3]
+PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "static-site-publish.yml"
 
 
 _ARTIFACT_LOOKUP_PRELUDE = """\
@@ -109,7 +110,7 @@ def test_static_fallback_downloader_import_does_not_initialize_database(tmp_path
 def _build_market_job() -> str:
     content = (ROOT / ".github" / "workflows" / "static-site.yml").read_text()
     return content.split("  build-market:\n", 1)[1].split(
-        "\n  combine-and-build:",
+        "\n  wake-publisher:",
         1,
     )[0]
 
@@ -120,25 +121,6 @@ def _build_cot_job() -> str:
         "\n  build-market:",
         1,
     )[0]
-
-
-def _combine_and_build_job() -> str:
-    content = (ROOT / ".github" / "workflows" / "static-site.yml").read_text()
-    return content.split("  combine-and-build:\n", 1)[1].split(
-        "\n  deploy:",
-        1,
-    )[0]
-
-
-def _fallback_download_step() -> str:
-    return (
-        _combine_and_build_job()
-        .split("      - name: Download per-market fallback artifacts\n", 1)[1]
-        .split(
-            "\n      - name: Validate market artifacts",
-            1,
-        )[0]
-    )
 
 
 def test_static_site_workflow_publishes_and_combines_global_cot_artifact() -> None:
@@ -152,11 +134,9 @@ def test_static_site_workflow_publishes_and_combines_global_cot_artifact() -> No
     assert "static-cot-global" in cot_job
     assert "--skip-cot-refresh" in market_job
     assert "Upload current global COT artifact" not in market_job
-    assert "needs: [select-markets, build-cot, build-market]" in workflow
-    assert "--current-cot-dir /tmp/static-cot-current" in workflow
-    assert "--fallback-cot-dir /tmp/static-cot-fallback" in workflow
-    assert "--cot-artifacts-dir /tmp/static-cot-current" in workflow
-    assert "--fallback-cot-artifacts-dir /tmp/static-cot-fallback" in workflow
+    publisher = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+    assert "--fallback-cot-dir /tmp/static-cot" in publisher
+    assert "--cot-artifacts-dir /tmp/static-cot" in publisher
 
 
 def test_fake_gh_launcher_handles_python_path_with_spaces(
@@ -240,7 +220,7 @@ def test_static_site_market_export_preserves_price_bundle_after_soft_skip() -> N
     upload_market_step = build_market_job.split(
         "      - name: Upload market artifact\n", 1
     )[1].split(
-        "\n\n  combine-and-build:",
+        "\n\n  wake-publisher:",
         1,
     )[0]
 
@@ -356,7 +336,7 @@ def test_static_site_rrg_history_publish_skips_rewound_market_exports() -> None:
     publish_rrg_step = build_market_job.split(
         "      - name: Publish rolling RRG history\n", 1
     )[1].split(
-        "\n\n  combine-and-build:",
+        "\n\n  wake-publisher:",
         1,
     )[0]
 
@@ -412,34 +392,10 @@ def test_static_site_daily_price_build_requires_current_session_coverage() -> No
     )
 
 
-def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> (
-    None
-):
-    combine_job = _combine_and_build_job()
-    fallback_step = _fallback_download_step()
-
-    assert "needs: [select-markets, build-cot, build-market]" in combine_job
-    assert "needs.select-markets.outputs.markets" in combine_job
-    assert "Download per-market fallback artifacts" in combine_job
-    assert "Download current market artifacts" in combine_job
-    assert "/tmp/static-market-artifacts-current" in combine_job
-    assert "/tmp/static-market-artifacts-fallback" in combine_job
-    assert (
-        "--fallback-artifacts-dir /tmp/static-market-artifacts-fallback" in combine_job
-    )
-    assert "FALLBACK_MARKETS" not in combine_job
-    assert "github.ref_name" in combine_job
-    assert "python -m app.scripts.download_static_market_fallbacks" in fallback_step
-    assert "--current-dir /tmp/static-market-artifacts-current" in fallback_step
-    assert "--fallback-dir /tmp/static-market-artifacts-fallback" in fallback_step
-    assert "python - <<'PY'" not in fallback_step
-    assert "static-site-v3" not in fallback_step
-
-
 def test_static_site_preserves_and_publishes_us_options_history() -> None:
     workflow = (ROOT / ".github" / "workflows" / "static-site.yml").read_text()
     build_job = _build_market_job()
-    combine_job = _combine_and_build_job()
+    publisher = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
 
     assert "options-analytics-data" in workflow
     assert "OPTIONS_ANALYTICS_ENABLED" in build_job
@@ -450,12 +406,8 @@ def test_static_site_preserves_and_publishes_us_options_history() -> None:
     assert "python -m app.scripts.export_options_history" in build_job
     assert "--require-run-id" in build_job
     assert "name: static-options-US" in build_job
-    assert "--current-options-dir /tmp/static-options-current" in combine_job
-    assert "--fallback-options-dir /tmp/static-options-fallback" in combine_job
-    assert "--options-artifacts-dir /tmp/static-options-current" in combine_job
-    assert (
-        "--fallback-options-artifacts-dir /tmp/static-options-fallback" in combine_job
-    )
+    assert "--fallback-options-dir /tmp/static-options" in publisher
+    assert "--options-artifacts-dir /tmp/static-options" in publisher
     publish_history = build_job.split("      - name: Publish US options history\n", 1)[
         1
     ].split("      - name:", 1)[0]
@@ -487,39 +439,6 @@ def test_static_site_restores_breadth_history_before_export_and_publishes_after(
     assert "static_breadth_history_cache export" in publish
     assert "continue-on-error: true" in publish
     assert "steps.export-market.outputs.has_artifact == 'true'" in publish
-
-
-def test_static_site_reports_market_freshness_without_blocking_deploy() -> None:
-    combine_job = _combine_and_build_job()
-    report = combine_job.split("      - name: Report market freshness\n", 1)[1].split(
-        "      - name:", 1
-    )[0]
-
-    # Reads the combined manifest, so it must run after the combine step.
-    assert combine_job.index("- name: Combine static data bundle") < combine_job.index(
-        "- name: Report market freshness"
-    )
-    assert "continue-on-error: true" in report
-    assert "app.scripts.report_static_market_freshness" in report
-    assert "--pattern 'daily-price-latest-*.json'" in report
-    assert '--selected-markets "${SELECTED_MARKETS}"' in report
-
-
-def test_static_site_validation_uses_python_module_not_inline_control_plane() -> None:
-    combine_job = _combine_and_build_job()
-    validation_step = combine_job.split("      - name: Validate market artifacts\n", 1)[
-        1
-    ].split(
-        "\n      - name: Combine static data bundle",
-        1,
-    )[0]
-
-    assert "python -m app.scripts.validate_static_market_artifacts" in validation_step
-    assert "--current-dir /tmp/static-market-artifacts-current" in validation_step
-    assert "--fallback-dir /tmp/static-market-artifacts-fallback" in validation_step
-    assert '--selected-markets "${SELECTED_MARKETS}"' in validation_step
-    assert "python - <<'PY'" not in validation_step
-    assert "snapshot-failure.json" not in validation_step
 
 
 def test_static_site_fallback_candidate_install_restores_incumbent_on_failure(
@@ -1206,8 +1125,6 @@ def test_static_site_current_market_collection_rejects_swapped_artifact_name(
     assert collect_current_markets(current_dir) == set()
 
 
-PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "static-site-publish.yml"
-
 
 def _publish_workflow() -> dict:
     return yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))
@@ -1271,3 +1188,59 @@ def test_publisher_deploys_only_from_default_branch_dispatch() -> None:
     assert jobs["deploy"]["environment"]["name"] == "github-pages"
     for name in ("Configure Pages", "Prune duplicate Pages artifacts"):
         assert "workflow_dispatch" in _publish_step(name)["if"]
+
+
+SITE_WORKFLOW = ROOT / ".github" / "workflows" / "static-site.yml"
+WAKE_COMMAND = "gh workflow run static-site-publish.yml"
+
+
+def _site_workflow() -> dict:
+    return yaml.safe_load(SITE_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _wake_step(job: str) -> dict:
+    steps = _site_workflow()["jobs"][job]["steps"]
+    return next(
+        step for step in steps if step.get("name") == "Wake static-site publisher"
+    )
+
+
+def test_static_site_no_longer_combines_or_deploys() -> None:
+    workflow = _site_workflow()
+    assert "combine-and-build" not in workflow["jobs"]
+    assert "deploy" not in workflow["jobs"]
+    assert "pages" not in workflow["permissions"]
+    assert "id-token" not in workflow["permissions"]
+    # The calendar audit reports; it no longer gates every market's export.
+    assert "needs" not in workflow["jobs"]["select-markets"]
+
+
+def test_wake_steps_only_run_on_the_default_branch() -> None:
+    for job in ("build-cot", "build-market"):
+        step = _wake_step(job)
+        assert step["continue-on-error"] is True
+        assert "default_branch" in step["if"]
+        assert WAKE_COMMAND in step["run"]
+        assert "--ref" in step["run"]
+    wake_job = _site_workflow()["jobs"]["wake-publisher"]
+    assert "always()" in wake_job["if"] and "default_branch" in wake_job["if"]
+    assert set(wake_job["needs"]) >= {"build-cot", "build-market"}
+    assert WAKE_COMMAND in wake_job["steps"][0]["run"]
+
+
+def test_market_wake_runs_after_any_later_failure() -> None:
+    steps = _site_workflow()["jobs"]["build-market"]["steps"]
+    assert steps[-1]["name"] == "Wake static-site publisher"
+    wake_if = steps[-1]["if"]
+    assert "always()" in wake_if
+    assert "steps.upload-market-artifact.outcome == 'success'" in wake_if
+    upload = next(step for step in steps if step.get("name") == "Upload market artifact")
+    assert upload["id"] == "upload-market-artifact"
+
+
+def test_cot_wake_follows_its_upload() -> None:
+    steps = _site_workflow()["jobs"]["build-cot"]["steps"]
+    names = [step.get("name") for step in steps]
+    assert names.index("Wake static-site publisher") > names.index(
+        "Upload current global COT artifact"
+    )

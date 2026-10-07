@@ -1,7 +1,7 @@
 """Report how far each static-site market lags its last completed session (#484).
 
-Runs in the combine job after the bundle is combined, so it sees what the site
-will actually serve (current artifact, a fallback, or nothing). Writes a table
+Runs in the static-site publisher after the bundle is combined, so it sees what
+the site will actually serve (the newest valid artifact per market, or nothing). Writes a table
 to the run summary and emits a GitHub annotation per lagging market. It never
 fails: the site still deploys, and the annotations make staleness visible.
 
