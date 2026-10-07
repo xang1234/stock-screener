@@ -54,9 +54,18 @@ def _load_json(*, market: str, market_dir: Path, advertised: object) -> object:
 
 
 def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> None:
-    """Every advertised page, asset and chart payload must exist and parse."""
+    """Every advertised page and asset, and every file they list, must parse.
+
+    The scan manifest lists its chunks and the chart index its payloads; the
+    browser fetches each, so a missing or truncated one is as broken as a
+    missing page. A few hundred small files per market are cheap to parse.
+    """
     pages = entry.get("pages") if isinstance(entry.get("pages"), dict) else {}
     assets = entry.get("assets") if isinstance(entry.get("assets"), dict) else {}
+    listed_files = {
+        id(pages.get("scan")): ("scan manifest", "chunks"),
+        id(assets.get("charts")): ("chart index", "symbols"),
+    }
     for descriptor in (*pages.values(), *assets.values()):
         if not isinstance(descriptor, dict) or "path" not in descriptor:
             continue
@@ -65,16 +74,13 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
         payload = _load_json(
             market=market, market_dir=market_dir, advertised=descriptor["path"]
         )
-        if descriptor is not assets.get("charts"):
+        if id(descriptor) not in listed_files:
             continue
-        symbols = payload.get("symbols") if isinstance(payload, dict) else None
-        if not isinstance(symbols, list) or not all(
-            isinstance(symbol, dict) for symbol in symbols
-        ):
+        label, key = listed_files[id(descriptor)]
+        refs = payload.get(key, []) if isinstance(payload, dict) else None
+        if not isinstance(refs, list) or not all(isinstance(ref, dict) for ref in refs):
             raise StaticAdvertisedPathError(
-                f"chart index {descriptor['path']!r} must list symbol objects"
+                f"{label} {descriptor['path']!r} must list {key} as objects"
             )
-        # A few hundred small files per market; parsing them is cheap and
-        # catches a truncated payload the browser would fail to load.
-        for symbol in symbols:
-            _load_json(market=market, market_dir=market_dir, advertised=symbol.get("path"))
+        for ref in refs:
+            _load_json(market=market, market_dir=market_dir, advertised=ref.get("path"))

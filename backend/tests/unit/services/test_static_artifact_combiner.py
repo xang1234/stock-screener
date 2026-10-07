@@ -760,6 +760,21 @@ def test_another_markets_path_is_rejected(tmp_path: Path) -> None:
         _validate_assets(market_dir)
 
 
+@pytest.mark.parametrize("chunk_text", [None, "{truncated"])
+def test_scan_chunks_are_validated_without_a_formula_override(
+    tmp_path: Path, chunk_text
+) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    chunk = tmp_path / "static-market-US" / "scan" / "chunks" / "chunk-0001.json"
+    if chunk_text is None:
+        chunk.unlink()
+    else:
+        chunk.write_text(chunk_text, encoding="utf-8")
+
+    with pytest.raises(StaticArtifactFormulaError, match="chunk-0001.json"):
+        _validate_assets(tmp_path / "static-market-US")
+
+
 def test_malformed_chart_payload_is_rejected(tmp_path: Path) -> None:
     write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
     market_dir = tmp_path / "static-market-US"
