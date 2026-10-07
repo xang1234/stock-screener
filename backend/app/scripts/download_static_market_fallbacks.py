@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+from app.domain.markets import SUPPORTED_MARKET_CODES
 from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
@@ -29,7 +30,6 @@ from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     StaticMarketArtifactContractError,
     expected_market_from_static_market_manifest_path,
-    market_from_static_market_artifact_name,
     read_static_market_manifest,
 )
 
@@ -52,35 +52,6 @@ def command_error_detail(exc: subprocess.CalledProcessError, limit: int = 800) -
             text = f"{text[:limit]}..."
         details.append(f"{stream_name}: {text}")
     return f" Details: {'; '.join(details)}" if details else ""
-
-
-def extract_runs(payload: object) -> list[dict[str, Any]]:
-    if isinstance(payload, dict):
-        workflow_runs = payload.get("workflow_runs")
-        if not isinstance(workflow_runs, list):
-            raise ValueError(
-                "Unexpected GitHub API response shape: workflow_runs is not a list."
-            )
-        return [run for run in workflow_runs if isinstance(run, dict)]
-
-    if isinstance(payload, list):
-        runs = []
-        for page in payload:
-            if not isinstance(page, dict):
-                raise ValueError(
-                    "Unexpected GitHub API response shape: page is not an object."
-                )
-            workflow_runs = page.get("workflow_runs", [])
-            if not isinstance(workflow_runs, list):
-                raise ValueError(
-                    "Unexpected GitHub API response shape: workflow_runs is not a list."
-                )
-            runs.extend(run for run in workflow_runs if isinstance(run, dict))
-        return runs
-
-    raise ValueError(
-        "Unexpected GitHub API response shape: response is not an object or list."
-    )
 
 
 def extract_artifacts(payload: object) -> list[dict[str, Any]]:
@@ -339,14 +310,6 @@ def _candidate_is_newer(
     )
 
 
-def _workflow_run_upper_bound_date(run: dict[str, Any]) -> date | None:
-    for key in ("run_started_at", "created_at", "updated_at"):
-        run_date = _coerce_manifest_date(run.get(key))
-        if run_date is not None:
-            return run_date
-    return None
-
-
 def _run_cannot_beat_incumbent(
     *,
     run_upper_bound: date | None,
@@ -468,6 +431,74 @@ def _find_compatible_market_candidate(
     return wrapper
 
 
+@dataclass(frozen=True)
+class _ArtifactRun:
+    run_id: int
+    created_on: date | None
+
+
+def list_artifact_runs(
+    *,
+    repo: str,
+    artifact_name: str,
+    branch_name: str,
+    current_run_id: int,
+) -> list[_ArtifactRun]:
+    """Return trusted runs that uploaded ``artifact_name``, newest first."""
+    query = urlencode({"name": artifact_name, "per_page": "100"})
+    try:
+        artifacts = extract_artifacts(
+            gh_json(
+                [
+                    "api",
+                    "--paginate",
+                    "--slurp",
+                    f"repos/{repo}/actions/artifacts?{query}",
+                ]
+            )
+        )
+    except subprocess.CalledProcessError as exc:
+        warn(
+            f"Artifact lookup for {artifact_name} failed "
+            f"with exit {exc.returncode}.{command_error_detail(exc)}"
+        )
+        return []
+    except json.JSONDecodeError as exc:
+        warn(f"Artifact lookup for {artifact_name} was not valid JSON ({exc}).")
+        return []
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        warn(f"Artifact lookup for {artifact_name} was invalid: {exc}")
+        return []
+
+    runs = []
+    for artifact in artifacts:
+        run = artifact.get("workflow_run")
+        if (
+            artifact.get("name") != artifact_name
+            or artifact.get("expired")
+            or not isinstance(run, dict)
+        ):
+            continue
+        run_id = run.get("id")
+        repository_id = run.get("repository_id")
+        # Trust boundary: only this repository's own default-branch runs. A
+        # fork PR's head branch can also be called "main"; its head repository
+        # differs.
+        if (
+            not isinstance(run_id, int)
+            or run_id == current_run_id
+            or run.get("head_branch") != branch_name
+            or repository_id is None
+            or run.get("head_repository_id") != repository_id
+        ):
+            continue
+        runs.append(
+            _ArtifactRun(run_id, _coerce_manifest_date(artifact.get("created_at")))
+        )
+    runs.sort(key=lambda run: run.created_on or date.min, reverse=True)
+    return runs
+
+
 def download_fallback_artifacts(
     *,
     repo: str,
@@ -487,37 +518,6 @@ def download_fallback_artifacts(
         for market, formula in (required_formula_by_market or {}).items()
         if str(market).strip() and str(formula).strip()
     }
-    query = urlencode(
-        {
-            "branch": branch_name,
-            "status": "completed",
-            "per_page": "100",
-        }
-    )
-
-    try:
-        pages = gh_json(
-            [
-                "api",
-                "--paginate",
-                "--slurp",
-                f"repos/{repo}/actions/workflows/static-site.yml/runs?{query}",
-            ]
-        )
-        runs = extract_runs(pages)
-    except subprocess.CalledProcessError as exc:
-        warn(
-            "GitHub workflow runs API request failed "
-            f"with exit {exc.returncode}.{command_error_detail(exc)}"
-        )
-        runs = []
-    except json.JSONDecodeError as exc:
-        warn(f"GitHub workflow runs API response was not valid JSON ({exc}).")
-        runs = []
-    except (AttributeError, KeyError, TypeError, ValueError) as exc:
-        warn(str(exc))
-        runs = []
-
     current_markets = collect_current_markets(current_dir)
     fallback_markets: set[str] = set()
     fallback_dates_by_market: dict[str, date | None] = {}
@@ -544,60 +544,26 @@ def download_fallback_artifacts(
             flush=True,
         )
 
-    for run in runs:
-        run_id = run.get("id")
-        if run_id == current_run_id:
+    for key, (_current_global_dir, fallback_global_dir) in global_directories.items():
+        if fallback_global_dir is None:
             continue
-        run_upper_bound = _workflow_run_upper_bound_date(run)
-        try:
-            artifact_pages = gh_json(
-                [
-                    "api",
-                    "--paginate",
-                    "--slurp",
-                    f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
-                ]
-            )
-            artifacts = extract_artifacts(artifact_pages)
-        except subprocess.CalledProcessError as exc:
-            warn(
-                f"Artifact list API request for run {run_id} failed "
-                f"with exit {exc.returncode}.{command_error_detail(exc)}"
-            )
-            continue
-        except json.JSONDecodeError as exc:
-            warn(
-                f"Artifact list API response for run {run_id} was not valid JSON ({exc})."
-            )
-            continue
-        except (AttributeError, KeyError, TypeError, ValueError) as exc:
-            warn(f"Artifact list API response for run {run_id} was invalid: {exc}")
-            continue
-
-        artifacts_by_name = {
-            str(artifact.get("name")): artifact
-            for artifact in artifacts
-            if not artifact.get("expired")
-        }
-
-        for key, (
-            _current_global_dir,
-            fallback_global_dir,
-        ) in global_directories.items():
-            spec = GLOBAL_STATIC_ARTIFACTS[key]
+        spec = GLOBAL_STATIC_ARTIFACTS[key]
+        for artifact_run in list_artifact_runs(
+            repo=repo,
+            artifact_name=spec.artifact_name,
+            branch_name=branch_name,
+            current_run_id=current_run_id,
+        ):
+            run_id = artifact_run.run_id
             incumbent_date = global_fallback_dates[key]
-            if (
-                spec.artifact_name not in artifacts_by_name
-                or fallback_global_dir is None
-                or _run_cannot_beat_incumbent(
-                    run_upper_bound=run_upper_bound,
-                    incumbent_date=incumbent_date,
-                )
+            if _run_cannot_beat_incumbent(
+                run_upper_bound=artifact_run.created_on,
+                incumbent_date=incumbent_date,
             ):
-                continue
+                break
             candidate = _download_candidate(
                 repo=repo,
-                run_id=int(run_id),
+                run_id=run_id,
                 artifact_name=spec.artifact_name,
                 parent_dir=fallback_dir,
                 finder=partial(find_global_artifact, spec),
@@ -623,29 +589,34 @@ def download_fallback_artifacts(
                 )
             shutil.rmtree(candidate.wrapper_dir, ignore_errors=True)
 
-        for artifact_name in sorted(artifacts_by_name):
-            market = market_from_static_market_artifact_name(artifact_name)
-            if not market:
-                continue
-            # Download fallback artifacts for current markets too; the combiner
-            # compares dates and keeps a newer last-known-good artifact when a
-            # cache-only current run had to rewind.
+    for market in sorted(SUPPORTED_MARKET_CODES):
+        artifact_name = f"static-market-{market}"
+        target_dir = fallback_dir / artifact_name
+        # Download fallback artifacts for current markets too; the combiner
+        # compares dates and keeps a newer last-known-good artifact when a
+        # cache-only current run had to rewind.
+        for artifact_run in list_artifact_runs(
+            repo=repo,
+            artifact_name=artifact_name,
+            branch_name=branch_name,
+            current_run_id=current_run_id,
+        ):
+            run_id = artifact_run.run_id
             if market in fallback_markets and _run_cannot_beat_incumbent(
-                run_upper_bound=run_upper_bound,
+                run_upper_bound=artifact_run.created_on,
                 incumbent_date=fallback_dates_by_market.get(market),
             ):
-                continue
-            target_dir = fallback_dir / artifact_name
+                break
             candidate = _download_candidate(
                 repo=repo,
-                run_id=int(run_id),
+                run_id=run_id,
                 artifact_name=artifact_name,
                 parent_dir=fallback_dir,
                 finder=partial(
                     _find_compatible_market_candidate,
                     market=market,
                     artifact_name=artifact_name,
-                    run_id=int(run_id),
+                    run_id=run_id,
                     formula_requirements=formula_requirements,
                 ),
                 date_reader=downloaded_market_as_of_date,

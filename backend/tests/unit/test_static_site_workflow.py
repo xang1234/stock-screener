@@ -19,9 +19,50 @@ from app.scripts.download_static_market_fallbacks import (
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _write_fake_gh(fake_gh: Path, payload: str) -> None:
+_ARTIFACT_LOOKUP_PRELUDE = """\
+import json as _json
+import sys as _sys
+
+_args = _sys.argv[1:]
+if _args[:3] == ["api", "--paginate", "--slurp"] and "actions/artifacts?name=" in _args[3]:
+    _name = _args[3].split("name=", 1)[1].split("&", 1)[0]
+    print(_json.dumps([{"artifacts": [
+        {
+            "name": _name,
+            "expired": False,
+            "created_at": created,
+            "workflow_run": {
+                "id": run_id,
+                "head_branch": "main",
+                "repository_id": 1,
+                "head_repository_id": 1,
+            },
+        }
+        for run_id, created, names in _ARTIFACT_RUNS
+        if _name in names
+    ]}]))
+    _sys.exit(0)
+"""
+
+
+def _write_fake_gh(
+    fake_gh: Path,
+    payload: str,
+    *,
+    artifact_runs: list[tuple[int, str | None, list[str]]] | None = None,
+) -> None:
+    """Install a fake ``gh``; ``artifact_runs`` serves the by-name artifact API.
+
+    Each ``(run_id, created_at, artifact_names)`` row is one workflow run of
+    this repository's main branch that uploaded those artifacts.
+    """
+    prelude = (
+        f"_ARTIFACT_RUNS = {artifact_runs!r}\n{_ARTIFACT_LOOKUP_PRELUDE}\n"
+        if artifact_runs is not None
+        else ""
+    )
     payload_path = fake_gh.with_suffix(".py")
-    payload_path.write_text(textwrap.dedent(payload), encoding="utf-8")
+    payload_path.write_text(prelude + textwrap.dedent(payload), encoding="utf-8")
     fake_gh.write_text(
         "#!/bin/sh\n"
         f'exec {shlex.quote(sys.executable)} {shlex.quote(str(payload_path))} "$@"\n',
@@ -544,19 +585,131 @@ def test_static_site_fallback_run_bound_allows_next_day_session_dates() -> None:
     )
 
 
+def _artifact(
+    run_id,
+    created,
+    *,
+    name="static-market-US",
+    branch="main",
+    repo_id=1,
+    head_repo_id=1,
+    expired=False,
+):
+    return {
+        "name": name,
+        "expired": expired,
+        "created_at": created,
+        "workflow_run": {
+            "id": run_id,
+            "head_branch": branch,
+            "repository_id": repo_id,
+            "head_repository_id": head_repo_id,
+        },
+    }
+
+
+def test_list_artifact_runs_keeps_only_trusted_default_branch_runs(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_gh_json(args):
+        calls.append(args)
+        return [
+            {
+                "artifacts": [
+                    _artifact(500, "2026-09-01T00:00:00Z"),
+                    _artifact(999, "2026-09-05T00:00:00Z"),  # current run
+                    _artifact(501, "2026-09-04T00:00:00Z", expired=True),
+                    _artifact(502, "2026-09-04T00:00:00Z", branch="feature"),
+                    # A fork PR whose head branch is also called "main".
+                    _artifact(503, "2026-09-04T00:00:00Z", head_repo_id=77),
+                    {
+                        **_artifact(504, "2026-09-04T00:00:00Z"),
+                        "workflow_run": {"id": 504, "head_branch": "main"},
+                    },
+                    _artifact(505, "2026-09-03T00:00:00Z", name="static-market-USX"),
+                    _artifact(506, "2026-09-03T00:00:00Z"),
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(fallback_script, "gh_json", fake_gh_json)
+
+    runs = fallback_script.list_artifact_runs(
+        repo="xang1234/stock-screener",
+        artifact_name="static-market-US",
+        branch_name="main",
+        current_run_id=999,
+    )
+
+    assert [run.run_id for run in runs] == [506, 500]
+    assert "actions/artifacts?name=static-market-US" in calls[0][-1]
+
+
+def test_market_fallback_prefers_newer_session_over_newer_upload(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    listings = {
+        "static-market-US": [
+            _artifact(600, "2026-09-06T00:00:00Z"),  # rewound export: older session
+            _artifact(500, "2026-09-05T00:00:00Z"),
+            _artifact(400, "2026-08-20T00:00:00Z"),  # cannot beat 2026-09-05
+        ]
+    }
+    sessions = {600: date(2026, 9, 4), 500: date(2026, 9, 5), 400: date(2026, 8, 19)}
+    downloaded = []
+
+    def fake_gh_json(args):
+        name = args[-1].split("name=", 1)[1].split("&", 1)[0]
+        return [{"artifacts": listings.get(name, [])}]
+
+    def fake_download(*, run_id, parent_dir, **_kwargs):
+        downloaded.append(run_id)
+        wrapper = parent_dir / f"c-{run_id}"
+        wrapper.mkdir(parents=True)
+        return fallback_script._DownloadedCandidate(wrapper, wrapper, sessions[run_id])
+
+    installed = {}
+    monkeypatch.setattr(fallback_script, "gh_json", fake_gh_json)
+    monkeypatch.setattr(fallback_script, "_download_candidate", fake_download)
+    monkeypatch.setattr(
+        fallback_script,
+        "_install_market_candidate",
+        lambda *, target_dir, candidate_dir: installed.__setitem__(
+            target_dir.name, candidate_dir.name
+        ),
+    )
+
+    markets = fallback_script.download_fallback_artifacts(
+        repo="xang1234/stock-screener",
+        current_run_id=999,
+        branch_name="main",
+        current_dir=tmp_path / "current",
+        fallback_dir=tmp_path / "fallback",
+    )
+
+    assert markets == {"US"}
+    assert downloaded == [600, 500]
+    assert installed["static-market-US"] == "c-500"
+
+
 def test_options_fallback_skips_runs_that_cannot_beat_the_incumbent(
     tmp_path,
     monkeypatch,
 ) -> None:
-    runs = [
-        {"id": 333, "created_at": "2026-09-05T00:00:00Z"},
-        {"id": 222, "created_at": "2026-09-01T00:00:00Z"},
-    ]
-
     def fake_gh_json(args):
-        if "actions/workflows/static-site.yml/runs" in args[-1]:
-            return {"workflow_runs": runs}
-        return {"artifacts": [{"name": "static-options-US", "expired": False}]}
+        if "name=static-options-US" in args[-1]:
+            return [
+                {
+                    "artifacts": [
+                        _artifact(333, "2026-09-05T00:00:00Z", name="static-options-US"),
+                        _artifact(222, "2026-09-01T00:00:00Z", name="static-options-US"),
+                    ]
+                }
+            ]
+        return [{"artifacts": []}]
 
     downloaded_runs = []
 
@@ -599,13 +752,18 @@ def test_options_fallback_keeps_a_newer_existing_fallback(
     tmp_path,
     monkeypatch,
 ) -> None:
-    runs = [{"id": 333, "created_at": "2026-09-05T00:00:00Z"}]
     fallback_options_dir = tmp_path / "selected-options"
 
     def fake_gh_json(args):
-        if "actions/workflows/static-site.yml/runs" in args[-1]:
-            return {"workflow_runs": runs}
-        return {"artifacts": [{"name": "static-options-US", "expired": False}]}
+        if "name=static-options-US" in args[-1]:
+            return [
+                {
+                    "artifacts": [
+                        _artifact(333, "2026-09-05T00:00:00Z", name="static-options-US")
+                    ]
+                }
+            ]
+        return [{"artifacts": []}]
 
     downloaded_runs = []
     monkeypatch.setattr(fallback_script, "gh_json", fake_gh_json)
@@ -658,37 +816,20 @@ def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_mark
     downloads_log = tmp_path / "downloads.jsonl"
     _write_fake_gh(
         fake_gh,
-        f"""\
+        artifact_runs=[
+            (999, '2026-08-05T00:00:00Z', ['static-market-HK', 'static-market-US', 'static-market-TW']),
+            (333, '2026-08-05T00:00:00Z', ['static-market-diagnostics-CN', 'static-market-HK', 'static-market-status-CN', 'static-market-US', 'static-market-TW']),
+            (222, '2026-08-04T00:00:00Z', ['static-market-US']),
+            (111, '2026-08-03T00:00:00Z', ['static-market-US']),
+        ],
+        payload=f"""\
         import json
         import pathlib
         import sys
 
         downloads_log = pathlib.Path({str(downloads_log)!r})
         args = sys.argv[1:]
-        if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
-            print(json.dumps([{{"workflow_runs": [
-                {{"id": 999, "conclusion": "failure", "created_at": "2026-08-05T00:00:00Z"}},
-                {{"id": 333, "conclusion": "success", "created_at": "2026-08-05T00:00:00Z"}},
-                {{"id": 222, "conclusion": "success", "created_at": "2026-08-04T00:00:00Z"}},
-                {{"id": 111, "conclusion": "success", "created_at": "2026-08-03T00:00:00Z"}}
-            ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
-            print(json.dumps([{{"artifacts": [
-                {{"name": "static-market-diagnostics-CN", "expired": False}},
-                {{"name": "static-market-HK", "expired": False}},
-                {{"name": "static-market-status-CN", "expired": False}},
-                {{"name": "static-market-US", "expired": False}},
-                {{"name": "static-market-TW", "expired": False}}
-            ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
-            print(json.dumps([{{"artifacts": [
-                {{"name": "static-market-US", "expired": False}}
-            ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/111/artifacts" in args[3]:
-            print(json.dumps([{{"artifacts": [
-                {{"name": "static-market-US", "expired": False}}
-            ]}}]))
-        elif args[:2] == ["run", "download"]:
+        if args[:2] == ["run", "download"]:
             run_id = args[2]
             artifact_name = args[args.index("--name") + 1]
             if artifact_name == "static-market-HK":
@@ -770,28 +911,19 @@ def test_static_site_fallback_downloader_keeps_formula_compatible_candidate(
     downloads_log = tmp_path / "downloads.jsonl"
     _write_fake_gh(
         fake_gh,
-        f"""\
+        artifact_runs=[
+            (999, '2026-08-05T00:00:00Z', ['static-market-US']),
+            (333, '2026-08-04T00:00:00Z', ['static-market-US']),
+            (222, '2026-08-03T00:00:00Z', ['static-market-US']),
+        ],
+        payload=f"""\
         import json
         import pathlib
         import sys
 
         downloads_log = pathlib.Path({str(downloads_log)!r})
         args = sys.argv[1:]
-        if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
-            print(json.dumps([{{"workflow_runs": [
-                {{"id": 999, "created_at": "2026-08-05T00:00:00Z"}},
-                {{"id": 333, "created_at": "2026-08-04T00:00:00Z"}},
-                {{"id": 222, "created_at": "2026-08-03T00:00:00Z"}}
-            ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
-            print(json.dumps([{{"artifacts": [
-                {{"name": "static-market-US", "expired": False}}
-            ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
-            print(json.dumps([{{"artifacts": [
-                {{"name": "static-market-US", "expired": False}}
-            ]}}]))
-        elif args[:2] == ["run", "download"]:
+        if args[:2] == ["run", "download"]:
             run_id = args[2]
             artifact_name = args[args.index("--name") + 1]
             target_dir = pathlib.Path(args[args.index("--dir") + 1])
@@ -891,22 +1023,17 @@ def test_static_site_fallback_downloader_skips_damaged_advertised_assets(
     fake_gh = fake_bin / "gh"
     _write_fake_gh(
         fake_gh,
-        """\
+        artifact_runs=[
+            (999, '2026-08-05T00:00:00Z', ['static-market-US']),
+            (333, '2026-08-04T00:00:00Z', ['static-market-US']),
+        ],
+        payload="""\
         import json
         import pathlib
         import sys
 
         args = sys.argv[1:]
-        if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
-            print(json.dumps([{"workflow_runs": [
-                {"id": 999, "created_at": "2026-08-05T00:00:00Z"},
-                {"id": 333, "created_at": "2026-08-04T00:00:00Z"}
-            ]}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
-            print(json.dumps([{"artifacts": [
-                {"name": "static-market-US", "expired": False}
-            ]}]))
-        elif args[:2] == ["run", "download"]:
+        if args[:2] == ["run", "download"]:
             target_dir = pathlib.Path(args[args.index("--dir") + 1])
             market_dir = target_dir / "markets" / "us"
             market_dir.mkdir(parents=True, exist_ok=True)
@@ -958,28 +1085,19 @@ def test_static_site_fallback_downloader_skips_incompatible_schema_and_keeps_sea
     downloads_log = tmp_path / "downloads.jsonl"
     _write_fake_gh(
         fake_gh,
-        f"""\
+        artifact_runs=[
+            (999, '2026-08-06T00:00:00Z', ['static-market-AU']),
+            (333, '2026-08-05T00:00:00Z', ['static-market-AU']),
+            (222, '2026-08-04T00:00:00Z', ['static-market-AU']),
+        ],
+        payload=f"""\
         import json
         import pathlib
         import sys
 
         downloads_log = pathlib.Path({str(downloads_log)!r})
         args = sys.argv[1:]
-        if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
-            print(json.dumps([{{"workflow_runs": [
-                {{"id": 999}},
-                {{"id": 333}},
-                {{"id": 222}}
-            ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
-            print(json.dumps([{{"artifacts": [
-                {{"name": "static-market-AU", "expired": False}}
-            ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
-            print(json.dumps([{{"artifacts": [
-                {{"name": "static-market-AU", "expired": False}}
-            ]}}]))
-        elif args[:2] == ["run", "download"]:
+        if args[:2] == ["run", "download"]:
             run_id = args[2]
             artifact_name = args[args.index("--name") + 1]
             target_dir = pathlib.Path(args[args.index("--dir") + 1])
