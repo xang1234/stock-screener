@@ -60,8 +60,11 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
     browser fetches each, so a missing or truncated one is as broken as a
     missing page. A few hundred small files per market are cheap to parse.
     """
-    pages = entry.get("pages") if isinstance(entry.get("pages"), dict) else {}
-    assets = entry.get("assets") if isinstance(entry.get("assets"), dict) else {}
+    for section in ("pages", "assets"):
+        if section in entry and not isinstance(entry[section], dict):
+            raise StaticAdvertisedPathError(f"{section} must be an object")
+    pages = entry.get("pages") or {}
+    assets = entry.get("assets") or {}
     listed_files = {
         id(pages.get("scan")): ("scan manifest", "chunks"),
         id(assets.get("charts")): ("chart index", "symbols"),

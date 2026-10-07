@@ -778,6 +778,54 @@ def test_malformed_descriptors_are_rejected(tmp_path: Path, changes) -> None:
         _validate_assets(market_dir)
 
 
+@pytest.mark.parametrize("changes", [{"pages": []}, {"assets": None}, {"pages": "x"}])
+def test_non_object_page_and_asset_sections_are_rejected(tmp_path: Path, changes) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(tmp_path, "US", **changes)
+
+    with pytest.raises(StaticArtifactFormulaError, match="must be an object"):
+        _validate_assets(market_dir)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda path: path.write_text("{truncated", encoding="utf-8"),
+        lambda path: path.write_text(
+            json.dumps(
+                {
+                    "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                    "market": "HK",
+                    "entry": [],
+                }
+            ),
+            encoding="utf-8",
+        ),
+    ],
+    ids=["truncated-manifest", "non-object-entry"],
+)
+def test_unreadable_current_manifest_falls_back(tmp_path: Path, damage) -> None:
+    current = tmp_path / "current"
+    write_market_artifact(current, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    write_market_artifact(current, market="HK", formula=BALANCED_RS_FORMULA_VERSION)
+    damage(current / "static-market-HK" / STATIC_MARKET_METADATA_FILENAME)
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=BALANCED_RS_FORMULA_VERSION
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=True,
+    )
+
+    assert result.manifest["markets"]["HK"]["publication"]["source"] == "fallback"
+    assert any("Ignored damaged" in w and "HK" in w for w in result.warnings)
+
+
 def test_asset_descriptor_without_path_is_left_to_its_own_validator(
     tmp_path: Path,
 ) -> None:

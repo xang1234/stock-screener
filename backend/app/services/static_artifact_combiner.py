@@ -342,20 +342,29 @@ class StaticArtifactCombiner:
                 root,
                 metadata_path,
             )
-            metadata = read_static_market_manifest(
-                metadata_path,
-                expected_schema_version=self._schema_version,
-                expected_market=expected_market,
-            )
+            try:
+                metadata = read_static_market_manifest(
+                    metadata_path,
+                    expected_schema_version=self._schema_version,
+                    expected_market=expected_market,
+                )
+            except (OSError, ValueError) as exc:
+                # An unreadable manifest is a damaged artifact; contract errors
+                # (wrong schema or market) stay fatal, as in the validator.
+                rejections.append(
+                    (expected_market or "", f"{metadata_path} is unreadable ({exc})")
+                )
+                continue
             market = str(metadata.get("market") or "").strip().upper()
             if market in discovered:
                 raise RuntimeError(f"Duplicate {source_label} artifact for {market}")
             market_dir = metadata_path.parent
             entry = metadata.get("entry")
             if not isinstance(entry, dict):
-                raise RuntimeError(
-                    f"{market} {source_label} metadata has no Market entry"
+                rejections.append(
+                    (market, f"{market} {source_label} metadata has no Market entry")
                 )
+                continue
             expected = required.get(market)
             if expected is not None:
                 entry = self._validate_formula(
