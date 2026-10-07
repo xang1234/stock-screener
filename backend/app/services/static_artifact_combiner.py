@@ -12,6 +12,10 @@ from app.services.atomic_directory_publisher import AtomicDirectoryPublisher
 from app.services.static_group_matrix import validate_group_matrix_asset
 from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
 from app.services.market_session_lag import market_session_lag
+from app.services.static_advertised_paths import (
+    StaticAdvertisedPathError,
+    validate_advertised_paths,
+)
 from app.services.static_breadth_contributor_asset_validator import (
     StaticBreadthContributorAssetError,
     validate_static_breadth_contributor_asset,
@@ -388,87 +392,15 @@ class StaticArtifactCombiner:
         return discovered
 
     @staticmethod
-    def _resolve_advertised_path(
-        *, market: str, source_label: str, market_dir: Path, advertised: object
-    ) -> Path | None:
-        """Resolve a market-owned ``markets/<m>/...`` path inside the artifact.
-
-        Returns ``None`` for root-level paths such as ``options/manifest.json``:
-        those sections ship as their own artifacts and are validated there.
-        """
-        text = str(advertised or "").strip()
-        if not text:
-            raise StaticArtifactFormulaError(
-                f"{market} {source_label} advertises an empty path"
-            )
-        try:
-            relative = Path(text).relative_to(Path("markets") / market.lower())
-        except ValueError:
-            return None
-        root = market_dir.resolve()
-        try:
-            resolved = (root / relative).resolve()
-        except (OSError, ValueError) as exc:
-            raise StaticArtifactFormulaError(
-                f"{market} {source_label} advertised path is invalid: {text!r} ({exc})"
-            ) from exc
-        if not resolved.is_relative_to(root):
-            raise StaticArtifactFormulaError(
-                f"{market} {source_label} advertised path escapes its artifact: {text!r}"
-            )
-        if not resolved.is_file():
-            raise StaticArtifactFormulaError(
-                f"{market} {source_label} advertised file is absent: {text!r}"
-            )
-        return resolved
-
-    @classmethod
-    def _validate_advertised_paths(
-        cls, *, market: str, source_label: str, entry: dict, market_dir: Path
-    ) -> None:
-        pages = entry.get("pages") if isinstance(entry.get("pages"), dict) else {}
-        assets = entry.get("assets") if isinstance(entry.get("assets"), dict) else {}
-        for descriptor in (*pages.values(), *assets.values()):
-            if not isinstance(descriptor, dict) or "path" not in descriptor:
-                continue
-            path = cls._resolve_advertised_path(
-                market=market,
-                source_label=source_label,
-                market_dir=market_dir,
-                advertised=descriptor["path"],
-            )
-            if path is None:
-                continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                raise StaticArtifactFormulaError(
-                    f"{market} {source_label} advertised file {descriptor['path']!r} "
-                    f"does not parse: {exc}"
-                ) from exc
-            if descriptor is assets.get("charts") and isinstance(payload, dict):
-                # ponytail: chart payloads are checked for presence only; there
-                # can be hundreds and the browser parses each one lazily.
-                for symbol in payload.get("symbols") or []:
-                    cls._resolve_advertised_path(
-                        market=market,
-                        source_label=source_label,
-                        market_dir=market_dir,
-                        advertised=(
-                            symbol.get("path") if isinstance(symbol, dict) else None
-                        ),
-                    )
-
-    @classmethod
     def _validate_advertised_assets(
-        cls, *, market: str, source_label: str, entry: dict, market_dir: Path
+        *, market: str, source_label: str, entry: dict, market_dir: Path
     ) -> list[str]:
-        cls._validate_advertised_paths(
-            market=market,
-            source_label=source_label,
-            entry=entry,
-            market_dir=market_dir,
-        )
+        try:
+            validate_advertised_paths(
+                market=market, entry=entry, market_dir=market_dir
+            )
+        except StaticAdvertisedPathError as exc:
+            raise StaticArtifactFormulaError(f"{market} {source_label} {exc}") from exc
         warnings: list[str] = []
         features = (
             entry.get("features") if isinstance(entry.get("features"), dict) else {}
