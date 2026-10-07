@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 from app.scripts import download_static_market_fallbacks as fallback_script
 from app.scripts.download_static_market_fallbacks import (
     collect_current_markets,
@@ -1203,3 +1204,70 @@ def test_static_site_current_market_collection_rejects_swapped_artifact_name(
     )
 
     assert collect_current_markets(current_dir) == set()
+
+
+PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "static-site-publish.yml"
+
+
+def _publish_workflow() -> dict:
+    return yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _publish_step(name: str) -> dict:
+    steps = _publish_workflow()["jobs"]["build"]["steps"]
+    return next(step for step in steps if step.get("name") == name)
+
+
+def test_publisher_runs_only_on_dispatch_and_same_repo_prs() -> None:
+    workflow = _publish_workflow()
+    triggers = workflow[True]  # PyYAML parses the `on:` key as True
+    assert set(triggers) == {"workflow_dispatch", "pull_request"}
+    assert "rs_formula_overrides" in triggers["workflow_dispatch"]["inputs"]
+    build_if = workflow["jobs"]["build"]["if"]
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in build_if
+    assert "default_branch" in build_if
+
+
+def test_publisher_pr_runs_never_share_the_production_group() -> None:
+    concurrency = _publish_workflow()["concurrency"]
+    assert concurrency["cancel-in-progress"] is False
+    group = concurrency["group"]
+    assert "static-site-publisher" in group
+    assert "pull_request" in group and "github.ref" in group
+
+
+def test_publisher_reads_default_branch_artifacts_into_one_selection() -> None:
+    step = _publish_step("Download newest market artifacts")
+    assert "continue-on-error" not in step
+    assert step["env"]["BRANCH_NAME"] == "${{ github.event.repository.default_branch }}"
+    assert step["env"]["CURRENT_RUN_ID"] == "${{ github.run_id }}"
+    run = step["run"]
+    assert "python -m app.scripts.download_static_market_fallbacks" in run
+    assert "--fallback-dir /tmp/static-market-artifacts" in run
+    assert "--fallback-options-dir /tmp/static-options" in run
+    assert "--fallback-cot-dir /tmp/static-cot" in run
+
+
+def test_publisher_validates_and_combines_one_selection() -> None:
+    validate = _publish_step("Validate market artifacts")["run"]
+    assert "python -m app.scripts.validate_static_market_artifacts" in validate
+    assert "--current-dir /tmp/static-market-artifacts" in validate
+    assert "--selected-markets '[]'" in validate
+    combine = _publish_step("Combine static data bundle")["run"]
+    assert "--combine-artifacts-dir /tmp/static-market-artifacts" in combine
+    assert "--fallback-artifacts-dir" not in combine
+    assert "--options-artifacts-dir /tmp/static-options" in combine
+    assert "--cot-artifacts-dir /tmp/static-cot" in combine
+    report = _publish_step("Report market freshness")
+    assert report["continue-on-error"] is True
+    assert "app.scripts.report_static_market_freshness" in report["run"]
+
+
+def test_publisher_deploys_only_from_default_branch_dispatch() -> None:
+    jobs = _publish_workflow()["jobs"]
+    deploy_if = jobs["deploy"]["if"]
+    assert "github.event_name == 'workflow_dispatch'" in deploy_if
+    assert "default_branch" in deploy_if
+    assert jobs["deploy"]["environment"]["name"] == "github-pages"
+    for name in ("Configure Pages", "Prune duplicate Pages artifacts"):
+        assert "workflow_dispatch" in _publish_step(name)["if"]
