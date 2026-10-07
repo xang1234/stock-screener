@@ -55,6 +55,10 @@ export const getStaticSupportedMarkets = (manifest) => {
   return [STATIC_DEFAULT_MARKET];
 };
 
+export const getStaticUnavailableMarkets = (manifest) => (
+  Array.isArray(manifest?.unavailable_markets) ? manifest.unavailable_markets : []
+);
+
 export const resolveStaticMarketEntry = (manifest, selectedMarket) => {
   const defaultMarket = String(manifest?.default_market || STATIC_DEFAULT_MARKET).toUpperCase();
   const supportedMarkets = getStaticSupportedMarkets(manifest).map((market) => String(market).toUpperCase());

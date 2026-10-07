@@ -20,7 +20,12 @@ import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import { ColorModeContext } from '../contexts/ColorModeContext';
 import { useStaticMarket } from './StaticMarketContext';
-import { getStaticSupportedMarkets, resolveStaticMarketEntry, useStaticManifest } from './dataClient';
+import {
+  getStaticSupportedMarkets,
+  getStaticUnavailableMarkets,
+  resolveStaticMarketEntry,
+  useStaticManifest,
+} from './dataClient';
 import { marketFlag } from '../utils/marketFlags';
 import { isStaticOptionsAvailable } from '../features/options/optionsAvailability';
 
@@ -81,6 +86,15 @@ function StaticLayout({ children }) {
                   const flag = marketFlag(market);
                   return (
                     <MenuItem key={market} value={market}>
+                      {flag ? `${flag}  ${label}` : label}
+                    </MenuItem>
+                  );
+                })}
+                {getStaticUnavailableMarkets(manifestQuery.data).map((market) => {
+                  const flag = marketFlag(market);
+                  const label = `${market} — unavailable`;
+                  return (
+                    <MenuItem key={market} value={market} disabled>
                       {flag ? `${flag}  ${label}` : label}
                     </MenuItem>
                   );
