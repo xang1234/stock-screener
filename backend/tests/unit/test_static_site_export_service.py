@@ -2336,7 +2336,9 @@ def test_combine_market_artifacts_accepts_fallback_when_current_is_empty(tmp_pat
 
     assert result.manifest["supported_markets"] == ["JP"]
     assert (output_dir / "markets" / "jp" / "scan" / "manifest.json").exists()
-    assert "JP reused from a previous static-site market artifact because the current run produced no artifact." in result.warnings
+    # With no current artifacts (the static-site publisher), every market is a
+    # fallback, so no per-market reuse warning is emitted (#499).
+    assert not any("reused from a previous" in warning for warning in result.warnings)
 
 
 def test_combine_market_artifacts_rejects_fallback_with_mismatched_schema(tmp_path):

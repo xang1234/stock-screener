@@ -57,14 +57,21 @@ run may be cancelled, duplicated or coalesced and the next run repairs it.
      this run, `BRANCH_NAME` = default branch.
   3. `validate_static_market_artifacts` with `--selected-markets '[]'` (no
      producer statuses in this run; US stays required).
-  4. `export_static_site` combine with the selection directory as
-     `--combine-artifacts-dir` (no separate fallback dir) and the options/COT
-     selections as their directories.
+  4. `export_static_site` combine with an empty `--combine-artifacts-dir`
+     and the selection as `--fallback-artifacts-dir` (options/COT likewise as
+     fallback dirs). Stored artifacts are last-good inputs, so they get the
+     fallback policy: an artifact that predates the balanced RS rollout or the
+     current breadth revision is accepted or skipped instead of failing every
+     market's publish; only an explicit `rs_formula_overrides` input constrains
+     it. (Review finding: passing them as current applied the full balanced
+     policy, so an RS rollback would have blocked every publish.)
   5. Freshness report (non-blocking, as today), `npm run build`,
      `upload-pages-artifact`, prune duplicate Pages artifacts.
-- Job `deploy`: `deploy-pages`, `environment: github-pages`, only when the run
-  is on the default branch. On another branch the publisher rehearses
-  everything except the deploy.
+- Job `deploy`: `deploy-pages`, `environment: github-pages`, only for a
+  `workflow_dispatch` on the default branch. A dispatch on another branch, or
+  a same-repo PR touching the publisher's files, rehearses everything except
+  Configure Pages, pruning and the deploy, in a per-ref concurrency group so it
+  can never replace a pending production publish.
 - `rs_formula_overrides` dispatch input passes through to download/combine as
   today (default `{}`).
 
@@ -72,16 +79,15 @@ run may be cancelled, duplicated or coalesced and the next run repairs it.
 
 upload-artifact v4 artifacts are finalized at upload and served by the REST API
 while their run continues, so HK publishes while CN is still exporting. The
-downloader uses `gh run download <run_id> --name <artifact>`; if that refuses an
-in-progress run, switch `_download_candidate` to
-`gh api repos/{repo}/actions/artifacts/{id}/zip` + unzip (the artifact ID is
-already in the by-name listing). Verify on the first branch rehearsal while a
-producer run is in progress.
+downloader uses `gh run download <run_id> --name <artifact>`, which lists the
+run's artifacts without checking the run's status (cli/cli
+`pkg/cmd/run/download/download.go`), so no fallback download path is needed.
 
 ### Publication semantics
 
-With one selection directory every served market is labelled
-`publication.source: "current"`; freshness is carried by `publication.state`
+Every served market is labelled `publication.source: "fallback"` (it comes
+from the artifact store, not from this run's export), and the combiner skips
+its per-market "reused" warning when there are no current artifacts; freshness is carried by `publication.state`
 (`current`/`stale`/`unknown`, judged against the market's last completed
 session). The freshness report has no producer statuses in the publisher run,
 so its Reason column is empty; per-market reasons stay in each producer run's
@@ -94,7 +100,8 @@ status/diagnostics artifacts.
 | Market export cancelled before upload | That market keeps its last artifact (`stale`); others unaffected |
 | Cancelled after upload, before its wake-up | Next wake-up from any market, or the run's final `wake-publisher`, publishes it; if the whole run died, the next export run's wake-ups do |
 | Publisher cancelled / build or deploy fails | Live site keeps its last deploy (Pages deploy is atomic); next wake-up republishes without re-exporting |
-| Late or out-of-order producer | Selection is by session date (strictly newer wins; same session: newest upload) and publishes are serialized, so older data cannot replace newer |
+| Late or out-of-order producer | Selection is by session date (strictly newer wins; same session: newest upload) and publishes are serialized, so a late producer cannot replace newer data |
+| Transient download/lookup failure in a publish | The downloader moves to the next candidate, so that publish can show an older session for one market (or omit an optional one); the next publish restores it. Accepted for now |
 | Duplicate / coalesced wake-ups | Idempotent |
 | No run starts for hours | Out of scope here; #503's external watchdog triggers producers/publisher via the API |
 
@@ -117,15 +124,20 @@ existing ones do):
   does not need `calendar-audit`.
 - each producer upload is followed by a non-fatal publisher wake-up on the
   default branch; `wake-publisher` needs all producers and runs `always()`.
-- `static-site-publish.yml`: `workflow_dispatch` only (no `schedule`), group
-  `static-site-publisher` without cancel-in-progress, downloads markets/options/
-  COT by name into one directory, validates with no selected markets, combines
-  without a fallback dir, deploys only on the default branch.
+- `static-site-publish.yml`: `workflow_dispatch` + same-repo PRs (no
+  `schedule`); the exact concurrency expression (production group only for a
+  default-branch dispatch); downloads markets/options/COT by name into one
+  selection; validates and combines it as fallbacks; deploys only on a
+  default-branch dispatch.
+- An end-to-end test runs `export_static_site.main()` with the combine
+  arguments parsed from the workflow, over a balanced US and a legacy HK
+  artifact.
 - Existing combine/download/validator/freshness tests stay green.
 
-Rollout: dispatch the publisher on the feature branch (no deploy) while a
-producer run is in progress to verify in-progress artifact download and a full
-build; merge; watch the first scheduled export run publish per market.
+Rollout: the PR's build-only rehearsal verifies download/validate/combine/
+build against main's artifacts; merge while no `static-site.yml` run is queued
+or running (queued runs keep the old definition and would deploy alongside the
+publisher); watch the first scheduled export run publish per market.
 Rollback: revert the PR (restores `combine-and-build`).
 
 ## Out of scope

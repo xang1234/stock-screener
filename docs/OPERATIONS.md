@@ -302,14 +302,14 @@ After success, verify the JSON has `activated: true`, the expected formula/run I
 
 ### 4. Promote static artifacts
 
-Do not copy an unvalidated staging directory into the serving directory. After the code and Market activation are on the default branch, use the existing Static Site workflow so its combine, fallback-compatibility, frontend-build, and Pages deployment gates remain in force:
+Do not copy an unvalidated staging directory into the serving directory. After the code and Market activation are on the default branch, run the Static Site export workflow. Each Market it exports wakes the **Static Site Publish** workflow (`static-site-publish.yml`), which selects the newest valid artifact per Market and keeps the artifact-validation, combine, frontend-build and Pages deployment gates in force:
 
 ```bash
 gh workflow run static-site.yml -f market_group=us
 # Use market_group=asia or market_group=all for the corresponding rollout set.
 ```
 
-Confirm the workflow publishes `static-site-v3`, updates the Market's `static-rrg-history-v4` release asset where applicable, and deploys Pages successfully.
+Confirm the export run publishes `static-site-v3` artifacts and updates the Market's `static-rrg-history-v4` release asset where applicable, then confirm the following Static Site Publish run deploys Pages successfully. A publish can be re-run at any time without re-exporting: `gh workflow run static-site-publish.yml`.
 
 ### 5. Roll back one Market
 
@@ -368,7 +368,7 @@ gh workflow run static-site.yml \
   -f 'rs_formula_overrides={"US":"legacy-linear-v1"}'
 ```
 
-The JSON map is per Market; omitted Markets remain on `balanced-horizon-percentile-v2`, allowing an isolated rollback without changing other current or fallback artifacts. Verify live/static metadata says `legacy-linear-v1` for the restored Market. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and omit that Market from `rs_formula_overrides`.
+The JSON map is per Market; omitted Markets remain on `balanced-horizon-percentile-v2`, allowing an isolated rollback without changing other current or fallback artifacts. The rollback artifact's wake-up publishes it: Static Site Publish treats stored artifacts as last-good inputs, so a legacy-formula artifact is accepted unless a publisher `rs_formula_overrides` input constrains that Market. To force a specific formula selection for one publish, run `gh workflow run static-site-publish.yml -f 'rs_formula_overrides={"US":"legacy-linear-v1"}'`; a later automatic wake-up (no input) may replace it while it is still pending, which is harmless because an empty override does not reject either formula. Verify live/static metadata says `legacy-linear-v1` for the restored Market. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and omit that Market from `rs_formula_overrides`.
 
 ## Market Calendar Maintenance
 

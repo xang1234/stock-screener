@@ -147,7 +147,10 @@ class StaticArtifactCombiner:
             warnings.extend(
                 str(item) for item in artifact["metadata"].get("warnings", [])
             )
-            if artifact["source_label"] == "fallback":
+            # With no current artifacts at all (the static-site publisher, which
+            # selects stored artifacts) every market is a fallback, so a
+            # per-market reuse warning would carry no information.
+            if artifact["source_label"] == "fallback" and current:
                 if fallback_reasons.get(market) == "newer":
                     warnings.append(
                         f"{market} reused from a previous static-site market artifact "

@@ -895,3 +895,47 @@ def test_malformed_chart_index_is_rejected_not_crashing(tmp_path: Path, index) -
 
     with pytest.raises(StaticArtifactFormulaError, match="chart index"):
         _validate_assets(market_dir)
+
+
+def test_publisher_selection_does_not_warn_per_market_reuse(tmp_path: Path) -> None:
+    # The publisher passes every stored artifact as a fallback with an empty
+    # current directory; "reused because the current run produced no artifact"
+    # would then fire for every market on every publish.
+    (tmp_path / "empty").mkdir()
+    selection = write_market_artifact(
+        tmp_path / "selection", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    write_market_artifact(selection, market="HK", formula=LEGACY_RS_FORMULA_VERSION)
+
+    result = combiner().combine(
+        artifacts_dir=tmp_path / "empty",
+        fallback_artifacts_dir=selection,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+        fallback_required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=True,
+    )
+
+    assert result.manifest["supported_markets"] == ["US", "HK"]
+    assert not any("reused from a previous" in w for w in result.warnings)
+
+
+def test_current_run_gap_still_warns_about_reuse(tmp_path: Path) -> None:
+    current = write_market_artifact(
+        tmp_path / "current", market="US", formula=BALANCED_RS_FORMULA_VERSION
+    )
+    fallback = write_market_artifact(
+        tmp_path / "fallback", market="HK", formula=BALANCED_RS_FORMULA_VERSION
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=fallback,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={},
+        optional_markets=[m for m in STATIC_SUPPORTED_MARKETS if m != "US"],
+        clean=True,
+    )
+
+    assert any("HK reused from a previous" in w for w in result.warnings)

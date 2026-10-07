@@ -18,12 +18,18 @@ on:
       - backend/app/scripts/validate_static_market_artifacts.py
       - backend/app/services/static_artifact_combiner.py
       - backend/app/services/static_advertised_paths.py
+      - backend/app/scripts/export_static_site.py
+      - backend/app/scripts/report_static_market_freshness.py
+      - backend/app/services/static_site_export_service.py
+      - backend/app/services/static_global_artifacts.py
+      - backend/app/services/static_market_artifact_contract.py
 
 concurrency:
   # One production publish at a time; a newer pending run replaces an older
   # pending one, which is safe because every run publishes "latest per market".
-  # PR rehearsals get their own group so they can never displace a production run.
-  group: ${{ github.event_name == 'pull_request' && format('static-site-publisher-pr-{0}', github.ref) || 'static-site-publisher' }}
+  # Rehearsals (PRs, dispatches on other branches) get a per-ref group so they
+  # can never displace a pending production publish.
+  group: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'static-site-publisher' || format('static-site-publisher-{0}', github.ref) }}
   cancel-in-progress: false
 
 permissions:
@@ -34,7 +40,7 @@ permissions:
 
 jobs:
   build:
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     env:
       REDIS_ENABLED: "false"
@@ -57,7 +63,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Configure Pages
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         uses: actions/configure-pages@v6
         with:
           enablement: true
@@ -86,15 +92,20 @@ jobs:
             --fallback-cot-dir /tmp/static-cot \
             --fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
 
+      # The selection holds stored last-good artifacts, not this run's exports,
+      # so it is passed as the fallback input: an artifact that predates the
+      # balanced RS rollout or the current breadth revision is accepted (or
+      # skipped) instead of failing every market's publish. Only an explicit
+      # rs_formula_overrides input constrains it.
       - name: Validate market artifacts
         run: |
           mkdir -p /tmp/static-market-artifacts
           cd backend
           python -m app.scripts.validate_static_market_artifacts \
-            --current-dir /tmp/static-market-artifacts \
-            --fallback-dir /tmp/static-empty \
-            --current-options-dir /tmp/static-options \
-            --current-cot-dir /tmp/static-cot \
+            --current-dir /tmp/static-empty \
+            --fallback-dir /tmp/static-market-artifacts \
+            --fallback-options-dir /tmp/static-options \
+            --fallback-cot-dir /tmp/static-cot \
             --selected-markets '[]'
 
       - name: Combine static data bundle
@@ -102,9 +113,10 @@ jobs:
           cd backend
           python -m app.scripts.export_static_site \
             --output-dir ../frontend/public/static-data \
-            --combine-artifacts-dir /tmp/static-market-artifacts \
-            --options-artifacts-dir /tmp/static-options \
-            --cot-artifacts-dir /tmp/static-cot \
+            --combine-artifacts-dir /tmp/static-empty \
+            --fallback-artifacts-dir /tmp/static-market-artifacts \
+            --fallback-options-artifacts-dir /tmp/static-options \
+            --fallback-cot-artifacts-dir /tmp/static-cot \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
 
       # Reporting only (#484): never blocks the deploy. Stale or missing markets
@@ -140,7 +152,7 @@ jobs:
           path: frontend/dist
 
       - name: Prune duplicate Pages artifacts
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}

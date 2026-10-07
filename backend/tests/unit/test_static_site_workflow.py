@@ -136,7 +136,7 @@ def test_static_site_workflow_publishes_and_combines_global_cot_artifact() -> No
     assert "Upload current global COT artifact" not in market_job
     publisher = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
     assert "--fallback-cot-dir /tmp/static-cot" in publisher
-    assert "--cot-artifacts-dir /tmp/static-cot" in publisher
+    assert "--fallback-cot-artifacts-dir /tmp/static-cot" in publisher
 
 
 def test_fake_gh_launcher_handles_python_path_with_spaces(
@@ -407,7 +407,7 @@ def test_static_site_preserves_and_publishes_us_options_history() -> None:
     assert "--require-run-id" in build_job
     assert "name: static-options-US" in build_job
     assert "--fallback-options-dir /tmp/static-options" in publisher
-    assert "--options-artifacts-dir /tmp/static-options" in publisher
+    assert "--fallback-options-artifacts-dir /tmp/static-options" in publisher
     publish_history = build_job.split("      - name: Publish US options history\n", 1)[
         1
     ].split("      - name:", 1)[0]
@@ -1142,15 +1142,27 @@ def test_publisher_runs_only_on_dispatch_and_same_repo_prs() -> None:
     assert "rs_formula_overrides" in triggers["workflow_dispatch"]["inputs"]
     build_if = workflow["jobs"]["build"]["if"]
     assert "github.event.pull_request.head.repo.full_name == github.repository" in build_if
-    assert "default_branch" in build_if
+    # Any-branch dispatch is a build-only rehearsal; only deploy needs main.
+    assert "github.event_name == 'workflow_dispatch'" in build_if
+    assert "default_branch" not in build_if
 
 
-def test_publisher_pr_runs_never_share_the_production_group() -> None:
+PRODUCTION_RUN = (
+    "github.event_name == 'workflow_dispatch' && "
+    "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+)
+
+
+def test_publisher_rehearsals_never_share_the_production_group() -> None:
+    # Only a default-branch dispatch joins the production group; a PR or a
+    # feature-branch dispatch would otherwise replace a pending production
+    # publish and then deploy nothing.
     concurrency = _publish_workflow()["concurrency"]
     assert concurrency["cancel-in-progress"] is False
-    group = concurrency["group"]
-    assert "static-site-publisher" in group
-    assert "pull_request" in group and "github.ref" in group
+    assert concurrency["group"] == (
+        "${{ " + PRODUCTION_RUN + " && 'static-site-publisher' || "
+        "format('static-site-publisher-{0}', github.ref) }}"
+    )
 
 
 def test_publisher_reads_default_branch_artifacts_into_one_selection() -> None:
@@ -1166,15 +1178,18 @@ def test_publisher_reads_default_branch_artifacts_into_one_selection() -> None:
 
 
 def test_publisher_validates_and_combines_one_selection() -> None:
+    # Stored artifacts are last-good inputs: they go through the fallback path
+    # (see test_publisher_combine_arguments_accept_last_good_legacy_artifacts).
     validate = _publish_step("Validate market artifacts")["run"]
     assert "python -m app.scripts.validate_static_market_artifacts" in validate
-    assert "--current-dir /tmp/static-market-artifacts" in validate
+    assert "--current-dir /tmp/static-empty" in validate
+    assert "--fallback-dir /tmp/static-market-artifacts" in validate
     assert "--selected-markets '[]'" in validate
     combine = _publish_step("Combine static data bundle")["run"]
-    assert "--combine-artifacts-dir /tmp/static-market-artifacts" in combine
-    assert "--fallback-artifacts-dir" not in combine
-    assert "--options-artifacts-dir /tmp/static-options" in combine
-    assert "--cot-artifacts-dir /tmp/static-cot" in combine
+    assert "--combine-artifacts-dir /tmp/static-empty" in combine
+    assert "--fallback-artifacts-dir /tmp/static-market-artifacts" in combine
+    assert "--fallback-options-artifacts-dir /tmp/static-options" in combine
+    assert "--fallback-cot-artifacts-dir /tmp/static-cot" in combine
     report = _publish_step("Report market freshness")
     assert report["continue-on-error"] is True
     assert "app.scripts.report_static_market_freshness" in report["run"]
@@ -1186,8 +1201,9 @@ def test_publisher_deploys_only_from_default_branch_dispatch() -> None:
     assert "github.event_name == 'workflow_dispatch'" in deploy_if
     assert "default_branch" in deploy_if
     assert jobs["deploy"]["environment"]["name"] == "github-pages"
+    assert PRODUCTION_RUN in deploy_if
     for name in ("Configure Pages", "Prune duplicate Pages artifacts"):
-        assert "workflow_dispatch" in _publish_step(name)["if"]
+        assert PRODUCTION_RUN in _publish_step(name)["if"]
 
 
 SITE_WORKFLOW = ROOT / ".github" / "workflows" / "static-site.yml"
@@ -1244,3 +1260,91 @@ def test_cot_wake_follows_its_upload() -> None:
     assert names.index("Wake static-site publisher") > names.index(
         "Upload current global COT artifact"
     )
+
+
+def _workflow_script_args(run: str, module: str) -> list[str]:
+    """Return the argv a workflow step passes to ``python -m <module>``."""
+    command = run.split(f"python -m {module}", 1)[1].replace("\\\n", " ")
+    return shlex.split(command.split("\n", 1)[0])
+
+
+def _write_selected_market(root: Path, market: str, formula: str) -> None:
+    market_dir = root / f"static-market-{market}"
+    (market_dir / "scan" / "chunks").mkdir(parents=True)
+    prefix = f"markets/{market.lower()}"
+    (market_dir / "scan" / "chunks" / "chunk-0001.json").write_text(
+        json.dumps({"rs_formula_version": formula, "rows": []}), encoding="utf-8"
+    )
+    (market_dir / "scan" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "rs_formula_version": formula,
+                "chunks": [{"path": f"{prefix}/scan/chunks/chunk-0001.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = {
+        "market": market,
+        "display_name": market,
+        "as_of_date": "2026-10-06",
+        "rs_formula_version": formula,
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": False},
+        "pages": {"scan": {"path": f"{prefix}/scan/manifest.json"}},
+        "assets": {},
+    }
+    (market_dir / "manifest.market.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "static-site-v3",
+                "generated_at": "2026-10-06T22:00:00Z",
+                "market": market,
+                "entry": entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_publisher_combine_arguments_accept_last_good_legacy_artifacts(
+    tmp_path, monkeypatch
+) -> None:
+    """Run the publisher's own combine arguments end to end.
+
+    The publisher selects stored artifacts, so they must get the last-good
+    policy: an RS rollback (legacy formula) still publishes instead of failing
+    every market's publish.
+    """
+    from app.domain.relative_strength import (
+        BALANCED_RS_FORMULA_VERSION,
+        LEGACY_RS_FORMULA_VERSION,
+    )
+    from app.scripts import export_static_site as export_script
+
+    selection = tmp_path / "selection"
+    _write_selected_market(selection, "US", BALANCED_RS_FORMULA_VERSION)
+    _write_selected_market(selection, "HK", LEGACY_RS_FORMULA_VERSION)
+    paths = {
+        "/tmp/static-market-artifacts": selection,
+        "/tmp/static-empty": tmp_path / "empty",
+        "/tmp/static-options": tmp_path / "options",
+        "/tmp/static-cot": tmp_path / "cot",
+        "../frontend/public/static-data": tmp_path / "out",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    args = _workflow_script_args(
+        _publish_step("Combine static data bundle")["run"], "app.scripts.export_static_site"
+    )
+    args = [
+        str(paths[arg]) if arg in paths else ("{}" if arg == "$RS_FORMULA_OVERRIDES" else arg)
+        for arg in args
+    ]
+    monkeypatch.setattr(sys, "argv", ["export_static_site.py", *args])
+
+    assert export_script.main() == 0
+
+    manifest = json.loads((tmp_path / "out" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["supported_markets"] == ["US", "HK"]
+    assert manifest["markets"]["HK"]["rs_formula_version"] == LEGACY_RS_FORMULA_VERSION
