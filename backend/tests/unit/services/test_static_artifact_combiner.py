@@ -760,6 +760,23 @@ def test_another_markets_path_is_rejected(tmp_path: Path) -> None:
         _validate_assets(market_dir)
 
 
+def test_malformed_chart_payload_is_rejected(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "X.json").write_text("{truncated", encoding="utf-8")
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/charts/X.json"}]}),
+        encoding="utf-8",
+    )
+    _rewrite_entry(
+        tmp_path, "US", assets={"charts": {"path": "markets/us/charts/index.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="X.json.*does not parse"):
+        _validate_assets(market_dir)
+
+
 @pytest.mark.parametrize("index", [{"symbols": 1}, [], {"symbols": [None]}])
 def test_malformed_chart_index_is_rejected_not_crashing(tmp_path: Path, index) -> None:
     write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)

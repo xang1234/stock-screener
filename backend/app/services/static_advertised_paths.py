@@ -43,12 +43,18 @@ def _resolve(*, market: str, market_dir: Path, advertised: object) -> Path:
     return resolved
 
 
-def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> None:
-    """Every advertised page/asset must exist inside the artifact and parse.
+def _load_json(*, market: str, market_dir: Path, advertised: object) -> object:
+    path = _resolve(market=market, market_dir=market_dir, advertised=advertised)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise StaticAdvertisedPathError(
+            f"advertised file {advertised!r} does not parse: {exc}"
+        ) from exc
 
-    Chart payloads listed by the chart index are checked for presence only:
-    there can be hundreds and the browser parses each one lazily.
-    """
+
+def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> None:
+    """Every advertised page, asset and chart payload must exist and parse."""
     pages = entry.get("pages") if isinstance(entry.get("pages"), dict) else {}
     assets = entry.get("assets") if isinstance(entry.get("assets"), dict) else {}
     for descriptor in (*pages.values(), *assets.values()):
@@ -56,13 +62,9 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
             continue
         if str(descriptor["path"]).strip() in ROOT_LEVEL_ADVERTISED_PATHS:
             continue
-        path = _resolve(market=market, market_dir=market_dir, advertised=descriptor["path"])
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise StaticAdvertisedPathError(
-                f"advertised file {descriptor['path']!r} does not parse: {exc}"
-            ) from exc
+        payload = _load_json(
+            market=market, market_dir=market_dir, advertised=descriptor["path"]
+        )
         if descriptor is not assets.get("charts"):
             continue
         symbols = payload.get("symbols") if isinstance(payload, dict) else None
@@ -72,5 +74,7 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
             raise StaticAdvertisedPathError(
                 f"chart index {descriptor['path']!r} must list symbol objects"
             )
+        # A few hundred small files per market; parsing them is cheap and
+        # catches a truncated payload the browser would fail to load.
         for symbol in symbols:
-            _resolve(market=market, market_dir=market_dir, advertised=symbol.get("path"))
+            _load_json(market=market, market_dir=market_dir, advertised=symbol.get("path"))
