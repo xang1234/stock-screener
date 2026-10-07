@@ -32,14 +32,16 @@ concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'static-site-publisher' || format('static-site-publisher-{0}', github.ref) }}
   cancel-in-progress: false
 
-permissions:
-  actions: write
-  contents: read
-  pages: write
-  id-token: write
+# Granted per job: build runs PR code and third-party installs, so only deploy
+# can request an OIDC token.
+permissions: {}
 
 jobs:
   build:
+    permissions:
+      actions: write
+      contents: read
+      pages: write
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     env:
@@ -215,6 +217,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

@@ -615,6 +615,51 @@ def test_market_fallback_prefers_newer_session_over_newer_upload(
     assert installed["static-market-US"] == "c-500"
 
 
+def test_same_session_reruns_resolve_to_the_latest_upload(tmp_path, monkeypatch) -> None:
+    # A corrected rerun or an RS rollback re-exports the same session on the
+    # same day. The API order is not a contract, so the listing arrives
+    # oldest-first here; the later upload must still win.
+    listings = {
+        "static-market-US": [
+            _artifact(500, "2026-09-05T09:00:00Z"),
+            _artifact(501, "2026-09-05T18:30:00Z"),
+        ]
+    }
+    downloaded = []
+
+    def fake_gh_json(args):
+        name = args[-1].split("name=", 1)[1].split("&", 1)[0]
+        return [{"artifacts": listings.get(name, [])}]
+
+    def fake_download(*, run_id, parent_dir, **_kwargs):
+        downloaded.append(run_id)
+        wrapper = parent_dir / f"c-{run_id}"
+        wrapper.mkdir(parents=True)
+        return fallback_script._DownloadedCandidate(wrapper, wrapper, date(2026, 9, 5))
+
+    installed = {}
+    monkeypatch.setattr(fallback_script, "gh_json", fake_gh_json)
+    monkeypatch.setattr(fallback_script, "_download_candidate", fake_download)
+    monkeypatch.setattr(
+        fallback_script,
+        "_install_market_candidate",
+        lambda *, target_dir, candidate_dir: installed.__setitem__(
+            target_dir.name, candidate_dir.name
+        ),
+    )
+
+    fallback_script.download_fallback_artifacts(
+        repo="xang1234/stock-screener",
+        current_run_id=999,
+        branch_name="main",
+        current_dir=tmp_path / "current",
+        fallback_dir=tmp_path / "fallback",
+    )
+
+    assert downloaded[0] == 501
+    assert installed["static-market-US"] == "c-501"
+
+
 def test_options_fallback_skips_runs_that_cannot_beat_the_incumbent(
     tmp_path,
     monkeypatch,
@@ -1151,6 +1196,22 @@ PRODUCTION_RUN = (
     "github.event_name == 'workflow_dispatch' && "
     "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
 )
+
+
+def test_publisher_scopes_token_permissions_per_job() -> None:
+    # The build job runs PR code and third-party installs: it must not be able
+    # to mint an OIDC token. Only deploy needs id-token.
+    workflow = _publish_workflow()
+    assert workflow["permissions"] == {}
+    assert workflow["jobs"]["build"]["permissions"] == {
+        "actions": "write",
+        "contents": "read",
+        "pages": "write",
+    }
+    assert workflow["jobs"]["deploy"]["permissions"] == {
+        "pages": "write",
+        "id-token": "write",
+    }
 
 
 def test_publisher_rehearsals_never_share_the_production_group() -> None:
