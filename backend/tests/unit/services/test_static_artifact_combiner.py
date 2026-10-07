@@ -466,3 +466,102 @@ def test_combiner_rejects_revision_three_with_revision_two_source_marker(tmp_pat
             required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
             clean=True,
         )
+
+
+def _rewrite_entry(root: Path, market: str, **changes) -> Path:
+    path = root / f"static-market-{market}" / STATIC_MARKET_METADATA_FILENAME
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["entry"].update(changes)
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    return path.parent
+
+
+def _validate_assets(market_dir: Path) -> None:
+    entry = json.loads(
+        (market_dir / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+    )["entry"]
+    StaticArtifactCombiner._validate_advertised_assets(
+        market="US", source_label="fallback", entry=entry, market_dir=market_dir
+    )
+
+
+@pytest.mark.parametrize(
+    "pages, files, message",
+    [
+        ({"home": {"path": "markets/us/home.json"}}, {}, "absent.*home.json"),
+        (
+            {"home": {"path": "markets/us/home.json"}},
+            {"home.json": "{not json"},
+            "home.json.*parse",
+        ),
+        ({"home": {"path": "markets/us/../../escape.json"}}, {}, "escapes"),
+    ],
+)
+def test_advertised_page_paths_must_exist_inside_root_and_parse(
+    tmp_path: Path, pages, files, message
+) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = _rewrite_entry(tmp_path, "US", pages=pages)
+    # The escape target exists, so only the containment check can reject it.
+    (tmp_path / "escape.json").write_text("{}", encoding="utf-8")
+    for name, text in files.items():
+        (market_dir / name).write_text(text, encoding="utf-8")
+
+    with pytest.raises(StaticArtifactFormulaError, match=message):
+        _validate_assets(market_dir)
+
+
+def test_chart_index_symbol_paths_must_stay_inside_root(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/../../x.json"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "x.json").write_text("{}", encoding="utf-8")
+    _rewrite_entry(
+        tmp_path, "US", assets={"charts": {"path": "markets/us/charts/index.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="escapes"):
+        _validate_assets(market_dir)
+
+
+def test_chart_index_symbol_payload_must_exist(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/charts/X.json"}]}),
+        encoding="utf-8",
+    )
+    _rewrite_entry(
+        tmp_path, "US", assets={"charts": {"path": "markets/us/charts/index.json"}}
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="X.json"):
+        _validate_assets(market_dir)
+
+
+def test_valid_advertised_pages_and_charts_pass(tmp_path: Path) -> None:
+    write_market_artifact(tmp_path, market="US", formula=BALANCED_RS_FORMULA_VERSION)
+    market_dir = tmp_path / "static-market-US"
+    (market_dir / "home.json").write_text("{}", encoding="utf-8")
+    (market_dir / "charts").mkdir()
+    (market_dir / "charts" / "X.json").write_text("{}", encoding="utf-8")
+    (market_dir / "charts" / "index.json").write_text(
+        json.dumps({"symbols": [{"symbol": "X", "path": "markets/us/charts/X.json"}]}),
+        encoding="utf-8",
+    )
+    _rewrite_entry(
+        tmp_path,
+        "US",
+        pages={
+            "home": {"path": "markets/us/home.json"},
+            "scan": {"path": "markets/us/scan/manifest.json"},
+        },
+        assets={"charts": {"path": "markets/us/charts/index.json"}},
+    )
+
+    _validate_assets(market_dir)

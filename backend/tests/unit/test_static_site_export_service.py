@@ -1758,6 +1758,37 @@ def test_serialize_scan_row_preserves_compact_opportunity_evidence_only(
     assert "se_candidates" not in payload
 
 
+
+def _materialize_advertised_files(root: Path) -> None:
+    """Write minimal JSON for advertised page/asset paths a fixture omits.
+
+    The combiner rejects artifacts whose advertised files are missing; these
+    combine tests exercise selection, not that validation.
+    """
+    for metadata_path in root.rglob(STATIC_MARKET_METADATA_FILENAME):
+        try:
+            entry = json.loads(metadata_path.read_text(encoding="utf-8")).get("entry")
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        market = str(entry.get("market") or "").lower()
+        descriptors = [
+            *(entry.get("pages") or {}).values(),
+            *(entry.get("assets") or {}).values(),
+        ]
+        for descriptor in descriptors:
+            if not isinstance(descriptor, dict) or "path" not in descriptor:
+                continue
+            relative = Path(descriptor["path"])
+            if relative.parts[:2] == ("markets", market):
+                relative = Path(*relative.parts[2:])
+            target = metadata_path.parent / relative
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('{"symbols": []}\n', encoding="utf-8")
+
+
 def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     artifacts_dir = tmp_path / "artifacts"
     us_dir = artifacts_dir / "job-us" / "markets" / "us"
@@ -1815,6 +1846,7 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     )
 
     output_dir = tmp_path / "combined"
+    _materialize_advertised_files(tmp_path)
     result = StaticSiteExportService.combine_market_artifacts(artifacts_dir, output_dir)
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -1923,6 +1955,7 @@ def test_combiner_drops_invalid_optional_contributors_without_dropping_market(
         encoding="utf-8",
     )
 
+    _materialize_advertised_files(tmp_path)
     result = StaticSiteExportService.combine_market_artifacts(
         artifacts_dir,
         tmp_path / "combined",
@@ -2041,6 +2074,7 @@ def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_pat
             encoding="utf-8",
         )
 
+    _materialize_advertised_files(tmp_path)
     result = StaticSiteExportService.combine_market_artifacts(
         current_dir,
         output_dir,
@@ -2109,6 +2143,7 @@ def test_combine_market_artifacts_uses_newer_fallback_for_rewound_current_market
             encoding="utf-8",
         )
 
+    _materialize_advertised_files(tmp_path)
     result = StaticSiteExportService.combine_market_artifacts(
         current_dir,
         output_dir,
@@ -2179,6 +2214,7 @@ def test_combine_market_artifacts_keeps_current_override_when_newer_fallback_use
             encoding="utf-8",
         )
 
+    _materialize_advertised_files(tmp_path)
     result = StaticSiteExportService.combine_market_artifacts(
         current_dir,
         output_dir,
@@ -2231,6 +2267,7 @@ def test_combine_market_artifacts_rejects_incompatible_fallback_when_current_mis
         encoding="utf-8",
     )
 
+    _materialize_advertised_files(tmp_path)
     with pytest.raises(NoPublishedStaticMarketArtifact, match="US"):
         StaticSiteExportService.combine_market_artifacts(
             current_dir,
@@ -2272,6 +2309,7 @@ def test_combine_market_artifacts_accepts_fallback_when_current_is_empty(tmp_pat
         encoding="utf-8",
     )
 
+    _materialize_advertised_files(tmp_path)
     result = StaticSiteExportService.combine_market_artifacts(
         current_dir,
         output_dir,
@@ -2335,6 +2373,7 @@ def test_combine_market_artifacts_rejects_fallback_with_mismatched_schema(tmp_pa
         encoding="utf-8",
     )
 
+    _materialize_advertised_files(tmp_path)
     with pytest.raises(RuntimeError, match="schema_version"):
         StaticSiteExportService.combine_market_artifacts(
             current_dir,

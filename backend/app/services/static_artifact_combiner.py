@@ -366,9 +366,72 @@ class StaticArtifactCombiner:
         return discovered
 
     @staticmethod
+    def _resolve_advertised_path(
+        *, market: str, source_label: str, market_dir: Path, advertised: object
+    ) -> Path:
+        text = str(advertised or "").strip()
+        relative = Path(text)
+        try:
+            relative = relative.relative_to(Path("markets") / market.lower())
+        except ValueError:
+            pass  # older artifacts advertise paths relative to the market root
+        root = market_dir.resolve()
+        resolved = (root / relative).resolve()
+        if not text or not resolved.is_relative_to(root):
+            raise StaticArtifactFormulaError(
+                f"{market} {source_label} advertised path escapes its artifact: {text!r}"
+            )
+        if not resolved.is_file():
+            raise StaticArtifactFormulaError(
+                f"{market} {source_label} advertised file is absent: {text!r}"
+            )
+        return resolved
+
+    @classmethod
+    def _validate_advertised_paths(
+        cls, *, market: str, source_label: str, entry: dict, market_dir: Path
+    ) -> None:
+        pages = entry.get("pages") if isinstance(entry.get("pages"), dict) else {}
+        assets = entry.get("assets") if isinstance(entry.get("assets"), dict) else {}
+        for descriptor in (*pages.values(), *assets.values()):
+            if not isinstance(descriptor, dict) or "path" not in descriptor:
+                continue
+            path = cls._resolve_advertised_path(
+                market=market,
+                source_label=source_label,
+                market_dir=market_dir,
+                advertised=descriptor["path"],
+            )
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise StaticArtifactFormulaError(
+                    f"{market} {source_label} advertised file {descriptor['path']!r} "
+                    f"does not parse: {exc}"
+                ) from exc
+            if descriptor is assets.get("charts") and isinstance(payload, dict):
+                # ponytail: chart payloads are checked for presence only; there
+                # can be hundreds and the browser parses each one lazily.
+                for symbol in payload.get("symbols") or []:
+                    cls._resolve_advertised_path(
+                        market=market,
+                        source_label=source_label,
+                        market_dir=market_dir,
+                        advertised=(
+                            symbol.get("path") if isinstance(symbol, dict) else None
+                        ),
+                    )
+
+    @classmethod
     def _validate_advertised_assets(
-        *, market: str, source_label: str, entry: dict, market_dir: Path
+        cls, *, market: str, source_label: str, entry: dict, market_dir: Path
     ) -> list[str]:
+        cls._validate_advertised_paths(
+            market=market,
+            source_label=source_label,
+            entry=entry,
+            market_dir=market_dir,
+        )
         warnings: list[str] = []
         features = (
             entry.get("features") if isinstance(entry.get("features"), dict) else {}
