@@ -201,10 +201,12 @@ jobs:
       - name: Resolve build inputs
         id: build_inputs
         env:
-          # Per-market wall-clock budget defaults for the fundamentals refresh.
-          # CN is the slow path: ~5,500 sequential AKShare+yfinance round-trips
-          # can blow past 6h, so we leave ~50 min headroom under the 350-min
-          # job cap and opt in to partial publish. Initial bootstrap
+          # Per-market wall-clock budget defaults for the fundamentals refresh,
+          # counted from script start. CN is the slow path: ~5,500 sequential
+          # AKShare+yfinance round-trips can blow past 6h, so 270 min leaves
+          # ~80 min under the 350-min job cap for checkout and seeding, the
+          # symbol in flight, persistence, export and upload (#522), and opts
+          # in to partial publish. Initial bootstrap
           # continuation requires explicitly enabling cn_resume_partial_seed on
           # a manual CN run so ordinary weekly refreshes do not skip stale
           # prior-bundle rows.
@@ -216,7 +218,7 @@ jobs:
           if [ -n "$INPUT_RUNTIME" ]; then
             RUNTIME="$INPUT_RUNTIME"
           elif [ "$MATRIX_MARKET" = "CN" ]; then
-            RUNTIME="300"
+            RUNTIME="270"
           else
             RUNTIME="0"
           fi

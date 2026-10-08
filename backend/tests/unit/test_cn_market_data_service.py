@@ -1121,4 +1121,46 @@ def test_statement_fundamentals_bounds_the_akshare_call(monkeypatch):
     )
 
     assert service.statement_fundamentals("600519") == {}
-    assert calls == [(7, "CN statement fundamentals fetch")]
+    assert calls == [
+        (7, "CN statement fundamentals fetch"),
+        (7, "CN BaoStock statement fundamentals fetch"),
+    ]
+
+
+def test_a_deterministic_listing_failure_is_also_remembered(monkeypatch):
+    # Eastmoney's 200-with-null-data makes AKShare raise TypeError.
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda _delay: None)
+
+    class _NullDataAkshare:
+        spot_calls = 0
+
+        def stock_zh_a_spot_em(self):
+            self.spot_calls += 1
+            raise TypeError("'NoneType' object is not subscriptable")
+
+    akshare = _NullDataAkshare()
+    service = CnMarketDataService(akshare_module=akshare, timeout_seconds=1)
+
+    for _ in range(3):
+        with pytest.raises(TypeError):
+            service.listing_rows()
+
+    assert akshare.spot_calls == 1
+
+
+def test_remembered_listing_failure_does_not_grow_its_traceback(monkeypatch):
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda _delay: None)
+    service = CnMarketDataService(
+        akshare_module=_UnreachableAkshare(), baostock_module=_UnreachableBaoStock(), timeout_seconds=1
+    )
+    depths = []
+    for _ in range(4):
+        try:
+            service.listing_rows()
+        except requests.exceptions.ConnectionError as exc:
+            depth, tb = 0, exc.__traceback__
+            while tb is not None:
+                depth, tb = depth + 1, tb.tb_next
+            depths.append(depth)
+
+    assert depths[1] == depths[2] == depths[3]

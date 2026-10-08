@@ -346,4 +346,8 @@ def test_deadline_stops_native_first_fetches_mid_batch(monkeypatch):
     # Two fetches (t=60, t=120); the third is not started after the deadline.
     assert list(result) == ["600000.SS", "600001.SS"]
     assert data_source.get_combined_data.call_count == 2
-    svc.price_cache.get_many.assert_called_once_with(["600000.SS", "600001.SS"], period="2y")
+    # Past the deadline, technicals read stored prices only; no provider fetch.
+    svc.price_cache.get_many.assert_not_called()
+    svc.price_cache.get_many_cached_only.assert_called_once_with(
+        ["600000.SS", "600001.SS"], period="2y"
+    )

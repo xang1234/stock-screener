@@ -277,11 +277,14 @@ class CnMarketDataService:
         if self._listing_failure is not None:
             error, retry_at = self._listing_failure
             if time.monotonic() < retry_at:
-                raise error
+                # Cleared, so re-raising does not grow its traceback per symbol.
+                raise error.with_traceback(None)
             self._listing_failure = None
         try:
             rows = self._fetch_listing_rows()
-        except (requests.exceptions.RequestException, OSError, CnDependencyError) as exc:
+        # Any failure, including AKShare's TypeError on an empty Eastmoney
+        # payload: each one would otherwise cost every symbol the retries.
+        except Exception as exc:
             self._listing_failure = (
                 exc,
                 time.monotonic() + _CN_LISTING_FAILURE_COOLDOWN_SECONDS,
@@ -457,7 +460,11 @@ class CnMarketDataService:
             logger.warning("AKShare CN fundamentals fetch failed for %s: %s", code, exc)
 
         try:
-            return self._statement_fundamentals_from_baostock(code, as_of=as_of)
+            return _call_with_timeout(
+                lambda: self._statement_fundamentals_from_baostock(code, as_of=as_of),
+                timeout_seconds=self._timeout_seconds,
+                operation_name="CN BaoStock statement fundamentals fetch",
+            )
         except CnDependencyError:
             raise
         except Exception as exc:  # pragma: no cover - network/API variability
