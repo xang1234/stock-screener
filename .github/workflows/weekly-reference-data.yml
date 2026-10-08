@@ -94,10 +94,12 @@ jobs:
     # chance to fire (and publish a partial bundle) before the runner is killed.
     timeout-minutes: 350
     # The later job for a market waits, then seeds from what the earlier one
-    # published (including the CN fundamentals resume cursor).
+    # published (including the CN fundamentals resume cursor). ``queue: max``
+    # keeps every waiting job instead of cancelling the older pending one.
     concurrency:
       group: ${{ github.workflow }}-publish-${{ matrix.market }}
       cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
       matrix:

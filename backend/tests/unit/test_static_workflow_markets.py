@@ -271,6 +271,8 @@ def test_weekly_reference_concurrency_is_scoped_per_market():
     publish_concurrency = workflow["jobs"]["publish"]["concurrency"]
     assert publish_concurrency["group"] == "${{ github.workflow }}-publish-${{ matrix.market }}"
     assert publish_concurrency["cancel-in-progress"] is False
+    # A third same-market job queues too instead of cancelling the pending one.
+    assert publish_concurrency["queue"] == "max"
 
 
 def test_local_celery_startup_derives_market_workers_from_backend_topology():
