@@ -918,3 +918,20 @@ def test_theme_metrics_index_serves_the_bootstrap_revision_lookup():
     indexed = [[column.name for column in index.columns] for index in ThemeMetrics.__table__.indexes]
 
     assert ["pipeline", "updated_at"] in indexed
+
+
+def test_publish_themes_bootstrap_backfills_metrics_before_resolving_the_revision():
+    """The L2 metrics backfill rewrites theme_metrics.updated_at; resolving the
+    revision first would publish a snapshot that is stale on its next read."""
+    service = UISnapshotService(Mock())
+    service._ensure_schema = Mock()  # noqa: SLF001
+    service._run_with_storage_recovery = lambda fn: fn(Mock())  # noqa: SLF001
+    order: list[str] = []
+    service._ensure_l2_theme_metrics = lambda *_args: order.append("backfill")  # noqa: SLF001
+    service._resolve_themes_source_revision = lambda *_args: order.append("revision") or "rev"  # noqa: SLF001
+    service._build_themes_payload = lambda **_kwargs: order.append("payload") or {}  # noqa: SLF001
+    service._publish = Mock()  # noqa: SLF001
+
+    service._publish_themes_bootstrap("technical", "grouped")  # noqa: SLF001
+
+    assert order.index("backfill") < order.index("revision")

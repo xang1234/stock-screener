@@ -351,15 +351,20 @@ class UISnapshotService:
     def _publish_themes_bootstrap(self, pipeline: str, theme_view: str) -> SnapshotResult:
         self._ensure_schema()
         variant_key = self._themes_variant_key(pipeline, theme_view)
-        return self._run_with_storage_recovery(
-            lambda db: self._publish(
+
+        def publish(db: Session) -> SnapshotResult:
+            # Before the revision: the backfill rewrites theme_metrics.updated_at,
+            # which would otherwise leave the new snapshot stale on its next read.
+            self._ensure_l2_theme_metrics(db, pipeline)
+            return self._publish(
                 db=db,
                 view_key=THEMES_VIEW_KEY,
                 variant_key=variant_key,
                 source_revision=self._resolve_themes_source_revision(db, pipeline),
                 payload=self._build_themes_payload(pipeline=pipeline, theme_view=theme_view),
             )
-        )
+
+        return self._run_with_storage_recovery(publish)
 
     def publish_all(self) -> dict[str, dict[str, Any] | None]:
         """Rebuild all bootstrap variants."""
@@ -984,7 +989,6 @@ class UISnapshotService:
             discovery = ThemeDiscoveryService(db, pipeline=pipeline)
             taxonomy = ThemeTaxonomyService(db, pipeline=pipeline)
 
-            self._ensure_l2_theme_metrics(db, pipeline)
             emerging = discovery.discover_emerging_themes(min_velocity=1.5, min_mentions=3)
             alerts_rows = (
                 db.query(ThemeAlert)
