@@ -370,6 +370,34 @@ gh workflow run static-site.yml \
 
 The JSON map is per Market; omitted Markets remain on `balanced-horizon-percentile-v2`, allowing an isolated rollback without changing other current or fallback artifacts. The rollback artifact's wake-up publishes it: Static Site Publish treats stored artifacts as last-good inputs and always selects each Market's newest valid artifact, so the legacy-formula export becomes the published one. The publisher deliberately has no formula input, because a publish-time override would be undone by the next wake-up; the export run is the only place to choose a formula. Verify live/static metadata says `legacy-linear-v1` for the restored Market. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and omit that Market from `rs_formula_overrides`.
 
+## Static Price-Stage Checkpoints
+
+A static market job loses every fetched price when it hits its `timeout-minutes`, because the runner's database is discarded. Markets listed in the repository variable `STATIC_PRICE_STAGE_DEADLINE_MINUTES` checkpoint the price stage instead (#502). Markets not listed behave as before.
+
+```bash
+# Opt US in: stop the price stage 210 minutes after the export starts.
+gh variable set STATIC_PRICE_STAGE_DEADLINE_MINUTES --repo xang1234/stock-screener --body '{"US": 210}'
+# Roll back: delete it. Leftover checkpoint assets are ignored.
+gh variable delete STATIC_PRICE_STAGE_DEADLINE_MINUTES --repo xang1234/stock-screener
+```
+
+When the deadline passes, the following happens:
+
+1. The price stage stops before its next provider batch. Every finished batch is already committed.
+2. The export skips all derived work: RS, features, scans and artifacts.
+3. It writes `price-checkpoint-<market>.json.gz` and its manifest (`kind: price_checkpoint`, plus a fingerprint), and exits `80`.
+4. The job uploads both to the `daily-price-data` release, data first and manifest last, then fails with "Re-run failed jobs to resume".
+
+**Re-run the failed job** for the same session. Its "Resume price-stage checkpoint" step imports the checkpoint after the daily-bundle seed. The import does three things:
+
+- it verifies the checksum;
+- it rejects a checkpoint whose kind or fingerprint differs (session, baseline bundle, weekly reference, price provider plan, adjustment tolerance, refresh periods or format);
+- it replaces each symbol's rows from its first checkpoint date onward.
+
+The completed daily-import state is not advanced. The refresh then fetches only the symbols still stale.
+
+A checkpoint never becomes `daily-price-latest-<market>.json`, a market artifact or a publisher wake-up; only a later complete export does. The step log prints `checkpoint status=imported|missing|incompatible|invalid`. Anything other than `imported` leaves the database as seeded, and the run takes the normal path.
+
 ## Market Calendar Maintenance
 
 Calendar maintenance is an **annual/on-publication** operator responsibility. The

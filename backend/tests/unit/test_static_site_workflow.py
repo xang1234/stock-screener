@@ -1440,7 +1440,7 @@ def test_price_history_repair_is_an_opt_in_for_one_market_job() -> None:
     run = export["run"]
     # Only the named market's job gets the flag, compared case-insensitively.
     assert '= "${{ matrix.market }}" ]; then\n  repair_args=(--repair-price-history)' in run
-    assert '"${breadth_metadata_args[@]}" "${repair_args[@]}" 2>&1' in run
+    assert '"${breadth_metadata_args[@]}" "${repair_args[@]}" "${checkpoint_args[@]}" 2>&1' in run
 
 
 @pytest.mark.parametrize(
@@ -1470,3 +1470,41 @@ def test_repair_market_must_belong_to_the_selected_group(repair_market, group, a
     }
     result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env, capture_output=True)
     assert (result.returncode == 0) is accepted
+
+
+def _build_market_step(name: str) -> dict:
+    return next(
+        step
+        for step in _site_workflow()["jobs"]["build-market"]["steps"]
+        if step.get("name") == name
+    )
+
+
+def test_price_stage_checkpoint_is_opt_in_per_market() -> None:
+    env = _site_workflow()["jobs"]["build-market"]["env"]
+    assert env["PRICE_STAGE_DEADLINE_MINUTES"] == (
+        "${{ fromJSON(vars.STATIC_PRICE_STAGE_DEADLINE_MINUTES || '{}')[matrix.market] || '' }}"
+    )
+    resume = _build_market_step("Resume price-stage checkpoint")
+    assert resume["if"] == "${{ env.PRICE_STAGE_DEADLINE_MINUTES != '' }}"
+    assert "app.scripts.resume_static_price_checkpoint" in resume["run"]
+    names = [step.get("name") for step in _site_workflow()["jobs"]["build-market"]["steps"]]
+    assert names.index("Seed daily price bundle from GitHub") < names.index(
+        "Resume price-stage checkpoint"
+    ) < names.index("Export market static data bundle")
+
+
+def test_checkpointed_export_uploads_data_before_manifest_then_fails() -> None:
+    export = _build_market_step("Export market static data bundle")
+    assert "--price-stage-deadline-minutes" in export["run"]
+    assert 'if [ "$status" -eq 80 ]; then' in export["run"]
+    assert 'echo "price_checkpointed=true" >> "$GITHUB_OUTPUT"' in export["run"]
+
+    upload = _build_market_step("Upload price-stage checkpoint")
+    assert upload["if"] == "${{ steps.export-market.outputs.price_checkpointed == 'true' }}"
+    run = upload["run"]
+    assert run.index('"$BUNDLE_PATH"') < run.index('"$MANIFEST_PATH"')
+
+    fail = _build_market_step("Fail after price-stage checkpoint")
+    assert fail["if"] == "${{ steps.export-market.outputs.price_checkpointed == 'true' }}"
+    assert "exit 1" in fail["run"] and "Re-run failed jobs" in fail["run"]

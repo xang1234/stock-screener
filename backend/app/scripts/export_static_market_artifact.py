@@ -19,6 +19,8 @@ def _status_for_exit_code(exit_code: int) -> tuple[bool, str, str | None]:
         return False, "skipped", "not_trading_day"
     if exit_code == export_static_site.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE:
         return False, "failed", "no_current_artifact"
+    if exit_code == export_static_site.STATIC_EXPORT_PRICE_CHECKPOINTED_EXIT_CODE:
+        return False, "failed", "price_checkpointed"
     return False, "failed", "export_failed"
 
 
