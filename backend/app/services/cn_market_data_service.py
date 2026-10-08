@@ -32,6 +32,11 @@ _AKSHARE_OHLCV_FAILURE_THRESHOLD = 2
 _AKSHARE_OHLCV_COOLDOWN_SECONDS = 300.0
 _CN_LISTING_FETCH_ATTEMPTS = 3
 _CN_LISTING_RETRY_BASE_DELAY_SECONDS = 5.0
+# A failed listing fetch is remembered this long. Per-symbol fundamentals
+# read the listing, so without it every CN symbol re-ran the failing fetch
+# and its retries: about 65 s each on GitHub runners, where Eastmoney drops
+# connections (#522).
+_CN_LISTING_FAILURE_COOLDOWN_SECONDS = 900
 _CN_INDEX_AKSHARE_SYMBOLS_BY_FETCHER = {
     "stock_zh_index_daily": {
         "000001.SS": "sh000001",  # Shanghai Composite
@@ -231,6 +236,7 @@ class CnMarketDataService:
             resolved_listing = settings.universe_source_timeout_for("CN")
         self._listing_timeout_seconds = int(resolved_listing)
         self._listing_rows_cache: list[dict[str, Any]] | None = None
+        self._listing_failure: tuple[Exception, float] | None = None
         self._akshare_ohlcv_consecutive_failures = 0
         self._akshare_ohlcv_disabled_until = 0.0
         self._baostock_session_open = False
@@ -268,6 +274,26 @@ class CnMarketDataService:
         del as_of  # CN listing sources return the current source snapshot.
         if self._listing_rows_cache is not None:
             return [dict(row) for row in self._listing_rows_cache]
+        if self._listing_failure is not None:
+            error, retry_at = self._listing_failure
+            if time.monotonic() < retry_at:
+                # Cleared, so re-raising does not grow its traceback per symbol.
+                raise error.with_traceback(None)
+            self._listing_failure = None
+        try:
+            rows = self._fetch_listing_rows()
+        # Any failure, including AKShare's TypeError on an empty Eastmoney
+        # payload: each one would otherwise cost every symbol the retries.
+        except Exception as exc:
+            self._listing_failure = (
+                exc,
+                time.monotonic() + _CN_LISTING_FAILURE_COOLDOWN_SECONDS,
+            )
+            raise
+        self._listing_rows_cache = rows
+        return [dict(row) for row in rows]
+
+    def _fetch_listing_rows(self) -> list[dict[str, Any]]:
 
         rows: list[dict[str, Any]] = []
         akshare_error: Exception | None = None
@@ -308,9 +334,7 @@ class CnMarketDataService:
                 raise CnDependencyError(
                     "CN listing sources returned no rows (AKShare and BaoStock both empty)"
                 )
-
-        self._listing_rows_cache = rows
-        return [dict(row) for row in rows]
+        return rows
 
     def _listing_frame(self) -> pd.DataFrame | None:
         spot_error: Exception | None = None
@@ -436,7 +460,11 @@ class CnMarketDataService:
             logger.warning("AKShare CN fundamentals fetch failed for %s: %s", code, exc)
 
         try:
-            return self._statement_fundamentals_from_baostock(code, as_of=as_of)
+            return _call_with_timeout(
+                lambda: self._statement_fundamentals_from_baostock(code, as_of=as_of),
+                timeout_seconds=self._timeout_seconds,
+                operation_name="CN BaoStock statement fundamentals fetch",
+            )
         except CnDependencyError:
             raise
         except Exception as exc:  # pragma: no cover - network/API variability
@@ -453,7 +481,11 @@ class CnMarketDataService:
         fetcher = getattr(self._akshare, "stock_financial_analysis_indicator", None)
         if not callable(fetcher):
             return {}
-        frame = fetcher(symbol=local_code, start_year=str(max(1990, year - 2)))
+        frame = _call_with_timeout(
+            lambda: fetcher(symbol=local_code, start_year=str(max(1990, year - 2))),
+            timeout_seconds=self._timeout_seconds,
+            operation_name="CN statement fundamentals fetch",
+        )
         if frame is None or frame.empty:
             return {}
         row = frame.iloc[-1]

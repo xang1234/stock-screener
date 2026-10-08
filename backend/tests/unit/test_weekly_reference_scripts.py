@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -2527,3 +2528,56 @@ def test_official_baseline_is_not_seeded_when_board_counts_breach(key):
     build_script._seed_official_reconciliation_baseline(object(), service, snapshot)
 
     assert calls == []
+
+
+def test_deadline_inside_a_chunk_counts_only_attempted_symbols_and_stops():
+    fetch_calls = []
+
+    def fetch_fundamentals_batch(chunk, **kwargs):
+        fetch_calls.append((list(chunk), kwargs["deadline"]))
+        # The batch hit its deadline after two symbols.
+        return {symbol: {"market_cap": 1.0} for symbol in chunk[:2]}
+
+    stored = []
+    hybrid = SimpleNamespace(
+        fetch_fundamentals_batch=fetch_fundamentals_batch,
+        store_all_caches=lambda data, _cache, **_kwargs: stored.append(sorted(data))
+        or {"persisted_symbols": len(data), "failed": 0},
+    )
+    symbols = [f"60000{index}.SS" for index in range(6)]
+
+    stats, attempted, deadline_hit = build_script._run_chunked_fundamentals_refresh(
+        hybrid_service=hybrid,
+        fundamentals_cache=object(),
+        market="CN",
+        symbols=symbols,
+        market_by_symbol={symbol: "CN" for symbol in symbols},
+        chunk_size=3,
+        max_runtime_seconds=3600,
+    )
+
+    assert len(fetch_calls) == 1 and fetch_calls[0][1] is not None
+    assert attempted == symbols[:2]
+    assert stored == [symbols[:2]]
+    assert deadline_hit is True
+
+
+def test_fundamentals_deadline_counts_from_script_start():
+    fetch_calls = []
+    hybrid = SimpleNamespace(
+        fetch_fundamentals_batch=lambda chunk, **kwargs: fetch_calls.append(chunk) or {},
+        store_all_caches=lambda *args, **kwargs: {},
+    )
+
+    _, attempted, deadline_hit = build_script._run_chunked_fundamentals_refresh(
+        hybrid_service=hybrid,
+        fundamentals_cache=object(),
+        market="CN",
+        symbols=["600000.SS"],
+        market_by_symbol={"600000.SS": "CN"},
+        chunk_size=10,
+        max_runtime_seconds=60,
+        started_at=time.monotonic() - 120,  # setup and universe refresh used the budget
+    )
+
+    assert fetch_calls == [] and attempted == [] and deadline_hit is True

@@ -1055,9 +1055,13 @@ class BulkDataFetcher:
         market_by_symbol: Optional[Dict[str, str]] = None,
         market: Optional[str] = None,
         progress_callback: Callable[[int, int], None] | None = None,
+        deadline: float | None = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals for multiple symbols efficiently.
+
+        With ``deadline`` (a ``time.monotonic()`` instant) no batch starts
+        after it; symbols of unstarted batches are absent from the result.
 
         This method is optimized for fundamental data fetching only (no price history),
         making it much faster for bulk fundamental updates.
@@ -1115,6 +1119,13 @@ class BulkDataFetcher:
             start_idx = batch_num * batch_size
             end_idx = min(start_idx + batch_size, len(symbols))
             batch_symbols = symbols[start_idx:end_idx]
+
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.warning(
+                    "Fundamentals deadline reached; skipping remaining %d batches",
+                    total_batches - batch_num,
+                )
+                break
 
             # Short-circuit doomed batches when the per-market breaker is open.
             if market is not None and breaker.check("yfinance", market) == "open":

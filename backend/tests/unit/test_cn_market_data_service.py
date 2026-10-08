@@ -1055,3 +1055,112 @@ def test_cn_market_data_service_uses_listing_timeout_for_spot_fetch(monkeypatch)
     service.listing_rows(as_of=date(2026, 4, 30))
 
     assert helper_calls == [(240, "CN A-share listing fetch")]
+
+
+class _UnreachableAkshare:
+    def __init__(self) -> None:
+        self.spot_calls = 0
+
+    def stock_zh_a_spot_em(self):
+        self.spot_calls += 1
+        raise requests.exceptions.ConnectionError("Connection aborted")
+
+
+class _UnreachableBaoStock:
+    def login(self):
+        raise OSError("baostock unreachable")
+
+
+def test_failed_listing_is_not_refetched_for_every_symbol(monkeypatch):
+    # #522: every CN symbol's core fundamentals re-ran the failing listing
+    # fetch and its retries (~65 s/symbol on GitHub runners).
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda _delay: None)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(cn_market_data_module.time, "monotonic", lambda: clock["now"])
+    akshare = _UnreachableAkshare()
+    service = CnMarketDataService(
+        akshare_module=akshare, baostock_module=_UnreachableBaoStock(), timeout_seconds=1
+    )
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        service.listing_rows()
+    first_attempts = akshare.spot_calls
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        service.core_fundamentals("600519")
+    with pytest.raises(requests.exceptions.ConnectionError):
+        service.listing_rows()
+    assert akshare.spot_calls == first_attempts
+
+    clock["now"] += cn_market_data_module._CN_LISTING_FAILURE_COOLDOWN_SECONDS + 1
+    with pytest.raises(requests.exceptions.ConnectionError):
+        service.listing_rows()
+    assert akshare.spot_calls == 2 * first_attempts
+
+
+def test_statement_fundamentals_bounds_the_akshare_call(monkeypatch):
+    calls = []
+
+    def fake_call_with_timeout(fetcher, *, timeout_seconds, operation_name):
+        calls.append((timeout_seconds, operation_name))
+        raise requests.exceptions.Timeout("slow")
+
+    monkeypatch.setattr(cn_market_data_module, "_call_with_timeout", fake_call_with_timeout)
+
+    class _Akshare:
+        @staticmethod
+        def stock_financial_analysis_indicator(symbol, start_year):
+            raise AssertionError("must go through the timeout wrapper")
+
+    class _NoBaoStock:
+        def login(self):
+            return _FakeBaoLogin("1")
+
+    service = CnMarketDataService(
+        akshare_module=_Akshare(), baostock_module=_NoBaoStock(), timeout_seconds=7
+    )
+
+    assert service.statement_fundamentals("600519") == {}
+    assert calls == [
+        (7, "CN statement fundamentals fetch"),
+        (7, "CN BaoStock statement fundamentals fetch"),
+    ]
+
+
+def test_a_deterministic_listing_failure_is_also_remembered(monkeypatch):
+    # Eastmoney's 200-with-null-data makes AKShare raise TypeError.
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda _delay: None)
+
+    class _NullDataAkshare:
+        spot_calls = 0
+
+        def stock_zh_a_spot_em(self):
+            self.spot_calls += 1
+            raise TypeError("'NoneType' object is not subscriptable")
+
+    akshare = _NullDataAkshare()
+    service = CnMarketDataService(akshare_module=akshare, timeout_seconds=1)
+
+    for _ in range(3):
+        with pytest.raises(TypeError):
+            service.listing_rows()
+
+    assert akshare.spot_calls == 1
+
+
+def test_remembered_listing_failure_does_not_grow_its_traceback(monkeypatch):
+    monkeypatch.setattr(cn_market_data_module.time, "sleep", lambda _delay: None)
+    service = CnMarketDataService(
+        akshare_module=_UnreachableAkshare(), baostock_module=_UnreachableBaoStock(), timeout_seconds=1
+    )
+    depths = []
+    for _ in range(4):
+        try:
+            service.listing_rows()
+        except requests.exceptions.ConnectionError as exc:
+            depth, tb = 0, exc.__traceback__
+            while tb is not None:
+                depth, tb = depth + 1, tb.tb_next
+            depths.append(depth)
+
+    assert depths[1] == depths[2] == depths[3]

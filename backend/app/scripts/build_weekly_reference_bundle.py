@@ -664,6 +664,7 @@ def _run_chunked_fundamentals_refresh(
     market_by_symbol: dict[str, str],
     chunk_size: int,
     max_runtime_seconds: float,
+    started_at: float | None = None,
 ) -> tuple[dict[str, Any], list[str], bool]:
     """Fetch + persist fundamentals in chunks, honouring an optional wall-clock budget.
 
@@ -681,8 +682,10 @@ def _run_chunked_fundamentals_refresh(
     chunk_size = max(1, int(chunk_size))
     total = len(symbols)
     chunks_total = math.ceil(total / chunk_size)
+    # Counted from script start (``started_at``), so setup and the universe
+    # refresh spend the same budget the job timeout does.
     deadline = (
-        time.monotonic() + float(max_runtime_seconds)
+        (time.monotonic() if started_at is None else started_at) + float(max_runtime_seconds)
         if max_runtime_seconds and max_runtime_seconds > 0
         else None
     )
@@ -713,7 +716,12 @@ def _run_chunked_fundamentals_refresh(
             include_finviz=False,
             progress_callback=_chunk_progress_cb,
             market_by_symbol=chunk_market_by_symbol,
+            # Inside the chunk too: one slow chunk overran CN's budget until
+            # the runner cancelled the job before any partial publish (#522).
+            deadline=deadline,
         )
+        # The batch returns only the symbols it started before the deadline.
+        chunk_attempted = [symbol for symbol in chunk if symbol in chunk_data]
         chunk_stats = hybrid_service.store_all_caches(
             chunk_data,
             fundamentals_cache,
@@ -722,13 +730,22 @@ def _run_chunked_fundamentals_refresh(
             market_by_symbol=chunk_market_by_symbol,
         )
         _merge_fundamentals_stats(stats, chunk_stats)
-        attempted_symbols.extend(chunk)
+        attempted_symbols.extend(chunk_attempted)
         print(
             f"[fundamentals] {market} chunk {chunk_index + 1}/{chunks_total} "
             f"persisted={(chunk_stats or {}).get('persisted_symbols', 0)} "
             f"failed={(chunk_stats or {}).get('failed', 0)}",
             flush=True,
         )
+        if len(chunk_attempted) < len(chunk):
+            deadline_hit = True
+            print(
+                f"[fundamentals] {market} deadline reached inside chunk "
+                f"{chunk_index + 1}/{chunks_total}; stopping with "
+                f"{len(attempted_symbols)}/{total} symbols attempted",
+                flush=True,
+            )
+            break
 
     return stats, attempted_symbols, deadline_hit
 
@@ -945,6 +962,7 @@ def _build_asia_bundle(
         market_by_symbol=market_by_symbol,
         chunk_size=fetch_chunk_size,
         max_runtime_seconds=max_runtime_seconds,
+        started_at=_SCRIPT_STARTED_AT,
     )
     attempted_symbol_set = set(attempted_symbols)
     skipped_symbols = [s for s in fetch_symbols if s not in attempted_symbol_set]
@@ -1066,7 +1084,13 @@ def _build_asia_bundle(
     return summary
 
 
+# Set by main(): the fundamentals deadline counts from here (#522).
+_SCRIPT_STARTED_AT: float | None = None
+
+
 def main() -> int:
+    global _SCRIPT_STARTED_AT
+    _SCRIPT_STARTED_AT = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--market",

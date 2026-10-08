@@ -315,3 +315,88 @@ class TestPhase3PolicyFiltering:
         svc.bulk_fetcher.fetch_fundamentals_parallel.assert_not_called()
         svc.finviz_service.get_finviz_only_fields_batch.assert_not_called()
         assert result["920118.BJ"]["market"] == "CN"
+
+
+def test_deadline_stops_native_first_fetches_mid_batch(monkeypatch):
+    # #522: a slow CN batch must not run past the weekly job's soft deadline.
+    import app.services.hybrid_fundamentals_service as hybrid_module
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(hybrid_module.time, "monotonic", lambda: clock["now"])
+    svc = _make_service()
+    data_source = _make_cn_data_source()
+    original = data_source.get_combined_data.side_effect
+
+    def slow(symbol, market=None):
+        clock["now"] += 60.0
+        return original(symbol, market=market)
+
+    data_source.get_combined_data.side_effect = slow
+    svc._data_source_service = data_source
+    symbols = ["600000.SS", "600001.SS", "600002.SS", "600003.SS"]
+
+    result = svc.fetch_fundamentals_batch(
+        symbols,
+        include_technicals=True,
+        include_finviz=False,
+        market_by_symbol={symbol: "CN" for symbol in symbols},
+        deadline=100.0,
+    )
+
+    # Two fetches (t=60, t=120); the third is not started after the deadline.
+    assert list(result) == ["600000.SS", "600001.SS"]
+    assert data_source.get_combined_data.call_count == 2
+    # Past the deadline, technicals read stored prices only; no provider fetch.
+    svc.price_cache.get_many.assert_not_called()
+    svc.price_cache.get_many_cached_only.assert_called_once_with(
+        ["600000.SS", "600001.SS"], period="2y"
+    )
+
+
+def test_technicals_use_stored_prices_when_too_little_budget_remains(monkeypatch):
+    import app.services.hybrid_fundamentals_service as hybrid_module
+
+    monkeypatch.setattr(hybrid_module.time, "monotonic", lambda: 0.0)
+    svc = _make_service()
+    svc._data_source_service = _make_cn_data_source()
+
+    # Five minutes left: a provider fallback for the chunk may not finish.
+    svc.fetch_fundamentals_batch(
+        ["600000.SS"],
+        include_technicals=True,
+        include_finviz=False,
+        market_by_symbol={"600000.SS": "CN"},
+        deadline=300.0,
+    )
+
+    svc.price_cache.get_many.assert_not_called()
+    svc.price_cache.get_many_cached_only.assert_called_once_with(["600000.SS"], period="2y")
+
+
+def test_deadline_stops_yfinance_batches_and_trims_unattempted_symbols(monkeypatch):
+    # #543 review: yfinance-routed markets (HK/JP/TW) run one bulk call per chunk.
+    import app.services.hybrid_fundamentals_service as hybrid_module
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(hybrid_module.time, "monotonic", lambda: clock["now"])
+    svc = _make_service()
+    calls = {}
+
+    def fetch_batch_fundamentals(symbols, **kwargs):
+        calls.update(kwargs)
+        clock["now"] = 200.0  # the budget ran out after the first batch
+        return {symbols[0]: {"market_cap": 1.0}}
+
+    svc.bulk_fetcher.fetch_batch_fundamentals.side_effect = fetch_batch_fundamentals
+    symbols = ["0001.HK", "0002.HK", "0003.HK"]
+
+    result = svc.fetch_fundamentals_batch(
+        symbols,
+        include_technicals=False,
+        include_finviz=False,
+        market_by_symbol={symbol: "HK" for symbol in symbols},
+        deadline=100.0,
+    )
+
+    assert calls["deadline"] == 100.0
+    assert list(result) == ["0001.HK"]
