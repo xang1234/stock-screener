@@ -60,3 +60,24 @@ def test_an_unexpected_resume_error_is_reported_and_never_fails_the_job(monkeypa
 
     assert rollbacks == [True]
     assert "checkpoint status=invalid" in capsys.readouterr().out
+
+
+def test_a_failing_rollback_does_not_hide_the_import_error(monkeypatch, capsys):
+    class _Session(_FakeSession):
+        def rollback(self):
+            raise RuntimeError("connection already closed")
+
+    def boom(db, **kwargs):
+        raise RuntimeError("database connection lost mid-import")
+
+    monkeypatch.setattr(resume_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(resume_script, "SessionLocal", lambda: _Session())
+    monkeypatch.setattr(
+        resume_script, "_resolve_latest_completed_trading_date", lambda market: date(2026, 10, 7)
+    )
+    monkeypatch.setattr(resume_script, "resume_price_checkpoint", boom)
+
+    assert resume_script.main(["--market", "US"]) == 0
+
+    out = capsys.readouterr().out
+    assert "checkpoint status=invalid" in out and "mid-import" in out

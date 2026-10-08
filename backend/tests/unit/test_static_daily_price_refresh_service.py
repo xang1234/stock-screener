@@ -1934,3 +1934,65 @@ def test_static_daily_price_session_repair_wait_respects_the_deadline() -> None:
             frames={"BEHIND": _price_frame([date(2026, 6, 3)], 1.0)},
         )
     assert sleeps == []
+
+
+def test_rate_limited_retry_checks_the_deadline_between_chunks_and_keeps_finished_ones() -> None:
+    # #544 review: one fetch call for the whole retry group ran past the deadline.
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+
+    clock = {"now": 0.0}
+    fetched: list[list[str]] = []
+    stored: list[list[str]] = []
+
+    class _Fetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            fetched.append(list(symbols))
+            clock["now"] += 1000.0
+            return {s: {"price_data": _price_frame([date(2026, 6, 4)], 1.0), "has_error": False} for s in symbols}
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(
+            store_batch_in_cache=lambda payload, **_kwargs: stored.append(sorted(payload))
+        ),
+        fetcher=_Fetcher(),
+        sleep=lambda _seconds: None,
+        deadline=STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS + 700.0,
+        clock=lambda: clock["now"],
+    )
+    symbols = [f"S{index:02d}.NS" for index in range(STATIC_RATE_LIMITED_RETRY_BATCH_SIZE + 5)]
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._retry_rate_limited_failures(
+            market="IN",
+            rate_limited_symbols_by_period={STATIC_DAILY_PRICE_REFRESH_PERIOD: symbols},
+        )
+
+    assert fetched == [symbols[:STATIC_RATE_LIMITED_RETRY_BATCH_SIZE]]
+    assert stored == [symbols[:STATIC_RATE_LIMITED_RETRY_BATCH_SIZE]]
+
+
+def test_session_repair_rechecks_the_deadline_after_its_wait() -> None:
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+
+    clock = {"now": 0.0}
+
+    def sleep(seconds):
+        clock["now"] += seconds + 30.0  # the wait overran
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=SimpleNamespace(),
+        sleep=sleep,
+        fetch_quotes=lambda symbols: pytest.fail("no quote repair past the deadline"),
+        deadline=STATIC_SESSION_REPAIR_WAIT_SECONDS + 10.0,
+        clock=lambda: clock["now"],
+    )
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._repair_missing_sessions(
+            market="US",
+            as_of_date=date(2026, 6, 4),
+            frames={"BEHIND": _price_frame([date(2026, 6, 3)], 1.0)},
+        )

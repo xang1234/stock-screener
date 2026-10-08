@@ -966,6 +966,7 @@ class StaticDailyPriceRefreshService:
             flush=True,
         )
         self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
+        self._check_deadline()  # the wait itself may have run past it
         results = {symbol: {"price_data": frame} for symbol, frame in frames.items()}
         rate_limiter = getattr(self._fetcher, "_rate_limiter", None)
         repair_from_yahoo_quotes(
@@ -1133,10 +1134,17 @@ class StaticDailyPriceRefreshService:
         self._sleep(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
 
         recovered = 0
-        for period, unique_symbols in retry_groups:
+        # One fetch per retry batch, each checked against the deadline and
+        # stored before the next, so a stop keeps every recovered batch (#502).
+        retry_batches = [
+            (period, batch)
+            for period, unique_symbols in retry_groups
+            for batch in _iter_chunks(unique_symbols, STATIC_RATE_LIMITED_RETRY_BATCH_SIZE)
+        ]
+        for period, batch_symbols in retry_batches:
             self._check_deadline()
             retry_results = self._fetcher.fetch_prices_in_batches(
-                unique_symbols,
+                batch_symbols,
                 period=period,
                 start_batch_size=STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
                 market=market,

@@ -209,3 +209,18 @@ def test_deadline_counts_from_the_job_start_epoch_when_given(monkeypatch, tmp_pa
 
     remaining = refresh_kwargs["price_stage_deadline"] - time.monotonic()
     assert 50 < remaining <= 61
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--price-stage-deadline-minutes", "nan"),
+        ("--price-stage-deadline-minutes", "inf"),
+        ("--price-stage-deadline-minutes", "2", "--price-stage-start-epoch", "nan"),
+    ],
+)
+def test_non_finite_price_stage_timing_is_rejected(tmp_path, extra):
+    with pytest.raises(SystemExit):
+        export_script.main(
+            _argv(tmp_path, "--price-checkpoint-dir", str(tmp_path / "c"), *extra)
+        )

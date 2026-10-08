@@ -1571,6 +1571,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(
             "--breadth-contributor-metadata-dir requires --refresh-daily"
         )
+    for flag, value in (
+        ("--price-stage-deadline-minutes", args.price_stage_deadline_minutes),
+        ("--price-stage-start-epoch", args.price_stage_start_epoch),
+    ):
+        # NaN would compare false against every clock reading: no deadline.
+        if value is not None and not math.isfinite(value):
+            raise SystemExit(f"{flag} must be a finite number")
     if (args.price_stage_deadline_minutes is None) != (args.price_checkpoint_dir is None):
         raise SystemExit(
             "--price-stage-deadline-minutes and --price-checkpoint-dir go together"
