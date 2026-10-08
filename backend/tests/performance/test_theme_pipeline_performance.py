@@ -324,9 +324,10 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         "update_all_theme_metrics",
         lambda self: {"themes_updated": 0},
     )
+    # The handler queues the bootstrap rebuild (#526); keep the broker out of the timing.
     monkeypatch.setattr(
-        "app.services.ui_snapshot_service.safe_publish_themes_bootstrap_variants",
-        lambda pipeline=None: {},
+        "app.tasks.theme_discovery_tasks.queue_themes_bootstrap_publish",
+        lambda pipeline=None: None,
     )
     async def _noop_startup_rebuild():
         return None
