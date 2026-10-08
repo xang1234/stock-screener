@@ -351,3 +351,23 @@ def test_deadline_stops_native_first_fetches_mid_batch(monkeypatch):
     svc.price_cache.get_many_cached_only.assert_called_once_with(
         ["600000.SS", "600001.SS"], period="2y"
     )
+
+
+def test_technicals_use_stored_prices_when_too_little_budget_remains(monkeypatch):
+    import app.services.hybrid_fundamentals_service as hybrid_module
+
+    monkeypatch.setattr(hybrid_module.time, "monotonic", lambda: 0.0)
+    svc = _make_service()
+    svc._data_source_service = _make_cn_data_source()
+
+    # Five minutes left: a provider fallback for the chunk may not finish.
+    svc.fetch_fundamentals_batch(
+        ["600000.SS"],
+        include_technicals=True,
+        include_finviz=False,
+        market_by_symbol={"600000.SS": "CN"},
+        deadline=300.0,
+    )
+
+    svc.price_cache.get_many.assert_not_called()
+    svc.price_cache.get_many_cached_only.assert_called_once_with(["600000.SS"], period="2y")

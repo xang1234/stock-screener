@@ -37,6 +37,9 @@ from .provider_adapters.fundamentals_plan_executor import (
 logger = logging.getLogger(__name__)
 
 
+TECHNICALS_PRICE_FETCH_RESERVE_SECONDS = 900
+
+
 class HybridFundamentalsService:
     """
     Hybrid fundamental data fetching for optimal performance.
@@ -189,6 +192,26 @@ class HybridFundamentalsService:
                 if value is not None and key not in merged:
                     merged[key] = value
         return merged
+
+    def _technical_price_data(
+        self,
+        symbols: List[str],
+        deadline: Optional[float],
+    ) -> Dict[str, Any]:
+        """2y prices for technicals; stored rows only near the deadline.
+
+        A cache miss falls back to providers with retries and backoff, which
+        cannot be interrupted once started. Within
+        ``TECHNICALS_PRICE_FETCH_RESERVE_SECONDS`` of the deadline (or past
+        it) read stored rows only, so the chunk persists before the job's
+        hard timeout (#522; a CN chunk's fetch took 7.5 min on 2026-10-03).
+        """
+        if (
+            deadline is not None
+            and time.monotonic() >= deadline - TECHNICALS_PRICE_FETCH_RESERVE_SECONDS
+        ):
+            return self.price_cache.get_many_cached_only(symbols, period='2y')
+        return self.price_cache.get_many(symbols, period='2y')
 
     def _fetch_native_first_fundamentals(
         self,
@@ -404,12 +427,7 @@ class HybridFundamentalsService:
             phase2_start = time.time()
 
             # Bulk fetch price data from cache
-            # Past the deadline, read stored prices only: a provider fetch for
-            # the chunk could still run the job past its hard timeout (#522).
-            if deadline is not None and time.monotonic() >= deadline:
-                price_data_dict = self.price_cache.get_many_cached_only(symbols, period='2y')
-            else:
-                price_data_dict = self.price_cache.get_many(symbols, period='2y')
+            price_data_dict = self._technical_price_data(symbols, deadline)
 
             # Calculate technicals for each symbol
             tech_success = 0
@@ -638,12 +656,7 @@ class HybridFundamentalsService:
         # Phase 2: Technical calculations
         if include_technicals:
             logger.info("Phase 2: Calculating technical indicators...")
-            # Past the deadline, read stored prices only: a provider fetch for
-            # the chunk could still run the job past its hard timeout (#522).
-            if deadline is not None and time.monotonic() >= deadline:
-                price_data_dict = self.price_cache.get_many_cached_only(symbols, period='2y')
-            else:
-                price_data_dict = self.price_cache.get_many(symbols, period='2y')
+            price_data_dict = self._technical_price_data(symbols, deadline)
             technicals = self.technical_calc.calculate_batch(price_data_dict)
             for symbol, tech_data in technicals.items():
                 results[symbol].update(tech_data)
