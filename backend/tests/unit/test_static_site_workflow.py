@@ -1441,3 +1441,25 @@ def test_price_history_repair_is_an_opt_in_for_one_market_job() -> None:
     # Only the named market's job gets the flag, compared case-insensitively.
     assert '= "${{ matrix.market }}" ]; then\n  repair_args=(--repair-price-history)' in run
     assert '"${breadth_metadata_args[@]}" "${repair_args[@]}" 2>&1' in run
+
+
+@pytest.mark.parametrize(
+    ("repair_market", "group", "accepted"),
+    [("AU", "asia", True), ("au", "asia", True), ("AUS", "asia", False), ("DE", "asia", False), ("", "us", True)],
+)
+def test_repair_market_must_belong_to_the_selected_group(repair_market, group, accepted) -> None:
+    step = next(
+        step
+        for step in _site_workflow()["jobs"]["select-markets"]["steps"]
+        if step.get("id") == "pick"
+    )
+    env = {
+        **os.environ,
+        "EVENT_NAME": "workflow_dispatch",
+        "SCHEDULE": "",
+        "MARKET_GROUP": group,
+        "REPAIR_PRICE_HISTORY_MARKET": repair_market,
+        "GITHUB_OUTPUT": os.devnull,
+    }
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env, capture_output=True)
+    assert (result.returncode == 0) is accepted

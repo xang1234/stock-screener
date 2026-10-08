@@ -85,6 +85,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           SCHEDULE: ${{ github.event.schedule }}
           MARKET_GROUP: ${{ github.event.inputs.market_group }}
+          REPAIR_PRICE_HISTORY_MARKET: ${{ github.event.inputs.repair_price_history_market }}
         run: |
           ASIA='["HK","IN","JP","KR","TW","CN","SG","MY","AU"]'
           CN_ONLY='["CN"]'
@@ -103,6 +104,12 @@ jobs:
               us)   markets="$US" ;;
               *)    markets="$ALL" ;;
             esac
+          fi
+
+          repair_market="$(echo "$REPAIR_PRICE_HISTORY_MARKET" | tr '[:lower:]' '[:upper:]')"
+          if [ -n "$repair_market" ] && ! echo "$markets" | grep -q "\"$repair_market\""; then
+            echo "repair_price_history_market=$repair_market is not in the selected market group ($markets)." >&2
+            exit 1
           fi
 
           echo "markets=$markets" >> "$GITHUB_OUTPUT"
@@ -452,6 +459,8 @@ jobs:
         env:
           RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
           REPAIR_PRICE_HISTORY_MARKET: ${{ github.event.inputs.repair_price_history_market || '' }}
+          # Operator override for the RS anchor-gap publication limit (#539).
+          STATIC_RS_MAX_HISTORY_GAP_SHARE: ${{ vars.STATIC_RS_MAX_HISTORY_GAP_SHARE || '' }}
           RRG_HISTORY_ENABLED: ${{ steps.rrg-history.outputs.enabled }}
           RRG_RESTORE_STATUS: ${{ steps.restore-rrg-history.outputs.restore_status }}
           BREADTH_METADATA_ENABLED: ${{ steps.breadth-contributor-metadata.outputs.enabled }}

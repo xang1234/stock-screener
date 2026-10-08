@@ -44,6 +44,7 @@ def test_calculate_market_rs_snapshot_returns_stable_completed_shape(monkeypatch
         as_of_date=date(2026, 4, 10),
         formula_version=BALANCED_RS_FORMULA_VERSION,
         eligible_symbol_count=5000,
+        diagnostics_json={"history_gaps": {"share": 0.0}},
     )
 
     result = module.calculate_market_rs_snapshot.run(
@@ -58,6 +59,7 @@ def test_calculate_market_rs_snapshot_returns_stable_completed_shape(monkeypatch
         "formula_version": BALANCED_RS_FORMULA_VERSION,
         "market_rs_run_id": 42,
         "eligible_symbol_count": 5000,
+        "history_gaps": {"share": 0.0},
     }
     fake_calendar.is_trading_day.assert_called_once_with("US", date(2026, 4, 10))
     fake_service.calculate.assert_called_once_with(
@@ -80,6 +82,7 @@ def test_calculate_market_rs_snapshot_resolves_bootstrap_date_when_omitted(monke
         as_of_date=date(2026, 4, 10),
         formula_version=BALANCED_RS_FORMULA_VERSION,
         eligible_symbol_count=800,
+        diagnostics_json={"history_gaps": {"share": 0.0}},
     )
 
     result = module.calculate_market_rs_snapshot.run(

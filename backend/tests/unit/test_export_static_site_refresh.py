@@ -591,3 +591,59 @@ def test_run_static_cot_refresh_reports_use_case_failure(monkeypatch):
         "reason_codes": ["cot_refresh_failed"],
         "error": "cftc unavailable",
     }
+
+
+def _completed_rs(share):
+    return {
+        "status": "completed",
+        "market": "AU",
+        "as_of_date": "2026-10-07",
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+        "market_rs_run_id": 7,
+        "history_gaps": {"symbol_count": 1704, "share": share, "count_by_anchor": {}},
+    }
+
+
+def test_static_rs_with_an_anchor_gap_collapse_has_no_current_artifact(monkeypatch):
+    monkeypatch.delenv("STATIC_RS_MAX_HISTORY_GAP_SHARE", raising=False)
+
+    rejected = export_static_site._reject_static_rs_history_gap_collapse(
+        _completed_rs(0.92), market="AU", as_of_date=date(2026, 10, 7)
+    )
+    healthy = _completed_rs(0.16)
+
+    assert rejected["reason_code"] == "historical_adjusted_anchor_gap_above_threshold"
+    assert rejected["market_rs_run_id"] is None
+    assert export_static_site.classify_static_market_rs_artifact_result(
+        rejected, market="AU", as_of_date="2026-10-07",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    ) is StaticMarketRsArtifactState.NO_CURRENT_ARTIFACT
+    assert export_static_site._reject_static_rs_history_gap_collapse(
+        healthy, market="DE", as_of_date=date(2026, 10, 7)
+    ) is healthy
+
+
+def test_static_rs_gap_limit_can_be_lifted_when_the_provider_lacks_sessions(monkeypatch):
+    monkeypatch.setenv("STATIC_RS_MAX_HISTORY_GAP_SHARE", "1")
+    result = _completed_rs(0.92)
+
+    assert export_static_site._reject_static_rs_history_gap_collapse(
+        result, market="AU", as_of_date=date(2026, 10, 7)
+    ) is result
+
+
+def test_anchor_gap_rejection_still_publishes_the_price_bundle(tmp_path):
+    from app.scripts import export_static_market_artifact
+
+    diagnostics = tmp_path / "diagnostics" / "au"
+    diagnostics.mkdir(parents=True)
+    (diagnostics / "snapshot-failure.json").write_text(
+        '{"reason": "market_rs_not_ready", "failure_diagnostics": '
+        '{"reason_code": "historical_adjusted_anchor_gap_above_threshold"}}'
+    )
+
+    assert export_static_market_artifact._has_price_bundle(
+        output_dir=tmp_path,
+        market="AU",
+        exit_code=export_static_site.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE,
+    )

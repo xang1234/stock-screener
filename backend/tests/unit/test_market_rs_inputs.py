@@ -465,9 +465,11 @@ def _rows_without(symbol, missing_offsets):
     ]
 
 
-def test_load_rejects_a_collapse_from_interior_anchor_gaps(db_session):
+def test_load_measures_interior_anchor_gaps_without_failing(db_session):
     # #539: fresh current prices and long history, but one interior anchor
-    # session (the 21-session one) is missing for most of the market.
+    # session (the 21-session one) is missing for most of the market. The
+    # loader still ranks the rest (live RS stays partial); static publication
+    # enforces the limit.
     db_session.add_all(
         [
             *_complete_rows("SPY", {offset: 100.0 + offset for offset in ANCHORS}),
@@ -479,16 +481,18 @@ def test_load_rejects_a_collapse_from_interior_anchor_gaps(db_session):
     )
     db_session.flush()
 
-    with pytest.raises(MarketRsInputUnavailable) as raised:
-        _loader(["AAA", "BBB", "CCC", "DDD"]).load(
-            db_session, market="AU", as_of_date=ANCHORS[0]
-        )
+    inputs = _loader(["AAA", "BBB", "CCC", "DDD"]).load(
+        db_session, market="AU", as_of_date=ANCHORS[0]
+    )
 
-    assert raised.value.reason_code == "historical_adjusted_anchor_gap_above_threshold"
-    diagnostics = raised.value.diagnostics
-    assert diagnostics["history_gap_symbol_count"] == 3
-    assert diagnostics["history_gap_count_by_anchor"] == {"2026-03-10": 3}
-    assert diagnostics["history_gap_samples"] == ["BBB", "CCC", "DDD"]
+    assert set(inputs.excess_returns_by_symbol) == {"AAA"}
+    assert inputs.history_gaps == {
+        "symbol_count": 3,
+        "share": 0.75,
+        "count_by_anchor": {"2026-03-10": 3},
+        "samples": ["BBB", "CCC", "DDD"],
+        "current_prices_available": 4,
+    }
 
 
 def test_load_keeps_short_histories_out_of_the_anchor_gap_guard(db_session):
@@ -512,3 +516,4 @@ def test_load_keeps_short_histories_out_of_the_anchor_gap_guard(db_session):
         "BBB": "missing_adjusted_21_session_anchor",
         "CCC": "missing_adjusted_21_session_anchor",
     }
+    assert inputs.history_gaps["symbol_count"] == 0

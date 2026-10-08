@@ -34,6 +34,7 @@ from app.services.ibd_industry_service import IBDIndustryService
 from app.services.market_exposure_service import EXPOSURE_BACKFILL_DAYS
 from app.services.market_rs_result_contract import (
     MARKET_RS_REASON_BENCHMARK_ADJUSTED_ANCHOR_MISSING,
+    MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
     MARKET_RS_REASON_CURRENT_ADJUSTED_PRICE_COVERAGE_BELOW_THRESHOLD,
 )
 from app.services.static_breadth_contributor_metadata_contract import (
@@ -596,6 +597,49 @@ def _hydrate_remaining_static_rs_benchmarks(
             )
 
 
+# #539: a market whose priced symbols mostly miss an interior RS anchor would
+# publish RS for a sliver of its universe. Measured on 2026-10-07 bundles:
+# AU 92% (the incident), DE 16% (sparse illiquid names), every other market
+# under 1%. Raise via STATIC_RS_MAX_HISTORY_GAP_SHARE (1 disables) when the
+# provider genuinely lacks the sessions; see the price-history repair runbook.
+STATIC_RS_MAX_HISTORY_GAP_SHARE = 0.5
+
+
+def _static_rs_max_history_gap_share() -> float:
+    raw = os.environ.get("STATIC_RS_MAX_HISTORY_GAP_SHARE", "").strip()
+    return float(raw) if raw else STATIC_RS_MAX_HISTORY_GAP_SHARE
+
+
+def _reject_static_rs_history_gap_collapse(
+    result: Any,
+    *,
+    market: str,
+    as_of_date: date,
+) -> Any:
+    if not isinstance(result, Mapping) or result.get("status") != "completed":
+        return result
+    gaps = result.get("history_gaps") or {}
+    threshold = _static_rs_max_history_gap_share()
+    if float(gaps.get("share") or 0.0) <= threshold:
+        return result
+    print(
+        f"[static-rs] {market} Market RS rejected for {as_of_date.isoformat()}: "
+        f"{gaps.get('symbol_count')} priced symbols miss an interior anchor "
+        f"(share {float(gaps['share']):.1%} > {threshold:.0%}): "
+        f"{gaps.get('count_by_anchor')}",
+        flush=True,
+    )
+    return {
+        "status": "failed",
+        "market": market,
+        "as_of_date": as_of_date.isoformat(),
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+        "reason_code": MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
+        "diagnostics": {"history_gaps": gaps, "max_history_gap_share": threshold},
+        "market_rs_run_id": None,
+    }
+
+
 def _prepare_balanced_static_rs(*, market: str, as_of_date: date) -> dict[str, Any]:
     """Build the exact canonical snapshot and select it in this private build DB."""
     from app.tasks.market_rs_tasks import calculate_market_rs_snapshot
@@ -642,6 +686,9 @@ def _prepare_balanced_static_rs(*, market: str, as_of_date: date) -> dict[str, A
             formula_version=BALANCED_RS_FORMULA_VERSION,
             rebuild_incompatible=True,
         )
+    result = _reject_static_rs_history_gap_collapse(
+        result, market=normalized_market, as_of_date=as_of_date
+    )
     artifact_state = classify_static_market_rs_artifact_result(
         result,
         market=normalized_market,

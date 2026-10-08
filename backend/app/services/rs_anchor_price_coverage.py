@@ -4,8 +4,9 @@ Group-history coverage only checks markets with group rankings, so AU and DE
 went unchecked and lost RS for most symbols when a missing session became the
 21-session anchor (#539). This covers the anchors of the as-of session and of
 the next ``lookahead_sessions`` sessions, so a hole is repaired before it
-becomes an anchor. Only gaps count: a symbol whose stored history starts after
-an anchor is a short history, not a hole.
+becomes an anchor. Only gaps inside a symbol's stored history count: one that
+starts after an anchor (new listing) or ends before it (dormant, halted) is
+not a hole.
 """
 
 from __future__ import annotations
@@ -79,7 +80,7 @@ class RsAnchorPriceCoverageService:
         if not required or not symbols:
             return RsAnchorGaps()
         available: dict[str, set[date]] = {}
-        first: dict[str, date] = {}
+        span: dict[str, tuple[date, date]] = {}
         for start in range(0, len(symbols), _CHUNK):
             chunk = symbols[start : start + _CHUNK]
             for symbol, day, adj_close in (
@@ -89,8 +90,10 @@ class RsAnchorPriceCoverageService:
             ):
                 if is_usable_adjusted_close(adj_close):
                     available.setdefault(symbol, set()).add(day)
-            first.update(
-                db.query(StockPrice.symbol, func.min(StockPrice.date))
+            for symbol, first, last in (
+                db.query(
+                    StockPrice.symbol, func.min(StockPrice.date), func.max(StockPrice.date)
+                )
                 .filter(
                     StockPrice.symbol.in_(chunk),
                     StockPrice.adj_close.isnot(None),
@@ -98,15 +101,17 @@ class RsAnchorPriceCoverageService:
                 )
                 .group_by(StockPrice.symbol)
                 .all()
-            )
+            ):
+                span[symbol] = (first, last)
         missing: dict[str, frozenset[date]] = {}
         for symbol in symbols:
-            if symbol not in first:
+            if symbol not in span:
                 continue
+            first, last = span[symbol]
             holes = frozenset(
                 day
                 for day in required
-                if day > first[symbol] and day not in available.get(symbol, ())
+                if first < day <= last and day not in available.get(symbol, ())
             )
             if holes:
                 missing[symbol] = holes

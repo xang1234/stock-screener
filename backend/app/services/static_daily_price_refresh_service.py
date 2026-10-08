@@ -252,6 +252,8 @@ class StaticDailyPriceRefreshService:
                 ),
                 enabled=ensure_static_history,
             )
+            # Benchmarks too: a benchmark hole fails RS for the whole market.
+            rs_anchor_symbol_set = active_symbol_set | set(key_market_symbols)
             rs_anchor_coverage = self._rs_anchor_coverage(
                 db,
                 market=market,
@@ -259,7 +261,7 @@ class StaticDailyPriceRefreshService:
                 symbols=tuple(
                     symbol
                     for symbol in coverage.fresh + coverage.stale
-                    if symbol in active_symbol_set
+                    if symbol in rs_anchor_symbol_set
                 ),
                 enabled=ensure_static_history,
                 lookahead_sessions=rs_anchor_lookahead_sessions,
@@ -448,16 +450,25 @@ class StaticDailyPriceRefreshService:
             )
             refreshed += readjusted_refreshed
             failed += readjusted_failed
+        # Before the latest-session quote repair, so a repair frame missing
+        # the as-of bar is quote-repaired with the rest. Symbols the drift
+        # re-bootstrap already replaced with 2y history are not refetched.
+        rs_anchor_repair = self._repair_rs_anchor_gaps(
+            rs_anchor_coverage,
+            symbols=[
+                symbol
+                for symbol in rs_anchor_repair_symbols
+                if symbol not in readjusted_symbols
+            ],
+            batch_size=batch_size,
+            market=market,
+            as_of_date=as_of_date,
+            missing_session_frames=missing_session_frames,
+        )
         session_repair = self._repair_missing_sessions(
             market=market,
             as_of_date=as_of_date,
             frames=missing_session_frames,
-        )
-        rs_anchor_repair = self._repair_rs_anchor_gaps(
-            rs_anchor_coverage,
-            symbols=rs_anchor_repair_symbols,
-            batch_size=batch_size,
-            market=market,
         )
 
         return {
@@ -645,6 +656,8 @@ class StaticDailyPriceRefreshService:
         symbols: list[str],
         batch_size: int,
         market: str | None,
+        as_of_date: date | None = None,
+        missing_session_frames: dict[str, pd.DataFrame] | None = None,
     ) -> dict[str, Any]:
         """Refetch 2y for symbols with RS anchor holes and swap their history.
 
@@ -662,13 +675,34 @@ class StaticDailyPriceRefreshService:
                 f"{len(symbols):,} symbols.",
                 flush=True,
             )
-            self._fetch_and_store(
+            required = {symbol: set(missing[symbol]) for symbol in symbols}
+            _, _, rate_limited = self._fetch_and_store(
                 symbols,
                 period=STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
                 batch_size=batch_size,
                 market=market,
-                replacement_required_dates={symbol: set(missing[symbol]) for symbol in symbols},
+                as_of_date=as_of_date,
+                replacement_required_dates=required,
+                missing_session_frames=missing_session_frames,
             )
+            if rate_limited:
+                # A large repair burst is the likeliest 429; replay it once.
+                print(
+                    f"[static-daily prices:{market}] {len(rate_limited):,} RS anchor "
+                    f"repairs were rate limited; retrying after "
+                    f"{STATIC_SESSION_REPAIR_WAIT_SECONDS}s.",
+                    flush=True,
+                )
+                self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
+                self._fetch_and_store(
+                    rate_limited,
+                    period=STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+                    batch_size=batch_size,
+                    market=market,
+                    as_of_date=as_of_date,
+                    replacement_required_dates=required,
+                    missing_session_frames=missing_session_frames,
+                )
         # Symbols the 2y bootstrap refetched are rechecked here too.
         with self._session_factory() as db:
             unresolved = self._rs_anchor_price_coverage.gaps(
@@ -976,6 +1010,10 @@ class StaticDailyPriceRefreshService:
                         for (stored_date,) in db.query(StockPrice.date).filter(
                             StockPrice.symbol == symbol,
                             StockPrice.date >= min(dates),
+                            # Newer stored bars (e.g. a quote-repaired as-of
+                            # bar the refetch lacks) are kept; required dates
+                            # still force any bar the caller needs.
+                            StockPrice.date <= max(dates),
                         )
                     }
                     uncovered = (

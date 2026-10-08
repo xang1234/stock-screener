@@ -241,3 +241,78 @@ def test_provider_errors_leave_the_gap_unresolved_and_history_unchanged():
 
     assert result["rs_anchor_repair"]["unresolved_symbols"] == 1
     assert set(_stored(session_factory, "GAP.AX")) == set(history)
+
+
+def test_dormant_symbols_are_not_refetched_for_holes_after_their_history_ends():
+    session_factory = _session_factory()
+    _seed(session_factory, {"DORMANT.AX": SESSIONS[:-40]})  # stopped trading 40 sessions ago
+    fetcher = _Fetcher(SESSIONS)
+
+    result = _service(session_factory, fetcher).refresh(
+        as_of_date=AS_OF, market="AU", ensure_static_history=True
+    )
+
+    assert result["rs_anchor_repair"]["gap_symbols"] == 0
+
+
+def test_benchmark_anchor_holes_are_repaired_too(monkeypatch):
+    from app.services import static_daily_price_refresh_service as module
+
+    session_factory = _session_factory()
+    _seed(session_factory, {"OK.AX": list(SESSIONS)})
+    with session_factory() as db:
+        db.add_all(
+            StockPrice(symbol="^AXJO", date=day, open=1.0, high=1.0, low=1.0,
+                       close=1.0, adj_close=1.0, volume=1000)
+            for day in SESSIONS if day not in GAP
+        )
+        db.commit()
+    monkeypatch.setattr(module, "_key_market_price_symbols", lambda market: ["^AXJO"])
+    fetcher = _Fetcher(SESSIONS)
+
+    result = _service(session_factory, fetcher).refresh(
+        as_of_date=AS_OF, market="AU", ensure_static_history=True
+    )
+
+    assert result["rs_anchor_repair"]["repaired_symbols"] == 1
+    assert GAP <= set(_stored(session_factory, "^AXJO"))
+
+
+def test_rate_limited_repairs_are_retried_once():
+    session_factory = _session_factory()
+    _seed(session_factory, {"GAP.AX": [day for day in SESSIONS if day not in GAP]})
+
+    class _ThrottledOnce(_Fetcher):
+        throttled = False
+
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            if period == STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD and "GAP.AX" in symbols and not self.throttled:
+                self.throttled = True
+                self.calls.append((tuple(symbols), period))
+                return {"GAP.AX": {"price_data": None, "has_error": True, "error": "429 Too Many Requests"}}
+            return super().fetch_prices_in_batches(symbols, period, start_batch_size, market)
+
+    fetcher = _ThrottledOnce(SESSIONS)
+    result = _service(session_factory, fetcher).refresh(
+        as_of_date=AS_OF, market="AU", ensure_static_history=True
+    )
+
+    assert _repair_calls(fetcher) == [("GAP.AX",), ("GAP.AX",)]
+    assert result["rs_anchor_repair"]["unresolved_symbols"] == 0
+
+
+def test_real_au_calendar_rolls_the_21_session_anchor_onto_september_7():
+    from app.services.market_calendar_service import MarketCalendarService
+
+    calendar = MarketCalendarService()
+    service = RsAnchorPriceCoverageService(calendar_service=calendar)
+    previous = calendar.trading_days("AU", date(2026, 9, 28), date(2026, 10, 5))[-1]
+
+    on_oct_6 = service.required_dates(market="AU", through_date=date(2026, 10, 6), lookahead_sessions=0)
+    before = service.required_dates(market="AU", through_date=previous, lookahead_sessions=0)
+    ahead = service.required_dates(market="AU", through_date=previous, lookahead_sessions=10)
+
+    assert date(2026, 9, 7) in on_oct_6 and date(2026, 9, 4) not in on_oct_6
+    assert date(2026, 9, 4) in before and date(2026, 9, 7) not in before
+    # The lookahead reaches the hole before the anchor does.
+    assert date(2026, 9, 7) in ahead
