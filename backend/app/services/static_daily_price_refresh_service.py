@@ -955,6 +955,7 @@ class StaticDailyPriceRefreshService:
             return stats
         self._check_deadline(STATIC_SESSION_REPAIR_WAIT_SECONDS)
         from app.services.yahoo_quote_price_repair import (
+            YAHOO_QUOTE_BATCH_SIZE,
             fetch_yahoo_quotes,
             repair_from_yahoo_quotes,
         )
@@ -967,27 +968,35 @@ class StaticDailyPriceRefreshService:
         )
         self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
         self._check_deadline()  # the wait itself may have run past it
-        results = {symbol: {"price_data": frame} for symbol, frame in frames.items()}
         rate_limiter = getattr(self._fetcher, "_rate_limiter", None)
-        repair_from_yahoo_quotes(
-            results,
-            expected_session=as_of_date,
-            market_tz=self._calendar_service.market_timezone(market),
-            fetch_quotes=self._fetch_quotes or fetch_yahoo_quotes,
-            wait=(
-                (lambda: rate_limiter.wait_for_market("yfinance:batch", market))
-                if rate_limiter is not None
-                else None
-            ),
-            sleep=self._sleep,
-        )
-        repaired = {
-            symbol: payload["price_data"]
-            for symbol, payload in results.items()
-            if payload.get("repaired_by")
-        }
-        if repaired:
-            self._price_cache.store_batch_in_cache(repaired, also_store_db=True, market=market)
+        repaired: dict[str, pd.DataFrame] = {}
+        # One quote batch per call, deadline-checked and stored before the
+        # next, so a stop past the deadline keeps the batches already repaired.
+        for symbols in _iter_chunks(list(frames), YAHOO_QUOTE_BATCH_SIZE):
+            self._check_deadline()
+            results = {symbol: {"price_data": frames[symbol]} for symbol in symbols}
+            repair_from_yahoo_quotes(
+                results,
+                expected_session=as_of_date,
+                market_tz=self._calendar_service.market_timezone(market),
+                fetch_quotes=self._fetch_quotes or fetch_yahoo_quotes,
+                wait=(
+                    (lambda: rate_limiter.wait_for_market("yfinance:batch", market))
+                    if rate_limiter is not None
+                    else None
+                ),
+                sleep=self._sleep,
+            )
+            batch_repaired = {
+                symbol: payload["price_data"]
+                for symbol, payload in results.items()
+                if payload.get("repaired_by")
+            }
+            if batch_repaired:
+                self._price_cache.store_batch_in_cache(
+                    batch_repaired, also_store_db=True, market=market
+                )
+                repaired.update(batch_repaired)
         stats.update(
             attempted=len(frames),
             repaired=len(repaired),

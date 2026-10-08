@@ -1996,3 +1996,39 @@ def test_session_repair_rechecks_the_deadline_after_its_wait() -> None:
             as_of_date=date(2026, 6, 4),
             frames={"BEHIND": _price_frame([date(2026, 6, 3)], 1.0)},
         )
+
+
+def test_session_repair_checks_the_deadline_between_quote_batches() -> None:
+    # #544 review: one repair call quoted every stale symbol past the deadline.
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+    from app.services.yahoo_quote_price_repair import YAHOO_QUOTE_BATCH_SIZE
+
+    clock = {"now": 0.0}
+    quoted: list[list[str]] = []
+
+    def fetch_quotes(symbols):
+        quoted.append(list(symbols))
+        clock["now"] += 1000.0
+        return []
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=SimpleNamespace(),
+        sleep=lambda _seconds: None,
+        fetch_quotes=fetch_quotes,
+        deadline=STATIC_SESSION_REPAIR_WAIT_SECONDS + 500.0,
+        clock=lambda: clock["now"],
+    )
+    frames = {
+        f"S{index:03d}": _price_frame([date(2026, 6, 3)], 1.0)
+        for index in range(YAHOO_QUOTE_BATCH_SIZE + 20)
+    }
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._repair_missing_sessions(market="US", as_of_date=date(2026, 6, 4), frames=frames)
+
+    # Every quote request (including the helper's retries) was for the first
+    # batch; the second batch never started.
+    first_batch = sorted(frames)[:YAHOO_QUOTE_BATCH_SIZE]
+    assert quoted and all(sorted(batch) == first_batch for batch in quoted)
