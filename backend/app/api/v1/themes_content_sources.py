@@ -181,6 +181,10 @@ def update_content_source(
         db.rollback()
         raise
 
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
+
+    # Pipeline reconciliation and activity change item state and failed counts.
+    queue_themes_bootstrap_publish()
     return ContentSourceResponse.model_validate(existing)
 
 
@@ -197,7 +201,9 @@ def delete_content_source(
 
     source.is_active = False
     db.commit()
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
+    queue_themes_bootstrap_publish()
     return {"status": "deactivated", "source": source.name}
 
 
@@ -231,9 +237,9 @@ def run_extraction(
     """Extract themes from unprocessed content using LLM."""
     service = ThemeExtractionService(db, pipeline=pipeline)
     result = service.process_batch(limit=limit)
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(pipeline)
+    queue_themes_bootstrap_publish(pipeline)
     return ExtractionResponse(**result)
 
 
@@ -245,9 +251,9 @@ def calculate_theme_metrics(
     """Calculate/update metrics for all active themes in a pipeline."""
     service = ThemeDiscoveryService(db, pipeline=pipeline)
     result = service.update_all_theme_metrics()
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(pipeline)
+    queue_themes_bootstrap_publish(pipeline)
     return result
 
 

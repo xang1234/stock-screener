@@ -25,6 +25,7 @@ from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
 from app.models.theme import (
+    ContentItemPipelineState,
     ThemeAlert,
     ThemeCluster,
     ThemeMergeSuggestion,
@@ -146,6 +147,7 @@ def test_resolve_themes_source_revision_filters_pipeline_runs_to_pipeline_or_glo
             ThemePipelineRun.__table__,
             ThemeAlert.__table__,
             ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
         ],
     )
     Session = sessionmaker(bind=engine)
@@ -168,6 +170,82 @@ def test_resolve_themes_source_revision_filters_pipeline_runs_to_pipeline_or_glo
 
         assert technical_revision.split("|")[2] == "2026-03-18T11:00:00"
         assert fundamental_revision.split("|")[2] == "2026-03-18T12:00:00"
+
+
+def test_resolve_themes_source_revision_changes_when_an_alert_is_dismissed_or_read():
+    """Handlers queue the bootstrap rebuild (#526); until it runs, a dismissed or
+    read alert must make the old snapshot stale so the page reads live alerts."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ThemeMetrics.__table__,
+            ThemeCluster.__table__,
+            ThemePipelineRun.__table__,
+            ThemeAlert.__table__,
+            ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
+
+    with Session() as db:
+        alert = ThemeAlert(alert_type="breakout", title="AI", triggered_at=datetime(2026, 3, 18, 9, 0, 0))
+        db.add(alert)
+        db.commit()
+        initial = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        alert.is_dismissed = True
+        db.commit()
+        dismissed = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        alert.is_read = True
+        db.commit()
+        read = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+    assert len({initial, dismissed, read}) == 3
+
+
+def test_resolve_themes_source_revision_changes_on_a_same_day_metrics_refresh():
+    """A second metrics run on the same date updates rows in place; the queued
+    rebuild (#526) must not leave the old rankings served as fresh meanwhile."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ThemeMetrics.__table__,
+            ThemeCluster.__table__,
+            ThemePipelineRun.__table__,
+            ThemeAlert.__table__,
+            ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
+
+    with Session() as db:
+        first = ThemeMetrics(
+            theme_cluster_id=1, date=date(2026, 3, 18), pipeline="technical", momentum_score=50.0
+        )
+        second = ThemeMetrics(
+            theme_cluster_id=2, date=date(2026, 3, 18), pipeline="technical", momentum_score=60.0
+        )
+        db.add_all([first, second])
+        db.commit()
+        before = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        # Equal and opposite moves keep any count/sum aggregate unchanged.
+        # while the rankings flip.
+        first.momentum_score = 61.0
+        second.momentum_score = 49.0
+        db.commit()
+        after = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+    assert before != after
 
 
 def test_publish_scan_bootstrap_serializes_universe_stats_counts():
@@ -795,3 +873,65 @@ def test_force_forget_snapshot_tables_removes_snapshot_schema_entries():
         }
 
     assert names == set()
+
+
+def test_resolve_themes_source_revision_changes_when_pipeline_state_is_updated():
+    """Extraction can change the observability payload through pipeline state
+    alone (no mention, or failed_terminal); that must turn the snapshot stale
+    until the queued rebuild (#526) runs."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ThemeMetrics.__table__,
+            ThemeCluster.__table__,
+            ThemePipelineRun.__table__,
+            ThemeAlert.__table__,
+            ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
+
+    with Session() as db:
+        state = ContentItemPipelineState(
+            content_item_id=1,
+            pipeline="technical",
+            status="pending",
+            updated_at=datetime(2026, 3, 18, 9, 0, 0),
+        )
+        db.add(state)
+        db.commit()
+        before = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        state.status = "failed_terminal"
+        state.updated_at = datetime(2026, 3, 18, 9, 5, 0)
+        db.commit()
+        after = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+    assert before != after
+
+
+def test_theme_metrics_index_serves_the_bootstrap_revision_lookup():
+    indexed = [[column.name for column in index.columns] for index in ThemeMetrics.__table__.indexes]
+
+    assert ["pipeline", "updated_at"] in indexed
+
+
+def test_publish_themes_bootstrap_backfills_metrics_before_resolving_the_revision():
+    """The L2 metrics backfill rewrites theme_metrics.updated_at; resolving the
+    revision first would publish a snapshot that is stale on its next read."""
+    service = UISnapshotService(Mock())
+    service._ensure_schema = Mock()  # noqa: SLF001
+    service._run_with_storage_recovery = lambda fn: fn(Mock())  # noqa: SLF001
+    order: list[str] = []
+    service._ensure_l2_theme_metrics = lambda *_args: order.append("backfill")  # noqa: SLF001
+    service._resolve_themes_source_revision = lambda *_args: order.append("revision") or "rev"  # noqa: SLF001
+    service._build_themes_payload = lambda **_kwargs: order.append("payload") or {}  # noqa: SLF001
+    service._publish = Mock()  # noqa: SLF001
+
+    service._publish_themes_bootstrap("technical", "grouped")  # noqa: SLF001
+
+    assert order.index("backfill") < order.index("revision")

@@ -351,15 +351,20 @@ class UISnapshotService:
     def _publish_themes_bootstrap(self, pipeline: str, theme_view: str) -> SnapshotResult:
         self._ensure_schema()
         variant_key = self._themes_variant_key(pipeline, theme_view)
-        return self._run_with_storage_recovery(
-            lambda db: self._publish(
+
+        def publish(db: Session) -> SnapshotResult:
+            # Before the revision: the backfill rewrites theme_metrics.updated_at,
+            # which would otherwise leave the new snapshot stale on its next read.
+            self._ensure_l2_theme_metrics(db, pipeline)
+            return self._publish(
                 db=db,
                 view_key=THEMES_VIEW_KEY,
                 variant_key=variant_key,
                 source_revision=self._resolve_themes_source_revision(db, pipeline),
                 payload=self._build_themes_payload(pipeline=pipeline, theme_view=theme_view),
             )
-        )
+
+        return self._run_with_storage_recovery(publish)
 
     def publish_all(self) -> dict[str, dict[str, Any] | None]:
         """Rebuild all bootstrap variants."""
@@ -664,11 +669,23 @@ class UISnapshotService:
 
     def _resolve_themes_source_revision(self, db: Session, pipeline: str) -> str:
         latest_metrics = db.query(func.max(ThemeMetrics.date)).filter(ThemeMetrics.pipeline == pipeline).scalar()
+        # A same-day metrics refresh updates rows in place without moving the date.
+        latest_metrics_update = db.query(func.max(ThemeMetrics.updated_at)).filter(
+            ThemeMetrics.pipeline == pipeline
+        ).scalar()
+        # Extraction can change the observability payload through item state alone.
+        latest_item_state = db.query(func.max(ContentItemPipelineState.updated_at)).filter(
+            ContentItemPipelineState.pipeline == pipeline
+        ).scalar()
         latest_cluster_update = db.query(func.max(ThemeCluster.updated_at)).filter(ThemeCluster.pipeline == pipeline).scalar()
         latest_pipeline_run = db.query(func.max(ThemePipelineRun.completed_at)).filter(
             (ThemePipelineRun.pipeline == pipeline) | (ThemePipelineRun.pipeline.is_(None))
         ).scalar()
         latest_alert = db.query(func.max(ThemeAlert.triggered_at)).scalar()
+        # Dismissing or reading an alert only flips a flag; count them so the
+        # snapshot turns stale until the queued rebuild runs (#526).
+        open_alerts = db.query(func.count(ThemeAlert.id)).filter(ThemeAlert.is_dismissed.isnot(True)).scalar() or 0
+        unread_alerts = db.query(func.count(ThemeAlert.id)).filter(ThemeAlert.is_read.isnot(True)).scalar() or 0
         latest_merge = db.query(func.max(ThemeMergeSuggestion.created_at)).scalar()
         latest_merge_review = db.query(func.max(ThemeMergeSuggestion.reviewed_at)).scalar()
         candidate_count = db.query(func.count(ThemeCluster.id)).filter(
@@ -687,6 +704,10 @@ class UISnapshotService:
             latest_merge_review.isoformat() if latest_merge_review else "none",
             str(candidate_count),
             str(failed_count),
+            str(open_alerts),
+            str(unread_alerts),
+            latest_metrics_update.isoformat() if latest_metrics_update else "none",
+            latest_item_state.isoformat() if latest_item_state else "none",
         ]
         return "|".join(parts)
 
@@ -968,7 +989,6 @@ class UISnapshotService:
             discovery = ThemeDiscoveryService(db, pipeline=pipeline)
             taxonomy = ThemeTaxonomyService(db, pipeline=pipeline)
 
-            self._ensure_l2_theme_metrics(db, pipeline)
             emerging = discovery.discover_emerging_themes(min_velocity=1.5, min_mentions=3)
             alerts_rows = (
                 db.query(ThemeAlert)

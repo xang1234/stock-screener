@@ -1686,3 +1686,46 @@ def recompute_l1_centroid_embeddings(pipeline: str = None):
         return {'error': str(e), 'timestamp': datetime.now().isoformat()}
     finally:
         db.close()
+
+
+# ignore_result: otherwise apply_async subscribes to the result backend first,
+# which retries for minutes when Redis is down and would hang the request.
+@celery_app.task(
+    name='app.tasks.theme_discovery_tasks.publish_themes_bootstrap_snapshots',
+    queue='celery',
+    ignore_result=True,
+)
+# In economic mode the bootstrap is served from the economic catalog instead.
+@skip_in_economic_authority
+def publish_themes_bootstrap_snapshots(pipeline: str | None = None):
+    """Rebuild the themes bootstrap variants on the general queue.
+
+    Theme request handlers queue this instead of building snapshots inline
+    (#526). Until it runs, a write that changes the themes source revision
+    makes readers see the old snapshot flagged stale, and the themes page
+    reads the live endpoints instead. A write that leaves the revision
+    unchanged is served from the old snapshot until then.
+    """
+    from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants(pipeline)
+    return {"pipeline": pipeline, "status": "published_themes_bootstrap"}
+
+
+def queue_themes_bootstrap_publish(pipeline: str | None = None) -> None:
+    """Queue the themes bootstrap rebuild; a failed enqueue only delays the snapshot.
+
+    Uses the scan enqueue's short-timeout broker connection so an outage fails
+    within about a second instead of blocking the request.
+    """
+    from .scan_tasks import _BOOTSTRAP_ENQUEUE_TRANSPORT_OPTIONS
+
+    try:
+        with celery_app.connection_for_write(
+            transport_options=_BOOTSTRAP_ENQUEUE_TRANSPORT_OPTIONS
+        ) as connection:
+            publish_themes_bootstrap_snapshots.apply_async(
+                args=[pipeline], retry=False, connection=connection
+            )
+    except Exception:
+        logger.warning("Could not queue themes bootstrap publish for %s", pipeline, exc_info=True)
