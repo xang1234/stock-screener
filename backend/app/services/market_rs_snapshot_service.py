@@ -153,6 +153,7 @@ class MarketRsSnapshotService:
                 diagnostics={
                     "current_price_coverage": inputs.current_price_coverage,
                     "exclusions": inputs.exclusions,
+                    "history_gaps": inputs.history_gaps,
                     "price_basis": BALANCED_RS_PRICE_BASIS,
                     "rs_snapshot_schema_version": (
                         BALANCED_RS_SNAPSHOT_SCHEMA_VERSION

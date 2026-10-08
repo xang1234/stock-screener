@@ -36,6 +36,11 @@ from app.services.price_refresh_planning import (
     NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
     STALE_PRICE_TOP_UP_PERIOD,
 )
+from app.services.rs_anchor_price_coverage import (
+    RS_ANCHOR_LOOKAHEAD_SESSIONS,
+    RsAnchorGaps,
+    RsAnchorPriceCoverageService,
+)
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = STALE_PRICE_TOP_UP_PERIOD
@@ -64,6 +69,7 @@ STATIC_RATE_LIMITED_RETRY_BATCH_SIZE = 25
 # After the refresh, symbols still stored without the as-of session get one more
 # quote repair once Yahoo's 429 burst has cleared (about a minute).
 STATIC_SESSION_REPAIR_WAIT_SECONDS = 60
+RS_ANCHOR_UNRESOLVED_SAMPLE_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,15 @@ class _StaticHistoryCoverageOutcome:
     required_dates: int = 0
     bootstrap_symbols: tuple[str, ...] | None = None
     missing_through_date_symbols: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _RsAnchorCoverage:
+    status: str
+    history_gaps: RsAnchorGaps = RsAnchorGaps()
+    tail_gap_symbols: tuple[str, ...] = ()
+    history_dates: frozenset[date] = frozenset()
+    error: str | None = None
 
 
 def _history_bootstrap_symbols(
@@ -157,6 +172,7 @@ class StaticDailyPriceRefreshService:
         ),
         sleep: Callable[[float], None] | None = None,
         fetch_quotes: Callable[[list[str]], list[dict[str, Any]]] | None = None,
+        rs_anchor_price_coverage: RsAnchorPriceCoverageService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._fetch_quotes = fetch_quotes
@@ -177,6 +193,10 @@ class StaticDailyPriceRefreshService:
                 lookback_days=breadth_history_price_lookback_days,
             )
         )
+        self._rs_anchor_price_coverage = (
+            rs_anchor_price_coverage
+            or RsAnchorPriceCoverageService(calendar_service=self._calendar_service)
+        )
         if sleep is None:
             import time
 
@@ -189,6 +209,7 @@ class StaticDailyPriceRefreshService:
         as_of_date: date,
         market: str | None = None,
         ensure_static_history: bool = False,
+        rs_anchor_lookahead_sessions: int = RS_ANCHOR_LOOKAHEAD_SESSIONS,
     ) -> dict[str, Any]:
         with self._session_factory() as db:
             query = (
@@ -231,6 +252,20 @@ class StaticDailyPriceRefreshService:
                 ),
                 enabled=ensure_static_history,
             )
+            # Benchmarks too: a benchmark hole fails RS for the whole market.
+            rs_anchor_symbol_set = active_symbol_set | set(key_market_symbols)
+            rs_anchor_coverage = self._rs_anchor_coverage(
+                db,
+                market=market,
+                through_date=as_of_date,
+                symbols=tuple(
+                    symbol
+                    for symbol in coverage.fresh + coverage.stale
+                    if symbol in rs_anchor_symbol_set
+                ),
+                enabled=ensure_static_history,
+                lookahead_sessions=rs_anchor_lookahead_sessions,
+            )
 
         rrg_history_incomplete_symbols = list(rrg_history_coverage.incomplete_symbols)
         rrg_history_tail_gap_symbols = list(
@@ -260,6 +295,7 @@ class StaticDailyPriceRefreshService:
                     *coverage.stale,
                     *breadth_history_missing_through_date_symbols,
                     *rrg_history_tail_gap_symbols,
+                    *rs_anchor_coverage.tail_gap_symbols,
                 ]
             )
             if symbol not in history_incomplete_symbol_set
@@ -268,8 +304,11 @@ class StaticDailyPriceRefreshService:
         bootstrap_symbols = _dedupe_symbols(
             [*history_incomplete_symbols, *no_history_symbols]
         )
+        rs_anchor_repair_symbols = list(
+            rs_anchor_coverage.history_gaps.missing_dates_by_symbol
+        )
 
-        if not stale_symbols and not bootstrap_symbols:
+        if not stale_symbols and not bootstrap_symbols and not rs_anchor_repair_symbols:
             print(
                 f"[static-daily prices] Database already has fresh price rows for "
                 f"{len(db_fresh_symbols):,} supported symbols as of {as_of_date}.",
@@ -308,6 +347,7 @@ class StaticDailyPriceRefreshService:
                 "skipped_unsupported_symbols": len(skipped_symbols),
                 "yahoo_fetched_symbols": 0,
                 "yahoo_failed_symbols": 0,
+                "rs_anchor_repair": self._rs_anchor_repair_stats(rs_anchor_coverage),
             }
 
         batch_size = self._batch_size_for_market(market)
@@ -406,6 +446,16 @@ class StaticDailyPriceRefreshService:
             )
             refreshed += readjusted_refreshed
             failed += readjusted_failed
+        # Before the latest-session quote repair, so a repair frame missing
+        # the as-of bar is quote-repaired with the rest.
+        rs_anchor_repair = self._repair_rs_anchor_gaps(
+            rs_anchor_coverage,
+            symbols=rs_anchor_repair_symbols,
+            batch_size=batch_size,
+            market=market,
+            as_of_date=as_of_date,
+            missing_session_frames=missing_session_frames,
+        )
         session_repair = self._repair_missing_sessions(
             market=market,
             as_of_date=as_of_date,
@@ -449,6 +499,7 @@ class StaticDailyPriceRefreshService:
             "yahoo_failed_symbols": failed,
             "rate_limited_retry": retry_stats,
             "latest_session_repair": session_repair,
+            "rs_anchor_repair": rs_anchor_repair,
         }
 
     def _rrg_history_coverage(
@@ -514,6 +565,159 @@ class StaticDailyPriceRefreshService:
             required_dates=len(history_anchor_dates),
             missing_through_date_symbols=tuple(tail_coverage.incomplete_symbols),
         )
+
+    def _rs_anchor_coverage(
+        self,
+        db,
+        *,
+        market: str | None,
+        through_date: date,
+        symbols: tuple[str, ...],
+        enabled: bool,
+        lookahead_sessions: int,
+    ) -> _RsAnchorCoverage:
+        if not enabled:
+            return _RsAnchorCoverage("not_requested")
+        if market is None or not symbols:
+            return _RsAnchorCoverage("not_applicable")
+        try:
+            required = self._rs_anchor_price_coverage.required_dates(
+                market=market,
+                through_date=through_date,
+                lookahead_sessions=lookahead_sessions,
+            )
+            # As for RRG anchors: the 7d top-up owns gaps in the tail.
+            tail_start = through_date - timedelta(days=STATIC_DAILY_PRICE_TOP_UP_TAIL_DAYS)
+            history_dates = frozenset(day for day in required if day <= tail_start)
+            history_gaps = self._rs_anchor_price_coverage.gaps(
+                db, symbols=symbols, required_dates=history_dates
+            )
+            tail_gaps = self._rs_anchor_price_coverage.gaps(
+                db, symbols=symbols, required_dates=required - history_dates
+            )
+        except Exception as exc:
+            print(
+                "[static-daily prices] Could not resolve RS anchor coverage "
+                f"for market={market}: {exc}",
+                flush=True,
+            )
+            return _RsAnchorCoverage("unverified", error=str(exc))
+        if history_gaps.missing_dates_by_symbol:
+            print(
+                f"[static-daily prices:{market}] {len(history_gaps.missing_dates_by_symbol):,} "
+                "symbols with older history are missing RS anchor sessions: "
+                f"{history_gaps.count_by_date()}",
+                flush=True,
+            )
+        return _RsAnchorCoverage(
+            "verified",
+            history_gaps=history_gaps,
+            tail_gap_symbols=tuple(tail_gaps.missing_dates_by_symbol),
+            history_dates=history_dates,
+        )
+
+    def _rs_anchor_repair_stats(
+        self,
+        coverage: _RsAnchorCoverage,
+        *,
+        attempted: int = 0,
+        unresolved: RsAnchorGaps | None = None,
+    ) -> dict[str, Any]:
+        gaps = coverage.history_gaps.missing_dates_by_symbol
+        unresolved = unresolved if unresolved is not None else coverage.history_gaps
+        unresolved_symbols = sorted(unresolved.missing_dates_by_symbol)
+        return {
+            "status": coverage.status,
+            "error": coverage.error,
+            "required_dates": len(coverage.history_dates),
+            "gap_symbols": len(gaps),
+            "gap_count_by_date": coverage.history_gaps.count_by_date(),
+            "tail_gap_symbols": len(coverage.tail_gap_symbols),
+            "attempted_symbols": attempted,
+            "repaired_symbols": len(gaps) - len(unresolved_symbols),
+            "unresolved_symbols": len(unresolved_symbols),
+            "unresolved_count_by_date": unresolved.count_by_date(),
+            "unresolved_samples": unresolved_symbols[:RS_ANCHOR_UNRESOLVED_SAMPLE_LIMIT],
+        }
+
+    def _repair_rs_anchor_gaps(
+        self,
+        coverage: _RsAnchorCoverage,
+        *,
+        symbols: list[str],
+        batch_size: int,
+        market: str | None,
+        as_of_date: date | None = None,
+        missing_session_frames: dict[str, pd.DataFrame] | None = None,
+    ) -> dict[str, Any]:
+        """Refetch 2y for symbols with RS anchor holes and swap their history.
+
+        Each symbol's stored rows are replaced by the refetch only if it covers
+        the stored dates and the missing anchors, so a repair never splices
+        two adjustment bases; anything else stays visibly unresolved. Coverage
+        is then rechecked from committed rows, not inferred from the fetch.
+        """
+        missing = coverage.history_gaps.missing_dates_by_symbol
+        if not missing:
+            return self._rs_anchor_repair_stats(coverage)
+        # Earlier fetches this run (2y bootstraps, drift replacements) may
+        # already have filled some gaps; refetch only what is still missing,
+        # judged by stored rows rather than by what was scheduled.
+        with self._session_factory() as db:
+            pending = self._rs_anchor_price_coverage.gaps(
+                db, symbols=tuple(symbols), required_dates=coverage.history_dates
+            ).missing_dates_by_symbol
+        symbols = [symbol for symbol in symbols if symbol in pending]
+        if symbols:
+            print(
+                f"[static-daily prices:{market}] Repairing RS anchor history for "
+                f"{len(symbols):,} symbols.",
+                flush=True,
+            )
+            required = {symbol: set(missing[symbol]) for symbol in symbols}
+            _, _, rate_limited = self._fetch_and_store(
+                symbols,
+                period=STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+                batch_size=batch_size,
+                market=market,
+                as_of_date=as_of_date,
+                replacement_required_dates=required,
+                missing_session_frames=missing_session_frames,
+            )
+            if rate_limited:
+                # A large repair burst is the likeliest 429; replay it once.
+                print(
+                    f"[static-daily prices:{market}] {len(rate_limited):,} RS anchor "
+                    f"repairs were rate limited; retrying after "
+                    f"{STATIC_SESSION_REPAIR_WAIT_SECONDS}s.",
+                    flush=True,
+                )
+                self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
+                self._fetch_and_store(
+                    rate_limited,
+                    period=STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+                    batch_size=batch_size,
+                    market=market,
+                    as_of_date=as_of_date,
+                    replacement_required_dates=required,
+                    missing_session_frames=missing_session_frames,
+                )
+        with self._session_factory() as db:
+            unresolved = self._rs_anchor_price_coverage.gaps(
+                db,
+                symbols=tuple(missing),
+                required_dates=coverage.history_dates,
+            )
+        stats = self._rs_anchor_repair_stats(
+            coverage, attempted=len(symbols), unresolved=unresolved
+        )
+        print(
+            f"[static-daily prices:{market}] RS anchor repair: "
+            f"{stats['repaired_symbols']:,}/{stats['gap_symbols']:,} repaired, "
+            f"{stats['unresolved_symbols']:,} unresolved {stats['unresolved_count_by_date']}.",
+            flush=True,
+        )
+        return stats
 
     def _breadth_history_coverage(
         self,

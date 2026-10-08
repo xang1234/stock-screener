@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
@@ -34,6 +34,7 @@ EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
 # Dormant symbols leave the current price coverage denominator only while they
 # are at most this share of the universe (US: about 3% on 2026-10-02, #478).
 MAX_DORMANT_COVERAGE_SHARE = 0.05
+HISTORY_GAP_SAMPLE_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,9 @@ class MarketRsInputs:
     excess_returns_by_symbol: dict[str, dict[str, float]]
     exclusions: dict[str, str]
     current_price_coverage: float
+    # Currently priced symbols missing an interior anchor despite older
+    # history (#539); measured here, enforced only by static publication.
+    history_gaps: dict[str, object] = field(default_factory=dict)
 
 
 class MarketRsInputUnavailable(RuntimeError):
@@ -288,6 +292,7 @@ class MarketRsInputLoader:
         }
         excess_returns_by_symbol: dict[str, dict[str, float]] = {}
         exclusions: dict[str, str] = {}
+        missing_anchor_by_symbol: dict[str, date] = {}
         required_offsets = (0, *HORIZON_SESSIONS.values())
         for symbol in universe.symbols:
             missing_offset = next(
@@ -301,6 +306,8 @@ class MarketRsInputLoader:
             if missing_offset is not None:
                 label = "current" if missing_offset == 0 else str(missing_offset)
                 exclusions[symbol] = f"missing_adjusted_{label}_session_anchor"
+                if missing_offset != 0:
+                    missing_anchor_by_symbol[symbol] = anchors[missing_offset]
                 continue
 
             current_stock = prices[(symbol, current_date)]
@@ -322,4 +329,48 @@ class MarketRsInputLoader:
             excess_returns_by_symbol=excess_returns_by_symbol,
             exclusions=exclusions,
             current_price_coverage=current_price_coverage,
+            history_gaps=self._history_anchor_gaps(
+                db,
+                missing_anchor_by_symbol=missing_anchor_by_symbol,
+                current_available=current_available,
+            ),
         )
+
+    @staticmethod
+    def _history_anchor_gaps(
+        db: Session,
+        *,
+        missing_anchor_by_symbol: dict[str, date],
+        current_available: int,
+    ) -> dict[str, object]:
+        first_by_symbol: dict[str, date] = {}
+        symbols = tuple(missing_anchor_by_symbol)
+        for start in range(0, len(symbols), 500):
+            first_by_symbol.update(
+                db.query(StockPrice.symbol, func.min(StockPrice.date))
+                .filter(
+                    StockPrice.symbol.in_(symbols[start : start + 500]),
+                    StockPrice.adj_close.isnot(None),
+                    StockPrice.adj_close > 0,
+                )
+                .group_by(StockPrice.symbol)
+                .all()
+            )
+        # Short histories (first price after the anchor) are expected exclusions.
+        gap_symbols = sorted(
+            symbol
+            for symbol, anchor in missing_anchor_by_symbol.items()
+            if first_by_symbol.get(symbol) is not None
+            and first_by_symbol[symbol] < anchor
+        )
+        count_by_anchor: dict[str, int] = {}
+        for symbol in gap_symbols:
+            key = missing_anchor_by_symbol[symbol].isoformat()
+            count_by_anchor[key] = count_by_anchor.get(key, 0) + 1
+        return {
+            "symbol_count": len(gap_symbols),
+            "share": len(gap_symbols) / current_available if current_available else 0.0,
+            "count_by_anchor": dict(sorted(count_by_anchor.items())),
+            "samples": gap_symbols[:HISTORY_GAP_SAMPLE_LIMIT],
+            "current_prices_available": current_available,
+        }

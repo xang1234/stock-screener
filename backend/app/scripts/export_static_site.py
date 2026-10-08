@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -34,6 +35,7 @@ from app.services.ibd_industry_service import IBDIndustryService
 from app.services.market_exposure_service import EXPOSURE_BACKFILL_DAYS
 from app.services.market_rs_result_contract import (
     MARKET_RS_REASON_BENCHMARK_ADJUSTED_ANCHOR_MISSING,
+    MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
     MARKET_RS_REASON_CURRENT_ADJUSTED_PRICE_COVERAGE_BELOW_THRESHOLD,
 )
 from app.services.static_breadth_contributor_metadata_contract import (
@@ -48,6 +50,10 @@ from app.services.static_breadth_eligibility import (
 from app.services.static_breadth_history_coordinator import (
     StaticBreadthHistoryCoordinator,
     StaticBreadthHistoryRequest,
+)
+from app.services.rs_anchor_price_coverage import (
+    RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS,
+    RS_ANCHOR_LOOKAHEAD_SESSIONS,
 )
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
@@ -350,7 +356,12 @@ def _no_current_artifact_exit_message(
     )
 
 
-def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None) -> dict[str, Any]:
+def _refresh_static_daily_prices(
+    *,
+    as_of_date: date,
+    market: str | None = None,
+    repair_price_history: bool = False,
+) -> dict[str, Any]:
     service = StaticDailyPriceRefreshService(
         session_factory=SessionLocal,
         price_cache=get_price_cache(),
@@ -362,6 +373,13 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
         as_of_date=as_of_date,
         market=market,
         ensure_static_history=True,
+        # Repair mode checks every session an RS anchor can land on, not just
+        # the next few rollovers (#539).
+        rs_anchor_lookahead_sessions=(
+            RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS
+            if repair_price_history
+            else RS_ANCHOR_LOOKAHEAD_SESSIONS
+        ),
     )
 
 
@@ -580,6 +598,64 @@ def _hydrate_remaining_static_rs_benchmarks(
             )
 
 
+# #539: a market whose priced symbols mostly miss an interior RS anchor would
+# publish RS for a sliver of its universe. Measured on 2026-10-07 bundles:
+# AU 92% (the incident), DE 16% (sparse illiquid names), every other market
+# under 1%. Raise via STATIC_RS_MAX_HISTORY_GAP_SHARE (1 disables) when the
+# provider genuinely lacks the sessions; see the price-history repair runbook.
+STATIC_RS_MAX_HISTORY_GAP_SHARE = 0.5
+
+
+def _static_rs_max_history_gap_share() -> float:
+    raw = os.environ.get("STATIC_RS_MAX_HISTORY_GAP_SHARE", "").strip()
+    if not raw:
+        return STATIC_RS_MAX_HISTORY_GAP_SHARE
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    # A share is 0..1 (1 disables the guard); NaN would reject every market,
+    # and a hand-set typo must not turn the guarded path into a hard failure.
+    if not 0.0 <= value <= 1.0:
+        print(
+            f"[static-rs] Ignoring STATIC_RS_MAX_HISTORY_GAP_SHARE={raw!r}; "
+            f"using {STATIC_RS_MAX_HISTORY_GAP_SHARE}.",
+            flush=True,
+        )
+        return STATIC_RS_MAX_HISTORY_GAP_SHARE
+    return value
+
+
+def _reject_static_rs_history_gap_collapse(
+    result: Any,
+    *,
+    market: str,
+    as_of_date: date,
+) -> Any:
+    if not isinstance(result, Mapping) or result.get("status") != "completed":
+        return result
+    gaps = result.get("history_gaps") or {}
+    threshold = _static_rs_max_history_gap_share()
+    if float(gaps.get("share") or 0.0) <= threshold:
+        return result
+    print(
+        f"[static-rs] {market} Market RS rejected for {as_of_date.isoformat()}: "
+        f"{gaps.get('symbol_count')} priced symbols miss an interior anchor "
+        f"(share {float(gaps['share']):.1%} > {threshold:.0%}): "
+        f"{gaps.get('count_by_anchor')}",
+        flush=True,
+    )
+    return {
+        "status": "failed",
+        "market": market,
+        "as_of_date": as_of_date.isoformat(),
+        "formula_version": BALANCED_RS_FORMULA_VERSION,
+        "reason_code": MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
+        "diagnostics": {"history_gaps": gaps, "max_history_gap_share": threshold},
+        "market_rs_run_id": None,
+    }
+
+
 def _prepare_balanced_static_rs(*, market: str, as_of_date: date) -> dict[str, Any]:
     """Build the exact canonical snapshot and select it in this private build DB."""
     from app.tasks.market_rs_tasks import calculate_market_rs_snapshot
@@ -626,6 +702,9 @@ def _prepare_balanced_static_rs(*, market: str, as_of_date: date) -> dict[str, A
             formula_version=BALANCED_RS_FORMULA_VERSION,
             rebuild_incompatible=True,
         )
+    result = _reject_static_rs_history_gap_collapse(
+        result, market=normalized_market, as_of_date=as_of_date
+    )
     artifact_state = classify_static_market_rs_artifact_result(
         result,
         market=normalized_market,
@@ -775,6 +854,7 @@ def _run_daily_refresh(
     rs_formula_version_by_market: Mapping[str, str] | None = None,
     breadth_contributor_metadata_dir: Path | None = None,
     breadth_contributor_metadata_restore_status: str | None = None,
+    repair_price_history: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
         _enrich_feature_run_with_ibd_metadata,
@@ -835,6 +915,7 @@ def _run_daily_refresh(
             price_refresh_results[selected_market] = _refresh_static_daily_prices(
                 as_of_date=as_of_by_market[selected_market],
                 market=selected_market,
+                repair_price_history=repair_price_history,
             )
         results["price_refresh"] = (
             price_refresh_results[selected_markets[0]]
@@ -1377,6 +1458,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Do not delete the output directory before exporting.",
     )
     parser.add_argument(
+        "--repair-price-history",
+        action="store_true",
+        help=(
+            "Check and repair every RS anchor session in the 252-session window "
+            "for --market, not only the next rollovers (#539)."
+        ),
+    )
+    parser.add_argument(
         "--rrg-history-dir",
         help="Optional directory holding the market's rolling RRG history state.",
     )
@@ -1442,6 +1531,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(
             "--breadth-contributor-metadata-dir requires --refresh-daily"
         )
+    if args.repair_price_history and not (args.market and args.refresh_daily):
+        raise SystemExit("--repair-price-history requires --market and --refresh-daily")
     if args.rs_formula_version and (args.combine_artifacts_dir or not args.market):
         raise SystemExit("--rs-formula-version is limited to single-market exports")
 
@@ -1506,6 +1597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 breadth_contributor_metadata_restore_status=(
                     args.breadth_contributor_metadata_restore_status
                 ),
+                repair_price_history=args.repair_price_history,
             )
             refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")

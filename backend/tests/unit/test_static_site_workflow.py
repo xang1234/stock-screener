@@ -1423,3 +1423,50 @@ def test_publisher_combine_arguments_accept_last_good_legacy_artifacts(
     manifest = json.loads((tmp_path / "out" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["supported_markets"] == ["US", "HK"]
     assert manifest["markets"]["HK"]["rs_formula_version"] == LEGACY_RS_FORMULA_VERSION
+
+
+def test_price_history_repair_is_an_opt_in_for_one_market_job() -> None:
+    workflow = _site_workflow()
+    dispatch_input = workflow[True]["workflow_dispatch"]["inputs"]["repair_price_history_market"]
+    assert dispatch_input["default"] == ""
+    export = next(
+        step
+        for step in workflow["jobs"]["build-market"]["steps"]
+        if step.get("id") == "export-market"
+    )
+    assert export["env"]["REPAIR_PRICE_HISTORY_MARKET"] == (
+        "${{ github.event.inputs.repair_price_history_market || '' }}"
+    )
+    run = export["run"]
+    # Only the named market's job gets the flag, compared case-insensitively.
+    assert '= "${{ matrix.market }}" ]; then\n  repair_args=(--repair-price-history)' in run
+    assert '"${breadth_metadata_args[@]}" "${repair_args[@]}" 2>&1' in run
+
+
+@pytest.mark.parametrize(
+    ("repair_market", "group", "accepted"),
+    [
+        ("AU", "asia", True),
+        ("au", "asia", True),
+        ("AUS", "asia", False),
+        ("DE", "asia", False),
+        ("A.", "asia", False),
+        ("", "us", True),
+    ],
+)
+def test_repair_market_must_belong_to_the_selected_group(repair_market, group, accepted) -> None:
+    step = next(
+        step
+        for step in _site_workflow()["jobs"]["select-markets"]["steps"]
+        if step.get("id") == "pick"
+    )
+    env = {
+        **os.environ,
+        "EVENT_NAME": "workflow_dispatch",
+        "SCHEDULE": "",
+        "MARKET_GROUP": group,
+        "REPAIR_PRICE_HISTORY_MARKET": repair_market,
+        "GITHUB_OUTPUT": os.devnull,
+    }
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env, capture_output=True)
+    assert (result.returncode == 0) is accepted

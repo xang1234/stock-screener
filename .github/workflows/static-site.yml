@@ -25,6 +25,10 @@ on:
         description: 'Optional per-market RS rollback JSON, e.g. {"HK":"legacy-linear-v1"}; all others use balanced-horizon-percentile-v2'
         type: string
         default: '{}'
+      repair_price_history_market:
+        description: 'Optional single market (e.g. AU) whose job checks and refetches every RS anchor session in the 252-session window; see docs/runbooks/static-price-history-repair.md'
+        type: string
+        default: ''
 
 concurrency:
   group: static-site-${{ github.ref }}
@@ -81,6 +85,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           SCHEDULE: ${{ github.event.schedule }}
           MARKET_GROUP: ${{ github.event.inputs.market_group }}
+          REPAIR_PRICE_HISTORY_MARKET: ${{ github.event.inputs.repair_price_history_market }}
         run: |
           ASIA='["HK","IN","JP","KR","TW","CN","SG","MY","AU"]'
           CN_ONLY='["CN"]'
@@ -99,6 +104,12 @@ jobs:
               us)   markets="$US" ;;
               *)    markets="$ALL" ;;
             esac
+          fi
+
+          repair_market="$(echo "$REPAIR_PRICE_HISTORY_MARKET" | tr '[:lower:]' '[:upper:]')"
+          if [ -n "$repair_market" ] && ! echo "$markets" | grep -qF "\"$repair_market\""; then
+            echo "repair_price_history_market=$repair_market is not in the selected market group ($markets)." >&2
+            exit 1
           fi
 
           echo "markets=$markets" >> "$GITHUB_OUTPUT"
@@ -447,6 +458,9 @@ jobs:
         id: export-market
         env:
           RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
+          REPAIR_PRICE_HISTORY_MARKET: ${{ github.event.inputs.repair_price_history_market || '' }}
+          # Operator override for the RS anchor-gap publication limit (#539).
+          STATIC_RS_MAX_HISTORY_GAP_SHARE: ${{ vars.STATIC_RS_MAX_HISTORY_GAP_SHARE || '' }}
           RRG_HISTORY_ENABLED: ${{ steps.rrg-history.outputs.enabled }}
           RRG_RESTORE_STATUS: ${{ steps.restore-rrg-history.outputs.restore_status }}
           BREADTH_METADATA_ENABLED: ${{ steps.breadth-contributor-metadata.outputs.enabled }}
@@ -460,6 +474,10 @@ jobs:
               --breadth-contributor-metadata-restore-status "$BREADTH_METADATA_RESTORE_STATUS"
             )
           fi
+          repair_args=()
+          if [ "$(echo "$REPAIR_PRICE_HISTORY_MARKET" | tr '[:lower:]' '[:upper:]')" = "${{ matrix.market }}" ]; then
+            repair_args=(--repair-price-history)
+          fi
           set +e
           EXPORT_LOG="$(mktemp)"
           python -m app.scripts.export_static_market_artifact \
@@ -472,7 +490,7 @@ jobs:
             --market "${{ matrix.market }}" \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES" \
             --rrg-history-dir "$RRG_HISTORY_DIR" \
-            "${breadth_metadata_args[@]}" 2>&1 | tee "$EXPORT_LOG"
+            "${breadth_metadata_args[@]}" "${repair_args[@]}" 2>&1 | tee "$EXPORT_LOG"
           pipeline_status=("${PIPESTATUS[@]}")
           status="${pipeline_status[0]}"
           log_status="${pipeline_status[1]}"

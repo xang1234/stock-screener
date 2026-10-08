@@ -271,6 +271,7 @@ def calculate_market_rs_snapshot(
             "formula_version": formula_version,
             "market_rs_run_id": run.id,
             "eligible_symbol_count": run.eligible_symbol_count,
+            "history_gaps": (run.diagnostics_json or {}).get("history_gaps", {}),
         }
     except MarketRsInputUnavailable as exc:
         return _failed_result(
