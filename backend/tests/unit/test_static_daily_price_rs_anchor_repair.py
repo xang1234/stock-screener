@@ -316,3 +316,61 @@ def test_real_au_calendar_rolls_the_21_session_anchor_onto_september_7():
     assert date(2026, 9, 4) in before and date(2026, 9, 7) not in before
     # The lookahead reaches the hole before the anchor does.
     assert date(2026, 9, 7) in ahead
+
+
+def test_truncated_refetch_ending_before_stored_rows_is_not_spliced():
+    session_factory = _session_factory()
+    history = [day for day in SESSIONS if day not in GAP]
+    _seed(session_factory, {"GAP.AX": history})
+    # Covers the gap but stops 3 sessions before the stored history ends.
+    fetcher = _Fetcher(SESSIONS[:-3])
+
+    result = _service(session_factory, fetcher).refresh(
+        as_of_date=AS_OF, market="AU", ensure_static_history=True
+    )
+
+    assert result["rs_anchor_repair"]["unresolved_symbols"] == 1
+    assert GAP.isdisjoint(_stored(session_factory, "GAP.AX"))
+
+
+def test_a_gap_symbol_whose_bootstrap_failed_is_still_repaired():
+    class _BootstrapGapBreadth(_CompleteBreadth):
+        @staticmethod
+        def classify(db, *, market, through_date, symbols):
+            return SimpleNamespace(
+                incomplete_symbols=("GAP.AX",),
+                history_incomplete_symbols=("GAP.AX",),
+                missing_through_date_symbols=(),
+                required_price_date_count=0,
+            )
+
+    session_factory = _session_factory()
+    _seed(session_factory, {"GAP.AX": [day for day in SESSIONS if day not in GAP]})
+
+    class _BootstrapThrottled(_Fetcher):
+        bootstrap_seen = False
+
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            if period == STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD and "GAP.AX" in symbols and not self.bootstrap_seen:
+                self.bootstrap_seen = True
+                self.calls.append((tuple(symbols), period))
+                return {s: {"price_data": None, "has_error": True, "error": "429"} for s in symbols}
+            return super().fetch_prices_in_batches(symbols, period, start_batch_size, market)
+
+    fetcher = _BootstrapThrottled(SESSIONS)
+    calendar = _WeekdayCalendar()
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(store_batch_in_cache=_store(session_factory)),
+        fetcher=fetcher,
+        batch_size_for_market=lambda _market: 50,
+        calendar_service=calendar,
+        breadth_history_price_coverage=_BootstrapGapBreadth(),
+        rs_anchor_price_coverage=RsAnchorPriceCoverageService(calendar_service=calendar),
+        sleep=lambda _seconds: None,
+    )
+
+    result = service.refresh(as_of_date=AS_OF, market="AU", ensure_static_history=True)
+
+    assert result["rs_anchor_repair"]["unresolved_symbols"] == 0
+    assert GAP <= set(_stored(session_factory, "GAP.AX"))

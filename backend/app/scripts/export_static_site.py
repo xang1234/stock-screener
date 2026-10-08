@@ -607,7 +607,18 @@ STATIC_RS_MAX_HISTORY_GAP_SHARE = 0.5
 
 def _static_rs_max_history_gap_share() -> float:
     raw = os.environ.get("STATIC_RS_MAX_HISTORY_GAP_SHARE", "").strip()
-    return float(raw) if raw else STATIC_RS_MAX_HISTORY_GAP_SHARE
+    if not raw:
+        return STATIC_RS_MAX_HISTORY_GAP_SHARE
+    try:
+        return float(raw)
+    except ValueError:
+        # A hand-set typo must not turn the guarded path into a hard failure.
+        print(
+            f"[static-rs] Ignoring STATIC_RS_MAX_HISTORY_GAP_SHARE={raw!r}; "
+            f"using {STATIC_RS_MAX_HISTORY_GAP_SHARE}.",
+            flush=True,
+        )
+        return STATIC_RS_MAX_HISTORY_GAP_SHARE
 
 
 def _reject_static_rs_history_gap_collapse(

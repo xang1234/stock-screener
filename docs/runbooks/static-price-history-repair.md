@@ -8,7 +8,8 @@ Canonical stock RS needs a usable adjusted close at eight exact sessions: the as
 
 - **What counts as a gap:** a missing anchor that falls inside the symbol's stored history (after its first row, up to its last). New listings and dormant or halted symbols are not gaps and are not refetched.
 - **Gaps more than 4 calendar days back:** the symbol is refetched for 2 years, with one retry after a rate-limit failure.
-  - Its stored rows inside the refetched range are replaced only if the refetch covers every stored date in that range plus the missing anchors, so two adjustment bases are never spliced.
+  - Its stored rows from the refetch's first date onward are replaced only if the refetch covers every one of them plus the missing anchors, so two adjustment bases are never spliced. A truncated refetch leaves the symbol unresolved.
+  - Gaps that an earlier fetch in the same run already filled are rechecked from stored rows and not refetched.
   - Otherwise nothing changes and the symbol stays unresolved.
   - The repair runs before the latest-session quote repair.
 - **Gaps in the last 4 days:** these go to the normal 7-day top-up.

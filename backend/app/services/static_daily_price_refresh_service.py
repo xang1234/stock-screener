@@ -304,13 +304,9 @@ class StaticDailyPriceRefreshService:
         bootstrap_symbols = _dedupe_symbols(
             [*history_incomplete_symbols, *no_history_symbols]
         )
-        # A 2y bootstrap already refetches these; repair the rest in place.
-        bootstrap_symbol_set = set(bootstrap_symbols)
-        rs_anchor_repair_symbols = [
-            symbol
-            for symbol in rs_anchor_coverage.history_gaps.missing_dates_by_symbol
-            if symbol not in bootstrap_symbol_set
-        ]
+        rs_anchor_repair_symbols = list(
+            rs_anchor_coverage.history_gaps.missing_dates_by_symbol
+        )
 
         if not stale_symbols and not bootstrap_symbols and not rs_anchor_repair_symbols:
             print(
@@ -451,15 +447,10 @@ class StaticDailyPriceRefreshService:
             refreshed += readjusted_refreshed
             failed += readjusted_failed
         # Before the latest-session quote repair, so a repair frame missing
-        # the as-of bar is quote-repaired with the rest. Symbols the drift
-        # re-bootstrap already replaced with 2y history are not refetched.
+        # the as-of bar is quote-repaired with the rest.
         rs_anchor_repair = self._repair_rs_anchor_gaps(
             rs_anchor_coverage,
-            symbols=[
-                symbol
-                for symbol in rs_anchor_repair_symbols
-                if symbol not in readjusted_symbols
-            ],
+            symbols=rs_anchor_repair_symbols,
             batch_size=batch_size,
             market=market,
             as_of_date=as_of_date,
@@ -669,6 +660,14 @@ class StaticDailyPriceRefreshService:
         missing = coverage.history_gaps.missing_dates_by_symbol
         if not missing:
             return self._rs_anchor_repair_stats(coverage)
+        # Earlier fetches this run (2y bootstraps, drift replacements) may
+        # already have filled some gaps; refetch only what is still missing,
+        # judged by stored rows rather than by what was scheduled.
+        with self._session_factory() as db:
+            pending = self._rs_anchor_price_coverage.gaps(
+                db, symbols=tuple(symbols), required_dates=coverage.history_dates
+            ).missing_dates_by_symbol
+        symbols = [symbol for symbol in symbols if symbol in pending]
         if symbols:
             print(
                 f"[static-daily prices:{market}] Repairing RS anchor history for "
@@ -703,7 +702,6 @@ class StaticDailyPriceRefreshService:
                     replacement_required_dates=required,
                     missing_session_frames=missing_session_frames,
                 )
-        # Symbols the 2y bootstrap refetched are rechecked here too.
         with self._session_factory() as db:
             unresolved = self._rs_anchor_price_coverage.gaps(
                 db,
@@ -1010,10 +1008,6 @@ class StaticDailyPriceRefreshService:
                         for (stored_date,) in db.query(StockPrice.date).filter(
                             StockPrice.symbol == symbol,
                             StockPrice.date >= min(dates),
-                            # Newer stored bars (e.g. a quote-repaired as-of
-                            # bar the refetch lacks) are kept; required dates
-                            # still force any bar the caller needs.
-                            StockPrice.date <= max(dates),
                         )
                     }
                     uncovered = (

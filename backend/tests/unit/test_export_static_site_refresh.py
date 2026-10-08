@@ -647,3 +647,11 @@ def test_anchor_gap_rejection_still_publishes_the_price_bundle(tmp_path):
         market="AU",
         exit_code=export_static_site.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE,
     )
+
+
+def test_a_malformed_gap_limit_override_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("STATIC_RS_MAX_HISTORY_GAP_SHARE", "50%")
+
+    assert export_static_site._static_rs_max_history_gap_share() == (
+        export_static_site.STATIC_RS_MAX_HISTORY_GAP_SHARE
+    )
