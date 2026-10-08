@@ -669,6 +669,10 @@ class UISnapshotService:
             (ThemePipelineRun.pipeline == pipeline) | (ThemePipelineRun.pipeline.is_(None))
         ).scalar()
         latest_alert = db.query(func.max(ThemeAlert.triggered_at)).scalar()
+        # Dismissing or reading an alert only flips a flag; count them so the
+        # snapshot turns stale until the queued rebuild runs (#526).
+        open_alerts = db.query(func.count(ThemeAlert.id)).filter(ThemeAlert.is_dismissed.isnot(True)).scalar() or 0
+        unread_alerts = db.query(func.count(ThemeAlert.id)).filter(ThemeAlert.is_read.isnot(True)).scalar() or 0
         latest_merge = db.query(func.max(ThemeMergeSuggestion.created_at)).scalar()
         latest_merge_review = db.query(func.max(ThemeMergeSuggestion.reviewed_at)).scalar()
         candidate_count = db.query(func.count(ThemeCluster.id)).filter(
@@ -687,6 +691,8 @@ class UISnapshotService:
             latest_merge_review.isoformat() if latest_merge_review else "none",
             str(candidate_count),
             str(failed_count),
+            str(open_alerts),
+            str(unread_alerts),
         ]
         return "|".join(parts)
 

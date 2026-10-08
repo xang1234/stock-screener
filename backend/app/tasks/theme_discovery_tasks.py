@@ -1695,9 +1695,10 @@ def publish_themes_bootstrap_snapshots(pipeline: str | None = None):
     """Rebuild the themes bootstrap variants on the general queue.
 
     Theme request handlers queue this instead of building snapshots inline
-    (#526). Until it runs, readers see the old snapshot flagged stale (its
-    source revision no longer matches) and the themes page reads the live
-    endpoints instead.
+    (#526). Until it runs, a write that changes the themes source revision
+    makes readers see the old snapshot flagged stale, and the themes page
+    reads the live endpoints instead. A write that leaves the revision
+    unchanged is served from the old snapshot until then.
     """
     from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
 

@@ -170,6 +170,41 @@ def test_resolve_themes_source_revision_filters_pipeline_runs_to_pipeline_or_glo
         assert fundamental_revision.split("|")[2] == "2026-03-18T12:00:00"
 
 
+def test_resolve_themes_source_revision_changes_when_an_alert_is_dismissed_or_read():
+    """Handlers queue the bootstrap rebuild (#526); until it runs, a dismissed or
+    read alert must make the old snapshot stale so the page reads live alerts."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ThemeMetrics.__table__,
+            ThemeCluster.__table__,
+            ThemePipelineRun.__table__,
+            ThemeAlert.__table__,
+            ThemeMergeSuggestion.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
+
+    with Session() as db:
+        alert = ThemeAlert(alert_type="breakout", title="AI", triggered_at=datetime(2026, 3, 18, 9, 0, 0))
+        db.add(alert)
+        db.commit()
+        initial = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        alert.is_dismissed = True
+        db.commit()
+        dismissed = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        alert.is_read = True
+        db.commit()
+        read = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+    assert len({initial, dismissed, read}) == 3
+
+
 def test_publish_scan_bootstrap_serializes_universe_stats_counts():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
