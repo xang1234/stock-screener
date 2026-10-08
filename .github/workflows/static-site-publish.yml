@@ -102,15 +102,23 @@ jobs:
             --fallback-cot-dir /tmp/static-cot \
             --selected-markets '[]'
 
+      # Data goes under g/<generation>/ so an open tab never pairs its manifest
+      # with a later publish's files (#504). Rollback: repo variable
+      # STATIC_DATA_GENERATIONS=false; the site reads either layout.
       - name: Combine static data bundle
+        env:
+          DATA_GENERATIONS: ${{ vars.STATIC_DATA_GENERATIONS || 'true' }}
         run: |
+          GENERATION_ARGS=""
+          [ "$DATA_GENERATIONS" != "false" ] && GENERATION_ARGS="--data-generation"
           cd backend
           python -m app.scripts.export_static_site \
             --output-dir ../frontend/public/static-data \
             --combine-artifacts-dir /tmp/static-empty \
             --fallback-artifacts-dir /tmp/static-market-artifacts \
             --fallback-options-artifacts-dir /tmp/static-options \
-            --fallback-cot-artifacts-dir /tmp/static-cot
+            --fallback-cot-artifacts-dir /tmp/static-cot \
+            $GENERATION_ARGS
 
       # Reporting only (#484): never blocks the deploy. Stale or missing markets
       # surface as annotations and a table on the run summary.

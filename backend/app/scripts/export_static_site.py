@@ -56,6 +56,7 @@ from app.services.rs_anchor_price_coverage import (
     RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS,
     RS_ANCHOR_LOOKAHEAD_SESSIONS,
 )
+from app.services.static_data_generations import relocate_into_generation
 from app.services.static_price_checkpoint import write_price_checkpoint
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
@@ -1431,6 +1432,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Optional previous-run market artifacts directory used to fill markets missing from --combine-artifacts-dir.",
     )
     parser.add_argument(
+        "--data-generation",
+        action="store_true",
+        help=(
+            "Combine mode: move the combined data under g/<generation>/ and record "
+            "generation and data_root in the root manifest (#504)."
+        ),
+    )
+    parser.add_argument(
         "--options-artifacts-dir",
         help="Optional current options directory selected independently in combine mode.",
     )
@@ -1543,6 +1552,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --refresh-daily")
     if args.combine_artifacts_dir and args.market:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
+    if args.data_generation and not args.combine_artifacts_dir:
+        raise SystemExit("--data-generation requires --combine-artifacts-dir")
     if args.fallback_artifacts_dir and not args.combine_artifacts_dir:
         raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
     if (
@@ -1640,6 +1651,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             optional_markets=OPTIONAL_STATIC_MARKETS,
             **options_combine_kwargs,
         )
+        if args.data_generation:
+            generation = relocate_into_generation(Path(args.output_dir))
+            print(f"Static data generation: {generation}")
     else:
         prepare_runtime()
 

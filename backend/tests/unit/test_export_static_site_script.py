@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import runpy
 import sys
 from contextlib import contextmanager
@@ -2920,6 +2921,45 @@ def test_main_passes_independent_options_roots_to_combine(monkeypatch, tmp_path)
     ) == 0
     assert captured["options_artifacts_dir"] == options_dir
     assert captured["fallback_options_artifacts_dir"] == fallback_options_dir
+
+
+def test_main_relocates_combined_data_into_a_generation(monkeypatch, tmp_path):
+    output_dir = tmp_path / "output"
+
+    def combine(_artifacts_dir, out_dir, **_kwargs):
+        (out_dir / "markets" / "us").mkdir(parents=True)
+        (out_dir / "markets" / "us" / "home.json").write_text("{}", encoding="utf-8")
+        (out_dir / "manifest.json").write_text(
+            json.dumps({"generated_at": "2026-10-08T05:47:12Z"}), encoding="utf-8"
+        )
+        return SimpleNamespace(
+            output_dir=out_dir,
+            generated_at="2026-10-08T05:47:12Z",
+            as_of_date="2026-10-07",
+            warnings=(),
+            manifest={},
+        )
+
+    monkeypatch.setattr(export_script.StaticSiteExportService, "combine_market_artifacts", combine)
+
+    assert export_script.main(
+        [
+            "--output-dir",
+            str(output_dir),
+            "--combine-artifacts-dir",
+            str(tmp_path / "markets"),
+            "--data-generation",
+        ]
+    ) == 0
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert (output_dir / manifest["data_root"] / "markets" / "us" / "home.json").is_file()
+    assert not (output_dir / "markets").exists()
+
+
+def test_main_rejects_data_generation_outside_combine_mode(tmp_path):
+    with pytest.raises(SystemExit, match="--data-generation requires --combine-artifacts-dir"):
+        export_script.main(["--output-dir", str(tmp_path / "out"), "--data-generation"])
 
 
 def test_main_passes_independent_cot_roots_to_combine(monkeypatch, tmp_path):
