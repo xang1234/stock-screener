@@ -41,7 +41,9 @@ class _WeekdayCalendar:
 
     @staticmethod
     def market_timezone(market):
-        return "Australia/Sydney"
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Australia/Sydney")
 
 
 class _CompleteBreadth:
@@ -129,6 +131,8 @@ def _service(session_factory, fetcher):
         breadth_history_price_coverage=_CompleteBreadth(),
         rs_anchor_price_coverage=RsAnchorPriceCoverageService(calendar_service=calendar),
         sleep=lambda _seconds: None,
+        # No live Yahoo quotes from unit tests.
+        fetch_quotes=lambda _symbols: [],
     )
 
 
@@ -368,6 +372,8 @@ def test_a_gap_symbol_whose_bootstrap_failed_is_still_repaired():
         breadth_history_price_coverage=_BootstrapGapBreadth(),
         rs_anchor_price_coverage=RsAnchorPriceCoverageService(calendar_service=calendar),
         sleep=lambda _seconds: None,
+        # No live Yahoo quotes from unit tests.
+        fetch_quotes=lambda _symbols: [],
     )
 
     result = service.refresh(as_of_date=AS_OF, market="AU", ensure_static_history=True)

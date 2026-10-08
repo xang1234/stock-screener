@@ -453,7 +453,15 @@ class DailyPriceBundleService:
         input_path: Path,
         warm_redis_symbols: int | None = None,
         expected_metadata: DailyPriceBundleMetadata | None = None,
+        checkpoint: bool = False,
     ) -> dict[str, Any]:
+        """Import a bundle's rows in one transaction.
+
+        ``checkpoint`` imports a static price checkpoint: each symbol's stored
+        rows from its first bundle date onward are replaced (the latest-row
+        update policy would keep superseded split-adjusted history), and the
+        completed daily-import state is left untouched.
+        """
         _ = warm_redis_symbols
         payload: dict[str, Any] = {}
         batch_rows: dict[str, list[dict[str, Any]]] = {}
@@ -464,6 +472,17 @@ class DailyPriceBundleService:
         def flush_batch() -> None:
             if not batch_rows:
                 return
+            if checkpoint:
+                for symbol, prices in batch_rows.items():
+                    first_date = min(
+                        date.fromisoformat(str(price.get("date") or ""))
+                        for price in prices
+                        if isinstance(price, dict)
+                    )
+                    db.query(StockPrice).filter(
+                        StockPrice.symbol == symbol,
+                        StockPrice.date >= first_date,
+                    ).delete(synchronize_session=False)
             self._persist_bundle_price_batch(db, dict(batch_rows))
             batch_rows.clear()
 
@@ -497,15 +516,16 @@ class DailyPriceBundleService:
                     f"{bundle_metadata.symbol_count}"
                 )
 
-            sync_state = self._upsert_import_state(
-                db,
-                market=bundle_metadata.market,
-                source_revision=bundle_metadata.source_revision,
-                as_of_date=bundle_metadata.as_of_date.isoformat(),
-                symbol_count=bundle_metadata.symbol_count,
-                bar_period=bundle_metadata.bar_period,
-                commit=False,
-            )
+            if not checkpoint:
+                self._upsert_import_state(
+                    db,
+                    market=bundle_metadata.market,
+                    source_revision=bundle_metadata.source_revision,
+                    as_of_date=bundle_metadata.as_of_date.isoformat(),
+                    symbol_count=bundle_metadata.symbol_count,
+                    bar_period=bundle_metadata.bar_period,
+                    commit=False,
+                )
             db.commit()
         except Exception:
             db.rollback()
@@ -518,7 +538,7 @@ class DailyPriceBundleService:
         return {
             "market": bundle_metadata.market,
             "as_of_date": bundle_metadata.as_of_date.isoformat(),
-            "source_revision": sync_state["source_revision"],
+            "source_revision": bundle_metadata.source_revision,
             "bar_period": bundle_metadata.bar_period,
             "symbol_count": bundle_metadata.symbol_count,
             "imported_symbols": imported_symbols,

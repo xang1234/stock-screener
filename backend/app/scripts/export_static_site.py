@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
@@ -55,6 +56,7 @@ from app.services.rs_anchor_price_coverage import (
     RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS,
     RS_ANCHOR_LOOKAHEAD_SESSIONS,
 )
+from app.services.static_price_checkpoint import write_price_checkpoint
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
 )
@@ -99,6 +101,8 @@ STATIC_DEFAULT_MARKET = "US"
 STATIC_EXPOSURE_PRIMARY_ONLY_BENCHMARK_MARKETS = frozenset({"US"})
 STATIC_EXPORT_SKIPPED_EXIT_CODE = 78
 STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE = 79
+# The price stage reached its deadline and was checkpointed (#502).
+STATIC_EXPORT_PRICE_CHECKPOINTED_EXIT_CODE = 80
 STATIC_RS_BENCHMARK_HYDRATION_PERIOD = "2y"
 STATIC_RS_BENCHMARK_HYDRATION_ATTEMPTS = 2
 STATIC_RS_BENCHMARK_RESOLUTION_EXCEPTION = "benchmark_resolution_exception"
@@ -361,6 +365,7 @@ def _refresh_static_daily_prices(
     as_of_date: date,
     market: str | None = None,
     repair_price_history: bool = False,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     service = StaticDailyPriceRefreshService(
         session_factory=SessionLocal,
@@ -368,6 +373,7 @@ def _refresh_static_daily_prices(
         fetcher=BulkDataFetcher(),
         batch_size_for_market=_static_daily_price_refresh_batch_size,
         breadth_history_price_lookback_days=EXPOSURE_BACKFILL_DAYS,
+        deadline=deadline,
     )
     return service.refresh(
         as_of_date=as_of_date,
@@ -855,6 +861,7 @@ def _run_daily_refresh(
     breadth_contributor_metadata_dir: Path | None = None,
     breadth_contributor_metadata_restore_status: str | None = None,
     repair_price_history: bool = False,
+    price_stage_deadline: float | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
         _enrich_feature_run_with_ibd_metadata,
@@ -916,12 +923,19 @@ def _run_daily_refresh(
                 as_of_date=as_of_by_market[selected_market],
                 market=selected_market,
                 repair_price_history=repair_price_history,
+                deadline=price_stage_deadline,
             )
         results["price_refresh"] = (
             price_refresh_results[selected_markets[0]]
             if market is not None
             else price_refresh_results
         )
+        # A stopped price stage is incomplete: no derived work runs on it (#502).
+        if any(
+            result.get("status") == "resumable"
+            for result in price_refresh_results.values()
+        ):
+            return results, warnings
 
         # Static CI uses a fresh, private database on every run. Migrations seed
         # its formula pointer to legacy for rollback safety, so explicitly build
@@ -1386,6 +1400,7 @@ def _run_daily_refresh(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    started_at = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output-dir",
@@ -1456,6 +1471,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--no-clean",
         action="store_true",
         help="Do not delete the output directory before exporting.",
+    )
+    parser.add_argument(
+        "--price-stage-deadline-minutes",
+        type=float,
+        default=None,
+        help=(
+            "Minutes after start at which the price stage stops and is "
+            "checkpointed for a re-run to resume (#502). Requires "
+            "--price-checkpoint-dir."
+        ),
+    )
+    parser.add_argument(
+        "--price-stage-start-epoch",
+        type=float,
+        default=None,
+        help=(
+            "Unix time the job started; the price-stage deadline counts from it "
+            "so setup and the checkpoint import spend the same budget as the "
+            "job timeout. Defaults to this process's start."
+        ),
+    )
+    parser.add_argument(
+        "--price-checkpoint-dir",
+        default=None,
+        help="Directory for the price-stage checkpoint bundle and manifest.",
     )
     parser.add_argument(
         "--repair-price-history",
@@ -1531,6 +1571,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(
             "--breadth-contributor-metadata-dir requires --refresh-daily"
         )
+    for flag, value in (
+        ("--price-stage-deadline-minutes", args.price_stage_deadline_minutes),
+        ("--price-stage-start-epoch", args.price_stage_start_epoch),
+    ):
+        # NaN would compare false against every clock reading: no deadline.
+        if value is not None and not math.isfinite(value):
+            raise SystemExit(f"{flag} must be a finite number")
+    if (args.price_stage_deadline_minutes is None) != (args.price_checkpoint_dir is None):
+        raise SystemExit(
+            "--price-stage-deadline-minutes and --price-checkpoint-dir go together"
+        )
+    if args.price_checkpoint_dir and not (args.market and args.refresh_daily):
+        raise SystemExit("--price-checkpoint-dir requires --market and --refresh-daily")
+    price_stage_deadline = None
+    if args.price_stage_deadline_minutes is not None:
+        elapsed = (
+            max(0.0, time.time() - args.price_stage_start_epoch)
+            if args.price_stage_start_epoch is not None
+            else time.monotonic() - started_at
+        )
+        price_stage_deadline = (
+            time.monotonic() - elapsed + args.price_stage_deadline_minutes * 60.0
+        )
     if args.repair_price_history and not (args.market and args.refresh_daily):
         raise SystemExit("--repair-price-history requires --market and --refresh-daily")
     if args.rs_formula_version and (args.combine_artifacts_dir or not args.market):
@@ -1598,7 +1661,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.breadth_contributor_metadata_restore_status
                 ),
                 repair_price_history=args.repair_price_history,
+                price_stage_deadline=price_stage_deadline,
             )
+            price_refresh = refresh_results.get("price_refresh") or {}
+            if price_refresh.get("status") == "resumable":
+                as_of_date = date.fromisoformat(str(price_refresh["as_of_date"]))
+                with SessionLocal() as db:
+                    manifest = write_price_checkpoint(
+                        db,
+                        market=args.market,
+                        as_of_date=as_of_date,
+                        output_dir=Path(args.price_checkpoint_dir),
+                    )
+                print(
+                    f"Price stage for {args.market} {as_of_date.isoformat()} reached its "
+                    f"deadline; checkpointed {manifest.get('symbol_count')} symbols to "
+                    f"{args.price_checkpoint_dir}. Re-run the failed job to resume.",
+                    flush=True,
+                )
+                return STATIC_EXPORT_PRICE_CHECKPOINTED_EXIT_CODE
             refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")
             for name, result_item in refresh_results.items():

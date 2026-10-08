@@ -907,3 +907,102 @@ def test_import_daily_price_bundle_rolls_back_state_on_persist_error(
     assert db.query(AppSetting).count() == 0
     assert db.query(StockPrice).filter(StockPrice.symbol == "AAPL").count() == 0
     db.close()
+
+
+def _write_aapl_bundle(service, path, prices):
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": service.DAILY_PRICE_BUNDLE_SCHEMA_VERSION,
+                "market": "US",
+                "as_of_date": "2026-04-18",
+                "bar_period": service.DAILY_PRICE_BAR_PERIOD,
+                "source_revision": "daily_prices_us:20260418120000",
+                "symbol_count": 1,
+                "rows": [{"symbol": "AAPL", "prices": prices}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _seed_old_scale_aapl(db, service):
+    db.add(_stock_row("AAPL", "US", "NASDAQ", 1000.0))
+    # 04-01 predates the checkpoint; 04-16/04-17 hold pre-split adj closes.
+    for day in (date(2026, 4, 1), date(2026, 4, 16), date(2026, 4, 17)):
+        db.add(_price_row("AAPL", day, 200.0))
+    service._upsert_import_state(
+        db,
+        market="US",
+        source_revision="daily_prices_us:seed",
+        as_of_date="2026-04-15",
+        symbol_count=1,
+        bar_period=service.DAILY_PRICE_BAR_PERIOD,
+    )
+
+
+def test_checkpoint_import_replaces_history_without_recording_import_state(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    service = DailyPriceBundleService()
+    _seed_old_scale_aapl(db, service)
+    bundle_path = tmp_path / "price-checkpoint-us.json"
+    _write_aapl_bundle(
+        service,
+        bundle_path,
+        [
+            _bundle_price(day="2026-04-16", close=100.0),
+            _bundle_price(day="2026-04-17", close=101.0),
+            _bundle_price(day="2026-04-18", close=102.0),
+        ],
+    )
+
+    result = service.import_daily_price_bundle(
+        db, input_path=bundle_path, checkpoint=True
+    )
+
+    closes = {
+        row.date: row.adj_close
+        for row in db.query(StockPrice).filter(StockPrice.symbol == "AAPL")
+    }
+    # The latest-row update policy alone would keep 04-16's old scale.
+    assert closes == {
+        date(2026, 4, 1): 199.5,
+        date(2026, 4, 16): 100.0,
+        date(2026, 4, 17): 101.0,
+        date(2026, 4, 18): 102.0,
+    }
+    assert result["imported_symbols"] == 1
+    assert service.get_import_state(db, "US")["source_revision"] == "daily_prices_us:seed"
+    db.close()
+
+
+def test_checkpoint_import_rolls_back_replaced_history_on_invalid_row(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    service = DailyPriceBundleService()
+    _seed_old_scale_aapl(db, service)
+    bundle_path = tmp_path / "price-checkpoint-us.json"
+    _write_aapl_bundle(
+        service,
+        bundle_path,
+        [
+            _bundle_price(day="2026-04-16", close=100.0),
+            {**_bundle_price(day="2026-04-17"), "close": None},
+        ],
+    )
+
+    with pytest.raises(ValueError, match="invalid OHLCV"):
+        service.import_daily_price_bundle(db, input_path=bundle_path, checkpoint=True)
+
+    closes = {
+        row.date: row.adj_close
+        for row in db.query(StockPrice).filter(StockPrice.symbol == "AAPL")
+    }
+    assert closes == {
+        date(2026, 4, 1): 199.5,
+        date(2026, 4, 16): 199.5,
+        date(2026, 4, 17): 199.5,
+    }
+    assert service.get_import_state(db, "US")["source_revision"] == "daily_prices_us:seed"
+    db.close()

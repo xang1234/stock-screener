@@ -72,6 +72,10 @@ STATIC_SESSION_REPAIR_WAIT_SECONDS = 60
 RS_ANCHOR_UNRESOLVED_SAMPLE_LIMIT = 20
 
 
+class PriceStageDeadlineReached(Exception):
+    """The price stage must stop so the run can checkpoint before its timeout."""
+
+
 @dataclass(frozen=True)
 class _StaticHistoryCoverageOutcome:
     incomplete_symbols: tuple[str, ...]
@@ -173,8 +177,20 @@ class StaticDailyPriceRefreshService:
         sleep: Callable[[float], None] | None = None,
         fetch_quotes: Callable[[list[str]], list[dict[str, Any]]] | None = None,
         rs_anchor_price_coverage: RsAnchorPriceCoverageService | None = None,
+        deadline: float | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
+        """``deadline`` is a ``clock()`` (default ``time.monotonic``) value after
+        which no provider batch or wait starts; ``refresh`` then returns
+        ``status: "resumable"`` with every finished batch already committed.
+        """
         self._session_factory = session_factory
+        self._deadline = deadline
+        if clock is None:
+            import time
+
+            clock = time.monotonic
+        self._clock = clock
         self._fetch_quotes = fetch_quotes
         self._price_cache = price_cache
         self._fetcher = fetcher
@@ -210,6 +226,39 @@ class StaticDailyPriceRefreshService:
         market: str | None = None,
         ensure_static_history: bool = False,
         rs_anchor_lookahead_sessions: int = RS_ANCHOR_LOOKAHEAD_SESSIONS,
+    ) -> dict[str, Any]:
+        try:
+            return self._refresh(
+                as_of_date=as_of_date,
+                market=market,
+                ensure_static_history=ensure_static_history,
+                rs_anchor_lookahead_sessions=rs_anchor_lookahead_sessions,
+            )
+        except PriceStageDeadlineReached:
+            print(
+                f"[static-daily prices] Price stage deadline reached for {market} "
+                f"{as_of_date}; stopping with every finished batch committed.",
+                flush=True,
+            )
+            return {
+                "status": "resumable",
+                "reason": "price_stage_deadline",
+                "market": market,
+                "as_of_date": as_of_date.isoformat(),
+            }
+
+    def _check_deadline(self, wait_seconds: float = 0.0) -> None:
+        """Raise if a fetch, or a ``wait_seconds`` wait, would start past the deadline."""
+        if self._deadline is not None and self._clock() + wait_seconds >= self._deadline:
+            raise PriceStageDeadlineReached
+
+    def _refresh(
+        self,
+        *,
+        as_of_date: date,
+        market: str | None,
+        ensure_static_history: bool,
+        rs_anchor_lookahead_sessions: int,
     ) -> dict[str, Any]:
         with self._session_factory() as db:
             query = (
@@ -692,6 +741,7 @@ class StaticDailyPriceRefreshService:
                     f"{STATIC_SESSION_REPAIR_WAIT_SECONDS}s.",
                     flush=True,
                 )
+                self._check_deadline(STATIC_SESSION_REPAIR_WAIT_SECONDS)
                 self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
                 self._fetch_and_store(
                     rate_limited,
@@ -809,6 +859,7 @@ class StaticDailyPriceRefreshService:
             _iter_chunks(symbols, batch_size),
             start=1,
         ):
+            self._check_deadline()
             processed_before = refreshed_count + failed_count
             print(
                 f"[static-daily prices] Batch {batch_index}/{total_group_batches}: "
@@ -902,7 +953,9 @@ class StaticDailyPriceRefreshService:
             )
         ):
             return stats
+        self._check_deadline(STATIC_SESSION_REPAIR_WAIT_SECONDS)
         from app.services.yahoo_quote_price_repair import (
+            YAHOO_QUOTE_BATCH_SIZE,
             fetch_yahoo_quotes,
             repair_from_yahoo_quotes,
         )
@@ -914,27 +967,36 @@ class StaticDailyPriceRefreshService:
             flush=True,
         )
         self._sleep(STATIC_SESSION_REPAIR_WAIT_SECONDS)
-        results = {symbol: {"price_data": frame} for symbol, frame in frames.items()}
+        self._check_deadline()  # the wait itself may have run past it
         rate_limiter = getattr(self._fetcher, "_rate_limiter", None)
-        repair_from_yahoo_quotes(
-            results,
-            expected_session=as_of_date,
-            market_tz=self._calendar_service.market_timezone(market),
-            fetch_quotes=self._fetch_quotes or fetch_yahoo_quotes,
-            wait=(
-                (lambda: rate_limiter.wait_for_market("yfinance:batch", market))
-                if rate_limiter is not None
-                else None
-            ),
-            sleep=self._sleep,
-        )
-        repaired = {
-            symbol: payload["price_data"]
-            for symbol, payload in results.items()
-            if payload.get("repaired_by")
-        }
-        if repaired:
-            self._price_cache.store_batch_in_cache(repaired, also_store_db=True, market=market)
+        repaired: dict[str, pd.DataFrame] = {}
+        # One quote batch per call, deadline-checked and stored before the
+        # next, so a stop past the deadline keeps the batches already repaired.
+        for symbols in _iter_chunks(list(frames), YAHOO_QUOTE_BATCH_SIZE):
+            self._check_deadline()
+            results = {symbol: {"price_data": frames[symbol]} for symbol in symbols}
+            repair_from_yahoo_quotes(
+                results,
+                expected_session=as_of_date,
+                market_tz=self._calendar_service.market_timezone(market),
+                fetch_quotes=self._fetch_quotes or fetch_yahoo_quotes,
+                wait=(
+                    (lambda: rate_limiter.wait_for_market("yfinance:batch", market))
+                    if rate_limiter is not None
+                    else None
+                ),
+                sleep=self._sleep,
+            )
+            batch_repaired = {
+                symbol: payload["price_data"]
+                for symbol, payload in results.items()
+                if payload.get("repaired_by")
+            }
+            if batch_repaired:
+                self._price_cache.store_batch_in_cache(
+                    batch_repaired, also_store_db=True, market=market
+                )
+                repaired.update(batch_repaired)
         stats.update(
             attempted=len(frames),
             repaired=len(repaired),
@@ -1077,12 +1139,21 @@ class StaticDailyPriceRefreshService:
             f"{STATIC_RATE_LIMITED_RETRY_BATCH_SIZE}.",
             flush=True,
         )
+        self._check_deadline(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
         self._sleep(STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS)
 
         recovered = 0
-        for period, unique_symbols in retry_groups:
+        # One fetch per retry batch, each checked against the deadline and
+        # stored before the next, so a stop keeps every recovered batch (#502).
+        retry_batches = [
+            (period, batch)
+            for period, unique_symbols in retry_groups
+            for batch in _iter_chunks(unique_symbols, STATIC_RATE_LIMITED_RETRY_BATCH_SIZE)
+        ]
+        for period, batch_symbols in retry_batches:
+            self._check_deadline()
             retry_results = self._fetcher.fetch_prices_in_batches(
-                unique_symbols,
+                batch_symbols,
                 period=period,
                 start_batch_size=STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
                 market=market,

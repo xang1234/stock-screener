@@ -237,8 +237,15 @@ jobs:
       YFINANCE_BATCH_SIZE_IN: "25"
       YFINANCE_BATCH_RATE_LIMIT_IN: "0.1"
       OPTIONS_ANALYTICS_ENABLED: ${{ matrix.market == 'US' && 'true' || 'false' }}
+      # Opt-in price-stage checkpoint (#502): repository variable JSON of market
+      # to minutes after export start, e.g. {"US": 210}. Unlisted markets are
+      # unchanged. Rollback: delete the variable.
+      PRICE_STAGE_DEADLINE_MINUTES: ${{ fromJSON(vars.STATIC_PRICE_STAGE_DEADLINE_MINUTES || '{}')[matrix.market] || '' }}
 
     steps:
+      - name: Record job start
+        run: echo "JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
@@ -287,6 +294,14 @@ jobs:
           python -m app.scripts.sync_daily_price_bundle_from_github \
             --market "${{ matrix.market }}" \
             --allow-stale
+
+      - name: Resume price-stage checkpoint
+        if: ${{ env.PRICE_STAGE_DEADLINE_MINUTES != '' }}
+        env:
+          GITHUB_DATA_TOKEN: ${{ github.token }}
+        run: |
+          cd backend
+          python -m app.scripts.resume_static_price_checkpoint --market "${{ matrix.market }}"
 
       - name: Restore US options history
         id: restore-options-history
@@ -475,6 +490,14 @@ jobs:
             )
           fi
           repair_args=()
+          checkpoint_args=()
+          if [ -n "$PRICE_STAGE_DEADLINE_MINUTES" ]; then
+            checkpoint_args=(
+              --price-stage-deadline-minutes "$PRICE_STAGE_DEADLINE_MINUTES"
+              --price-stage-start-epoch "$JOB_STARTED_EPOCH"
+              --price-checkpoint-dir /tmp/price-checkpoint
+            )
+          fi
           if [ "$(echo "$REPAIR_PRICE_HISTORY_MARKET" | tr '[:lower:]' '[:upper:]')" = "${{ matrix.market }}" ]; then
             repair_args=(--repair-price-history)
           fi
@@ -490,7 +513,7 @@ jobs:
             --market "${{ matrix.market }}" \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES" \
             --rrg-history-dir "$RRG_HISTORY_DIR" \
-            "${breadth_metadata_args[@]}" "${repair_args[@]}" 2>&1 | tee "$EXPORT_LOG"
+            "${breadth_metadata_args[@]}" "${repair_args[@]}" "${checkpoint_args[@]}" 2>&1 | tee "$EXPORT_LOG"
           pipeline_status=("${PIPESTATUS[@]}")
           status="${pipeline_status[0]}"
           log_status="${pipeline_status[1]}"
@@ -502,6 +525,15 @@ jobs:
           STATUS_PATH="/tmp/static-data/status/${MARKET_LOWER}/status.json"
           if [ "$status" -eq 78 ]; then
             echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
+            echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            echo "has_price_bundle=false" >> "$GITHUB_OUTPUT"
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
+            echo "has_options_artifact=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$status" -eq 80 ]; then
+            echo "Market ${{ matrix.market }} price stage reached its deadline and was checkpointed; no derived output this run."
+            echo "price_checkpointed=true" >> "$GITHUB_OUTPUT"
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             echo "has_price_bundle=false" >> "$GITHUB_OUTPUT"
             echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
@@ -540,6 +572,33 @@ jobs:
             echo "has_options_artifact=false" >> "$GITHUB_OUTPUT"
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload price-stage checkpoint
+        if: ${{ steps.export-market.outputs.price_checkpointed == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKET_LOWER="$(echo "${{ matrix.market }}" | tr '[:upper:]' '[:lower:]')"
+          BUNDLE_PATH="/tmp/price-checkpoint/price-checkpoint-${MARKET_LOWER}.json.gz"
+          MANIFEST_PATH="/tmp/price-checkpoint/price-checkpoint-${MARKET_LOWER}.json"
+          upload() {
+            for attempt in 1 2 3; do
+              gh release upload daily-price-data "$1" --clobber && return 0
+              echo "Upload of $1 failed (attempt $attempt/3)." >&2
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          # Data first, manifest last: the manifest is the acceptance marker,
+          # and its checksum rejects a manifest left over from an older upload.
+          upload "$BUNDLE_PATH"
+          upload "$MANIFEST_PATH"
+
+      - name: Fail after price-stage checkpoint
+        if: ${{ steps.export-market.outputs.price_checkpointed == 'true' }}
+        run: |
+          echo "::error::${{ matrix.market }} price stage was checkpointed before the job timeout. Re-run failed jobs to resume from the checkpoint."
+          exit 1
 
       - name: Upload market status
         if: ${{ always() }}

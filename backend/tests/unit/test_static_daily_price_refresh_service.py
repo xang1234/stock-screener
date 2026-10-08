@@ -1822,3 +1822,213 @@ def test_static_daily_price_skips_session_repair_without_a_quote_plan() -> None:
 
     assert sleeps == []
     assert stats == {"attempted": 0, "repaired": 0, "wait_seconds": 0}
+
+
+class _TickingFetcher:
+    """Fetcher whose every provider call advances a fake monotonic clock."""
+
+    def __init__(self, *, tick: float = 0.0, responses=None) -> None:
+        self.now = 0.0
+        self.tick = tick
+        self.calls: list[list[str]] = []
+        self._responses = responses
+
+    def clock(self) -> float:
+        return self.now
+
+    def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+        self.calls.append(list(symbols))
+        self.now += self.tick
+        if self._responses is not None:
+            return self._responses(len(self.calls), list(symbols))
+        return {
+            symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+            for symbol in symbols
+        }
+
+
+def test_static_daily_price_refresh_stops_before_the_deadline_with_durable_batches() -> None:
+    session_factory = _sqlite_session_factory()
+    _seed_in_universe(session_factory)
+    fetcher = _TickingFetcher(tick=10.0)
+    stored: list[list[str]] = []
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(
+            store_batch_in_cache=lambda payload, **_kwargs: stored.append(sorted(payload))
+        ),
+        fetcher=fetcher,
+        batch_size_for_market=lambda _market: 1,
+        sleep=sleeps.append,
+        deadline=25.0,
+        clock=fetcher.clock,
+    )
+
+    result = service.refresh(as_of_date=date(2026, 4, 2), market="IN")
+
+    # Batches start at t=0, 10 and 20; none starts at t=30, past the deadline.
+    assert fetcher.calls == [["RELIANCE.NS"], ["TCS.NS"], ["INFY.NS"]]
+    assert stored == [["RELIANCE.NS"], ["TCS.NS"], ["INFY.NS"]]
+    assert sleeps == []
+    assert result["status"] == "resumable"
+    assert result["reason"] == "price_stage_deadline"
+    assert result["market"] == "IN"
+    assert result["as_of_date"] == "2026-04-02"
+
+
+def test_static_daily_price_refresh_does_not_start_a_retry_wait_past_the_deadline() -> None:
+    session_factory = _sqlite_session_factory()
+    _seed_in_universe(session_factory)
+
+    def responses(call_number, symbols):
+        if call_number == 1:
+            return {
+                "TCS.NS": {
+                    "price_data": None,
+                    "has_error": True,
+                    "error": "Too Many Requests (429)",
+                }
+            }
+        return {
+            symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+            for symbol in symbols
+        }
+
+    fetcher = _TickingFetcher(responses=responses)
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+        fetcher=fetcher,
+        sleep=sleeps.append,
+        deadline=STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS - 1.0,
+        clock=fetcher.clock,
+    )
+
+    result = service.refresh(as_of_date=date(2026, 4, 2), market="IN")
+
+    assert len(fetcher.calls) == 2  # stale and bootstrap batches, no retry
+    assert sleeps == []
+    assert result["status"] == "resumable"
+
+
+def test_static_daily_price_session_repair_wait_respects_the_deadline() -> None:
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+
+    sleeps: list[float] = []
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=SimpleNamespace(),
+        sleep=sleeps.append,
+        fetch_quotes=lambda symbols: pytest.fail("no repair past the deadline"),
+        deadline=STATIC_SESSION_REPAIR_WAIT_SECONDS - 1.0,
+        clock=lambda: 0.0,
+    )
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._repair_missing_sessions(
+            market="US",
+            as_of_date=date(2026, 6, 4),
+            frames={"BEHIND": _price_frame([date(2026, 6, 3)], 1.0)},
+        )
+    assert sleeps == []
+
+
+def test_rate_limited_retry_checks_the_deadline_between_chunks_and_keeps_finished_ones() -> None:
+    # #544 review: one fetch call for the whole retry group ran past the deadline.
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+
+    clock = {"now": 0.0}
+    fetched: list[list[str]] = []
+    stored: list[list[str]] = []
+
+    class _Fetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            fetched.append(list(symbols))
+            clock["now"] += 1000.0
+            return {s: {"price_data": _price_frame([date(2026, 6, 4)], 1.0), "has_error": False} for s in symbols}
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(
+            store_batch_in_cache=lambda payload, **_kwargs: stored.append(sorted(payload))
+        ),
+        fetcher=_Fetcher(),
+        sleep=lambda _seconds: None,
+        deadline=STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS + 700.0,
+        clock=lambda: clock["now"],
+    )
+    symbols = [f"S{index:02d}.NS" for index in range(STATIC_RATE_LIMITED_RETRY_BATCH_SIZE + 5)]
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._retry_rate_limited_failures(
+            market="IN",
+            rate_limited_symbols_by_period={STATIC_DAILY_PRICE_REFRESH_PERIOD: symbols},
+        )
+
+    assert fetched == [symbols[:STATIC_RATE_LIMITED_RETRY_BATCH_SIZE]]
+    assert stored == [symbols[:STATIC_RATE_LIMITED_RETRY_BATCH_SIZE]]
+
+
+def test_session_repair_rechecks_the_deadline_after_its_wait() -> None:
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+
+    clock = {"now": 0.0}
+
+    def sleep(seconds):
+        clock["now"] += seconds + 30.0  # the wait overran
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=SimpleNamespace(),
+        sleep=sleep,
+        fetch_quotes=lambda symbols: pytest.fail("no quote repair past the deadline"),
+        deadline=STATIC_SESSION_REPAIR_WAIT_SECONDS + 10.0,
+        clock=lambda: clock["now"],
+    )
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._repair_missing_sessions(
+            market="US",
+            as_of_date=date(2026, 6, 4),
+            frames={"BEHIND": _price_frame([date(2026, 6, 3)], 1.0)},
+        )
+
+
+def test_session_repair_checks_the_deadline_between_quote_batches() -> None:
+    # #544 review: one repair call quoted every stale symbol past the deadline.
+    from app.services.static_daily_price_refresh_service import PriceStageDeadlineReached
+    from app.services.yahoo_quote_price_repair import YAHOO_QUOTE_BATCH_SIZE
+
+    clock = {"now": 0.0}
+    quoted: list[list[str]] = []
+
+    def fetch_quotes(symbols):
+        quoted.append(list(symbols))
+        clock["now"] += 1000.0
+        return []
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=_sqlite_session_factory(),
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *args, **kwargs: None),
+        fetcher=SimpleNamespace(),
+        sleep=lambda _seconds: None,
+        fetch_quotes=fetch_quotes,
+        deadline=STATIC_SESSION_REPAIR_WAIT_SECONDS + 500.0,
+        clock=lambda: clock["now"],
+    )
+    frames = {
+        f"S{index:03d}": _price_frame([date(2026, 6, 3)], 1.0)
+        for index in range(YAHOO_QUOTE_BATCH_SIZE + 20)
+    }
+
+    with pytest.raises(PriceStageDeadlineReached):
+        service._repair_missing_sessions(market="US", as_of_date=date(2026, 6, 4), frames=frames)
+
+    # Every quote request (including the helper's retries) was for the first
+    # batch; the second batch never started.
+    first_batch = sorted(frames)[:YAHOO_QUOTE_BATCH_SIZE]
+    assert quoted and all(sorted(batch) == first_batch for batch in quoted)

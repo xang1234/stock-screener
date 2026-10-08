@@ -32,16 +32,17 @@ _VALID_REASON_VALUES = frozenset(
         "not_trading_day",
         "no_current_artifact",
         "export_failed",
+        "price_checkpointed",
     }
 )
 _ALLOWED_MISSING_MARKETS = OPTIONAL_STATIC_MARKETS
 _ALLOWED_OPTIONAL_OMISSION_REASONS = frozenset(
-    {"not_trading_day", "no_current_artifact", "export_failed"}
+    {"not_trading_day", "no_current_artifact", "export_failed", "price_checkpointed"}
 )
 # A current-run export failure describes the new candidate, not the history:
 # an independently valid earlier artifact stays publishable.
 _ALLOWED_FALLBACK_REASONS = frozenset(
-    {"not_trading_day", "no_current_artifact", "export_failed"}
+    {"not_trading_day", "no_current_artifact", "export_failed", "price_checkpointed"}
 )
 
 
