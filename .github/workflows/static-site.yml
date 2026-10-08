@@ -107,7 +107,7 @@ jobs:
           fi
 
           repair_market="$(echo "$REPAIR_PRICE_HISTORY_MARKET" | tr '[:lower:]' '[:upper:]')"
-          if [ -n "$repair_market" ] && ! echo "$markets" | grep -q "\"$repair_market\""; then
+          if [ -n "$repair_market" ] && ! echo "$markets" | grep -qF "\"$repair_market\""; then
             echo "repair_price_history_market=$repair_market is not in the selected market group ($markets)." >&2
             exit 1
           fi

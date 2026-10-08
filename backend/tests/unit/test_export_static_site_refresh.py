@@ -649,8 +649,9 @@ def test_anchor_gap_rejection_still_publishes_the_price_bundle(tmp_path):
     )
 
 
-def test_a_malformed_gap_limit_override_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setenv("STATIC_RS_MAX_HISTORY_GAP_SHARE", "50%")
+@pytest.mark.parametrize("raw", ["50%", "nan", "inf", "-0.1", "1.5"])
+def test_a_malformed_gap_limit_override_falls_back_to_the_default(monkeypatch, raw):
+    monkeypatch.setenv("STATIC_RS_MAX_HISTORY_GAP_SHARE", raw)
 
     assert export_static_site._static_rs_max_history_gap_share() == (
         export_static_site.STATIC_RS_MAX_HISTORY_GAP_SHARE

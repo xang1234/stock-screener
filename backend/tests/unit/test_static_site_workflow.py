@@ -1445,7 +1445,14 @@ def test_price_history_repair_is_an_opt_in_for_one_market_job() -> None:
 
 @pytest.mark.parametrize(
     ("repair_market", "group", "accepted"),
-    [("AU", "asia", True), ("au", "asia", True), ("AUS", "asia", False), ("DE", "asia", False), ("", "us", True)],
+    [
+        ("AU", "asia", True),
+        ("au", "asia", True),
+        ("AUS", "asia", False),
+        ("DE", "asia", False),
+        ("A.", "asia", False),
+        ("", "us", True),
+    ],
 )
 def test_repair_market_must_belong_to_the_selected_group(repair_market, group, accepted) -> None:
     step = next(

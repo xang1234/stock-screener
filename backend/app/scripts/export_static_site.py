@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -610,15 +611,19 @@ def _static_rs_max_history_gap_share() -> float:
     if not raw:
         return STATIC_RS_MAX_HISTORY_GAP_SHARE
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
-        # A hand-set typo must not turn the guarded path into a hard failure.
+        value = math.nan
+    # A share is 0..1 (1 disables the guard); NaN would reject every market,
+    # and a hand-set typo must not turn the guarded path into a hard failure.
+    if not 0.0 <= value <= 1.0:
         print(
             f"[static-rs] Ignoring STATIC_RS_MAX_HISTORY_GAP_SHARE={raw!r}; "
             f"using {STATIC_RS_MAX_HISTORY_GAP_SHARE}.",
             flush=True,
         )
         return STATIC_RS_MAX_HISTORY_GAP_SHARE
+    return value
 
 
 def _reject_static_rs_history_gap_collapse(
