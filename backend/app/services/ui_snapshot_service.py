@@ -664,11 +664,10 @@ class UISnapshotService:
 
     def _resolve_themes_source_revision(self, db: Session, pipeline: str) -> str:
         latest_metrics = db.query(func.max(ThemeMetrics.date)).filter(ThemeMetrics.pipeline == pipeline).scalar()
-        # A same-day metrics refresh updates rows in place without moving the
-        # date; fold the latest day's scores in so it turns the snapshot stale.
-        latest_metrics_rows, latest_metrics_score = db.query(
-            func.count(ThemeMetrics.id), func.sum(ThemeMetrics.momentum_score)
-        ).filter(ThemeMetrics.pipeline == pipeline, ThemeMetrics.date == latest_metrics).one()
+        # A same-day metrics refresh updates rows in place without moving the date.
+        latest_metrics_update = db.query(func.max(ThemeMetrics.updated_at)).filter(
+            ThemeMetrics.pipeline == pipeline
+        ).scalar()
         latest_cluster_update = db.query(func.max(ThemeCluster.updated_at)).filter(ThemeCluster.pipeline == pipeline).scalar()
         latest_pipeline_run = db.query(func.max(ThemePipelineRun.completed_at)).filter(
             (ThemePipelineRun.pipeline == pipeline) | (ThemePipelineRun.pipeline.is_(None))
@@ -698,7 +697,7 @@ class UISnapshotService:
             str(failed_count),
             str(open_alerts),
             str(unread_alerts),
-            f"{latest_metrics_rows}:{latest_metrics_score}",
+            latest_metrics_update.isoformat() if latest_metrics_update else "none",
         ]
         return "|".join(parts)
 

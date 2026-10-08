@@ -1,4 +1,6 @@
 """Theme discovery models for tracking market themes from unstructured sources"""
+from datetime import datetime, timezone
+
 from sqlalchemy import (
     Column,
     Integer,
@@ -479,6 +481,14 @@ class ThemeMetrics(Base):
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Set in Python for microsecond precision on every backend: a same-day
+    # refresh rewrites rows in place, and the themes bootstrap revision reads it.
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     __table_args__ = (
         UniqueConstraint("theme_cluster_id", "date", name="uix_theme_metrics_date"),

@@ -224,14 +224,20 @@ def test_resolve_themes_source_revision_changes_on_a_same_day_metrics_refresh():
     service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
 
     with Session() as db:
-        metrics = ThemeMetrics(
+        first = ThemeMetrics(
             theme_cluster_id=1, date=date(2026, 3, 18), pipeline="technical", momentum_score=50.0
         )
-        db.add(metrics)
+        second = ThemeMetrics(
+            theme_cluster_id=2, date=date(2026, 3, 18), pipeline="technical", momentum_score=60.0
+        )
+        db.add_all([first, second])
         db.commit()
         before = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
 
-        metrics.momentum_score = 61.5
+        # Equal and opposite moves keep any count/sum aggregate unchanged
+        # while the rankings flip.
+        first.momentum_score = 61.0
+        second.momentum_score = 49.0
         db.commit()
         after = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
 
