@@ -398,6 +398,28 @@ The completed daily-import state is not advanced. The refresh then fetches only 
 
 A checkpoint never becomes `daily-price-latest-<market>.json` or a market artifact; only a later complete export does. The failed run still wakes the publisher, which keeps serving the last good artifact. The step log prints `checkpoint status=imported|missing|incompatible|invalid`. Anything other than `imported` leaves the database as seeded, and the run takes the normal path.
 
+## Static Data Generations
+
+Every publish puts its data under `static-data/g/<generation>/` (#504). The root `static-data/manifest.json` is the pointer: it carries `generation` and `data_root`, and every path inside it, and inside the data files, resolves under `data_root`. An open tab therefore never pairs its manifest with files from a later publish.
+
+In the browser:
+
+- The site revalidates the root manifest when the window regains focus and every 5 minutes, bypassing the 10-minute Pages cache with an ETag check.
+- When the generation changes, every data query switches to the new generation. Each view keeps showing its current data until the replacement has loaded.
+- Data from another generation is dropped from memory once nothing displays it.
+- Only the current generation is deployed. The site is about 1.2 GB, already at the Pages size limit, so a previous generation is not retained.
+- A tab that requests a file from a replaced generation checks the manifest again. If that does not move it forward, it shows "Newer data has been published" with a Reload button.
+- A market listed in `unavailable_markets` stays selected (from `?market=` or the saved choice) and shows an unavailable notice with Retry, instead of switching to another market.
+
+```bash
+# Roll back to the flat static-data/ layout. The site reads both layouts.
+gh variable set STATIC_DATA_GENERATIONS --repo xang1234/stock-screener --body false
+# Return to generations.
+gh variable delete STATIC_DATA_GENERATIONS --repo xang1234/stock-screener
+```
+
+After changing the variable, dispatch Static Site Publish so the next deploy uses the chosen layout.
+
 ## Market Calendar Maintenance
 
 Calendar maintenance is an **annual/on-publication** operator responsibility. The

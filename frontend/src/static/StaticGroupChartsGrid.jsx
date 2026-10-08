@@ -11,7 +11,8 @@ import { useQuery } from '@tanstack/react-query';
 import CandlestickChart from '../components/Charts/CandlestickChart';
 import GroupChartsLayout, { GroupChartCell } from '../components/Charts/GroupChartsLayout';
 import { getGroupRankColor } from '../utils/colorUtils';
-import { fetchStaticChartPayload, staticChartKeys } from './chartClient';
+import { staticChartPayloadQuery } from './chartClient';
+import { useStaticGeneration } from './dataClient';
 
 const MAX_SYMBOLS = 50;
 const CHART_HEIGHT = 360;
@@ -41,13 +42,10 @@ function StatBadge({ value, label, bgcolor }) {
 }
 
 function StaticGroupChartCard({ symbol, entry, isSelected, onSelect }) {
-  const { data: payload, isLoading, isError } = useQuery({
-    queryKey: staticChartKeys.payload(symbol, entry?.path),
-    queryFn: () => fetchStaticChartPayload(entry.path),
-    enabled: Boolean(entry?.path),
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
+  const generation = useStaticGeneration();
+  const { data: payload, isLoading, isError } = useQuery(
+    staticChartPayloadQuery(symbol, entry?.path, generation),
+  );
 
   const stockData = payload?.stock_data || null;
   const fundamentals = payload?.fundamentals || null;

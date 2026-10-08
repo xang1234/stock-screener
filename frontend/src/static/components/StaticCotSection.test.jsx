@@ -11,7 +11,7 @@ import {
 
 vi.mock('../dataClient', async () => {
   const actual = await vi.importActual('../dataClient');
-  return { ...actual, fetchStaticJson: vi.fn() };
+  return { ...actual, fetchStaticJson: vi.fn(), useStaticGeneration: () => ({ generation: 'flat', dataRoot: '' }), };
 });
 
 describe('StaticCotSection', () => {
@@ -37,14 +37,14 @@ describe('StaticCotSection', () => {
     expect(await screen.findByTestId('static-cot-section')).toBeInTheDocument();
     await screen.findByRole('img', { name: /S&P 500 net positioning.*52 report weeks/i });
     expect(fetchStaticJson.mock.calls).toEqual([
-      ['cot/index.json'],
-      ['cot/sp-500.json'],
+      ['cot/index.json', ''],
+      ['cot/sp-500.json', ''],
     ]);
     fireEvent.click(screen.getByRole('button', { name: '3Y' }));
     expect(await screen.findByRole('img', { name: /156 report weeks/i })).toBeInTheDocument();
     expect(fetchStaticJson).toHaveBeenCalledTimes(2);
     fireEvent.change(screen.getByLabelText('COT instrument'), { target: { value: 'nasdaq-100' } });
-    await waitFor(() => expect(fetchStaticJson).toHaveBeenCalledWith('cot/nasdaq-100.json'));
+    await waitFor(() => expect(fetchStaticJson).toHaveBeenCalledWith('cot/nasdaq-100.json', ''));
     expect(screen.queryByRole('table', { name: /COT positioning snapshot/i })).not.toBeInTheDocument();
   });
 

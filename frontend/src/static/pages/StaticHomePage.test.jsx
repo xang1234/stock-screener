@@ -14,7 +14,9 @@ const priceSparklineSpy = vi.fn();
 const correctionPanelSpy = vi.fn();
 const staticCotSpy = vi.fn();
 
-vi.mock('../dataClient', () => ({
+vi.mock('../dataClient', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useStaticGeneration: () => ({ generation: 'flat', dataRoot: '' }),
   fetchStaticJson: (...args) => fetchStaticJson(...args),
   useStaticManifest: (...args) => useStaticManifest(...args),
   resolveStaticMarketEntry: (manifest, selectedMarket) => ({
@@ -332,8 +334,8 @@ describe('StaticHomePage', () => {
     expect(screen.getAllByText('MCap').length).toBeGreaterThan(0);
     expect(screen.getByText('$500.0M')).toBeInTheDocument();
     expect(screen.queryByText('HK$3.9T')).not.toBeInTheDocument();
-    expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/manifest.json');
-    expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/chunks/chunk-0001.json');
+    expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/manifest.json', '');
+    expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/chunks/chunk-0001.json', '');
     expect(screen.queryByText('SUMMARYONLY')).not.toBeInTheDocument();
 
     const user = userEvent.setup();

@@ -16,7 +16,12 @@ import {
   ToggleButtonGroup,
   Typography,
 } from '@mui/material';
-import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import {
+  fetchStaticJson,
+  staticQueryOptions,
+  useStaticGeneration,
+  useStaticManifest,
+} from '../dataClient';
 
 function SummaryMetric({ label, value }) {
   return (
@@ -33,12 +38,15 @@ function SummaryMetric({ label, value }) {
 
 function StaticThemesPage() {
   const manifestQuery = useStaticManifest();
-  const themesIndexQuery = useQuery({
-    queryKey: ['staticThemesIndex', manifestQuery.data?.pages?.themes?.path],
-    queryFn: () => fetchStaticJson(manifestQuery.data.pages.themes.path),
-    enabled: Boolean(manifestQuery.data?.pages?.themes?.path),
-    staleTime: Infinity,
-  });
+  const { generation, dataRoot } = useStaticGeneration();
+  const themesPath = manifestQuery.data?.pages?.themes?.path;
+  const themesIndexQuery = useQuery(staticQueryOptions({
+    key: ['staticThemesIndex', themesPath],
+    generation,
+    queryFn: () => fetchStaticJson(themesPath, dataRoot),
+    enabled: Boolean(themesPath),
+    gcTime: undefined,
+  }));
   const [pipeline, setPipeline] = useState('technical');
   const [themeView, setThemeView] = useState('grouped');
   const variantKey = `${pipeline}:${themeView}`;
@@ -64,12 +72,13 @@ function StaticThemesPage() {
   const activeVariantMeta = activeVariantKey ? variants?.[activeVariantKey] : null;
   const activeThemeView = activeVariantKey?.split(':')[1] || themeView;
   const isFallbackActive = Boolean(activeVariantKey && activeVariantKey !== variantKey);
-  const variantQuery = useQuery({
-    queryKey: ['staticThemesVariant', activeVariantMeta?.path],
-    queryFn: () => fetchStaticJson(activeVariantMeta.path),
+  const variantQuery = useQuery(staticQueryOptions({
+    key: ['staticThemesVariant', activeVariantMeta?.path],
+    generation,
+    queryFn: () => fetchStaticJson(activeVariantMeta.path, dataRoot),
     enabled: Boolean(activeVariantMeta?.available && activeVariantMeta?.path),
-    staleTime: Infinity,
-  });
+    gcTime: undefined,
+  }));
 
   const rankings = useMemo(() => {
     const payload = variantQuery.data?.payload || {};

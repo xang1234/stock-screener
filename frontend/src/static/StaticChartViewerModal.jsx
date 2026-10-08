@@ -19,7 +19,8 @@ import CandlestickChart from '../components/Charts/CandlestickChart';
 import StockMetricsSidebar from '../components/Scan/StockMetricsSidebar';
 import { getGroupRankColor } from '../utils/colorUtils';
 import { useChartNavigation } from '../hooks/useChartNavigation';
-import { fetchStaticChartPayload, staticChartKeys } from './chartClient';
+import { staticChartPayloadQuery } from './chartClient';
+import { useStaticGeneration } from './dataClient';
 
 function StaticChartViewerModal({
   open,
@@ -52,16 +53,15 @@ function StaticChartViewerModal({
   );
 
   const currentEntry = currentSymbol ? entryBySymbol.get(currentSymbol) : null;
+  const generation = useStaticGeneration();
+  const currentQuery = staticChartPayloadQuery(currentSymbol, currentEntry?.path, generation);
   const {
     data: chartPayload,
     isLoading,
     isError,
   } = useQuery({
-    queryKey: staticChartKeys.payload(currentSymbol, currentEntry?.path),
-    queryFn: () => fetchStaticChartPayload(currentEntry.path),
-    enabled: open && Boolean(currentEntry?.path),
-    staleTime: Infinity,
-    gcTime: Infinity,
+    ...currentQuery,
+    enabled: open && currentQuery.enabled,
   });
 
   useEffect(() => {
@@ -73,12 +73,7 @@ function StaticChartViewerModal({
       if (!entry?.path) {
         return;
       }
-      queryClient.prefetchQuery({
-        queryKey: staticChartKeys.payload(entry.symbol, entry.path),
-        queryFn: () => fetchStaticChartPayload(entry.path),
-        staleTime: Infinity,
-        gcTime: Infinity,
-      });
+      queryClient.prefetchQuery(staticChartPayloadQuery(entry.symbol, entry.path, generation));
     };
 
     const timeouts = [];
@@ -109,7 +104,7 @@ function StaticChartViewerModal({
     return () => {
       timeouts.forEach(clearTimeout);
     };
-  }, [currentIndex, entryBySymbol, open, queryClient, symbols]);
+  }, [currentIndex, entryBySymbol, generation, open, queryClient, symbols]);
 
   useEffect(() => {
     if (!open) {

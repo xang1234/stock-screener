@@ -6,7 +6,11 @@ import StaticScanPage from './pages/StaticScanPage';
 import StaticBreadthPage from './pages/StaticBreadthPage';
 import StaticGroupsPage from './pages/StaticGroupsPage';
 import { StaticMarketProvider } from './StaticMarketContext';
-import { getStaticSupportedMarkets, useStaticManifest } from './dataClient';
+import {
+  getStaticSupportedMarkets,
+  getStaticUnavailableMarkets,
+  useStaticManifest,
+} from './dataClient';
 
 const StaticOptionsPage = lazy(() => import('./pages/StaticOptionsPage'));
 const StaticOptionsSymbolPage = lazy(() => import('./pages/StaticOptionsSymbolPage'));
@@ -19,6 +23,7 @@ function StaticAppContent() {
   return (
     <StaticMarketProvider
       supportedMarkets={supportedMarkets}
+      unavailableMarkets={getStaticUnavailableMarkets(manifestQuery.data)}
       defaultMarket={defaultMarket}
     >
       <StaticLayout>

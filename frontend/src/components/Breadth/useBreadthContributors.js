@@ -16,6 +16,8 @@ export const useBreadthContributors = ({
   loadDate,
   indexStaleTime = LIVE_INDEX_STALE_TIME_MS,
   documentStaleTime = LIVE_INDEX_STALE_TIME_MS,
+  // Static mode scopes per-date documents to the data generation (#504).
+  documentKeySuffix = [],
 }) => {
   const [selected, setSelected] = useState(null);
   const indexIdentity = JSON.stringify(indexQueryKey);
@@ -56,6 +58,7 @@ export const useBreadthContributors = ({
       selectedDate,
       BREADTH_CONTRIBUTOR_SCHEMA,
       BREADTH_CONTRIBUTOR_REVISION,
+      ...documentKeySuffix,
     ],
     queryFn: () => loadDate(selectedDate),
     enabled: Boolean(selectedDate && loadDate && availableDates.has(selectedDate)),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -10,7 +10,13 @@ import {
 import FilterPanel from '../../components/Scan/FilterPanel';
 import GuidedFilterBuilderDialog from '../../features/scan/components/GuidedFilterBuilderDialog';
 import ResultsTable from '../../components/Scan/ResultsTable';
-import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
+import {
+  fetchStaticJson,
+  resolveStaticMarketEntry,
+  staticQueryOptions,
+  useStaticGeneration,
+  useStaticManifest,
+} from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
 import {
   applyScanFilterDefaults,
@@ -51,12 +57,18 @@ function StaticScanPage() {
     () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
     [manifestQuery.data, selectedMarket],
   );
-  const scanManifestQuery = useQuery({
-    queryKey: ['staticScanManifest', marketEntry.pages?.scan?.path],
-    queryFn: () => fetchStaticJson(marketEntry.pages.scan.path),
-    enabled: Boolean(marketEntry.pages?.scan?.path),
-    staleTime: Infinity,
-  });
+  const { generation, dataRoot } = useStaticGeneration();
+  const scanPath = marketEntry.pages?.scan?.path;
+  const scanManifestQuery = useQuery(staticQueryOptions({
+    key: ['staticScanManifest', scanPath],
+    generation,
+    queryFn: () => fetchStaticJson(scanPath, dataRoot),
+    enabled: Boolean(scanPath),
+    gcTime: undefined,
+  }));
+  // A new data generation must not reset the user's filters, sort or page
+  // size: those defaults apply once per scan (market), not per publish.
+  const defaultsAppliedFor = useRef(null);
   const chartIndexQuery = useStaticChartIndex(scanManifestQuery.data?.charts?.path);
 
   const [filterState, dispatchFilterState] = useReducer(
@@ -112,28 +124,31 @@ function StaticScanPage() {
   }, [scanManifestQuery.data, showOpportunityState]);
 
   useEffect(() => {
-    if (scanManifestQuery.data?.default_page_size) {
+    if (!scanManifestQuery.data || scanManifestQuery.isPlaceholderData) {
+      return;
+    }
+    if (defaultsAppliedFor.current === scanPath) {
+      return;
+    }
+    defaultsAppliedFor.current = scanPath;
+    if (scanManifestQuery.data.default_page_size) {
       setPerPage(scanManifestQuery.data.default_page_size);
     }
-    if (scanManifestQuery.data?.sort?.field) {
+    if (scanManifestQuery.data.sort?.field) {
       setSortBy(scanManifestQuery.data.sort.field);
       setSortOrder(scanManifestQuery.data.sort.order || 'desc');
-    }
-  }, [scanManifestQuery.data]);
-
-  useEffect(() => {
-    if (!scanManifestQuery.data) {
-      return;
     }
     dispatchFilterState({
       type: 'reset-filters',
       defaultFilters: manifestDefaultFilters,
     });
-  }, [manifestDefaultFilters, scanManifestQuery.data]);
+  }, [manifestDefaultFilters, scanManifestQuery.data, scanManifestQuery.isPlaceholderData, scanPath]);
 
   useEffect(() => {
     const manifest = scanManifestQuery.data;
-    if (!manifest) {
+    // Placeholder data is the previous generation's manifest; its chunks
+    // belong under the previous data root, so wait for the new manifest.
+    if (!manifest || scanManifestQuery.isPlaceholderData) {
       return undefined;
     }
 
@@ -165,7 +180,7 @@ function StaticScanPage() {
       try {
         for (let index = 0; index < chunks.length; index += HYDRATION_BATCH_SIZE) {
           const batch = chunks.slice(index, index + HYDRATION_BATCH_SIZE);
-          const payloads = await Promise.all(batch.map((chunk) => fetchStaticJson(chunk.path)));
+          const payloads = await Promise.all(batch.map((chunk) => fetchStaticJson(chunk.path, dataRoot)));
           if (cancelled) {
             return;
           }
@@ -210,7 +225,7 @@ function StaticScanPage() {
     return () => {
       cancelled = true;
     };
-  }, [scanManifestQuery.data]);
+  }, [dataRoot, scanManifestQuery.data, scanManifestQuery.isPlaceholderData]);
 
   const hydrationComplete = hydrationState.status === 'complete';
   const hydratedRows = hydrationState.rows;

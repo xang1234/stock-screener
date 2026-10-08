@@ -14,7 +14,7 @@ import {
   symbolDetailFixture,
 } from '../features/options/__fixtures__/optionsResponses';
 
-vi.mock('./dataClient', () => ({ fetchStaticJson: vi.fn() }));
+vi.mock('./dataClient', async (importOriginal) => ({ ...(await importOriginal()), fetchStaticJson: vi.fn() }));
 
 describe('static options client', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -33,9 +33,9 @@ describe('static options client', () => {
     expect(command).toEqual(commandCenterFixture);
     expect(detail).toEqual(symbolDetailFixture);
     expect(fetchStaticJson.mock.calls).toEqual([
-      ['options/manifest.json'],
-      ['options/command-center.json'],
-      ['options/symbols/QUFQTA.json'],
+      ['options/manifest.json', ''],
+      ['options/command-center.json', ''],
+      ['options/symbols/QUFQTA.json', ''],
     ]);
   });
 
