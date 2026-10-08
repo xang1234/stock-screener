@@ -1688,7 +1688,13 @@ def recompute_l1_centroid_embeddings(pipeline: str = None):
         db.close()
 
 
-@celery_app.task(name='app.tasks.theme_discovery_tasks.publish_themes_bootstrap_snapshots', queue='celery')
+# ignore_result: otherwise apply_async subscribes to the result backend first,
+# which retries for minutes when Redis is down and would hang the request.
+@celery_app.task(
+    name='app.tasks.theme_discovery_tasks.publish_themes_bootstrap_snapshots',
+    queue='celery',
+    ignore_result=True,
+)
 # In economic mode the bootstrap is served from the economic catalog instead.
 @skip_in_economic_authority
 def publish_themes_bootstrap_snapshots(pipeline: str | None = None):

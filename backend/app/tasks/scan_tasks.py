@@ -294,7 +294,13 @@ def finalize_scan_artifacts(scan_id: str):
     return {"scan_id": scan_id, "status": "queued_post_scan_finalization"}
 
 
-@celery_app.task(name='app.tasks.scan_tasks.publish_scan_bootstrap_snapshots', queue='celery')
+# ignore_result: otherwise apply_async subscribes to the result backend first,
+# which retries for minutes when Redis is down and would hang the request.
+@celery_app.task(
+    name='app.tasks.scan_tasks.publish_scan_bootstrap_snapshots',
+    queue='celery',
+    ignore_result=True,
+)
 def publish_scan_bootstrap_snapshots(scan_id: str):
     """Rebuild a scan's bootstrap snapshot and its market's "latest" one on the general queue.
 

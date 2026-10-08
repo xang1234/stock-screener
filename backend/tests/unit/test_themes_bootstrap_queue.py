@@ -79,3 +79,22 @@ def test_queue_themes_bootstrap_publish_logs_and_returns_when_the_broker_is_down
 
     warning.assert_called_once()
     assert warning.call_args.kwargs.get("exc_info") is True
+
+
+@pytest.mark.parametrize(
+    "task_path",
+    [
+        "app.tasks.theme_discovery_tasks.publish_themes_bootstrap_snapshots",
+        "app.tasks.scan_tasks.publish_scan_bootstrap_snapshots",
+    ],
+)
+def test_bootstrap_publish_tasks_skip_the_result_backend(task_path):
+    # apply_async subscribes to the result backend before sending unless the
+    # task ignores its result, and that subscription retries for minutes when
+    # Redis is down, outside the enqueue's short broker timeout. It hung CI.
+    import importlib
+
+    module_name, task_name = task_path.rsplit(".", 1)
+    task = getattr(importlib.import_module(module_name), task_name)
+
+    assert task.ignore_result is True
