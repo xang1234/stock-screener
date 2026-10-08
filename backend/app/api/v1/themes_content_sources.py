@@ -231,9 +231,9 @@ def run_extraction(
     """Extract themes from unprocessed content using LLM."""
     service = ThemeExtractionService(db, pipeline=pipeline)
     result = service.process_batch(limit=limit)
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(pipeline)
+    queue_themes_bootstrap_publish(pipeline)
     return ExtractionResponse(**result)
 
 
@@ -245,9 +245,9 @@ def calculate_theme_metrics(
     """Calculate/update metrics for all active themes in a pipeline."""
     service = ThemeDiscoveryService(db, pipeline=pipeline)
     result = service.update_all_theme_metrics()
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(pipeline)
+    queue_themes_bootstrap_publish(pipeline)
     return result
 
 

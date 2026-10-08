@@ -74,9 +74,9 @@ def approve_merge_suggestion(
         ).scalar()
     service = ThemeMergingService(db)
     result = service.approve_suggestion(suggestion_id, idempotency_key=idempotency_key)
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(source_pipeline)
+    queue_themes_bootstrap_publish(source_pipeline)
     return MergeActionResponse(**result)
 
 
@@ -94,9 +94,9 @@ def reject_merge_suggestion(
         ).scalar()
     service = ThemeMergingService(db)
     result = service.reject_suggestion(suggestion_id)
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(source_pipeline)
+    queue_themes_bootstrap_publish(source_pipeline)
     return result
 
 
@@ -123,9 +123,9 @@ def run_theme_consolidation(
     service = ThemeMergingService(db)
     result = service.run_consolidation(dry_run=dry_run)
     if not dry_run:
-        from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+        from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-        safe_publish_themes_bootstrap_variants()
+        queue_themes_bootstrap_publish()
     return ConsolidationResultResponse(**result)
 
 
@@ -207,9 +207,9 @@ def run_strict_auto_merge_wave(
         dry_run=dry_run,
     )
     if not dry_run:
-        from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+        from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-        safe_publish_themes_bootstrap_variants(pipeline)
+        queue_themes_bootstrap_publish(pipeline)
     return StrictAutoMergeWaveResponse(**result)
 
 
@@ -229,9 +229,9 @@ def run_manual_review_wave(
         dry_run=payload.dry_run,
     )
     if not payload.dry_run:
-        from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+        from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-        safe_publish_themes_bootstrap_variants(pipeline)
+        queue_themes_bootstrap_publish(pipeline)
     return ManualReviewWaveResponse(**result)
 
 
@@ -272,9 +272,9 @@ def review_candidate_themes(
     )
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Candidate review failed"))
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(pipeline)
+    queue_themes_bootstrap_publish(pipeline)
     return CandidateThemeReviewResponse(
         success=True,
         action=result["action"],
@@ -351,9 +351,9 @@ def create_theme_from_cluster(
         name=name,
         description=description,
     )
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(getattr(cluster, "pipeline", None))
+    queue_themes_bootstrap_publish(getattr(cluster, "pipeline", None))
     return {
         "status": "created",
         "theme_id": cluster.id,
@@ -421,7 +421,7 @@ def deactivate_theme(
 
     cluster.is_active = False
     db.commit()
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants(cluster.pipeline)
+    queue_themes_bootstrap_publish(cluster.pipeline)
     return {"status": "deactivated", "theme": cluster.display_name}

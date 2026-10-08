@@ -109,11 +109,9 @@ def run_taxonomy_assignment(
     service = ThemeTaxonomyService(db, pipeline=request.pipeline)
     report = service.run_full_taxonomy_assignment(dry_run=request.dry_run)
     if not request.dry_run:
-        from ...services.ui_snapshot_service import (
-            safe_publish_themes_bootstrap_variants,
-        )
+        from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-        safe_publish_themes_bootstrap_variants(request.pipeline)
+        queue_themes_bootstrap_publish(request.pipeline)
     return report
 
 
@@ -147,9 +145,9 @@ def reassign_l2_to_l1(
     if not success:
         raise HTTPException(status_code=404, detail="L2 or L1 theme not found")
     db.commit()
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants()
+    queue_themes_bootstrap_publish()
     return {"success": True, "l2_id": l2_id, "l1_id": request.l1_id}
 
 

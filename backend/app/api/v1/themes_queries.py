@@ -295,9 +295,9 @@ def dismiss_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
     alert.is_dismissed = True
     db.commit()
-    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
-    safe_publish_themes_bootstrap_variants()
+    queue_themes_bootstrap_publish()
     return {"status": "dismissed", "alert_id": alert_id}
 
 
