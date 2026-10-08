@@ -989,14 +989,29 @@ def _make_universe_row(symbol: str, market: str = "CN") -> SimpleNamespace:
     )
 
 
+@pytest.mark.parametrize(
+    ("prior_cursor", "first_chunk", "resume_from"),
+    [
+        # Fetched in sorted order whatever order the database returned.
+        (None, ["000001.SZ", "600000.SS"], "600001.SS"),
+        # The prior run stopped before 600001.SS: start there and wrap around,
+        # so a deadline-bound market refreshes every symbol over a few weeks.
+        ("600001.SS", ["600001.SS", "000001.SZ"], "600000.SS"),
+        # A cursor that has since delisted resumes at its successor.
+        ("600000.SX", ["600001.SS", "000001.SZ"], "600000.SS"),
+        # A cursor past every symbol wraps to the start.
+        ("ZZZ", ["000001.SZ", "600000.SS"], "600001.SS"),
+    ],
+)
 def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
-    monkeypatch, tmp_path, capsys
+    monkeypatch, tmp_path, capsys, prior_cursor, first_chunk, resume_from
 ):
     """Asia path stops between chunks once the wall-clock budget is exhausted.
 
     With --max-runtime-minutes set and the deadline tripping after the first
     chunk, the second chunk is never fetched, the snapshot is published with
-    force_publish=True, and warnings record the deadline.
+    force_publish=True, and warnings record the deadline and where the next
+    run resumes.
     """
 
     published_at = datetime(2026, 5, 5, 12, 10, 0)
@@ -1119,6 +1134,9 @@ def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
                 "published_at": published_at,
                 "created_at": published_at,
                 "source_revision": "fundamentals_v1_cn:20260505121000",
+                "coverage_stats_json": json.dumps(
+                    {"partial_run": True, "fundamentals_resume_from": prior_cursor}
+                ),
             },
         )(),
         export_weekly_reference_bundle=lambda db, **kwargs: export_calls.append(kwargs)
@@ -1147,8 +1165,8 @@ def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
     assert build_script.main() == 0
 
     # Only the first chunk fetched; the second chunk's deadline check tripped.
-    assert fetch_calls == [["600000.SS", "600001.SS"]]
-    assert store_calls == [["600000.SS", "600001.SS"]]
+    assert fetch_calls == [first_chunk]
+    assert store_calls == [first_chunk]
 
     # Snapshot rows still cover all 3 symbols (skipped one inherited from cache).
     publish_kwargs = publish_calls[0]
@@ -1157,6 +1175,7 @@ def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
     assert publish_kwargs["coverage_stats"]["attempted_symbols"] == 2
     assert publish_kwargs["coverage_stats"]["skipped_due_to_deadline"] == 1
     assert publish_kwargs["coverage_stats"]["snapshot_symbols"] == 3
+    assert publish_kwargs["coverage_stats"]["fundamentals_resume_from"] == resume_from
     deadline_warning = next(
         (w for w in publish_kwargs["warnings"] if "deadline reached" in w), None
     )
@@ -1276,6 +1295,7 @@ def test_build_weekly_reference_bundle_deadline_blocks_when_partial_disabled(
                 "raw_payload": kwargs["raw_payload"],
             },
             publish_market_snapshot_run=fake_publish_market_snapshot_run,
+            get_published_run=lambda db, snapshot_key: None,
         ),
     )
     monkeypatch.setattr(
@@ -1682,7 +1702,7 @@ def test_build_weekly_reference_bundle_resumes_partial_seed_by_skipping_cached_s
 
     assert build_script.main() == 0
 
-    assert fetch_calls == [["600001.SS", "000001.SZ"]]
+    assert fetch_calls == [["000001.SZ", "600001.SS"]]
     publish_kwargs = publish_calls[0]
     assert publish_kwargs["coverage_stats"]["seeded_symbols"] == 1
     assert publish_kwargs["coverage_stats"]["fetch_symbols"] == 2
@@ -1803,7 +1823,7 @@ def test_build_weekly_reference_bundle_does_not_resume_full_coverage_partial_see
 
     assert build_script.main() == 0
 
-    assert fetch_calls == [["600000.SS", "600001.SS"], ["000001.SZ"]]
+    assert fetch_calls == [["000001.SZ", "600000.SS"], ["600001.SS"]]
     publish_kwargs = publish_calls[0]
     assert publish_kwargs["coverage_stats"]["seeded_symbols"] == 0
     assert publish_kwargs["coverage_stats"]["fetch_symbols"] == 3

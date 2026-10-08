@@ -217,6 +217,32 @@ def _published_run_is_incomplete_partial_seed(
     return False
 
 
+def _rotate_to_resume_cursor(
+    provider_snapshot_service: Any, db, snapshot_key: str, symbols: list[str]
+) -> list[str]:
+    """Start at the published run's ``fundamentals_resume_from`` and wrap around.
+
+    A market whose full fetch outlasts the runtime budget (CN) otherwise
+    restarts at the first symbol every week and never refreshes the tail.
+    Sorted here, not by the database collation, so the ``>=`` comparison holds
+    and a cursor that has since delisted resumes at its successor.
+    """
+    symbols = sorted(symbols)
+    published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
+    try:
+        cursor = json.loads(getattr(published_run, "coverage_stats_json", None) or "{}").get(
+            "fundamentals_resume_from"
+        )
+    except (AttributeError, TypeError, ValueError):
+        cursor = None
+    if not isinstance(cursor, str) or not cursor:
+        return symbols
+    start = next((i for i, symbol in enumerate(symbols) if symbol >= cursor), 0)
+    if start:
+        print(f"[fundamentals] resuming at {symbols[start]} (prior run stopped there)", flush=True)
+    return symbols[start:] + symbols[:start]
+
+
 def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
@@ -245,6 +271,7 @@ def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
         f"| Failed persistence symbols | {fundamentals_stats.get('failed_persistence_symbols', 0)} |",
         f"| Failed fetch/store symbols | {fundamentals_stats.get('failed', 0)} |",
         f"| Bundle rows exported | {export_stats.get('rows', 0)} |",
+        f"| Next run resumes at | {coverage.get('fundamentals_resume_from') or 'start'} |",
     ]
     seed_note = _seed_source_note(coverage)
     if seed_note:
@@ -951,7 +978,12 @@ def _build_asia_bundle(
                 flush=True,
             )
     seeded_symbol_set = set(seeded_symbols)
-    fetch_symbols = [symbol for symbol in symbols if symbol not in seeded_symbol_set]
+    fetch_symbols = _rotate_to_resume_cursor(
+        provider_snapshot_service,
+        db,
+        snapshot_key,
+        [symbol for symbol in symbols if symbol not in seeded_symbol_set],
+    )
 
     print(f"Starting hybrid fundamentals refresh for {market}...", flush=True)
     fundamentals_stats, attempted_symbols, deadline_hit = _run_chunked_fundamentals_refresh(
@@ -997,6 +1029,8 @@ def _build_asia_bundle(
         "seeded_symbols": len(seeded_symbols),
         "fetch_symbols": len(fetch_symbols),
         "skipped_due_to_deadline": len(skipped_symbols) if deadline_hit else 0,
+        # Where next week's fetch starts, so the deadline rotates through the market.
+        "fundamentals_resume_from": skipped_symbols[0] if deadline_hit and skipped_symbols else None,
         "partial_run": deadline_hit or stale_universe,
         "stale_universe": stale_universe,
         **universe_seed,
