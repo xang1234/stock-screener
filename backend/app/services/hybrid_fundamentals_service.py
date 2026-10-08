@@ -405,7 +405,19 @@ class HybridFundamentalsService:
                     if progress_callback
                     else None
                 ),
+                deadline=deadline,
             )
+
+        if deadline is not None and time.monotonic() >= deadline:
+            # Batches the deadline skipped return no entry (errors do).
+            unstarted = {s for s in yfinance_symbols if s not in yf_data}
+            if unstarted:
+                symbols = [s for s in symbols if s not in unstarted]
+                yfinance_symbols = [s for s in yfinance_symbols if s not in unstarted]
+                results = {s: results[s] for s in symbols}
+                total = len(symbols)
+                if not symbols:
+                    return {}
 
         for symbol in yfinance_symbols:
             if symbol in yf_data and not yf_data[symbol].get('has_error'):

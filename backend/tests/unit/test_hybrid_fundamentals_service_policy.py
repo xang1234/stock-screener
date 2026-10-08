@@ -371,3 +371,32 @@ def test_technicals_use_stored_prices_when_too_little_budget_remains(monkeypatch
 
     svc.price_cache.get_many.assert_not_called()
     svc.price_cache.get_many_cached_only.assert_called_once_with(["600000.SS"], period="2y")
+
+
+def test_deadline_stops_yfinance_batches_and_trims_unattempted_symbols(monkeypatch):
+    # #543 review: yfinance-routed markets (HK/JP/TW) run one bulk call per chunk.
+    import app.services.hybrid_fundamentals_service as hybrid_module
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(hybrid_module.time, "monotonic", lambda: clock["now"])
+    svc = _make_service()
+    calls = {}
+
+    def fetch_batch_fundamentals(symbols, **kwargs):
+        calls.update(kwargs)
+        clock["now"] = 200.0  # the budget ran out after the first batch
+        return {symbols[0]: {"market_cap": 1.0}}
+
+    svc.bulk_fetcher.fetch_batch_fundamentals.side_effect = fetch_batch_fundamentals
+    symbols = ["0001.HK", "0002.HK", "0003.HK"]
+
+    result = svc.fetch_fundamentals_batch(
+        symbols,
+        include_technicals=False,
+        include_finviz=False,
+        market_by_symbol={symbol: "HK" for symbol in symbols},
+        deadline=100.0,
+    )
+
+    assert calls["deadline"] == 100.0
+    assert list(result) == ["0001.HK"]
