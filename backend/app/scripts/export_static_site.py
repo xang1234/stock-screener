@@ -49,6 +49,10 @@ from app.services.static_breadth_history_coordinator import (
     StaticBreadthHistoryCoordinator,
     StaticBreadthHistoryRequest,
 )
+from app.services.rs_anchor_price_coverage import (
+    RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS,
+    RS_ANCHOR_LOOKAHEAD_SESSIONS,
+)
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
 )
@@ -350,7 +354,12 @@ def _no_current_artifact_exit_message(
     )
 
 
-def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None) -> dict[str, Any]:
+def _refresh_static_daily_prices(
+    *,
+    as_of_date: date,
+    market: str | None = None,
+    repair_price_history: bool = False,
+) -> dict[str, Any]:
     service = StaticDailyPriceRefreshService(
         session_factory=SessionLocal,
         price_cache=get_price_cache(),
@@ -362,6 +371,13 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
         as_of_date=as_of_date,
         market=market,
         ensure_static_history=True,
+        # Repair mode checks every session an RS anchor can land on, not just
+        # the next few rollovers (#539).
+        rs_anchor_lookahead_sessions=(
+            RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS
+            if repair_price_history
+            else RS_ANCHOR_LOOKAHEAD_SESSIONS
+        ),
     )
 
 
@@ -775,6 +791,7 @@ def _run_daily_refresh(
     rs_formula_version_by_market: Mapping[str, str] | None = None,
     breadth_contributor_metadata_dir: Path | None = None,
     breadth_contributor_metadata_restore_status: str | None = None,
+    repair_price_history: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
         _enrich_feature_run_with_ibd_metadata,
@@ -835,6 +852,7 @@ def _run_daily_refresh(
             price_refresh_results[selected_market] = _refresh_static_daily_prices(
                 as_of_date=as_of_by_market[selected_market],
                 market=selected_market,
+                repair_price_history=repair_price_history,
             )
         results["price_refresh"] = (
             price_refresh_results[selected_markets[0]]
@@ -1377,6 +1395,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Do not delete the output directory before exporting.",
     )
     parser.add_argument(
+        "--repair-price-history",
+        action="store_true",
+        help=(
+            "Check and repair every RS anchor session in the 252-session window "
+            "for --market, not only the next rollovers (#539)."
+        ),
+    )
+    parser.add_argument(
         "--rrg-history-dir",
         help="Optional directory holding the market's rolling RRG history state.",
     )
@@ -1442,6 +1468,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(
             "--breadth-contributor-metadata-dir requires --refresh-daily"
         )
+    if args.repair_price_history and not (args.market and args.refresh_daily):
+        raise SystemExit("--repair-price-history requires --market and --refresh-daily")
     if args.rs_formula_version and (args.combine_artifacts_dir or not args.market):
         raise SystemExit("--rs-formula-version is limited to single-market exports")
 
@@ -1506,6 +1534,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 breadth_contributor_metadata_restore_status=(
                     args.breadth_contributor_metadata_restore_status
                 ),
+                repair_price_history=args.repair_price_history,
             )
             refresh_warnings.extend(daily_refresh_warnings)
             print("Daily refresh complete:")

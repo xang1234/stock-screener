@@ -1035,7 +1035,7 @@ def test_run_daily_refresh_skips_snapshot_when_market_rs_benchmark_anchor_missin
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append(f"price:{market}") or {"status": "completed"},
+        lambda *, as_of_date, market=None, **_kwargs: calls.append(f"price:{market}") or {"status": "completed"},
     )
     monkeypatch.setattr(
         export_script,
@@ -1155,7 +1155,7 @@ def test_run_daily_refresh_continues_eligible_market_when_peer_market_rs_is_not_
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append(f"price:{market}")
+        lambda *, as_of_date, market=None, **_kwargs: calls.append(f"price:{market}")
         or {"status": "completed"},
     )
 
@@ -1266,7 +1266,7 @@ def test_run_daily_refresh_raises_hard_market_rs_failure(
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"status": "completed"},
+        lambda *, as_of_date, market=None, **_kwargs: {"status": "completed"},
     )
     monkeypatch.setattr(
         export_script,
@@ -1322,7 +1322,7 @@ def test_run_daily_refresh_reports_every_hard_market_rs_failure(
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"status": "completed"},
+        lambda *, as_of_date, market=None, **_kwargs: {"status": "completed"},
     )
     monkeypatch.setattr(
         export_script,
@@ -1373,7 +1373,7 @@ def test_run_daily_refresh_treats_explicit_legacy_rs_selection_as_ready(
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append(f"price:{market}")
+        lambda *, as_of_date, market=None, **_kwargs: calls.append(f"price:{market}")
         or {"status": "completed"},
     )
     monkeypatch.setattr(
@@ -1510,7 +1510,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -1590,7 +1590,7 @@ def test_run_daily_refresh_uses_resolved_tracked_ibd_csv_path(monkeypatch, tmp_p
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -1634,7 +1634,7 @@ def test_run_daily_refresh_computes_market_exposure_before_snapshot(monkeypatch)
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append(f"price:{market}:{as_of_date.isoformat()}")
+        lambda *, as_of_date, market=None, **_kwargs: calls.append(f"price:{market}:{as_of_date.isoformat()}")
         or {"task": "price_refresh"},
     )
     monkeypatch.setattr(
@@ -1694,7 +1694,7 @@ def test_run_daily_refresh_skips_unsupported_breadth_and_builds_snapshot(
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append(
+        lambda *, as_of_date, market=None, **_kwargs: calls.append(
             f"price:{market}:{as_of_date.isoformat()}"
         )
         or {"task": "price_refresh"},
@@ -1773,7 +1773,7 @@ def test_run_daily_refresh_skips_snapshot_when_market_exposure_errors(monkeypatc
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append(f"price:{market}:{as_of_date.isoformat()}")
+        lambda *, as_of_date, market=None, **_kwargs: calls.append(f"price:{market}:{as_of_date.isoformat()}")
         or {"task": "price_refresh"},
     )
     monkeypatch.setattr(
@@ -1888,7 +1888,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -1961,7 +1961,7 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -2014,7 +2014,7 @@ def test_run_daily_refresh_warns_when_default_market_run_id_is_missing(monkeypat
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -2062,7 +2062,7 @@ def test_run_daily_refresh_does_not_repoint_default_pointer_for_unpublished_us_r
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -2135,7 +2135,7 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -2172,7 +2172,7 @@ def test_run_daily_refresh_limits_work_to_selected_market(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -2248,7 +2248,7 @@ def test_run_daily_refresh_uses_per_market_trading_date_for_in(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {
+        lambda *, as_of_date, market=None, **_kwargs: {
             "task": "price_refresh",
             "market": market,
             "as_of_date": as_of_date.isoformat(),
@@ -2300,7 +2300,7 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -2383,7 +2383,7 @@ def test_run_daily_refresh_builds_snapshot_before_group_rank_backfill_and_reenri
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -2486,7 +2486,7 @@ def test_run_daily_refresh_skips_reenrich_when_group_rank_backfill_errored(monke
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh"},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh"},
     )
     monkeypatch.setattr(
         export_script,
@@ -2563,7 +2563,7 @@ def test_run_daily_refresh_quarantines_fresh_deferred_snapshot_when_group_rank_b
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh"},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh"},
     )
     monkeypatch.setattr(
         export_script,
@@ -2634,7 +2634,7 @@ def test_run_daily_refresh_skips_reenrich_when_snapshot_not_ready(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh"},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh"},
     )
     monkeypatch.setattr(
         export_script,
@@ -2687,7 +2687,7 @@ def test_run_daily_refresh_warns_when_non_default_market_snapshot_is_not_publish
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market=None: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+        lambda *, as_of_date, market=None, **_kwargs: {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,

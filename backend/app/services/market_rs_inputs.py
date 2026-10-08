@@ -21,6 +21,7 @@ from app.services.market_calendar_service import MarketCalendarService
 from app.services.market_rs_result_contract import (
     MARKET_RS_REASON_BENCHMARK_ADJUSTED_ANCHOR_MISSING,
     MARKET_RS_REASON_CURRENT_ADJUSTED_PRICE_COVERAGE_BELOW_THRESHOLD,
+    MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
 )
 from app.services.point_in_time_universe_service import (
     PointInTimeUniverseService,
@@ -34,6 +35,12 @@ EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
 # Dormant symbols leave the current price coverage denominator only while they
 # are at most this share of the universe (US: about 3% on 2026-10-02, #478).
 MAX_DORMANT_COVERAGE_SHARE = 0.05
+# A history gap is a currently priced symbol missing an interior RS anchor
+# although it has older history (#539: AU lost RS for 1,695 of 2,101 symbols to
+# one missing session). Above this share of currently priced symbols, ranking
+# the remainder would publish a collapsed market, so the run fails instead.
+MAX_HISTORY_ANCHOR_GAP_SHARE = 0.25
+HISTORY_GAP_SAMPLE_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -312,6 +319,14 @@ class MarketRsInputLoader:
                 for horizon, offset in HORIZON_SESSIONS.items()
             }
 
+        self._reject_history_anchor_gaps(
+            db,
+            exclusions=exclusions,
+            anchors=anchors,
+            current_available=current_available,
+            context=context,
+        )
+
         return MarketRsInputs(
             market=normalized,
             as_of_date=as_of_date,
@@ -322,4 +337,62 @@ class MarketRsInputLoader:
             excess_returns_by_symbol=excess_returns_by_symbol,
             exclusions=exclusions,
             current_price_coverage=current_price_coverage,
+        )
+
+    @staticmethod
+    def _reject_history_anchor_gaps(
+        db: Session,
+        *,
+        exclusions: dict[str, str],
+        anchors: dict[int, date],
+        current_available: int,
+        context: dict[str, object],
+    ) -> None:
+        # Exclusion reasons are missing_adjusted_<offset>_session_anchor.
+        missing_anchor_by_symbol = {
+            symbol: anchors[int(reason.split("_")[2])]
+            for symbol, reason in exclusions.items()
+            if reason.split("_")[2].isdigit()
+        }
+        if not missing_anchor_by_symbol:
+            return
+        first_by_symbol: dict[str, date] = {}
+        symbols = tuple(missing_anchor_by_symbol)
+        for start in range(0, len(symbols), 500):
+            first_by_symbol.update(
+                db.query(StockPrice.symbol, func.min(StockPrice.date))
+                .filter(
+                    StockPrice.symbol.in_(symbols[start : start + 500]),
+                    StockPrice.adj_close.isnot(None),
+                    StockPrice.adj_close > 0,
+                )
+                .group_by(StockPrice.symbol)
+                .all()
+            )
+        # Short histories (first price after the anchor) are expected exclusions.
+        gap_symbols = sorted(
+            symbol
+            for symbol, anchor in missing_anchor_by_symbol.items()
+            if first_by_symbol.get(symbol) is not None
+            and first_by_symbol[symbol] < anchor
+        )
+        if len(gap_symbols) <= MAX_HISTORY_ANCHOR_GAP_SHARE * current_available:
+            return
+        count_by_anchor: dict[str, int] = {}
+        for symbol in gap_symbols:
+            key = missing_anchor_by_symbol[symbol].isoformat()
+            count_by_anchor[key] = count_by_anchor.get(key, 0) + 1
+        raise MarketRsInputUnavailable(
+            f"{len(gap_symbols)} of {current_available} currently priced symbols "
+            "are missing an interior RS anchor session despite older history",
+            reason_code=MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
+            diagnostics={
+                "history_gap_symbol_count": len(gap_symbols),
+                "history_gap_share": len(gap_symbols) / current_available,
+                "max_history_gap_share": MAX_HISTORY_ANCHOR_GAP_SHARE,
+                "history_gap_count_by_anchor": dict(sorted(count_by_anchor.items())),
+                "history_gap_samples": gap_symbols[:HISTORY_GAP_SAMPLE_LIMIT],
+                "current_prices_available": current_available,
+            },
+            **context,
         )

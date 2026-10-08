@@ -7,6 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.services.rs_anchor_price_coverage import (
+    RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS,
+    RS_ANCHOR_LOOKAHEAD_SESSIONS,
+)
 from app.scripts import export_static_site
 from app.services.market_exposure_service import EXPOSURE_BACKFILL_DAYS
 from app.services.static_market_publish_policy import StaticMarketRsArtifactState
@@ -64,7 +68,23 @@ def test_refresh_static_daily_prices_uses_exposure_lookback_for_history_hydratio
         "as_of_date": date(2026, 7, 31),
         "market": "US",
         "ensure_static_history": True,
+        "rs_anchor_lookahead_sessions": RS_ANCHOR_LOOKAHEAD_SESSIONS,
     }
+
+    export_static_site._refresh_static_daily_prices(
+        as_of_date=date(2026, 7, 31),
+        market="AU",
+        repair_price_history=True,
+    )
+
+    assert refresh_kwargs["rs_anchor_lookahead_sessions"] == (
+        RS_ANCHOR_FULL_WINDOW_LOOKAHEAD_SESSIONS
+    )
+
+
+def test_repair_price_history_requires_a_single_market_daily_refresh():
+    with pytest.raises(SystemExit, match="--repair-price-history requires"):
+        export_static_site.main(["--repair-price-history", "--refresh-daily"])
 
 
 def test_static_daily_refresh_ensures_market_breadth_before_exposure(monkeypatch):
@@ -89,7 +109,7 @@ def test_static_daily_refresh_ensures_market_breadth_before_exposure(monkeypatch
     monkeypatch.setattr(
         export_static_site,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market: {"status": "completed", "market": market},
+        lambda *, as_of_date, market, **_kwargs: {"status": "completed", "market": market},
     )
     monkeypatch.setattr(
         export_static_site,
@@ -247,7 +267,7 @@ def test_static_daily_refresh_rewinds_a_session_when_market_rs_is_not_current(
     monkeypatch.setattr(
         export_static_site,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market: {"status": "completed", "market": market},
+        lambda *, as_of_date, market, **_kwargs: {"status": "completed", "market": market},
     )
 
     def prepare_static_rs(*, market, as_of_date, formula_version):
@@ -352,7 +372,7 @@ def test_static_daily_refresh_skips_exposure_when_breadth_history_errors(monkeyp
     monkeypatch.setattr(
         export_static_site,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market: {"status": "completed", "market": market},
+        lambda *, as_of_date, market, **_kwargs: {"status": "completed", "market": market},
     )
     monkeypatch.setattr(
         export_static_site,
@@ -455,7 +475,7 @@ def test_static_daily_refresh_quarantines_breadth_history_exceptions(monkeypatch
     monkeypatch.setattr(
         export_static_site,
         "_refresh_static_daily_prices",
-        lambda *, as_of_date, market: {"status": "completed", "market": market},
+        lambda *, as_of_date, market, **_kwargs: {"status": "completed", "market": market},
     )
     monkeypatch.setattr(
         export_static_site,
