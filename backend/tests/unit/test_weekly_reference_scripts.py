@@ -992,12 +992,15 @@ def _make_universe_row(symbol: str, market: str = "CN") -> SimpleNamespace:
 @pytest.mark.parametrize(
     ("prior_cursor", "first_chunk", "resume_from"),
     [
-        (None, ["600000.SS", "600001.SS"], "000001.SZ"),
+        # Fetched in sorted order whatever order the database returned.
+        (None, ["000001.SZ", "600000.SS"], "600001.SS"),
         # The prior run stopped before 600001.SS: start there and wrap around,
         # so a deadline-bound market refreshes every symbol over a few weeks.
         ("600001.SS", ["600001.SS", "000001.SZ"], "600000.SS"),
+        # A cursor that has since delisted resumes at its successor.
+        ("600000.SX", ["600001.SS", "000001.SZ"], "600000.SS"),
         # A cursor past every symbol wraps to the start.
-        ("ZZZ", ["600000.SS", "600001.SS"], "000001.SZ"),
+        ("ZZZ", ["000001.SZ", "600000.SS"], "600001.SS"),
     ],
 )
 def test_build_weekly_reference_bundle_chunked_deadline_force_publishes(
@@ -1699,7 +1702,7 @@ def test_build_weekly_reference_bundle_resumes_partial_seed_by_skipping_cached_s
 
     assert build_script.main() == 0
 
-    assert fetch_calls == [["600001.SS", "000001.SZ"]]
+    assert fetch_calls == [["000001.SZ", "600001.SS"]]
     publish_kwargs = publish_calls[0]
     assert publish_kwargs["coverage_stats"]["seeded_symbols"] == 1
     assert publish_kwargs["coverage_stats"]["fetch_symbols"] == 2
@@ -1820,7 +1823,7 @@ def test_build_weekly_reference_bundle_does_not_resume_full_coverage_partial_see
 
     assert build_script.main() == 0
 
-    assert fetch_calls == [["600000.SS", "600001.SS"], ["000001.SZ"]]
+    assert fetch_calls == [["000001.SZ", "600000.SS"], ["600001.SS"]]
     publish_kwargs = publish_calls[0]
     assert publish_kwargs["coverage_stats"]["seeded_symbols"] == 0
     assert publish_kwargs["coverage_stats"]["fetch_symbols"] == 3

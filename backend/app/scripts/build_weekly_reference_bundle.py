@@ -224,9 +224,10 @@ def _rotate_to_resume_cursor(
 
     A market whose full fetch outlasts the runtime budget (CN) otherwise
     restarts at the first symbol every week and never refreshes the tail.
-    ``symbols`` is sorted, so a cursor that has since delisted still resumes
-    at its successor.
+    Sorted here, not by the database collation, so the ``>=`` comparison holds
+    and a cursor that has since delisted resumes at its successor.
     """
+    symbols = sorted(symbols)
     published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     try:
         cursor = json.loads(getattr(published_run, "coverage_stats_json", None) or "{}").get(
@@ -270,6 +271,7 @@ def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
         f"| Failed persistence symbols | {fundamentals_stats.get('failed_persistence_symbols', 0)} |",
         f"| Failed fetch/store symbols | {fundamentals_stats.get('failed', 0)} |",
         f"| Bundle rows exported | {export_stats.get('rows', 0)} |",
+        f"| Next run resumes at | {coverage.get('fundamentals_resume_from') or 'start'} |",
     ]
     seed_note = _seed_source_note(coverage)
     if seed_note:
