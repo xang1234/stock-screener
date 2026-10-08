@@ -493,6 +493,7 @@ class ThemeMetrics(Base):
     __table_args__ = (
         UniqueConstraint("theme_cluster_id", "date", name="uix_theme_metrics_date"),
         Index("idx_theme_metrics_date", "theme_cluster_id", "date"),
+        Index("idx_theme_metrics_pipeline_updated", "pipeline", "updated_at"),
         Index("idx_theme_rank", "date", "rank"),
         Index("idx_theme_metrics_pipeline_date", "pipeline", "date"),
     )

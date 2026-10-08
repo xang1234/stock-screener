@@ -25,6 +25,7 @@ from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
 from app.models.theme import (
+    ContentItemPipelineState,
     ThemeAlert,
     ThemeCluster,
     ThemeMergeSuggestion,
@@ -146,6 +147,7 @@ def test_resolve_themes_source_revision_filters_pipeline_runs_to_pipeline_or_glo
             ThemePipelineRun.__table__,
             ThemeAlert.__table__,
             ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
         ],
     )
     Session = sessionmaker(bind=engine)
@@ -182,6 +184,7 @@ def test_resolve_themes_source_revision_changes_when_an_alert_is_dismissed_or_re
             ThemePipelineRun.__table__,
             ThemeAlert.__table__,
             ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
         ],
     )
     Session = sessionmaker(bind=engine)
@@ -217,6 +220,7 @@ def test_resolve_themes_source_revision_changes_on_a_same_day_metrics_refresh():
             ThemePipelineRun.__table__,
             ThemeAlert.__table__,
             ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
         ],
     )
     Session = sessionmaker(bind=engine)
@@ -234,7 +238,7 @@ def test_resolve_themes_source_revision_changes_on_a_same_day_metrics_refresh():
         db.commit()
         before = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
 
-        # Equal and opposite moves keep any count/sum aggregate unchanged
+        # Equal and opposite moves keep any count/sum aggregate unchanged.
         # while the rankings flip.
         first.momentum_score = 61.0
         second.momentum_score = 49.0
@@ -869,3 +873,48 @@ def test_force_forget_snapshot_tables_removes_snapshot_schema_entries():
         }
 
     assert names == set()
+
+
+def test_resolve_themes_source_revision_changes_when_pipeline_state_is_updated():
+    """Extraction can change the observability payload through pipeline state
+    alone (no mention, or failed_terminal); that must turn the snapshot stale
+    until the queued rebuild (#526) runs."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ThemeMetrics.__table__,
+            ThemeCluster.__table__,
+            ThemePipelineRun.__table__,
+            ThemeAlert.__table__,
+            ThemeMergeSuggestion.__table__,
+            ContentItemPipelineState.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
+
+    with Session() as db:
+        state = ContentItemPipelineState(
+            content_item_id=1,
+            pipeline="technical",
+            status="pending",
+            updated_at=datetime(2026, 3, 18, 9, 0, 0),
+        )
+        db.add(state)
+        db.commit()
+        before = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        state.status = "failed_terminal"
+        state.updated_at = datetime(2026, 3, 18, 9, 5, 0)
+        db.commit()
+        after = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+    assert before != after
+
+
+def test_theme_metrics_index_serves_the_bootstrap_revision_lookup():
+    indexed = [[column.name for column in index.columns] for index in ThemeMetrics.__table__.indexes]
+
+    assert ["pipeline", "updated_at"] in indexed

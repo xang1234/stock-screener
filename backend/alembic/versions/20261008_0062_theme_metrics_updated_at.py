@@ -20,7 +20,14 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
+    # Serves max(updated_at) per pipeline on every themes bootstrap read.
+    op.create_index(
+        "idx_theme_metrics_pipeline_updated",
+        "theme_metrics",
+        ["pipeline", "updated_at"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("idx_theme_metrics_pipeline_updated", table_name="theme_metrics")
     op.drop_column("theme_metrics", "updated_at")

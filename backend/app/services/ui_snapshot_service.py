@@ -668,6 +668,10 @@ class UISnapshotService:
         latest_metrics_update = db.query(func.max(ThemeMetrics.updated_at)).filter(
             ThemeMetrics.pipeline == pipeline
         ).scalar()
+        # Extraction can change the observability payload through item state alone.
+        latest_item_state = db.query(func.max(ContentItemPipelineState.updated_at)).filter(
+            ContentItemPipelineState.pipeline == pipeline
+        ).scalar()
         latest_cluster_update = db.query(func.max(ThemeCluster.updated_at)).filter(ThemeCluster.pipeline == pipeline).scalar()
         latest_pipeline_run = db.query(func.max(ThemePipelineRun.completed_at)).filter(
             (ThemePipelineRun.pipeline == pipeline) | (ThemePipelineRun.pipeline.is_(None))
@@ -698,6 +702,7 @@ class UISnapshotService:
             str(open_alerts),
             str(unread_alerts),
             latest_metrics_update.isoformat() if latest_metrics_update else "none",
+            latest_item_state.isoformat() if latest_item_state else "none",
         ]
         return "|".join(parts)
 
