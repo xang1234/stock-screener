@@ -181,6 +181,10 @@ def update_content_source(
         db.rollback()
         raise
 
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
+
+    # Pipeline reconciliation and activity change item state and failed counts.
+    queue_themes_bootstrap_publish()
     return ContentSourceResponse.model_validate(existing)
 
 
@@ -197,7 +201,9 @@ def delete_content_source(
 
     source.is_active = False
     db.commit()
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
 
+    queue_themes_bootstrap_publish()
     return {"status": "deactivated", "source": source.name}
 
 

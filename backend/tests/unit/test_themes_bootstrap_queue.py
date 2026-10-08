@@ -98,3 +98,42 @@ def test_bootstrap_publish_tasks_skip_the_result_backend(task_path):
     task = getattr(importlib.import_module(module_name), task_name)
 
     assert task.ignore_result is True
+
+
+def test_changing_feed_pipelines_queues_a_bootstrap_rebuild(monkeypatch):
+    # Reconciliation rewrites item pipeline state, which is part of the themes
+    # source revision; without a rebuild the snapshot stays stale.
+    from unittest.mock import MagicMock
+
+    from app.api.v1 import themes_content_sources as api
+    from app.schemas.theme import ContentSourceUpdate
+
+    existing = MagicMock(pipelines=["technical"])
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = existing
+    monkeypatch.setattr(api, "_reject_social_owned", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api, "reconcile_source_pipeline_change", lambda **_kwargs: {})
+    monkeypatch.setattr(api.ContentSourceResponse, "model_validate", lambda _obj: None)
+
+    with patch("app.tasks.theme_discovery_tasks.queue_themes_bootstrap_publish") as queue:
+        api.update_content_source(
+            3, ContentSourceUpdate(pipelines=["technical", "fundamental"]), db=db
+        )
+
+    db.commit.assert_called_once()
+    queue.assert_called_once_with()
+
+
+def test_deactivating_a_feed_queues_a_bootstrap_rebuild(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.api.v1 import themes_content_sources as api
+
+    db = MagicMock()
+    monkeypatch.setattr(api, "_reject_social_owned", lambda *_args, **_kwargs: None)
+
+    with patch("app.tasks.theme_discovery_tasks.queue_themes_bootstrap_publish") as queue:
+        api.delete_content_source(3, db=db)
+
+    db.commit.assert_called_once()
+    queue.assert_called_once_with()
