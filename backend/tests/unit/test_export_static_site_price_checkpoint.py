@@ -181,3 +181,31 @@ def test_refresh_static_daily_prices_passes_the_deadline_to_the_service(monkeypa
     )
 
     assert init_kwargs["deadline"] == 99.0
+
+
+def test_deadline_counts_from_the_job_start_epoch_when_given(monkeypatch, tmp_path):
+    refresh_kwargs: dict = {}
+
+    def run_daily_refresh(**kwargs):
+        refresh_kwargs.update(kwargs)
+        raise RuntimeError("stop after capturing the refresh arguments")
+
+    monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(export_script, "_run_daily_refresh", run_daily_refresh)
+    job_started = time.time() - 60  # setup and the checkpoint import took a minute
+
+    with pytest.raises(RuntimeError, match="stop after"):
+        export_script.main(
+            _argv(
+                tmp_path,
+                "--price-stage-deadline-minutes",
+                "2",
+                "--price-checkpoint-dir",
+                str(tmp_path / "checkpoint"),
+                "--price-stage-start-epoch",
+                str(job_started),
+            )
+        )
+
+    remaining = refresh_kwargs["price_stage_deadline"] - time.monotonic()
+    assert 50 < remaining <= 61

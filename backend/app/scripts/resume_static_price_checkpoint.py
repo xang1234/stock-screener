@@ -27,7 +27,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare_runtime()
     as_of_date = _resolve_latest_completed_trading_date(market)
     with SessionLocal() as db:
-        result = resume_price_checkpoint(db, market=market, as_of_date=as_of_date)
+        try:
+            result = resume_price_checkpoint(db, market=market, as_of_date=as_of_date)
+        except Exception as exc:  # e.g. a database error mid-import
+            # Falling back to the plain path beats failing the market's job.
+            db.rollback()
+            result = {"status": "invalid", "reason": f"{type(exc).__name__}: {exc}"}
     print(
         f"[price checkpoint] {market} {as_of_date.isoformat()} "
         f"checkpoint status={result.get('status')} {result}",

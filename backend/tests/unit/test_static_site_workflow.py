@@ -1497,6 +1497,10 @@ def test_price_stage_checkpoint_is_opt_in_per_market() -> None:
 def test_checkpointed_export_uploads_data_before_manifest_then_fails() -> None:
     export = _build_market_step("Export market static data bundle")
     assert "--price-stage-deadline-minutes" in export["run"]
+    # The deadline counts from the job's start, recorded by its first step.
+    assert '--price-stage-start-epoch "$JOB_STARTED_EPOCH"' in export["run"]
+    first = _site_workflow()["jobs"]["build-market"]["steps"][0]
+    assert first["name"] == "Record job start" and "JOB_STARTED_EPOCH" in first["run"]
     assert 'if [ "$status" -eq 80 ]; then' in export["run"]
     assert 'echo "price_checkpointed=true" >> "$GITHUB_OUTPUT"' in export["run"]
 

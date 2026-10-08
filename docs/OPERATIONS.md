@@ -375,7 +375,7 @@ The JSON map is per Market; omitted Markets remain on `balanced-horizon-percenti
 A static market job loses every fetched price when it hits its `timeout-minutes`, because the runner's database is discarded. Markets listed in the repository variable `STATIC_PRICE_STAGE_DEADLINE_MINUTES` checkpoint the price stage instead (#502). Markets not listed behave as before.
 
 ```bash
-# Opt US in: stop the price stage 210 minutes after the export starts.
+# Opt US in: stop the price stage 210 minutes after the job starts.
 gh variable set STATIC_PRICE_STAGE_DEADLINE_MINUTES --repo xang1234/stock-screener --body '{"US": 210}'
 # Roll back: delete it. Leftover checkpoint assets are ignored.
 gh variable delete STATIC_PRICE_STAGE_DEADLINE_MINUTES --repo xang1234/stock-screener
@@ -396,7 +396,7 @@ When the deadline passes, the following happens:
 
 The completed daily-import state is not advanced. The refresh then fetches only the symbols still stale.
 
-A checkpoint never becomes `daily-price-latest-<market>.json`, a market artifact or a publisher wake-up; only a later complete export does. The step log prints `checkpoint status=imported|missing|incompatible|invalid`. Anything other than `imported` leaves the database as seeded, and the run takes the normal path.
+A checkpoint never becomes `daily-price-latest-<market>.json` or a market artifact; only a later complete export does. The failed run still wakes the publisher, which keeps serving the last good artifact. The step log prints `checkpoint status=imported|missing|incompatible|invalid`. Anything other than `imported` leaves the database as seeded, and the run takes the normal path.
 
 ## Market Calendar Maintenance
 

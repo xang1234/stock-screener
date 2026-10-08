@@ -37,3 +37,26 @@ def test_resume_reports_the_status_for_the_exports_session(monkeypatch, capsys, 
 
     assert calls == [{"market": "US", "as_of_date": date(2026, 10, 7)}]
     assert f"checkpoint status={status}" in capsys.readouterr().out
+
+
+def test_an_unexpected_resume_error_is_reported_and_never_fails_the_job(monkeypatch, capsys):
+    rollbacks = []
+
+    class _Session(_FakeSession):
+        def rollback(self):
+            rollbacks.append(True)
+
+    def boom(db, **kwargs):
+        raise RuntimeError("database connection lost mid-import")
+
+    monkeypatch.setattr(resume_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(resume_script, "SessionLocal", lambda: _Session())
+    monkeypatch.setattr(
+        resume_script, "_resolve_latest_completed_trading_date", lambda market: date(2026, 10, 7)
+    )
+    monkeypatch.setattr(resume_script, "resume_price_checkpoint", boom)
+
+    assert resume_script.main(["--market", "US"]) == 0
+
+    assert rollbacks == [True]
+    assert "checkpoint status=invalid" in capsys.readouterr().out

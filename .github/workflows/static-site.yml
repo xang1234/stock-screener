@@ -243,6 +243,9 @@ jobs:
       PRICE_STAGE_DEADLINE_MINUTES: ${{ fromJSON(vars.STATIC_PRICE_STAGE_DEADLINE_MINUTES || '{}')[matrix.market] || '' }}
 
     steps:
+      - name: Record job start
+        run: echo "JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
@@ -491,6 +494,7 @@ jobs:
           if [ -n "$PRICE_STAGE_DEADLINE_MINUTES" ]; then
             checkpoint_args=(
               --price-stage-deadline-minutes "$PRICE_STAGE_DEADLINE_MINUTES"
+              --price-stage-start-epoch "$JOB_STARTED_EPOCH"
               --price-checkpoint-dir /tmp/price-checkpoint
             )
           fi

@@ -1483,6 +1483,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--price-stage-start-epoch",
+        type=float,
+        default=None,
+        help=(
+            "Unix time the job started; the price-stage deadline counts from it "
+            "so setup and the checkpoint import spend the same budget as the "
+            "job timeout. Defaults to this process's start."
+        ),
+    )
+    parser.add_argument(
         "--price-checkpoint-dir",
         default=None,
         help="Directory for the price-stage checkpoint bundle and manifest.",
@@ -1567,11 +1577,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.price_checkpoint_dir and not (args.market and args.refresh_daily):
         raise SystemExit("--price-checkpoint-dir requires --market and --refresh-daily")
-    price_stage_deadline = (
-        started_at + args.price_stage_deadline_minutes * 60.0
-        if args.price_stage_deadline_minutes is not None
-        else None
-    )
+    price_stage_deadline = None
+    if args.price_stage_deadline_minutes is not None:
+        elapsed = (
+            max(0.0, time.time() - args.price_stage_start_epoch)
+            if args.price_stage_start_epoch is not None
+            else time.monotonic() - started_at
+        )
+        price_stage_deadline = (
+            time.monotonic() - elapsed + args.price_stage_deadline_minutes * 60.0
+        )
     if args.repair_price_history and not (args.market and args.refresh_daily):
         raise SystemExit("--repair-price-history requires --market and --refresh-daily")
     if args.rs_formula_version and (args.combine_artifacts_dir or not args.market):
