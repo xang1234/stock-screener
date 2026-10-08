@@ -315,3 +315,35 @@ class TestPhase3PolicyFiltering:
         svc.bulk_fetcher.fetch_fundamentals_parallel.assert_not_called()
         svc.finviz_service.get_finviz_only_fields_batch.assert_not_called()
         assert result["920118.BJ"]["market"] == "CN"
+
+
+def test_deadline_stops_native_first_fetches_mid_batch(monkeypatch):
+    # #522: a slow CN batch must not run past the weekly job's soft deadline.
+    import app.services.hybrid_fundamentals_service as hybrid_module
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(hybrid_module.time, "monotonic", lambda: clock["now"])
+    svc = _make_service()
+    data_source = _make_cn_data_source()
+    original = data_source.get_combined_data.side_effect
+
+    def slow(symbol, market=None):
+        clock["now"] += 60.0
+        return original(symbol, market=market)
+
+    data_source.get_combined_data.side_effect = slow
+    svc._data_source_service = data_source
+    symbols = ["600000.SS", "600001.SS", "600002.SS", "600003.SS"]
+
+    result = svc.fetch_fundamentals_batch(
+        symbols,
+        include_technicals=True,
+        include_finviz=False,
+        market_by_symbol={symbol: "CN" for symbol in symbols},
+        deadline=100.0,
+    )
+
+    # Two fetches (t=60, t=120); the third is not started after the deadline.
+    assert list(result) == ["600000.SS", "600001.SS"]
+    assert data_source.get_combined_data.call_count == 2
+    svc.price_cache.get_many.assert_called_once_with(["600000.SS", "600001.SS"], period="2y")

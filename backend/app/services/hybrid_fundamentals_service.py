@@ -190,6 +190,40 @@ class HybridFundamentalsService:
                     merged[key] = value
         return merged
 
+    def _fetch_native_first_fundamentals(
+        self,
+        symbols: List[str],
+        results: Dict[str, Dict],
+        market_by_symbol: Optional[Dict[str, str]],
+        deadline: Optional[float],
+    ) -> set:
+        """Fetch per-symbol provider-plan fundamentals into ``results``.
+
+        ``deadline`` is a ``time.monotonic()`` instant; no symbol is started
+        after it (#522: a slow CN batch overran the weekly job's soft budget
+        until the runner cancelled it). Returns the symbols not started.
+        """
+        if not symbols:
+            return set()
+        logger.info(
+            "Phase 1a: Fetching native-first fundamentals via provider data plans for %d symbols...",
+            len(symbols),
+        )
+        for index, symbol in enumerate(symbols):
+            if deadline is not None and time.monotonic() >= deadline:
+                return set(symbols[index:])
+            plan = self._fundamentals_plan_for_symbol(symbol, market_by_symbol)
+            try:
+                native_data = self._fetch_plan_routed_fundamentals_payload(
+                    symbol,
+                    market=plan.market,
+                )
+                if native_data:
+                    results[symbol].update(native_data)
+            except Exception as exc:  # pragma: no cover - provider/network variability
+                logger.warning("Native-first fundamentals fetch failed for %s: %s", symbol, exc)
+        return set()
+
     def _fetch_cn_fundamentals_payload(self, symbol: str) -> Dict[str, Any]:
         """Fetch CN fundamentals through AKShare/BaoStock-aware routing."""
         return self._fetch_plan_routed_fundamentals_payload(
@@ -265,6 +299,7 @@ class HybridFundamentalsService:
         include_finviz: bool = None,
         progress_callback=None,
         market_by_symbol: Optional[Dict[str, str]] = None,
+        deadline: Optional[float] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals for multiple symbols using hybrid approach.
@@ -309,22 +344,20 @@ class HybridFundamentalsService:
             )
         ]
 
-        if data_source_symbols:
-            logger.info(
-                "Phase 1a: Fetching native-first fundamentals via provider data plans for %d symbols...",
-                len(data_source_symbols),
+        unstarted = self._fetch_native_first_fundamentals(
+            data_source_symbols, results, market_by_symbol, deadline
+        )
+        if unstarted or (deadline is not None and time.monotonic() >= deadline):
+            unstarted |= set(yfinance_symbols)
+            symbols = [s for s in symbols if s not in unstarted]
+            yfinance_symbols = [s for s in yfinance_symbols if s not in unstarted]
+            results = {s: results[s] for s in symbols}
+            total = len(symbols)
+            logger.warning(
+                "Fundamentals deadline reached: %d symbols not started", len(unstarted)
             )
-            for symbol in data_source_symbols:
-                plan = self._fundamentals_plan_for_symbol(symbol, market_by_symbol)
-                try:
-                    native_data = self._fetch_plan_routed_fundamentals_payload(
-                        symbol,
-                        market=plan.market,
-                    )
-                    if native_data:
-                        results[symbol].update(native_data)
-                except Exception as exc:  # pragma: no cover - provider/network variability
-                    logger.warning("Native-first fundamentals fetch failed for %s: %s", symbol, exc)
+            if not symbols:
+                return {}
 
         # ============================================================
         # Phase 1: Batch fetch yfinance fundamentals (~25 min for 7000)
@@ -517,6 +550,7 @@ class HybridFundamentalsService:
         finviz_workers: Optional[int] = None,
         progress_callback=None,
         market_by_symbol: Optional[Dict[str, str]] = None,
+        deadline: Optional[float] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals with parallel finviz fetching for faster performance.
@@ -562,22 +596,20 @@ class HybridFundamentalsService:
                 routing_policy.PROVIDER_YFINANCE
             )
         ]
-        if data_source_symbols:
-            logger.info(
-                "Phase 1a: Fetching native-first fundamentals via provider data plans for %d symbols...",
-                len(data_source_symbols),
+        unstarted = self._fetch_native_first_fundamentals(
+            data_source_symbols, results, market_by_symbol, deadline
+        )
+        if unstarted or (deadline is not None and time.monotonic() >= deadline):
+            unstarted |= set(yfinance_symbols)
+            symbols = [s for s in symbols if s not in unstarted]
+            yfinance_symbols = [s for s in yfinance_symbols if s not in unstarted]
+            results = {s: results[s] for s in symbols}
+            total = len(symbols)
+            logger.warning(
+                "Fundamentals deadline reached: %d symbols not started", len(unstarted)
             )
-            for symbol in data_source_symbols:
-                plan = self._fundamentals_plan_for_symbol(symbol, market_by_symbol)
-                try:
-                    native_data = self._fetch_plan_routed_fundamentals_payload(
-                        symbol,
-                        market=plan.market,
-                    )
-                    if native_data:
-                        results[symbol].update(native_data)
-                except Exception as exc:  # pragma: no cover - provider/network variability
-                    logger.warning("Native-first fundamentals fetch failed for %s: %s", symbol, exc)
+            if not symbols:
+                return {}
 
         logger.info("Phase 1: Fetching yfinance fundamentals...")
         yf_data = {}
