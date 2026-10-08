@@ -28,7 +28,7 @@ on:
       max_runtime_minutes:
         description: >-
           Per-market deadline in minutes for the fundamentals refresh. Blank
-          uses the built-in defaults (CN=300, others=0). CN bootstrap runs
+          uses the built-in defaults (CN=270, counted from script start; others=0). CN bootstrap runs
           should keep a deadline so a partial resumable bundle can publish
           before the GitHub Actions job cap.
         required: false
