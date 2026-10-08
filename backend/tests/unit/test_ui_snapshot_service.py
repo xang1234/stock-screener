@@ -205,6 +205,39 @@ def test_resolve_themes_source_revision_changes_when_an_alert_is_dismissed_or_re
     assert len({initial, dismissed, read}) == 3
 
 
+def test_resolve_themes_source_revision_changes_on_a_same_day_metrics_refresh():
+    """A second metrics run on the same date updates rows in place; the queued
+    rebuild (#526) must not leave the old rankings served as fresh meanwhile."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ThemeMetrics.__table__,
+            ThemeCluster.__table__,
+            ThemePipelineRun.__table__,
+            ThemeAlert.__table__,
+            ThemeMergeSuggestion.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
+
+    with Session() as db:
+        metrics = ThemeMetrics(
+            theme_cluster_id=1, date=date(2026, 3, 18), pipeline="technical", momentum_score=50.0
+        )
+        db.add(metrics)
+        db.commit()
+        before = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+        metrics.momentum_score = 61.5
+        db.commit()
+        after = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+    assert before != after
+
+
 def test_publish_scan_bootstrap_serializes_universe_stats_counts():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(

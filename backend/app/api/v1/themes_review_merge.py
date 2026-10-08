@@ -334,6 +334,10 @@ def mark_alert_read(
     alert.is_read = True
     alert.read_at = datetime.utcnow()
     db.commit()
+    from ...tasks.theme_discovery_tasks import queue_themes_bootstrap_publish
+
+    # The unread count is part of the themes source revision.
+    queue_themes_bootstrap_publish()
     return {"status": "marked as read"}
 
 

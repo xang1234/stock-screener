@@ -21,6 +21,24 @@ def test_theme_handlers_do_not_rebuild_the_bootstrap_inline(module):
     assert "queue_themes_bootstrap_publish" in source
 
 
+def test_marking_an_alert_read_queues_a_bootstrap_rebuild():
+    # The unread count is part of the themes source revision, so a read alert
+    # makes every snapshot stale until something republishes it.
+    from unittest.mock import MagicMock
+
+    from app.api.v1 import themes_review_merge
+
+    alert = MagicMock()
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = alert
+
+    with patch("app.tasks.theme_discovery_tasks.queue_themes_bootstrap_publish") as queue:
+        themes_review_merge.mark_alert_read(7, db=db)
+
+    db.commit.assert_called_once()
+    queue.assert_called_once_with()
+
+
 @pytest.mark.parametrize("pipeline", ["technical", None])
 def test_publish_themes_bootstrap_snapshots_rebuilds_the_pipeline_variants(pipeline):
     from app.tasks.theme_discovery_tasks import publish_themes_bootstrap_snapshots
