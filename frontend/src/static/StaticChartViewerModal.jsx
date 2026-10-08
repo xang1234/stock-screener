@@ -19,7 +19,7 @@ import CandlestickChart from '../components/Charts/CandlestickChart';
 import StockMetricsSidebar from '../components/Scan/StockMetricsSidebar';
 import { getGroupRankColor } from '../utils/colorUtils';
 import { useChartNavigation } from '../hooks/useChartNavigation';
-import { staticChartPayloadQuery } from './chartClient';
+import { isCurrentChartIndex, staticChartPayloadQuery } from './chartClient';
 import { useStaticGeneration } from './dataClient';
 
 function StaticChartViewerModal({
@@ -54,6 +54,9 @@ function StaticChartViewerModal({
 
   const currentEntry = currentSymbol ? entryBySymbol.get(currentSymbol) : null;
   const generation = useStaticGeneration();
+  // A previous-generation index (placeholder) keeps its payload on screen but
+  // starts no fetch: its paths belong to the previous data root.
+  const indexCurrent = isCurrentChartIndex(chartIndex, generation.generation);
   const currentQuery = staticChartPayloadQuery(currentSymbol, currentEntry?.path, generation);
   const {
     data: chartPayload,
@@ -61,11 +64,11 @@ function StaticChartViewerModal({
     isError,
   } = useQuery({
     ...currentQuery,
-    enabled: open && currentQuery.enabled,
+    enabled: open && indexCurrent && currentQuery.enabled,
   });
 
   useEffect(() => {
-    if (!open || !symbols.length) {
+    if (!open || !symbols.length || !indexCurrent) {
       return undefined;
     }
 
@@ -104,7 +107,7 @@ function StaticChartViewerModal({
     return () => {
       timeouts.forEach(clearTimeout);
     };
-  }, [currentIndex, entryBySymbol, generation, open, queryClient, symbols]);
+  }, [currentIndex, entryBySymbol, generation, indexCurrent, open, queryClient, symbols]);
 
   useEffect(() => {
     if (!open) {

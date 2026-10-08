@@ -6,16 +6,26 @@ export const staticChartKeys = {
   payload: (symbol, path) => ['staticChartsPayload', symbol, path],
 };
 
+// The index records the generation it was loaded from. While a new generation
+// loads, the previous index is shown as placeholder; its entries must not be
+// fetched from the new data root (see ``isCurrentChartIndex``).
 export const useStaticChartIndex = (path, enabled = true) => {
   const { generation, dataRoot } = useStaticGeneration();
   return useQuery(staticQueryOptions({
     key: staticChartKeys.index(path),
     generation,
-    queryFn: () => fetchStaticJson(path, dataRoot),
+    queryFn: async () => ({ ...(await fetchStaticJson(path, dataRoot)), generation }),
     enabled: Boolean(path) && enabled,
     gcTime: Infinity,
   }));
 };
+
+// An index not loaded through ``useStaticChartIndex`` carries no generation
+// and is taken as current.
+export const isCurrentChartIndex = (chartIndex, generation) => (
+  Boolean(chartIndex)
+  && (chartIndex.generation === undefined || chartIndex.generation === generation)
+);
 
 export const fetchStaticChartPayload = (path, dataRoot = '') => fetchStaticJson(path, dataRoot);
 

@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import CandlestickChart from '../components/Charts/CandlestickChart';
 import GroupChartsLayout, { GroupChartCell } from '../components/Charts/GroupChartsLayout';
 import { getGroupRankColor } from '../utils/colorUtils';
-import { staticChartPayloadQuery } from './chartClient';
+import { isCurrentChartIndex, staticChartPayloadQuery } from './chartClient';
 import { useStaticGeneration } from './dataClient';
 
 const MAX_SYMBOLS = 50;
@@ -41,11 +41,15 @@ function StatBadge({ value, label, bgcolor }) {
   );
 }
 
-function StaticGroupChartCard({ symbol, entry, isSelected, onSelect }) {
+function StaticGroupChartCard({ symbol, entry, indexCurrent, isSelected, onSelect }) {
   const generation = useStaticGeneration();
-  const { data: payload, isLoading, isError } = useQuery(
-    staticChartPayloadQuery(symbol, entry?.path, generation),
-  );
+  const payloadQuery = staticChartPayloadQuery(symbol, entry?.path, generation);
+  // A previous-generation index (placeholder) keeps the card's payload on
+  // screen but fetches nothing: its paths belong to the previous data root.
+  const { data: payload, isLoading, isError } = useQuery({
+    ...payloadQuery,
+    enabled: indexCurrent && payloadQuery.enabled,
+  });
 
   const stockData = payload?.stock_data || null;
   const fundamentals = payload?.fundamentals || null;
@@ -198,6 +202,7 @@ function StaticGroupChartCard({ symbol, entry, isSelected, onSelect }) {
  */
 function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
   const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const indexCurrent = isCurrentChartIndex(chartIndex, useStaticGeneration().generation);
 
   const entryBySymbol = useMemo(() => {
     const entries = chartIndex?.symbols || [];
@@ -279,6 +284,7 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
               <StaticGroupChartCard
                 symbol={sym}
                 entry={entry}
+                indexCurrent={indexCurrent}
                 isSelected={selectedSymbol === sym}
                 onSelect={setSelectedSymbol}
               />
