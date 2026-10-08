@@ -59,8 +59,11 @@ on:
           - disable
           - enable
 
+# Scoped per selected market, so dispatching one market never cancels a long
+# run for another (CN takes ~4.5h). The publish job's own group keeps two runs
+# from building the same market at once.
 concurrency:
-  group: weekly-reference-data
+  group: weekly-reference-data-${{ github.event.inputs.market || 'all' }}
   cancel-in-progress: true
 
 permissions:
@@ -74,13 +77,17 @@ jobs:
       - name: Ensure weekly release exists
         env:
           GH_TOKEN: ${{ github.token }}
+        # Runs for different markets can race to create the release; the loser
+        # passes once it sees the winner's release.
         run: |
           gh release view weekly-reference-data \
             --repo "${{ github.repository }}" >/dev/null 2>&1 || \
           gh release create weekly-reference-data \
             --repo "${{ github.repository }}" \
             --title "Weekly Reference Data" \
-            --notes "Automated weekly market-scoped reference bundles for static-site builds."
+            --notes "Automated weekly market-scoped reference bundles for static-site builds." || \
+          gh release view weekly-reference-data \
+            --repo "${{ github.repository }}" >/dev/null
 
   publish:
     if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
@@ -90,6 +97,13 @@ jobs:
     # below that gives the build script's --max-runtime-minutes deadline a
     # chance to fire (and publish a partial bundle) before the runner is killed.
     timeout-minutes: 350
+    # The later job for a market waits, then seeds from what the earlier one
+    # published (including the CN fundamentals resume cursor). ``queue: max``
+    # keeps every waiting job instead of cancelling the older pending one.
+    concurrency:
+      group: ${{ github.workflow }}-publish-${{ matrix.market }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
       matrix:

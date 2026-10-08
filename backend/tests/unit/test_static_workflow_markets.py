@@ -255,6 +255,32 @@ def test_weekly_reference_defaults_to_partial_publish_for_transient_tw_source_fa
     assert '[ "$MATRIX_MARKET" = "CN" ] || [ "$MATRIX_MARKET" = "TW" ]' in content
 
 
+def test_weekly_reference_concurrency_is_scoped_per_market():
+    workflow = yaml.safe_load(
+        (_PROJECT_ROOT / ".github/workflows/weekly-reference-data.yml").read_text(encoding="utf-8")
+    )
+
+    # A dispatch for one market must not cancel a long run for another (CN ~4.5h).
+    run_group = workflow["concurrency"]["group"]
+    assert "github.event.inputs.market" in run_group
+    assert "|| 'all'" in run_group
+    assert workflow["concurrency"]["cancel-in-progress"] is True
+
+    # Two runs never build the same market at once: the later job waits, so it
+    # seeds from the bundle (and fundamentals cursor) the earlier one published.
+    publish_concurrency = workflow["jobs"]["publish"]["concurrency"]
+    assert publish_concurrency["group"] == "${{ github.workflow }}-publish-${{ matrix.market }}"
+    assert publish_concurrency["cancel-in-progress"] is False
+    # A third same-market job queues too instead of cancelling the pending one.
+    assert publish_concurrency["queue"] == "max"
+
+    # Runs for different markets can now create the release at the same time;
+    # the one that loses the create race must re-check instead of failing.
+    ensure_script = workflow["jobs"]["ensure_release"]["steps"][0]["run"]
+    create_at = ensure_script.index("gh release create")
+    assert "gh release view" in ensure_script[create_at:]
+
+
 def test_local_celery_startup_derives_market_workers_from_backend_topology():
     content = (_PROJECT_ROOT / "backend" / "start_celery.sh").read_text(encoding="utf-8")
 
