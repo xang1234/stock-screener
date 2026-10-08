@@ -59,8 +59,11 @@ on:
           - disable
           - enable
 
+# Scoped per selected market, so dispatching one market never cancels a long
+# run for another (CN takes ~4.5h). The publish job's own group keeps two runs
+# from building the same market at once.
 concurrency:
-  group: weekly-reference-data
+  group: weekly-reference-data-${{ github.event.inputs.market || 'all' }}
   cancel-in-progress: true
 
 permissions:
@@ -90,6 +93,11 @@ jobs:
     # below that gives the build script's --max-runtime-minutes deadline a
     # chance to fire (and publish a partial bundle) before the runner is killed.
     timeout-minutes: 350
+    # The later job for a market waits, then seeds from what the earlier one
+    # published (including the CN fundamentals resume cursor).
+    concurrency:
+      group: ${{ github.workflow }}-publish-${{ matrix.market }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
