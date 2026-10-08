@@ -77,13 +77,17 @@ jobs:
       - name: Ensure weekly release exists
         env:
           GH_TOKEN: ${{ github.token }}
+        # Runs for different markets can race to create the release; the loser
+        # passes once it sees the winner's release.
         run: |
           gh release view weekly-reference-data \
             --repo "${{ github.repository }}" >/dev/null 2>&1 || \
           gh release create weekly-reference-data \
             --repo "${{ github.repository }}" \
             --title "Weekly Reference Data" \
-            --notes "Automated weekly market-scoped reference bundles for static-site builds."
+            --notes "Automated weekly market-scoped reference bundles for static-site builds." || \
+          gh release view weekly-reference-data \
+            --repo "${{ github.repository }}" >/dev/null
 
   publish:
     if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}

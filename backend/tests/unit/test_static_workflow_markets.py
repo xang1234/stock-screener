@@ -274,6 +274,12 @@ def test_weekly_reference_concurrency_is_scoped_per_market():
     # A third same-market job queues too instead of cancelling the pending one.
     assert publish_concurrency["queue"] == "max"
 
+    # Runs for different markets can now create the release at the same time;
+    # the one that loses the create race must re-check instead of failing.
+    ensure_script = workflow["jobs"]["ensure_release"]["steps"][0]["run"]
+    create_at = ensure_script.index("gh release create")
+    assert "gh release view" in ensure_script[create_at:]
+
 
 def test_local_celery_startup_derives_market_workers_from_backend_topology():
     content = (_PROJECT_ROOT / "backend" / "start_celery.sh").read_text(encoding="utf-8")
