@@ -43,7 +43,6 @@ function StaticBreadthPage() {
     generation,
     queryFn: () => fetchStaticJson(marketEntry.pages.breadth.path, dataRoot),
     enabled: Boolean(marketEntry.pages?.breadth?.path),
-    gcTime: undefined,
   }));
   const contributorIndexPath = marketEntry.assets?.breadth_contributors?.index_path;
   const contributorDrilldown = useBreadthContributors({

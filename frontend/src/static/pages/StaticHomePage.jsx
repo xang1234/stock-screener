@@ -71,7 +71,6 @@ function StaticHomePage() {
     generation,
     queryFn: () => fetchStaticJson(marketEntry.pages.home.path, dataRoot),
     enabled: Boolean(marketEntry.pages?.home?.path),
-    gcTime: undefined,
   }));
   const scanBundleQuery = useQuery(staticQueryOptions({
     key: ['staticHomeScanRows', marketEntry.pages?.scan?.path],
@@ -109,6 +108,7 @@ function StaticHomePage() {
       };
     },
     enabled: Boolean(marketEntry.pages?.scan?.path),
+    gcTime: Infinity,
   }));
   const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
 

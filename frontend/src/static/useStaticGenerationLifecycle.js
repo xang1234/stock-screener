@@ -9,20 +9,21 @@ import {
 } from './dataClient';
 
 /**
- * Tab-level data generation housekeeping (#504).
+ * Tab-level data generation housekeeping (#504). Mount once (the layout).
  *
+ * - Polls the root manifest (focus and every few minutes).
  * - Bounds the query cache: a query from another generation is removed as
  *   soon as nothing renders it, so only the current generation (plus one still
  *   on screen as placeholder) is held despite ``gcTime: Infinity``.
  * - A file missing under the tab's generation means a later publish replaced
- *   it: check the manifest now. ``expired`` stays true only while the tab is
- *   still on that generation afterwards, so the UI can offer a reload.
+ *   it: re-check the manifest. ``expired`` is true once that check finished and
+ *   left the tab on the same generation, so the UI can offer a reload.
  */
 export function useStaticGenerationLifecycle() {
   const queryClient = useQueryClient();
-  const manifestQuery = useStaticManifest();
+  const manifestQuery = useStaticManifest({ poll: true });
   const { generation, dataRoot } = getStaticGeneration(manifestQuery.data);
-  const [expiredRoot, setExpiredRoot] = useState(null);
+  const [checkedExpiredRoot, setCheckedExpiredRoot] = useState(null);
 
   useEffect(() => {
     const cache = queryClient.getQueryCache();
@@ -41,15 +42,21 @@ export function useStaticGenerationLifecycle() {
   }, [generation, queryClient]);
 
   useEffect(() => {
+    let active = true;
     const onExpired = (event) => {
-      setExpiredRoot(event.detail?.dataRoot ?? null);
-      queryClient.invalidateQueries({ queryKey: ['staticManifest'] });
+      const expiredRoot = event.detail?.dataRoot ?? null;
+      queryClient.refetchQueries({ queryKey: ['staticManifest'] }).finally(() => {
+        if (active) setCheckedExpiredRoot(expiredRoot);
+      });
     };
     window.addEventListener(STATIC_GENERATION_EXPIRED_EVENT, onExpired);
-    return () => window.removeEventListener(STATIC_GENERATION_EXPIRED_EVENT, onExpired);
+    return () => {
+      active = false;
+      window.removeEventListener(STATIC_GENERATION_EXPIRED_EVENT, onExpired);
+    };
   }, [queryClient]);
 
   return {
-    expired: Boolean(expiredRoot) && expiredRoot === dataRoot && !manifestQuery.isFetching,
+    expired: Boolean(checkedExpiredRoot) && checkedExpiredRoot === dataRoot,
   };
 }

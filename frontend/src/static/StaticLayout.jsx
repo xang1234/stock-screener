@@ -153,7 +153,7 @@ function StaticLayout({ children }) {
               </Button>
             )}
           >
-            Newer data has been published. Reload to see it.
+            Some data could not be loaded, most likely because newer data has been published. Reload to get the latest.
           </Alert>
         )}
         {selectedUnavailable ? (

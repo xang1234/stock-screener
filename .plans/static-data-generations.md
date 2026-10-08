@@ -31,11 +31,13 @@ an explicit "data updated, reload" state instead of mixed data.
   working) and gains `generation` and `data_root: "g/<generation>/"`. Paths
   inside the manifest and inside data files stay root-relative; they resolve
   against `data_root`.
-- Before upload, every path the manifest advertises must exist under
-  `data_root`.
-- Opt-out switch: `export_static_site --no-data-generations` (workflow:
-  repo variable `STATIC_DATA_GENERATIONS=false`). The frontend reads a
-  manifest without `data_root` exactly as today, so rollback is the switch.
+- The move is verified: the file list under `g/<generation>/` must equal the
+  list before the move. Advertised paths are already validated per market by
+  the combiner before it writes.
+- Switch: `export_static_site --data-generation`, passed by the publisher
+  unless repo variable `STATIC_DATA_GENERATIONS=false`. The frontend reads a
+  manifest without `data_root` from the flat layout, so rollback is the
+  variable.
 
 ## Frontend
 
@@ -47,16 +49,22 @@ an explicit "data updated, reload" state instead of mixed data.
   5 minutes, instead of never.
 - `useStaticGeneration()` derives `{ generation, dataRoot }` from the
   manifest; every static data query key ends with `gen:<generation>`.
+- Nothing loads before the manifest names the generation. A flat-layout
+  manifest (rollback) gets `flat-<generated_at>` so its publishes switch too.
 - Switching: a new manifest switches every key at once. Each query keeps
   showing its previous data while the new generation loads, but only when
   the previous key differs from the new one by the generation alone (never
   another market's data). Not a cross-query transaction: each view swaps when
-  its own data is ready.
+  its own data is ready. A query whose key or path comes from another query's
+  data (options detail, COT history, scan chart index, themes variant) waits
+  until that parent has its new-generation data, never using placeholder data.
 - Query-cache bound: when a query with another generation becomes inactive,
   it is removed. Active queries are never evicted, so only the current
   generation plus the still-rendered previous one are held.
 - Expired generation: a `StaticGenerationExpiredError` refetches the manifest;
-  if that does not move the tab forward, a banner offers "Reload".
+  if that check leaves the tab on the same generation, a banner offers
+  "Reload". A file genuinely missing from the current generation shows the
+  same banner (worded for both cases); reload does not fix that one.
 - Unavailable market: a `?market=` or saved selection listed in
   `unavailable_markets` stays selected and shows an explicit unavailable state
   with Retry, instead of silently switching to another market.

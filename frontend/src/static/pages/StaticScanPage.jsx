@@ -64,12 +64,14 @@ function StaticScanPage() {
     generation,
     queryFn: () => fetchStaticJson(scanPath, dataRoot),
     enabled: Boolean(scanPath),
-    gcTime: undefined,
   }));
   // A new data generation must not reset the user's filters, sort or page
   // size: those defaults apply once per scan (market), not per publish.
   const defaultsAppliedFor = useRef(null);
-  const chartIndexQuery = useStaticChartIndex(scanManifestQuery.data?.charts?.path);
+  const chartIndexQuery = useStaticChartIndex(
+    scanManifestQuery.data?.charts?.path,
+    !scanManifestQuery.isPlaceholderData,
+  );
 
   const [filterState, dispatchFilterState] = useReducer(
     filterStateReducer,

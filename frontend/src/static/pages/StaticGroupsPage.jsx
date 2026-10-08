@@ -236,7 +236,6 @@ function StaticGroupsPage() {
     generation,
     queryFn: () => fetchStaticJson(marketEntry.pages.groups.path, dataRoot),
     enabled: Boolean(marketEntry.pages?.groups?.path),
-    gcTime: undefined,
   }));
   const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
   const rrgQuery = useStaticGroupsRRG(marketEntry);

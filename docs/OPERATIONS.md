@@ -408,7 +408,7 @@ In the browser:
 - When the generation changes, every data query switches to the new generation. Each view keeps showing its current data until the replacement has loaded.
 - Data from another generation is dropped from memory once nothing displays it.
 - Only the current generation is deployed. The site is about 1.2 GB, already at the Pages size limit, so a previous generation is not retained.
-- A tab that requests a file from a replaced generation checks the manifest again. If that does not move it forward, it shows "Newer data has been published" with a Reload button.
+- A tab that requests a file from a replaced generation checks the manifest again. If that does not move it forward, it shows a "Some data could not be loaded" notice with a Reload button. A file genuinely missing from the current publish shows the same notice; reloading does not fix that case.
 - A market listed in `unavailable_markets` stays selected (from `?market=` or the saved choice) and shows an unavailable notice with Retry, instead of switching to another market.
 
 ```bash

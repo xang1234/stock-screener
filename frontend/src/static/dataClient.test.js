@@ -6,6 +6,7 @@ import {
   fetchStaticManifest,
   getStaticGeneration,
   keepGenerationData,
+  staticQueryOptions,
   withGeneration,
 } from './dataClient';
 
@@ -71,7 +72,22 @@ describe('static data generations (#504)', () => {
       dataRoot: 'g/g1/',
     });
     expect(getStaticGeneration({})).toEqual({ generation: 'flat', dataRoot: '' });
-    expect(getStaticGeneration(undefined)).toEqual({ generation: 'flat', dataRoot: '' });
+    // Not loaded yet: no generation, and static queries stay disabled.
+    expect(getStaticGeneration(undefined)).toEqual({ generation: null, dataRoot: '' });
+    expect(staticQueryOptions({ key: ['k'], generation: null }).enabled).toBe(false);
+  });
+
+  it('gives each flat-layout publish its own generation so a rollback still switches data together', () => {
+    expect(getStaticGeneration({ generated_at: '2026-10-08T05:47:12Z' })).toEqual({
+      generation: 'flat-2026-10-08T05:47:12Z',
+      dataRoot: '',
+    });
+  });
+
+  it('leaves the cache lifetime to the app default unless a query asks to keep data', () => {
+    const options = staticQueryOptions({ key: ['staticHome', 'p'], generation: 'g1', queryFn: () => null });
+    expect('gcTime' in options).toBe(false);
+    expect(staticQueryOptions({ key: ['k'], generation: 'g1', gcTime: Infinity }).gcTime).toBe(Infinity);
   });
 
   it('keeps previous data only across a generation change of the same query', () => {

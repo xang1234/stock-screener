@@ -13,6 +13,7 @@ export const useStaticChartIndex = (path, enabled = true) => {
     generation,
     queryFn: () => fetchStaticJson(path, dataRoot),
     enabled: Boolean(path) && enabled,
+    gcTime: Infinity,
   }));
 };
 
@@ -24,4 +25,5 @@ export const staticChartPayloadQuery = (symbol, path, { generation, dataRoot }) 
   generation,
   queryFn: () => fetchStaticChartPayload(path, dataRoot),
   enabled: Boolean(path),
+  gcTime: Infinity,
 });

@@ -107,6 +107,15 @@ describe('static data generation lifecycle (#504)', () => {
     });
     await waitFor(() => expect(screen.getByTestId('expired').textContent).toBe('true'));
 
+    // A routine manifest check that finds the same generation keeps the offer up.
+    let refetching;
+    act(() => {
+      refetching = queryClient.refetchQueries({ queryKey: ['staticManifest'] });
+    });
+    expect(screen.getByTestId('expired').textContent).toBe('true');
+    await act(async () => refetching);
+    expect(screen.getByTestId('expired').textContent).toBe('true');
+
     // The next manifest check moves the tab forward and the reload offer goes away.
     site.generation = 'g2';
     await act(async () => {

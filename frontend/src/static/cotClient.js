@@ -38,10 +38,13 @@ export const useStaticCotIndex = (rootManifest) => {
     generation,
     queryFn: () => getStaticCotIndex(rootManifest, dataRoot),
     enabled: Boolean(path),
+    gcTime: Infinity,
   }));
 };
 
-export const useStaticCotHistory = (index, slug, range = '1y') => {
+// ``enabled``: false while ``index`` is the previous generation's placeholder,
+// whose publication id would not match the new history files.
+export const useStaticCotHistory = (index, slug, range = '1y', enabled = true) => {
   const entry = index?.histories?.[slug];
   const { generation, dataRoot } = useStaticGeneration();
   return useQuery(staticQueryOptions({
@@ -54,6 +57,7 @@ export const useStaticCotHistory = (index, slug, range = '1y') => {
     }),
     generation,
     queryFn: () => getStaticCotHistory(index, slug, range, dataRoot),
-    enabled: Boolean(entry),
+    enabled: enabled && Boolean(entry),
+    gcTime: Infinity,
   }));
 };

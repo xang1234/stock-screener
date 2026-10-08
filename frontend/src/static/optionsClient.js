@@ -15,7 +15,7 @@ const advertisedSymbol = (manifest, symbol) => {
   return { symbol: normalized, entry };
 };
 
-const FLAT = getStaticGeneration(null);
+const FLAT = getStaticGeneration({});
 
 const generationOptions = (key, generation) => {
   const queryKey = withGeneration(key, generation);

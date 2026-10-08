@@ -45,7 +45,6 @@ function StaticThemesPage() {
     generation,
     queryFn: () => fetchStaticJson(themesPath, dataRoot),
     enabled: Boolean(themesPath),
-    gcTime: undefined,
   }));
   const [pipeline, setPipeline] = useState('technical');
   const [themeView, setThemeView] = useState('grouped');
@@ -76,8 +75,8 @@ function StaticThemesPage() {
     key: ['staticThemesVariant', activeVariantMeta?.path],
     generation,
     queryFn: () => fetchStaticJson(activeVariantMeta.path, dataRoot),
-    enabled: Boolean(activeVariantMeta?.available && activeVariantMeta?.path),
-    gcTime: undefined,
+    enabled: Boolean(activeVariantMeta?.available && activeVariantMeta?.path)
+      && !themesIndexQuery.isPlaceholderData,
   }));
 
   const rankings = useMemo(() => {

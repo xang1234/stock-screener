@@ -11,7 +11,7 @@ const StaticCotSection = ({ manifest }) => {
   const [range, setRange] = useState('1y');
   const indexQuery = useStaticCotIndex(manifest);
   const index = indexQuery.data || null;
-  const historyQuery = useStaticCotHistory(index, selectedSlug, '5y');
+  const historyQuery = useStaticCotHistory(index, selectedSlug, '5y', !indexQuery.isPlaceholderData);
   const history = historyQuery.data ? sliceCotHistory(historyQuery.data, range) : null;
 
   if (!advertised) return null;

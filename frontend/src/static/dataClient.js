@@ -52,8 +52,13 @@ export const fetchStaticManifest = async () => {
 
 export const STATIC_MANIFEST_REFRESH_MS = 5 * 60 * 1000;
 
+// A flat-layout publish (rollback switch) still gets its own generation from
+// generated_at, so data keys switch together when the manifest changes.
+// ``generation`` is null until the manifest has loaded: no data path is known yet.
 export const getStaticGeneration = (manifest) => ({
-  generation: manifest?.generation || 'flat',
+  generation: !manifest
+    ? null
+    : manifest.generation || (manifest.generated_at ? `flat-${manifest.generated_at}` : 'flat'),
   dataRoot: manifest?.data_root || '',
 });
 
@@ -92,33 +97,41 @@ export const fetchStaticBreadthContributors = (indexPath, date, dataRoot = '') =
   return fetchStaticJson(indexPath.replace(/index\.json$/, `${date}.json`), dataRoot);
 };
 
-export const useStaticManifest = () => useQuery({
+// Every observer reads the manifest; only the tab's lifecycle observer polls
+// it (``{ poll: true }``), so mounted views do not each start an interval.
+export const useStaticManifest = ({ poll = false } = {}) => useQuery({
   queryKey: ['staticManifest'],
   queryFn: fetchStaticManifest,
   staleTime: STATIC_MANIFEST_REFRESH_MS,
-  refetchInterval: STATIC_MANIFEST_REFRESH_MS,
-  refetchOnWindowFocus: true,
+  refetchOnWindowFocus: poll,
+  ...(poll ? { refetchInterval: STATIC_MANIFEST_REFRESH_MS } : {}),
   gcTime: Infinity,
 });
 
 export const useStaticGeneration = () => {
   const manifest = useStaticManifest().data;
+  const loaded = Boolean(manifest);
   const generation = manifest?.generation;
   const dataRoot = manifest?.data_root;
+  const generatedAt = manifest?.generated_at;
   return useMemo(
-    () => getStaticGeneration({ generation, data_root: dataRoot }),
-    [generation, dataRoot],
+    () => getStaticGeneration(
+      loaded ? { generation, data_root: dataRoot, generated_at: generatedAt } : null,
+    ),
+    [loaded, generation, dataRoot, generatedAt],
   );
 };
 
 // Options for a static data query: the generation joins the key, and the
-// previous generation's data stays visible while the new one loads.
+// previous generation's data stays visible while the new one loads. gcTime is
+// left to the app default unless the caller keeps data for good.
 export const staticQueryOptions = ({ key, generation, ...options }) => {
   const queryKey = withGeneration(key, generation);
   return {
     staleTime: Infinity,
-    gcTime: Infinity,
     ...options,
+    // Nothing loads before the manifest names the generation.
+    enabled: generation !== null && (options.enabled ?? true),
     queryKey,
     placeholderData: keepGenerationData(queryKey),
   };
@@ -132,6 +145,7 @@ export const useStaticGroupsRRG = (marketEntry) => {
     generation,
     queryFn: () => fetchStaticJson(path, dataRoot),
     enabled: Boolean(path),
+    gcTime: Infinity,
   }));
 };
 
@@ -187,6 +201,5 @@ export const useStaticGroupMatrix = (marketEntry, enabled) => {
     generation,
     queryFn: () => fetchStaticJson(path, dataRoot),
     enabled: enabled && Boolean(path),
-    gcTime: undefined,
   }));
 };

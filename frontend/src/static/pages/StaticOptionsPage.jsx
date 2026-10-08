@@ -28,11 +28,17 @@ export default function StaticOptionsPage() {
     generation: generation.generation,
     queryFn: () => getStaticOptionsManifest(marketEntry, generation.dataRoot),
     enabled: market === 'US' && Boolean(optionsPath),
+    gcTime: Infinity,
   }));
   const commandOptions = manifestQuery.data
     ? staticOptionsCommandCenterQueryOptions(manifestQuery.data, generation)
     : { queryKey: ['options-analytics', 'command-center', 'static', 'pending'], queryFn: async () => null };
-  const commandQuery = useQuery({ ...commandOptions, enabled: Boolean(manifestQuery.data) });
+  // Not from the previous generation's placeholder manifest (its run id would
+  // reject the new command center).
+  const commandQuery = useQuery({
+    ...commandOptions,
+    enabled: Boolean(manifestQuery.data) && !manifestQuery.isPlaceholderData,
+  });
 
   if (manifestQuery.isLoading || commandQuery.isLoading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', p: 6 }}><CircularProgress /></Box>;

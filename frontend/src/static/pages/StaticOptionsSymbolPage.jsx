@@ -28,6 +28,7 @@ export default function StaticOptionsSymbolPage() {
     generation: generation.generation,
     queryFn: () => getStaticOptionsManifest(marketEntry, generation.dataRoot),
     enabled: market === 'US' && Boolean(optionsPath),
+    gcTime: Infinity,
   }));
   const detailSetup = useMemo(() => {
     if (!manifestQuery.data) return { options: null, setupError: null };
@@ -42,7 +43,7 @@ export default function StaticOptionsSymbolPage() {
       queryKey: ['options-analytics', 'symbol', 'static', 'unavailable', symbol],
       queryFn: async () => null,
     }),
-    enabled: Boolean(detailSetup.options),
+    enabled: Boolean(detailSetup.options) && !manifestQuery.isPlaceholderData,
   });
 
   if (manifestQuery.isLoading || (detailSetup.options && detailQuery.isLoading)) {
