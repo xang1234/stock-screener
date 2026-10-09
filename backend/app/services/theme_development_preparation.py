@@ -150,7 +150,9 @@ def _economic_themes(db, item, pipeline):
         return False, {}, None
     packet = interpretations.packet_for_attempt(db, attempt)
     if pipeline not in EconomicSourceAdmissionService(db).latest_channels(packet.id):
-        return False, {}, None
+        # Classified, but not for this channel: ready with no themes, so an
+        # empty revision supersedes the channel's earlier observations.
+        return True, {}, packet
     theme_ids = sorted(
         set(
             db.execute(

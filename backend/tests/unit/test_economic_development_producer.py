@@ -647,7 +647,9 @@ def test_channels_come_from_the_classified_packet_not_a_newer_unclassified_one(d
     fundamental = development_bundle(db_session, item.id, "fundamental")
     technical = development_bundle(db_session, item.id, "technical")
     assert fundamental["economic_refs"] == {1: theme.id}
-    assert technical["ready"] is False
+    # Classified, but the classified packet is not technical-eligible.
+    assert technical["ready"] is True
+    assert technical["theme_ids"] == []
 
     worker.discover(db_session)
     db_session.commit()
@@ -750,6 +752,37 @@ def test_prompt_uses_the_classified_packet_text_not_the_stale_item_text(db_sessi
     assert "extended to 12 years" in after["sources"]["primary"]
     assert item.content == TEXT  # the item itself was not updated
     assert after["revision"] != before["revision"]
+
+
+def test_a_channel_the_selected_evidence_lost_is_ready_with_no_themes(db_session):
+    # The older packet was technical-eligible; the selected (newer, classified)
+    # packet is fundamental-only. The technical channel must record an empty
+    # revision to supersede its earlier observations, not wait as "not ready".
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session, channels=("technical",))
+    _classify(db_session, admitted, taxonomy, [theme.id])
+    now = datetime.now(timezone.utc)
+    newer = EconomicSourceAdmissionService(db_session).admit_content(
+        EvidenceAdmission(
+            provider="news",
+            canonical_source_family=content_family_key("news", item.external_id, item.url),
+            capture_route="social",
+            original_text=TEXT,
+            preparation_version="social-v1",
+            source_metadata={"social_work_id": 10},
+            captured_at=now,
+            available_at=now,
+            evidence_channels=("fundamental",),
+            supersedes_packet_id=admitted.packet_id,
+        )
+    )
+    db_session.commit()
+    _classify(db_session, newer, taxonomy, [theme.id], resolver="resolver-v2")
+
+    technical = development_bundle(db_session, item.id, "technical")
+
+    assert technical["ready"] is True
+    assert technical["theme_ids"] == []
 
 
 def test_explicit_backfill_only_queries_the_requested_items_lineages():
