@@ -480,6 +480,17 @@ def _serving_generation(db, taxonomy, admitted, *, override_id=None, selected_at
     )
     db.add(generation)
     db.flush()
+    from app.models.economic_taxonomy_runtime import ServingGenerationEvent
+
+    db.add(
+        ServingGenerationEvent(
+            serving_generation_id=generation.id,
+            sequence_number=1,
+            event_type="published",
+            actor="test:publisher",
+            details={},
+        )
+    )
     db.get(TaxonomyAuthority, 1).serving_generation_id = generation.id
     db.commit()
 
@@ -664,9 +675,6 @@ def test_work_finished_as_not_ready_is_redone_once_classification_completes(db_s
 def test_a_recent_reviewer_override_brings_an_old_item_back_into_discovery(db_session):
     from datetime import timedelta
 
-    from app.domain.economic_taxonomy.contracts import AdminPrincipal
-    from app.services.economic_taxonomy_interpretations import create_interpretation_override
-
     taxonomy, theme = _taxonomy(db_session)
     item, admitted = _admit_item(db_session)
     old = datetime.now(timezone.utc) - timedelta(days=5)
@@ -677,16 +685,33 @@ def test_a_recent_reviewer_override_brings_an_old_item_back_into_discovery(db_se
     db_session.commit()
     assert _work(db_session, item.id) == []  # too old for automatic discovery
 
-    create_interpretation_override(
-        db_session,
+    # Created long ago (as create_interpretation_override writes it), but only
+    # now published in the serving generation: rediscovery follows publication.
+    from app.models.economic_taxonomy_runtime import InterpretationOverrideRevision
+
+    override = InterpretationOverrideRevision(
         source_lineage_id=admitted.source_lineage_id,
-        selected_attempt_id=attempt.id,
+        revision_number=1,
+        override_kind="select_attempt",
+        payload={
+            "selected_attempt_id": str(attempt.id),
+            "authenticated": True,
+            "auth_method": "api_key",
+            "roles": ["taxonomy:review"],
+        },
         reason="Reviewer confirms this reading",
-        principal=AdminPrincipal(
-            subject="reviewer", auth_method="api_key", roles=frozenset({"taxonomy:review"})
-        ),
+        created_by="reviewer",
+        created_at=old,
     )
+    db_session.add(override)
     db_session.commit()
+    worker.discover(db_session)
+    db_session.commit()
+    assert _work(db_session, item.id) == []  # not serving yet: nothing changed for users
+
+    _serving_generation(
+        db_session, taxonomy, admitted, override_id=override.id, selected_attempt_id=attempt.id
+    )
     worker.discover(db_session)
     db_session.commit()
 

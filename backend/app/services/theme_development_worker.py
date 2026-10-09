@@ -94,18 +94,50 @@ def _economic_candidate_query(item_ids, lineage_ids=None):
 
 
 def _recently_overridden_lineages(db):
+    """Lineages whose reviewer override became visible in the last two days.
+
+    An override takes effect when a generation carrying it is published, which
+    can be long after the override was created, so this follows publication.
+    """
+    from uuid import UUID
+
     from sqlalchemy import select
 
-    from app.models.economic_taxonomy_runtime import InterpretationOverrideRevision
-
-    return set(
-        db.execute(
-            select(InterpretationOverrideRevision.source_lineage_id).where(
-                InterpretationOverrideRevision.created_at
-                >= datetime.now(timezone.utc) - timedelta(days=2)
-            )
-        ).scalars()
+    from app.models.economic_taxonomy_runtime import (
+        GenerationInputManifest,
+        ServingGeneration,
+        ServingGenerationEvent,
+        TaxonomyAuthority,
     )
+
+    authority = db.get(TaxonomyAuthority, 1)
+    if authority is None or authority.serving_generation_id is None:
+        return set()
+    published = db.execute(
+        select(ServingGenerationEvent.created_at)
+        .where(
+            ServingGenerationEvent.serving_generation_id == authority.serving_generation_id,
+            ServingGenerationEvent.event_type == "published",
+        )
+        .order_by(ServingGenerationEvent.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if published is None:
+        return set()
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    if published < datetime.now(timezone.utc) - timedelta(days=2):
+        return set()
+    generation = db.get(ServingGeneration, authority.serving_generation_id)
+    manifest = db.get(GenerationInputManifest, generation.generation_input_manifest_id)
+    lineages = set()
+    for entry in manifest.selections or []:
+        if entry.get("interpretation_override_revision_id") and entry.get("lineage"):
+            try:
+                lineages.add(UUID(str(entry["lineage"])))
+            except ValueError:
+                continue
+    return lineages
 
 
 def _item_lineages(db, item_ids):
