@@ -543,6 +543,19 @@ def test_a_reclassification_to_no_themes_records_the_empty_revision(db_session, 
     assert len(recorded) == 1
 
 
+def test_discovery_admits_a_completed_empty_first_classification(db_session):
+    # Its empty revision must be recorded to supersede legacy observations an
+    # item may carry from before cutover.
+    taxonomy, _theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session)
+    _classify(db_session, admitted, taxonomy, [])
+
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
+
+
 def test_explicit_backfill_only_queries_the_requested_items_lineages():
     from uuid import UUID
 

@@ -62,19 +62,18 @@ CHANNELS = ("technical", "fundamental")
 
 
 def _economic_candidate_query(item_ids, lineage_ids=None):
-    """Lineages with a completed, non-empty classification.
+    """Lineages with a completed classification.
+
+    Completed-empty ones count too: their empty revision supersedes the
+    observations of themes the item no longer has (e.g. legacy ones at cutover).
 
     No DISTINCT and no JSON in the select list: PostgreSQL cannot compare its
     json type. Recent classifications only for automatic discovery, so a new
     taxonomy version reclassifying old items does not re-run the model.
     """
-    from sqlalchemy import exists, select
+    from sqlalchemy import select
 
-    from app.models.economic_taxonomy_runtime import (
-        ClaimAssignment,
-        ClassificationAttempt,
-        ProcessingRequest,
-    )
+    from app.models.economic_taxonomy_runtime import ClassificationAttempt, ProcessingRequest
 
     query = (
         select(ProcessingRequest.source_lineage_id)
@@ -82,10 +81,7 @@ def _economic_candidate_query(item_ids, lineage_ids=None):
             ClassificationAttempt,
             ClassificationAttempt.processing_request_id == ProcessingRequest.id,
         )
-        .where(
-            ClassificationAttempt.result_status == "completed",
-            exists().where(ClaimAssignment.classification_attempt_id == ClassificationAttempt.id),
-        )
+        .where(ClassificationAttempt.result_status == "completed")
     )
     if item_ids is None:
         query = query.where(
