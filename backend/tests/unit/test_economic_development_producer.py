@@ -13,6 +13,7 @@ from app.infra.db.repositories.economic_taxonomy_repo import EconomicTaxonomyRep
 from app.infra.db.repositories.economic_taxonomy_work_repo import (
     EconomicTaxonomyWorkRepository,
 )
+from app.models.economic_taxonomy_runtime import EvidencePacket as EvidencePacketLineage
 from app.models.economic_taxonomy_runtime import (
     ClaimAssignment,
     ClaimReviewArtifact,
@@ -348,7 +349,7 @@ def test_scheduled_task_runs_the_economic_producer_under_economic_authority(db_s
 
     item, _theme = _economic_item(db_session)
     monkeypatch.setenv("THEME_DEVELOPMENT_TRACKING_ENABLED", "true")
-    monkeypatch.setattr(theme_discovery_tasks, "_theme_automation_gate_result", lambda _db: None)
+    monkeypatch.setattr(theme_discovery_tasks, "_theme_automation_gate_result", lambda _db, **_kw: None)
     monkeypatch.setattr(worker, "process_one", lambda _sessions: False)
 
     result = theme_intelligence_tasks.prepare_developments()
@@ -553,6 +554,57 @@ def test_discovery_admits_a_completed_empty_first_classification(db_session):
     worker.discover(db_session)
     db_session.commit()
 
+    assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
+
+
+def test_economic_observations_belong_to_the_lineage_source_family(db_session):
+    # Publication pins development observations by the lineage's source family;
+    # a content-item-keyed observation would never reach a generation.
+    from app.models.economic_taxonomy_runtime import SourceLineage
+
+    item, _theme = _economic_item(db_session)
+    worker.discover(db_session, item_ids=[item.id])
+    db_session.commit()
+
+    worker.process_one(sessionmaker(bind=db_session.get_bind()), generate=lambda *_args: [_fact(1)])
+
+    observation = db_session.scalar(
+        select(ThemeDevelopmentObservation).where(
+            ThemeDevelopmentObservation.content_item_id == item.id
+        )
+    )
+    family = db_session.scalar(
+        select(SourceLineage.source_family_id).where(
+            SourceLineage.id
+            == select(EvidencePacketLineage.source_lineage_id)
+            .where(EvidencePacketLineage.capture_route == CONTENT_INGESTION_ROUTE)
+            .order_by(EvidencePacketLineage.created_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+    )
+    assert observation.source_family_id == family
+
+
+def test_economic_gate_does_not_require_legacy_content_sources(db_session, monkeypatch):
+    # A deployment fed only by Social or other directly admitted evidence has
+    # no active legacy content source; the economic producer must still run.
+    from app.tasks import theme_discovery_tasks, theme_intelligence_tasks
+
+    item, _theme = _economic_item(db_session)
+    monkeypatch.setenv("THEME_DEVELOPMENT_TRACKING_ENABLED", "true")
+    monkeypatch.setattr(theme_discovery_tasks.settings, "feature_themes", True)
+    monkeypatch.setattr(
+        theme_discovery_tasks,
+        "get_runtime_bootstrap_status",
+        lambda _db: type("Status", (), {"bootstrap_required": False, "bootstrap_state": "ready"})(),
+    )
+    monkeypatch.setattr(worker, "process_one", lambda _sessions: False)
+
+    result = theme_intelligence_tasks.prepare_developments()
+
+    assert result["status"] == "processed"
+    db_session.expire_all()
     assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
 
 

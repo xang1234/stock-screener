@@ -184,6 +184,18 @@ def _economic_themes(db, item, pipeline):
     return True, {theme_id: names[theme_id] for theme_id in theme_ids if theme_id in names}
 
 
+def _source_family_id(db, item):
+    from app.models.economic_taxonomy_runtime import SourceFamily
+    from app.services.economic_source_admission import content_family_key
+
+    family_key = content_family_key(item.source_type, item.external_id, item.url)
+    if family_key is None:
+        return None
+    return db.execute(
+        select(SourceFamily.id).where(SourceFamily.canonical_source_key == family_key)
+    ).scalar_one_or_none()
+
+
 def economic_input_bundle(db, item_id, pipeline):
     """``input_bundle`` from economic evidence (#513).
 
@@ -208,6 +220,7 @@ def economic_input_bundle(db, item_id, pipeline):
         **{row["id"]: row["url"] for row in snapshot["evidence"]},
     }
     ready, themes = _economic_themes(db, item, pipeline)
+    source_family_id = _source_family_id(db, item)
     refs = {index: theme_id for index, theme_id in enumerate(themes, start=1)}
     # The theme set, not the attempt: a reclassification into the same themes
     # must not re-run the model and supersede the item's observations.
@@ -222,6 +235,8 @@ def economic_input_bundle(db, item_id, pipeline):
     return {
         "kind": "economic",
         "ready": ready,
+        # Publication pins development observations by source family.
+        "source_family_id": source_family_id,
         "item": item,
         "sources": sources,
         "source_urls": source_urls,

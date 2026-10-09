@@ -14,13 +14,15 @@ def tracking_enabled():
     }
 
 
-def _prepare_developments():
+def _prepare_developments(*, require_legacy_sources=True):
     from app.database import SessionLocal
     from app.services import theme_development_worker as worker
     from app.tasks import theme_discovery_tasks
 
     with SessionLocal.begin() as db:
-        gate = theme_discovery_tasks._theme_automation_gate_result(db)
+        gate = theme_discovery_tasks._theme_automation_gate_result(
+            db, require_legacy_sources=require_legacy_sources
+        )
         if gate is not None:
             return gate
         queued = worker.discover(db)
@@ -47,7 +49,12 @@ def prepare_developments():
 
     with SessionLocal() as db:
         economic = economic_authority(db)
-    return _prepare_developments() if economic else _prepare_legacy_developments()
+    # Economic evidence need not come from a legacy content source (Social).
+    return (
+        _prepare_developments(require_legacy_sources=False)
+        if economic
+        else _prepare_legacy_developments()
+    )
 
 
 @celery_app.task(name="app.tasks.theme_intelligence_tasks.refresh_groups")

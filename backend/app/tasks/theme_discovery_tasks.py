@@ -151,7 +151,7 @@ def _theme_automation_skip_payload(*, reason: str, message: str) -> dict[str, ob
     }
 
 
-def _theme_automation_gate_result(db) -> dict[str, object] | None:
+def _theme_automation_gate_result(db, *, require_legacy_sources=True) -> dict[str, object] | None:
     if not settings.feature_themes:
         return _theme_automation_skip_payload(
             reason="themes_disabled",
@@ -170,6 +170,8 @@ def _theme_automation_gate_result(db) -> dict[str, object] | None:
             message="Theme automation is blocked until first-run bootstrap is ready.",
         )
 
+    if not require_legacy_sources:
+        return None
     from ..models.theme import ContentSource
     from ..services.theme_evidence_eligibility_service import legacy_sources
 

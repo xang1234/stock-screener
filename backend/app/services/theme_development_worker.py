@@ -355,6 +355,7 @@ def process_one(sessions, generate=generate_facts):
                         # economic themes and writes no legacy links (#513).
                         theme_ids=[] if economic else current["theme_ids"],
                         economic_theme_refs=current["economic_refs"] if economic else None,
+                        source_family_id=current["source_family_id"] if economic else None,
                         sources=current["sources"],
                         source_urls=current["source_urls"],
                         observations=values,
