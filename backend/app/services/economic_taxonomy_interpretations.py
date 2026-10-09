@@ -225,6 +225,10 @@ class EconomicTaxonomyInterpretationService:
             session.expunge(interpretation)
             return interpretation
 
+    def packet_for_attempt(self, session, attempt) -> EvidencePacket:
+        """The evidence packet an attempt classified."""
+        return self._packet_for_attempt(session, attempt)
+
     def default_attempt(self, session, source_lineage_id: UUID) -> ClassificationAttempt | None:
         """``choose_default`` in the caller's session (no session factory needed)."""
         return self._default_attempt(session, source_lineage_id)

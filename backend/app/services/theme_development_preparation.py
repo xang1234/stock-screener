@@ -112,8 +112,9 @@ def _economic_themes(db, item, pipeline):
     The item's source family leads to its lineage; the lineage's effective
     packet must be eligible for the channel, and the interpretation users see
     (a serving reviewer override, else the policy default) names the themes
-    (#513). ``ready`` is False until such a completed classification exists; a
-    completed classification may still name no themes.
+    (#513). Eligibility is the classified packet's, as publication pairs them:
+    a newer, unclassified capture does not change it. ``ready`` is False until
+    such a completed classification exists; it may still name no themes.
     """
     from app.models.economic_taxonomy import EconomicThemeRevision
     from app.models.economic_taxonomy_runtime import (
@@ -143,12 +144,12 @@ def _economic_themes(db, item, pipeline):
     ).scalar_one_or_none()
     if lineage_id is None:
         return False, {}
-    admission = EconomicSourceAdmissionService(db)
-    packet = admission.effective_packet(lineage_id)
-    if packet is None or pipeline not in admission.latest_channels(packet.id):
-        return False, {}
-    attempt = EconomicTaxonomyInterpretationService(None).serving_attempt(db, lineage_id)
+    interpretations = EconomicTaxonomyInterpretationService(None)
+    attempt = interpretations.serving_attempt(db, lineage_id)
     if attempt is None:
+        return False, {}
+    packet = interpretations.packet_for_attempt(db, attempt)
+    if pipeline not in EconomicSourceAdmissionService(db).latest_channels(packet.id):
         return False, {}
     theme_ids = sorted(
         set(

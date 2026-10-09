@@ -608,6 +608,40 @@ def test_economic_gate_does_not_require_legacy_content_sources(db_session, monke
     assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
 
 
+def test_channels_come_from_the_classified_packet_not_a_newer_unclassified_one(db_session):
+    # A newer capture (technical-only, not yet classified) supersedes the
+    # classified fundamental packet. As publication does, the themes keep the
+    # eligibility of the packet they were classified from.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session, channels=("fundamental",))
+    _classify(db_session, admitted, taxonomy, [theme.id])
+    now = datetime.now(timezone.utc)
+    EconomicSourceAdmissionService(db_session).admit_content(
+        EvidenceAdmission(
+            provider="news",
+            canonical_source_family=content_family_key("news", item.external_id, item.url),
+            capture_route="social",
+            original_text=TEXT + " Updated.",
+            preparation_version="social-v1",
+            source_metadata={"social_work_id": 8},
+            captured_at=now,
+            available_at=now,
+            evidence_channels=("technical",),
+            supersedes_packet_id=admitted.packet_id,
+        )
+    )
+    db_session.commit()
+
+    fundamental = development_bundle(db_session, item.id, "fundamental")
+    technical = development_bundle(db_session, item.id, "technical")
+    assert fundamental["economic_refs"] == {1: theme.id}
+    assert technical["ready"] is False
+
+    worker.discover(db_session)
+    db_session.commit()
+    assert "fundamental" in {row.pipeline for row in _work(db_session, item.id)}
+
+
 def test_explicit_backfill_only_queries_the_requested_items_lineages():
     from uuid import UUID
 

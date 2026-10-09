@@ -76,7 +76,7 @@ def _economic_candidate_query(item_ids, lineage_ids=None):
     from app.models.economic_taxonomy_runtime import ClassificationAttempt, ProcessingRequest
 
     query = (
-        select(ProcessingRequest.source_lineage_id)
+        select(ProcessingRequest.source_lineage_id, ProcessingRequest.evidence_packet_id)
         .join(
             ClassificationAttempt,
             ClassificationAttempt.processing_request_id == ProcessingRequest.id,
@@ -132,11 +132,12 @@ def _economic_candidates(db, item_ids):
         EconomicSourceAdmissionService,
     )
 
-    lineages = set(
-        db.execute(
-            _economic_candidate_query(item_ids, _item_lineages(db, item_ids) if item_ids is not None else None)
-        ).scalars()
-    )
+    classified = {}
+    for lineage_id, packet_id in db.execute(
+        _economic_candidate_query(item_ids, _item_lineages(db, item_ids) if item_ids is not None else None)
+    ):
+        classified.setdefault(lineage_id, set()).add(packet_id)
+    lineages = set(classified)
     if not lineages:
         return []
     items_by_lineage = {}
@@ -166,8 +167,13 @@ def _economic_candidates(db, item_ids):
         items &= wanted
         if not items:
             continue
-        packet = admission.effective_packet(lineage_id)
-        channels = admission.latest_channels(packet.id) if packet is not None else set()
+        # The bundle decides per channel; offer every channel a classified or
+        # the effective packet is eligible for.
+        packets = set(classified[lineage_id])
+        effective = admission.effective_packet(lineage_id)
+        if effective is not None:
+            packets.add(effective.id)
+        channels = set().union(*(admission.latest_channels(packet_id) for packet_id in packets))
         pairs.update((item, channel) for item in items for channel in CHANNELS if channel in channels)
     return sorted(pairs)
 
