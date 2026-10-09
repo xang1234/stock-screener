@@ -66,6 +66,16 @@ projection.
 - **Known event identities:** events whose observations link (through
   `EconomicThemeDevelopment`) to the bundle's economic themes.
 
+- **Entry points:** the scheduled `prepare_developments` and
+  `POST /themes/developments/backfill` choose the producer by mode; the legacy
+  producer keeps the #472 write fence.
+- **Not ready is not empty:** economic evidence not yet classified for a
+  channel records nothing (recording an empty revision would supersede the
+  item's legacy history).
+- **Cutover order:** until PR 2's backfill, economic "known event identity"
+  hints see no legacy history, so the model may re-word an event legacy history
+  already holds. Land PR 1 and PR 2 before a deployment cuts over.
+
 ### PR 2 — legacy links → economic rows (question 2)
 
 - Migration: `EconomicThemeDevelopment` gains `taxonomy_version_id`, required for

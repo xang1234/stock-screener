@@ -109,14 +109,13 @@ def economic_authority(db) -> bool:
 def _economic_themes(db, item, pipeline):
     """Economic themes of an item's effective evidence for one lens channel.
 
-    The item's source family leads to its lineage's effective packet; the
-    newest completed classification of that packet names the themes (#513).
+    The item's source family leads to its lineage; the lineage's effective
+    packet must be eligible for the channel, and the canonical interpretation
+    choice (the one generations serve) names the themes (#513).
     """
     from app.models.economic_taxonomy import EconomicThemeRevision
     from app.models.economic_taxonomy_runtime import (
         ClaimAssignment,
-        ClassificationAttempt,
-        ProcessingRequest,
         SourceFamily,
         SourceLineage,
         TaxonomyAuthority,
@@ -125,10 +124,13 @@ def _economic_themes(db, item, pipeline):
         EconomicSourceAdmissionService,
         content_family_key,
     )
+    from app.services.economic_taxonomy_interpretations import (
+        EconomicTaxonomyInterpretationService,
+    )
 
     family_key = content_family_key(item.source_type, item.external_id, item.url)
     if family_key is None:
-        return None, {}
+        return {}
     lineage_id = db.execute(
         select(SourceLineage.id)
         .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
@@ -137,22 +139,15 @@ def _economic_themes(db, item, pipeline):
             SourceLineage.scope_suffix == "",
         )
     ).scalar_one_or_none()
+    if lineage_id is None:
+        return {}
     admission = EconomicSourceAdmissionService(db)
-    packet = admission.effective_packet(lineage_id) if lineage_id is not None else None
-    if packet is None or pipeline not in admission._latest_channels(packet.id):  # noqa: SLF001
-        return None, {}
-    attempt = db.execute(
-        select(ClassificationAttempt)
-        .join(ProcessingRequest, ProcessingRequest.id == ClassificationAttempt.processing_request_id)
-        .where(
-            ProcessingRequest.evidence_packet_id == packet.id,
-            ClassificationAttempt.result_status == "completed",
-        )
-        .order_by(ClassificationAttempt.created_at.desc(), ClassificationAttempt.id.desc())
-        .limit(1)
-    ).scalar_one_or_none()
+    packet = admission.effective_packet(lineage_id)
+    if packet is None or pipeline not in admission.latest_channels(packet.id):
+        return {}
+    attempt = EconomicTaxonomyInterpretationService(None).default_attempt(db, lineage_id)
     if attempt is None:
-        return None, {}
+        return {}
     theme_ids = sorted(
         set(
             db.execute(
@@ -163,18 +158,28 @@ def _economic_themes(db, item, pipeline):
         ),
         key=str,
     )
-    version_id = db.execute(
+    processing_version = db.execute(
         select(TaxonomyAuthority.processing_taxonomy_version_id).where(TaxonomyAuthority.id == 1)
-    ).scalar_one_or_none() or attempt.output_taxonomy_version_id or attempt.input_taxonomy_version_id
-    names = dict(
-        db.execute(
-            select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
-                EconomicThemeRevision.taxonomy_version_id == version_id,
-                EconomicThemeRevision.theme_id.in_(theme_ids),
-            )
-        ).all()
-    )
-    return attempt, {theme_id: names.get(theme_id, str(theme_id)) for theme_id in theme_ids}
+    ).scalar_one_or_none()
+    names = {}
+    # The serving taxonomy's name, else the version the attempt classified against.
+    for version_id in (
+        attempt.input_taxonomy_version_id,
+        attempt.output_taxonomy_version_id,
+        processing_version,
+    ):
+        if version_id is None:
+            continue
+        names.update(
+            db.execute(
+                select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
+                    EconomicThemeRevision.taxonomy_version_id == version_id,
+                    EconomicThemeRevision.theme_id.in_(theme_ids),
+                )
+            ).all()
+        )
+    # A theme no taxonomy version names is not offered to the model.
+    return {theme_id: names[theme_id] for theme_id in theme_ids if theme_id in names}
 
 
 def economic_input_bundle(db, item_id, pipeline):
@@ -200,14 +205,15 @@ def economic_input_bundle(db, item_id, pipeline):
         "translated_primary": item.url,
         **{row["id"]: row["url"] for row in snapshot["evidence"]},
     }
-    attempt, themes = _economic_themes(db, item, pipeline)
+    themes = _economic_themes(db, item, pipeline)
     refs = {index: theme_id for index, theme_id in enumerate(themes, start=1)}
+    # The theme set, not the attempt: a reclassification into the same themes
+    # must not re-run the model and supersede the item's observations.
     revision = digest(
         [
             "economic",
             sources,
             source_urls,
-            str(attempt.id) if attempt is not None else None,
             [str(theme_id) for theme_id in themes],
         ]
     )
@@ -238,12 +244,18 @@ def _known_event_identities(db, pipeline, bundle):
         ThemeDevelopmentTheme,
     )
 
-    if bundle.get("kind") == "economic":
+    # A bundle of the other kind means the mode changed mid-run: give no hints;
+    # recording re-checks the revision and discards the work.
+    if economic_authority(db):
+        if bundle.get("kind") != "economic":
+            return []
         link = (
             EconomicThemeDevelopment.observation_id == ThemeDevelopmentObservation.id,
             EconomicThemeDevelopment.economic_theme_id.in_(list(bundle["economic_refs"].values())),
         )
     else:
+        if bundle.get("kind") == "economic":
+            return []
         from app.services.theme_equivalence_service import ThemeEquivalenceService
 
         members = ThemeEquivalenceService(db).snapshot(pipeline).expand(bundle["theme_ids"])

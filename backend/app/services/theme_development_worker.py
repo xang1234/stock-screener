@@ -58,59 +58,120 @@ def enqueue(db, item_id, pipeline):
     return row
 
 
-def _economic_candidates(db, item_ids):
-    """(item, channel) pairs whose effective content evidence has a completed
-    classification, from recent classifications of recently fetched items."""
+CHANNELS = ("technical", "fundamental")
+
+
+def _economic_candidate_query(item_ids):
+    """Lineages with a completed, non-empty classification.
+
+    No DISTINCT and no JSON in the select list: PostgreSQL cannot compare its
+    json type. Recent classifications only for automatic discovery, so a new
+    taxonomy version reclassifying old items does not re-run the model.
+    """
+    from sqlalchemy import exists, select
+
     from app.models.economic_taxonomy_runtime import (
+        ClaimAssignment,
         ClassificationAttempt,
-        EvidencePacket,
         ProcessingRequest,
     )
-    from app.services.economic_source_admission import CONTENT_INGESTION_ROUTE
 
     query = (
-        db.query(EvidencePacket.source_metadata)
-        .join(ProcessingRequest, ProcessingRequest.evidence_packet_id == EvidencePacket.id)
+        select(ProcessingRequest.source_lineage_id)
         .join(
             ClassificationAttempt,
             ClassificationAttempt.processing_request_id == ProcessingRequest.id,
         )
-        .filter(
-            EvidencePacket.capture_route == CONTENT_INGESTION_ROUTE,
+        .where(
             ClassificationAttempt.result_status == "completed",
+            exists().where(ClaimAssignment.classification_attempt_id == ClassificationAttempt.id),
         )
     )
     if item_ids is None:
-        # Recent classifications only: a new taxonomy version reclassifies old
-        # items, which must not re-run the model over history.
-        query = query.filter(
+        query = query.where(
             ClassificationAttempt.created_at >= datetime.now(timezone.utc) - timedelta(days=2)
         )
-    found = {
-        (metadata or {}).get("content_item_id") for (metadata,) in query.distinct().all()
-    }
-    found.discard(None)
+    return query
+
+
+def _economic_candidates(db, item_ids):
+    """(item, channel) pairs with classified economic evidence (#513).
+
+    The classified packet may be a later capture of the same source (Social
+    supersedes an X capture, #500), so items are found through any
+    content-ingestion packet in the lineage; channels come from the lineage's
+    effective packet.
+    """
+    from sqlalchemy import select
+
+    from app.models.economic_taxonomy_runtime import EvidencePacket
+    from app.services.economic_source_admission import (
+        CONTENT_INGESTION_ROUTE,
+        EconomicSourceAdmissionService,
+    )
+
+    lineages = set(db.execute(_economic_candidate_query(item_ids)).scalars())
+    if not lineages:
+        return []
+    items_by_lineage = {}
+    for lineage_id, metadata in db.execute(
+        select(EvidencePacket.source_lineage_id, EvidencePacket.source_metadata).where(
+            EvidencePacket.source_lineage_id.in_(lineages),
+            EvidencePacket.capture_route == CONTENT_INGESTION_ROUTE,
+        )
+    ):
+        item = (metadata or {}).get("content_item_id")
+        if item is not None:
+            items_by_lineage.setdefault(lineage_id, set()).add(int(item))
+    wanted = {item for items in items_by_lineage.values() for item in items}
     if item_ids is not None:
-        found &= set(item_ids)
-    elif found:
-        found = {
+        wanted &= set(item_ids)
+    elif wanted:
+        wanted = {
             row.id
             for row in db.query(ContentItem.id).filter(
-                ContentItem.id.in_(found),
+                ContentItem.id.in_(wanted),
                 ContentItem.fetched_at >= datetime.now(timezone.utc) - timedelta(days=2),
             )
         }
-    # Eligibility per channel is decided by the bundle; an ineligible channel
-    # yields no themes and records nothing.
-    return sorted((item, channel) for item in found for channel in ("technical", "fundamental"))
+    admission = EconomicSourceAdmissionService(db)
+    pairs = set()
+    for lineage_id, items in items_by_lineage.items():
+        items &= wanted
+        if not items:
+            continue
+        packet = admission.effective_packet(lineage_id)
+        channels = admission.latest_channels(packet.id) if packet is not None else set()
+        pairs.update((item, channel) for item in items for channel in CHANNELS if channel in channels)
+    return sorted(pairs)
+
+
+def _least_recently_checked(db, pairs, limit):
+    """The legacy rotation: never-checked pairs first, then the oldest check."""
+    if not pairs:
+        return []
+    checked = {
+        (row.item, row.pipeline): row.checked_at
+        for row in db.query(
+            ThemeDevelopmentWork.content_item_id.label("item"),
+            ThemeDevelopmentWork.pipeline.label("pipeline"),
+            func.max(ThemeDevelopmentWork.checked_at).label("checked_at"),
+        )
+        .filter(ThemeDevelopmentWork.content_item_id.in_({item for item, _ in pairs}))
+        .group_by(ThemeDevelopmentWork.content_item_id, ThemeDevelopmentWork.pipeline)
+    }
+
+    def key(pair):
+        at = checked.get(pair)
+        return (at is not None, at.timestamp() if at is not None else 0.0, pair)
+
+    return sorted(pairs, key=key)[: min(limit, 100)]
 
 
 def discover(db, limit=50, item_ids=None):
     if economic_authority(db):
         queued = 0
-        for item, pipeline in _economic_candidates(db, item_ids)[: min(limit, 100)]:
-            if not development_bundle(db, item, pipeline)["theme_ids"]:
-                continue
+        for item, pipeline in _least_recently_checked(db, _economic_candidates(db, item_ids), limit):
             work = enqueue(db, item, pipeline)
             queued += work.status == "pending"
         return queued
@@ -247,9 +308,16 @@ def process_one(sessions, generate=generate_facts):
                 if row.claim_token != token:
                     return True
                 current = development_bundle(db, item_id, pipeline)
+                # Economic evidence not classified for this channel is "not
+                # ready", never an empty revision: recording supersedes every
+                # other revision of the item, which would wipe its history.
+                not_ready = current["kind"] == "economic" and not current["theme_ids"]
                 if values is None or current["revision"] != revision:
                     row.status = "superseded"
-                    enqueue(db, item_id, pipeline)
+                    if not not_ready:
+                        enqueue(db, item_id, pipeline)
+                elif not_ready:
+                    row.status = "complete"
                 else:
                     economic = current["kind"] == "economic"
                     record_developments(

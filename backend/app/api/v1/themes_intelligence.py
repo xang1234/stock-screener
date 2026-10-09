@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import String, cast, exists, func, or_
+from sqlalchemy import String, cast, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.config import require_admin
@@ -175,7 +175,25 @@ def search_equivalent_themes(
     return {"themes": list(results.values()), "version": snapshot.version}
 
 
-@router.post("/developments/backfill", dependencies=[Depends(require_admin), Depends(reject_legacy_theme_writes)])
+def guard_development_backfill(db: DbSession) -> None:
+    """Admit the economic producer under economic authority (#513).
+
+    It writes only economic links, fenced by ``producer_write``; rollback
+    recovery (``writes_fenced``) still refuses. Otherwise the legacy producer
+    runs, under the legacy writer guard.
+    """
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+    from app.services.theme_development_preparation import economic_authority
+
+    fenced = db.execute(
+        select(TaxonomyAuthority.writes_fenced).where(TaxonomyAuthority.id == 1)
+    ).scalar_one_or_none()
+    if economic_authority(db) and not fenced:
+        return
+    reject_legacy_theme_writes(db)
+
+
+@router.post("/developments/backfill", dependencies=[Depends(require_admin), Depends(guard_development_backfill)])
 def backfill_developments(request: BackfillRequest, db: DbSession):
     from app.services.theme_development_worker import discover
 

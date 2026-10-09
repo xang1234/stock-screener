@@ -31,6 +31,7 @@ from .theme_development_facts import (
     DevelopmentFacts as DevelopmentFacts,  # noqa: PLC0414 -- Existing public import.
 )
 from .theme_development_facts import EventFacts, digest, identity, normalize_batch
+from .theme_development_preparation import economic_authority
 from .theme_event_state import EventState
 from .theme_event_state import (
     classify as classify,  # noqa: PLC0414 -- Existing public import.
@@ -342,16 +343,18 @@ def _ensure_links(
     economic_link_origin,
 ) -> bool:
     changed = False
-    current_legacy = {link.theme_id for link in observation.theme_links}
-    for theme_id in legacy_theme_ids:
-        if theme_id not in current_legacy:
-            db.add(
-                ThemeDevelopmentTheme(
-                    observation_id=observation.id,
-                    theme_id=theme_id,
+    # Legacy links are neither read nor written under economic authority (#513).
+    if legacy_theme_ids and not economic_authority(db):
+        current_legacy = {link.theme_id for link in observation.theme_links}
+        for theme_id in legacy_theme_ids:
+            if theme_id not in current_legacy:
+                db.add(
+                    ThemeDevelopmentTheme(
+                        observation_id=observation.id,
+                        theme_id=theme_id,
+                    )
                 )
-            )
-            changed = True
+                changed = True
     current_economic = {
         link.economic_theme_id for link in observation.economic_theme_links
     }

@@ -225,6 +225,10 @@ class EconomicTaxonomyInterpretationService:
             session.expunge(interpretation)
             return interpretation
 
+    def default_attempt(self, session, source_lineage_id: UUID) -> ClassificationAttempt | None:
+        """``choose_default`` in the caller's session (no session factory needed)."""
+        return self._default_attempt(session, source_lineage_id)
+
     def choose_default(self, source_lineage_id: UUID) -> ClassificationAttempt | None:
         with self.session_factory() as session:
             chosen = self._default_attempt(session, source_lineage_id)

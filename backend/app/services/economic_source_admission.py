@@ -504,6 +504,10 @@ class EconomicSourceAdmissionService:
             return 0
         return 1 if disposition == "hold_review" else None
 
+    def latest_channels(self, packet_id: UUID) -> set[str]:
+        """The lens channels the packet is currently eligible for."""
+        return self._latest_channels(packet_id)
+
     def _latest_channels(self, packet_id: UUID) -> set[str]:
         channels = self.session.scalar(
             select(LensEligibilityRevision.evidence_channels)
