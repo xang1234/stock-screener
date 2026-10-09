@@ -805,6 +805,29 @@ def test_discovery_offers_a_channel_that_still_has_active_observations(db_sessio
     assert (item.id, "technical") in pairs
 
 
+def test_a_recent_eligibility_revision_brings_an_old_item_back_into_discovery(db_session):
+    from datetime import timedelta
+
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session, channels=("fundamental",))
+    old = datetime.now(timezone.utc) - timedelta(days=5)
+    _classify(db_session, admitted, taxonomy, [theme.id], created_at=old)
+    item.fetched_at = old
+    db_session.commit()
+    worker.discover(db_session)
+    db_session.commit()
+    assert _work(db_session, item.id) == []  # too old for automatic discovery
+
+    EconomicSourceAdmissionService(db_session).revise_lens_eligibility(
+        admitted.packet_id, evidence_channels=("fundamental", "technical"), reason="technical added"
+    )
+    db_session.commit()
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert "technical" in {row.pipeline for row in _work(db_session, item.id)}
+
+
 def test_explicit_backfill_only_queries_the_requested_items_lineages():
     from uuid import UUID
 

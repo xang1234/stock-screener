@@ -93,6 +93,24 @@ def _economic_candidate_query(item_ids, lineage_ids=None):
     return query
 
 
+def _recently_revised_eligibility_lineages(db):
+    """Lineages whose lens eligibility changed in the last two days (a channel
+    added needs developments; a channel removed needs its empty revision)."""
+    from sqlalchemy import select
+
+    from app.models.economic_taxonomy_runtime import LensEligibilityRevision
+
+    return set(
+        db.execute(
+            select(LensEligibilityRevision.source_lineage_id).where(
+                LensEligibilityRevision.revision_number > 1,
+                LensEligibilityRevision.created_at
+                >= datetime.now(timezone.utc) - timedelta(days=2),
+            )
+        ).scalars()
+    )
+
+
 def _recently_overridden_lineages(db):
     """Lineages whose reviewer override became visible in the last two days.
 
@@ -211,7 +229,13 @@ def _economic_candidates(db, item_ids):
         classified.setdefault(lineage_id, set()).add(packet_id)
     # A recent reviewer override may select an old attempt: its lineage comes
     # back regardless of the attempt's or the item's age.
-    overridden = _recently_overridden_lineages(db) if item_ids is None else set()
+    # Targeted changes (a published override, a lens eligibility revision)
+    # bring their lineage back regardless of the attempt's or the item's age.
+    overridden = (
+        _recently_overridden_lineages(db) | _recently_revised_eligibility_lineages(db)
+        if item_ids is None
+        else set()
+    )
     if overridden:
         for lineage_id, packet_id in db.execute(_economic_candidate_query([], list(overridden))):
             classified.setdefault(lineage_id, set()).add(packet_id)
