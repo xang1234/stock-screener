@@ -2,7 +2,7 @@
 
 import json
 
-from sqlalchemy import exists
+from sqlalchemy import exists, select
 
 from app.models.theme import (
     ContentItem,
@@ -96,29 +96,170 @@ def input_bundle(db, item_id, pipeline):
     }
 
 
-def generate_facts(pipeline, db, bundle):
-    if not bundle["theme_ids"]:
-        return []
+def economic_authority(db) -> bool:
+    """Developments come from economic evidence only while economic authority serves."""
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+
+    mode = db.execute(
+        select(TaxonomyAuthority.mode).where(TaxonomyAuthority.id == 1)
+    ).scalar_one_or_none()
+    return mode == "economic"
+
+
+def _economic_themes(db, item, pipeline):
+    """Economic themes of an item's effective evidence for one lens channel.
+
+    The item's source family leads to its lineage's effective packet; the
+    newest completed classification of that packet names the themes (#513).
+    """
+    from app.models.economic_taxonomy import EconomicThemeRevision
+    from app.models.economic_taxonomy_runtime import (
+        ClaimAssignment,
+        ClassificationAttempt,
+        ProcessingRequest,
+        SourceFamily,
+        SourceLineage,
+        TaxonomyAuthority,
+    )
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        content_family_key,
+    )
+
+    family_key = content_family_key(item.source_type, item.external_id, item.url)
+    if family_key is None:
+        return None, {}
+    lineage_id = db.execute(
+        select(SourceLineage.id)
+        .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
+        .where(
+            SourceFamily.canonical_source_key == family_key,
+            SourceLineage.scope_suffix == "",
+        )
+    ).scalar_one_or_none()
+    admission = EconomicSourceAdmissionService(db)
+    packet = admission.effective_packet(lineage_id) if lineage_id is not None else None
+    if packet is None or pipeline not in admission._latest_channels(packet.id):  # noqa: SLF001
+        return None, {}
+    attempt = db.execute(
+        select(ClassificationAttempt)
+        .join(ProcessingRequest, ProcessingRequest.id == ClassificationAttempt.processing_request_id)
+        .where(
+            ProcessingRequest.evidence_packet_id == packet.id,
+            ClassificationAttempt.result_status == "completed",
+        )
+        .order_by(ClassificationAttempt.created_at.desc(), ClassificationAttempt.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if attempt is None:
+        return None, {}
+    theme_ids = sorted(
+        set(
+            db.execute(
+                select(ClaimAssignment.economic_theme_id).where(
+                    ClaimAssignment.classification_attempt_id == attempt.id
+                )
+            ).scalars()
+        ),
+        key=str,
+    )
+    version_id = db.execute(
+        select(TaxonomyAuthority.processing_taxonomy_version_id).where(TaxonomyAuthority.id == 1)
+    ).scalar_one_or_none() or attempt.output_taxonomy_version_id or attempt.input_taxonomy_version_id
+    names = dict(
+        db.execute(
+            select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
+                EconomicThemeRevision.taxonomy_version_id == version_id,
+                EconomicThemeRevision.theme_id.in_(theme_ids),
+            )
+        ).all()
+    )
+    return attempt, {theme_id: names.get(theme_id, str(theme_id)) for theme_id in theme_ids}
+
+
+def economic_input_bundle(db, item_id, pipeline):
+    """``input_bundle`` from economic evidence (#513).
+
+    The model sees the economic themes as integers ``1..n``; ``economic_refs``
+    maps them back, so each event links to its own economic themes.
+    """
+    item = db.get(ContentItem, item_id)
+    if item is None:
+        raise ValueError("development_source_missing")
+    snapshot = attachment_snapshot(db, item_id)
+    sources = {
+        "primary": f"Title: {item.title or ''}\n\n{(item.content or '')[:10000]}"
+    }
+    if item.translated_content:
+        sources["translated_primary"] = (
+            f"Title: {item.translated_title or ''}\n\n{item.translated_content[:10000]}"
+        )
+    sources.update({row["id"]: row["text"] for row in snapshot["evidence"]})
+    source_urls = {
+        "primary": item.url,
+        "translated_primary": item.url,
+        **{row["id"]: row["url"] for row in snapshot["evidence"]},
+    }
+    attempt, themes = _economic_themes(db, item, pipeline)
+    refs = {index: theme_id for index, theme_id in enumerate(themes, start=1)}
+    revision = digest(
+        [
+            "economic",
+            sources,
+            source_urls,
+            str(attempt.id) if attempt is not None else None,
+            [str(theme_id) for theme_id in themes],
+        ]
+    )
+    return {
+        "kind": "economic",
+        "item": item,
+        "sources": sources,
+        "source_urls": source_urls,
+        "theme_ids": sorted(refs),
+        "economic_refs": refs,
+        "revision": revision,
+        "themes": {index: themes[theme_id] for index, theme_id in refs.items()},
+    }
+
+
+def development_bundle(db, item_id, pipeline):
+    """The bundle for the serving authority: economic evidence, else legacy themes."""
+    if economic_authority(db):
+        return economic_input_bundle(db, item_id, pipeline)
+    return {"kind": "legacy", **input_bundle(db, item_id, pipeline)}
+
+
+def _known_event_identities(db, pipeline, bundle):
     from app.models.theme_intelligence import (
+        EconomicThemeDevelopment,
         ThemeDevelopmentEvent,
         ThemeDevelopmentObservation,
         ThemeDevelopmentTheme,
     )
-    from app.services.theme_equivalence_service import ThemeEquivalenceService
-    from app.services.theme_extraction_service import ThemeExtractionService
 
-    group = ThemeEquivalenceService(db).snapshot(pipeline)
-    members = group.expand(bundle["theme_ids"])
+    if bundle.get("kind") == "economic":
+        link = (
+            EconomicThemeDevelopment.observation_id == ThemeDevelopmentObservation.id,
+            EconomicThemeDevelopment.economic_theme_id.in_(list(bundle["economic_refs"].values())),
+        )
+    else:
+        from app.services.theme_equivalence_service import ThemeEquivalenceService
+
+        members = ThemeEquivalenceService(db).snapshot(pipeline).expand(bundle["theme_ids"])
+        link = (
+            ThemeDevelopmentTheme.observation_id == ThemeDevelopmentObservation.id,
+            ThemeDevelopmentTheme.theme_id.in_(members),
+        )
     # EXISTS deduplicates matching observations without DISTINCT over JSON,
     # which PostgreSQL's JSON type cannot compare for equality.
-    known = (
+    return (
         db.query(ThemeDevelopmentEvent)
         .filter(
             exists().where(
                 ThemeDevelopmentObservation.event_id == ThemeDevelopmentEvent.id,
                 ThemeDevelopmentObservation.analysis_channel == pipeline,
-                ThemeDevelopmentTheme.observation_id == ThemeDevelopmentObservation.id,
-                ThemeDevelopmentTheme.theme_id.in_(members),
+                *link,
                 ThemeDevelopmentObservation.superseded.is_(False),
             ),
         )
@@ -126,6 +267,14 @@ def generate_facts(pipeline, db, bundle):
         .limit(30)
         .all()
     )
+
+
+def generate_facts(pipeline, db, bundle):
+    if not bundle["theme_ids"]:
+        return []
+    from app.services.theme_extraction_service import ThemeExtractionService
+
+    known = _known_event_identities(db, pipeline, bundle)
     service = ThemeExtractionService(db, pipeline=pipeline)
     service._rate_limit()
     raw = service._try_generate_litellm(

@@ -10,14 +10,18 @@ from app.models.theme import ContentItem, ThemeMention
 from app.models.theme_intelligence import ThemeDevelopmentWork
 from app.services.economic_taxonomy_fence import producer_write
 from app.services.theme_development_facts import normalize_batch
-from app.services.theme_development_preparation import generate_facts, input_bundle
+from app.services.theme_development_preparation import (
+    development_bundle,
+    economic_authority,
+    generate_facts,
+)
 from app.services.theme_development_service import record_developments
 from app.services.theme_evidence_eligibility_service import legacy_eligibility_exists
 
 
 def enqueue(db, item_id, pipeline):
     db.query(ContentItem).filter_by(id=item_id).with_for_update().one()
-    bundle = input_bundle(db, item_id, pipeline)
+    bundle = development_bundle(db, item_id, pipeline)
     row = (
         db.query(ThemeDevelopmentWork)
         .filter_by(
@@ -54,7 +58,62 @@ def enqueue(db, item_id, pipeline):
     return row
 
 
+def _economic_candidates(db, item_ids):
+    """(item, channel) pairs whose effective content evidence has a completed
+    classification, from recent classifications of recently fetched items."""
+    from app.models.economic_taxonomy_runtime import (
+        ClassificationAttempt,
+        EvidencePacket,
+        ProcessingRequest,
+    )
+    from app.services.economic_source_admission import CONTENT_INGESTION_ROUTE
+
+    query = (
+        db.query(EvidencePacket.source_metadata)
+        .join(ProcessingRequest, ProcessingRequest.evidence_packet_id == EvidencePacket.id)
+        .join(
+            ClassificationAttempt,
+            ClassificationAttempt.processing_request_id == ProcessingRequest.id,
+        )
+        .filter(
+            EvidencePacket.capture_route == CONTENT_INGESTION_ROUTE,
+            ClassificationAttempt.result_status == "completed",
+        )
+    )
+    if item_ids is None:
+        # Recent classifications only: a new taxonomy version reclassifies old
+        # items, which must not re-run the model over history.
+        query = query.filter(
+            ClassificationAttempt.created_at >= datetime.now(timezone.utc) - timedelta(days=2)
+        )
+    found = {
+        (metadata or {}).get("content_item_id") for (metadata,) in query.distinct().all()
+    }
+    found.discard(None)
+    if item_ids is not None:
+        found &= set(item_ids)
+    elif found:
+        found = {
+            row.id
+            for row in db.query(ContentItem.id).filter(
+                ContentItem.id.in_(found),
+                ContentItem.fetched_at >= datetime.now(timezone.utc) - timedelta(days=2),
+            )
+        }
+    # Eligibility per channel is decided by the bundle; an ineligible channel
+    # yields no themes and records nothing.
+    return sorted((item, channel) for item in found for channel in ("technical", "fundamental"))
+
+
 def discover(db, limit=50, item_ids=None):
+    if economic_authority(db):
+        queued = 0
+        for item, pipeline in _economic_candidates(db, item_ids)[: min(limit, 100)]:
+            if not development_bundle(db, item, pipeline)["theme_ids"]:
+                continue
+            work = enqueue(db, item, pipeline)
+            queued += work.status == "pending"
+        return queued
     latest = (
         db.query(
             ThemeMention.content_item_id.label("item"),
@@ -153,7 +212,7 @@ def process_one(sessions, generate=generate_facts):
         )
     try:
         with sessions() as db:
-            bundle = input_bundle(db, item_id, pipeline)
+            bundle = development_bundle(db, item_id, pipeline)
             values = (
                 generate(pipeline, db, bundle)
                 if bundle["revision"] == revision
@@ -187,17 +246,21 @@ def process_one(sessions, generate=generate_facts):
                 )
                 if row.claim_token != token:
                     return True
-                current = input_bundle(db, item_id, pipeline)
+                current = development_bundle(db, item_id, pipeline)
                 if values is None or current["revision"] != revision:
                     row.status = "superseded"
                     enqueue(db, item_id, pipeline)
                 else:
+                    economic = current["kind"] == "economic"
                     record_developments(
                         db,
                         item=current["item"],
                         pipeline=pipeline,
                         revision=revision,
-                        theme_ids=current["theme_ids"],
+                        # Economic authority links each event to its own
+                        # economic themes and writes no legacy links (#513).
+                        theme_ids=[] if economic else current["theme_ids"],
+                        economic_theme_refs=current["economic_refs"] if economic else None,
                         sources=current["sources"],
                         source_urls=current["source_urls"],
                         observations=values,

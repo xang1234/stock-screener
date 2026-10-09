@@ -74,8 +74,13 @@ def record_developments(
     authority_fenced=False,
     authority_epoch=None,
     economic_link_origin="economic_native",
+    economic_theme_refs=None,
 ):
     """Persist one evidence revision and its exact development selections.
+
+    ``economic_theme_refs`` maps the integer theme refs the model returned to
+    economic theme ids (#513): each event then links to its own economic themes
+    and no legacy theme link is written.
 
     Model/provider work is completed by the caller. Validation and deterministic
     normalization happen before the short authority-fenced write section.
@@ -93,14 +98,19 @@ def record_developments(
     }:
         raise ValueError("invalid_economic_development_link_origin")
     legacy_theme_ids = sorted(set(theme_ids))
-    economic_ids = sorted(set(economic_theme_ids), key=str)
+    economic_theme_refs = dict(economic_theme_refs or {})
+    if economic_theme_refs and legacy_theme_ids:
+        raise ValueError("development_theme_refs_conflict")
+    economic_ids = sorted(
+        set(economic_theme_ids) | set(economic_theme_refs.values()), key=str
+    )
     source_urls = source_urls or {}
     parsed = prepared_observations or normalize_batch(
         observations,
         item_id=item.id,
-        theme_ids=set(legacy_theme_ids),
+        theme_ids=set(economic_theme_refs) or set(legacy_theme_ids),
         sources=sources,
-        allow_empty_theme_ids=bool(economic_ids),
+        allow_empty_theme_ids=bool(economic_ids) and not economic_theme_refs,
     )
     if parsed and not legacy_theme_ids and not economic_ids:
         raise ValueError("invalid_development_themes")
@@ -122,6 +132,7 @@ def record_developments(
             available_at=available_at,
             development_support=development_support,
             economic_link_origin=economic_link_origin,
+            economic_theme_refs=economic_theme_refs,
         )
         if changed:
             logical_source_key = (
@@ -176,6 +187,7 @@ def _record_developments_fenced(
     available_at,
     development_support,
     economic_link_origin,
+    economic_theme_refs=None,
 ):
     if source_family_id is not None:
         source = db.scalar(
@@ -209,13 +221,16 @@ def _record_developments_fenced(
 
     if existing and all(not row.superseded for row in existing):
         for row in existing:
-            changed |= _ensure_links(
-                db,
-                row,
-                legacy_theme_ids=legacy_theme_ids,
-                economic_theme_ids=economic_theme_ids,
-                economic_link_origin=economic_link_origin,
-            )
+            # Per-event economic links were written with the observation; the
+            # same revision re-recorded has nothing item-wide to add.
+            if not economic_theme_refs:
+                changed |= _ensure_links(
+                    db,
+                    row,
+                    legacy_theme_ids=legacy_theme_ids,
+                    economic_theme_ids=economic_theme_ids,
+                    economic_link_origin=economic_link_origin,
+                )
             affected_canonical_ids.add(current_development_event(db, row.event_id).id)
     else:
         for row in existing:
@@ -271,13 +286,24 @@ def _record_developments_fenced(
             elif row.superseded:
                 row.superseded = False
                 changed = True
-            changed |= _ensure_links(
-                db,
-                row,
-                legacy_theme_ids=facts.theme_ids or legacy_theme_ids,
-                economic_theme_ids=economic_theme_ids,
-                economic_link_origin=economic_link_origin,
-            )
+            if economic_theme_refs:
+                changed |= _ensure_links(
+                    db,
+                    row,
+                    legacy_theme_ids=(),
+                    economic_theme_ids=sorted(
+                        {economic_theme_refs[ref] for ref in facts.theme_ids}, key=str
+                    ),
+                    economic_link_origin=economic_link_origin,
+                )
+            else:
+                changed |= _ensure_links(
+                    db,
+                    row,
+                    legacy_theme_ids=facts.theme_ids or legacy_theme_ids,
+                    economic_theme_ids=economic_theme_ids,
+                    economic_link_origin=economic_link_origin,
+                )
             if row not in results:
                 results.append(row)
 
