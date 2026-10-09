@@ -21,7 +21,10 @@ import {
   fetchStaticBreadthContributors,
   fetchStaticJson,
   resolveStaticMarketEntry,
+  staticQueryOptions,
+  useStaticGeneration,
   useStaticManifest,
+  withGeneration,
 } from '../dataClient';
 import { useStaticMarket } from '../StaticMarketContext';
 
@@ -34,26 +37,28 @@ function StaticBreadthPage() {
     () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
     [manifestQuery.data, selectedMarket],
   );
-  const breadthQuery = useQuery({
-    queryKey: ['staticBreadth', marketEntry.pages?.breadth?.path],
-    queryFn: () => fetchStaticJson(marketEntry.pages.breadth.path),
+  const { generation, dataRoot } = useStaticGeneration();
+  const breadthQuery = useQuery(staticQueryOptions({
+    key: ['staticBreadth', marketEntry.pages?.breadth?.path],
+    generation,
+    queryFn: () => fetchStaticJson(marketEntry.pages.breadth.path, dataRoot),
     enabled: Boolean(marketEntry.pages?.breadth?.path),
-    staleTime: Infinity,
-  });
+  }));
   const contributorIndexPath = marketEntry.assets?.breadth_contributors?.index_path;
   const contributorDrilldown = useBreadthContributors({
     market: marketEntry.market,
     indexQueryKey: contributorIndexPath
-      ? ['staticBreadthContributors', 'index', marketEntry.market, contributorIndexPath]
+      ? withGeneration(['staticBreadthContributors', 'index', marketEntry.market, contributorIndexPath], generation)
       : null,
     loadIndex: contributorIndexPath
-      ? () => fetchStaticBreadthContributorIndex(contributorIndexPath)
+      ? () => fetchStaticBreadthContributorIndex(contributorIndexPath, dataRoot)
       : null,
     loadDate: contributorIndexPath
-      ? (date) => fetchStaticBreadthContributors(contributorIndexPath, date)
+      ? (date) => fetchStaticBreadthContributors(contributorIndexPath, date, dataRoot)
       : null,
     indexStaleTime: Infinity,
     documentStaleTime: Infinity,
+    documentKeySuffix: withGeneration([], generation),
   });
   const [timeRange, setTimeRange] = useState('1M');
   const [selectedTab, setSelectedTab] = useState(0);

@@ -58,6 +58,11 @@ describe('StaticChartViewerModal', () => {
     globalThis.fetch = vi.fn(async (url) => {
       const path = String(url).split('/static-data/')[1];
 
+      // Static data loads once the root manifest names its generation (flat here).
+      if (path === 'manifest.json') {
+        return { ok: true, status: 200, json: async () => ({ generated_at: '2026-04-03T20:10:00Z' }) };
+      }
+
       if (path === 'charts/NVDA.json') {
         return {
           ok: true,

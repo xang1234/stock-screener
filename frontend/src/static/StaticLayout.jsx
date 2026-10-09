@@ -1,7 +1,9 @@
 import { useContext } from 'react';
 import {
+  Alert,
   AppBar,
   Box,
+  Button,
   Chip,
   Container,
   FormControl,
@@ -26,6 +28,7 @@ import {
   resolveStaticMarketEntry,
   useStaticManifest,
 } from './dataClient';
+import { useStaticGenerationLifecycle } from './useStaticGenerationLifecycle';
 import { marketFlag } from '../utils/marketFlags';
 import { isStaticOptionsAvailable } from '../features/options/optionsAvailability';
 
@@ -41,9 +44,11 @@ function StaticLayout({ children }) {
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
   const manifestQuery = useStaticManifest();
+  const { expired } = useStaticGenerationLifecycle();
   const supportedMarkets = getStaticSupportedMarkets(manifestQuery.data);
   const { selectedMarket, setSelectedMarket } = useStaticMarket();
   const marketEntry = resolveStaticMarketEntry(manifestQuery.data, selectedMarket);
+  const selectedUnavailable = getStaticUnavailableMarkets(manifestQuery.data).includes(selectedMarket);
   const navItems = isStaticOptionsAvailable(marketEntry)
     ? [...NAV_ITEMS, { path: '/options', label: 'Options', matchPrefix: true }]
     : NAV_ITEMS;
@@ -65,7 +70,7 @@ function StaticLayout({ children }) {
           <Box sx={{ ml: 1.5, minWidth: 140 }}>
             <FormControl size="small" fullWidth>
               <Select
-                value={marketEntry.market}
+                value={selectedUnavailable ? selectedMarket : marketEntry.market}
                 onChange={(event) => setSelectedMarket(event.target.value)}
                 displayEmpty
                 sx={{
@@ -138,7 +143,31 @@ function StaticLayout({ children }) {
       </AppBar>
 
       <Container maxWidth="xl" sx={{ mt: 1.5, mb: 1.5, flex: 1 }}>
-        {children}
+        {expired && (
+          <Alert
+            severity="info"
+            sx={{ mb: 1.5 }}
+            action={(
+              <Button color="inherit" size="small" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+            )}
+          >
+            Some data could not be loaded, most likely because newer data has been published. Reload to get the latest.
+          </Alert>
+        )}
+        {selectedUnavailable ? (
+          <Alert
+            severity="warning"
+            action={(
+              <Button color="inherit" size="small" onClick={() => manifestQuery.refetch()}>
+                Retry
+              </Button>
+            )}
+          >
+            {selectedMarket} data is not available in this publish. Retry, or choose another market above.
+          </Alert>
+        ) : children}
       </Container>
     </Box>
   );

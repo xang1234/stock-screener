@@ -9,17 +9,26 @@ const StaticMarketContext = createContext({
   setSelectedMarket: () => {},
 });
 
-const normalizeMarket = (value, supportedMarkets, defaultMarket) => {
+// An unavailable market (listed by the manifest but with no data in this
+// publish) stays selected so the site can say so (#504), instead of silently
+// showing another market.
+const normalizeMarket = (value, supportedMarkets, defaultMarket, unavailableMarkets = []) => {
   const normalized = String(value || defaultMarket || STATIC_DEFAULT_MARKET).trim().toUpperCase();
+  if (unavailableMarkets.includes(normalized)) {
+    return normalized;
+  }
   if (Array.isArray(supportedMarkets) && supportedMarkets.length > 0) {
     return supportedMarkets.includes(normalized) ? normalized : (supportedMarkets[0] || defaultMarket || STATIC_DEFAULT_MARKET);
   }
   return normalized || defaultMarket || STATIC_DEFAULT_MARKET;
 };
 
+const EMPTY_MARKETS = [];
+
 export function StaticMarketProvider({
   children,
-  supportedMarkets = [],
+  supportedMarkets = EMPTY_MARKETS,
+  unavailableMarkets = EMPTY_MARKETS,
   defaultMarket = STATIC_DEFAULT_MARKET,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -28,7 +37,7 @@ export function StaticMarketProvider({
     const fromStorage = typeof window !== 'undefined'
       ? window.localStorage.getItem(STATIC_MARKET_STORAGE_KEY)
       : null;
-    return normalizeMarket(fromQuery || fromStorage, supportedMarkets, defaultMarket);
+    return normalizeMarket(fromQuery || fromStorage, supportedMarkets, defaultMarket, unavailableMarkets);
   });
 
   useEffect(() => {
@@ -36,17 +45,17 @@ export function StaticMarketProvider({
     const fromStorage = typeof window !== 'undefined'
       ? window.localStorage.getItem(STATIC_MARKET_STORAGE_KEY)
       : null;
-    const nextMarket = normalizeMarket(fromQuery || fromStorage, supportedMarkets, defaultMarket);
+    const nextMarket = normalizeMarket(fromQuery || fromStorage, supportedMarkets, defaultMarket, unavailableMarkets);
     if (typeof window !== 'undefined' && fromQuery) {
       window.localStorage.setItem(STATIC_MARKET_STORAGE_KEY, nextMarket);
     }
     if (nextMarket !== selectedMarket) {
       setSelectedMarketState(nextMarket);
     }
-  }, [defaultMarket, searchParams, selectedMarket, supportedMarkets]);
+  }, [defaultMarket, searchParams, selectedMarket, supportedMarkets, unavailableMarkets]);
 
   const setSelectedMarket = useCallback((market) => {
-    const normalized = normalizeMarket(market, supportedMarkets, defaultMarket);
+    const normalized = normalizeMarket(market, supportedMarkets, defaultMarket, unavailableMarkets);
     setSelectedMarketState(normalized);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(STATIC_MARKET_STORAGE_KEY, normalized);
@@ -59,7 +68,7 @@ export function StaticMarketProvider({
       nextParams.set('market', normalized);
     }
     setSearchParams(nextParams, { replace: true });
-  }, [defaultMarket, searchParams, setSearchParams, supportedMarkets]);
+  }, [defaultMarket, searchParams, setSearchParams, supportedMarkets, unavailableMarkets]);
 
   const value = useMemo(() => ({
     selectedMarket,

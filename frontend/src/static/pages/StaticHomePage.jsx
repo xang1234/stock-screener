@@ -16,7 +16,14 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
+import {
+  StaticGenerationExpiredError,
+  fetchStaticJson,
+  resolveStaticMarketEntry,
+  staticQueryOptions,
+  useStaticGeneration,
+  useStaticManifest,
+} from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
 import PriceSparkline from '../../components/Scan/PriceSparkline';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
@@ -58,22 +65,29 @@ function StaticHomePage() {
     () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
     [manifestQuery.data, selectedMarket],
   );
-  const homeQuery = useQuery({
-    queryKey: ['staticHome', marketEntry.pages?.home?.path],
-    queryFn: () => fetchStaticJson(marketEntry.pages.home.path),
+  const { generation, dataRoot } = useStaticGeneration();
+  const homeQuery = useQuery(staticQueryOptions({
+    key: ['staticHome', marketEntry.pages?.home?.path],
+    generation,
+    queryFn: () => fetchStaticJson(marketEntry.pages.home.path, dataRoot),
     enabled: Boolean(marketEntry.pages?.home?.path),
-    staleTime: Infinity,
-  });
-  const scanBundleQuery = useQuery({
-    queryKey: ['staticHomeScanRows', marketEntry.pages?.scan?.path],
+  }));
+  const scanBundleQuery = useQuery(staticQueryOptions({
+    key: ['staticHomeScanRows', marketEntry.pages?.scan?.path],
+    generation,
     queryFn: async () => {
-      const scanManifest = await fetchStaticJson(marketEntry.pages.scan.path);
+      const scanManifest = await fetchStaticJson(marketEntry.pages.scan.path, dataRoot);
       const rowsBySymbol = new Map(
         (scanManifest.initial_rows || []).map((row) => [row.symbol, row])
       );
       const chunkResults = await Promise.allSettled(
-        (scanManifest.chunks || []).map((chunk) => fetchStaticJson(chunk.path))
+        (scanManifest.chunks || []).map((chunk) => fetchStaticJson(chunk.path, dataRoot))
       );
+      // A replaced generation is not a partial result: let the tab move on.
+      const expired = chunkResults.find(
+        (result) => result.status === 'rejected' && result.reason instanceof StaticGenerationExpiredError
+      );
+      if (expired) throw expired.reason;
       const successfulChunks = chunkResults
         .filter((result) => result.status === 'fulfilled')
         .map((result) => result.value);
@@ -94,9 +108,8 @@ function StaticHomePage() {
       };
     },
     enabled: Boolean(marketEntry.pages?.scan?.path),
-    staleTime: Infinity,
     gcTime: Infinity,
-  });
+  }));
   const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
 
   const [chartModalOpen, setChartModalOpen] = useState(false);

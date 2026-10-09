@@ -11,7 +11,8 @@ import { useQuery } from '@tanstack/react-query';
 import CandlestickChart from '../components/Charts/CandlestickChart';
 import GroupChartsLayout, { GroupChartCell } from '../components/Charts/GroupChartsLayout';
 import { getGroupRankColor } from '../utils/colorUtils';
-import { fetchStaticChartPayload, staticChartKeys } from './chartClient';
+import { isCurrentChartIndex, staticChartPayloadQuery } from './chartClient';
+import { useStaticGeneration } from './dataClient';
 
 const MAX_SYMBOLS = 50;
 const CHART_HEIGHT = 360;
@@ -40,13 +41,14 @@ function StatBadge({ value, label, bgcolor }) {
   );
 }
 
-function StaticGroupChartCard({ symbol, entry, isSelected, onSelect }) {
+function StaticGroupChartCard({ symbol, entry, indexCurrent, isSelected, onSelect }) {
+  const generation = useStaticGeneration();
+  const payloadQuery = staticChartPayloadQuery(symbol, entry?.path, generation);
+  // A previous-generation index (placeholder) keeps the card's payload on
+  // screen but fetches nothing: its paths belong to the previous data root.
   const { data: payload, isLoading, isError } = useQuery({
-    queryKey: staticChartKeys.payload(symbol, entry?.path),
-    queryFn: () => fetchStaticChartPayload(entry.path),
-    enabled: Boolean(entry?.path),
-    staleTime: Infinity,
-    gcTime: Infinity,
+    ...payloadQuery,
+    enabled: indexCurrent && payloadQuery.enabled,
   });
 
   const stockData = payload?.stock_data || null;
@@ -200,6 +202,7 @@ function StaticGroupChartCard({ symbol, entry, isSelected, onSelect }) {
  */
 function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
   const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const indexCurrent = isCurrentChartIndex(chartIndex, useStaticGeneration().generation);
 
   const entryBySymbol = useMemo(() => {
     const entries = chartIndex?.symbols || [];
@@ -281,6 +284,7 @@ function StaticGroupChartsGrid({ symbols = [], chartIndex = null }) {
               <StaticGroupChartCard
                 symbol={sym}
                 entry={entry}
+                indexCurrent={indexCurrent}
                 isSelected={selectedSymbol === sym}
                 onSelect={setSelectedSymbol}
               />

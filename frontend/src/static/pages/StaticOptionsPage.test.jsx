@@ -7,7 +7,9 @@ import StaticOptionsPage from './StaticOptionsPage';
 import { commandCenterFixture, optionsManifestFixture } from '../../features/options/__fixtures__/optionsResponses';
 
 vi.mock('../StaticMarketContext', () => ({ useStaticMarket: () => ({ selectedMarket: 'US' }) }));
-vi.mock('../dataClient', () => ({
+vi.mock('../dataClient', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useStaticGeneration: () => ({ generation: 'flat', dataRoot: '' }),
   useStaticManifest: () => ({ data: { markets: { US: { pages: { options: { path: 'options/manifest.json' } } } } } }),
   resolveStaticMarketEntry: (manifest) => manifest.markets.US,
 }));

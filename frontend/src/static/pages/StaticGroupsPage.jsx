@@ -19,6 +19,8 @@ import {
   useStaticManifest,
   fetchStaticJson,
   resolveStaticMarketEntry,
+  staticQueryOptions,
+  useStaticGeneration,
   useStaticGroupsRRG,
   useStaticGroupMatrix,
 } from '../dataClient';
@@ -228,12 +230,13 @@ function StaticGroupsPage() {
     () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
     [manifestQuery.data, selectedMarket],
   );
-  const groupsQuery = useQuery({
-    queryKey: ['staticGroups', marketEntry.pages?.groups?.path],
-    queryFn: () => fetchStaticJson(marketEntry.pages.groups.path),
+  const { generation, dataRoot } = useStaticGeneration();
+  const groupsQuery = useQuery(staticQueryOptions({
+    key: ['staticGroups', marketEntry.pages?.groups?.path],
+    generation,
+    queryFn: () => fetchStaticJson(marketEntry.pages.groups.path, dataRoot),
     enabled: Boolean(marketEntry.pages?.groups?.path),
-    staleTime: Infinity,
-  });
+  }));
   const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
   const rrgQuery = useStaticGroupsRRG(marketEntry);
   const rrgAvailable = Boolean(marketEntry.assets?.groups_rrg?.path);

@@ -1259,6 +1259,14 @@ def test_publisher_validates_and_combines_one_selection() -> None:
     assert "app.scripts.report_static_market_freshness" in report["run"]
 
 
+def test_publisher_publishes_data_generations_unless_switched_off() -> None:
+    # #504: data under g/<generation>/; STATIC_DATA_GENERATIONS=false is the rollback.
+    step = _publish_step("Combine static data bundle")
+    assert step["env"]["DATA_GENERATIONS"] == "${{ vars.STATIC_DATA_GENERATIONS || 'true' }}"
+    assert '[ "$DATA_GENERATIONS" != "false" ] && GENERATION_ARGS="--data-generation"' in step["run"]
+    assert "$GENERATION_ARGS" in step["run"]
+
+
 def test_publisher_deploys_only_from_default_branch_dispatch() -> None:
     jobs = _publish_workflow()["jobs"]
     deploy_if = jobs["deploy"]["if"]
@@ -1412,8 +1420,9 @@ def test_publisher_combine_arguments_accept_last_good_legacy_artifacts(
     args = _workflow_script_args(
         _publish_step("Combine static data bundle")["run"], "app.scripts.export_static_site"
     )
+    # The step's default (STATIC_DATA_GENERATIONS unset) passes --data-generation.
     args = [
-        str(paths[arg]) if arg in paths else arg
+        "--data-generation" if arg == "$GENERATION_ARGS" else str(paths[arg]) if arg in paths else arg
         for arg in args
     ]
     monkeypatch.setattr(sys, "argv", ["export_static_site.py", *args])
@@ -1423,6 +1432,8 @@ def test_publisher_combine_arguments_accept_last_good_legacy_artifacts(
     manifest = json.loads((tmp_path / "out" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["supported_markets"] == ["US", "HK"]
     assert manifest["markets"]["HK"]["rs_formula_version"] == LEGACY_RS_FORMULA_VERSION
+    scan_path = manifest["markets"]["HK"]["pages"]["scan"]["path"]
+    assert (tmp_path / "out" / manifest["data_root"] / scan_path).is_file()
 
 
 def test_price_history_repair_is_an_opt_in_for_one_market_job() -> None:

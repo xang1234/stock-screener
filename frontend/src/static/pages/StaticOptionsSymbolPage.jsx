@@ -5,7 +5,12 @@ import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 
 import OptionsSymbolDetailView from '../../features/options/OptionsSymbolDetailView';
 import { useStaticMarket } from '../StaticMarketContext';
-import { resolveStaticMarketEntry, useStaticManifest } from '../dataClient';
+import {
+  resolveStaticMarketEntry,
+  staticQueryOptions,
+  useStaticGeneration,
+  useStaticManifest,
+} from '../dataClient';
 import { getStaticOptionsManifest, staticOptionsSymbolQueryOptions } from '../optionsClient';
 
 export default function StaticOptionsSymbolPage() {
@@ -17,27 +22,28 @@ export default function StaticOptionsSymbolPage() {
   const marketEntry = resolveStaticMarketEntry(rootManifest.data, selectedMarket);
   const market = marketEntry.market || selectedMarket;
   const optionsPath = marketEntry.pages?.options?.path;
-  const manifestQuery = useQuery({
-    queryKey: ['options-analytics', 'manifest', 'static', market, optionsPath],
-    queryFn: () => getStaticOptionsManifest(marketEntry),
+  const generation = useStaticGeneration();
+  const manifestQuery = useQuery(staticQueryOptions({
+    key: ['options-analytics', 'manifest', 'static', market, optionsPath],
+    generation: generation.generation,
+    queryFn: () => getStaticOptionsManifest(marketEntry, generation.dataRoot),
     enabled: market === 'US' && Boolean(optionsPath),
-    staleTime: Infinity,
     gcTime: Infinity,
-  });
+  }));
   const detailSetup = useMemo(() => {
     if (!manifestQuery.data) return { options: null, setupError: null };
     try {
-      return { options: staticOptionsSymbolQueryOptions(manifestQuery.data, symbol), setupError: null };
+      return { options: staticOptionsSymbolQueryOptions(manifestQuery.data, symbol, generation), setupError: null };
     } catch (error) {
       return { options: null, setupError: error };
     }
-  }, [manifestQuery.data, symbol]);
+  }, [generation, manifestQuery.data, symbol]);
   const detailQuery = useQuery({
     ...(detailSetup.options || {
       queryKey: ['options-analytics', 'symbol', 'static', 'unavailable', symbol],
       queryFn: async () => null,
     }),
-    enabled: Boolean(detailSetup.options),
+    enabled: Boolean(detailSetup.options) && !manifestQuery.isPlaceholderData,
   });
 
   if (manifestQuery.isLoading || (detailSetup.options && detailQuery.isLoading)) {

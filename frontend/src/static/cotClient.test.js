@@ -10,7 +10,7 @@ import {
   staticCotIndexFixture,
 } from '../features/cot/__fixtures__/cotResponses';
 
-vi.mock('./dataClient', () => ({ fetchStaticJson: vi.fn() }));
+vi.mock('./dataClient', async (importOriginal) => ({ ...(await importOriginal()), fetchStaticJson: vi.fn() }));
 
 describe('static COT client', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -27,8 +27,8 @@ describe('static COT client', () => {
 
     expect(history.weeks).toHaveLength(52);
     expect(fetchStaticJson.mock.calls).toEqual([
-      ['cot/index.json'],
-      ['cot/sp-500.json'],
+      ['cot/index.json', ''],
+      ['cot/sp-500.json', ''],
     ]);
   });
 

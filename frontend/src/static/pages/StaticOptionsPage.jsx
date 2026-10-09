@@ -4,7 +4,12 @@ import { useNavigate } from 'react-router-dom';
 
 import OptionsCommandCenterView from '../../features/options/OptionsCommandCenterView';
 import { useStaticMarket } from '../StaticMarketContext';
-import { resolveStaticMarketEntry, useStaticManifest } from '../dataClient';
+import {
+  resolveStaticMarketEntry,
+  staticQueryOptions,
+  useStaticGeneration,
+  useStaticManifest,
+} from '../dataClient';
 import {
   getStaticOptionsManifest,
   staticOptionsCommandCenterQueryOptions,
@@ -17,17 +22,23 @@ export default function StaticOptionsPage() {
   const marketEntry = resolveStaticMarketEntry(rootManifest.data, selectedMarket);
   const market = marketEntry.market || selectedMarket;
   const optionsPath = marketEntry.pages?.options?.path;
-  const manifestQuery = useQuery({
-    queryKey: ['options-analytics', 'manifest', 'static', market, optionsPath],
-    queryFn: () => getStaticOptionsManifest(marketEntry),
+  const generation = useStaticGeneration();
+  const manifestQuery = useQuery(staticQueryOptions({
+    key: ['options-analytics', 'manifest', 'static', market, optionsPath],
+    generation: generation.generation,
+    queryFn: () => getStaticOptionsManifest(marketEntry, generation.dataRoot),
     enabled: market === 'US' && Boolean(optionsPath),
-    staleTime: Infinity,
     gcTime: Infinity,
-  });
+  }));
   const commandOptions = manifestQuery.data
-    ? staticOptionsCommandCenterQueryOptions(manifestQuery.data)
+    ? staticOptionsCommandCenterQueryOptions(manifestQuery.data, generation)
     : { queryKey: ['options-analytics', 'command-center', 'static', 'pending'], queryFn: async () => null };
-  const commandQuery = useQuery({ ...commandOptions, enabled: Boolean(manifestQuery.data) });
+  // Not from the previous generation's placeholder manifest (its run id would
+  // reject the new command center).
+  const commandQuery = useQuery({
+    ...commandOptions,
+    enabled: Boolean(manifestQuery.data) && !manifestQuery.isPlaceholderData,
+  });
 
   if (manifestQuery.isLoading || commandQuery.isLoading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', p: 6 }}><CircularProgress /></Box>;
