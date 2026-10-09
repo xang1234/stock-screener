@@ -61,7 +61,7 @@ def enqueue(db, item_id, pipeline):
 CHANNELS = ("technical", "fundamental")
 
 
-def _economic_candidate_query(item_ids):
+def _economic_candidate_query(item_ids, lineage_ids=None):
     """Lineages with a completed, non-empty classification.
 
     No DISTINCT and no JSON in the select list: PostgreSQL cannot compare its
@@ -91,7 +91,33 @@ def _economic_candidate_query(item_ids):
         query = query.where(
             ClassificationAttempt.created_at >= datetime.now(timezone.utc) - timedelta(days=2)
         )
+    if lineage_ids is not None:
+        # Explicit backfill: only the requested items' lineages, not all history.
+        query = query.where(ProcessingRequest.source_lineage_id.in_(lineage_ids))
     return query
+
+
+def _item_lineages(db, item_ids):
+    """The source lineages of the given content items (empty when none match)."""
+    from sqlalchemy import select
+
+    from app.models.economic_taxonomy_runtime import SourceFamily, SourceLineage
+    from app.services.economic_source_admission import content_family_key
+
+    keys = {
+        content_family_key(row.source_type, row.external_id, row.url)
+        for row in db.query(ContentItem).filter(ContentItem.id.in_(list(item_ids)))
+    }
+    keys.discard(None)
+    if not keys:
+        return []
+    return list(
+        db.execute(
+            select(SourceLineage.id)
+            .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
+            .where(SourceFamily.canonical_source_key.in_(keys), SourceLineage.scope_suffix == "")
+        ).scalars()
+    )
 
 
 def _economic_candidates(db, item_ids):
@@ -110,7 +136,11 @@ def _economic_candidates(db, item_ids):
         EconomicSourceAdmissionService,
     )
 
-    lineages = set(db.execute(_economic_candidate_query(item_ids)).scalars())
+    lineages = set(
+        db.execute(
+            _economic_candidate_query(item_ids, _item_lineages(db, item_ids) if item_ids is not None else None)
+        ).scalars()
+    )
     if not lineages:
         return []
     items_by_lineage = {}
@@ -311,7 +341,7 @@ def process_one(sessions, generate=generate_facts):
                 # Economic evidence not classified for this channel is "not
                 # ready", never an empty revision: recording supersedes every
                 # other revision of the item, which would wipe its history.
-                not_ready = current["kind"] == "economic" and not current["theme_ids"]
+                not_ready = current["kind"] == "economic" and not current["ready"]
                 if values is None or current["revision"] != revision:
                     row.status = "superseded"
                     if not not_ready:

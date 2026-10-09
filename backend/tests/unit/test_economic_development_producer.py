@@ -43,18 +43,26 @@ TEXT = "Freeport-McMoRan said it won a 10-year copper supply contract with Acme 
 
 
 def _taxonomy(db, *, mode="economic"):
+    taxonomy, themes = _taxonomy_themes(db, ("Copper Miners",), mode=mode)
+    return taxonomy, themes[0]
+
+
+def _taxonomy_themes(db, names, *, mode="economic"):
     repo = EconomicTaxonomyRepository(db)
     draft = repo.create_draft(actor="test:author", reason="development fixture")
     seed_initial_dimensions(repo, draft.id, actor="test:author")
-    theme = repo.create_theme(
-        draft.id,
-        display_name="Copper Miners",
-        definition="Copper mining exposure.",
-        mechanism="Mine economics",
-        lifecycle="established",
-        lifecycle_policy_version="lifecycle-v1",
-        actor="test:author",
-    )
+    themes = [
+        repo.create_theme(
+            draft.id,
+            display_name=name,
+            definition=f"{name} exposure.",
+            mechanism="Mine economics",
+            lifecycle="established",
+            lifecycle_policy_version="lifecycle-v1",
+            actor="test:author",
+        )
+        for name in names
+    ]
     taxonomy = repo.seal_draft(draft.id)
     db.merge(
         TaxonomyAuthority(
@@ -68,7 +76,7 @@ def _taxonomy(db, *, mode="economic"):
         )
     )
     db.commit()
-    return taxonomy, theme
+    return taxonomy, themes
 
 
 def _classify(db, admitted, taxonomy, theme_ids, *, resolver="resolver-v1"):
@@ -399,3 +407,149 @@ def test_discovery_finds_an_item_whose_effective_evidence_is_a_later_capture(db_
     db_session.commit()
 
     assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
+
+
+def _serving_generation(db, taxonomy, admitted, *, override_id=None, selected_attempt_id=None):
+    """A minimal serving generation whose manifest selection carries an override."""
+    from app.models.economic_taxonomy_runtime import (
+        GenerationInputManifest,
+        InterpretationSet,
+        MetricsRevision,
+        ReaderCapabilityManifest,
+        ReaderSnapshotBundle,
+        ServingGeneration,
+    )
+
+    manifest = GenerationInputManifest(
+        status="unsealed",
+        semantic_invalidation_revision=0,
+        committed_revision_tuples=[],
+        selections=[
+            {
+                "lineage": str(admitted.source_lineage_id),
+                "evidence_packet_id": str(admitted.packet_id),
+                "selected_attempt_id": str(selected_attempt_id) if selected_attempt_id else None,
+                "interpretation_override_revision_id": str(override_id) if override_id else None,
+            }
+        ],
+        created_by="test:publisher",
+    )
+    db.add(manifest)
+    db.flush()
+    manifest.seal(semantic_hash="manifest", artifact_integrity_hash="manifest-artifact")
+    interpretation = InterpretationSet(
+        status="unsealed", generation_input_manifest_id=manifest.id, created_by="test:publisher"
+    )
+    db.add(interpretation)
+    db.flush()
+    interpretation.seal(semantic_hash="interpretation", artifact_integrity_hash="artifact")
+    metrics = MetricsRevision(
+        status="unsealed",
+        interpretation_set_id=interpretation.id,
+        generation_input_manifest_id=manifest.id,
+        formula_version="metrics-v1",
+        as_of=datetime.now(timezone.utc),
+        created_by="test:publisher",
+    )
+    snapshots = ReaderSnapshotBundle(
+        status="unsealed", generation_input_manifest_id=manifest.id, payload={}, created_by="test:publisher"
+    )
+    capability = ReaderCapabilityManifest(
+        backend_contract=1,
+        frontend_contract=1,
+        migration_version="0049",
+        consumer_test_hash="tests",
+        verified_by="test:publisher",
+    )
+    db.add_all([metrics, snapshots, capability])
+    db.flush()
+    metrics.seal(semantic_hash="metrics", artifact_integrity_hash="metrics-artifact")
+    snapshots.seal(semantic_hash="snapshots", artifact_integrity_hash="snapshot-artifact")
+    generation = ServingGeneration(
+        taxonomy_version_id=taxonomy.id,
+        interpretation_set_id=interpretation.id,
+        metrics_revision_id=metrics.id,
+        generation_input_manifest_id=manifest.id,
+        reader_snapshot_bundle_id=snapshots.id,
+        reader_capability_manifest_id=capability.id,
+        semantic_hash="generation",
+        artifact_integrity_hash="generation-artifact",
+        created_by="test:publisher",
+    )
+    db.add(generation)
+    db.flush()
+    db.get(TaxonomyAuthority, 1).serving_generation_id = generation.id
+    db.commit()
+
+
+def test_bundle_follows_the_reviewer_override_the_serving_generation_carries(db_session):
+    from app.domain.economic_taxonomy.contracts import AdminPrincipal
+    from app.services.economic_taxonomy_interpretations import (
+        EconomicTaxonomyInterpretationService,
+        create_interpretation_override,
+    )
+
+    taxonomy, (miners, smelters) = _taxonomy_themes(db_session, ("Copper Miners", "Copper Smelters"))
+    item, admitted = _admit_item(db_session)
+    first = _classify(db_session, admitted, taxonomy, [miners.id])
+    second = _classify(db_session, admitted, taxonomy, [smelters.id], resolver="resolver-v2")
+    default = EconomicTaxonomyInterpretationService(None).default_attempt(
+        db_session, admitted.source_lineage_id
+    )
+    chosen = second if default.id == first.id else first
+    override = create_interpretation_override(
+        db_session,
+        source_lineage_id=admitted.source_lineage_id,
+        selected_attempt_id=chosen.id,
+        reason="Reviewer prefers this reading",
+        principal=AdminPrincipal(
+            subject="reviewer", auth_method="api_key", roles=frozenset({"taxonomy:review"})
+        ),
+    )
+    _serving_generation(
+        db_session, taxonomy, admitted, override_id=override.id, selected_attempt_id=chosen.id
+    )
+
+    bundle = development_bundle(db_session, item.id, "fundamental")
+
+    expected = miners if chosen.id == first.id else smelters
+    assert list(bundle["economic_refs"].values()) == [expected.id]
+
+
+def test_completed_empty_classification_is_ready_but_unclassified_is_not(db_session):
+    taxonomy, _theme = _taxonomy(db_session)
+    pending, _ = _admit_item(db_session)
+    empty, admitted = _admit_item(db_session)
+    _classify(db_session, admitted, taxonomy, [])
+
+    assert development_bundle(db_session, pending.id, "fundamental")["ready"] is False
+    bundle = development_bundle(db_session, empty.id, "fundamental")
+    assert bundle["ready"] is True
+    assert bundle["theme_ids"] == []
+
+
+def test_a_reclassification_to_no_themes_records_the_empty_revision(db_session, monkeypatch):
+    # It supersedes the observations still linked to the removed themes.
+    taxonomy, _theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session)
+    _classify(db_session, admitted, taxonomy, [])
+    worker.enqueue(db_session, item.id, "fundamental")
+    db_session.commit()
+    recorded = []
+    monkeypatch.setattr(worker, "record_developments", lambda *args, **kwargs: recorded.append(kwargs))
+
+    worker.process_one(sessionmaker(bind=db_session.get_bind()), generate=lambda *_args: [])
+
+    assert len(recorded) == 1
+
+
+def test_explicit_backfill_only_queries_the_requested_items_lineages():
+    from uuid import UUID
+
+    lineage = UUID(int=7)
+    sql = str(
+        worker._economic_candidate_query(item_ids=[1], lineage_ids=[lineage]).compile(  # noqa: SLF001
+            dialect=postgresql.dialect()
+        )
+    )
+    assert "source_lineage_id IN" in sql

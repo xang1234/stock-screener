@@ -229,6 +229,46 @@ class EconomicTaxonomyInterpretationService:
         """``choose_default`` in the caller's session (no session factory needed)."""
         return self._default_attempt(session, source_lineage_id)
 
+    def serving_attempt(self, session, source_lineage_id: UUID) -> ClassificationAttempt | None:
+        """The attempt users see for the lineage (#513).
+
+        A reviewer override carried by the serving generation's manifest wins,
+        validated as publication validates it; otherwise the policy default.
+        """
+        from app.models.economic_taxonomy_runtime import ServingGeneration, TaxonomyAuthority
+
+        authority = session.get(TaxonomyAuthority, 1)
+        generation = (
+            session.get(ServingGeneration, authority.serving_generation_id)
+            if authority is not None and authority.serving_generation_id is not None
+            else None
+        )
+        manifest = (
+            session.get(GenerationInputManifest, generation.generation_input_manifest_id)
+            if generation is not None
+            else None
+        )
+        for entry in (manifest.selections or []) if manifest is not None else []:
+            if str(entry.get("lineage")) != str(source_lineage_id):
+                continue
+            override_id = entry.get("interpretation_override_revision_id")
+            if not override_id:
+                break
+            try:
+                selected = session.get(ClassificationAttempt, UUID(str(entry["selected_attempt_id"])))
+                if selected is not None and self._attempt_completed(session, selected):
+                    self._validated_override(
+                        session,
+                        UUID(str(override_id)),
+                        lineage_id=source_lineage_id,
+                        selected_attempt_id=selected.id,
+                    )
+                    return selected
+            except (KeyError, TypeError, ValueError):
+                pass  # InvalidInterpretation is a ValueError: fall back to the default
+            break
+        return self._default_attempt(session, source_lineage_id)
+
     def choose_default(self, source_lineage_id: UUID) -> ClassificationAttempt | None:
         with self.session_factory() as session:
             chosen = self._default_attempt(session, source_lineage_id)

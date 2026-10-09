@@ -107,11 +107,13 @@ def economic_authority(db) -> bool:
 
 
 def _economic_themes(db, item, pipeline):
-    """Economic themes of an item's effective evidence for one lens channel.
+    """``(ready, themes)`` for an item's effective evidence on one lens channel.
 
     The item's source family leads to its lineage; the lineage's effective
-    packet must be eligible for the channel, and the canonical interpretation
-    choice (the one generations serve) names the themes (#513).
+    packet must be eligible for the channel, and the interpretation users see
+    (a serving reviewer override, else the policy default) names the themes
+    (#513). ``ready`` is False until such a completed classification exists; a
+    completed classification may still name no themes.
     """
     from app.models.economic_taxonomy import EconomicThemeRevision
     from app.models.economic_taxonomy_runtime import (
@@ -130,7 +132,7 @@ def _economic_themes(db, item, pipeline):
 
     family_key = content_family_key(item.source_type, item.external_id, item.url)
     if family_key is None:
-        return {}
+        return False, {}
     lineage_id = db.execute(
         select(SourceLineage.id)
         .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
@@ -140,14 +142,14 @@ def _economic_themes(db, item, pipeline):
         )
     ).scalar_one_or_none()
     if lineage_id is None:
-        return {}
+        return False, {}
     admission = EconomicSourceAdmissionService(db)
     packet = admission.effective_packet(lineage_id)
     if packet is None or pipeline not in admission.latest_channels(packet.id):
-        return {}
-    attempt = EconomicTaxonomyInterpretationService(None).default_attempt(db, lineage_id)
+        return False, {}
+    attempt = EconomicTaxonomyInterpretationService(None).serving_attempt(db, lineage_id)
     if attempt is None:
-        return {}
+        return False, {}
     theme_ids = sorted(
         set(
             db.execute(
@@ -179,7 +181,7 @@ def _economic_themes(db, item, pipeline):
             ).all()
         )
     # A theme no taxonomy version names is not offered to the model.
-    return {theme_id: names[theme_id] for theme_id in theme_ids if theme_id in names}
+    return True, {theme_id: names[theme_id] for theme_id in theme_ids if theme_id in names}
 
 
 def economic_input_bundle(db, item_id, pipeline):
@@ -205,7 +207,7 @@ def economic_input_bundle(db, item_id, pipeline):
         "translated_primary": item.url,
         **{row["id"]: row["url"] for row in snapshot["evidence"]},
     }
-    themes = _economic_themes(db, item, pipeline)
+    ready, themes = _economic_themes(db, item, pipeline)
     refs = {index: theme_id for index, theme_id in enumerate(themes, start=1)}
     # The theme set, not the attempt: a reclassification into the same themes
     # must not re-run the model and supersede the item's observations.
@@ -219,6 +221,7 @@ def economic_input_bundle(db, item_id, pipeline):
     )
     return {
         "kind": "economic",
+        "ready": ready,
         "item": item,
         "sources": sources,
         "source_urls": source_urls,
