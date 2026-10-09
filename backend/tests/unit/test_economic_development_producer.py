@@ -785,6 +785,26 @@ def test_a_channel_the_selected_evidence_lost_is_ready_with_no_themes(db_session
     assert technical["theme_ids"] == []
 
 
+def test_discovery_offers_a_channel_that_still_has_active_observations(db_session):
+    # Eligibility for "technical" was removed from the packet, but technical
+    # observations recorded earlier are still active: the channel must be
+    # offered so its empty revision supersedes them.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session, channels=("technical",))
+    _classify(db_session, admitted, taxonomy, [theme.id])
+    worker.discover(db_session, item_ids=[item.id])
+    db_session.commit()
+    worker.process_one(sessionmaker(bind=db_session.get_bind()), generate=lambda *_args: [_fact(1)])
+    EconomicSourceAdmissionService(db_session).revise_lens_eligibility(
+        admitted.packet_id, evidence_channels=("fundamental",), reason="technical withdrawn"
+    )
+    db_session.commit()
+
+    pairs = worker._economic_candidates(db_session, [item.id])  # noqa: SLF001
+
+    assert (item.id, "technical") in pairs
+
+
 def test_explicit_backfill_only_queries_the_requested_items_lineages():
     from uuid import UUID
 

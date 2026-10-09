@@ -163,6 +163,31 @@ def _item_lineages(db, item_ids):
     )
 
 
+def _channels_with_active_observations(db, lineage_ids):
+    """``{lineage: channels}`` with active economic (source-family) observations."""
+    from sqlalchemy import select
+
+    from app.models.economic_taxonomy_runtime import SourceLineage
+    from app.models.theme_intelligence import ThemeDevelopmentObservation
+
+    if not lineage_ids:
+        return {}
+    result = {}
+    for lineage_id, channel in db.execute(
+        select(SourceLineage.id, ThemeDevelopmentObservation.analysis_channel)
+        .join(
+            ThemeDevelopmentObservation,
+            ThemeDevelopmentObservation.source_family_id == SourceLineage.source_family_id,
+        )
+        .where(
+            SourceLineage.id.in_(list(lineage_ids)),
+            ThemeDevelopmentObservation.superseded.is_(False),
+        )
+    ):
+        result.setdefault(lineage_id, set()).add(channel)
+    return result
+
+
 def _economic_candidates(db, item_ids):
     """(item, channel) pairs with classified economic evidence (#513).
 
@@ -216,18 +241,22 @@ def _economic_candidates(db, item_ids):
             )
         }
     admission = EconomicSourceAdmissionService(db)
+    observed = _channels_with_active_observations(db, items_by_lineage)
     pairs = set()
     for lineage_id, items in items_by_lineage.items():
         items &= wanted
         if not items:
             continue
         # The bundle decides per channel; offer every channel a classified or
-        # the effective packet is eligible for.
+        # the effective packet is eligible for, and every channel that still
+        # has active observations (eligibility may have been withdrawn, which
+        # the bundle answers with an empty revision superseding them).
         packets = set(classified[lineage_id])
         effective = admission.effective_packet(lineage_id)
         if effective is not None:
             packets.add(effective.id)
         channels = set().union(*(admission.latest_channels(packet_id) for packet_id in packets))
+        channels |= observed.get(lineage_id, set())
         pairs.update((item, channel) for item in items for channel in CHANNELS if channel in channels)
     return sorted(pairs)
 
