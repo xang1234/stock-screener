@@ -107,7 +107,7 @@ def economic_authority(db) -> bool:
 
 
 def _economic_themes(db, item, pipeline):
-    """``(ready, themes)`` for an item's effective evidence on one lens channel.
+    """``(ready, themes, packet)`` for an item's effective evidence on one lens channel.
 
     The item's source family leads to its lineage; the lineage's effective
     packet must be eligible for the channel, and the interpretation users see
@@ -133,7 +133,7 @@ def _economic_themes(db, item, pipeline):
 
     family_key = content_family_key(item.source_type, item.external_id, item.url)
     if family_key is None:
-        return False, {}
+        return False, {}, None
     lineage_id = db.execute(
         select(SourceLineage.id)
         .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
@@ -143,14 +143,14 @@ def _economic_themes(db, item, pipeline):
         )
     ).scalar_one_or_none()
     if lineage_id is None:
-        return False, {}
+        return False, {}, None
     interpretations = EconomicTaxonomyInterpretationService(None)
     attempt = interpretations.serving_attempt(db, lineage_id)
     if attempt is None:
-        return False, {}
+        return False, {}, None
     packet = interpretations.packet_for_attempt(db, attempt)
     if pipeline not in EconomicSourceAdmissionService(db).latest_channels(packet.id):
-        return False, {}
+        return False, {}, None
     theme_ids = sorted(
         set(
             db.execute(
@@ -182,7 +182,7 @@ def _economic_themes(db, item, pipeline):
             ).all()
         )
     # A theme no taxonomy version names is not offered to the model.
-    return True, {theme_id: names[theme_id] for theme_id in theme_ids if theme_id in names}
+    return True, {theme_id: names[theme_id] for theme_id in theme_ids if theme_id in names}, packet
 
 
 def _source_family_id(db, item):
@@ -214,13 +214,20 @@ def economic_input_bundle(db, item_id, pipeline):
         sources["translated_primary"] = (
             f"Title: {item.translated_title or ''}\n\n{item.translated_content[:10000]}"
         )
+    ready, themes, packet = _economic_themes(db, item, pipeline)
+    if packet is not None:
+        # The text classification ran on: a re-poll or a later capture admits
+        # new text as a new packet but leaves the ContentItem unchanged.
+        sources = {"primary": (packet.original_text_ref or "")[:10000]}
+        if packet.translated_text_ref:
+            sources["translated_primary"] = packet.translated_text_ref[:10000]
     sources.update({row["id"]: row["text"] for row in snapshot["evidence"]})
+    primary_url = ((packet.source_metadata or {}).get("url") if packet is not None else None) or item.url
     source_urls = {
-        "primary": item.url,
-        "translated_primary": item.url,
+        "primary": primary_url,
+        "translated_primary": primary_url,
         **{row["id"]: row["url"] for row in snapshot["evidence"]},
     }
-    ready, themes = _economic_themes(db, item, pipeline)
     source_family_id = _source_family_id(db, item)
     refs = {index: theme_id for index, theme_id in enumerate(themes, start=1)}
     # The theme set, not the attempt: a reclassification into the same themes

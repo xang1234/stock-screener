@@ -718,6 +718,40 @@ def test_a_recent_reviewer_override_brings_an_old_item_back_into_discovery(db_se
     assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
 
 
+def test_prompt_uses_the_classified_packet_text_not_the_stale_item_text(db_session):
+    # A later capture in force (here Social's, superseding the ingestion packet)
+    # carries new text while the ContentItem keeps the old one. Classification
+    # ran on the new text, so the prompt must too, and it changes the revision.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session)
+    _classify(db_session, admitted, taxonomy, [theme.id])
+    before = development_bundle(db_session, item.id, "fundamental")
+    edited = TEXT + " The contract was later extended to 12 years."
+    now = datetime.now(timezone.utc)
+    corrected = EconomicSourceAdmissionService(db_session).admit_content(
+        EvidenceAdmission(
+            provider="news",
+            canonical_source_family=content_family_key("news", item.external_id, item.url),
+            capture_route="social",
+            original_text=edited,
+            preparation_version="social-v1",
+            source_metadata={"social_work_id": 9},
+            captured_at=now,
+            available_at=now,
+            evidence_channels=("fundamental",),
+            supersedes_packet_id=admitted.packet_id,
+        )
+    )
+    db_session.commit()
+    _classify(db_session, corrected, taxonomy, [theme.id], resolver="resolver-v2")
+
+    after = development_bundle(db_session, item.id, "fundamental")
+
+    assert "extended to 12 years" in after["sources"]["primary"]
+    assert item.content == TEXT  # the item itself was not updated
+    assert after["revision"] != before["revision"]
+
+
 def test_explicit_backfill_only_queries_the_requested_items_lineages():
     from uuid import UUID
 
