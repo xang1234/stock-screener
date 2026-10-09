@@ -80,7 +80,7 @@ def _taxonomy_themes(db, names, *, mode="economic"):
     return taxonomy, themes
 
 
-def _classify(db, admitted, taxonomy, theme_ids, *, resolver="resolver-v1"):
+def _classify(db, admitted, taxonomy, theme_ids, *, resolver="resolver-v1", created_at=None):
     now = datetime.now(timezone.utc)
     request = EconomicTaxonomyWorkRepository(db).enqueue_request(
         source_lineage_id=admitted.source_lineage_id,
@@ -116,6 +116,7 @@ def _classify(db, admitted, taxonomy, theme_ids, *, resolver="resolver-v1"):
         derivation_policy_version="derive-v1",
         result_status="completed",
         result_payload={},
+        **({"created_at": created_at} if created_at is not None else {}),
     )
     db.add(attempt)
     db.flush()
@@ -640,6 +641,56 @@ def test_channels_come_from_the_classified_packet_not_a_newer_unclassified_one(d
     worker.discover(db_session)
     db_session.commit()
     assert "fundamental" in {row.pipeline for row in _work(db_session, item.id)}
+
+
+def test_work_finished_as_not_ready_is_redone_once_classification_completes(db_session):
+    # Unclassified and completed-empty both offer no themes; the revision must
+    # still differ, or the completed not-ready row hides the ready bundle.
+    taxonomy, _theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session)
+    worker.enqueue(db_session, item.id, "fundamental")
+    db_session.commit()
+    worker.process_one(sessionmaker(bind=db_session.get_bind()), generate=lambda *_args: [])
+    db_session.expire_all()
+    assert [row.status for row in _work(db_session, item.id)] == ["complete"]
+
+    _classify(db_session, admitted, taxonomy, [])
+    worker.enqueue(db_session, item.id, "fundamental")
+    db_session.commit()
+
+    assert "pending" in {row.status for row in _work(db_session, item.id)}
+
+
+def test_a_recent_reviewer_override_brings_an_old_item_back_into_discovery(db_session):
+    from datetime import timedelta
+
+    from app.domain.economic_taxonomy.contracts import AdminPrincipal
+    from app.services.economic_taxonomy_interpretations import create_interpretation_override
+
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_item(db_session)
+    old = datetime.now(timezone.utc) - timedelta(days=5)
+    attempt = _classify(db_session, admitted, taxonomy, [theme.id], created_at=old)
+    item.fetched_at = old
+    db_session.commit()
+    worker.discover(db_session)
+    db_session.commit()
+    assert _work(db_session, item.id) == []  # too old for automatic discovery
+
+    create_interpretation_override(
+        db_session,
+        source_lineage_id=admitted.source_lineage_id,
+        selected_attempt_id=attempt.id,
+        reason="Reviewer confirms this reading",
+        principal=AdminPrincipal(
+            subject="reviewer", auth_method="api_key", roles=frozenset({"taxonomy:review"})
+        ),
+    )
+    db_session.commit()
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
 
 
 def test_explicit_backfill_only_queries_the_requested_items_lineages():

@@ -93,6 +93,21 @@ def _economic_candidate_query(item_ids, lineage_ids=None):
     return query
 
 
+def _recently_overridden_lineages(db):
+    from sqlalchemy import select
+
+    from app.models.economic_taxonomy_runtime import InterpretationOverrideRevision
+
+    return set(
+        db.execute(
+            select(InterpretationOverrideRevision.source_lineage_id).where(
+                InterpretationOverrideRevision.created_at
+                >= datetime.now(timezone.utc) - timedelta(days=2)
+            )
+        ).scalars()
+    )
+
+
 def _item_lineages(db, item_ids):
     """The source lineages of the given content items (empty when none match)."""
     from sqlalchemy import select
@@ -137,6 +152,12 @@ def _economic_candidates(db, item_ids):
         _economic_candidate_query(item_ids, _item_lineages(db, item_ids) if item_ids is not None else None)
     ):
         classified.setdefault(lineage_id, set()).add(packet_id)
+    # A recent reviewer override may select an old attempt: its lineage comes
+    # back regardless of the attempt's or the item's age.
+    overridden = _recently_overridden_lineages(db) if item_ids is None else set()
+    if overridden:
+        for lineage_id, packet_id in db.execute(_economic_candidate_query([], list(overridden))):
+            classified.setdefault(lineage_id, set()).add(packet_id)
     lineages = set(classified)
     if not lineages:
         return []
@@ -154,10 +175,11 @@ def _economic_candidates(db, item_ids):
     if item_ids is not None:
         wanted &= set(item_ids)
     elif wanted:
-        wanted = {
+        exempt = {item for lineage_id in overridden for item in items_by_lineage.get(lineage_id, ())}
+        wanted = exempt | {
             row.id
             for row in db.query(ContentItem.id).filter(
-                ContentItem.id.in_(wanted),
+                ContentItem.id.in_(wanted - exempt),
                 ContentItem.fetched_at >= datetime.now(timezone.utc) - timedelta(days=2),
             )
         }

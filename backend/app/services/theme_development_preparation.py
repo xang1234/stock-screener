@@ -225,9 +225,12 @@ def economic_input_bundle(db, item_id, pipeline):
     refs = {index: theme_id for index, theme_id in enumerate(themes, start=1)}
     # The theme set, not the attempt: a reclassification into the same themes
     # must not re-run the model and supersede the item's observations.
+    # Readiness is part of the revision: unclassified and completed-empty
+    # both offer no themes, and a not-ready row must not hide the ready one.
     revision = digest(
         [
             "economic",
+            ready,
             sources,
             source_urls,
             [str(theme_id) for theme_id in themes],
