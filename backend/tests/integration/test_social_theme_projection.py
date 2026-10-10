@@ -768,6 +768,37 @@ def test_processor_accepts_a_proposed_sibling_when_evidence_lands_on_an_accepted
     assert (latest.details or {}).get("requested_state", latest.state) == "accepted"
 
 
+def test_processor_accepts_a_proposed_sibling_when_evidence_lands_on_a_rejected_listing(social_fixture):
+    # The rejected listing stays rejected; the company's proposed one follows
+    # the company-level evidence, as the legacy rule assesses every listing.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    listings = {}
+    for symbol, state in (("AAA", "rejected"), ("0005.HK", "proposed")):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        listings[symbol] = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(listings[symbol].id, state=state, idempotency_key=f"seed-{symbol}",
+                       actor="admin", reason="seed", mirror_acknowledged=True)
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    _project_economic(f, f.save(("AAA",), author="second"), theme.id)
+
+    def state(symbol):
+        latest = f.db.query(EconomicSocialAssociationRevision).filter_by(
+            association_id=listings[symbol].id
+        ).order_by(EconomicSocialAssociationRevision.revision_number.desc()).first()
+        return (latest.details or {}).get("requested_state", latest.state)
+
+    assert state("0005.HK") == "accepted"
+    assert state("AAA") == "rejected"
+
+
 def test_processor_ignores_a_bridged_work_whose_post_was_corrected(social_fixture):
     # The bridged work has no packet of its own; a correction is now the
     # post's effective packet, so the original claim no longer counts.

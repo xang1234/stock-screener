@@ -602,14 +602,17 @@ class EconomicSocialTaxonomyAdapter:
                 )
                 if current_state == "conflict_review_required":
                     continue
-                if requested_state == "proposed" and current_state in {None, "proposed", "accepted"}:
-                    # Evaluated for an accepted listing too: new evidence on it
+                if requested_state == "proposed" and current_state in {
+                    None, "proposed", "accepted", "rejected"
+                }:
+                    # Evaluated for a decided listing too: new evidence on it
                     # can qualify the company and so its undecided siblings.
+                    # The decided listing itself keeps its decision.
                     accepted = self._automatic_acceptances(
                         association, now=social_packet.available_at
                     )
                     if accepted:
-                        if current_state != "accepted":
+                        if current_state in {None, "proposed"}:
                             requested_state = "accepted"
                         siblings.extend(row for row in accepted if row.id != association.id)
                 if current_state in {"accepted", "rejected"} and requested_state == "proposed":
