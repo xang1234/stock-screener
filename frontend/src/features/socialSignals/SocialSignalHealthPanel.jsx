@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 
 import {
-  createSocialSource, decideSocialAssociation, getSocialAdminHealth,
+  createSocialSource, decideEconomicSocialAssociation, decideSocialAssociation, getSocialAdminHealth,
   getSocialAdminRuntime, getSocialAdminSources, getSocialAnalysis,
   getSocialAssociations, getSocialCompanyIdentities, getSocialRuns,
   getSocialValidation, refreshSocialSignals, renameSocialSource,
@@ -216,23 +216,28 @@ export default function SocialSignalHealthPanel() {
         <Alert severity="info" sx={{ my: 1 }}>
           Social-linked Theme merges are not available in this version; ordinary legacy Theme merges are unchanged.
         </Alert>
-        {(associations.data || []).map((row) => <Stack key={row.association_id ?? row.economic_association_id} direction="row" gap={1} alignItems="center" flexWrap="wrap">
-          <Typography variant="body2">{row.theme_name} · {row.market}:{row.canonical_symbol} · {row.state}</Typography>
-          {row.association_id == null ? <Typography variant="caption" color="text.secondary">
-            Economic association without a legacy link; not decidable here yet.
-          </Typography> : <>
-          <TextField size="small" label={`Decision reason ${row.association_id}`}
-            value={reasons[row.association_id] || ''}
-            onChange={(event) => setReasons((current) => ({ ...current, [row.association_id]: event.target.value }))} />
-          {['accepted', 'rejected'].map((target) => <Button key={target} size="small"
-            aria-label={`${target === 'accepted' ? 'Accept' : 'Reject'} ${row.canonical_symbol}`}
-            disabled={!reasons[row.association_id]?.trim()}
-            onClick={() => mutation.mutate(() => decideSocialAssociation(adminKey, row.association_id, {
-              target, reason: reasons[row.association_id].trim(), expected_version: row.version,
-              ...(row.economic_revision != null && { expected_economic_revision: row.economic_revision }),
-            }))}>{target}</Button>)}
-          </>}
-        </Stack>)}
+        {(associations.data || []).map((row) => {
+          // An economic row (economic authority) is decided by its economic id
+          // and revision; a legacy row by its id and version (#515).
+          const key = row.economic_association_id ?? row.association_id;
+          const decide = (target) => (row.economic_association_id
+            ? decideEconomicSocialAssociation(adminKey, row.economic_association_id, {
+              target, reason: reasons[key].trim(), expected_revision: row.economic_revision,
+            })
+            : decideSocialAssociation(adminKey, row.association_id, {
+              target, reason: reasons[key].trim(), expected_version: row.version,
+            }));
+          return <Stack key={key} direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            <Typography variant="body2">{row.theme_name} · {row.market}:{row.canonical_symbol} · {row.state}</Typography>
+            <TextField size="small" label={`Decision reason ${key}`}
+              value={reasons[key] || ''}
+              onChange={(event) => setReasons((current) => ({ ...current, [key]: event.target.value }))} />
+            {['accepted', 'rejected'].map((target) => <Button key={target} size="small"
+              aria-label={`${target === 'accepted' ? 'Accept' : 'Reject'} ${row.canonical_symbol}`}
+              disabled={!reasons[key]?.trim()}
+              onClick={() => mutation.mutate(() => decide(target))}>{target}</Button>)}
+          </Stack>;
+        })}
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle1" fontWeight={700}>Verified company identities</Typography>
         <Alert severity="info" sx={{ my: 1 }}>

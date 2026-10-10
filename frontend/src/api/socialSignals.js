@@ -115,6 +115,11 @@ export const decideSocialAssociation = async (adminKey, associationId, body) => 
   (await apiClient.post(`/v1/social-signals/admin/associations/${associationId}/decision`,
     body, adminConfig(adminKey))).data
 );
+// Under economic authority every association is decided by its economic id (#515).
+export const decideEconomicSocialAssociation = async (adminKey, associationId, body) => (
+  (await apiClient.post(`/v1/social-signals/admin/economic-associations/${associationId}/decision`,
+    body, adminConfig(adminKey))).data
+);
 export const getSocialCompanyIdentities = async (adminKey) => (
   (await apiClient.get('/v1/social-signals/admin/company-identities', adminConfig(adminKey))).data
 );

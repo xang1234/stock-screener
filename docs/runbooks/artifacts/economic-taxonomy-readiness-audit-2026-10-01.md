@@ -249,7 +249,7 @@ something checkable.
 | **Economic** reader snapshot builder (`economic_taxonomy_snapshot_builder.py:698-717`) | `ThemeDevelopmentTheme`, mapped to economic themes | **The economic side itself depends on legacy development links.** Retirement must migrate these links first |
 | `GET /themes/pipeline/state-health`, `/themes/pipeline/observability` (`themes_content_pipeline.py:215-245`, via `theme_pipeline_state_service.py:338-352`, `:430-475`) | `ThemeMention`, `ThemeCluster`, `ThemeMergeSuggestion` | Serves legacy-only diagnostics |
 | `SocialSignalOperationsService.snapshot` (`social_signal_operations_service.py:106-111`), used by `GET /operations/social-signals` and `GET /social-signals/admin/health` | counts `SocialThemeAssociation` | Counts legacy Social associations |
-| `GET /social-signals/admin/associations` (`social_signals.py:422-442`) | `SocialThemeAssociation` joined to `ThemeCluster` | Serves legacy associations; the decision endpoint beside it is mode-aware, but this list is not |
+| `GET /social-signals/admin/associations` (`social_signals.py:422-442`) | `SocialThemeAssociation` joined to `ThemeCluster` | Serves legacy associations; the decision endpoint beside it is mode-aware, but this list is not. *Since #515 the list serves economic associations under economic authority without reading `SocialThemeAssociation`.* |
 | `theme_development_preparation`, `theme_platform/content_browser_queries`, `social_refresh_support` | legacy clusters and mentions | Serves legacy data |
 
 `ContentItem` and content-source endpoints are shared ingestion inputs, not
@@ -263,7 +263,10 @@ that a route, task or MCP tool reaches, with these differences:
   Social taxonomy adapter); and the Social association decision endpoint, whose
   economic-mode branch (`_decide_economic`) still reads and revises the bridged
   `SocialThemeAssociation` row, so "mode-aware" above does not mean "no legacy
-  read"; and the daily digest (`/digest/daily`, its markdown variant and the MCP
+  read" (*since #515 the legacy-id endpoint refuses under economic authority;
+  `POST /social-signals/admin/economic-associations/{id}/decision` decides by
+  economic id, and reads bridged legacy rows only to keep their mirror in step*);
+  and the daily digest (`/digest/daily`, its markdown variant and the MCP
   `daily_digest` tool), which routes its theme section but builds its
   validation section through `validation_service` in every mode.
 - Not listed: the MCP `theme_state` alert read (`market_copilot.py:719`) runs

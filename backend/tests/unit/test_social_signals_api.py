@@ -1012,29 +1012,22 @@ async def test_admin_associations_list_economic_associations_in_economic_mode(
     assert listed.status_code == 200
     by_symbol = {row["canonical_symbol"]: row for row in listed.json()}
     assert set(by_symbol) == {"MU", "NVDA", "AMD"}
-    # Bridged: decided through the legacy id and version the decision API takes.
-    assert by_symbol["MU"]["association_id"] == rows["legacy"].id
-    assert by_symbol["MU"]["version"] == 3
+    # Every row is decided by its economic id and revision; no legacy id (#515).
+    assert all(row["association_id"] is None and row["version"] is None for row in by_symbol.values())
+    assert by_symbol["MU"]["economic_association_id"] == str(rows["MU"].id)
+    assert by_symbol["MU"]["origin"] == "legacy_bridge"
     assert by_symbol["MU"]["state"] == "accepted"
     assert by_symbol["MU"]["theme_name"] == "AI Memory"
-    assert by_symbol["MU"]["economic_revision"] == 1  # checked on decision
-    # Native: no legacy row, so not decidable through this API.
-    assert by_symbol["NVDA"]["association_id"] is None
+    assert by_symbol["MU"]["economic_revision"] == 1
     assert by_symbol["NVDA"]["economic_association_id"] == str(rows["NVDA"].id)
+    assert by_symbol["NVDA"]["origin"] == "economic"
     assert by_symbol["NVDA"]["theme_name"] == "Semiconductors"
     assert {row["canonical_symbol"] for row in proposed.json()} == {"NVDA", "AMD"}
 
 
 @pytest.mark.asyncio
-async def test_admin_associations_hide_the_legacy_id_when_its_bridge_is_ambiguous(
-    db_session, monkeypatch
-):
+async def test_admin_decides_an_economic_association_by_its_id(db_session, monkeypatch):
     from app.api.v1 import config
-    from app.infra.db.models.social_analysis import (
-        EconomicSocialAssociation,
-        EconomicSocialAssociationRevision,
-        EconomicSocialAssociationSource,
-    )
     from app.services import server_auth
     from tests.unit.economic_taxonomy_reader_helpers import (
         seed_generation,
@@ -1043,52 +1036,45 @@ async def test_admin_associations_hide_the_legacy_id_when_its_bridge_is_ambiguou
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
     monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    headers = {"X-Admin-Key": "admin-secret"}
     seeded = seed_generation(db_session)
     rows = seed_social_associations(db_session, seeded)
-    # A remap reprojects the same legacy row onto a second economic theme.
-    remapped = EconomicSocialAssociation(
-        economic_theme_id=seeded["semiconductors"].id, security_id=rows["MU"].security_id
-    )
-    db_session.add(remapped)
-    db_session.flush()
-    db_session.add_all([
-        EconomicSocialAssociationRevision(
-            association_id=remapped.id, revision_number=1, state="proposed", live=False,
-            admission_state="live", mirror_state="not_required", reconciliation_hash="remap",
-        ),
-        EconomicSocialAssociationSource(
-            association_id=remapped.id, source_kind="legacy_association",
-            source_key=f"legacy:{rows['legacy'].id}:remap",
-            legacy_association_id=rows["legacy"].id,
-        ),
-    ])
-    db_session.commit()
+    nvda_id, legacy_id = rows["NVDA"].id, rows["legacy"].id
+    db_session.commit()  # the endpoint begins its own transaction on this session
+    path = f"/api/v1/social-signals/admin/economic-associations/{nvda_id}/decision"
 
-    listed = await _request(
-        db_session, "GET", "/api/v1/social-signals/admin/associations",
-        headers={"X-Admin-Key": "admin-secret"},
+    stale = await _request(
+        db_session, "POST", path, headers=headers,
+        json={"target": "accepted", "reason": "reviewed", "expected_revision": 2},
+    )
+    decided = await _request(
+        db_session, "POST", path, headers=headers,
+        json={"target": "accepted", "reason": "reviewed", "expected_revision": 1},
+    )
+    legacy = await _request(
+        db_session, "POST",
+        f"/api/v1/social-signals/admin/associations/{legacy_id}/decision",
+        headers=headers,
+        json={"target": "rejected", "reason": "reviewed", "expected_version": 3},
     )
 
-    mu_rows = [row for row in listed.json() if row["canonical_symbol"] == "MU"]
-    # _decide_economic refuses an ambiguous bridge, so neither row offers a decision.
-    assert len(mu_rows) == 2
-    assert all(row["association_id"] is None for row in mu_rows)
+    assert stale.status_code == 409
+    assert decided.status_code == 200
+    assert decided.json() == {
+        "economic_association_id": str(nvda_id), "status": "accepted",
+    }
+    assert legacy.status_code == 422
+    assert legacy.json()["detail"]["code"] == "economic_association_decision_required"
 
 
 @pytest.mark.asyncio
-async def test_admin_associations_keep_a_unique_bridge_beside_an_ambiguous_one(
+async def test_economic_decision_reports_an_unknown_association_and_a_fenced_write(
     db_session, monkeypatch
 ):
-    from datetime import datetime, timezone
+    from uuid import uuid4
 
     from app.api.v1 import config
-    from app.infra.db.models.social_analysis import (
-        EconomicSocialAssociation,
-        EconomicSocialAssociationRevision,
-        EconomicSocialAssociationSource,
-        SocialThemeAssociation,
-    )
-    from app.models.theme import ThemeCluster
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
     from app.services import server_auth
     from tests.unit.economic_taxonomy_reader_helpers import (
         seed_generation,
@@ -1097,53 +1083,29 @@ async def test_admin_associations_keep_a_unique_bridge_beside_an_ambiguous_one(
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
     monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    headers = {"X-Admin-Key": "admin-secret"}
     seeded = seed_generation(db_session)
     rows = seed_social_associations(db_session, seeded)
-    now = datetime(2026, 9, 21, tzinfo=timezone.utc)
-    other_theme = ThemeCluster(
-        name="HBM", display_name="HBM", canonical_key="hbm",
-        pipeline="technical", aliases=[], lifecycle_state="candidate", is_active=True,
-    )
-    db_session.add(other_theme)
-    db_session.flush()
-    second_legacy = SocialThemeAssociation(
-        theme_cluster_id=other_theme.id, market="US", canonical_symbol="MU",
-        state="proposed", origin="social", decision_owner="system",
-        evidence_work_ids=[], policy_version="policy-v1", version=1,
-        first_seen_at=now, updated_at=now,
-    )
-    remapped = EconomicSocialAssociation(
-        economic_theme_id=seeded["semiconductors"].id, security_id=rows["MU"].security_id
-    )
-    db_session.add_all([second_legacy, remapped])
-    db_session.flush()
-    # MU (AI Memory) keeps its unique bridge and gains a second one, which a
-    # remap also points at another economic association: that one is ambiguous.
-    db_session.add_all([
-        EconomicSocialAssociationRevision(
-            association_id=remapped.id, revision_number=1, state="proposed", live=False,
-            admission_state="live", mirror_state="not_required", reconciliation_hash="remap",
-        ),
-        EconomicSocialAssociationSource(
-            association_id=rows["MU"].id, source_kind="legacy_association",
-            source_key=f"legacy:{second_legacy.id}", legacy_association_id=second_legacy.id,
-        ),
-        EconomicSocialAssociationSource(
-            association_id=remapped.id, source_kind="legacy_association",
-            source_key=f"legacy:{second_legacy.id}:remap", legacy_association_id=second_legacy.id,
-        ),
-    ])
+    nvda_id = rows["NVDA"].id
+    db_session.get(TaxonomyAuthority, 1).writes_fenced = True
     db_session.commit()
+    body = {"target": "accepted", "reason": "reviewed", "expected_revision": 1}
 
-    listed = await _request(
-        db_session, "GET", "/api/v1/social-signals/admin/associations",
-        headers={"X-Admin-Key": "admin-secret"},
+    unknown = await _request(
+        db_session, "POST",
+        f"/api/v1/social-signals/admin/economic-associations/{uuid4()}/decision",
+        headers=headers, json=body,
+    )
+    fenced = await _request(
+        db_session, "POST",
+        f"/api/v1/social-signals/admin/economic-associations/{nvda_id}/decision",
+        headers=headers, json=body,
     )
 
-    by_theme = {row["theme_name"]: row for row in listed.json() if row["canonical_symbol"] == "MU"}
-    assert by_theme["AI Memory"]["association_id"] == rows["legacy"].id
-    assert by_theme["AI Memory"]["version"] == 3
-    assert by_theme["Semiconductors"]["association_id"] is None
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"]["code"] == "association_not_found"
+    assert fenced.status_code == 409
+    assert fenced.json()["detail"]["code"] == "authority_writes_fenced"
 
 
 @pytest.mark.asyncio
