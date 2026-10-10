@@ -178,25 +178,41 @@ class SocialThemeProjectionService:
         return self._prepared_decoded.get(work.id) or _decode(work)
 
     def _economic_catalog(self):
-        """``{normalized key: (economic theme id, theme key)}`` (#515).
-
-        The processing version's display names and aliases; a theme's key is
-        its display name's, so an alias lands on the same basket.
-        """
+        """``{normalized key: (economic theme id, theme key)}`` (#515), from the processing version."""
         from app.models.economic_taxonomy import EconomicThemeAlias, EconomicThemeRevision
         version_id = self.db.get(TaxonomyAuthority, 1).processing_taxonomy_version_id
         names = self.db.execute(select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
             EconomicThemeRevision.taxonomy_version_id == version_id,
-            EconomicThemeRevision.lifecycle != "retired").order_by(EconomicThemeRevision.theme_id)).all()
-        keys = {theme_id: canonical_theme_key(name) for theme_id, name in names}
-        catalog = {}
-        for theme_id, key in keys.items():
-            catalog.setdefault(key, (theme_id, key))
-        for theme_id, alias in self.db.execute(select(EconomicThemeAlias.theme_id, EconomicThemeAlias.alias).where(
-                EconomicThemeAlias.taxonomy_version_id == version_id).order_by(
-                EconomicThemeAlias.theme_id, EconomicThemeAlias.alias)):
-            if theme_id in keys:
-                catalog.setdefault(canonical_theme_key(alias), (theme_id, keys[theme_id]))
+            EconomicThemeRevision.lifecycle != "retired")).all()
+        aliases = self.db.execute(select(EconomicThemeAlias.theme_id, EconomicThemeAlias.alias).where(
+            EconomicThemeAlias.taxonomy_version_id == version_id)).all()
+        return self.catalog_from(names=names, aliases=aliases)
+
+    @staticmethod
+    def catalog_from(*, names, aliases):
+        """Map normalized display names and aliases to ``(theme id, theme key)``.
+
+        A theme's key is its display name's, so an alias lands on the same
+        basket. A key two themes claim is ambiguous and maps to neither: a
+        shared display name drops both themes, and an alias shared across
+        themes is dropped. A display name wins over another theme's alias.
+        """
+        def ambiguous(pairs):
+            owners = {}
+            for key, theme_id in pairs:
+                owners.setdefault(key, set()).add(theme_id)
+            return {key for key, ids in owners.items() if len(ids) > 1}
+
+        display = [(canonical_theme_key(name), theme_id) for theme_id, name in names]
+        clashing = ambiguous(display)
+        keys = {theme_id: key for key, theme_id in display if key not in clashing}
+        catalog = {key: (theme_id, key) for theme_id, key in keys.items()}
+        alias_pairs = [(canonical_theme_key(alias), theme_id) for theme_id, alias in aliases
+                       if theme_id in keys]
+        shared = ambiguous(alias_pairs)
+        for key, theme_id in alias_pairs:
+            if key not in shared and key not in catalog and key not in clashing:
+                catalog[key] = (theme_id, keys[theme_id])
         catalog.pop(UNKNOWN_THEME_KEY, None)
         return catalog
 

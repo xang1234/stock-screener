@@ -726,6 +726,34 @@ def test_economic_fingerprint_moves_only_with_basket_membership(social_fixture):
     assert f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint != before
 
 
+def test_processor_does_not_count_a_claim_about_an_uncatalogued_theme(social_fixture):
+    # As the legacy rule: a claim counts only when it is about this theme.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    elsewhere = f.save(("AAA",), author="second", theme="Quantum Widgets")
+    assert _project_economic(f, elsewhere, theme.id) == "proposed"
+
+
+def test_economic_catalog_drops_keys_two_themes_claim():
+    from app.services.social_theme_projection_service import SocialThemeProjectionService
+
+    first, second = "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"
+    catalog = SocialThemeProjectionService.catalog_from(
+        names=[(first, "Cooling"), (second, "Storage"), ("third", "Memory"), ("fourth", "Memory")],
+        aliases=[(first, "Chillers"), (second, "Chillers"), (second, "Cooling"), (first, "Thermal")],
+    )
+
+    assert catalog["cooling"] == (first, "cooling")  # a display name beats another theme's alias
+    assert catalog["thermal"] == (first, "cooling")
+    assert "memory" not in catalog  # two themes share the display name
+    assert "chiller" not in catalog and "chillers" not in catalog  # two themes share the alias
+
+
 def test_economic_basket_counts_only_stocks_as_company_stocks(social_fixture):
     # As the legacy reader: an accepted ETF is a member, not company-stock coverage.
     from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter

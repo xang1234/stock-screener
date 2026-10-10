@@ -638,8 +638,8 @@ class EconomicSocialTaxonomyAdapter:
         Two independent authors within 14 days, for a verified company,
         counted over the association's Social works. The window ends at the
         newest Social packet the association has seen (``now`` at least), so
-        processing an older packet last still counts the newer posts. A claim
-        the catalog places under another theme does not count.
+        processing an older packet last still counts the newer posts. Only a
+        claim the catalog places under this theme counts.
         """
         from app.services.social_company_identity_service import SocialCompanyIdentityService
         from app.services.social_theme_projection_service import (
@@ -683,8 +683,9 @@ class EconomicSocialTaxonomyAdapter:
                 continue  # unreadable saved work never counts
 
         def about_this_theme(claim):
+            # As the legacy rule: the claim itself must be about this theme.
             mapped = catalog.get(canonical_theme_key(claim.raw_theme))
-            return mapped is None or mapped[0] == association.economic_theme_id
+            return mapped is not None and mapped[0] == association.economic_theme_id
 
         rows = qualifying_social_evidence(decoded, now, resolver, about_this_theme)
         return len({row[4] for row in rows if row[3] == company.company_id}) >= 2
