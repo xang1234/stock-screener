@@ -15,7 +15,8 @@ Part of #410. Owner decisions (2026-10-10):
 3. **Decision API:** new `POST /social-signals/admin/economic-associations/{uuid}/decision`
    taking `target`, `reason`, `expected_revision`, for native and bridged
    associations alike. Under economic authority the legacy-id endpoint refuses,
-   so neither the admin list nor decisions read legacy rows.
+   so neither the admin list nor the decision lookup reads legacy rows (the
+   adapter still reads bridged rows to keep their legacy mirror in step).
 
 Legacy, shadow and dual modes keep the legacy flow unchanged.
 

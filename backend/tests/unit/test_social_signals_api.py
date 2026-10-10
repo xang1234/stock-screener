@@ -1068,6 +1068,47 @@ async def test_admin_decides_an_economic_association_by_its_id(db_session, monke
 
 
 @pytest.mark.asyncio
+async def test_economic_decision_reports_an_unknown_association_and_a_fenced_write(
+    db_session, monkeypatch
+):
+    from uuid import uuid4
+
+    from app.api.v1 import config
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+    from app.services import server_auth
+    from tests.unit.economic_taxonomy_reader_helpers import (
+        seed_generation,
+        seed_social_associations,
+    )
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    headers = {"X-Admin-Key": "admin-secret"}
+    seeded = seed_generation(db_session)
+    rows = seed_social_associations(db_session, seeded)
+    nvda_id = rows["NVDA"].id
+    db_session.get(TaxonomyAuthority, 1).writes_fenced = True
+    db_session.commit()
+    body = {"target": "accepted", "reason": "reviewed", "expected_revision": 1}
+
+    unknown = await _request(
+        db_session, "POST",
+        f"/api/v1/social-signals/admin/economic-associations/{uuid4()}/decision",
+        headers=headers, json=body,
+    )
+    fenced = await _request(
+        db_session, "POST",
+        f"/api/v1/social-signals/admin/economic-associations/{nvda_id}/decision",
+        headers=headers, json=body,
+    )
+
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"]["code"] == "association_not_found"
+    assert fenced.status_code == 409
+    assert fenced.json()["detail"]["code"] == "authority_writes_fenced"
+
+
+@pytest.mark.asyncio
 async def test_association_decision_requires_live_mode_reason_and_current_version(
     db_session, social_runtime, monkeypatch
 ):

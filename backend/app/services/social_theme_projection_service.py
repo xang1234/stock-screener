@@ -20,6 +20,7 @@ from app.domain.social_signals.records import (
     validate_utc_timestamp,
 )
 from app.infra.db.models.social_analysis import (
+    EconomicSocialAssociation,
     SocialExtractionWork,
     SocialRunWork,
     SocialThemeAssociation,
@@ -782,6 +783,8 @@ class SocialThemeProjectionService:
         authority = self.db.get(TaxonomyAuthority, 1)
         if authority is None or authority.mode != "economic":
             raise ValueError("economic_authority_required")
+        if self.db.get(EconomicSocialAssociation, association_id) is None:
+            raise ValueError("association_not_found")
         reason, actor = reason.strip(), actor.strip()
         return EconomicSocialTaxonomyAdapter(self.db).revise(
             association_id,

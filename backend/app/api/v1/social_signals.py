@@ -18,6 +18,7 @@ from app.schemas.social_signals import (
     SocialSourceRenameRequest, SocialSourceTransitionRequest,
     SocialSourceVersionRequest, SocialSummaryResponse, WindowCode,
 )
+from app.services.economic_taxonomy_fence import TaxonomyWriteRejected
 from app.services.social_signal_query_service import SocialSignalQueries
 from app.api.v1.config import require_admin
 
@@ -40,7 +41,7 @@ def _admin_error(exc):
     code = str(exc)
     if isinstance(exc, SocialSourceVersionError) or "version_conflict" in code:
         return HTTPException(status_code=409, detail={"code": code})
-    if code in {"source_not_found", "candidate_not_found", "work_not_found"}:
+    if code in {"source_not_found", "candidate_not_found", "work_not_found", "association_not_found"}:
         return HTTPException(status_code=404, detail={"code": code})
     return HTTPException(status_code=422, detail={"code": code})
 
@@ -521,8 +522,9 @@ def decide_admin_economic_association(
                 association_id, body.target, body.reason, ADMIN_ACTOR, body.expected_revision,
             )
         return {"economic_association_id": str(association_id), "status": body.target}
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail={"code": "association_not_found"}) from exc
+    except TaxonomyWriteRejected as exc:
+        # A cutover or rollback holds the fence, or the epoch moved: retry later.
+        raise HTTPException(status_code=409, detail={"code": exc.code}) from exc
     except ValueError as exc:
         raise _admin_error(exc) from exc
 
