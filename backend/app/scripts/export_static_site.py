@@ -383,17 +383,29 @@ def _market_coverage(
     rs_details = rs.get("diagnostics") or {}
     snapshot = (refresh_results.get("feature_snapshots") or {}).get(market) or {}
     history_gaps = rs.get("history_gaps") or rs_details.get("history_gaps") or {}
-    scored, seed_revision = _snapshot_score_counts(market, snapshot.get("run_id"))
+    # A same-day rebuild reuses the published run and reports existing_run_id.
+    scored, seed_revision = _snapshot_score_counts(
+        market, snapshot.get("run_id") or snapshot.get("existing_run_id")
+    )
     eligible = rs.get("eligible_symbol_count")
     priced = history_gaps.get("current_prices_available")
-    expected = snapshot.get("total_symbols")
+    expected = next(
+        (
+            count
+            for count in (
+                snapshot.get("total_symbols"),
+                rs.get("expected_symbol_count"),
+                rs_details.get("expected_symbol_count"),
+            )
+            if count is not None
+        ),
+        None,
+    )
     return {
         "market": market,
         "as_of_date": rs.get("as_of_date") or price.get("as_of_date"),
         "seed_source_revision": seed_revision,
-        "expected_universe": (
-            expected if expected is not None else rs_details.get("expected_symbol_count")
-        ),
+        "expected_universe": expected,
         "latest_session_priced": (
             priced if priced is not None else rs_details.get("current_prices_available")
         ),
@@ -439,11 +451,14 @@ def _write_market_coverage_files(output_dir: Path, coverage: Mapping[str, Any]) 
         rs += f": {coverage['rs_reason']}"
     with open(summary_path, "a", encoding="utf-8") as fh:
         fh.write(
-            "| Market | As of | Priced | RS eligible | Scored | Market RS | Anchor repair |\n"
-            "|---|---|---|---|---|---|---|\n"
+            "| Market | As of | Universe | Priced | RS eligible | Scored | Market RS "
+            "| Fetched/failed | Anchor repair |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
             f"| {coverage['market']} | {cell(coverage.get('as_of_date'))} "
+            f"| {cell(coverage.get('expected_universe'))} "
             f"| {cell(coverage.get('latest_session_priced'))} | {cell(coverage.get('rs_eligible'))} "
             f"| {cell(coverage.get('scored'))} | {rs} "
+            f"| {cell(coverage.get('fetched_symbols'))}/{cell(coverage.get('failed_symbols'))} "
             f"| {cell(repair.get('repaired_symbols'))}/{cell(repair.get('gap_symbols'))} repaired, "
             f"{cell(repair.get('unresolved_symbols'))} unresolved |\n"
         )
@@ -772,7 +787,8 @@ def _reject_static_rs_history_gap_collapse(
         "diagnostics": {
             "history_gaps": gaps,
             "max_history_gap_share": threshold,
-            # The rejected run's own count: how far RS collapsed.
+            # The rejected run's own counts: how far RS collapsed.
+            "expected_symbol_count": result.get("expected_symbol_count"),
             "eligible_symbol_count": result.get("eligible_symbol_count"),
         },
         "market_rs_run_id": None,

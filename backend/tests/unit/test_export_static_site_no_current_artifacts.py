@@ -639,6 +639,7 @@ def test_main_records_rs_coverage_when_anchor_gaps_reject_rs(monkeypatch, tmp_pa
             "status": "completed",
             "market": "AU",
             "as_of_date": "2026-10-08",
+            "expected_symbol_count": 2101,
             "eligible_symbol_count": 84,
             "history_gaps": _AU_HISTORY_GAPS,
         },
@@ -666,7 +667,7 @@ def test_main_records_rs_coverage_when_anchor_gaps_reject_rs(monkeypatch, tmp_pa
         "market": "AU",
         "as_of_date": "2026-10-08",
         "seed_source_revision": "daily_prices_au:20261007",
-        "expected_universe": None,
+        "expected_universe": 2101,
         "latest_session_priced": 1845,
         "rs_status": "failed",
         "rs_reason": "historical_adjusted_anchor_gap_above_threshold",
@@ -680,9 +681,29 @@ def test_main_records_rs_coverage_when_anchor_gaps_reject_rs(monkeypatch, tmp_pa
         "history_gaps": _AU_HISTORY_GAPS,
     }
     assert (
-        "| AU | 2026-10-08 | 1845 | 84 | — | failed: historical_adjusted_anchor_gap_above_threshold "
-        "| 1691/1731 repaired, 40 unresolved |"
+        "| AU | 2026-10-08 | 2101 | 1845 | 84 | — | failed: historical_adjusted_anchor_gap_above_threshold "
+        "| 1731/40 | 1691/1731 repaired, 40 unresolved |"
     ) in summary.read_text()
+
+
+def test_market_coverage_counts_the_existing_run_of_a_same_day_rebuild(monkeypatch):
+    # A rebuild of an already-published day reuses that run: existing_run_id only.
+    monkeypatch.setattr(
+        export_script,
+        "_snapshot_score_counts",
+        lambda market, run_id: (1766, "rev") if run_id == 7 else (None, None),
+    )
+    coverage = export_script._market_coverage(  # noqa: SLF001
+        "AU",
+        {
+            "market_rs": {"AU": {"status": "completed", "expected_symbol_count": 2101}},
+            "feature_snapshots": {
+                "AU": {"status": "skipped", "reason": "already_published", "existing_run_id": 7}
+            },
+        },
+    )
+    assert coverage["scored"] == 1766
+    assert coverage["expected_universe"] == 2101
 
 
 def test_main_records_scored_count_after_a_cleaning_export(monkeypatch, tmp_path):
