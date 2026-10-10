@@ -58,6 +58,7 @@ from ...services.theme_merging_service import ThemeMergingService
 from ...wiring.bootstrap import get_ui_snapshot_service
 from .themes_common import (
     parse_csv_values,
+    reject_legacy_theme_reads,
     reject_legacy_theme_writes,
     safe_theme_cluster_response,
 )
@@ -415,7 +416,7 @@ def _build_match_slice(key: str, rows: list[dict[str, object]]) -> ThemeMatchTel
     )
 
 
-@router.get("/matching/telemetry", response_model=ThemeMatchTelemetryResponse)
+@router.get("/matching/telemetry", response_model=ThemeMatchTelemetryResponse, dependencies=[Depends(reject_legacy_theme_reads)])
 def get_matching_telemetry(
     days: Annotated[int, Query(ge=1, le=365, description="Rolling window in days")] = 30,
     pipeline: Annotated[Optional[str], Query(description="Filter by pipeline: technical or fundamental")] = None,

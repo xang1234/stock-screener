@@ -9,7 +9,7 @@ from sqlalchemy import String, cast, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.config import require_admin
-from app.api.v1.themes_common import reject_legacy_theme_writes
+from app.api.v1.themes_common import reject_legacy_theme_reads, reject_legacy_theme_writes
 from app.database import get_db
 from app.domain.economic_taxonomy.contracts import AdminPrincipal
 from app.models.theme import ContentItem, ThemeCluster, ThemeMention
@@ -45,7 +45,7 @@ class BackfillRequest(BaseModel):
     apply: bool = False
 
 
-@router.get("/equivalence/preview")
+@router.get("/equivalence/preview", dependencies=[Depends(reject_legacy_theme_reads)])
 def preview_equivalence(source_id: int, target_id: int, db: DbSession):
     try:
         return ThemeEquivalenceService(db).preview(source_id, target_id)
@@ -80,7 +80,7 @@ def apply_equivalence(
     }
 
 
-@router.get("/equivalence/history")
+@router.get("/equivalence/history", dependencies=[Depends(reject_legacy_theme_reads)])
 def equivalence_history(
     db: DbSession,
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
@@ -132,7 +132,7 @@ def undo_equivalence(
     }
 
 
-@router.get("/equivalence/search")
+@router.get("/equivalence/search", dependencies=[Depends(reject_legacy_theme_reads)])
 def search_equivalent_themes(
     db: DbSession,
     q: str = "",

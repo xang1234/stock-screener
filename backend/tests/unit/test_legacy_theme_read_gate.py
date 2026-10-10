@@ -16,15 +16,12 @@ import pytest
 
 from tests.helpers.legacy_theme_read_gate import Index, api_entry_points, unrouted_legacy_reads
 
-_REVIEW = "Audit 'Readers with no routing': review/merge GETs serve legacy clusters and suggestions."
-_INTELLIGENCE = "Audit 'Readers with no routing': equivalence and development GETs serve legacy identities."
-_TELEMETRY = "Audit 'Readers with no routing': matching telemetry serves legacy ThemeMention stats."
+_INTELLIGENCE = "Audit 'Readers with no routing': the development GET serves legacy identities (#557: route)."
 _CONTENT = "Audit 'Readers with no routing': content listing annotates items with ThemeMention."
 _DEVELOPMENT_BACKFILL = (
     "Audit 'Rollback machinery (keep until retirement)': maps legacy "
     "ThemeDevelopmentTheme links to economic rows for the snapshot builder (#513)."
 )
-_PIPELINE_DIAGNOSTICS = "Audit 'Readers with no routing': pipeline diagnostics read legacy tables."
 _ROLLBACK = (
     "Audit 'Rollback machinery (keep until retirement)': compatibility delivery "
     "maintains legacy projections."
@@ -36,45 +33,9 @@ _SOCIAL_BRIDGE = (
 
 # entry point -> (reason, the legacy models it is expected to read)
 ALLOWLIST: dict[str, tuple[str, set[str]]] = {
-    "GET /api/v1/themes/merge-suggestions": (
-        _REVIEW,
-        {"ThemeCluster", "ThemeMergeSuggestion"},
-    ),
-    "GET /api/v1/themes/merge-history": (
-        _REVIEW,
-        {"ThemeMergeHistory"},
-    ),
-    "GET /api/v1/themes/merge-plan/dry-run": (
-        _REVIEW,
-        {"ThemeCluster", "ThemeEmbedding"},
-    ),
-    "GET /api/v1/themes/candidates/queue": (
-        _REVIEW,
-        {"ThemeCluster", "ThemeEquivalenceOperation", "ThemeMention", "ThemeMetrics"},
-    ),
-    "GET /api/v1/themes/relationship-graph": (
-        _REVIEW,
-        {"ThemeCluster", "ThemeEquivalenceOperation", "ThemeRelationship"},
-    ),
-    "GET /api/v1/themes/equivalence/preview": (
-        _INTELLIGENCE,
-        {"ThemeCluster", "ThemeEquivalenceOperation", "ThemeMention"},
-    ),
-    "GET /api/v1/themes/equivalence/history": (
-        _INTELLIGENCE,
-        {"ThemeEquivalenceOperation"},
-    ),
-    "GET /api/v1/themes/equivalence/search": (
-        _INTELLIGENCE,
-        {"ThemeCluster", "ThemeEquivalenceOperation"},
-    ),
     "GET /api/v1/themes/{theme_id}/developments": (
         _INTELLIGENCE,
         {"ThemeCluster", "ThemeDevelopmentTheme", "ThemeEquivalenceOperation", "ThemeMention"},
-    ),
-    "GET /api/v1/themes/matching/telemetry": (
-        _TELEMETRY,
-        {"ThemeMention"},
     ),
     "GET /api/v1/themes/content": (
         _CONTENT,
@@ -87,14 +48,6 @@ ALLOWLIST: dict[str, tuple[str, set[str]]] = {
     "task app.tasks.economic_taxonomy_tasks.backfill_legacy_developments": (
         _DEVELOPMENT_BACKFILL,
         {"ThemeDevelopmentTheme"},
-    ),
-    "GET /api/v1/themes/pipeline/state-health": (
-        _PIPELINE_DIAGNOSTICS,
-        {"ThemeMention"},
-    ),
-    "GET /api/v1/themes/pipeline/observability": (
-        _PIPELINE_DIAGNOSTICS,
-        {"ThemeCluster", "ThemeMention", "ThemeMergeSuggestion"},
     ),
     "task app.tasks.economic_taxonomy_tasks.deliver_taxonomy_outbox": (
         _ROLLBACK,
