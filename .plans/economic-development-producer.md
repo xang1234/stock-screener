@@ -92,6 +92,15 @@ projection.
   `LegacyDestinationMapping` (logic moved out of the builder), replacing any
   other version's rows and marker. A split without an allocation fails it, as it
   failed the builder before. No CLI: the task takes an optional version id.
+  It maps only links on legacy-producer observations (no source family); links
+  on economic observations are the rollback projection of their native links.
+  When the fingerprint moved it takes `exclusive_publication`, which drains
+  legacy writers (shared producer fence) so the watermark is safe, and
+  serializes runs; it applies the difference rather than rewriting the rows.
+- After a processing-version bump, a refresh can run before the new version's
+  backfill and fail `legacy_development_backfill_missing` for about a minute.
+  Running the backfill inside prepare would put the legacy read back into the
+  refresh task.
 - The builder reads only `EconomicThemeDevelopment`. It fails closed
   (`legacy_development_backfill_missing`) when a pinned legacy observation (no
   source family) is above the marker's watermark or the marker is for another

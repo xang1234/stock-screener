@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, tuple_
 
 from app.models.economic_taxonomy import (
     LegacyClaimAllocation,
@@ -20,6 +20,7 @@ from app.models.economic_taxonomy import (
 )
 from app.models.economic_taxonomy_runtime import TaxonomyAuthority
 from app.models.theme import ThemeCluster
+from app.services.economic_taxonomy_fence import exclusive_publication
 from app.models.theme_intelligence import (
     EconomicDevelopmentBackfill,
     EconomicThemeDevelopment,
@@ -72,6 +73,10 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
 
     Defaults to the processing version. Skips when the marker already covers
     the current legacy links (their count and highest observation).
+
+    Only links on legacy-producer observations (no source family) are mapped:
+    economic observations carry native links, and their legacy links are the
+    rollback projection of those (which may land on a split legacy theme).
     """
     if taxonomy_version_id is None:
         authority = db.get(TaxonomyAuthority, 1)
@@ -80,62 +85,108 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
     if version is None or version.status != "sealed":
         # A draft's allocations can still change under an unchanged fingerprint.
         return {"status": "no_sealed_taxonomy"}
-    # Read before the links: an observation above it is not covered.
-    through = db.scalar(select(func.max(ThemeDevelopmentObservation.id))) or 0
-    count, max_observation = db.execute(
-        select(func.count(), func.max(ThemeDevelopmentTheme.observation_id))
+    if _is_current(db, version.id):
+        return {"status": "current", "taxonomy_version_id": str(version.id)}
+    # Drains legacy writers (they hold the shared producer fence), so every
+    # observation at or below the watermark has committed its links; it also
+    # serializes backfills.
+    with exclusive_publication(db):
+        if _is_current(db, version.id):
+            return {"status": "current", "taxonomy_version_id": str(version.id)}
+        through = db.scalar(select(func.max(ThemeDevelopmentObservation.id))) or 0
+        count, max_observation = _fingerprint(db)
+        mapped = map_legacy_links(
+            db.execute(
+                _on_legacy_observations(
+                    select(ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id),
+                    ThemeDevelopmentTheme.observation_id,
+                )
+            ),
+            allocations=_version_rows(db, LegacyClaimAllocation, version.id),
+            destinations=_version_rows(db, LegacyDestinationMapping, version.id),
+        )
+        current, other = set(), set()
+        for observation_id, theme_id, origin in db.execute(
+            _on_legacy_observations(
+                select(
+                    EconomicThemeDevelopment.observation_id,
+                    EconomicThemeDevelopment.economic_theme_id,
+                    EconomicThemeDevelopment.link_origin,
+                ),
+                EconomicThemeDevelopment.observation_id,
+            )
+        ):
+            (current if origin == "legacy_mapping" else other).add((observation_id, theme_id))
+        # Apply the difference: a full rewrite each minute would bloat the table.
+        stale = current - mapped
+        if stale:
+            db.execute(
+                delete(EconomicThemeDevelopment).where(
+                    EconomicThemeDevelopment.link_origin == "legacy_mapping",
+                    tuple_(
+                        EconomicThemeDevelopment.observation_id,
+                        EconomicThemeDevelopment.economic_theme_id,
+                    ).in_(stale),
+                )
+            )
+        added = mapped - current - other
+        db.add_all(
+            EconomicThemeDevelopment(
+                observation_id=observation_id,
+                economic_theme_id=theme_id,
+                link_origin="legacy_mapping",
+            )
+            for observation_id, theme_id in added
+        )
+        _write_marker(db, version.id, through, count, max_observation)
+    return {
+        "status": "backfilled",
+        "taxonomy_version_id": str(version.id),
+        "added": len(added),
+        "removed": len(stale),
+    }
+
+
+def _on_legacy_observations(query, observation_column):
+    return query.join(
+        ThemeDevelopmentObservation, ThemeDevelopmentObservation.id == observation_column
+    ).where(ThemeDevelopmentObservation.source_family_id.is_(None))
+
+
+def _fingerprint(db):
+    return db.execute(
+        _on_legacy_observations(
+            select(func.count(), func.max(ThemeDevelopmentTheme.observation_id)),
+            ThemeDevelopmentTheme.observation_id,
+        )
     ).one()
-    marker = db.get(EconomicDevelopmentBackfill, version.id)
-    if (
+
+
+def _is_current(db, taxonomy_version_id):
+    marker = db.scalar(
+        select(EconomicDevelopmentBackfill).where(
+            EconomicDevelopmentBackfill.taxonomy_version_id == taxonomy_version_id
+        )
+    )
+    count, max_observation = _fingerprint(db)
+    return (
         marker is not None
         and marker.legacy_link_count == count
         and marker.legacy_link_max_observation_id == max_observation
-    ):
-        return {"status": "current", "taxonomy_version_id": str(version.id)}
-    mapped = map_legacy_links(
-        db.execute(select(ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id)),
-        allocations=_version_rows(db, LegacyClaimAllocation, version.id),
-        destinations=_version_rows(db, LegacyDestinationMapping, version.id),
     )
-    db.execute(
-        delete(EconomicThemeDevelopment).where(
-            EconomicThemeDevelopment.link_origin == "legacy_mapping"
-        )
-    )
-    # A native or compatibility link for the same pair stays as it is.
-    existing = set(
-        db.execute(
-            select(
-                EconomicThemeDevelopment.observation_id,
-                EconomicThemeDevelopment.economic_theme_id,
-            ).where(
-                EconomicThemeDevelopment.observation_id.in_({pair[0] for pair in mapped})
-            )
-        ).all()
-    )
-    db.add_all(
-        EconomicThemeDevelopment(
-            observation_id=observation_id,
-            economic_theme_id=theme_id,
-            link_origin="legacy_mapping",
-        )
-        for observation_id, theme_id in mapped - existing
-    )
+
+
+def _write_marker(db, taxonomy_version_id, through, count, max_observation):
     db.execute(delete(EconomicDevelopmentBackfill))
     db.add(
         EconomicDevelopmentBackfill(
-            taxonomy_version_id=version.id,
+            taxonomy_version_id=taxonomy_version_id,
             through_observation_id=through,
             legacy_link_count=count,
             legacy_link_max_observation_id=max_observation,
         )
     )
     db.flush()
-    return {
-        "status": "backfilled",
-        "taxonomy_version_id": str(version.id),
-        "links": len(mapped - existing),
-    }
 
 
 def project_economic_developments(db, taxonomy_version_id):

@@ -230,3 +230,68 @@ def test_rollback_projects_only_unambiguous_same_pipeline_links(db_session):
     links = set(db_session.execute(select(ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id)))
     assert links == {(fundamental_obs.id, fundamental.id), (gold_obs.id, other_technical.id)}
     assert result == {"projected": 2, "skipped": 2}
+
+
+def test_a_rollback_projection_onto_a_split_theme_does_not_block_the_backfill(db_session):
+    # Projected links sit on economic (family) observations, which carry their
+    # native links already: the backfill must not map them (or need an
+    # allocation for them).
+    split = _legacy(db_session)
+    version, themes = _version(db_session, {split: ["Copper Miners", "Gold Miners"]})
+    native = _observation(db_session, family=_family(db_session).id)
+    db_session.add(
+        EconomicThemeDevelopment(
+            observation_id=native.id,
+            economic_theme_id=themes["Gold Miners"].id,
+            link_origin="economic_native",
+        )
+    )
+    db_session.flush()
+    assert project_economic_developments(db_session, version.id)["projected"] == 1
+
+    assert backfill_legacy_developments(db_session, version.id)["status"] == "backfilled"
+    assert _economic_links(db_session) == set()
+
+
+def test_backfill_drains_legacy_writers_before_reading_the_watermark(db_session, monkeypatch):
+    import app.services.economic_development_backfill as backfill_module
+
+    cluster = _legacy(db_session)
+    version, _themes = _version(db_session, {cluster: ["Copper Miners"]})
+    calls = []
+    real = backfill_module.exclusive_publication
+
+    def recording(session):
+        calls.append(session)
+        return real(session)
+
+    monkeypatch.setattr(backfill_module, "exclusive_publication", recording)
+
+    backfill_legacy_developments(db_session, version.id)
+
+    assert calls == [db_session]
+
+
+def test_builder_fails_when_the_backfill_moves_to_another_version_mid_read(db_session, monkeypatch):
+    import app.services.economic_taxonomy_snapshot_builder as builder
+
+    cluster = _legacy(db_session)
+    old, _old = _version(db_session, {cluster: ["Copper Miners"]})
+    new, _new = _version(db_session, {cluster: ["Copper Producers"]})
+    observation = _observation(db_session)
+    db_session.add(ThemeDevelopmentTheme(observation_id=observation.id, theme_id=cluster.id))
+    db_session.flush()
+    backfill_legacy_developments(db_session, old.id)
+    real = builder._backfill_marker
+    reads = []
+
+    def switching(db, version_id):
+        reads.append(version_id)
+        if len(reads) == 2:  # a backfill for the new version committed in between
+            backfill_legacy_developments(db, new.id)
+        return real(db, version_id)
+
+    monkeypatch.setattr(builder, "_backfill_marker", switching)
+
+    with pytest.raises(SnapshotBundleError, match="legacy_development_backfill_changed"):
+        _development_rows(db_session, observation_ids=[observation.id], taxonomy_version_id=old.id)

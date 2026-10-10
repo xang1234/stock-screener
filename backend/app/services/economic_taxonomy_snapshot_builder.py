@@ -660,6 +660,17 @@ def _pinned_development_observation_ids(db, manifest):
     return observation_ids
 
 
+def _backfill_marker(db, taxonomy_version_id):
+    """``(through_observation_id, completed_at)`` of the version's backfill, or None."""
+    row = db.execute(
+        select(
+            EconomicDevelopmentBackfill.through_observation_id,
+            EconomicDevelopmentBackfill.completed_at,
+        ).where(EconomicDevelopmentBackfill.taxonomy_version_id == taxonomy_version_id)
+    ).first()
+    return tuple(row) if row is not None else None
+
+
 def _development_rows(db, *, observation_ids, taxonomy_version_id):
     """Pinned observations with their economic theme links (#513).
 
@@ -679,8 +690,8 @@ def _development_rows(db, *, observation_ids, taxonomy_version_id):
             )
         )
     }
-    backfill = db.get(EconomicDevelopmentBackfill, taxonomy_version_id)
-    covered = backfill.through_observation_id if backfill is not None else 0
+    backfill = _backfill_marker(db, taxonomy_version_id)
+    covered = backfill[0] if backfill is not None else 0
     if any(
         row.source_family_id is None and row.id > covered
         for row in observations.values()
@@ -695,6 +706,10 @@ def _development_rows(db, *, observation_ids, taxonomy_version_id):
     theme_links = {
         (row.observation_id, row.economic_theme_id) for row in db.scalars(links)
     }
+    # The two reads are separate statements: a backfill committing between
+    # them may have swapped the rows for another version's.
+    if _backfill_marker(db, taxonomy_version_id) != backfill:
+        raise SnapshotBundleError("legacy_development_backfill_changed")
     return [
         (observations[observation_id], theme_id)
         for observation_id, theme_id in sorted(
