@@ -838,3 +838,75 @@ def test_explicit_backfill_only_queries_the_requested_items_lineages():
         )
     )
     assert "source_lineage_id IN" in sql
+
+
+def _admit_social_item(db, *, with_item_id=True):
+    """An X post that reached the deployment only through Social (#551)."""
+    now = datetime.now(timezone.utc)
+    post_id = str(uuid4().int)[:18]
+    url = f"https://x.com/someone/status/{post_id}"
+    item = ContentItem(
+        source_type="twitter",
+        external_id=post_id,
+        url=url,
+        content=TEXT,
+        published_at=now,
+        fetched_at=now,
+    )
+    db.add(item)
+    db.flush()
+    metadata = {"url": url, **({"content_item_id": item.id} if with_item_id else {})}
+    admitted = EconomicSourceAdmissionService(db).admit_social_work(
+        EvidenceAdmission(
+            provider="x",
+            canonical_item_id=post_id,
+            canonical_source_family=content_family_key("twitter", post_id, url),
+            capture_route="social",
+            route_record_id=str(uuid4()),
+            original_text=TEXT,
+            preparation_version="social-saved-work-v1",
+            source_metadata=metadata,
+            captured_at=now,
+            available_at=now,
+            evidence_channels=("narrative",),
+        )
+    )
+    db.commit()
+    return item, admitted
+
+
+def test_social_only_item_records_narrative_developments(db_session):
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session)
+    _classify(db_session, admitted, taxonomy, [theme.id])
+
+    worker.discover(db_session)
+    db_session.commit()
+    assert [(row.pipeline, row.status) for row in _work(db_session, item.id)] == [
+        ("narrative", "pending")
+    ]
+
+    worker.process_one(sessionmaker(bind=db_session.get_bind()), generate=lambda *_args: [_fact(1)])
+    links = db_session.scalars(
+        select(EconomicThemeDevelopment)
+        .join(
+            ThemeDevelopmentObservation,
+            ThemeDevelopmentObservation.id == EconomicThemeDevelopment.observation_id,
+        )
+        .where(
+            ThemeDevelopmentObservation.content_item_id == item.id,
+            ThemeDevelopmentObservation.analysis_channel == "narrative",
+        )
+    ).all()
+    assert [link.economic_theme_id for link in links] == [theme.id]
+
+
+def test_social_packet_without_content_item_is_skipped(db_session):
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session, with_item_id=False)
+    _classify(db_session, admitted, taxonomy, [theme.id])
+
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert _work(db_session, item.id) == []
