@@ -18,7 +18,6 @@ from app.models.economic_taxonomy_runtime import (
     TaxonomyProjectionEvent,
     TaxonomySourceRevisionLog,
 )
-from app.services.economic_development_backfill import project_economic_developments
 from app.services.economic_taxonomy_fence import exclusive_publication
 from app.services.economic_taxonomy_publication_contracts import (
     CompatibilityNotAcknowledged,
@@ -154,19 +153,6 @@ class RollbackRecovery:
             authority.rollback_state = "recovered"
             authority.rollback_reason = None
             session.commit()
-
-    def project_developments(self) -> None:
-        """Legacy links for developments recorded under economic authority (#513).
-
-        Idempotent; every rollback runs it, healthy or not.
-        """
-        with self.session_factory() as session:
-            authority = session.get(TaxonomyAuthority, 1)
-            if authority is not None and authority.processing_taxonomy_version_id:
-                project_economic_developments(
-                    session, authority.processing_taxonomy_version_id
-                )
-                session.commit()
 
     def mark_failed(self, reason: str) -> None:
         with self.session_factory() as session:  # noqa: SIM117

@@ -116,7 +116,7 @@ projection.
   window whose economic theme maps 1:1 to a legacy theme (version's
   destinations); skip and log ambiguous ones. Nothing extra runs during normal
   economic operation.
-- As built: `EconomicTaxonomyPublicationCoordinator.rollback` (healthy and recovery paths, before the legacy generation and again after it is published) calls
+- As built: `EconomicTaxonomyPublicationCoordinator.rollback` (healthy and recovery paths) passes a `before_switch` hook to `publish_generation`, which calls
   `project_economic_developments` for the processing version. "1:1" is per
   pipeline: exactly one of the theme's legacy destinations is in the
   observation's pipeline, so narrative observations project nothing.

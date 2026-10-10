@@ -41,6 +41,7 @@ from app.models.theme_intelligence import (
     ThemeDevelopmentEvent,
     ThemeDevelopmentObservation,
 )
+from app.services.economic_development_backfill import project_economic_developments
 from app.services.economic_taxonomy_fence import exclusive_publication
 from app.services.economic_social_taxonomy_adapter import (
     EconomicSocialTaxonomyAdapter,
@@ -94,6 +95,18 @@ __all__ = (
     "PublishedGeneration",
     "ReaderCapabilityRejected",
 )
+
+
+def _project_economic_developments(
+    session: Session, authority: TaxonomyAuthority
+) -> None:
+    """Rollback: legacy links for developments recorded under economic authority (#513).
+
+    Runs in the switch's transaction under the exclusive fence, which has
+    drained producers, so none commits between the links and legacy mode.
+    """
+    if authority.mode != "legacy" and authority.processing_taxonomy_version_id:
+        project_economic_developments(session, authority.processing_taxonomy_version_id)
 
 
 def _utcnow() -> datetime:
@@ -214,6 +227,7 @@ class EconomicTaxonomyPublicationCoordinator:
         principal: AdminPrincipal,
         notify_delivery_workers: Callable[[], Any] | None = None,
         before_commit: Callable[[], Any] | None = None,
+        before_switch: Callable[[Session, TaxonomyAuthority], Any] | None = None,
     ) -> PublishedGeneration:
         self._require_admin(principal)
         changed: str | None = None
@@ -266,6 +280,8 @@ class EconomicTaxonomyPublicationCoordinator:
                         )
                         previous_id = authority.serving_generation_id
                         target_mode = str(prepared.details["target_mode"])
+                        if before_switch is not None:
+                            before_switch(session, authority)
                         next_epoch = authority.authority_epoch + 1
                         switch_reader_pointers(
                             session,
@@ -414,9 +430,6 @@ class EconomicTaxonomyPublicationCoordinator:
                 self.rollback_recovery.mark_failed(str(exc))
                 raise
 
-        # Before the legacy generation is built, and again once legacy mode
-        # has stopped the economic producer, for what it recorded in between.
-        self.rollback_recovery.project_developments()
         cutoff = self.capture_cutoff(principal=principal, selections=selections)
         prepared = self.prepare_generation(
             cutoff,
@@ -424,9 +437,11 @@ class EconomicTaxonomyPublicationCoordinator:
             reader_capability_manifest_id=capability_id,
             target_mode="legacy",
         )
-        published = self.publish_generation(prepared.id, principal=principal)
-        self.rollback_recovery.project_developments()
-        return published
+        return self.publish_generation(
+            prepared.id,
+            principal=principal,
+            before_switch=_project_economic_developments,
+        )
 
     def refresh_rollback_availability(self) -> str:
         """Promote rollback readiness after asynchronous mirrors catch up."""

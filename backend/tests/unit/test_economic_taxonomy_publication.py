@@ -364,8 +364,9 @@ def test_unhealthy_rollback_rebuilds_legacy_before_switch(db_session):
 
 def test_healthy_rollback_projects_economic_developments(db_session, monkeypatch):
     # Developments recorded under economic authority need legacy links on every
-    # rollback, not only on the recovery path (#513).
-    import app.services.economic_taxonomy_rollback_recovery as recovery_module
+    # rollback, not only on the recovery path, and in the transaction that
+    # switches to legacy: none may commit after it and before the links (#513).
+    import app.services.economic_taxonomy_publication as publication_module
 
     taxonomy, capability = _seed(db_session)
     coordinator = _coordinator(db_session)
@@ -378,14 +379,16 @@ def test_healthy_rollback_projects_economic_developments(db_session, monkeypatch
     coordinator.publish_generation(first.id, principal=ADMIN)
     projected = []
     monkeypatch.setattr(
-        recovery_module,
+        publication_module,
         "project_economic_developments",
-        lambda _session, version_id: projected.append(version_id),
+        lambda session, version_id: projected.append(
+            (version_id, session.get(TaxonomyAuthority, 1).mode)
+        ),
     )
 
     coordinator.rollback(principal=ADMIN)
 
-    assert projected and set(projected) == {taxonomy.id}
+    assert projected == [(taxonomy.id, "economic")]
 
 
 def test_failed_benchmark_does_not_prepare_candidate(db_session):
