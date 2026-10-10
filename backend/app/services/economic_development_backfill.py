@@ -126,18 +126,16 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
         ):
             (current if origin == "legacy_mapping" else other).add((observation_id, theme_id))
         # Apply the difference: a full rewrite each minute would bloat the table.
-        stale = sorted(current - mapped, key=lambda pair: (pair[0], str(pair[1])))
+        stale = current - mapped
         # Bounded statements: a remap can make tens of thousands of pairs stale.
-        for start in range(0, len(stale), _DELETE_CHUNK):
-            db.execute(
-                delete(EconomicThemeDevelopment).where(
-                    EconomicThemeDevelopment.link_origin == "legacy_mapping",
-                    tuple_(
-                        EconomicThemeDevelopment.observation_id,
-                        EconomicThemeDevelopment.economic_theme_id,
-                    ).in_(stale[start : start + _DELETE_CHUNK]),
-                )
-            )
+        _delete_pairs(
+            db,
+            delete(EconomicThemeDevelopment).where(
+                EconomicThemeDevelopment.link_origin == "legacy_mapping"
+            ),
+            (EconomicThemeDevelopment.observation_id, EconomicThemeDevelopment.economic_theme_id),
+            stale,
+        )
         added = mapped - current - other
         db.add_all(
             EconomicThemeDevelopment(
@@ -226,7 +224,19 @@ def project_economic_developments(db, taxonomy_version_id):
             )
         ).all()
     )
-    existing = set(db.execute(select(ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id)).all())
+    # Legacy links on economic (family) observations are only ever written
+    # here, so the projection owns them: an earlier rollback's links that this
+    # version no longer projects are retracted.
+    existing = set(
+        db.execute(
+            select(ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id)
+            .join(
+                ThemeDevelopmentObservation,
+                ThemeDevelopmentObservation.id == ThemeDevelopmentTheme.observation_id,
+            )
+            .where(ThemeDevelopmentObservation.source_family_id.is_not(None))
+        ).all()
+    )
     projected, skipped = set(), 0
     for observation_id, theme_id, pipeline in db.execute(
         select(
@@ -249,6 +259,12 @@ def project_economic_developments(db, taxonomy_version_id):
             skipped += 1
             continue
         projected.add((observation_id, candidates[0]))
+    _delete_pairs(
+        db,
+        delete(ThemeDevelopmentTheme),
+        (ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id),
+        existing - projected,
+    )
     new = projected - existing
     db.add_all(
         ThemeDevelopmentTheme(observation_id=observation_id, theme_id=theme_id)
@@ -257,4 +273,15 @@ def project_economic_developments(db, taxonomy_version_id):
     db.flush()
     if skipped:
         logger.warning("rollback projection skipped %d unmapped or ambiguous development links", skipped)
-    return {"projected": len(new), "skipped": skipped}
+    return {
+        "projected": len(new),
+        "retracted": len(existing - projected),
+        "skipped": skipped,
+    }
+
+
+def _delete_pairs(db, statement, columns, pairs):
+    """Delete ``pairs`` of ``columns`` in bounded statements."""
+    pairs = sorted(pairs, key=lambda pair: (pair[0], str(pair[1])))
+    for start in range(0, len(pairs), _DELETE_CHUNK):
+        db.execute(statement.where(tuple_(*columns).in_(pairs[start : start + _DELETE_CHUNK])))

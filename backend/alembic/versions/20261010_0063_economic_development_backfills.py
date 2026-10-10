@@ -32,4 +32,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The earlier builder maps legacy links itself; backfilled rows would
+    # duplicate or outlive them.
+    op.execute(
+        "DELETE FROM economic_theme_developments WHERE link_origin = 'legacy_mapping'"
+    )
     op.drop_table("economic_development_backfills")

@@ -243,7 +243,7 @@ def test_rollback_projects_only_unambiguous_same_pipeline_links(db_session):
 
     links = set(db_session.execute(select(ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id)))
     assert links == {(fundamental_obs.id, fundamental.id), (gold_obs.id, other_technical.id)}
-    assert result == {"projected": 2, "skipped": 2}
+    assert result == {"projected": 2, "retracted": 0, "skipped": 2}
 
 
 def test_a_rollback_projection_onto_a_split_theme_does_not_block_the_backfill(db_session):
@@ -377,3 +377,27 @@ def test_stale_mapping_rows_are_deleted_in_chunks(db_session, monkeypatch):
         for name in ("Copper Producers", "Gold Producers")
     }
     assert _economic_links(db_session) == expected
+
+
+def test_a_later_rollback_retracts_links_its_version_no_longer_projects(db_session):
+    # An earlier rollback projected under the old version's destinations; the
+    # current version no longer maps that theme, so its link must go.
+    cluster = _legacy(db_session)
+    old, old_themes = _version(db_session, {cluster: ["Copper Miners"]})
+    new, _new = _version(db_session, {cluster: ["Copper Producers"]})
+    native = _observation(db_session, family=_family(db_session).id)
+    db_session.add(
+        EconomicThemeDevelopment(
+            observation_id=native.id,
+            economic_theme_id=old_themes["Copper Miners"].id,
+            link_origin="economic_native",
+        )
+    )
+    db_session.flush()
+    project_economic_developments(db_session, old.id)
+
+    project_economic_developments(db_session, new.id)
+
+    assert db_session.scalars(
+        select(ThemeDevelopmentTheme).where(ThemeDevelopmentTheme.observation_id == native.id)
+    ).all() == []
