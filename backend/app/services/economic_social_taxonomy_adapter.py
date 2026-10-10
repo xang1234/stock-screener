@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -635,19 +635,23 @@ class EconomicSocialTaxonomyAdapter:
     def _automatically_accepted(self, association, *, now) -> bool:
         """The automatic Social rule on economic evidence (#515).
 
-        Two independent authors within 14 days of ``now`` (the Social packet's
-        availability), counted over the association's Social works, for a
-        verified company.
+        Two independent authors within 14 days, for a verified company,
+        counted over the association's Social works. The window ends at the
+        newest Social packet the association has seen (``now`` at least), so
+        processing an older packet last still counts the newer posts. A claim
+        the catalog places under another theme does not count.
         """
         from app.services.social_company_identity_service import SocialCompanyIdentityService
         from app.services.social_theme_projection_service import (
+            SocialThemeProjectionService,
             _decode,
             qualifying_social_evidence,
         )
         from app.services.social_ticker_resolver import SocialTickerResolver
 
-        if now.tzinfo is None:  # SQLite drops the zone of a stored UTC time
-            now = now.replace(tzinfo=timezone.utc)
+        def utc(value):  # SQLite drops the zone of a stored UTC time
+            return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
         security = self.db.get(StockUniverse, association.security_id)
         identity = SocialCompanyIdentityService(self.db).read()
         resolver = SocialTickerResolver(
@@ -656,19 +660,33 @@ class EconomicSocialTaxonomyAdapter:
         company = resolver.resolve(security.symbol, security.market)
         if not company.company_count_eligible:
             return False
-        decoded = []
-        for work_id in sorted(set(self.db.scalars(
-            select(EconomicSocialAssociationSource.social_work_id).where(
+        sources = self.db.execute(
+            select(EconomicSocialAssociationSource.social_work_id, EvidencePacket.available_at)
+            .outerjoin(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
+            .where(
                 EconomicSocialAssociationSource.association_id == association.id,
                 EconomicSocialAssociationSource.social_work_id.is_not(None),
             )
-        ))):
+        ).all()
+        now = max([utc(now), *(utc(at) for _, at in sources if at is not None)])
+        catalog = SocialThemeProjectionService(self.db)._economic_catalog()
+        decoded = []
+        for work_id in sorted({work_id for work_id, _ in sources}):
             work = self.db.get(SocialExtractionWork, work_id)
+            created = (work.input_snapshot_json or {}).get("created_at")
             try:
+                # Cheap pre-filter: only posts inside the window are decoded.
+                if created and not now - timedelta(days=14) <= utc(datetime.fromisoformat(created)) <= now:
+                    continue
                 decoded.append((work, *_decode(work)))
             except ValueError:
                 continue  # unreadable saved work never counts
-        rows = qualifying_social_evidence(decoded, now, resolver, lambda _claim: True)
+
+        def about_this_theme(claim):
+            mapped = catalog.get(canonical_theme_key(claim.raw_theme))
+            return mapped is None or mapped[0] == association.economic_theme_id
+
+        rows = qualifying_social_evidence(decoded, now, resolver, about_this_theme)
         return len({row[4] for row in rows if row[3] == company.company_id}) >= 2
 
     def project_equivalent_social_packet(

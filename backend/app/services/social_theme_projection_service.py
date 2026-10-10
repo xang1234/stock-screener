@@ -232,7 +232,15 @@ class SocialThemeProjectionService:
             EconomicSocialAssociationRevision.association_id == EconomicSocialAssociation.id).where(
             EconomicSocialAssociation.economic_theme_id.in_(list(themes.values()))).order_by(
             EconomicSocialAssociation.id, EconomicSocialAssociationRevision.revision_number)).all()
-        rows.append(("economic_social_associations", [tuple(map(str, row)) for row in revisions]))
+        # Only what a basket holds: an association whose latest revision is a
+        # live acceptance. A proposed or pending revision changes no basket.
+        latest = {}
+        for association_id, security_id, number, state, live in revisions:
+            latest[association_id] = (security_id, number, state, live)
+        rows.append(("economic_social_associations", sorted(
+            (str(association_id), str(security_id), number)
+            for association_id, (security_id, number, state, live) in latest.items()
+            if live and state == "accepted")))
         for model, condition in ((SocialExtractionWork, SocialExtractionWork.id.in_(projection.work_ids)),
                                  (SocialRunWork, SocialRunWork.run_id == projection.run_id)):
             values = self.db.execute(select(*model.__table__.columns).where(condition).order_by(
