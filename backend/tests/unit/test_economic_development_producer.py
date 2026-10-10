@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -838,3 +839,180 @@ def test_explicit_backfill_only_queries_the_requested_items_lineages():
         )
     )
     assert "source_lineage_id IN" in sql
+
+
+def _admit_social_item(db, *, with_item_id=True, content_channels=None):
+    """An X post that reached the deployment through Social (#551).
+
+    With ``content_channels`` the post was first ingested as X content, which
+    Social then supersedes.
+    """
+    now = datetime.now(timezone.utc)
+    post_id = str(uuid4().int)[:18]
+    url = f"https://x.com/someone/status/{post_id}"
+    item = ContentItem(
+        source_type="twitter",
+        external_id=post_id,
+        url=url,
+        content=TEXT,
+        published_at=now,
+        fetched_at=now,
+    )
+    db.add(item)
+    db.flush()
+    if content_channels:
+        EconomicSourceAdmissionService(db).admit_content(
+            EvidenceAdmission(
+                provider="twitter",
+                canonical_source_family=content_family_key("twitter", post_id, url),
+                capture_route=CONTENT_INGESTION_ROUTE,
+                route_record_id=content_route_record_id(item.id, None),
+                original_text=f"{TEXT} (raw)",
+                preparation_version="content-ingestion-v1",
+                source_metadata={"content_item_id": item.id},
+                captured_at=now,
+                available_at=now,
+                evidence_channels=content_channels,
+            )
+        )
+    metadata = {"url": url, **({"content_item_id": item.id} if with_item_id else {})}
+    admitted = EconomicSourceAdmissionService(db).admit_social_work(
+        EvidenceAdmission(
+            provider="x",
+            canonical_item_id=post_id,
+            canonical_source_family=content_family_key("twitter", post_id, url),
+            capture_route="social",
+            route_record_id=str(uuid4()),
+            original_text=TEXT,
+            preparation_version="social-saved-work-v1",
+            source_metadata=metadata,
+            captured_at=now,
+            available_at=now,
+            evidence_channels=("narrative",),
+        )
+    )
+    db.commit()
+    return item, admitted
+
+
+def test_social_only_item_records_narrative_developments(db_session):
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session)
+    _classify(db_session, admitted, taxonomy, [theme.id])
+
+    worker.discover(db_session)
+    db_session.commit()
+    assert [(row.pipeline, row.status) for row in _work(db_session, item.id)] == [
+        ("narrative", "pending")
+    ]
+
+    worker.process_one(sessionmaker(bind=db_session.get_bind()), generate=lambda *_args: [_fact(1)])
+    links = db_session.scalars(
+        select(EconomicThemeDevelopment)
+        .join(
+            ThemeDevelopmentObservation,
+            ThemeDevelopmentObservation.id == EconomicThemeDevelopment.observation_id,
+        )
+        .where(
+            ThemeDevelopmentObservation.content_item_id == item.id,
+            ThemeDevelopmentObservation.analysis_channel == "narrative",
+        )
+    ).all()
+    assert [link.economic_theme_id for link in links] == [theme.id]
+
+
+def test_social_capture_of_an_ingested_post_adds_no_narrative_copy(db_session):
+    # The superseding Social packet inherits the content grant, so the post
+    # already gets fundamental developments; narrative would repeat them.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session, content_channels=("fundamental",))
+    _classify(db_session, admitted, taxonomy, [theme.id])
+
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
+
+
+def test_withdrawn_inherited_grant_restores_narrative_discovery(db_session):
+    # An older classified content packet keeps its fundamental grant; once the
+    # Social packet is narrative-only again, narrative must still be offered.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session, content_channels=("fundamental",))
+    content_packet = db_session.scalar(
+        select(EvidencePacketLineage.id).where(
+            EvidencePacketLineage.source_lineage_id == admitted.source_lineage_id,
+            EvidencePacketLineage.capture_route == CONTENT_INGESTION_ROUTE,
+        )
+    )
+    _classify(
+        db_session,
+        SimpleNamespace(source_lineage_id=admitted.source_lineage_id, packet_id=content_packet),
+        taxonomy,
+        [theme.id],
+    )
+    _classify(db_session, admitted, taxonomy, [theme.id], resolver="resolver-v2")
+    EconomicSourceAdmissionService(db_session).revise_lens_eligibility(
+        admitted.packet_id, evidence_channels=("narrative",), reason="fundamental withdrawn"
+    )
+    db_session.commit()
+
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert "narrative" in {row.pipeline for row in _work(db_session, item.id)}
+
+
+def test_a_later_content_grant_retires_the_narrative_developments(db_session):
+    # Social first, then ingestion lends fundamental to the Social packet: the
+    # post is no longer Social-only, so its narrative copy must be superseded.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session)
+    _classify(db_session, admitted, taxonomy, [theme.id])
+    sessions = sessionmaker(bind=db_session.get_bind())
+    worker.discover(db_session)
+    db_session.commit()
+    worker.process_one(sessions, generate=lambda *_args: [_fact(1)])
+
+    now = datetime.now(timezone.utc)
+    EconomicSourceAdmissionService(db_session).admit_content(
+        EvidenceAdmission(
+            provider="twitter",
+            canonical_source_family=content_family_key(item.source_type, item.external_id, item.url),
+            capture_route=CONTENT_INGESTION_ROUTE,
+            route_record_id=content_route_record_id(item.id, None),
+            original_text=f"{TEXT} (raw)",
+            preparation_version="content-ingestion-v1",
+            source_metadata={"content_item_id": item.id},
+            captured_at=now,
+            available_at=now,
+            evidence_channels=("fundamental",),
+        )
+    )
+    db_session.commit()
+    worker.discover(db_session)
+    db_session.commit()
+    # Like generate_facts, an empty bundle produces no facts.
+    while worker.process_one(
+        sessions, generate=lambda _p, _db, bundle: [_fact(1)] if bundle["theme_ids"] else []
+    ):
+        pass
+
+    active = db_session.scalars(
+        select(ThemeDevelopmentObservation.analysis_channel).where(
+            ThemeDevelopmentObservation.content_item_id == item.id,
+            ThemeDevelopmentObservation.superseded.is_(False),
+        )
+    ).all()
+    assert sorted(active) == ["fundamental"]
+
+
+def test_social_packet_without_content_item_is_skipped(db_session):
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session, with_item_id=False)
+    _classify(db_session, admitted, taxonomy, [theme.id])
+
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert _work(db_session, item.id) == []

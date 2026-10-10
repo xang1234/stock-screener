@@ -12,6 +12,7 @@ from app.services.economic_taxonomy_fence import producer_write
 from app.services.theme_development_facts import normalize_batch
 from app.services.theme_development_preparation import (
     development_bundle,
+    development_channels,
     economic_authority,
     generate_facts,
 )
@@ -58,7 +59,7 @@ def enqueue(db, item_id, pipeline):
     return row
 
 
-CHANNELS = ("technical", "fundamental")
+CHANNELS = ("technical", "fundamental", "narrative")
 
 
 def _economic_candidate_query(item_ids, lineage_ids=None):
@@ -211,7 +212,8 @@ def _economic_candidates(db, item_ids):
 
     The classified packet may be a later capture of the same source (Social
     supersedes an X capture, #500), so items are found through any
-    content-ingestion packet in the lineage; channels come from the lineage's
+    content-ingestion or Social packet in the lineage (Social-only posts get
+    narrative developments, #551); channels come from the lineage's
     effective packet.
     """
     from sqlalchemy import select
@@ -246,7 +248,7 @@ def _economic_candidates(db, item_ids):
     for lineage_id, metadata in db.execute(
         select(EvidencePacket.source_lineage_id, EvidencePacket.source_metadata).where(
             EvidencePacket.source_lineage_id.in_(lineages),
-            EvidencePacket.capture_route == CONTENT_INGESTION_ROUTE,
+            EvidencePacket.capture_route.in_((CONTENT_INGESTION_ROUTE, "social")),
         )
     ):
         item = (metadata or {}).get("content_item_id")
@@ -279,7 +281,11 @@ def _economic_candidates(db, item_ids):
         effective = admission.effective_packet(lineage_id)
         if effective is not None:
             packets.add(effective.id)
-        channels = set().union(*(admission.latest_channels(packet_id) for packet_id in packets))
+        # Per packet: an older packet's grant must not hide narrative on a
+        # packet that is Social-only again.
+        channels = set().union(
+            *(development_channels(admission.latest_channels(packet_id)) for packet_id in packets)
+        )
         channels |= observed.get(lineage_id, set())
         pairs.update((item, channel) for item in items for channel in CHANNELS if channel in channels)
     return sorted(pairs)
