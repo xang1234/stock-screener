@@ -935,20 +935,20 @@ def refresh_economic_taxonomy_generation():
 @celery_app.task(
     name="app.tasks.economic_taxonomy_tasks.backfill_legacy_developments"
 )
-def backfill_legacy_developments(taxonomy_version_id: str | None = None):
+def backfill_legacy_developments():
     """Keep the processing version's legacy development links mapped (#513).
 
     The snapshot builder fails closed on legacy observations this has not
-    covered; unchanged legacy links make the run a cheap no-op.
+    covered; unchanged legacy links make the run a cheap no-op. It takes no
+    version: only the processing version, revalidated under the fence, may
+    replace the single set of mapped rows.
     """
     from app.services.economic_development_backfill import (
         backfill_legacy_developments as backfill,
     )
 
     with SessionLocal.begin() as db:
-        return backfill(
-            db, UUID(taxonomy_version_id) if taxonomy_version_id else None
-        )
+        return backfill(db)
 
 
 @celery_app.task(

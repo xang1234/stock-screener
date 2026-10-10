@@ -343,3 +343,37 @@ def test_backfill_skips_a_processing_version_replaced_while_it_waited(db_session
 
     assert backfill_legacy_developments(db_session)["status"] == "processing_version_changed"
     assert db_session.get(EconomicDevelopmentBackfill, old.id) is None
+
+
+def test_the_backfill_task_only_follows_the_processing_version():
+    # An explicit version could replace the processing version's rows with an
+    # obsolete one's; only the defaulted (revalidated) path is schedulable.
+    import inspect
+
+    from app.tasks.economic_taxonomy_tasks import backfill_legacy_developments as task
+
+    assert list(inspect.signature(task.run).parameters) == []
+
+
+def test_stale_mapping_rows_are_deleted_in_chunks(db_session, monkeypatch):
+    import app.services.economic_development_backfill as backfill_module
+
+    first, second = _legacy(db_session), _legacy(db_session)
+    old, _old = _version(db_session, {first: ["Copper Miners"], second: ["Gold Miners"]})
+    new, new_themes = _version(db_session, {first: ["Copper Producers"], second: ["Gold Producers"]})
+    observations = [_observation(db_session) for _ in range(3)]
+    for observation in observations:
+        for cluster in (first, second):
+            db_session.add(ThemeDevelopmentTheme(observation_id=observation.id, theme_id=cluster.id))
+    db_session.flush()
+    backfill_legacy_developments(db_session, old.id)
+    monkeypatch.setattr(backfill_module, "_DELETE_CHUNK", 2)
+
+    backfill_legacy_developments(db_session, new.id)
+
+    expected = {
+        (observation.id, new_themes[name].id)
+        for observation in observations
+        for name in ("Copper Producers", "Gold Producers")
+    }
+    assert _economic_links(db_session) == expected

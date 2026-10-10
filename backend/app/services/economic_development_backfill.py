@@ -30,6 +30,8 @@ from app.models.theme_intelligence import (
 
 logger = logging.getLogger(__name__)
 
+_DELETE_CHUNK = 1000
+
 
 def map_legacy_links(links, *, allocations, destinations):
     """``{(observation_id, economic_theme_id)}`` for legacy ``(observation_id, theme_id)`` links.
@@ -124,15 +126,16 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
         ):
             (current if origin == "legacy_mapping" else other).add((observation_id, theme_id))
         # Apply the difference: a full rewrite each minute would bloat the table.
-        stale = current - mapped
-        if stale:
+        stale = sorted(current - mapped, key=lambda pair: (pair[0], str(pair[1])))
+        # Bounded statements: a remap can make tens of thousands of pairs stale.
+        for start in range(0, len(stale), _DELETE_CHUNK):
             db.execute(
                 delete(EconomicThemeDevelopment).where(
                     EconomicThemeDevelopment.link_origin == "legacy_mapping",
                     tuple_(
                         EconomicThemeDevelopment.observation_id,
                         EconomicThemeDevelopment.economic_theme_id,
-                    ).in_(stale),
+                    ).in_(stale[start : start + _DELETE_CHUNK]),
                 )
             )
         added = mapped - current - other
