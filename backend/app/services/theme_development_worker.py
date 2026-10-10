@@ -281,8 +281,10 @@ def _economic_candidates(db, item_ids):
         effective = admission.effective_packet(lineage_id)
         if effective is not None:
             packets.add(effective.id)
-        channels = development_channels(
-            set().union(*(admission.latest_channels(packet_id) for packet_id in packets))
+        # Per packet: an older packet's grant must not hide narrative on a
+        # packet that is Social-only again.
+        channels = set().union(
+            *(development_channels(admission.latest_channels(packet_id)) for packet_id in packets)
         )
         channels |= observed.get(lineage_id, set())
         pairs.update((item, channel) for item in items for channel in CHANNELS if channel in channels)

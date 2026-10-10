@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -931,6 +932,35 @@ def test_social_capture_of_an_ingested_post_adds_no_narrative_copy(db_session):
     db_session.commit()
 
     assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
+
+
+def test_withdrawn_inherited_grant_restores_narrative_discovery(db_session):
+    # An older classified content packet keeps its fundamental grant; once the
+    # Social packet is narrative-only again, narrative must still be offered.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session, content_channels=("fundamental",))
+    content_packet = db_session.scalar(
+        select(EvidencePacketLineage.id).where(
+            EvidencePacketLineage.source_lineage_id == admitted.source_lineage_id,
+            EvidencePacketLineage.capture_route == CONTENT_INGESTION_ROUTE,
+        )
+    )
+    _classify(
+        db_session,
+        SimpleNamespace(source_lineage_id=admitted.source_lineage_id, packet_id=content_packet),
+        taxonomy,
+        [theme.id],
+    )
+    _classify(db_session, admitted, taxonomy, [theme.id], resolver="resolver-v2")
+    EconomicSourceAdmissionService(db_session).revise_lens_eligibility(
+        admitted.packet_id, evidence_channels=("narrative",), reason="fundamental withdrawn"
+    )
+    db_session.commit()
+
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert "narrative" in {row.pipeline for row in _work(db_session, item.id)}
 
 
 def test_a_later_content_grant_retires_the_narrative_developments(db_session):
