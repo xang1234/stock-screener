@@ -106,6 +106,19 @@ def economic_authority(db) -> bool:
     return mode == "economic"
 
 
+def development_channels(channels):
+    """The channels a packet's eligibility records developments on.
+
+    Narrative is for Social-only posts (#551): a Social capture of an ingested
+    post inherits its technical/fundamental grant, and the same packet on a
+    third channel would only repeat those events.
+    """
+    channels = set(channels)
+    if channels & {"technical", "fundamental"}:
+        channels.discard("narrative")
+    return channels
+
+
 def _economic_themes(db, item, pipeline):
     """``(ready, themes, packet)`` for an item's effective evidence on one lens channel.
 
@@ -149,7 +162,7 @@ def _economic_themes(db, item, pipeline):
     if attempt is None:
         return False, {}, None
     packet = interpretations.packet_for_attempt(db, attempt)
-    if pipeline not in EconomicSourceAdmissionService(db).latest_channels(packet.id):
+    if pipeline not in development_channels(EconomicSourceAdmissionService(db).latest_channels(packet.id)):
         # Classified, but not for this channel: ready with no themes, so an
         # empty revision supersedes the channel's earlier observations.
         return True, {}, packet

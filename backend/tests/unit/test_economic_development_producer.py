@@ -933,6 +933,50 @@ def test_social_capture_of_an_ingested_post_adds_no_narrative_copy(db_session):
     assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
 
 
+def test_a_later_content_grant_retires_the_narrative_developments(db_session):
+    # Social first, then ingestion lends fundamental to the Social packet: the
+    # post is no longer Social-only, so its narrative copy must be superseded.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session)
+    _classify(db_session, admitted, taxonomy, [theme.id])
+    sessions = sessionmaker(bind=db_session.get_bind())
+    worker.discover(db_session)
+    db_session.commit()
+    worker.process_one(sessions, generate=lambda *_args: [_fact(1)])
+
+    now = datetime.now(timezone.utc)
+    EconomicSourceAdmissionService(db_session).admit_content(
+        EvidenceAdmission(
+            provider="twitter",
+            canonical_source_family=content_family_key(item.source_type, item.external_id, item.url),
+            capture_route=CONTENT_INGESTION_ROUTE,
+            route_record_id=content_route_record_id(item.id, None),
+            original_text=f"{TEXT} (raw)",
+            preparation_version="content-ingestion-v1",
+            source_metadata={"content_item_id": item.id},
+            captured_at=now,
+            available_at=now,
+            evidence_channels=("fundamental",),
+        )
+    )
+    db_session.commit()
+    worker.discover(db_session)
+    db_session.commit()
+    # Like generate_facts, an empty bundle produces no facts.
+    while worker.process_one(
+        sessions, generate=lambda _p, _db, bundle: [_fact(1)] if bundle["theme_ids"] else []
+    ):
+        pass
+
+    active = db_session.scalars(
+        select(ThemeDevelopmentObservation.analysis_channel).where(
+            ThemeDevelopmentObservation.content_item_id == item.id,
+            ThemeDevelopmentObservation.superseded.is_(False),
+        )
+    ).all()
+    assert sorted(active) == ["fundamental"]
+
+
 def test_social_packet_without_content_item_is_skipped(db_session):
     taxonomy, theme = _taxonomy(db_session)
     item, admitted = _admit_social_item(db_session, with_item_id=False)

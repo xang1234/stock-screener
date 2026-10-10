@@ -12,6 +12,7 @@ from app.services.economic_taxonomy_fence import producer_write
 from app.services.theme_development_facts import normalize_batch
 from app.services.theme_development_preparation import (
     development_bundle,
+    development_channels,
     economic_authority,
     generate_facts,
 )
@@ -280,12 +281,9 @@ def _economic_candidates(db, item_ids):
         effective = admission.effective_packet(lineage_id)
         if effective is not None:
             packets.add(effective.id)
-        channels = set().union(*(admission.latest_channels(packet_id) for packet_id in packets))
-        # Narrative is for Social-only posts (#551): a Social capture of an
-        # ingested post inherits its technical/fundamental grant, and the
-        # same packet on a third channel would only repeat those events.
-        if channels & {"technical", "fundamental"}:
-            channels.discard("narrative")
+        channels = development_channels(
+            set().union(*(admission.latest_channels(packet_id) for packet_id in packets))
+        )
         channels |= observed.get(lineage_id, set())
         pairs.update((item, channel) for item in items for channel in CHANNELS if channel in channels)
     return sorted(pairs)
