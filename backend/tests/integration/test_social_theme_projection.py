@@ -898,6 +898,29 @@ def test_economic_basket_counts_only_stocks_as_company_stocks(social_fixture):
     assert basket.company_stock_symbols == ("AAA",)
 
 
+def test_economic_basket_omits_an_unresolved_security(social_fixture):
+    # As the legacy reader: an inactive listing is not a basket member.
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    for symbol in ("AAA", "BBB"):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        association = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(association.id, state="accepted", idempotency_key=f"accept-{symbol}",
+                       actor="admin", reason="reviewed", mirror_acknowledged=True)
+    f.db.query(StockUniverse).filter_by(symbol="BBB").one().is_active = False
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+
+    basket = f.service.prepare_application(projection, theme_keys=()).read("cooling", "US")
+
+    assert [m.canonical_symbol for m in basket.membership] == ["AAA"]
+    assert basket.company_stock_symbols == ("AAA",)
+
+
 def test_economic_fingerprint_moves_when_an_alias_is_remapped(social_fixture, monkeypatch):
     # Admission re-derives the catalog; an alias a newer processing version
     # remaps must refuse a publication prepared under the old mapping.

@@ -138,6 +138,8 @@ class EconomicAcceptedBasketReader:
             if security is None or security.market not in by_market:
                 continue
             resolved = resolver.resolve(security.symbol, security.market)
+            if resolved.status != "resolved":
+                continue  # as the legacy reader: e.g. an inactive listing
             accepted, stock_symbols = by_market[security.market]
             accepted.append(
                 EffectiveThemeMembership(
