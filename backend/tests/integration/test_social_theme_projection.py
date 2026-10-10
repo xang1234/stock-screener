@@ -722,6 +722,27 @@ def test_processor_ignores_evidence_from_a_superseded_packet(social_fixture):
     assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
 
 
+def test_processor_counts_a_bridged_pre_cutover_work(social_fixture):
+    # A legacy association bridged at cutover carries its works without an
+    # evidence packet; they still count toward the two-author rule.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationSource
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    association = EconomicSocialTaxonomyAdapter(f.db).get_or_create_association(theme.id, security.id)
+    bridged = f.save(("AAA",), author="first")
+    f.db.add(EconomicSocialAssociationSource(
+        association_id=association.id, source_kind="social_work",
+        source_key=f"social_work:{bridged}", social_work_id=bridged,
+    ))
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
+
+
 def test_processor_keeps_one_authors_repeated_posts_proposed(social_fixture):
     from tests.unit.economic_taxonomy_reader_helpers import seed_generation
 

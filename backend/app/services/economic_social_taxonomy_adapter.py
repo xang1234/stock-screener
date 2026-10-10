@@ -713,17 +713,19 @@ class EconomicSocialTaxonomyAdapter:
             effective = effective_by_lineage[packet.source_lineage_id]
             return effective is not None and admission._standing(packet, effective) == 0
 
+        # A work bridged from a legacy association at cutover has no packet;
+        # it was legacy evidence and still counts.
         sources = [
-            (work_id, packet.available_at)
+            (work_id, packet.available_at if packet is not None else None)
             for work_id, packet in self.db.execute(
                 select(EconomicSocialAssociationSource.social_work_id, EvidencePacket)
-                .join(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
+                .outerjoin(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
                 .where(
                     EconomicSocialAssociationSource.association_id.in_([row.id for row in listings]),
                     EconomicSocialAssociationSource.social_work_id.is_not(None),
                 )
             )
-            if stands(packet)
+            if packet is None or stands(packet)
         ]
         now = max([utc(now), *(utc(at) for _, at in sources if at is not None)])
         catalog = SocialThemeProjectionService(self.db)._economic_catalog()
