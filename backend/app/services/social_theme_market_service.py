@@ -71,10 +71,8 @@ class LiveAcceptedBasketReader:
         self.authority_source = authority_source
 
     def read(self, theme_key, market):
-        authority_source = self.authority_source or EconomicThemeReader(
-            self.db
-        ).source_name
-        if authority_source == "economic":
+        if (self.authority_source == "economic"
+                or EconomicThemeReader(self.db).source_name == "economic"):
             raise MeasurementUnavailable("legacy_theme_authority_disabled")
         identity = SocialCompanyIdentityService(self.db).read()
         theme = self.db.scalar(select(ThemeCluster).where(

@@ -189,7 +189,7 @@ class SocialConfirmationReader:
 
     def _theme_memberships(
         self,
-        reader,
+        reader: EconomicThemeReader,
         *,
         theme_keys,
         membership_reader,

@@ -1,4 +1,5 @@
 """Atomic pointer/projection publication from isolated, saved input records."""
+import re
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
@@ -258,7 +259,6 @@ def test_social_publication_uses_economic_native_path_after_cutover(store):
     w = writer(store)
     w.create_run("economic-native", NOW)
     save_success(store, w, "economic-native")
-    prepared = w.prepare_run("economic-native", (row("economic-native"),), NOW)
     with store.begin() as db:
         db.add(
             TaxonomyAuthority(
@@ -272,6 +272,7 @@ def test_social_publication_uses_economic_native_path_after_cutover(store):
                 rollback_state="ready",
             )
         )
+    prepared = w.prepare_run("economic-native", (row("economic-native"),), NOW)
 
     assert w.publish("economic-native", prepared.registry_version).published
 
@@ -285,6 +286,65 @@ def test_social_publication_uses_economic_native_path_after_cutover(store):
         assert packet.source_metadata["social_memberships"] == []
         assert db.query(ThemeCluster).count() == 0
         assert db.query(TaxonomyProjectionEvent).count() == 0
+
+
+_LEGACY_THEME_TABLES = re.compile(
+    r"\b(theme_clusters|theme_mentions|theme_aliases|theme_constituents"
+    r"|social_theme_associations|social_theme_decisions)\b"
+)
+
+
+def test_economic_social_run_prepares_and_publishes_without_legacy_theme_tables(store):
+    # #515: under economic authority a live run maps its theme keys through the
+    # economic catalog and never reads the legacy theme tables.
+    from app.models.economic_taxonomy_runtime import EvidencePacket
+    from app.models.stock_universe import StockUniverse
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    with store.begin() as db:
+        seed_generation(db, display_name="Cooling")
+        db.add(StockUniverse(symbol="AAA", market="US", is_active=True))
+    w = writer(store)
+    w.create_run("economic-run", NOW)
+    save_success(store, w, "economic-run")
+    statements = []
+
+    def record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    engine = store.kw["bind"]
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        prepared = w.prepare_run("economic-run", (row("economic-run"),), NOW)
+        assert w.publish("economic-run", prepared.registry_version).published
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert [s for s in statements if _LEGACY_THEME_TABLES.search(s)] == []
+    with store() as db:
+        memberships = db.query(EvidencePacket).one().source_metadata["social_memberships"]
+    # The processor decides acceptance; publish only proposes.
+    assert [(m["theme_key"], m["state"]) for m in memberships] == [("cooling", "proposed")]
+
+
+def test_a_cutover_between_preparation_and_publication_refuses_the_run(store):
+    # Baskets prepared from legacy themes are not the economic baskets; the
+    # next run prepares under economic authority (#515).
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+
+    w = writer(store)
+    w.create_run("straddles-cutover", NOW)
+    save_success(store, w, "straddles-cutover")
+    prepared = w.prepare_run("straddles-cutover", (row("straddles-cutover"),), NOW)
+    with store.begin() as db:
+        db.add(TaxonomyAuthority(
+            id=1, mode="economic", processing_head_revision=0, authority_epoch=2,
+            writes_fenced=False, semantic_invalidation_revision=0,
+            cutover_catch_up_cursor=[], rollback_state="ready",
+        ))
+
+    with pytest.raises(ValueError, match="publication_basket_changed"):
+        w.publish("straddles-cutover", prepared.registry_version)
 
 
 def test_equivalent_social_recapture_can_publish_without_recounting(store):

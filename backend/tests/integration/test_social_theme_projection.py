@@ -612,3 +612,86 @@ def test_migration_preserves_legacy_membership_and_roundtrips(tmp_path):
         assert conn.execute(text("SELECT count(*) FROM theme_constituents")).scalar() == 1
         assert "social_work_id" not in {c["name"] for c in inspect(conn).get_columns("theme_mentions")}
     engine.dispose()
+
+
+def _project_economic(f, work_id, theme_id, symbol="AAA"):
+    """The processor's projection of one classified Social work (#515)."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+
+    security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+    admitted = EconomicSourceAdmissionService(f.db).admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{work_id}", capture_route="social",
+        original_text=f"post {work_id}", preparation_version="social-prep-v1",
+        captured_at=NOW, available_at=NOW, evidence_channels=("narrative",),
+        source_metadata={"social_work_id": work_id, "social_memberships": []},
+    ))
+    assignment = SimpleNamespace(
+        id=uuid4(), classification_attempt_id=uuid4(), economic_theme_id=theme_id,
+        claim_payload={"display_name": "Cooling", "securities": [{"security_id": security.id}]},
+    )
+    EconomicSocialTaxonomyAdapter(f.db).project_native_assignments(
+        [assignment], evidence_packet_id=admitted.packet_id,
+        authority_epoch=f.db.get(TaxonomyAuthority, 1).authority_epoch,
+    )
+    f.db.commit()
+    latest = f.db.query(EconomicSocialAssociationRevision).order_by(
+        EconomicSocialAssociationRevision.created_at.desc(),
+        EconomicSocialAssociationRevision.revision_number.desc(),
+    ).first()
+    return (latest.details or {}).get("requested_state", latest.state)
+
+
+def test_processor_accepts_an_economic_association_on_two_independent_authors(social_fixture):
+    # The legacy automatic rule, run by the processor on economic evidence.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="first"), theme.id) == "proposed"
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
+
+
+def test_processor_keeps_one_authors_repeated_posts_proposed(social_fixture):
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="same"), theme.id)
+    assert _project_economic(f, f.save(("AAA",), author="same"), theme.id) == "proposed"
+
+
+def test_economic_application_reads_accepted_economic_memberships(social_fixture):
+    # #515: the basket of a catalog theme (reached by name or alias) holds its
+    # accepted economic Social memberships; no legacy basket is built.
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.theme_identity_normalization import canonical_theme_key
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    association = adapter.get_or_create_association(theme.id, security.id)
+    adapter.revise(association.id, state="accepted", idempotency_key="reviewed",
+                   actor="admin", reason="reviewed", mirror_acknowledged=True)
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+
+    application = f.service.prepare_application(projection, theme_keys=("hbm",))
+
+    assert [m.canonical_symbol for m in application.read("cooling", "US").membership] == ["AAA"]
+    assert {"cooling", canonical_theme_key("Semiconductors")} <= set(f.service.theme_keys(projection))
+    assert f.db.query(ThemeCluster).count() == 0

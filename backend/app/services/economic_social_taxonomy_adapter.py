@@ -599,6 +599,14 @@ class EconomicSocialTaxonomyAdapter:
                 )
                 if current_state == "conflict_review_required":
                     continue
+                if (
+                    requested_state == "proposed"
+                    and current_state in {None, "proposed"}
+                    and self._automatically_accepted(
+                        association, now=social_packet.available_at
+                    )
+                ):
+                    requested_state = "accepted"
                 if current_state in {"accepted", "rejected"} and requested_state == "proposed":
                     continue
                 if current_state == "rejected" and requested_state == "accepted":
@@ -623,6 +631,45 @@ class EconomicSocialTaxonomyAdapter:
                     )
                 )
         return tuple(revisions)
+
+    def _automatically_accepted(self, association, *, now) -> bool:
+        """The automatic Social rule on economic evidence (#515).
+
+        Two independent authors within 14 days of ``now`` (the Social packet's
+        availability), counted over the association's Social works, for a
+        verified company.
+        """
+        from app.services.social_company_identity_service import SocialCompanyIdentityService
+        from app.services.social_theme_projection_service import (
+            _decode,
+            qualifying_social_evidence,
+        )
+        from app.services.social_ticker_resolver import SocialTickerResolver
+
+        if now.tzinfo is None:  # SQLite drops the zone of a stored UTC time
+            now = now.replace(tzinfo=timezone.utc)
+        security = self.db.get(StockUniverse, association.security_id)
+        identity = SocialCompanyIdentityService(self.db).read()
+        resolver = SocialTickerResolver(
+            self.db, verified_company_ids=identity.verified_company_ids
+        )
+        company = resolver.resolve(security.symbol, security.market)
+        if not company.company_count_eligible:
+            return False
+        decoded = []
+        for work_id in sorted(set(self.db.scalars(
+            select(EconomicSocialAssociationSource.social_work_id).where(
+                EconomicSocialAssociationSource.association_id == association.id,
+                EconomicSocialAssociationSource.social_work_id.is_not(None),
+            )
+        ))):
+            work = self.db.get(SocialExtractionWork, work_id)
+            try:
+                decoded.append((work, *_decode(work)))
+            except ValueError:
+                continue  # unreadable saved work never counts
+        rows = qualifying_social_evidence(decoded, now, resolver, lambda _claim: True)
+        return len({row[4] for row in rows if row[3] == company.company_id}) >= 2
 
     def project_equivalent_social_packet(
         self,
