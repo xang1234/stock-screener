@@ -778,6 +778,51 @@ def test_projection_skips_a_social_packet_a_correction_displaced(social_fixture)
     assert f.db.query(EconomicSocialAssociationRevision).count() == 0
 
 
+def test_readmitting_a_displaced_packet_reports_it_superseded(social_fixture):
+    # #556: identical content matches the stored packet by hash; its stored
+    # precedence_state still reads "effective", but a correction displaced it,
+    # so the admission must not report it effective (Social would mark it live).
+    from app.models.economic_taxonomy_runtime import EvidencePacket
+    from app.models.economic_taxonomy_runtime_evidence import EvidencePrecedenceRevision
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+
+    f = social_fixture
+    work = f.save(("AAA",), author="first")
+
+    def original():
+        return EvidenceAdmission(
+            provider="x", canonical_item_id=f"post-{work}", capture_route="social",
+            original_text=f"post {work}", preparation_version="social-prep-v1",
+            captured_at=NOW, available_at=NOW, evidence_channels=("narrative",),
+            source_metadata={"social_work_id": work, "social_memberships": []},
+        )
+
+    admission = EconomicSourceAdmissionService(f.db)
+    first = admission.admit_social_work(original())
+    assert first.precedence_state == "effective"
+    displaced = f.db.get(EvidencePacket, first.packet_id)
+    correction = admission.admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{work}", capture_route="social",
+        original_text=f"post {work}, corrected", preparation_version="social-prep-v1",
+        captured_at=NOW + timedelta(minutes=5), available_at=NOW + timedelta(minutes=5),
+        evidence_channels=("narrative",), source_metadata={"social_memberships": []},
+    ))
+    f.db.add(EvidencePrecedenceRevision(
+        source_lineage_id=displaced.source_lineage_id, evidence_packet_id=correction.packet_id,
+        revision_number=99, disposition="effective", reason="review promoted the correction",
+    ))
+    f.db.commit()
+
+    again = admission.admit_social_work(original())
+
+    assert again.packet_id == first.packet_id
+    assert again.effective_packet_id == correction.packet_id
+    assert again.precedence_state == "superseded"
+
+
 def test_processor_counts_a_bridged_pre_cutover_work(social_fixture):
     # A legacy association bridged at cutover carries its works without an
     # evidence packet; they still count toward the two-author rule.

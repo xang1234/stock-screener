@@ -232,6 +232,11 @@ def test_incompatible_apply_invalidates_prepared_generation(
     )
     db_session.commit()
     monkeypatch.setattr(service, "_has_prepared_generation", lambda: True)
+    before = db_session.get(TaxonomyAuthority, 1)
+    head_before, version_before = (
+        before.processing_head_revision,
+        before.processing_taxonomy_version_id,
+    )
 
     service.apply_operation(
         preview.preview_id,
@@ -245,6 +250,10 @@ def test_incompatible_apply_invalidates_prepared_generation(
     invalidation = db_session.scalar(select(SemanticInvalidationRevision))
     assert authority.semantic_invalidation_revision == 1
     assert invalidation.created_by == admin_principal.subject
+    # The invalidation re-locks the authority; the apply's own head advance
+    # and new processing version must survive that lock (#556).
+    assert authority.processing_head_revision == head_before + 1
+    assert authority.processing_taxonomy_version_id != version_before
 
 
 def test_operation_events_are_append_only(db_session, seeded_head, admin_principal):

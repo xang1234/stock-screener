@@ -819,7 +819,9 @@ class EconomicSocialTaxonomyAdapter:
             packet is None
             or effective is None
             or packet.source_lineage_id != effective.source_lineage_id
-            or packet.precedence_state != "equivalent"
+            # Current standing, as the admission that routed here reports it.
+            or EconomicSourceAdmissionService(self.db)._current_state(packet, effective)
+            != "equivalent"
         ):
             raise ValueError("equivalent_social_packet_mismatch")
         attempt_id = self.db.scalar(

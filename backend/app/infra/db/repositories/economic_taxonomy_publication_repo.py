@@ -59,7 +59,10 @@ class EconomicTaxonomyPublicationRepository:
             )
         # populate_existing: a caller that loaded the row earlier in this
         # session must see what the lock read, or fence checks would use
-        # pre-lock values (#556).
+        # pre-lock values (#556). Sessions run with autoflush=False, so the
+        # caller's own pending changes (e.g. an apply advancing the head) are
+        # flushed first; otherwise the refresh would discard them.
+        self.session.flush()
         authority = self.session.execute(
             select(TaxonomyAuthority)
             .where(TaxonomyAuthority.id == 1)

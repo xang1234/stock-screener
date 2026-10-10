@@ -306,16 +306,18 @@ class EconomicSourceAdmissionService:
             existing = min(ranked, key=lambda pair: pair[0], default=(None, None))[1]
         if existing is not None:
             effective = self.effective_packet(lineage.id)
-            if effective is not None and (
-                existing.id == effective.id
-                or existing.precedence_state == "equivalent"
-            ):
+            # The stored state is the one at admission; a later correction may
+            # have displaced this packet since (#556).
+            state = self._current_state(existing, effective)
+            if state in {"effective", "equivalent"}:
                 self._merge_equivalent_eligibility(
                     effective,
                     evidence.evidence_channels,
                     authority_epoch=authority_epoch,
                 )
-            return self._result(family, lineage, existing, effective)
+            return self._result(
+                family, lineage, existing, effective, precedence_state=state
+            )
 
         accepted = self.effective_packet(lineage.id)
         packet_id = uuid4()
@@ -488,6 +490,17 @@ class EconomicSourceAdmissionService:
             effective.id, evidence_channels=tuple(current | set(channels)), reason=reason
         )
         return True
+
+    def _current_state(
+        self, packet: EvidencePacket, effective: EvidencePacket | None
+    ) -> str:
+        """The packet's precedence now, read from the revision log."""
+        if effective is None:
+            return packet.precedence_state
+        rank = self._standing(packet, effective)
+        if rank == 0:
+            return "effective" if packet.id == effective.id else "equivalent"
+        return "hold_review" if rank == 1 else "superseded"
 
     def _standing(self, packet: EvidencePacket, effective: EvidencePacket) -> int | None:
         """Rank a packet that still stands against the current effective one.
@@ -800,6 +813,8 @@ class EconomicSourceAdmissionService:
         lineage: SourceLineage,
         packet: EvidencePacket,
         effective: EvidencePacket | None,
+        *,
+        precedence_state: str | None = None,
     ) -> AdmissionResult:
         return AdmissionResult(
             source_family_id=family.id,
@@ -807,7 +822,7 @@ class EconomicSourceAdmissionService:
             packet_id=packet.id,
             effective_packet_id=effective.id if effective else None,
             evidence_revision_ordinal=packet.evidence_revision_ordinal,
-            precedence_state=packet.precedence_state,
+            precedence_state=precedence_state or packet.precedence_state,
             packet_hash=packet.packet_hash,
             evidence_content_fingerprint=packet.evidence_content_fingerprint,
         )
