@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -30,6 +30,8 @@ from app.models.economic_taxonomy_runtime import (
     EvidencePacket,
     ProcessingRequest,
     SocialAssociationRevisionRef,
+    SourceFamily,
+    SourceLineage,
     TaxonomyAuthority,
 )
 from app.models.stock_universe import StockUniverse
@@ -38,6 +40,7 @@ from app.services.economic_source_admission import (
     AdmissionResult,
     EconomicSourceAdmissionService,
     EvidenceAdmission,
+    post_family_key,
 )
 from app.services.economic_taxonomy_fence import producer_write
 from app.services.economic_taxonomy_runtime import EconomicTaxonomyRuntimeService
@@ -523,7 +526,7 @@ class EconomicSocialTaxonomyAdapter:
             and isinstance(row.get("security_id"), int)
             and not isinstance(row.get("security_id"), bool)
         }
-        revisions = []
+        revisions, siblings = [], []
         for assignment in assignments:
             theme_key = canonical_theme_key(
                 str(assignment.claim_payload.get("display_name") or "")
@@ -599,6 +602,19 @@ class EconomicSocialTaxonomyAdapter:
                 )
                 if current_state == "conflict_review_required":
                     continue
+                if requested_state == "proposed" and current_state in {
+                    None, "proposed", "accepted", "rejected"
+                }:
+                    # Evaluated for a decided listing too: new evidence on it
+                    # can qualify the company and so its undecided siblings.
+                    # The decided listing itself keeps its decision.
+                    accepted = self._automatic_acceptances(
+                        association, now=social_packet.available_at
+                    )
+                    if accepted:
+                        if current_state in {None, "proposed"}:
+                            requested_state = "accepted"
+                        siblings.extend(row for row in accepted if row.id != association.id)
                 if current_state in {"accepted", "rejected"} and requested_state == "proposed":
                     continue
                 if current_state == "rejected" and requested_state == "accepted":
@@ -622,7 +638,162 @@ class EconomicSocialTaxonomyAdapter:
                         authority_epoch=authority_epoch,
                     )
                 )
+        # The rule is per company: its other listings on the theme follow.
+        revised = {revision.association_id for revision in revisions}
+        for sibling in siblings:
+            if sibling.id in revised or self._requested_state(sibling.id) not in {None, "proposed"}:
+                continue
+            revised.add(sibling.id)
+            revisions.append(
+                self._revise(
+                    sibling.id,
+                    state="accepted",
+                    idempotency_key=f"company-acceptance:{sibling.id}:social-packet:{social_packet.id}",
+                    actor="system:economic-taxonomy-refresh",
+                    reason="classified_social_membership",
+                    mirror_acknowledged=False,
+                    admission_state="live",
+                    evidence_packet_id=social_packet.id,
+                    authority_epoch=authority_epoch,
+                )
+            )
         return tuple(revisions)
+
+    def _requested_state(self, association_id):
+        current = self.db.scalar(
+            select(EconomicSocialAssociationRevision)
+            .where(EconomicSocialAssociationRevision.association_id == association_id)
+            .order_by(EconomicSocialAssociationRevision.revision_number.desc())
+            .limit(1)
+        )
+        if current is None:
+            return None
+        return str((current.details or {}).get("requested_state") or current.state)
+
+    def _automatic_acceptances(self, association, *, now):
+        """The associations the automatic Social rule accepts, or none (#515).
+
+        Two independent authors within 14 days, for a verified company,
+        counted over the Social works of every listing of that company on the
+        association's theme (as the legacy rule counts by company); all those
+        listings are returned when it passes. The window ends at the
+        newest Social packet the association has seen (``now`` at least), so
+        processing an older packet last still counts the newer posts. Only a
+        claim the catalog places under this theme counts.
+        """
+        from app.services.social_company_identity_service import SocialCompanyIdentityService
+        from app.services.social_theme_projection_service import (
+            SocialThemeProjectionService,
+            _decode,
+            qualifying_social_evidence,
+        )
+        from app.services.social_ticker_resolver import SocialTickerResolver
+
+        def utc(value):  # SQLite drops the zone of a stored UTC time
+            return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+        security = self.db.get(StockUniverse, association.security_id)
+        identity = SocialCompanyIdentityService(self.db).read()
+        resolver = SocialTickerResolver(
+            self.db, verified_company_ids=identity.verified_company_ids
+        )
+        company = resolver.resolve(security.symbol, security.market)
+        if not company.company_count_eligible:
+            return []
+        listings = []
+        for sibling, sibling_security in self.db.execute(
+            select(EconomicSocialAssociation, StockUniverse)
+            .join(StockUniverse, StockUniverse.id == EconomicSocialAssociation.security_id)
+            .where(EconomicSocialAssociation.economic_theme_id == association.economic_theme_id)
+        ):
+            if resolver.resolve(sibling_security.symbol, sibling_security.market).company_id == company.company_id:
+                listings.append(sibling)
+        admission = EconomicSourceAdmissionService(self.db)
+        effective_by_lineage = {}
+
+        def stands(packet):
+            # A packet a correction displaced no longer speaks for its post.
+            # Stored dispositions are fixed at admission, so standing is read
+            # against the lineage's current effective packet.
+            if packet.source_lineage_id not in effective_by_lineage:
+                effective_by_lineage[packet.source_lineage_id] = admission.effective_packet(
+                    packet.source_lineage_id
+                )
+            effective = effective_by_lineage[packet.source_lineage_id]
+            return effective is not None and admission._standing(packet, effective) == 0
+
+        def bridged_work_stands(work_id):
+            # A work bridged from a legacy association at cutover has no
+            # packet. It still counts unless another Social capture now
+            # speaks for its post: then only a standing packet of its own
+            # keeps it.
+            work = self.db.get(SocialExtractionWork, work_id)
+            post_id = (work.input_snapshot_json or {}).get("provider_post_id") if work else None
+            if not post_id:
+                return True
+            lineage_id = self.db.scalar(
+                select(SourceLineage.id)
+                .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
+                .where(
+                    SourceFamily.canonical_source_key == post_family_key("x", str(post_id)),
+                    SourceLineage.scope_suffix == "",
+                )
+            )
+            if lineage_id is None:
+                return True
+            if lineage_id not in effective_by_lineage:
+                effective_by_lineage[lineage_id] = admission.effective_packet(lineage_id)
+            effective = effective_by_lineage[lineage_id]
+            # Only another Social capture corrects a Social work; a raw
+            # content capture of the post displaces nothing.
+            if effective is None or effective.capture_route != "social":
+                return True
+            if (effective.source_metadata or {}).get("social_work_id") == work_id:
+                return True
+            own = [
+                packet
+                for packet in self.db.scalars(
+                    select(EvidencePacket).where(EvidencePacket.source_lineage_id == lineage_id)
+                )
+                if (packet.source_metadata or {}).get("social_work_id") == work_id
+            ]
+            return any(stands(packet) for packet in own)
+
+        sources = [
+            (work_id, packet.available_at if packet is not None else None)
+            for work_id, packet in self.db.execute(
+                select(EconomicSocialAssociationSource.social_work_id, EvidencePacket)
+                .outerjoin(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
+                .where(
+                    EconomicSocialAssociationSource.association_id.in_([row.id for row in listings]),
+                    EconomicSocialAssociationSource.social_work_id.is_not(None),
+                )
+            )
+            if (bridged_work_stands(work_id) if packet is None else stands(packet))
+        ]
+        now = max([utc(now), *(utc(at) for _, at in sources if at is not None)])
+        catalog = SocialThemeProjectionService(self.db)._economic_catalog()
+        decoded = []
+        for work_id in sorted({work_id for work_id, _ in sources}):
+            work = self.db.get(SocialExtractionWork, work_id)
+            created = (work.input_snapshot_json or {}).get("created_at")
+            try:
+                # Cheap pre-filter: only posts inside the window are decoded.
+                if created and not now - timedelta(days=14) <= utc(datetime.fromisoformat(created)) <= now:
+                    continue
+                decoded.append((work, *_decode(work)))
+            except ValueError:
+                continue  # unreadable saved work never counts
+
+        def about_this_theme(claim):
+            # As the legacy rule: the claim itself must be about this theme.
+            mapped = catalog.get(canonical_theme_key(claim.raw_theme))
+            return mapped is not None and mapped[0] == association.economic_theme_id
+
+        rows = qualifying_social_evidence(decoded, now, resolver, about_this_theme)
+        if len({row[4] for row in rows if row[3] == company.company_id}) < 2:
+            return []
+        return sorted(listings, key=lambda row: str(row.id))
 
     def project_equivalent_social_packet(
         self,

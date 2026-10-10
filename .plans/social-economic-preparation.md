@@ -41,3 +41,25 @@ Legacy, shadow and dual modes keep the legacy flow unchanged.
   decision) per membership.
 - `project_native_assignments` applies the automatic rule.
 - Gate: `_SOCIAL_PREPARATION` entries removed.
+
+As built:
+- Authority checks use `theme_development_preparation.economic_authority`, a
+  registered gate predicate. `LiveAcceptedBasketReader` refuses under economic
+  authority whatever `authority_source` a caller passes.
+- The 14-day window for the processor's rule ends at the newest Social packet
+  the association has seen. The rule counts the association's Social works,
+  only claims the catalog places under its theme, and needs 2+ independent
+  authors for the verified company, like `_automatic_accepts`.
+  `qualifying_social_evidence` is shared by both paths.
+- The catalog drops a normalized key two themes claim: a shared display name
+  drops both themes, and an alias shared across themes is dropped. A display
+  name wins over another theme's alias. The publication fingerprint covers the
+  whole mapping.
+- Economic baskets count only `stock` securities as company stocks, like the
+  legacy reader.
+- A run prepared before a cutover and published after it is refused
+  (`publication_basket_changed`), and the next run prepares under economic
+  authority.
+- Both Social tasks stay allowlisted under `_SOCIAL_BRIDGE` for
+  `SocialThemeAssociation` only, because the adapter's `revise` keeps bridged
+  legacy mirrors in step.

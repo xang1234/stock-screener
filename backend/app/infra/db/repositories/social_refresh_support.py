@@ -319,14 +319,9 @@ class SqlThemeProjectionFacade:
             )
 
     def theme_keys(self, projection):
-        from app.models.theme import ThemeCluster
+        from app.services.social_theme_projection_service import SocialThemeProjectionService
         with self.session_factory() as db:
-            existing = db.scalars(select(ThemeCluster.canonical_key).where(
-                ThemeCluster.pipeline == "technical",
-                ThemeCluster.is_active.is_(True),
-                ThemeCluster.lifecycle_state != "retired",
-            )).all()
-        return tuple(sorted(set(existing) | {claim.theme_key for claim in projection.proposals}))
+            return SocialThemeProjectionService(db).theme_keys(projection)
 
 
 class SqlConfirmationReaderFacade:

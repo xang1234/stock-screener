@@ -42,7 +42,7 @@ class Fixture:
         self.db, self.service = db, cls(db, admin_authorized=True)
         self.serial = 0
 
-    def save(self, symbols=("AAA",), *, author=None, age=1, support="supported", thesis=True, key=None, repost=False):
+    def save(self, symbols=("AAA",), *, author=None, age=1, support="supported", thesis=True, key=None, repost=False, theme="Cooling"):
         self.serial += 1
         number = str(self.serial)
         text = " ".join(symbols) + " supply cooling equipment"
@@ -52,7 +52,7 @@ class Fixture:
         self.db.add(item)
         self.db.flush()
         input_hash = SocialExtractionService.input_hash((post,))
-        claims = tuple(ExtractionClaim(number, "cooling", "Cooling", symbol, "supplies", text, support, ()) for symbol in symbols)
+        claims = tuple(ExtractionClaim(number, theme.casefold(), theme, symbol, "supplies", text, support, ()) for symbol in symbols)
         result = ExtractionResult(input_hash, "synthetic", "model", "social-extraction-v1", "social-extraction-v1", claims, 10, 10,
                                   (ExtractionPostJudgment(number, thesis, key or f"claim-{number}"),))
         snapshot = asdict(post)
@@ -612,3 +612,474 @@ def test_migration_preserves_legacy_membership_and_roundtrips(tmp_path):
         assert conn.execute(text("SELECT count(*) FROM theme_constituents")).scalar() == 1
         assert "social_work_id" not in {c["name"] for c in inspect(conn).get_columns("theme_mentions")}
     engine.dispose()
+
+
+def _project_economic(f, work_id, theme_id, symbol="AAA", available_at=NOW):
+    """The processor's projection of one classified Social work (#515)."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+
+    security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+    admitted = EconomicSourceAdmissionService(f.db).admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{work_id}", capture_route="social",
+        original_text=f"post {work_id}", preparation_version="social-prep-v1",
+        captured_at=available_at, available_at=available_at, evidence_channels=("narrative",),
+        source_metadata={"social_work_id": work_id, "social_memberships": []},
+    ))
+    assignment = SimpleNamespace(
+        id=uuid4(), classification_attempt_id=uuid4(), economic_theme_id=theme_id,
+        claim_payload={"display_name": "Cooling", "securities": [{"security_id": security.id}]},
+    )
+    EconomicSocialTaxonomyAdapter(f.db).project_native_assignments(
+        [assignment], evidence_packet_id=admitted.packet_id,
+        authority_epoch=f.db.get(TaxonomyAuthority, 1).authority_epoch,
+    )
+    f.db.commit()
+    latest = f.db.query(EconomicSocialAssociationRevision).order_by(
+        EconomicSocialAssociationRevision.created_at.desc(),
+        EconomicSocialAssociationRevision.revision_number.desc(),
+    ).first()
+    return (latest.details or {}).get("requested_state", latest.state)
+
+
+def test_processor_accepts_an_economic_association_on_two_independent_authors(social_fixture):
+    # The legacy automatic rule, run by the processor on economic evidence.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="first"), theme.id) == "proposed"
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
+
+
+def test_processor_accepts_every_listing_of_a_company_on_company_evidence(social_fixture):
+    # AAA and 0005.HK are one verified company: two authors across the two
+    # listings accept both, as the legacy rule does.
+    from app.infra.db.models.social_analysis import (
+        EconomicSocialAssociation,
+        EconomicSocialAssociationRevision,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    _project_economic(f, f.save(("0005.HK",), author="second"), theme.id, symbol="0005.HK")
+
+    states = {}
+    for association in f.db.query(EconomicSocialAssociation):
+        latest = f.db.query(EconomicSocialAssociationRevision).filter_by(
+            association_id=association.id
+        ).order_by(EconomicSocialAssociationRevision.revision_number.desc()).first()
+        symbol = f.db.get(StockUniverse, association.security_id).symbol
+        states[symbol] = (latest.details or {}).get("requested_state", latest.state)
+    assert states == {"AAA": "accepted", "0005.HK": "accepted"}
+
+
+def test_processor_ignores_evidence_from_a_superseded_packet(social_fixture):
+    # A correction becomes the lineage's effective packet. The displaced
+    # packet's own latest disposition still reads "effective" (dispositions are
+    # fixed at admission), so standing must be read against the lineage.
+    from app.models.economic_taxonomy_runtime import EvidencePacket
+    from app.models.economic_taxonomy_runtime_evidence import EvidencePrecedenceRevision
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+    first = f.save(("AAA",), author="first")
+    _project_economic(f, first, theme.id)
+    displaced = f.db.query(EvidencePacket).one()
+    correction = EconomicSourceAdmissionService(f.db).admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{first}", capture_route="social",
+        original_text=f"post {first}, corrected", preparation_version="social-prep-v1",
+        captured_at=NOW + timedelta(minutes=5), available_at=NOW + timedelta(minutes=5),
+        evidence_channels=("narrative",), source_metadata={"social_memberships": []},
+    ))
+    f.db.add(EvidencePrecedenceRevision(
+        source_lineage_id=displaced.source_lineage_id, evidence_packet_id=correction.packet_id,
+        revision_number=99, disposition="effective", reason="review promoted the correction",
+    ))
+    f.db.commit()
+    assert EconomicSourceAdmissionService(f.db)._latest_disposition(displaced.id) == "effective"
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
+
+
+def test_processor_counts_a_bridged_pre_cutover_work(social_fixture):
+    # A legacy association bridged at cutover carries its works without an
+    # evidence packet; they still count toward the two-author rule.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationSource
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    association = EconomicSocialTaxonomyAdapter(f.db).get_or_create_association(theme.id, security.id)
+    bridged = f.save(("AAA",), author="first")
+    f.db.add(EconomicSocialAssociationSource(
+        association_id=association.id, source_kind="social_work",
+        source_key=f"social_work:{bridged}", social_work_id=bridged,
+    ))
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
+
+
+def test_processor_accepts_a_proposed_sibling_when_evidence_lands_on_an_accepted_listing(social_fixture):
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    listings = {}
+    for symbol, state in (("AAA", "accepted"), ("0005.HK", "proposed")):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        listings[symbol] = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(listings[symbol].id, state=state, idempotency_key=f"seed-{symbol}",
+                       actor="admin", reason="seed", mirror_acknowledged=True)
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    _project_economic(f, f.save(("AAA",), author="second"), theme.id)
+
+    latest = f.db.query(EconomicSocialAssociationRevision).filter_by(
+        association_id=listings["0005.HK"].id
+    ).order_by(EconomicSocialAssociationRevision.revision_number.desc()).first()
+    assert (latest.details or {}).get("requested_state", latest.state) == "accepted"
+
+
+def test_processor_accepts_a_proposed_sibling_when_evidence_lands_on_a_rejected_listing(social_fixture):
+    # The rejected listing stays rejected; the company's proposed one follows
+    # the company-level evidence, as the legacy rule assesses every listing.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    listings = {}
+    for symbol, state in (("AAA", "rejected"), ("0005.HK", "proposed")):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        listings[symbol] = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(listings[symbol].id, state=state, idempotency_key=f"seed-{symbol}",
+                       actor="admin", reason="seed", mirror_acknowledged=True)
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    _project_economic(f, f.save(("AAA",), author="second"), theme.id)
+
+    def state(symbol):
+        latest = f.db.query(EconomicSocialAssociationRevision).filter_by(
+            association_id=listings[symbol].id
+        ).order_by(EconomicSocialAssociationRevision.revision_number.desc()).first()
+        return (latest.details or {}).get("requested_state", latest.state)
+
+    assert state("0005.HK") == "accepted"
+    assert state("AAA") == "rejected"
+
+
+def test_processor_ignores_a_bridged_work_whose_post_was_corrected(social_fixture):
+    # The bridged work has no packet of its own; a correction is now the
+    # post's effective packet, so the original claim no longer counts.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationSource
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    association = EconomicSocialTaxonomyAdapter(f.db).get_or_create_association(theme.id, security.id)
+    bridged = f.save(("AAA",), author="first")
+    correction = f.save(("BBB",), author="first")
+    f.db.add(EconomicSocialAssociationSource(
+        association_id=association.id, source_kind="social_work",
+        source_key=f"social_work:{bridged}", social_work_id=bridged,
+    ))
+    post_id = f.db.get(SocialExtractionWork, bridged).input_snapshot_json["provider_post_id"]
+    EconomicSourceAdmissionService(f.db).admit_social_work(EvidenceAdmission(
+        provider="x", canonical_source_family=f"x:post:{post_id}", capture_route="social",
+        original_text="corrected", preparation_version="social-prep-v1",
+        captured_at=NOW, available_at=NOW, evidence_channels=("narrative",),
+        source_metadata={"social_work_id": correction, "social_memberships": []},
+    ))
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
+
+
+def test_processor_counts_a_bridged_work_whose_post_has_only_raw_content(social_fixture):
+    # A raw X content capture of the post is not a correction of the Social work.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationSource
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        CONTENT_INGESTION_ROUTE,
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    association = EconomicSocialTaxonomyAdapter(f.db).get_or_create_association(theme.id, security.id)
+    bridged = f.save(("AAA",), author="first")
+    f.db.add(EconomicSocialAssociationSource(
+        association_id=association.id, source_kind="social_work",
+        source_key=f"social_work:{bridged}", social_work_id=bridged,
+    ))
+    post_id = f.db.get(SocialExtractionWork, bridged).input_snapshot_json["provider_post_id"]
+    EconomicSourceAdmissionService(f.db).admit_content(EvidenceAdmission(
+        provider="twitter", canonical_source_family=f"x:post:{post_id}",
+        capture_route=CONTENT_INGESTION_ROUTE, route_record_id=f"{bridged}:1",
+        original_text="raw post", preparation_version="content-ingestion-v1",
+        captured_at=NOW, available_at=NOW, evidence_channels=("fundamental",),
+        source_metadata={"content_item_id": 1},
+    ))
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
+
+
+def test_processor_keeps_one_authors_repeated_posts_proposed(social_fixture):
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="same"), theme.id)
+    assert _project_economic(f, f.save(("AAA",), author="same"), theme.id) == "proposed"
+
+
+def test_processor_accepts_when_an_older_packet_is_processed_last(social_fixture):
+    # Processing order is not evidence order: the window ends at the newest
+    # packet the association has seen.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+    older = f.save(("AAA",), author="first", age=6)
+    newer = f.save(("AAA",), author="second", age=1)
+
+    assert _project_economic(f, newer, theme.id) == "proposed"
+    assert _project_economic(f, older, theme.id, available_at=NOW - timedelta(days=5)) == "accepted"
+
+
+def test_processor_does_not_count_a_claim_about_another_catalog_theme(social_fixture):
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    elsewhere = f.save(("AAA",), author="second", theme="Semiconductors")
+    assert _project_economic(f, elsewhere, theme.id) == "proposed"
+
+
+def test_economic_fingerprint_moves_only_with_basket_membership(social_fixture):
+    # A proposed association changes no basket, so it must not refuse a
+    # publication prepared before it; a live acceptance must.
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+    before = f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    security = f.db.query(StockUniverse).filter_by(symbol="BBB").one()
+    association = adapter.get_or_create_association(theme.id, security.id)
+    adapter.revise(association.id, state="proposed", idempotency_key="proposed",
+                   actor="system", reason="classified", mirror_acknowledged=True)
+    f.db.commit()
+
+    assert f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint == before
+
+    adapter.revise(association.id, state="accepted", idempotency_key="accepted",
+                   actor="admin", reason="reviewed", mirror_acknowledged=True)
+    f.db.commit()
+    assert f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint != before
+
+
+def test_processor_does_not_count_a_claim_about_an_uncatalogued_theme(social_fixture):
+    # As the legacy rule: a claim counts only when it is about this theme.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    elsewhere = f.save(("AAA",), author="second", theme="Quantum Widgets")
+    assert _project_economic(f, elsewhere, theme.id) == "proposed"
+
+
+def test_economic_application_covers_the_current_catalog_whatever_keys_it_is_given(social_fixture):
+    # The keys come from another session; a rename in between must not drop
+    # a theme's basket.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    seed_generation(f.db, display_name="Cooling")
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",), theme="Unrelated")])
+
+    application = f.service.prepare_application(projection, theme_keys=("renamed_away",))
+
+    assert {basket.theme_key for basket in application.baskets} == set(f.service.theme_keys(projection)) - {"unrelated"}
+
+
+def test_economic_application_loads_each_themes_memberships_once(social_fixture, monkeypatch):
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    seed_generation(f.db, display_name="Cooling")
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+    loads = []
+    real = EconomicSocialTaxonomyAdapter.current_live_memberships
+
+    def counting(self, theme_id):
+        loads.append(theme_id)
+        return real(self, theme_id)
+
+    monkeypatch.setattr(EconomicSocialTaxonomyAdapter, "current_live_memberships", counting)
+
+    application = f.service.prepare_application(projection, theme_keys=())
+
+    themes = {basket.theme_key for basket in application.baskets}
+    assert len(application.baskets) == 5 * len(themes)
+    assert len(loads) == len(themes)
+
+
+def test_economic_catalog_drops_keys_two_themes_claim():
+    from app.services.social_theme_projection_service import SocialThemeProjectionService
+
+    first, second = "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"
+    catalog = SocialThemeProjectionService.catalog_from(
+        names=[(first, "Cooling"), (second, "Storage"), ("third", "Memory"), ("fourth", "Memory")],
+        aliases=[(first, "Chillers"), (second, "Chillers"), (second, "Cooling"), (first, "Thermal")],
+    )
+
+    assert catalog["cooling"] == (first, "cooling")  # a display name beats another theme's alias
+    assert catalog["thermal"] == (first, "cooling")
+    assert "memory" not in catalog  # two themes share the display name
+    assert "chiller" not in catalog and "chillers" not in catalog  # two themes share the alias
+
+
+def test_economic_basket_counts_only_stocks_as_company_stocks(social_fixture):
+    # As the legacy reader: an accepted ETF is a member, not company-stock coverage.
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.add(StockUniverse(symbol="SMH", market="US", is_active=True))
+    f.db.flush()
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    for symbol in ("AAA", "SMH"):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        association = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(association.id, state="accepted", idempotency_key=f"accept-{symbol}",
+                       actor="admin", reason="reviewed", mirror_acknowledged=True)
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+
+    basket = f.service.prepare_application(projection, theme_keys=("cooling",)).read("cooling", "US")
+
+    assert [m.canonical_symbol for m in basket.membership] == ["AAA", "SMH"]
+    assert basket.company_stock_symbols == ("AAA",)
+
+
+def test_economic_basket_omits_an_unresolved_security(social_fixture):
+    # As the legacy reader: an inactive listing is not a basket member.
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    for symbol in ("AAA", "BBB"):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        association = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(association.id, state="accepted", idempotency_key=f"accept-{symbol}",
+                       actor="admin", reason="reviewed", mirror_acknowledged=True)
+    f.db.query(StockUniverse).filter_by(symbol="BBB").one().is_active = False
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+
+    basket = f.service.prepare_application(projection, theme_keys=()).read("cooling", "US")
+
+    assert [m.canonical_symbol for m in basket.membership] == ["AAA"]
+    assert basket.company_stock_symbols == ("AAA",)
+
+
+def test_economic_fingerprint_moves_when_an_alias_is_remapped(social_fixture, monkeypatch):
+    # Admission re-derives the catalog; an alias a newer processing version
+    # remaps must refuse a publication prepared under the old mapping.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    seeded = seed_generation(f.db, display_name="Cooling")
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+    before = f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint
+    catalog = f.service._economic_catalog()
+    semiconductors = catalog[next(k for k, (tid, _) in catalog.items() if tid == seeded["semiconductors"].id)]
+    remapped = {**catalog, "hbm": semiconductors}
+    monkeypatch.setattr(f.service, "_economic_catalog", lambda: remapped)
+
+    assert f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint != before
+
+
+def test_economic_application_reads_accepted_economic_memberships(social_fixture):
+    # #515: the basket of a catalog theme (reached by name or alias) holds its
+    # accepted economic Social memberships; no legacy basket is built.
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.theme_identity_normalization import canonical_theme_key
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    association = adapter.get_or_create_association(theme.id, security.id)
+    adapter.revise(association.id, state="accepted", idempotency_key="reviewed",
+                   actor="admin", reason="reviewed", mirror_acknowledged=True)
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+
+    application = f.service.prepare_application(projection, theme_keys=("hbm",))
+
+    assert [m.canonical_symbol for m in application.read("cooling", "US").membership] == ["AAA"]
+    assert {"cooling", canonical_theme_key("Semiconductors")} <= set(f.service.theme_keys(projection))
+    assert f.db.query(ThemeCluster).count() == 0

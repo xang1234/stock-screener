@@ -44,6 +44,7 @@ from app.services.social_extraction_service import (
     SocialExtractionService,
 )
 from app.services.social_ticker_resolver import SocialTickerResolver
+from app.services.theme_development_preparation import economic_authority
 from app.services.theme_extraction_service import find_read_only_theme_match
 from app.services.theme_identity_normalization import (
     UNKNOWN_THEME_KEY,
@@ -133,6 +134,39 @@ def _decode(work):
         raise ValueError("invalid_saved_social_result") from None
 
 
+def qualifying_social_evidence(decoded, now, resolver, claim_matches):
+    """Rows automatic acceptance counts: one per company and independent post.
+
+    ``decoded`` yields ``(work, post, result)``; ``claim_matches`` says whether a
+    claim is about the theme in question. A row is ``(created_at, work_id,
+    content_item_id, company_id, author, claim_key, url)``.
+    """
+    evidence = []
+    for work, post, result in decoded:
+        judgment = result.judgments[0]
+        if (not now - timedelta(days=14) <= post.created_at <= now or post.is_repost
+                or not judgment.has_new_thesis or not judgment.canonical_claim_key):
+            continue
+        for claim in result.claims:
+            if not claim_matches(claim) or claim.support != "supported" or claim.duplicate_of_post_ids:
+                continue
+            resolution = resolver.resolve(claim.company_token)
+            if resolution.company_count_eligible:
+                evidence.append((post.created_at, work.id, work.content_item_id, resolution.company_id,
+                                 post.author_handle.casefold().lstrip("@"), judgment.canonical_claim_key,
+                                 post.canonical_url or post.url))
+    # One canonical post, URL or copied thesis contributes at most once/company,
+    # even after model/content revisions or alternate listing extraction.
+    seen_posts, seen_urls, seen_claims, qualifying = set(), set(), set(), []
+    for row in sorted(evidence):
+        date, work_id, item_id, company, author, key, url = row
+        if (company, item_id) in seen_posts or (company, url) in seen_urls or (company, key) in seen_claims:
+            continue
+        seen_posts.add((company, item_id)); seen_urls.add((company, url)); seen_claims.add((company, key))
+        qualifying.append(row)
+    return qualifying
+
+
 class SocialThemeProjectionService:
     def __init__(self, db, *, pipeline="technical", admin_authorized=False):
         if pipeline not in {"technical", "fundamental"}:
@@ -143,12 +177,115 @@ class SocialThemeProjectionService:
     def _decode_work(self, work):
         return self._prepared_decoded.get(work.id) or _decode(work)
 
+    def _economic_catalog(self):
+        """``{normalized key: (economic theme id, theme key)}`` (#515), from the processing version."""
+        from app.models.economic_taxonomy import EconomicThemeAlias, EconomicThemeRevision
+        version_id = self.db.get(TaxonomyAuthority, 1).processing_taxonomy_version_id
+        names = self.db.execute(select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
+            EconomicThemeRevision.taxonomy_version_id == version_id,
+            EconomicThemeRevision.lifecycle != "retired")).all()
+        aliases = self.db.execute(select(EconomicThemeAlias.theme_id, EconomicThemeAlias.alias).where(
+            EconomicThemeAlias.taxonomy_version_id == version_id)).all()
+        return self.catalog_from(names=names, aliases=aliases)
+
+    @staticmethod
+    def _catalog_themes(catalog):
+        """``{theme key: economic theme id}`` for every theme the catalog reaches."""
+        return {key: theme_id for theme_id, key in catalog.values()}
+
+    @staticmethod
+    def catalog_from(*, names, aliases):
+        """Map normalized display names and aliases to ``(theme id, theme key)``.
+
+        A theme's key is its display name's, so an alias lands on the same
+        basket. A key two themes claim is ambiguous and maps to neither: a
+        shared display name drops both themes, and an alias shared across
+        themes is dropped. A display name wins over another theme's alias.
+        """
+        def ambiguous(pairs):
+            owners = {}
+            for key, theme_id in pairs:
+                owners.setdefault(key, set()).add(theme_id)
+            return {key for key, ids in owners.items() if len(ids) > 1}
+
+        display = [(canonical_theme_key(name), theme_id) for theme_id, name in names]
+        clashing = ambiguous(display)
+        keys = {theme_id: key for key, theme_id in display if key not in clashing}
+        catalog = {key: (theme_id, key) for theme_id, key in keys.items()}
+        alias_pairs = [(canonical_theme_key(alias), theme_id) for theme_id, alias in aliases
+                       if theme_id in keys]
+        shared = ambiguous(alias_pairs)
+        for key, theme_id in alias_pairs:
+            if key not in shared and key not in catalog and key not in clashing:
+                catalog[key] = (theme_id, keys[theme_id])
+        catalog.pop(UNKNOWN_THEME_KEY, None)
+        return catalog
+
+    @staticmethod
+    def _catalog_theme_key(raw_theme, catalog):
+        """A claim's theme key under economic authority: the catalog theme's, else its own."""
+        key = canonical_theme_key(raw_theme)
+        return catalog.get(key, (None, key))[1]
+
+    def _legacy_theme_key(self, raw_theme):
+        match = find_read_only_theme_match(self.db, raw_theme, self.pipeline)
+        return match.canonical_key if match else canonical_theme_key(raw_theme)
+
+    def theme_keys(self, projection):
+        """Themes a run measures: every current theme plus the run's own keys."""
+        if economic_authority(self.db):
+            catalog = self._economic_catalog()
+            return tuple(sorted({key for _, key in catalog.values()}
+                                | {self._catalog_theme_key(claim.raw_theme, catalog) for claim in projection.proposals}))
+        existing = self.db.scalars(select(ThemeCluster.canonical_key).where(
+            ThemeCluster.pipeline == self.pipeline, ThemeCluster.is_active.is_(True),
+            ThemeCluster.lifecycle_state != "retired")).all()
+        return tuple(sorted(set(existing) | {claim.theme_key for claim in projection.proposals}))
+
+    def _economic_fingerprint(self, projection, themes, catalog):
+        """Fence the catalog mapping, the themes' Social associations and saved work (#515).
+
+        The whole name/alias mapping is fenced: admission re-derives it, so a
+        newer processing version that remaps an alias must refuse publication.
+        """
+        from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+        from app.models.stock_universe import StockUniverse
+        rows = [("catalog", sorted((key, str(theme_id)) for key, theme_id in themes.items())),
+                ("catalog_mapping", sorted((alias, str(theme_id), key) for alias, (theme_id, key) in catalog.items()))]
+        revisions = self.db.execute(select(EconomicSocialAssociation.id, EconomicSocialAssociation.security_id,
+            EconomicSocialAssociationRevision.revision_number, EconomicSocialAssociationRevision.state,
+            EconomicSocialAssociationRevision.live).join(EconomicSocialAssociationRevision,
+            EconomicSocialAssociationRevision.association_id == EconomicSocialAssociation.id).where(
+            EconomicSocialAssociation.economic_theme_id.in_(list(themes.values()))).order_by(
+            EconomicSocialAssociation.id, EconomicSocialAssociationRevision.revision_number)).all()
+        # Only what a basket holds: an association whose latest revision is a
+        # live acceptance. A proposed or pending revision changes no basket.
+        latest = {}
+        for association_id, security_id, number, state, live in revisions:
+            latest[association_id] = (security_id, number, state, live)
+        rows.append(("economic_social_associations", sorted(
+            (str(association_id), str(security_id), number)
+            for association_id, (security_id, number, state, live) in latest.items()
+            if live and state == "accepted")))
+        for model, condition in ((SocialExtractionWork, SocialExtractionWork.id.in_(projection.work_ids)),
+                                 (SocialRunWork, SocialRunWork.run_id == projection.run_id)):
+            values = self.db.execute(select(*model.__table__.columns).where(condition).order_by(
+                *model.__table__.primary_key.columns)).all()
+            rows.append((model.__tablename__, [tuple(row) for row in values]))
+        values = self.db.execute(select(StockUniverse.id, StockUniverse.symbol, StockUniverse.market,
+            StockUniverse.is_active, StockUniverse.is_common_stock, StockUniverse.exchange).order_by(StockUniverse.id)).all()
+        rows.append(("security_identity", [tuple(row) for row in values]))
+        return sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
+
     def _fingerprint(self, projection, theme_keys):
         """Fence catalog, manual/legacy basket edits and saved-work changes.
 
         No semantic decoding, feature reads or price calculations under the lock.
         Includes shared identity tables because legacy writers do not bump registry.
         """
+        if economic_authority(self.db):
+            catalog = self._economic_catalog()
+            return self._economic_fingerprint(projection, self._catalog_themes(catalog), catalog)
         from app.models.stock_universe import StockUniverse
         catalog = self.db.execute(select(ThemeCluster.id, ThemeCluster.canonical_key, ThemeCluster.aliases,
             ThemeCluster.is_active, ThemeCluster.lifecycle_state).where(ThemeCluster.pipeline == self.pipeline).order_by(ThemeCluster.id)).all()
@@ -192,6 +329,8 @@ class SocialThemeProjectionService:
         with self.db.no_autoflush:
             if self.prepare(projection.run_id, projection.prepared_at) != projection:
                 raise ValueError("social_projection_version_conflict")
+            if economic_authority(self.db):
+                return self._prepare_economic_application(projection, theme_keys)
             identity = SocialCompanyIdentityService(self.db).read()
             resolver = SocialTickerResolver(self.db, verified_company_ids=identity.verified_company_ids)
             themes = {t.canonical_key: t for t in self.db.scalars(select(ThemeCluster).where(
@@ -236,6 +375,26 @@ class SocialThemeProjectionService:
                     baskets.append(AcceptedBasketSnapshot(key, market, selected, stocks, identity.version, identity.policy_version, identity.registry_version))
             return PreparedThemeApplication(projection, tuple(baskets), decoded, self._fingerprint(projection, tuple(themes)))
 
+    def _prepare_economic_application(self, projection, theme_keys):
+        """Baskets of every current economic catalog theme (#515).
+
+        Accepted economic Social memberships only: acceptance is the
+        processor's, and a key the catalog does not know has no basket.
+        """
+        from app.services.social_theme_market_service import EconomicAcceptedBasketReader
+        catalog = self._economic_catalog()
+        # Every current catalog theme, whatever keys the caller passed: they
+        # may come from another session, before a rename.
+        themes = self._catalog_themes(catalog)
+        decoded = tuple((wid, *_decode(self.db.get(SocialExtractionWork, wid))) for wid in sorted(projection.work_ids))
+        self._prepared_decoded = {wid: (post, result) for wid, post, result in decoded}
+        baskets = []
+        for key, theme_id in sorted(themes.items()):
+            reader = EconomicAcceptedBasketReader(self.db, economic_theme_id=theme_id)
+            baskets.extend(reader.read_markets(key, ("US", "HK", "CN", "JP", "TW")))
+        return PreparedThemeApplication(projection, tuple(baskets), decoded,
+                                        self._economic_fingerprint(projection, themes, catalog))
+
     def prepare(self, run_id: str, now: datetime) -> ThemeProjection:
         validate_utc_timestamp(now, "now")
         with self.db.no_autoflush:
@@ -244,6 +403,7 @@ class SocialThemeProjectionService:
                 raise ValueError("invalid_social_run")
             identity = SocialCompanyIdentityService(self.db).read()
             resolver = SocialTickerResolver(self.db, verified_company_ids=identity.verified_company_ids)
+            economic = economic_authority(self.db)
             proposals, work_ids = [], []
             links = self.db.scalars(select(SocialRunWork).where(SocialRunWork.run_id == run_id).order_by(SocialRunWork.work_id)).all()
             for link in links:
@@ -258,8 +418,9 @@ class SocialThemeProjectionService:
                         if claim.support != "unsupported"
                     )
                     proposals.extend(supported_claims)
-                    for claim in supported_claims:
-                        find_read_only_theme_match(self.db, claim.raw_theme, self.pipeline)
+                    if not economic:
+                        for claim in supported_claims:
+                            find_read_only_theme_match(self.db, claim.raw_theme, self.pipeline)
             return ThemeProjection(run_id, POLICY, tuple(proposals), identity.registry_version,
                                    identity.version, identity.policy_version, now, tuple(work_ids),
                                    tuple(resolver.resolve(claim.company_token) for claim in proposals), self.pipeline)
@@ -290,6 +451,9 @@ class SocialThemeProjectionService:
             self.db, verified_company_ids=identity.verified_company_ids
         )
         adapter = EconomicSocialTaxonomyAdapter(self.db)
+        # Under economic authority acceptance is the processor's (#515).
+        economic = economic_authority(self.db)
+        catalog = self._economic_catalog() if economic else None
         for work_id in projection.work_ids:
             work = self.db.get(SocialExtractionWork, work_id)
             post, result = self._decode_work(work)
@@ -313,31 +477,35 @@ class SocialThemeProjectionService:
                 resolution = resolutions[claim.company_token]
                 if claim.support == "unsupported" or resolution.status != "resolved":
                     continue
-                matched = find_read_only_theme_match(
-                    self.db, claim.raw_theme, self.pipeline
-                )
-                theme_key = (
-                    matched.canonical_key
-                    if matched is not None
-                    else canonical_theme_key(claim.raw_theme)
-                )
-                state = (
-                    "accepted"
-                    if (theme_key, resolution.market, resolution.symbol)
-                    in accepted_pairs
-                    else "proposed"
-                )
-                if matched is not None and state != "accepted":
-                    legacy = self.db.scalar(
-                        select(SocialThemeAssociation).where(
-                            SocialThemeAssociation.theme_cluster_id == matched.id,
-                            SocialThemeAssociation.market == resolution.market,
-                            SocialThemeAssociation.canonical_symbol
-                            == resolution.symbol,
-                        )
+                if economic:
+                    theme_key = self._catalog_theme_key(claim.raw_theme, catalog)
+                    state = "proposed"
+                else:
+                    matched = find_read_only_theme_match(
+                        self.db, claim.raw_theme, self.pipeline
                     )
-                    if legacy is not None and legacy.state == "rejected":
-                        state = "rejected"
+                    theme_key = (
+                        matched.canonical_key
+                        if matched is not None
+                        else canonical_theme_key(claim.raw_theme)
+                    )
+                    state = (
+                        "accepted"
+                        if (theme_key, resolution.market, resolution.symbol)
+                        in accepted_pairs
+                        else "proposed"
+                    )
+                    if matched is not None and state != "accepted":
+                        legacy = self.db.scalar(
+                            select(SocialThemeAssociation).where(
+                                SocialThemeAssociation.theme_cluster_id == matched.id,
+                                SocialThemeAssociation.market == resolution.market,
+                                SocialThemeAssociation.canonical_symbol
+                                == resolution.symbol,
+                            )
+                        )
+                        if legacy is not None and legacy.state == "rejected":
+                            state = "rejected"
                 social_memberships.append(
                     {
                         "membership_key": social_membership_key(
@@ -649,34 +817,11 @@ class SocialThemeProjectionService:
         return self._qualifying_inputs(work_ids, self.db.get(ThemeCluster, theme_id).canonical_key, now, resolver)
 
     def _qualifying_inputs(self, work_ids, theme_key, now, resolver):
-        evidence = []
-        for work_id in set(work_ids):
-            work = self.db.get(SocialExtractionWork, work_id)
-            post, result = self._decode_work(work)
-            judgment = result.judgments[0]
-            if (not now - timedelta(days=14) <= post.created_at <= now or post.is_repost
-                    or not judgment.has_new_thesis or not judgment.canonical_claim_key):
-                continue
-            for claim in result.claims:
-                match = find_read_only_theme_match(self.db, claim.raw_theme, self.pipeline)
-                key = match.canonical_key if match else canonical_theme_key(claim.raw_theme)
-                if key != theme_key or claim.support != "supported" or claim.duplicate_of_post_ids:
-                    continue
-                resolution = resolver.resolve(claim.company_token)
-                if resolution.company_count_eligible:
-                    evidence.append((post.created_at, work.id, work.content_item_id, resolution.company_id,
-                                     post.author_handle.casefold().lstrip("@"), judgment.canonical_claim_key,
-                                     post.canonical_url or post.url))
-        # One canonical post, URL or copied thesis contributes at most once/company,
-        # even after model/content revisions or alternate listing extraction.
-        seen_posts, seen_urls, seen_claims, qualifying = set(), set(), set(), []
-        for row in sorted(evidence):
-            date, work_id, item_id, company, author, key, url = row
-            if (company, item_id) in seen_posts or (company, url) in seen_urls or (company, key) in seen_claims:
-                continue
-            seen_posts.add((company, item_id)); seen_urls.add((company, url)); seen_claims.add((company, key))
-            qualifying.append(row)
-        return qualifying
+        works = (self.db.get(SocialExtractionWork, work_id) for work_id in set(work_ids))
+        return qualifying_social_evidence(
+            ((work, *self._decode_work(work)) for work in works), now, resolver,
+            lambda claim: self._legacy_theme_key(claim.raw_theme) == theme_key,
+        )
 
     def _assess(self, theme_id, projection, resolver):
         qualifying = self._qualifying(theme_id, projection.prepared_at, resolver)

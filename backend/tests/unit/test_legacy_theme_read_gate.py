@@ -20,10 +20,6 @@ _REVIEW = "Audit 'Readers with no routing': review/merge GETs serve legacy clust
 _INTELLIGENCE = "Audit 'Readers with no routing': equivalence and development GETs serve legacy identities."
 _TELEMETRY = "Audit 'Readers with no routing': matching telemetry serves legacy ThemeMention stats."
 _CONTENT = "Audit 'Readers with no routing': content listing annotates items with ThemeMention."
-_SOCIAL_PREPARATION = (
-    "Audit 'Readers with no routing': every live Social run prepares baskets from legacy "
-    "theme tables before its economic-mode check; move it before retirement (#515)."
-)
 _DEVELOPMENT_BACKFILL = (
     "Audit 'Rollback machinery (keep until retirement)': maps legacy "
     "ThemeDevelopmentTheme links to economic rows for the snapshot builder (#513)."
@@ -88,14 +84,6 @@ ALLOWLIST: dict[str, tuple[str, set[str]]] = {
         _CONTENT,
         {"ThemeMention", "table:theme_mentions"},
     ),
-    "task app.interfaces.tasks.social_signal_tasks.refresh_social_signals": (
-        _SOCIAL_PREPARATION,
-        {"SocialThemeAssociation", "ThemeAlias", "ThemeCluster", "ThemeConstituent", "ThemeMention"},
-    ),
-    "task app.interfaces.tasks.social_signal_tasks.resume_social_analysis": (
-        _SOCIAL_PREPARATION,
-        {"SocialThemeAssociation", "ThemeAlias", "ThemeCluster", "ThemeConstituent", "ThemeMention"},
-    ),
     "task app.tasks.economic_taxonomy_tasks.backfill_legacy_developments": (
         _DEVELOPMENT_BACKFILL,
         {"ThemeDevelopmentTheme"},
@@ -111,6 +99,14 @@ ALLOWLIST: dict[str, tuple[str, set[str]]] = {
     "task app.tasks.economic_taxonomy_tasks.deliver_taxonomy_outbox": (
         _ROLLBACK,
         {"SocialThemeAssociation", "SocialThemeDecision", "ThemeCluster", "ThemeConstituent"},
+    ),
+    "task app.interfaces.tasks.social_signal_tasks.refresh_social_signals": (
+        _SOCIAL_BRIDGE,
+        {"SocialThemeAssociation"},
+    ),
+    "task app.interfaces.tasks.social_signal_tasks.resume_social_analysis": (
+        _SOCIAL_BRIDGE,
+        {"SocialThemeAssociation"},
     ),
     "task app.tasks.economic_taxonomy_tasks.process_economic_taxonomy_work": (
         _SOCIAL_BRIDGE,
