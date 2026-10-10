@@ -26,6 +26,13 @@ The result is `price_refresh.rs_anchor_repair`, also printed in the job log:
 
 The job log lines start with `[static-daily prices:<MARKET>]`, for example `RS anchor repair: 1695/1706 repaired, 11 unresolved {...}`.
 
+Each market build also writes `coverage.json` to its `static-market-diagnostics-<MARKET>` artifact, on every outcome including a rejected market. It records:
+- `latest_session_priced`, `rs_eligible` and `scored`. These are counted separately, because RS eligibility does not imply a composite score.
+- The RS status and reason, `history_gaps` and `rs_anchor_repair`.
+- `seed_source_revision`, the daily-price bundle the build started from. It appears only when a feature snapshot ran.
+
+The same counts appear as a one-row table in the build job's summary. A missing-anchor collapse shows as `rs_eligible` far below `latest_session_priced`.
+
 ### Measured baseline (2026-10-07 daily-price bundles)
 
 | Market | Priced symbols missing an anchor despite older history | Symbols the lookahead check refetches |
@@ -35,6 +42,10 @@ The job log lines start with `[static-daily prices:<MARKET>]`, for example `RS a
 | CA, HK, IN, JP, KR, MY, SG, TW | under 1% | 0–66 |
 
 DE's sparse names are probably refetched on every run and stay unresolved, because the provider has no bars for their no-trade days. That is expected noise, and the run remains bounded at about 450 symbols.
+
+DE has a second kind of gap: listings with no bars on US market holidays. These are probably US-linked shares that do not trade on German exchanges when the US is closed. On the 2026-10-09 bundle, 406 DE symbols lack 2026-06-19, 374 lack 2026-07-03 and 264 lack 2026-09-07. The full-window repair of 2026-10-08 could not fill them, so the provider has no such bars.
+- When a horizon's anchor lands on one of those dates, those symbols drop out of RS for that one session. The deepest dip forecast from that bundle is about 30% of DE symbols, on 2026-12-14. That is under the 50% guard, so the market still publishes.
+- This is accepted: the policy does not substitute nearby closes for a missing session.
 
 ### Publication guard
 
@@ -71,7 +82,7 @@ Record why, then remove the variable once the hole has aged out of the 252-sessi
 
 ## Verify
 
-1. **Repair:** in the market job's log, check the `RS anchor repair` line: repaired and unresolved counts, and the per-date counts for the incident range.
+1. **Repair:** in the market job's summary or `coverage.json`, check the repaired and unresolved counts, then the per-date counts for the incident range (`rs_anchor_repair.unresolved_count_by_date`).
 2. **Bundle:** check that `daily-price-<market>-YYYYMMDD.json.gz` and then `daily-price-latest-<market>.json` were uploaded to the `daily-price-data` release. The bundle is uploaded before its manifest.
 3. **Clean import:** import the bundle into an empty database (`DATABASE_URL` pointing at it, `alembic upgrade head` applied) and check the anchors:
 
