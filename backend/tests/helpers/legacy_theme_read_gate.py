@@ -58,6 +58,8 @@ PREDICATE_MARKERS = frozenset({
     "app.services.economic_theme_read_service.EconomicThemeReader",
     "app.api.v1.themes_queries._economic_reader",
     "app.services.legacy_theme_write_guard.legacy_theme_writes_blocked",
+    # True under economic authority: the development producer's branch (#513).
+    "app.services.theme_development_preparation.economic_authority",
 })
 RAISING_MARKERS = frozenset({
     "app.api.v1.themes_taxonomy._reject_economic_mode",

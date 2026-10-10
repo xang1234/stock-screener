@@ -2,7 +2,7 @@
 
 import json
 
-from sqlalchemy import exists
+from sqlalchemy import exists, select
 
 from app.models.theme import (
     ContentItem,
@@ -96,29 +96,213 @@ def input_bundle(db, item_id, pipeline):
     }
 
 
-def generate_facts(pipeline, db, bundle):
-    if not bundle["theme_ids"]:
-        return []
+def economic_authority(db) -> bool:
+    """Developments come from economic evidence only while economic authority serves."""
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+
+    mode = db.execute(
+        select(TaxonomyAuthority.mode).where(TaxonomyAuthority.id == 1)
+    ).scalar_one_or_none()
+    return mode == "economic"
+
+
+def _economic_themes(db, item, pipeline):
+    """``(ready, themes, packet)`` for an item's effective evidence on one lens channel.
+
+    The item's source family leads to its lineage; the lineage's effective
+    packet must be eligible for the channel, and the interpretation users see
+    (a serving reviewer override, else the policy default) names the themes
+    (#513). Eligibility is the classified packet's, as publication pairs them:
+    a newer, unclassified capture does not change it. ``ready`` is False until
+    such a completed classification exists; it may still name no themes.
+    """
+    from app.models.economic_taxonomy import EconomicThemeRevision
+    from app.models.economic_taxonomy_runtime import (
+        ClaimAssignment,
+        SourceFamily,
+        SourceLineage,
+        TaxonomyAuthority,
+    )
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        content_family_key,
+    )
+    from app.services.economic_taxonomy_interpretations import (
+        EconomicTaxonomyInterpretationService,
+    )
+
+    family_key = content_family_key(item.source_type, item.external_id, item.url)
+    if family_key is None:
+        return False, {}, None
+    lineage_id = db.execute(
+        select(SourceLineage.id)
+        .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
+        .where(
+            SourceFamily.canonical_source_key == family_key,
+            SourceLineage.scope_suffix == "",
+        )
+    ).scalar_one_or_none()
+    if lineage_id is None:
+        return False, {}, None
+    interpretations = EconomicTaxonomyInterpretationService(None)
+    attempt = interpretations.serving_attempt(db, lineage_id)
+    if attempt is None:
+        return False, {}, None
+    packet = interpretations.packet_for_attempt(db, attempt)
+    if pipeline not in EconomicSourceAdmissionService(db).latest_channels(packet.id):
+        # Classified, but not for this channel: ready with no themes, so an
+        # empty revision supersedes the channel's earlier observations.
+        return True, {}, packet
+    theme_ids = sorted(
+        set(
+            db.execute(
+                select(ClaimAssignment.economic_theme_id).where(
+                    ClaimAssignment.classification_attempt_id == attempt.id
+                )
+            ).scalars()
+        ),
+        key=str,
+    )
+    processing_version = db.execute(
+        select(TaxonomyAuthority.processing_taxonomy_version_id).where(TaxonomyAuthority.id == 1)
+    ).scalar_one_or_none()
+    names = {}
+    # The serving taxonomy's name, else the version the attempt classified against.
+    for version_id in (
+        attempt.input_taxonomy_version_id,
+        attempt.output_taxonomy_version_id,
+        processing_version,
+    ):
+        if version_id is None:
+            continue
+        names.update(
+            db.execute(
+                select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
+                    EconomicThemeRevision.taxonomy_version_id == version_id,
+                    EconomicThemeRevision.theme_id.in_(theme_ids),
+                )
+            ).all()
+        )
+    # A theme no taxonomy version names is not offered to the model.
+    return True, {theme_id: names[theme_id] for theme_id in theme_ids if theme_id in names}, packet
+
+
+def _source_family_id(db, item):
+    from app.models.economic_taxonomy_runtime import SourceFamily
+    from app.services.economic_source_admission import content_family_key
+
+    family_key = content_family_key(item.source_type, item.external_id, item.url)
+    if family_key is None:
+        return None
+    return db.execute(
+        select(SourceFamily.id).where(SourceFamily.canonical_source_key == family_key)
+    ).scalar_one_or_none()
+
+
+def economic_input_bundle(db, item_id, pipeline):
+    """``input_bundle`` from economic evidence (#513).
+
+    The model sees the economic themes as integers ``1..n``; ``economic_refs``
+    maps them back, so each event links to its own economic themes.
+    """
+    item = db.get(ContentItem, item_id)
+    if item is None:
+        raise ValueError("development_source_missing")
+    snapshot = attachment_snapshot(db, item_id)
+    sources = {
+        "primary": f"Title: {item.title or ''}\n\n{(item.content or '')[:10000]}"
+    }
+    if item.translated_content:
+        sources["translated_primary"] = (
+            f"Title: {item.translated_title or ''}\n\n{item.translated_content[:10000]}"
+        )
+    ready, themes, packet = _economic_themes(db, item, pipeline)
+    if packet is not None:
+        # The text classification ran on: a re-poll or a later capture admits
+        # new text as a new packet but leaves the ContentItem unchanged.
+        sources = {"primary": (packet.original_text_ref or "")[:10000]}
+        if packet.translated_text_ref:
+            sources["translated_primary"] = packet.translated_text_ref[:10000]
+    sources.update({row["id"]: row["text"] for row in snapshot["evidence"]})
+    primary_url = ((packet.source_metadata or {}).get("url") if packet is not None else None) or item.url
+    source_urls = {
+        "primary": primary_url,
+        "translated_primary": primary_url,
+        **{row["id"]: row["url"] for row in snapshot["evidence"]},
+    }
+    source_family_id = _source_family_id(db, item)
+    refs = {index: theme_id for index, theme_id in enumerate(themes, start=1)}
+    # The theme set, not the attempt: a reclassification into the same themes
+    # must not re-run the model and supersede the item's observations.
+    # Readiness is part of the revision: unclassified and completed-empty
+    # both offer no themes, and a not-ready row must not hide the ready one.
+    revision = digest(
+        [
+            "economic",
+            ready,
+            sources,
+            source_urls,
+            [str(theme_id) for theme_id in themes],
+        ]
+    )
+    return {
+        "kind": "economic",
+        "ready": ready,
+        # Publication pins development observations by source family.
+        "source_family_id": source_family_id,
+        "item": item,
+        "sources": sources,
+        "source_urls": source_urls,
+        "theme_ids": sorted(refs),
+        "economic_refs": refs,
+        "revision": revision,
+        "themes": {index: themes[theme_id] for index, theme_id in refs.items()},
+    }
+
+
+def development_bundle(db, item_id, pipeline):
+    """The bundle for the serving authority: economic evidence, else legacy themes."""
+    if economic_authority(db):
+        return economic_input_bundle(db, item_id, pipeline)
+    return {"kind": "legacy", **input_bundle(db, item_id, pipeline)}
+
+
+def _known_event_identities(db, pipeline, bundle):
     from app.models.theme_intelligence import (
+        EconomicThemeDevelopment,
         ThemeDevelopmentEvent,
         ThemeDevelopmentObservation,
         ThemeDevelopmentTheme,
     )
-    from app.services.theme_equivalence_service import ThemeEquivalenceService
-    from app.services.theme_extraction_service import ThemeExtractionService
 
-    group = ThemeEquivalenceService(db).snapshot(pipeline)
-    members = group.expand(bundle["theme_ids"])
+    # A bundle of the other kind means the mode changed mid-run: give no hints;
+    # recording re-checks the revision and discards the work.
+    if economic_authority(db):
+        if bundle.get("kind") != "economic":
+            return []
+        link = (
+            EconomicThemeDevelopment.observation_id == ThemeDevelopmentObservation.id,
+            EconomicThemeDevelopment.economic_theme_id.in_(list(bundle["economic_refs"].values())),
+        )
+    else:
+        if bundle.get("kind") == "economic":
+            return []
+        from app.services.theme_equivalence_service import ThemeEquivalenceService
+
+        members = ThemeEquivalenceService(db).snapshot(pipeline).expand(bundle["theme_ids"])
+        link = (
+            ThemeDevelopmentTheme.observation_id == ThemeDevelopmentObservation.id,
+            ThemeDevelopmentTheme.theme_id.in_(members),
+        )
     # EXISTS deduplicates matching observations without DISTINCT over JSON,
     # which PostgreSQL's JSON type cannot compare for equality.
-    known = (
+    return (
         db.query(ThemeDevelopmentEvent)
         .filter(
             exists().where(
                 ThemeDevelopmentObservation.event_id == ThemeDevelopmentEvent.id,
                 ThemeDevelopmentObservation.analysis_channel == pipeline,
-                ThemeDevelopmentTheme.observation_id == ThemeDevelopmentObservation.id,
-                ThemeDevelopmentTheme.theme_id.in_(members),
+                *link,
                 ThemeDevelopmentObservation.superseded.is_(False),
             ),
         )
@@ -126,6 +310,14 @@ def generate_facts(pipeline, db, bundle):
         .limit(30)
         .all()
     )
+
+
+def generate_facts(pipeline, db, bundle):
+    if not bundle["theme_ids"]:
+        return []
+    from app.services.theme_extraction_service import ThemeExtractionService
+
+    known = _known_event_identities(db, pipeline, bundle)
     service = ThemeExtractionService(db, pipeline=pipeline)
     service._rate_limit()
     raw = service._try_generate_litellm(

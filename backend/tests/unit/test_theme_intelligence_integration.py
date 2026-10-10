@@ -408,7 +408,7 @@ async def test_development_backfill_apply_requires_admin_key(sessions, monkeypat
             app.dependency_overrides.pop(get_db, None)
 
 
-def test_development_preparation_writes_no_legacy_links_in_economic_mode(
+def test_development_preparation_runs_the_economic_producer_in_economic_mode(
     sessions, monkeypatch
 ):
     import app.database
@@ -424,14 +424,17 @@ def test_development_preparation_writes_no_legacy_links_in_economic_mode(
 
     result = prepare_developments()
 
-    assert result["reason"] == "economic_authority"
+    # #513: no longer skipped for economic authority (the economic producer
+    # runs, subject to the usual automation gate); legacy mentions alone queue
+    # nothing and no legacy link is written.
+    assert result.get("reason") != "economic_authority"
     with sessions() as db:
         assert db.query(ThemeDevelopmentWork).count() == 0
         assert db.query(ThemeDevelopmentTheme).count() == 0
 
 
 @pytest.mark.asyncio
-async def test_development_backfill_is_rejected_in_economic_mode(monkeypatch):
+async def test_development_backfill_uses_the_economic_producer_in_economic_mode(monkeypatch):
     import httpx
     from sqlalchemy.pool import StaticPool
 
@@ -463,7 +466,10 @@ async def test_development_backfill_is_rejected_in_economic_mode(monkeypatch):
                     json={"item_ids": [item.id], "apply": True},
                     headers={"X-Admin-Key": "review-secret"},
                 )
-                assert response.status_code == 409
+                # #513: admitted; an item with only legacy mentions has no
+                # economic evidence, so nothing is queued.
+                assert response.status_code == 200
+                assert response.json()["queued"] == 0
                 assert db.query(ThemeDevelopmentWork).count() == 0
         finally:
             app.dependency_overrides.pop(get_db, None)
