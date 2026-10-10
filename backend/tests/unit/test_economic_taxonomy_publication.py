@@ -126,6 +126,31 @@ def test_prepare_builds_all_artifacts_from_one_manifest(db_session):
         assert check.get(TaxonomyAuthority, 1).serving_generation_id is None
 
 
+def test_lock_authority_returns_the_row_as_locked_not_as_first_loaded(db_session):
+    # #556: a caller that loaded the authority earlier in the session must see
+    # a cutover or epoch change committed before its lock, not the stale copy.
+    from sqlalchemy import update
+
+    repo = EconomicTaxonomyPublicationRepository(db_session)
+    loaded = repo.lock_authority()
+    db_session.commit()
+    assert (loaded.authority_epoch, loaded.writes_fenced) == (1, False)
+    assert db_session.get(TaxonomyAuthority, 1) is loaded  # held in the identity map
+
+    # Another transaction's commit: the row changes, the session's copy does not.
+    db_session.execute(
+        update(TaxonomyAuthority)
+        .where(TaxonomyAuthority.id == 1)
+        .values(authority_epoch=2, writes_fenced=True)
+        .execution_options(synchronize_session=False)
+    )
+    assert loaded.authority_epoch == 1
+
+    locked = repo.lock_authority()
+
+    assert (locked.authority_epoch, locked.writes_fenced) == (2, True)
+
+
 def test_ordinary_post_cutoff_revision_does_not_abort(db_session):
     _taxonomy, capability = _seed(db_session)
     coordinator = _coordinator(db_session)

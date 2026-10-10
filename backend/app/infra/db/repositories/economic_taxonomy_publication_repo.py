@@ -57,10 +57,17 @@ class EconomicTaxonomyPublicationRepository:
                 .values(**defaults)
                 .on_conflict_do_nothing(index_elements=[TaxonomyAuthority.id])
             )
+        # populate_existing: a caller that loaded the row earlier in this
+        # session must see what the lock read, or fence checks would use
+        # pre-lock values (#556). Sessions run with autoflush=False, so the
+        # caller's own pending changes (e.g. an apply advancing the head) are
+        # flushed first; otherwise the refresh would discard them.
+        self.session.flush()
         authority = self.session.execute(
             select(TaxonomyAuthority)
             .where(TaxonomyAuthority.id == 1)
             .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
         if authority is None:
             authority = TaxonomyAuthority(**defaults)
