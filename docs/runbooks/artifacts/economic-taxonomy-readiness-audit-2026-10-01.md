@@ -307,8 +307,9 @@ tasks write only shared ingestion state (`ingest_content`,
 `poll_due_sources`, `prepare_live_attachments`).
 
 This check works at the module and task level. A module listed as routed may
-still contain an unrouted endpoint, as `themes_queries` does with
-`/matching/telemetry`. Endpoint-level completeness is criterion 4's job.
+still contain an unrouted endpoint, as `themes_queries` did with
+`/matching/telemetry` (refused under economic authority since #557).
+Endpoint-level completeness is criterion 4's job.
 
 ## Proposed follow-ups
 
