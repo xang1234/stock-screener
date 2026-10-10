@@ -778,6 +778,63 @@ def test_projection_skips_a_social_packet_a_correction_displaced(social_fixture)
     assert f.db.query(EconomicSocialAssociationRevision).count() == 0
 
 
+def test_late_classification_of_a_displaced_packet_projects_nothing(social_fixture):
+    # A's classification completes after a different-content Social
+    # correction B became effective. A's claims must not be projected under
+    # B's memberships; B gets its own classification.
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.models.economic_taxonomy_runtime import TaxonomyAuthority
+    from app.models.economic_taxonomy_runtime_evidence import EvidencePrecedenceRevision
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+    work = f.save(("AAA",), author="first")
+    correction_work = f.save(("AAA",), author="first")
+    admission = EconomicSourceAdmissionService(f.db)
+    first = admission.admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{work}", capture_route="social",
+        original_text=f"post {work}", preparation_version="social-prep-v1",
+        captured_at=NOW, available_at=NOW, evidence_channels=("narrative",),
+        source_metadata={"social_work_id": work, "social_memberships": []},
+    ))
+    correction = admission.admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{work}", capture_route="social",
+        original_text=f"post {work}, corrected", preparation_version="social-prep-v1",
+        captured_at=NOW + timedelta(minutes=5), available_at=NOW + timedelta(minutes=5),
+        evidence_channels=("narrative",),
+        source_metadata={"social_work_id": correction_work, "social_memberships": []},
+    ))
+    assert correction.source_lineage_id == first.source_lineage_id
+    f.db.add(EvidencePrecedenceRevision(
+        source_lineage_id=first.source_lineage_id, evidence_packet_id=correction.packet_id,
+        revision_number=99, disposition="effective", reason="review promoted the correction",
+    ))
+    f.db.commit()
+
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    a_claims = SimpleNamespace(
+        id=uuid4(), classification_attempt_id=uuid4(), economic_theme_id=theme.id,
+        claim_payload={"display_name": "Cooling", "securities": [{"security_id": security.id}]},
+    )
+    projected = EconomicSocialTaxonomyAdapter(f.db).project_native_assignments(
+        [a_claims], evidence_packet_id=first.packet_id,
+        authority_epoch=f.db.get(TaxonomyAuthority, 1).authority_epoch,
+    )
+
+    assert projected == ()
+    assert f.db.query(EconomicSocialAssociationRevision).count() == 0
+
+
 def test_readmitting_a_displaced_packet_reports_it_superseded(social_fixture):
     # #556: identical content matches the stored packet by hash; its stored
     # precedence_state still reads "effective", but a correction displaced it,

@@ -477,6 +477,12 @@ class EconomicSocialTaxonomyAdapter:
             # against the lineage's current effective packet instead (#556).
             return effective is not None and admission._standing(row, effective) == 0
 
+        # The assignments classify ``packet``. Once a different-content
+        # correction displaced it, its claims must not be projected under the
+        # correction's memberships; the correction gets its own classification.
+        if not stands(packet):
+            return ()
+
         social_packets = []
         if social_evidence_packet_id is not None:
             social_packet = self.db.get(EvidencePacket, social_evidence_packet_id)
