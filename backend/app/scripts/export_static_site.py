@@ -11,6 +11,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
+from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.config import settings
 from app.database import SessionLocal
 from app.domain.markets import market_registry
@@ -19,13 +22,14 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
-from app.infra.db.models.feature_store import FeatureRunPointer
+from app.infra.db.models.feature_store import FeatureRunPointer, StockFeatureDaily
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.benchmark_resolution import BenchmarkResolution
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
+from app.services.daily_price_bundle_service import DailyPriceBundleService
 from app.services.group_rank_history_backfill_service import (
     DEFAULT_CALENDAR_DAY_GROUP_RANK_HISTORY_LOOKBACK_DAYS,
     GroupRankHistoryBackfillResult,
@@ -336,6 +340,128 @@ def _write_market_diagnostics(output_dir: Path, market: str, snapshot: Mapping[s
         encoding="utf-8",
     )
     return diagnostics_path
+
+
+def _snapshot_score_counts(market: str, run_id: int | None) -> tuple[int | None, str | None]:
+    """Scored rows of a feature run (if any), and the daily-price bundle seeded."""
+    try:
+        with SessionLocal() as db:
+            scored = (
+                db.query(func.count(StockFeatureDaily.symbol))
+                .filter(
+                    StockFeatureDaily.run_id == run_id,
+                    StockFeatureDaily.composite_score.isnot(None),
+                )
+                .scalar()
+                if run_id is not None
+                else None
+            )
+            state = DailyPriceBundleService().get_import_state(db, market)
+    except SQLAlchemyError as exc:
+        # Diagnostics only: the counts are reported missing, the export goes on.
+        print(f"Could not read {market} score coverage for run {run_id}: {exc}")
+        return None, None
+    revision = state.get("source_revision") if isinstance(state, dict) else None
+    return scored, revision
+
+
+def _market_coverage(
+    market: str | None, refresh_results: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """RS and score coverage for one market's diagnostics artifact (#539).
+
+    A missing-anchor RS collapse shows up here as rs_eligible far below
+    latest_session_priced, with the anchors in history_gaps and the repair's
+    outcome in rs_anchor_repair. scored is counted separately: RS eligibility
+    does not imply a composite score. A failed RS result (including the
+    anchor-gap rejection) keeps its counts under ``diagnostics``.
+    """
+    if market is None:
+        return None
+    price = refresh_results.get("price_refresh") or {}
+    rs = (refresh_results.get("market_rs") or {}).get(market) or {}
+    rs_details = rs.get("diagnostics") or {}
+    snapshot = (refresh_results.get("feature_snapshots") or {}).get(market) or {}
+    history_gaps = rs.get("history_gaps") or rs_details.get("history_gaps") or {}
+    # A same-day rebuild reuses the published run and reports existing_run_id.
+    scored, seed_revision = _snapshot_score_counts(
+        market, snapshot.get("run_id") or snapshot.get("existing_run_id")
+    )
+    eligible = rs.get("eligible_symbol_count")
+    priced = history_gaps.get("current_prices_available")
+    expected = next(
+        (
+            count
+            for count in (
+                snapshot.get("total_symbols"),
+                rs.get("expected_symbol_count"),
+                rs_details.get("expected_symbol_count"),
+            )
+            if count is not None
+        ),
+        None,
+    )
+    return {
+        "market": market,
+        "as_of_date": rs.get("as_of_date") or price.get("as_of_date"),
+        "seed_source_revision": seed_revision,
+        "expected_universe": expected,
+        "latest_session_priced": (
+            priced if priced is not None else rs_details.get("current_prices_available")
+        ),
+        "rs_status": rs.get("status"),
+        "rs_reason": rs.get("reason_code"),
+        "rs_eligible": eligible if eligible is not None else rs_details.get("eligible_symbol_count"),
+        "scored": scored,
+        "snapshot_status": snapshot.get("status"),
+        "snapshot_reason": snapshot.get("reason"),
+        "fetched_symbols": price.get("yahoo_fetched_symbols"),
+        "failed_symbols": price.get("yahoo_failed_symbols"),
+        "rs_anchor_repair": price.get("rs_anchor_repair"),
+        "history_gaps": history_gaps or None,
+    }
+
+
+def _write_market_coverage(output_dir: Path, coverage: Mapping[str, Any] | None) -> None:
+    # Written last: the export wipes output_dir, and the workflow uploads this
+    # directory as the market's diagnostics artifact on every outcome.
+    if coverage is None:
+        return
+    try:
+        _write_market_coverage_files(output_dir, coverage)
+    except OSError as exc:
+        # Diagnostics only: never turn an exported market into a failed one.
+        print(f"Could not write {coverage['market']} coverage diagnostics: {exc}")
+
+
+def _write_market_coverage_files(output_dir: Path, coverage: Mapping[str, Any]) -> None:
+    path = output_dir / "diagnostics" / str(coverage["market"]).lower() / "coverage.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(coverage, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    def cell(value: Any) -> str:
+        return "—" if value is None else str(value)
+
+    repair = coverage.get("rs_anchor_repair") or {}
+    rs = cell(coverage.get("rs_status"))
+    if coverage.get("rs_reason"):
+        rs += f": {coverage['rs_reason']}"
+    with open(summary_path, "a", encoding="utf-8") as fh:
+        fh.write(
+            "| Market | As of | Universe | Priced | RS eligible | Scored | Market RS "
+            "| Fetched/failed | Anchor repair |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            f"| {coverage['market']} | {cell(coverage.get('as_of_date'))} "
+            f"| {cell(coverage.get('expected_universe'))} "
+            f"| {cell(coverage.get('latest_session_priced'))} | {cell(coverage.get('rs_eligible'))} "
+            f"| {cell(coverage.get('scored'))} | {rs} "
+            f"| {cell(coverage.get('fetched_symbols'))}/{cell(coverage.get('failed_symbols'))} "
+            f"| {cell(repair.get('repaired_symbols'))}/{cell(repair.get('gap_symbols'))} repaired, "
+            f"{cell(repair.get('unresolved_symbols'))} unresolved |\n"
+        )
 
 
 def _no_current_artifact_exit_message(
@@ -658,7 +784,13 @@ def _reject_static_rs_history_gap_collapse(
         "as_of_date": as_of_date.isoformat(),
         "formula_version": BALANCED_RS_FORMULA_VERSION,
         "reason_code": MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
-        "diagnostics": {"history_gaps": gaps, "max_history_gap_share": threshold},
+        "diagnostics": {
+            "history_gaps": gaps,
+            "max_history_gap_share": threshold,
+            # The rejected run's own counts: how far RS collapsed.
+            "expected_symbol_count": result.get("expected_symbol_count"),
+            "eligible_symbol_count": result.get("eligible_symbol_count"),
+        },
         "market_rs_run_id": None,
     }
 
@@ -1617,6 +1749,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     refresh_warnings: list[str] = []
     selected_market_non_publishable_snapshot: dict[str, Any] | None = None
+    market_coverage: dict[str, Any] | None = None
     if args.combine_artifacts_dir:
         options_combine_kwargs: dict[str, Path] = {}
         if args.options_artifacts_dir:
@@ -1700,12 +1833,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"  - {name}: {result_item}")
             for warning in refresh_warnings:
                 print(f"  - warning: {warning}")
+            market_coverage = _market_coverage(args.market, refresh_results)
 
             selected_market_non_publishable_snapshot = _selected_market_non_publishable_snapshot(
                 refresh_results,
                 args.market,
             )
             if _snapshot_skipped_not_trading_day(selected_market_non_publishable_snapshot):
+                _write_market_coverage(Path(args.output_dir), market_coverage)
                 print(
                     f"Static site export skipped for market {args.market} because it is not a trading day."
                 )
@@ -1721,6 +1856,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         failure.market,
                         failure.snapshot,
                     )
+                _write_market_coverage(Path(args.output_dir), market_coverage)
                 print(
                     _no_current_artifact_exit_message(
                         market=args.market,
@@ -1767,6 +1903,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.market,
                     selected_market_non_publishable_snapshot,
                 )
+                _write_market_coverage(Path(args.output_dir), market_coverage)
                 print(
                     f"Static site export skipped for market {args.market}; "
                     "no current artifact was produced, diagnostics were uploaded, "
@@ -1789,6 +1926,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             except StaticRRGHistoryBundleError as exc:
                 refresh_warnings.append(f"Rolling RRG history was not persisted: {exc}")
 
+    _write_market_coverage(Path(args.output_dir), market_coverage)
     print("Static site export complete:")
     print(f"  - output_dir: {result.output_dir}")
     print(f"  - generated_at: {result.generated_at}")

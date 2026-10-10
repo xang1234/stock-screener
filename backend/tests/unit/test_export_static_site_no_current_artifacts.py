@@ -576,3 +576,229 @@ def test_main_reraises_unrelated_runtime_errors_for_non_ready_selected_market(
 
     with pytest.raises(RuntimeError, match="database connection dropped"):
         export_script.main()
+
+
+_AU_REPAIR = {
+    "status": "verified",
+    "gap_symbols": 1731,
+    "repaired_symbols": 1691,
+    "unresolved_symbols": 40,
+    "unresolved_count_by_date": {"2026-09-10": 15},
+}
+_AU_HISTORY_GAPS = {
+    "symbol_count": 1704,
+    "share": 0.92,
+    "count_by_anchor": {"2026-09-07": 1695},
+    "current_prices_available": 1845,
+}
+
+
+def _run_au(monkeypatch, tmp_path, feature_snapshot, market_rs):
+    output_dir = tmp_path / "out"
+    monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(
+        export_script,
+        "_run_daily_refresh",
+        lambda **_kwargs: (
+            {
+                "price_refresh": {
+                    "status": "completed",
+                    "market": "AU",
+                    "as_of_date": "2026-10-08",
+                    "yahoo_fetched_symbols": 1731,
+                    "yahoo_failed_symbols": 40,
+                    "rs_anchor_repair": _AU_REPAIR,
+                },
+                "market_rs": {"AU": market_rs},
+                "feature_snapshots": {"AU": feature_snapshot},
+            },
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_static_site.py", "--output-dir", str(output_dir), "--refresh-daily", "--market", "AU"],
+    )
+    return output_dir
+
+
+def test_main_records_rs_coverage_when_anchor_gaps_reject_rs(monkeypatch, tmp_path):
+    """#539: a market kept on its last good artifact still reports why."""
+    from datetime import date
+
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("STATIC_RS_MAX_HISTORY_GAP_SHARE", raising=False)
+    monkeypatch.setattr(
+        export_script, "_snapshot_score_counts", lambda market, run_id: (None, "daily_prices_au:20261007")
+    )
+    # The real guard's output, not a hand-built shape.
+    rejected = export_script._reject_static_rs_history_gap_collapse(  # noqa: SLF001
+        {
+            "status": "completed",
+            "market": "AU",
+            "as_of_date": "2026-10-08",
+            "expected_symbol_count": 2101,
+            "eligible_symbol_count": 84,
+            "history_gaps": _AU_HISTORY_GAPS,
+        },
+        market="AU",
+        as_of_date=date(2026, 10, 8),
+    )
+    assert rejected["status"] == "failed"
+    output_dir = _run_au(
+        monkeypatch,
+        tmp_path,
+        {
+            "status": "skipped",
+            "reason": "market_rs_not_ready",
+            "market": "AU",
+            "as_of_date": "2026-10-08",
+            "failure_diagnostics": {"reason_code": "historical_adjusted_anchor_gap_above_threshold"},
+        },
+        rejected,
+    )
+
+    assert export_script.main() == export_script.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
+
+    coverage = json.loads((output_dir / "diagnostics" / "au" / "coverage.json").read_text())
+    assert coverage == {
+        "market": "AU",
+        "as_of_date": "2026-10-08",
+        "seed_source_revision": "daily_prices_au:20261007",
+        "expected_universe": 2101,
+        "latest_session_priced": 1845,
+        "rs_status": "failed",
+        "rs_reason": "historical_adjusted_anchor_gap_above_threshold",
+        "rs_eligible": 84,
+        "scored": None,
+        "snapshot_status": "skipped",
+        "snapshot_reason": "market_rs_not_ready",
+        "fetched_symbols": 1731,
+        "failed_symbols": 40,
+        "rs_anchor_repair": _AU_REPAIR,
+        "history_gaps": _AU_HISTORY_GAPS,
+    }
+    assert (
+        "| AU | 2026-10-08 | 2101 | 1845 | 84 | — | failed: historical_adjusted_anchor_gap_above_threshold "
+        "| 1731/40 | 1691/1731 repaired, 40 unresolved |"
+    ) in summary.read_text()
+
+
+def test_market_coverage_counts_the_existing_run_of_a_same_day_rebuild(monkeypatch):
+    # A rebuild of an already-published day reuses that run: existing_run_id only.
+    monkeypatch.setattr(
+        export_script,
+        "_snapshot_score_counts",
+        lambda market, run_id: (1766, "rev") if run_id == 7 else (None, None),
+    )
+    coverage = export_script._market_coverage(  # noqa: SLF001
+        "AU",
+        {
+            "market_rs": {"AU": {"status": "completed", "expected_symbol_count": 2101}},
+            "feature_snapshots": {
+                "AU": {"status": "skipped", "reason": "already_published", "existing_run_id": 7}
+            },
+        },
+    )
+    assert coverage["scored"] == 1766
+    assert coverage["expected_universe"] == 2101
+
+
+def test_main_records_scored_count_after_a_cleaning_export(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(
+        export_script,
+        "_snapshot_score_counts",
+        lambda market, run_id: (
+            (1766, "daily_prices_au:20261008") if (market, run_id) == ("AU", 7) else (None, None)
+        ),
+    )
+    output_dir = _run_au(
+        monkeypatch,
+        tmp_path,
+        {"status": "published", "market": "AU", "run_id": 7, "total_symbols": 2101},
+        {"status": "completed", "eligible_symbol_count": 1766, "history_gaps": _AU_HISTORY_GAPS},
+    )
+
+    class CleaningExport:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def export(self, output_dir_arg, **_kwargs):
+            # The real export wipes its output directory first.
+            shutil.rmtree(output_dir_arg, ignore_errors=True)
+            output_dir_arg.mkdir(parents=True)
+            return type(
+                "Result",
+                (),
+                {"output_dir": output_dir_arg, "generated_at": "now", "as_of_date": "2026-10-08", "warnings": ()},
+            )()
+
+    monkeypatch.setattr(export_script, "StaticSiteExportService", CleaningExport)
+    assert export_script.main() == 0
+
+    coverage = json.loads((output_dir / "diagnostics" / "au" / "coverage.json").read_text())
+    assert coverage["scored"] == 1766
+    assert coverage["expected_universe"] == 2101
+    assert coverage["seed_source_revision"] == "daily_prices_au:20261008"
+    assert coverage["rs_eligible"] == 1766
+
+
+def test_market_coverage_reads_counts_from_failed_rs_diagnostics(monkeypatch):
+    # A current-coverage failure carries its counts under diagnostics.
+    monkeypatch.setattr(export_script, "_snapshot_score_counts", lambda market, run_id: (None, None))
+    coverage = export_script._market_coverage(  # noqa: SLF001
+        "DE",
+        {
+            "market_rs": {
+                "DE": {
+                    "status": "failed",
+                    "reason_code": "current_adjusted_price_coverage_below_threshold",
+                    "diagnostics": {"current_prices_available": 1228, "expected_symbol_count": 1456},
+                }
+            }
+        },
+    )
+    assert coverage["latest_session_priced"] == 1228
+    assert coverage["expected_universe"] == 1456
+    assert coverage["rs_eligible"] is None
+
+
+def test_a_failed_coverage_write_does_not_fail_the_publish(monkeypatch, tmp_path, capsys):
+    blocker = tmp_path / "out"
+    blocker.write_text("a file where the diagnostics directory should go")
+    export_script._write_market_coverage(blocker, {"market": "AU"})  # noqa: SLF001
+    assert "Could not write AU coverage diagnostics" in capsys.readouterr().out
+
+
+def test_snapshot_score_counts_reads_scored_rows_and_seed_revision(db_session):
+    from datetime import date
+
+    from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+    from app.models.app_settings import AppSetting
+    from app.services.daily_price_bundle_service import DailyPriceBundleService
+
+    day = date(2026, 10, 8)
+    run = FeatureRun(as_of_date=day, run_type="daily_snapshot", status="published")
+    other = FeatureRun(as_of_date=day, run_type="daily_snapshot", status="published")
+    db_session.add_all([run, other])
+    db_session.flush()
+    db_session.add_all(
+        [
+            StockFeatureDaily(run_id=run.id, symbol="BHP.AX", as_of_date=day, composite_score=71.0),
+            StockFeatureDaily(run_id=run.id, symbol="CBA.AX", as_of_date=day, composite_score=None),
+            StockFeatureDaily(run_id=other.id, symbol="BHP.AX", as_of_date=day, composite_score=50.0),
+            AppSetting(
+                key=DailyPriceBundleService.sync_state_key("AU"),
+                value=json.dumps({"source_revision": "daily_prices_au:20261008"}),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    assert export_script._snapshot_score_counts("AU", run.id) == (  # noqa: SLF001
+        1,
+        "daily_prices_au:20261008",
+    )

@@ -270,6 +270,7 @@ def calculate_market_rs_snapshot(
             "as_of_date": as_of_date.isoformat(),
             "formula_version": formula_version,
             "market_rs_run_id": run.id,
+            "expected_symbol_count": run.expected_symbol_count,
             "eligible_symbol_count": run.eligible_symbol_count,
             "history_gaps": (run.diagnostics_json or {}).get("history_gaps", {}),
         }

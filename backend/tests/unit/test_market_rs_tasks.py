@@ -43,6 +43,7 @@ def test_calculate_market_rs_snapshot_returns_stable_completed_shape(monkeypatch
         market="US",
         as_of_date=date(2026, 4, 10),
         formula_version=BALANCED_RS_FORMULA_VERSION,
+        expected_symbol_count=6000,
         eligible_symbol_count=5000,
         diagnostics_json={"history_gaps": {"share": 0.0}},
     )
@@ -58,6 +59,7 @@ def test_calculate_market_rs_snapshot_returns_stable_completed_shape(monkeypatch
         "as_of_date": "2026-04-10",
         "formula_version": BALANCED_RS_FORMULA_VERSION,
         "market_rs_run_id": 42,
+        "expected_symbol_count": 6000,
         "eligible_symbol_count": 5000,
         "history_gaps": {"share": 0.0},
     }
@@ -81,6 +83,7 @@ def test_calculate_market_rs_snapshot_resolves_bootstrap_date_when_omitted(monke
         market="HK",
         as_of_date=date(2026, 4, 10),
         formula_version=BALANCED_RS_FORMULA_VERSION,
+        expected_symbol_count=900,
         eligible_symbol_count=800,
         diagnostics_json={"history_gaps": {"share": 0.0}},
     )
