@@ -689,9 +689,15 @@ def test_processor_accepts_every_listing_of_a_company_on_company_evidence(social
 
 
 def test_processor_ignores_evidence_from_a_superseded_packet(social_fixture):
-    # A correction displaces the first post's packet; its claim no longer counts.
+    # A correction becomes the lineage's effective packet. The displaced
+    # packet's own latest disposition still reads "effective" (dispositions are
+    # fixed at admission), so standing must be read against the lineage.
     from app.models.economic_taxonomy_runtime import EvidencePacket
     from app.models.economic_taxonomy_runtime_evidence import EvidencePrecedenceRevision
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
     from tests.unit.economic_taxonomy_reader_helpers import seed_generation
 
     f = social_fixture
@@ -700,11 +706,18 @@ def test_processor_ignores_evidence_from_a_superseded_packet(social_fixture):
     first = f.save(("AAA",), author="first")
     _project_economic(f, first, theme.id)
     displaced = f.db.query(EvidencePacket).one()
+    correction = EconomicSourceAdmissionService(f.db).admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{first}", capture_route="social",
+        original_text=f"post {first}, corrected", preparation_version="social-prep-v1",
+        captured_at=NOW + timedelta(minutes=5), available_at=NOW + timedelta(minutes=5),
+        evidence_channels=("narrative",), source_metadata={"social_memberships": []},
+    ))
     f.db.add(EvidencePrecedenceRevision(
-        source_lineage_id=displaced.source_lineage_id, evidence_packet_id=displaced.id,
-        revision_number=99, disposition="superseded", reason="corrected capture",
+        source_lineage_id=displaced.source_lineage_id, evidence_packet_id=correction.packet_id,
+        revision_number=99, disposition="effective", reason="review promoted the correction",
     ))
     f.db.commit()
+    assert EconomicSourceAdmissionService(f.db)._latest_disposition(displaced.id) == "effective"
 
     assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
 

@@ -700,22 +700,30 @@ class EconomicSocialTaxonomyAdapter:
             if resolver.resolve(sibling_security.symbol, sibling_security.market).company_id == company.company_id:
                 listings.append(sibling)
         admission = EconomicSourceAdmissionService(self.db)
-        sources = [
-            (work_id, available_at)
-            for work_id, packet_id, available_at in self.db.execute(
-                select(
-                    EconomicSocialAssociationSource.social_work_id,
-                    EvidencePacket.id,
-                    EvidencePacket.available_at,
+        effective_by_lineage = {}
+
+        def stands(packet):
+            # A packet a correction displaced no longer speaks for its post.
+            # Stored dispositions are fixed at admission, so standing is read
+            # against the lineage's current effective packet.
+            if packet.source_lineage_id not in effective_by_lineage:
+                effective_by_lineage[packet.source_lineage_id] = admission.effective_packet(
+                    packet.source_lineage_id
                 )
+            effective = effective_by_lineage[packet.source_lineage_id]
+            return effective is not None and admission._standing(packet, effective) == 0
+
+        sources = [
+            (work_id, packet.available_at)
+            for work_id, packet in self.db.execute(
+                select(EconomicSocialAssociationSource.social_work_id, EvidencePacket)
                 .join(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
                 .where(
                     EconomicSocialAssociationSource.association_id.in_([row.id for row in listings]),
                     EconomicSocialAssociationSource.social_work_id.is_not(None),
                 )
             )
-            # A packet a correction displaced no longer speaks for its post.
-            if admission._latest_disposition(packet_id) in {"effective", "equivalent"}
+            if stands(packet)
         ]
         now = max([utc(now), *(utc(at) for _, at in sources if at is not None)])
         catalog = SocialThemeProjectionService(self.db)._economic_catalog()
