@@ -840,8 +840,12 @@ def test_explicit_backfill_only_queries_the_requested_items_lineages():
     assert "source_lineage_id IN" in sql
 
 
-def _admit_social_item(db, *, with_item_id=True):
-    """An X post that reached the deployment only through Social (#551)."""
+def _admit_social_item(db, *, with_item_id=True, content_channels=None):
+    """An X post that reached the deployment through Social (#551).
+
+    With ``content_channels`` the post was first ingested as X content, which
+    Social then supersedes.
+    """
     now = datetime.now(timezone.utc)
     post_id = str(uuid4().int)[:18]
     url = f"https://x.com/someone/status/{post_id}"
@@ -855,6 +859,21 @@ def _admit_social_item(db, *, with_item_id=True):
     )
     db.add(item)
     db.flush()
+    if content_channels:
+        EconomicSourceAdmissionService(db).admit_content(
+            EvidenceAdmission(
+                provider="twitter",
+                canonical_source_family=content_family_key("twitter", post_id, url),
+                capture_route=CONTENT_INGESTION_ROUTE,
+                route_record_id=content_route_record_id(item.id, None),
+                original_text=f"{TEXT} (raw)",
+                preparation_version="content-ingestion-v1",
+                source_metadata={"content_item_id": item.id},
+                captured_at=now,
+                available_at=now,
+                evidence_channels=content_channels,
+            )
+        )
     metadata = {"url": url, **({"content_item_id": item.id} if with_item_id else {})}
     admitted = EconomicSourceAdmissionService(db).admit_social_work(
         EvidenceAdmission(
@@ -899,6 +918,19 @@ def test_social_only_item_records_narrative_developments(db_session):
         )
     ).all()
     assert [link.economic_theme_id for link in links] == [theme.id]
+
+
+def test_social_capture_of_an_ingested_post_adds_no_narrative_copy(db_session):
+    # The superseding Social packet inherits the content grant, so the post
+    # already gets fundamental developments; narrative would repeat them.
+    taxonomy, theme = _taxonomy(db_session)
+    item, admitted = _admit_social_item(db_session, content_channels=("fundamental",))
+    _classify(db_session, admitted, taxonomy, [theme.id])
+
+    worker.discover(db_session)
+    db_session.commit()
+
+    assert [row.pipeline for row in _work(db_session, item.id)] == ["fundamental"]
 
 
 def test_social_packet_without_content_item_is_skipped(db_session):

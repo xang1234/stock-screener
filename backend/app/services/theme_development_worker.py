@@ -281,6 +281,11 @@ def _economic_candidates(db, item_ids):
         if effective is not None:
             packets.add(effective.id)
         channels = set().union(*(admission.latest_channels(packet_id) for packet_id in packets))
+        # Narrative is for Social-only posts (#551): a Social capture of an
+        # ingested post inherits its technical/fundamental grant, and the
+        # same packet on a third channel would only repeat those events.
+        if channels & {"technical", "fundamental"}:
+            channels.discard("narrative")
         channels |= observed.get(lineage_id, set())
         pairs.update((item, channel) for item in items for channel in CHANNELS if channel in channels)
     return sorted(pairs)
