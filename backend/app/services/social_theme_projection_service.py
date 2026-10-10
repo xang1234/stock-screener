@@ -221,11 +221,16 @@ class SocialThemeProjectionService:
             ThemeCluster.lifecycle_state != "retired")).all()
         return tuple(sorted(set(existing) | {claim.theme_key for claim in projection.proposals}))
 
-    def _economic_fingerprint(self, projection, themes):
-        """Fence the catalog mapping, the themes' Social associations and saved work (#515)."""
+    def _economic_fingerprint(self, projection, themes, catalog):
+        """Fence the catalog mapping, the themes' Social associations and saved work (#515).
+
+        The whole name/alias mapping is fenced: admission re-derives it, so a
+        newer processing version that remaps an alias must refuse publication.
+        """
         from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
         from app.models.stock_universe import StockUniverse
-        rows = [("catalog", sorted((key, str(theme_id)) for key, theme_id in themes.items()))]
+        rows = [("catalog", sorted((key, str(theme_id)) for key, theme_id in themes.items())),
+                ("catalog_mapping", sorted((alias, str(theme_id), key) for alias, (theme_id, key) in catalog.items()))]
         revisions = self.db.execute(select(EconomicSocialAssociation.id, EconomicSocialAssociation.security_id,
             EconomicSocialAssociationRevision.revision_number, EconomicSocialAssociationRevision.state,
             EconomicSocialAssociationRevision.live).join(EconomicSocialAssociationRevision,
@@ -260,7 +265,7 @@ class SocialThemeProjectionService:
         if economic_authority(self.db):
             catalog = self._economic_catalog()
             return self._economic_fingerprint(
-                projection, {key: catalog[key][0] for key in theme_keys if key in catalog})
+                projection, {key: catalog[key][0] for key in theme_keys if key in catalog}, catalog)
         from app.models.stock_universe import StockUniverse
         catalog = self.db.execute(select(ThemeCluster.id, ThemeCluster.canonical_key, ThemeCluster.aliases,
             ThemeCluster.is_active, ThemeCluster.lifecycle_state).where(ThemeCluster.pipeline == self.pipeline).order_by(ThemeCluster.id)).all()
@@ -370,7 +375,7 @@ class SocialThemeProjectionService:
             reader = EconomicAcceptedBasketReader(self.db, economic_theme_id=theme_id)
             baskets.extend(reader.read(key, market) for market in ("US", "HK", "CN", "JP", "TW"))
         return PreparedThemeApplication(projection, tuple(baskets), decoded,
-                                        self._economic_fingerprint(projection, themes))
+                                        self._economic_fingerprint(projection, themes, catalog))
 
     def prepare(self, run_id: str, now: datetime) -> ThemeProjection:
         validate_utc_timestamp(now, "now")

@@ -726,6 +726,48 @@ def test_economic_fingerprint_moves_only_with_basket_membership(social_fixture):
     assert f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint != before
 
 
+def test_economic_basket_counts_only_stocks_as_company_stocks(social_fixture):
+    # As the legacy reader: an accepted ETF is a member, not company-stock coverage.
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.add(StockUniverse(symbol="SMH", market="US", is_active=True))
+    f.db.flush()
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    for symbol in ("AAA", "SMH"):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        association = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(association.id, state="accepted", idempotency_key=f"accept-{symbol}",
+                       actor="admin", reason="reviewed", mirror_acknowledged=True)
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+
+    basket = f.service.prepare_application(projection, theme_keys=("cooling",)).read("cooling", "US")
+
+    assert [m.canonical_symbol for m in basket.membership] == ["AAA", "SMH"]
+    assert basket.company_stock_symbols == ("AAA",)
+
+
+def test_economic_fingerprint_moves_when_an_alias_is_remapped(social_fixture, monkeypatch):
+    # Admission re-derives the catalog; an alias a newer processing version
+    # remaps must refuse a publication prepared under the old mapping.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    seeded = seed_generation(f.db, display_name="Cooling")
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+    before = f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint
+    catalog = f.service._economic_catalog()
+    semiconductors = catalog[next(k for k, (tid, _) in catalog.items() if tid == seeded["semiconductors"].id)]
+    remapped = {**catalog, "hbm": semiconductors}
+    monkeypatch.setattr(f.service, "_economic_catalog", lambda: remapped)
+
+    assert f.service.prepare_application(projection, theme_keys=("cooling",)).fingerprint != before
+
+
 def test_economic_application_reads_accepted_economic_memberships(social_fixture):
     # #515: the basket of a catalog theme (reached by name or alias) holds its
     # accepted economic Social memberships; no legacy basket is built.

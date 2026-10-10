@@ -126,7 +126,7 @@ class EconomicAcceptedBasketReader:
         resolver = SocialTickerResolver(
             self.db, verified_company_ids=identity.verified_company_ids
         )
-        accepted = []
+        accepted, stock_symbols = [], set()
         for item in memberships:
             if not item.live or item.state != "accepted":
                 continue
@@ -143,8 +143,11 @@ class EconomicAcceptedBasketReader:
                     ("economic",),
                 )
             )
+            if resolved.security_kind == "stock":
+                stock_symbols.add(security.symbol)
         accepted = tuple(sorted(accepted, key=lambda item: item.canonical_symbol))
-        stocks = tuple(item.canonical_symbol for item in accepted)
+        # As the legacy reader: an ETF is a member, not company-stock coverage.
+        stocks = tuple(item.canonical_symbol for item in accepted if item.canonical_symbol in stock_symbols)
         return AcceptedBasketSnapshot(
             theme_key,
             market,
