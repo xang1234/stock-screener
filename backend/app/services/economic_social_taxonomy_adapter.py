@@ -523,7 +523,7 @@ class EconomicSocialTaxonomyAdapter:
             and isinstance(row.get("security_id"), int)
             and not isinstance(row.get("security_id"), bool)
         }
-        revisions = []
+        revisions, siblings = [], []
         for assignment in assignments:
             theme_key = canonical_theme_key(
                 str(assignment.claim_payload.get("display_name") or "")
@@ -599,14 +599,13 @@ class EconomicSocialTaxonomyAdapter:
                 )
                 if current_state == "conflict_review_required":
                     continue
-                if (
-                    requested_state == "proposed"
-                    and current_state in {None, "proposed"}
-                    and self._automatically_accepted(
+                if requested_state == "proposed" and current_state in {None, "proposed"}:
+                    accepted = self._automatic_acceptances(
                         association, now=social_packet.available_at
                     )
-                ):
-                    requested_state = "accepted"
+                    if accepted:
+                        requested_state = "accepted"
+                        siblings.extend(row for row in accepted if row.id != association.id)
                 if current_state in {"accepted", "rejected"} and requested_state == "proposed":
                     continue
                 if current_state == "rejected" and requested_state == "accepted":
@@ -630,13 +629,45 @@ class EconomicSocialTaxonomyAdapter:
                         authority_epoch=authority_epoch,
                     )
                 )
+        # The rule is per company: its other listings on the theme follow.
+        revised = {revision.association_id for revision in revisions}
+        for sibling in siblings:
+            if sibling.id in revised or self._requested_state(sibling.id) not in {None, "proposed"}:
+                continue
+            revised.add(sibling.id)
+            revisions.append(
+                self._revise(
+                    sibling.id,
+                    state="accepted",
+                    idempotency_key=f"company-acceptance:{sibling.id}:social-packet:{social_packet.id}",
+                    actor="system:economic-taxonomy-refresh",
+                    reason="classified_social_membership",
+                    mirror_acknowledged=False,
+                    admission_state="live",
+                    evidence_packet_id=social_packet.id,
+                    authority_epoch=authority_epoch,
+                )
+            )
         return tuple(revisions)
 
-    def _automatically_accepted(self, association, *, now) -> bool:
-        """The automatic Social rule on economic evidence (#515).
+    def _requested_state(self, association_id):
+        current = self.db.scalar(
+            select(EconomicSocialAssociationRevision)
+            .where(EconomicSocialAssociationRevision.association_id == association_id)
+            .order_by(EconomicSocialAssociationRevision.revision_number.desc())
+            .limit(1)
+        )
+        if current is None:
+            return None
+        return str((current.details or {}).get("requested_state") or current.state)
+
+    def _automatic_acceptances(self, association, *, now):
+        """The associations the automatic Social rule accepts, or none (#515).
 
         Two independent authors within 14 days, for a verified company,
-        counted over the association's Social works. The window ends at the
+        counted over the Social works of every listing of that company on the
+        association's theme (as the legacy rule counts by company); all those
+        listings are returned when it passes. The window ends at the
         newest Social packet the association has seen (``now`` at least), so
         processing an older packet last still counts the newer posts. Only a
         claim the catalog places under this theme counts.
@@ -659,12 +690,20 @@ class EconomicSocialTaxonomyAdapter:
         )
         company = resolver.resolve(security.symbol, security.market)
         if not company.company_count_eligible:
-            return False
+            return []
+        listings = []
+        for sibling, sibling_security in self.db.execute(
+            select(EconomicSocialAssociation, StockUniverse)
+            .join(StockUniverse, StockUniverse.id == EconomicSocialAssociation.security_id)
+            .where(EconomicSocialAssociation.economic_theme_id == association.economic_theme_id)
+        ):
+            if resolver.resolve(sibling_security.symbol, sibling_security.market).company_id == company.company_id:
+                listings.append(sibling)
         sources = self.db.execute(
             select(EconomicSocialAssociationSource.social_work_id, EvidencePacket.available_at)
             .outerjoin(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
             .where(
-                EconomicSocialAssociationSource.association_id == association.id,
+                EconomicSocialAssociationSource.association_id.in_([row.id for row in listings]),
                 EconomicSocialAssociationSource.social_work_id.is_not(None),
             )
         ).all()
@@ -688,7 +727,9 @@ class EconomicSocialTaxonomyAdapter:
             return mapped is not None and mapped[0] == association.economic_theme_id
 
         rows = qualifying_social_evidence(decoded, now, resolver, about_this_theme)
-        return len({row[4] for row in rows if row[3] == company.company_id}) >= 2
+        if len({row[4] for row in rows if row[3] == company.company_id}) < 2:
+            return []
+        return sorted(listings, key=lambda row: str(row.id))
 
     def project_equivalent_social_packet(
         self,

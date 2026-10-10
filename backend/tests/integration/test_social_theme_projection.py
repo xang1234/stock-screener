@@ -662,6 +662,32 @@ def test_processor_accepts_an_economic_association_on_two_independent_authors(so
     assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
 
 
+def test_processor_accepts_every_listing_of_a_company_on_company_evidence(social_fixture):
+    # AAA and 0005.HK are one verified company: two authors across the two
+    # listings accept both, as the legacy rule does.
+    from app.infra.db.models.social_analysis import (
+        EconomicSocialAssociation,
+        EconomicSocialAssociationRevision,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    _project_economic(f, f.save(("0005.HK",), author="second"), theme.id, symbol="0005.HK")
+
+    states = {}
+    for association in f.db.query(EconomicSocialAssociation):
+        latest = f.db.query(EconomicSocialAssociationRevision).filter_by(
+            association_id=association.id
+        ).order_by(EconomicSocialAssociationRevision.revision_number.desc()).first()
+        symbol = f.db.get(StockUniverse, association.security_id).symbol
+        states[symbol] = (latest.details or {}).get("requested_state", latest.state)
+    assert states == {"AAA": "accepted", "0005.HK": "accepted"}
+
+
 def test_processor_keeps_one_authors_repeated_posts_proposed(social_fixture):
     from tests.unit.economic_taxonomy_reader_helpers import seed_generation
 
