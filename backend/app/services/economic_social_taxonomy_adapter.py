@@ -468,6 +468,15 @@ class EconomicSocialTaxonomyAdapter:
         packet = self.db.get(EvidencePacket, evidence_packet_id)
         if packet is None:
             raise KeyError(f"evidence packet {evidence_packet_id} not found")
+        admission = EconomicSourceAdmissionService(self.db)
+        effective = admission.effective_packet(packet.source_lineage_id)
+
+        def stands(row):
+            # Stored precedence_state is fixed at admission: a packet a later
+            # correction displaced still reads "effective". Standing is read
+            # against the lineage's current effective packet instead (#556).
+            return effective is not None and admission._standing(row, effective) == 0
+
         social_packets = []
         if social_evidence_packet_id is not None:
             social_packet = self.db.get(EvidencePacket, social_evidence_packet_id)
@@ -490,7 +499,7 @@ class EconomicSocialTaxonomyAdapter:
                 ).all()
                 if isinstance(row.source_metadata, dict)
                 and row.source_metadata.get("social_work_id") is not None
-                and row.precedence_state in {"effective", "equivalent"}
+                and stands(row)
             ]
         if not social_packets:
             return ()
@@ -498,7 +507,7 @@ class EconomicSocialTaxonomyAdapter:
         if (
             not isinstance(social_packet.source_metadata, dict)
             or social_packet.source_metadata.get("social_work_id") is None
-            or social_packet.precedence_state not in {"effective", "equivalent"}
+            or not stands(social_packet)
         ):
             return ()
         metadata = dict(social_packet.source_metadata or {})

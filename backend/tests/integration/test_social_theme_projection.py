@@ -722,6 +722,62 @@ def test_processor_ignores_evidence_from_a_superseded_packet(social_fixture):
     assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
 
 
+def test_projection_skips_a_social_packet_a_correction_displaced(social_fixture):
+    # #556: the displaced packet's stored precedence_state still reads
+    # "effective"; only its standing against the lineage says it no longer
+    # speaks for the post, so its memberships must not be projected.
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.models.economic_taxonomy_runtime import EvidencePacket, TaxonomyAuthority
+    from app.models.economic_taxonomy_runtime_evidence import EvidencePrecedenceRevision
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+    work = f.save(("AAA",), author="first")
+    admission = EconomicSourceAdmissionService(f.db)
+    admission.admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{work}", capture_route="social",
+        original_text=f"post {work}", preparation_version="social-prep-v1",
+        captured_at=NOW, available_at=NOW, evidence_channels=("narrative",),
+        source_metadata={"social_work_id": work, "social_memberships": []},
+    ))
+    displaced = f.db.query(EvidencePacket).one()
+    correction = admission.admit_social_work(EvidenceAdmission(
+        provider="x", canonical_item_id=f"post-{work}", capture_route="social",
+        original_text=f"post {work}, corrected", preparation_version="social-prep-v1",
+        captured_at=NOW + timedelta(minutes=5), available_at=NOW + timedelta(minutes=5),
+        evidence_channels=("narrative",), source_metadata={"social_memberships": []},
+    ))
+    f.db.add(EvidencePrecedenceRevision(
+        source_lineage_id=displaced.source_lineage_id, evidence_packet_id=correction.packet_id,
+        revision_number=99, disposition="effective", reason="review promoted the correction",
+    ))
+    f.db.commit()
+    assert displaced.precedence_state == "effective"
+
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    assignment = SimpleNamespace(
+        id=uuid4(), classification_attempt_id=uuid4(), economic_theme_id=theme.id,
+        claim_payload={"display_name": "Cooling", "securities": [{"security_id": security.id}]},
+    )
+    projected = EconomicSocialTaxonomyAdapter(f.db).project_native_assignments(
+        [assignment], evidence_packet_id=correction.packet_id,
+        authority_epoch=f.db.get(TaxonomyAuthority, 1).authority_epoch,
+    )
+
+    assert projected == ()
+    assert f.db.query(EconomicSocialAssociationRevision).count() == 0
+
+
 def test_processor_counts_a_bridged_pre_cutover_work(social_fixture):
     # A legacy association bridged at cutover carries its works without an
     # evidence packet; they still count toward the two-author rule.
