@@ -721,8 +721,9 @@ class EconomicSocialTaxonomyAdapter:
 
         def bridged_work_stands(work_id):
             # A work bridged from a legacy association at cutover has no
-            # packet. It still counts unless a correction now speaks for its
-            # post: then only a standing packet of its own keeps it.
+            # packet. It still counts unless another Social capture now
+            # speaks for its post: then only a standing packet of its own
+            # keeps it.
             work = self.db.get(SocialExtractionWork, work_id)
             post_id = (work.input_snapshot_json or {}).get("provider_post_id") if work else None
             if not post_id:
@@ -739,7 +740,12 @@ class EconomicSocialTaxonomyAdapter:
                 return True
             if lineage_id not in effective_by_lineage:
                 effective_by_lineage[lineage_id] = admission.effective_packet(lineage_id)
-            if effective_by_lineage[lineage_id] is None:
+            effective = effective_by_lineage[lineage_id]
+            # Only another Social capture corrects a Social work; a raw
+            # content capture of the post displaces nothing.
+            if effective is None or effective.capture_route != "social":
+                return True
+            if (effective.source_metadata or {}).get("social_work_id") == work_id:
                 return True
             own = [
                 packet

@@ -801,6 +801,39 @@ def test_processor_ignores_a_bridged_work_whose_post_was_corrected(social_fixtur
     assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
 
 
+def test_processor_counts_a_bridged_work_whose_post_has_only_raw_content(social_fixture):
+    # A raw X content capture of the post is not a correction of the Social work.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationSource
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        CONTENT_INGESTION_ROUTE,
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    association = EconomicSocialTaxonomyAdapter(f.db).get_or_create_association(theme.id, security.id)
+    bridged = f.save(("AAA",), author="first")
+    f.db.add(EconomicSocialAssociationSource(
+        association_id=association.id, source_kind="social_work",
+        source_key=f"social_work:{bridged}", social_work_id=bridged,
+    ))
+    post_id = f.db.get(SocialExtractionWork, bridged).input_snapshot_json["provider_post_id"]
+    EconomicSourceAdmissionService(f.db).admit_content(EvidenceAdmission(
+        provider="twitter", canonical_source_family=f"x:post:{post_id}",
+        capture_route=CONTENT_INGESTION_ROUTE, route_record_id=f"{bridged}:1",
+        original_text="raw post", preparation_version="content-ingestion-v1",
+        captured_at=NOW, available_at=NOW, evidence_channels=("fundamental",),
+        source_metadata={"content_item_id": 1},
+    ))
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
+
+
 def test_processor_keeps_one_authors_repeated_posts_proposed(social_fixture):
     from tests.unit.economic_taxonomy_reader_helpers import seed_generation
 
