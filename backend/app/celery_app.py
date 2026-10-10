@@ -411,6 +411,7 @@ for _economic_taxonomy_task in (
     'app.tasks.economic_taxonomy_tasks.process_economic_taxonomy_work',
     'app.tasks.economic_taxonomy_tasks.deliver_taxonomy_outbox',
     'app.tasks.economic_taxonomy_tasks.refresh_economic_taxonomy_generation',
+    'app.tasks.economic_taxonomy_tasks.backfill_legacy_developments',
     'app.tasks.economic_taxonomy_tasks.apply_economic_theme_lifecycle',
     'app.tasks.economic_taxonomy_tasks.calculate_economic_theme_metrics',
 ):
@@ -706,6 +707,11 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
         },
         'economic-taxonomy-refresh': {
             'task': 'app.tasks.economic_taxonomy_tasks.refresh_economic_taxonomy_generation',
+            'schedule': crontab(minute='*'),
+            'options': {'queue': 'celery', 'expires': 55},
+        },
+        'economic-taxonomy-development-backfill': {
+            'task': 'app.tasks.economic_taxonomy_tasks.backfill_legacy_developments',
             'schedule': crontab(minute='*'),
             'options': {'queue': 'celery', 'expires': 55},
         },

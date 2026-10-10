@@ -24,9 +24,9 @@ _SOCIAL_PREPARATION = (
     "Audit 'Readers with no routing': every live Social run prepares baskets from legacy "
     "theme tables before its economic-mode check; move it before retirement (#515)."
 )
-_SNAPSHOT_BUILDER = (
-    "Audit 'Readers with no routing': the economic snapshot builder reads legacy "
-    "ThemeDevelopmentTheme links; migrate them before retirement (#513)."
+_DEVELOPMENT_BACKFILL = (
+    "Audit 'Rollback machinery (keep until retirement)': maps legacy "
+    "ThemeDevelopmentTheme links to economic rows for the snapshot builder (#513)."
 )
 _PIPELINE_DIAGNOSTICS = "Audit 'Readers with no routing': pipeline diagnostics read legacy tables."
 _SOCIAL_ASSOCIATIONS = (
@@ -100,8 +100,8 @@ ALLOWLIST: dict[str, tuple[str, set[str]]] = {
         _SOCIAL_PREPARATION,
         {"SocialThemeAssociation", "ThemeAlias", "ThemeCluster", "ThemeConstituent", "ThemeMention"},
     ),
-    "task app.tasks.economic_taxonomy_tasks.refresh_economic_taxonomy_generation": (
-        _SNAPSHOT_BUILDER,
+    "task app.tasks.economic_taxonomy_tasks.backfill_legacy_developments": (
+        _DEVELOPMENT_BACKFILL,
         {"ThemeDevelopmentTheme"},
     ),
     "GET /api/v1/themes/pipeline/state-health": (
