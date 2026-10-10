@@ -154,12 +154,23 @@ def _on_legacy_observations(query, observation_column):
 
 
 def _fingerprint(db):
-    return db.execute(
+    """``(legacy link count, highest legacy observation)``.
+
+    The observation is any legacy one, linked or not: the builder checks every
+    pinned legacy observation against the watermark.
+    """
+    count = db.scalar(
         _on_legacy_observations(
-            select(func.count(), func.max(ThemeDevelopmentTheme.observation_id)),
+            select(func.count()).select_from(ThemeDevelopmentTheme),
             ThemeDevelopmentTheme.observation_id,
         )
-    ).one()
+    )
+    highest = db.scalar(
+        select(func.max(ThemeDevelopmentObservation.id)).where(
+            ThemeDevelopmentObservation.source_family_id.is_(None)
+        )
+    )
+    return count, highest
 
 
 def _is_current(db, taxonomy_version_id):
@@ -172,7 +183,7 @@ def _is_current(db, taxonomy_version_id):
     return (
         marker is not None
         and marker.legacy_link_count == count
-        and marker.legacy_link_max_observation_id == max_observation
+        and marker.legacy_max_observation_id == max_observation
     )
 
 
@@ -183,7 +194,7 @@ def _write_marker(db, taxonomy_version_id, through, count, max_observation):
             taxonomy_version_id=taxonomy_version_id,
             through_observation_id=through,
             legacy_link_count=count,
-            legacy_link_max_observation_id=max_observation,
+            legacy_max_observation_id=max_observation,
         )
     )
     db.flush()

@@ -414,6 +414,9 @@ class EconomicTaxonomyPublicationCoordinator:
                 self.rollback_recovery.mark_failed(str(exc))
                 raise
 
+        # Before the legacy generation is built, and again once legacy mode
+        # has stopped the economic producer, for what it recorded in between.
+        self.rollback_recovery.project_developments()
         cutoff = self.capture_cutoff(principal=principal, selections=selections)
         prepared = self.prepare_generation(
             cutoff,
@@ -421,7 +424,9 @@ class EconomicTaxonomyPublicationCoordinator:
             reader_capability_manifest_id=capability_id,
             target_mode="legacy",
         )
-        return self.publish_generation(prepared.id, principal=principal)
+        published = self.publish_generation(prepared.id, principal=principal)
+        self.rollback_recovery.project_developments()
+        return published
 
     def refresh_rollback_availability(self) -> str:
         """Promote rollback readiness after asynchronous mirrors catch up."""

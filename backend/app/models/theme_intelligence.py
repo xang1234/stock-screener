@@ -203,7 +203,7 @@ class EconomicDevelopmentBackfill(Base):
     )
     through_observation_id = Column(Integer, nullable=False)
     legacy_link_count = Column(Integer, nullable=False)
-    legacy_link_max_observation_id = Column(Integer)
+    legacy_max_observation_id = Column(Integer)
     completed_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

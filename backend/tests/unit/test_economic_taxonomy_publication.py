@@ -362,6 +362,32 @@ def test_unhealthy_rollback_rebuilds_legacy_before_switch(db_session):
         assert recovery is not None
 
 
+def test_healthy_rollback_projects_economic_developments(db_session, monkeypatch):
+    # Developments recorded under economic authority need legacy links on every
+    # rollback, not only on the recovery path (#513).
+    import app.services.economic_taxonomy_rollback_recovery as recovery_module
+
+    taxonomy, capability = _seed(db_session)
+    coordinator = _coordinator(db_session)
+    first = coordinator.prepare_generation(
+        coordinator.capture_cutoff(principal=ADMIN, selections=[]),
+        principal=ADMIN,
+        reader_capability_manifest_id=capability.id,
+        target_mode="economic",
+    )
+    coordinator.publish_generation(first.id, principal=ADMIN)
+    projected = []
+    monkeypatch.setattr(
+        recovery_module,
+        "project_economic_developments",
+        lambda _session, version_id: projected.append(version_id),
+    )
+
+    coordinator.rollback(principal=ADMIN)
+
+    assert projected and set(projected) == {taxonomy.id}
+
+
 def test_failed_benchmark_does_not_prepare_candidate(db_session):
     _taxonomy, capability = _seed(db_session)
     coordinator = _coordinator(

@@ -81,7 +81,7 @@ projection.
 - Storage (as built): `legacy_mapping` rows hold **one** version at a time —
   the processing version, the only one the builder builds. A one-row
   `EconomicDevelopmentBackfill` marker (migration 0063) names that version, an
-  observation watermark, and a fingerprint (count, max observation id) of the
+  observation watermark, and a fingerprint (legacy link count, highest legacy observation id, linked or not) of the
   legacy links. This avoids a nullable version column in the
   `(observation_id, economic_theme_id)` primary key. Sealed versions' allocations
   and destinations are immutable, so a version's mapping changes only when
@@ -116,7 +116,7 @@ projection.
   window whose economic theme maps 1:1 to a legacy theme (version's
   destinations); skip and log ambiguous ones. Nothing extra runs during normal
   economic operation.
-- As built: `RollbackRecovery.rebuild_legacy_projections` calls
+- As built: `EconomicTaxonomyPublicationCoordinator.rollback` (healthy and recovery paths, before the legacy generation and again after it is published) calls
   `project_economic_developments` for the processing version. "1:1" is per
   pipeline: exactly one of the theme's legacy destinations is in the
   observation's pipeline, so narrative observations project nothing.

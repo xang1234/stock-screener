@@ -144,6 +144,20 @@ def test_backfill_maps_legacy_links_and_skips_when_unchanged(db_session):
     assert db_session.get(EconomicDevelopmentBackfill, version.id).through_observation_id >= later.id
 
 
+def test_a_linkless_legacy_observation_advances_the_watermark(db_session):
+    # It changes no link, but the builder checks every pinned legacy
+    # observation against the watermark.
+    cluster = _legacy(db_session)
+    version, _themes = _version(db_session, {cluster: ["Copper Miners"]})
+    backfill_legacy_developments(db_session, version.id)
+    linkless = _observation(db_session)
+
+    assert backfill_legacy_developments(db_session, version.id)["status"] == "backfilled"
+    assert _development_rows(
+        db_session, observation_ids=[linkless.id], taxonomy_version_id=version.id
+    ) == []
+
+
 def test_backfill_for_a_new_version_replaces_the_old_rows(db_session):
     cluster = _legacy(db_session)
     old, old_themes = _version(db_session, {cluster: ["Copper Miners"]})

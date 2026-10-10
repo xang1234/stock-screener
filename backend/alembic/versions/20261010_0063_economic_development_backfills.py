@@ -16,7 +16,7 @@ def upgrade() -> None:
         sa.Column("taxonomy_version_id", sa.Uuid(), primary_key=True),
         sa.Column("through_observation_id", sa.Integer(), nullable=False),
         sa.Column("legacy_link_count", sa.Integer(), nullable=False),
-        sa.Column("legacy_link_max_observation_id", sa.Integer(), nullable=True),
+        sa.Column("legacy_max_observation_id", sa.Integer(), nullable=True),
         sa.Column(
             "completed_at",
             sa.DateTime(timezone=True),
